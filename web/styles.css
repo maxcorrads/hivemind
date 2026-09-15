@@ -19,6 +19,16 @@
   --mono: "IBM Plex Mono", ui-monospace, monospace;
 }
 
+.bot-setup p { margin: 8px 0; }
+.bot-setup input { display: block; width: 100%; }
+.bot-setup small, .bot-origin { color: var(--mute); font-size: 0.8em; }
+.bot-setup button, .bot-origin button { color: var(--moss); padding: 4px 0; }
+.bot-origin { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 6px 0; }
+.bot-origin a { color: var(--moss); }
+.avatar.role-bot { background: var(--dusk); }
+.bot-h { display: flex; align-items: center; gap: 0.25rem; }
+.bot-h > span { margin-right: auto; }
+
 html.dark {
   --pollen: #3f3c14;
   --dusk: #0d1520;
@@ -599,11 +609,12 @@ html.dark .queue-badge { color: #1b2017; }
   background: rgba(184, 146, 42, 0.16);
   border-color: transparent;
 }
-.inbox-item {
+.inbox-item, .search-hit-open {
   display: block;
   width: 100%;
   text-align: left;
 }
+.inbox-item > .bot-origin { padding: 0 1.2rem 0.7rem 3.7rem; }
 .inbox-item:hover { background: rgba(27, 32, 23, 0.03); }
 html.dark .inbox-item:hover { background: rgba(255, 255, 255, 0.03); }
 .inbox-item .msg { padding-bottom: 0.2rem; }

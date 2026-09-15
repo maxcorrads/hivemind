@@ -16,6 +16,7 @@ import {
   HUMAN_NAME,
   WAIT_MAIL_CAP,
   type Agent,
+  type BotEvent,
   type AttachmentMeta,
   type Channel,
   type ChannelType,
@@ -35,6 +36,7 @@ import { clampSearchLimit, likeNeedle, parseSearchQuery, snippetAround } from ".
 import { pickName } from "./names.ts";
 import { hiveHome } from "./paths.ts";
 import { packWait } from "./wait-format.ts";
+import { botMessageSchema, createBotSchema } from "../shared/bot-message.ts";
 import { assertAllowedMime, commitUpload, openBlob, removeOrphanBlobs, streamUpload } from "./files.ts";
 
 export { hiveHome } from "./paths.ts";
@@ -170,6 +172,16 @@ export class Hive {
         channel_id TEXT NOT NULL,
         last_read_seq INTEGER NOT NULL,
         PRIMARY KEY (agent_id, channel_id)
+      );
+      CREATE TABLE IF NOT EXISTS bot_events (
+        message_id TEXT PRIMARY KEY,
+        bot_id TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL DEFAULT '',
+        event_id TEXT NOT NULL,
+        metadata TEXT NOT NULL,
+        payload_hash TEXT NOT NULL,
+        UNIQUE (bot_id, channel_id, thread_id, event_id)
       );
       CREATE INDEX IF NOT EXISTS idx_messages_channel_seq ON messages(channel_id, seq);
       CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
@@ -496,6 +508,7 @@ export class Hive {
         this.db.prepare(`DELETE FROM telegram_out WHERE channel_id IN (${ph})`).run(...channelIds);
         this.db.prepare(`DELETE FROM telegram_topics WHERE channel_id IN (${ph})`).run(...channelIds);
         this.db.prepare(`DELETE FROM threads WHERE channel_id IN (${ph})`).run(...channelIds);
+        this.db.prepare(`DELETE FROM bot_events WHERE channel_id IN (${ph})`).run(...channelIds);
         this.db.prepare(`DELETE FROM reads WHERE channel_id IN (${ph})`).run(...channelIds);
         this.db.prepare(`DELETE FROM channel_members WHERE channel_id IN (${ph})`).run(...channelIds);
         this.db.prepare(`DELETE FROM messages WHERE channel_id IN (${ph})`).run(...channelIds);
@@ -813,6 +826,7 @@ export class Hive {
   }
 
   canPost(actor: Agent, ch: Channel): boolean {
+    if (actor.role === "bot") return false; // Bots use the observation-only ingress.
     if (actor.role === "human") return true;
     if (actor.projectId && ch.projectId && actor.projectId !== ch.projectId) return false;
     if (ch.type === "brains") return actor.role === "brain";
@@ -831,7 +845,7 @@ export class Hive {
       project?: string | null;
     },
   ): Channel {
-    if (actor.role === "worker") throw new HiveError(403, "Workers cannot create channels");
+    if (actor.role === "worker" || actor.role === "bot") throw new HiveError(403, "Workers and bots cannot create channels");
     if (input.type !== "public" && input.type !== "private" && input.type !== "brains") {
       throw new HiveError(400, "Channel type must be public, private, or brains");
     }
@@ -853,7 +867,7 @@ export class Hive {
     const roster = this.listAgents().filter((a) => a.role === "human" || a.projectId === project.id);
     if (input.type === "public") {
       for (const a of roster) {
-        if (a.role !== "human") this.addMember(id, a.id);
+        if (a.role !== "human" && a.role !== "bot") this.addMember(id, a.id);
       }
     } else if (input.type === "brains") {
       for (const a of roster) {
@@ -875,6 +889,7 @@ export class Hive {
   openDm(actor: Agent, otherName: string): Channel {
     const other = this.getAgentByName(otherName);
     if (!other) throw new HiveError(404, `No agent named ${otherName}`);
+    if (actor.role === "bot" || other.role === "bot") throw new HiveError(403, "Bots publish observations to explicitly linked channels, not DMs");
     if (other.id === actor.id) throw new HiveError(400, "Cannot DM yourself");
     if (actor.role !== "human" && other.role !== "human" && actor.projectId !== other.projectId) {
       throw new HiveError(403, `${other.name} is not in your project`);
@@ -909,6 +924,73 @@ export class Hive {
       | ChannelRow
       | undefined;
     return row ? this.mapChannel(row) : null;
+  }
+
+  /** Human creates a project identity with no channel memberships. Token is returned once. */
+  createBot(actor: Agent, projectRef: string, raw: unknown): { bot: Agent; token: string } {
+    if (actor.role !== "human") throw new HiveError(403, "Only Human can create bots");
+    const project = this.requireActorProject(actor, projectRef);
+    const parsed = createBotSchema.safeParse(raw);
+    if (!parsed.success) throw new HiveError(400, "Bot name must be 1–40 letters, digits, underscores or dashes, starting with a letter");
+    const { name } = parsed.data;
+    if (this.getAgentByName(name)) throw new HiveError(409, "This identity name is already in use");
+    const id = crypto.randomUUID();
+    const token = newToken();
+    const t = now();
+    this.db.prepare(`INSERT INTO agents
+      (id, name, role, token_hash, online, last_seen_at, created_at, project_id)
+      VALUES (?, ?, 'bot', ?, 0, ?, ?, ?)`).run(id, name, hashToken(token), t, t, project.id);
+    const bot = this.getAgent(id);
+    this.bus.emit("agent", bot);
+    return { bot, token };
+  }
+
+  postBotMessage(actor: Agent, channel: string, raw: unknown): { message: Message; duplicate: boolean } {
+    if (actor.role !== "bot") throw new HiveError(403, "A bot identity is required");
+    const parsed = botMessageSchema.safeParse(raw);
+    if (!parsed.success) throw new HiveError(400, parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "));
+    const input = parsed.data;
+    const ch = this.getChannel(channel, actor.projectId);
+    if (!this.canSeeChannel(actor, ch) || (ch.type !== "public" && ch.type !== "private")) {
+      throw new HiveError(403, "Bot is not linked to this channel");
+    }
+    if (input.threadId) {
+      const root = this.db.prepare("SELECT channel_id, thread_id FROM messages WHERE id = ?").get(input.threadId) as
+        { channel_id: string; thread_id: string | null } | undefined;
+      if (!root || root.channel_id !== ch.id || root.thread_id) throw new HiveError(400, "Thread must be a root message in this channel");
+    }
+    const event: BotEvent = { eventId: input.eventId, ...(input.origin ? { origin: input.origin } : {}) };
+    const payloadHash = hashToken(JSON.stringify({ body: input.body, attachmentIds: input.attachmentIds, ...event }));
+    let messageId: string;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const previous = this.db.prepare(`SELECT message_id, payload_hash FROM bot_events
+        WHERE bot_id = ? AND channel_id = ? AND thread_id = ? AND event_id = ?`)
+        .get(actor.id, ch.id, input.threadId ?? "", input.eventId) as { message_id: string; payload_hash: string } | undefined;
+      if (previous) {
+        if (previous.payload_hash !== payloadHash) throw new HiveError(409, "Event ID already used with different content; use a new revision/event ID");
+        this.db.exec("COMMIT");
+        return { message: this.getMessageById(previous.message_id), duplicate: true };
+      }
+      messageId = crypto.randomUUID();
+      this.db.prepare(`INSERT INTO messages (id, channel_id, thread_id, author_id, body, kind, mentions, created_at)
+        VALUES (?, ?, ?, ?, ?, 'chat', '[]', ?)`)
+        .run(messageId, ch.id, input.threadId ?? null, actor.id, input.body, now());
+      this.db.prepare(`INSERT INTO bot_events (message_id, bot_id, channel_id, thread_id, event_id, metadata, payload_hash)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`)
+        .run(messageId, actor.id, ch.id, input.threadId ?? "", input.eventId, JSON.stringify(event), payloadHash);
+      this.bindAttachments(actor, messageId, input.attachmentIds);
+      if (input.threadId) this.db.prepare("INSERT OR IGNORE INTO threads (id, channel_id, status) VALUES (?, ?, 'open')")
+        .run(input.threadId, ch.id);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      if (this.db.isTransaction) this.db.exec("ROLLBACK");
+      throw error;
+    }
+    const message = this.getMessageById(messageId);
+    this.bus.emit("message", message);
+    this.wakeMembers(ch, message);
+    return { message, duplicate: false };
   }
 
   postMessage(
@@ -1025,6 +1107,7 @@ export class Hive {
   }
 
   private mapMessage(row: MessageRow): Message {
+    const botRow = this.db.prepare("SELECT metadata FROM bot_events WHERE message_id = ?").get(row.id) as { metadata: string } | undefined;
     let author: Agent;
     try {
       author = this.getAgent(row.author_id);
@@ -1055,6 +1138,7 @@ export class Hive {
       control: row.control,
       mentions: JSON.parse(row.mentions) as string[],
       createdAt: row.created_at,
+      ...(botRow ? { source: "bot" as const, botEvent: JSON.parse(botRow.metadata) as BotEvent } : {}),
     };
   }
 
@@ -1183,6 +1267,7 @@ export class Hive {
           body: snippetAround(msg.body, tokens),
           createdAt: msg.createdAt,
           kind: msg.kind,
+          botEvent: msg.botEvent,
           attachments: (msg.attachments ?? []).map((a) => a.name),
           reactions: [...new Set((msg.reactions ?? []).map((r) => r.emoji))],
         };
@@ -1235,6 +1320,7 @@ export class Hive {
   }
 
   setThreadStatus(actor: Agent, threadId: string, status: ThreadStatus | null): Thread {
+    if (actor.role === "bot") throw new HiveError(403, "Bots cannot change thread status");
     const row = this.db.prepare(
       `SELECT m.id, m.channel_id FROM messages m WHERE m.id = ?`,
     ).get(threadId) as { id: string; channel_id: string } | undefined;
@@ -1410,7 +1496,7 @@ export class Hive {
   queuedCounts(): Record<string, number> {
     const out: Record<string, number> = {};
     for (const agent of this.listAgents()) {
-      if (agent.role === "human") continue;
+      if (agent.role !== "brain" && agent.role !== "worker") continue;
       out[agent.id] = this.countUnseen(agent);
     }
     return out;
@@ -1426,11 +1512,12 @@ export class Hive {
 
   private emitQueued(agentId: string) {
     const agent = this.getAgent(agentId);
-    if (agent.role === "human") return;
+    if (agent.role !== "brain" && agent.role !== "worker") return;
     this.bus.emit("queued", { agentId, n: this.countUnseen(agent) });
   }
 
   private countUnseen(actor: Agent, cap = 99): number {
+    if (actor.role !== "brain" && actor.role !== "worker") return 0;
     const row = this.db.prepare("SELECT inbox_cursor FROM agents WHERE id = ?").get(actor.id) as {
       inbox_cursor: number;
     };
@@ -1461,6 +1548,7 @@ export class Hive {
 
   /** Wait wakes agents only for mail addressed to them, not public chatter. */
   isFor(actor: Agent, msg: Message): boolean {
+    if (actor.role === "bot") return false;
     if (msg.mentions.includes(actor.id)) return true;
     if (msg.kind === "control") {
       const ch = this.getChannel(msg.channelId);
@@ -1473,7 +1561,7 @@ export class Hive {
   }
 
   invite(actor: Agent, channelRef: string, memberNames: string[]): Channel {
-    if (actor.role === "worker") throw new HiveError(403, "Workers cannot invite");
+    if (actor.role === "worker" || actor.role === "bot") throw new HiveError(403, "Workers and bots cannot invite");
     if (memberNames.length === 0) throw new HiveError(400, "No members to invite");
     const ch = this.getChannel(channelRef, actor.projectId);
     if (!this.canSeeChannel(actor, ch)) throw new HiveError(403, "Cannot access channel");
@@ -1485,8 +1573,8 @@ export class Hive {
       if (member.role !== "human" && member.projectId !== ch.projectId) {
         throw new HiveError(403, `${member.name} is not in this project`);
       }
-      if (ch.type === "brains" && member.role === "worker") {
-        throw new HiveError(403, "Workers cannot join brains channels");
+      if (ch.type === "brains" && (member.role === "worker" || member.role === "bot")) {
+        throw new HiveError(403, "Workers and bots cannot join brains channels");
       }
       this.addMember(ch.id, member.id);
       added.push(member.name);
@@ -1514,6 +1602,7 @@ export class Hive {
     signal?: AbortSignal,
     opts: { compact?: boolean } = {},
   ): Promise<WaitResult> {
+    if (actor.role === "bot") throw new HiveError(403, "Bots publish observations; they do not wait for work");
     this.touch(actor.id, true);
     const compact = Boolean(opts.compact);
     const pack = (batch: { messages: Message[]; more: number }): WaitResult =>
@@ -1732,6 +1821,7 @@ export class Hive {
 
 export function describeAgent(agent: Agent): string {
   if (agent.role === "human") return "Human";
+  if (agent.role === "bot") return "bot (context only)";
   if (agent.role === "brain") return agent.focus ? `brain (${agent.focus})` : "brain";
   const sen = agent.seniority ?? "mid";
   return agent.focus ? `${sen} worker (${agent.focus})` : `${sen} worker`;
@@ -1756,7 +1846,7 @@ export function parseMentions(body: string, agents: Agent[]): string[] {
   let m: RegExpExecArray | null;
   while ((m = re.exec(body))) {
     const name = m[1]!;
-    const agent = agents.find((a) => a.name.toLowerCase() === name.toLowerCase());
+    const agent = agents.find((a) => a.role !== "bot" && a.name.toLowerCase() === name.toLowerCase());
     if (agent) ids.add(agent.id);
   }
   return [...ids];
