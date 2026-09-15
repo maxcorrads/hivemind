@@ -181,6 +181,10 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     });
     return c.json({ channel });
   });
+  ui.post("/projects/:id/bots", async (c) => {
+    const body = await c.req.json().catch(() => { throw new HiveError(400, "Expected JSON"); });
+    return c.json(hive.createBot(hive.getAgent("human"), c.req.param("id"), body), 201);
+  });
   ui.post("/channels/:id/messages", async (c) => {
     const human = hive.getAgent("human");
     const body = await c.req.json();
@@ -249,7 +253,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const token = header.replace(/^Bearer\s+/i, "").trim();
     if (!token) throw new HiveError(401, "Missing token. Join first.");
     const me = hive.agentByToken(token);
-    if (me.role === "human") throw new HiveError(403, "Human uses the web UI, not the agent API");
+    if (me.role !== "brain" && me.role !== "worker") throw new HiveError(403, "Only brains and workers use the agent API");
     hive.touch(me.id, true);
     c.set("me", me);
     c.set("token", token);
@@ -419,6 +423,31 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     return c.json({ ok: true });
   });
 
+  // Provider-neutral ingress. The credential determines identity, never the payload.
+  const bot = new Hono<{ Variables: { me: Agent } }>();
+  bot.use("*", async (c, next) => {
+    const match = /^Bearer\s+(\S+)$/i.exec(c.req.header("authorization") ?? "");
+    if (!match) throw new HiveError(401, "A Bearer bot token is required");
+    const me = hive.agentByToken(match[1]!);
+    if (me.role !== "bot") throw new HiveError(403, "A bot identity is required");
+    c.set("me", me);
+    await next();
+  });
+  bot.post("/channels/:id/messages", async (c) => {
+    const body = await c.req.json().catch(() => { throw new HiveError(400, "Expected JSON"); });
+    const result = hive.postBotMessage(c.get("me"), c.req.param("id"), body);
+    return c.json(result, result.duplicate ? 200 : 201);
+  });
+  bot.post("/files", async (c) => {
+    const name = c.req.header("x-file-name") || "attachment";
+    const file = await hive.createFile(c.get("me"), {
+      name,
+      mime: resolveUploadMime(c.req.header("x-file-mime"), name),
+      body: c.req.raw.body,
+    });
+    return c.json({ file }, 201);
+  });
+  app.route("/api/bot", bot);
   app.route("/api/ui", ui);
   app.route("/api/agent", agent);
   return app;

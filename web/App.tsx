@@ -4,6 +4,7 @@ import { REACTION_EMOJIS } from "../src/shared/types.ts";
 import { isLiveSearchQuery, parseSearchQuery } from "../src/shared/search-query.ts";
 import { api, connectWs, type ChannelPayload, type Snapshot, type TelegramSettings } from "./api.ts";
 import { LaunchSheet } from "./LaunchSheet.tsx";
+import { BotOrigin, BotSetup } from "./Bots.tsx";
 import { loadMailLog, mergeMailLog, saveMailLog } from "./mail-log.ts";
 import { renderBody } from "./markdown.tsx";
 
@@ -138,6 +139,8 @@ export function App() {
   const [newMembers, setNewMembers] = useState<string[]>([]);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteNames, setInviteNames] = useState<string[]>([]);
+  const [botProject, setBotProject] = useState<string | null>(null);
+  const [botBusy, setBotBusy] = useState(false);
   const [confirmClear, setConfirmClear] = useState<string | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [launchOpen, setLaunchOpen] = useState(false);
@@ -684,6 +687,8 @@ export function App() {
                     </div>
                     <AgentList
                       agents={hiveAgents}
+                      projectName={project.name}
+                      onCreateBot={() => setBotProject(project.id)}
                       queued={snap.queued ?? {}}
                       onOpen={onAgent}
                       confirmClear={confirmClear}
@@ -790,7 +795,7 @@ export function App() {
                   </p>
                 )}
               </div>
-              {activeChannel?.type === "private" && (
+              {(activeChannel?.type === "private" || activeChannel?.type === "public") && (
                 <button type="button" className="text-btn" onClick={() => setInviteOpen(true)}>
                   Invite
                 </button>
@@ -968,6 +973,17 @@ export function App() {
         </div>
       )}
 
+      {botProject && projects.some((p) => p.id === botProject) && (
+        <div className="modal">
+          <div className="sheet" role="dialog" aria-modal="true" aria-label="Create project bot">
+            <h2>Create bot</h2>
+            <BotSetup key={botProject} project={projects.find((p) => p.id === botProject)!}
+              onBusy={setBotBusy} onCreated={() => { void refreshSnap().catch((e) => setErr(String(e.message || e))); }} />
+            <div className="row"><button type="button" disabled={botBusy} onClick={() => setBotProject(null)}>Close</button></div>
+          </div>
+        </div>
+      )}
+
       {inviteOpen && activeChannel && (
         <div className="modal" onClick={() => setInviteOpen(false)}>
           <form
@@ -988,7 +1004,7 @@ export function App() {
           >
             <h2>Invite to #{activeChannel.name}</h2>
             <fieldset className="checks">
-              <legend>Agents</legend>
+              <legend>Agents and bots</legend>
               {snap.agents
                 .filter(
                   (a) =>
@@ -1358,7 +1374,7 @@ function SearchHitMsg({ hit, q }: { hit: SearchHit; q: string }) {
   );
 }
 
-function SearchDesk({
+export function SearchDesk({
   hiveName,
   q,
   hits,
@@ -1397,13 +1413,16 @@ function SearchDesk({
         {hits.map((hit) => {
           const where = hit.channelType === "dm" ? hit.channelName : `#${hit.channelName}`;
           return (
-            <button key={hit.seq} type="button" className="inbox-item" onClick={() => onOpen(hit)}>
-              <SearchHitMsg hit={hit} q={q} />
-              <span className="open-link">
-                {where}
-                {hit.threadId ? " · open thread" : " · open conversation"}
-              </span>
-            </button>
+            <div key={hit.seq} className="inbox-item">
+              <button type="button" className="search-hit-open" onClick={() => onOpen(hit)}>
+                <SearchHitMsg hit={hit} q={q} />
+                <span className="open-link">
+                  {where}
+                  {hit.threadId ? " · open thread" : " · open conversation"}
+                </span>
+              </button>
+              <BotOrigin event={hit.botEvent} />
+            </div>
           );
         })}
         {hasMore && (
@@ -1524,6 +1543,7 @@ function Msg({
           {status && <span className={`st st-${status}`}>{status.replace("_", " ")}</span>}
         </div>
         {m.body && <div className="msg-b">{renderBody(m.body)}</div>}
+        <BotOrigin event={m.botEvent} />
         {(m.attachments?.length ?? 0) > 0 && (
           <div className="atts">
             {m.attachments!.map((a) =>
@@ -1599,7 +1619,7 @@ function Composer({
 }) {
   const [hint, setHint] = useState<Agent[]>([]);
   const [files, setFiles] = useState<File[]>([]);
-  const names = useMemo(() => agents, [agents]);
+  const names = useMemo(() => agents.filter((a) => a.role !== "bot"), [agents]);
   const pick = useRef<HTMLInputElement>(null);
 
   const addFiles = (list: FileList | File[]) => {
@@ -1724,8 +1744,10 @@ function Avatar({ name, role, online, small }: { name: string; role?: string; on
   );
 }
 
-function AgentList({
+export function AgentList({
   agents,
+  projectName,
+  onCreateBot,
   queued,
   onOpen,
   confirmClear,
@@ -1733,6 +1755,8 @@ function AgentList({
   onClear,
 }: {
   agents: Agent[];
+  projectName: string;
+  onCreateBot: () => void;
   queued: Record<string, number>;
   onOpen: (a: Agent) => void;
   confirmClear: string | null;
@@ -1742,6 +1766,7 @@ function AgentList({
   const human = agents.find((a) => a.role === "human");
   const brains = agents.filter((a) => a.role === "brain");
   const workers = agents.filter((a) => a.role === "worker");
+  const bots = agents.filter((a) => a.role === "bot");
   const rank = { senior: 0, mid: 1, junior: 2 } as const;
   workers.sort((a, b) => (rank[a.seniority ?? "mid"] ?? 3) - (rank[b.seniority ?? "mid"] ?? 3) || a.name.localeCompare(b.name));
 
@@ -1764,6 +1789,12 @@ function AgentList({
           onClear={onClear}
         />
       ))}
+      <div className="subh bot-h">
+        <span>bot · context only</span>
+        <button type="button" className="plus" title={`Create bot in ${projectName}`}
+          aria-label={`Create bot in ${projectName}`} onClick={onCreateBot}>+</button>
+      </div>
+      {bots.map((a) => <PersonRow key={a.id} agent={a} onOpen={() => undefined} self />)}
       {brains.length + workers.length === 0 && (
         <p className="empty-mini">
           Open Codex, Claude, or Cursor, then <code>hivemind join --as brain</code> or{" "}
