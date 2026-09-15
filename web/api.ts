@@ -41,6 +41,9 @@ export type ChannelPayload = {
 };
 
 export const api = {
+  createBot: (projectId: string, name: string) => req<{ bot: Agent; token: string }>(
+    `/api/ui/projects/${encodeURIComponent(projectId)}/bots`, { method: "POST", body: JSON.stringify({ name }) },
+  ),
   snapshot: () => req<Snapshot>("/api/ui/snapshot"),
   mentions: (beforeSeq?: number, project?: string) => {
     const q = new URLSearchParams();
