@@ -1,3 +1,5 @@
+import type { TaskEnvelope } from './tasks.ts';
+
 export const PROTOCOL_VERSION = 3;
 export const DEFAULT_PORT = 7420;
 export const HUMAN_ID = "human";
@@ -119,6 +121,7 @@ export type SearchHit = {
 };
 
 export type Message = {
+  taskEvent?: TaskEnvelope;
   id: string;
   seq: number;
   channelId: string;
@@ -167,6 +170,7 @@ export type WaitControlItem = {
 };
 
 export type WaitMailItem = {
+  taskEvent?: TaskEnvelope;
   messageId: string;
   rootId: string;
   seq: number;

@@ -61,6 +61,7 @@ export function packWait(
     authorRole: m.authorRole,
     kind: m.kind,
     eventType: m.eventType,
+    taskEvent: m.taskEvent,
     source: m.source,
     botEvent: m.botEvent,
     body: m.body.length > BODY_MAX ? m.body.slice(0, BODY_MAX) : m.body,
@@ -104,7 +105,7 @@ export function packWait(
     for (const m of other) {
       // Only explicitly non-actionable progress can be summarized. Untyped legacy
       // messages may contain a blocker/question anywhere in the body: keep them full.
-      if (m.eventType !== "progress" || m.authorRole === "human" || m.authorRole === "brain" || m.attachments?.length || m.recovery) {
+      if (m.taskEvent || m.eventType !== "progress" || m.authorRole === "human" || m.authorRole === "brain" || m.attachments?.length || m.recovery) {
         instructions.push(m);
         continue;
       }

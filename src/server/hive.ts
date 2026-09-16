@@ -45,6 +45,8 @@ import { hiveHome } from "./paths.ts";
 import { packWait } from "./wait-format.ts";
 import { botMessageSchema, createBotSchema } from "../shared/bot-message.ts";
 import { digestExpansionSchema } from "../shared/digest.ts";
+import { TaskStore } from './tasks.ts';
+import type { TaskEnvelope } from '../shared/tasks.ts';
 import { assertAllowedMime, commitUpload, openBlob, removeOrphanBlobs, streamUpload } from "./files.ts";
 
 export { hiveHome } from "./paths.ts";
@@ -118,6 +120,7 @@ export class Hive {
   bus = new EventEmitter();
   readonly home: string;
   readonly inbox: InboxDeliveryStore;
+  readonly tasks: TaskStore;
   private readonly inboxReader: InboxReader;
   private waiters = new Map<string, Waiter>();
   private telegramOrigin = new Set<string>();
@@ -132,6 +135,7 @@ export class Hive {
     this.migrate();
     this.migrateProjects();
     this.bootstrap();
+    this.tasks = new TaskStore(this);
     this.inbox = new InboxDeliveryStore(this.db);
     this.inboxReader = new InboxReader(this.db, this.inbox);
   }
@@ -523,6 +527,7 @@ export class Hive {
         ).run(...channelIds);
         this.db.prepare(`DELETE FROM telegram_out WHERE channel_id IN (${ph})`).run(...channelIds);
         this.db.prepare(`DELETE FROM telegram_topics WHERE channel_id IN (${ph})`).run(...channelIds);
+        this.db.prepare(`DELETE FROM task_records WHERE channel_id IN (${ph})`).run(...channelIds);
         this.db.prepare(`DELETE FROM threads WHERE channel_id IN (${ph})`).run(...channelIds);
         this.db.prepare(`DELETE FROM bot_events WHERE channel_id IN (${ph})`).run(...channelIds);
         this.db.prepare(`DELETE FROM reads WHERE channel_id IN (${ph})`).run(...channelIds);
@@ -902,7 +907,7 @@ export class Hive {
     return this.getChannel(id);
   }
 
-  openDm(actor: Agent, otherName: string): Channel {
+  openDm(actor: Agent, otherName: string, silent = false): Channel {
     const other = this.getAgentByName(otherName);
     if (!other) throw new HiveError(404, `No agent named ${otherName}`);
     if (actor.role === "bot" || other.role === "bot") throw new HiveError(403, "Bots publish observations to explicitly linked channels, not DMs");
@@ -930,7 +935,7 @@ export class Hive {
     this.addMember(id, actor.id);
     this.addMember(id, other.id);
     const ch = this.getChannel(id);
-    this.bus.emit("channel", ch);
+    if (!silent) this.bus.emit("channel", ch);
     return ch;
   }
 
@@ -1128,6 +1133,7 @@ export class Hive {
   }
 
   private mapMessage(row: MessageRow): Message {
+    const taskRow = this.db.prepare('SELECT envelope FROM task_events WHERE message_id = ?').get(row.id);
     const botRow = this.db.prepare("SELECT metadata FROM bot_events WHERE message_id = ?").get(row.id) as { metadata: string } | undefined;
     let author: Agent;
     try {
@@ -1158,6 +1164,7 @@ export class Hive {
       kind: row.kind,
       control: row.control,
       ...(row.event_type ? { eventType: row.event_type } : {}),
+      ...(taskRow ? { taskEvent: JSON.parse(String(taskRow.envelope)) as TaskEnvelope } : {}),
       mentions: JSON.parse(row.mentions) as string[],
       createdAt: row.created_at,
       ...(botRow ? { source: "bot" as const, botEvent: JSON.parse(botRow.metadata) as BotEvent } : {}),
@@ -1173,7 +1180,8 @@ export class Hive {
     const ch = this.getChannel(channel, actor.projectId);
     if (!this.canSeeChannel(actor, ch)) throw new HiveError(403, "Cannot read this channel");
     const headers = this.db.prepare(`SELECT id, seq, channel_id, length(CAST(body AS BLOB)) AS body_bytes,
-      COALESCE((SELECT length(CAST(metadata AS BLOB)) FROM bot_events WHERE message_id = messages.id), 0) AS metadata_bytes FROM messages
+      COALESCE((SELECT length(CAST(metadata AS BLOB)) FROM bot_events WHERE message_id = messages.id), 0) +
+      COALESCE((SELECT length(CAST(envelope AS BLOB)) FROM task_events WHERE message_id = messages.id), 0) AS metadata_bytes FROM messages
       WHERE id IN (SELECT value FROM json_each(?)) ORDER BY seq`).all(JSON.stringify(messageIds)) as
         { id: string; seq: number; channel_id: string; body_bytes: number; metadata_bytes: number }[];
     // Validate the entire selection before emitting any content, including past pages.
@@ -1391,6 +1399,7 @@ export class Hive {
   }
 
   setThreadStatus(actor: Agent, threadId: string, status: ThreadStatus | null): Thread {
+    if (this.tasks.has(threadId)) throw new HiveError(409, 'Use structured task events; generic thread status cannot change a task');
     if (actor.role === "bot") throw new HiveError(403, "Bots cannot change thread status");
     const row = this.db.prepare(
       `SELECT m.id, m.channel_id FROM messages m WHERE m.id = ?`,
@@ -1496,9 +1505,18 @@ export class Hive {
 
   acknowledgeInbox(actor: Agent, sessionId: string, deliveryId: string) {
     if (actor.role !== "brain" && actor.role !== "worker") throw new HiveError(403, "Only agents acknowledge inbox mail");
-    const result = this.inbox.acknowledge(actor.id, sessionId, deliveryId);
+    let changed: string[] = [];
+    const result = this.inbox.acknowledge(actor.id, sessionId, deliveryId,
+      (seqs, at) => { changed = this.tasks.recordReceipt(actor.id, seqs, at); });
+    for (const id of changed) this.bus.emit('task', this.tasks.get(this.getAgent(HUMAN_ID), id));
     this.emitQueued(actor.id);
     return result;
+  }
+
+  /** Publish only after the structured event and its message commit atomically. */
+  publishTaskMessage(message: Message) {
+    this.bus.emit('message', message);
+    this.wakeMembers(this.getChannel(message.channelId), message);
   }
 
   inboxStatuses(): Record<string, InboxStatus> {

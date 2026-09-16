@@ -13,9 +13,9 @@
     "build": "vite build",
     "mcp": "tsx src/mcp/index.ts",
     "hivemind": "tsx src/cli.ts",
-    "test": "tsx --test src/server/hive.test.ts src/server/http.test.ts src/server/telegram.test.ts src/server/bots.test.ts src/shared/join-args.test.ts src/shared/launch-models.test.ts src/shared/launch-prompt.test.ts src/shared/mime.test.ts src/shared/project.test.ts src/shared/search-query.test.ts src/mcp/mcp.test.ts src/mcp/wait-loop.test.ts src/mcp/bots.test.ts src/server/plugins.test.ts src/server/inbox-delivery.test.ts src/mcp/inbox-delivery.test.ts src/server/inbox-bounds.test.ts src/server/inbox-digests.test.ts src/mcp/digests.test.ts",
+    "test": "tsx --test src/server/hive.test.ts src/server/http.test.ts src/server/telegram.test.ts src/server/bots.test.ts src/shared/join-args.test.ts src/shared/launch-models.test.ts src/shared/launch-prompt.test.ts src/shared/mime.test.ts src/shared/project.test.ts src/shared/search-query.test.ts src/mcp/mcp.test.ts src/mcp/wait-loop.test.ts src/mcp/bots.test.ts src/server/plugins.test.ts src/server/inbox-delivery.test.ts src/mcp/inbox-delivery.test.ts src/server/inbox-bounds.test.ts src/server/inbox-digests.test.ts src/mcp/digests.test.ts src/server/tasks.test.ts src/mcp/tasks.test.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.web.json",
-    "test:ui": "tsx --tsconfig tsconfig.web.json --test web/bots.test.tsx web/plugins.test.tsx web/inbox-delivery.test.tsx",
+    "test:ui": "tsx --tsconfig tsconfig.web.json --test web/bots.test.tsx web/plugins.test.tsx web/inbox-delivery.test.tsx web/tasks.test.tsx",
     "test:inbox-bounds": "tsx --test src/server/inbox-bounds.test.ts",
     "benchmark:inbox": "tsx scripts/benchmark-inbox.ts"
   },

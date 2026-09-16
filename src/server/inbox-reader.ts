@@ -79,6 +79,8 @@ export class InboxReader {
       length(metadata) > 16384 AS oversized FROM bot_events WHERE message_id = ?`).get(row.id);
     const attachments = this.db.prepare(`SELECT id, name, mime, bytes FROM attachments
       WHERE message_id = ? ORDER BY id LIMIT ?`).all(row.id, FILES_PER_MESSAGE) as AttachmentMeta[];
+    const task = this.db.prepare(`SELECT substr(envelope, 1, 16000) AS envelope,
+      length(envelope) > 16000 AS oversized FROM task_events WHERE message_id = ?`).get(row.id);
     // Reactions are not necessary to deliver mail. History/UI retain them; don't
     // hydrate an unbounded list of reactors on this latency-sensitive path.
     const message: Message = {
@@ -87,12 +89,13 @@ export class InboxReader {
       authorRole: (row.author_role ?? "worker") as Message["authorRole"], body,
       kind: row.kind as Message["kind"], control: row.control as Message["control"],
       ...(row.event_type ? { eventType: row.event_type as Message["eventType"] } : {}),
+      ...(task && !task.oversized ? { taskEvent: JSON.parse(String(task.envelope)) as Message['taskEvent'] } : {}),
       mentions: JSON.parse(String(row.mentions)), createdAt: Number(row.created_at), attachments,
       ...(bot ? { source: "bot" as const,
         ...(bot.oversized ? {} : { botEvent: JSON.parse(String(bot.metadata)) as BotEvent }) } : {}),
     };
-    if (bodyClipped || message.body.length > BODY_MAX || bot?.oversized) {
-      message.body = bot?.oversized
+    if (bodyClipped || message.body.length > BODY_MAX || bot?.oversized || task?.oversized) {
+      message.body = bot?.oversized || task?.oversized
         ? "[Message metadata exceeds the wait budget. Read the original with history using recovery.]"
         : message.body.slice(0, BODY_MAX);
       // Do not split a surrogate pair at the character ceiling either.
@@ -168,7 +171,7 @@ export class InboxReader {
         // A single oversized legacy/control item must not permanently block the
         // inbox. Explicitly expose how to recover its original via history.
         message = { ...message, body: "[Message exceeds the wait budget. Read the original with history using recovery.]",
-          attachments: [], botEvent: undefined, mentions: header.urgent ? [actor.id] : [],
+          attachments: [], botEvent: undefined, taskEvent: undefined, mentions: header.urgent ? [actor.id] : [],
           recovery: this.recovery(message) };
         if (!fits([message])) throw new HiveError(413, "Inbox item metadata exceeds the wait budget");
       }

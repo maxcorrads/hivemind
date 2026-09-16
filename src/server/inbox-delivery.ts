@@ -124,7 +124,7 @@ export class InboxDeliveryStore {
     });
   }
 
-  acknowledge(agentId: string, sessionId: string, deliveryId: string) {
+  acknowledge(agentId: string, sessionId: string, deliveryId: string, onReceipt?: (seqs: number[], at: number) => void) {
     return this.transaction(() => {
       this.requireSession(agentId, sessionId);
       const row = this.db.prepare("SELECT * FROM inbox_deliveries WHERE agent_id = ? AND id = ?")
@@ -142,6 +142,7 @@ export class InboxDeliveryStore {
       this.db.prepare("DELETE FROM inbox_early_receipts WHERE agent_id = ? AND seq <= (SELECT inbox_cursor FROM agents WHERE id = ?)")
         .run(agentId, agentId);
       this.db.prepare("UPDATE inbox_deliveries SET acknowledged_at = ? WHERE id = ?").run(t, row.id);
+      onReceipt?.(JSON.parse(row.seqs) as number[], t);
       return { acknowledged: true, duplicate: false, deliveryId, acknowledgedAt: t };
     });
   }

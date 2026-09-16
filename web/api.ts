@@ -2,6 +2,7 @@ import type { Agent, AttachmentMeta, Channel, Message, Project, SearchHit, Threa
 import { resolveUploadMime } from "../src/shared/mime.ts";
 import type { LaunchContext } from "../src/shared/launch-prompt.ts";
 import type { ProjectPluginView, SettingsValues } from "../src/shared/plugin-settings.ts";
+import type { TaskSnapshot } from '../src/shared/tasks.ts';
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -36,6 +37,7 @@ export type TelegramSettings = {
 };
 
 export type ChannelPayload = {
+  task?: TaskSnapshot;
   channel: Channel;
   messages: Message[];
   hasOlder?: boolean;

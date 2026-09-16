@@ -10,6 +10,9 @@ import { InboxReceipt, QueueBadge } from "./InboxReceipt.tsx";
 import type { InboxStatus } from "../src/shared/types.ts";
 import { loadMailLog, mergeMailLog, saveMailLog } from "./mail-log.ts";
 import { renderBody } from "./markdown.tsx";
+import { TaskCard } from './TaskCard.tsx';
+import type { TaskSnapshot } from '../src/shared/tasks.ts';
+import { selectThread, beginThreadLoad, failThreadLoad, receiveThreadMessage, receiveThreadTask, receiveThreadSnapshot, type ThreadView } from './thread-state.ts';
 
 type InboxBox = "unread" | "all";
 
@@ -130,7 +133,8 @@ export function App() {
     const start = parseHash();
     return start.kind === "channel" ? start.thread ?? null : null;
   });
-  const [threadPane, setThreadPane] = useState<ChannelPayload | null>(null);
+  const [threadView, setThreadView] = useState<ThreadView | null>(null);
+  const threadPane = sel.kind === 'channel' && threadView?.channelId === sel.id && threadView.threadId === threadId ? threadView.pane : null;
   const [draft, setDraft] = useState("");
   const [threadDraft, setThreadDraft] = useState("");
   const [err, setErr] = useState<string | null>(null);
@@ -184,6 +188,31 @@ export function App() {
   const threadIdRef = useRef(threadId);
   threadIdRef.current = threadId;
   const channelsRef = useRef<Channel[]>([]);
+  const threadLoadIdRef = useRef(0);
+
+  const viewingThread = useCallback((channelId: string, root: string) =>
+    selRef.current.kind === 'channel' && selRef.current.id === channelId && threadIdRef.current === root, []);
+
+  const loadThread = useCallback(async (channelId: string, root: string) => {
+    if (!viewingThread(channelId, root)) return;
+    const requestId = ++threadLoadIdRef.current;
+    setThreadView(view => beginThreadLoad(view, channelId, root, requestId));
+    try {
+      const data = await api.messages(channelId, root);
+      if (viewingThread(channelId, root)) setThreadView(view => receiveThreadSnapshot(view, root, data, requestId));
+    } catch (error) {
+      if (viewingThread(channelId, root) && requestId === threadLoadIdRef.current) {
+        setThreadView(view => failThreadLoad(view, requestId));
+        throw error;
+      }
+    }
+  }, [viewingThread]);
+
+  const onThreadMessage = useCallback((message: Message) => {
+    const root = threadIdRef.current;
+    if (root && viewingThread(message.channelId, root))
+      setThreadView(view => receiveThreadMessage(selectThread(view, message.channelId, root), message));
+  }, [viewingThread]);
 
   const refreshSnap = useCallback(async () => {
     const next = await api.snapshot();
@@ -210,12 +239,15 @@ export function App() {
     const off = connectWs((ev) => {
       if (ev.type === "hello") {
         refreshSnap().catch(() => undefined);
+        const selected = selRef.current;
+        const root = threadIdRef.current;
+        if (selected.kind === 'channel' && root) loadThread(selected.id, root).catch(() => undefined);
         return;
       }
       if (ev.type === "message") {
         const msg = ev.payload as Message;
         setPane((p) => patchPane(p, msg, null));
-        setThreadPane((p) => patchPane(p, msg, threadIdRef.current));
+        onThreadMessage(msg);
         const viewing = selRef.current.kind === "channel" ? selRef.current.id : null;
         setSnap((s) => (s ? applyMessageToSnap(s, msg, viewing, threadIdRef.current) : s));
         setMailLog((prev) => {
@@ -229,7 +261,7 @@ export function App() {
         const payload = ev.payload as { message?: Message };
         if (payload.message) {
           setPane((p) => replaceMessage(p, payload.message!));
-          setThreadPane((p) => replaceMessage(p, payload.message!));
+          onThreadMessage(payload.message);
         }
         return;
       }
@@ -256,6 +288,12 @@ export function App() {
         setSnap((s) => (s ? { ...s, queued: { ...s.queued, [q.agentId]: q.n }, inbox: { ...s.inbox, [q.agentId]: q.inbox } } : s));
         return;
       }
+      if (ev.type === 'task') {
+        const task = ev.payload as TaskSnapshot;
+        if (viewingThread(task.channelId, task.id))
+          setThreadView(view => receiveThreadTask(selectThread(view, task.channelId, task.id), task));
+        return;
+      }
       if (ev.type === "project") {
         refreshSnap().catch(() => undefined);
         return;
@@ -271,7 +309,7 @@ export function App() {
       off();
       window.removeEventListener("hashchange", onHash);
     };
-  }, [loadChannel, refreshSnap]);
+  }, [loadChannel, refreshSnap, loadThread, onThreadMessage, viewingThread]);
 
   const missingChannel = Boolean(snap && sel.kind === "channel" && !snap.channels.some((c) => c.id === sel.id));
 
@@ -308,11 +346,13 @@ export function App() {
 
   useEffect(() => {
     if (!threadId || sel.kind !== "channel" || missingChannel) {
-      setThreadPane(null);
+      setThreadView(null);
       return;
     }
-    api.messages(sel.id, threadId).then(setThreadPane).catch((e) => setErr(String(e.message || e)));
-  }, [threadId, sel, missingChannel]);
+    loadThread(sel.id, threadId).catch((e) => {
+      if (viewingThread(sel.id, threadId)) setErr(String(e.message || e));
+    });
+  }, [threadId, sel, missingChannel, loadThread, viewingThread]);
 
   useEffect(() => {
     const apply = () => {
@@ -446,7 +486,7 @@ export function App() {
     await api.send(sel.id, body.trim(), tid, attachmentIds);
     if (tid) setThreadDraft("");
     else setDraft("");
-    if (tid) setThreadPane(await api.messages(sel.id, tid));
+    if (tid) await loadThread(sel.id, tid);
   };
 
   const onCreate = async () => {
@@ -870,12 +910,12 @@ export function App() {
               <p>replies on this message</p>
             </div>
             <div className="thread-tools">
-              <select
+              {threadPane.task ? <span className="st">{threadPane.task.state.replaceAll('_', ' ')}</span> : <select
                 value={threadPane.threads.find((t) => t.id === threadId)?.status ?? "open"}
                 onChange={(e) => {
                   const status = e.target.value as ThreadStatus;
                   api.setStatus(threadId, status).then(() =>
-                    api.messages(sel.id, threadId).then(setThreadPane),
+                    loadThread(sel.id, threadId),
                   );
                 }}
               >
@@ -884,7 +924,7 @@ export function App() {
                     {s.replace("_", " ")}
                   </option>
                 ))}
-              </select>
+              </select>}
               <button
                 type="button"
                 className="plus"
@@ -898,13 +938,14 @@ export function App() {
             </div>
           </header>
           <div className="stream">
+            {threadPane.task && <TaskCard task={threadPane.task} />}
             {threadPane.messages.map((m) => (
               <Msg
                 key={m.id}
                 m={m}
                 replies={0}
                 status={null}
-                onReact={(emoji) => api.react(m.seq, emoji).then((r) => setThreadPane((p) => replaceMessage(p, r.message)))}
+                onReact={(emoji) => api.react(m.seq, emoji).then((r) => onThreadMessage(r.message))}
               />
             ))}
             <div ref={threadBottomRef} />
@@ -1551,6 +1592,7 @@ function Msg({
           <strong>{m.authorName}</strong>
           <span className="role">{m.authorRole}</span>
           <time>{time}</time>
+          {m.taskEvent && <span className="st">Task {m.taskEvent.action.type} · v{m.taskEvent.revision}</span>}
           {status && <span className={`st st-${status}`}>{status.replace("_", " ")}</span>}
         </div>
         {m.body && <div className="msg-b">{renderBody(m.body)}</div>}

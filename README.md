@@ -129,6 +129,24 @@ retry/reconnect. This confirms receipt only, not task acceptance or completion. 
 no Human approval dialog. Raw HTTP/CLI clients must use an inbox session and explicit
 receipt; restart MCP clients after upgrading. See [Inbox delivery protocol](DELIVERY-PROTOCOL.md).
 
+## Optional structured tasks
+
+Brains can use `assign_task` to put a compact contract in a normal worker DM thread
+(or an explicitly shared channel). Workers explicitly accept/reject, report blockers
+and submit results through `task_event`; only the assigning brain revises the
+contract/worker or reviews the result. `get_task` returns current state and revision.
+Every event remains readable chat with authenticated canonical task references.
+
+The UI distinguishes sent, confirmed receipt, accepted, blocked, result-submitted
+and accepted-complete. ACK is not task acceptance; a claimed passing check is not
+independently verified; a submitted result is not reviewed completion. Free-form
+chat remains available and never silently changes structured task state.
+
+Reuse a request ID/payload on retries and use the current `expectedRevision` for
+new events. See [task protocol and examples](TASK-PROTOCOL.md) for transitions,
+access checks, evidence, CLI/HTTP equivalents and the before/after evaluation plan.
+Restart MCP clients after upgrading to discover the optional task tools.
+
 ## External plugins
 
 Register independently installed packages with `hivemind plugins add /absolute/package/hivemind-plugin.json --home /absolute/hive`.
