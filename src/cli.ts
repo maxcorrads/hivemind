@@ -2,7 +2,7 @@
 import { resolve, dirname, basename, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import { DEFAULT_PORT, DEFAULT_WAIT_MS, MCP_HEARTBEAT_MS } from "./shared/types.ts";
+import { DEFAULT_PORT, DEFAULT_WAIT_MS, MCP_HEARTBEAT_MS, MESSAGE_EVENT_TYPES, type MessageEventType } from "./shared/types.ts";
 import { guessMime } from "./shared/mime.ts";
 import {
   agentDownloadToFile,
@@ -27,12 +27,13 @@ function help() {
   hivemind join --as brain [--focus …] [--project slug] [--resume Name]
   hivemind wait [--timeout ${Math.round(DEFAULT_WAIT_MS / 1000)}] [--session UUID]
   hivemind ack DELIVERY_ID --session SESSION_ID
-  hivemind send --channel NAME --body TEXT [--thread ID] [--file PATH]
+  hivemind send --channel NAME --body TEXT [--thread ID] [--file PATH] [--event-type progress|blocker|question|action_required]
   hivemind send --to NAME --body TEXT [--file PATH]
   hivemind fetch --id ATT_ID [--out DIR]
   hivemind react --seq N --emoji 👍
   hivemind gc
   hivemind history --channel NAME [--thread ID]
+  hivemind expand --channel ID --ids MESSAGE_ID,MESSAGE_ID [--after SEQ]
   hivemind search --q TEXT [--channel NAME] [--before N]
   hivemind agents
   hivemind channels
@@ -217,6 +218,8 @@ async function main() {
   }
 
   if (cmd === "send") {
+    const eventType = arg(argv, "--event-type") as MessageEventType | undefined;
+    if (eventType !== undefined && !MESSAGE_EVENT_TYPES.includes(eventType)) throw new Error("Unknown --event-type");
     const body = argRest(argv, "--body") ?? "";
     const file = arg(argv, "--file");
     if (!body && !file) throw new Error("send --body TEXT  and/or  --file PATH");
@@ -244,10 +247,20 @@ async function main() {
     const result = await agentRequest<{ ok: boolean; seq: number; id: string }>(
       "POST",
       `/api/agent/channels/${encodeURIComponent(channel)}/messages`,
-      { body, threadId: thread ?? null, attachmentIds },
+      { body, threadId: thread ?? null, attachmentIds, eventType },
       token,
     );
     console.log(`sent ${result.id} seq ${result.seq}`);
+    return;
+  }
+
+  if (cmd === "expand") {
+    const channel = arg(argv, "--channel");
+    const ids = arg(argv, "--ids");
+    if (!channel || !ids) throw new Error("expand --channel ID --ids MESSAGE_ID,MESSAGE_ID [--after SEQ]");
+    const after = arg(argv, "--after");
+    console.log(JSON.stringify(await agentRequest("POST", "/api/agent/messages/expand",
+      { channel, messageIds: ids.split(","), ...(after === undefined ? {} : { afterSeq: Number(after) }) }, token), null, 2));
     return;
   }
 

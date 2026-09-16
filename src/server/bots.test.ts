@@ -172,7 +172,7 @@ test("compact mail does not merge bot sources/threads or hide Human commands", a
   const { hive, human, channel, bot, brain } = setup(t);
   const roots = ["A", "B"].map((body) => hive.postMessage(human, { channel: channel.id, body }));
   for (const [i, root] of roots.entries()) {
-    for (let j = 0; j < 2; j++) hive.postBotMessage(bot.bot, channel.id, { eventId: `${i}:${j}`, threadId: root.id, body: `Update ${j}` });
+    for (let j = 0; j < 2; j++) hive.postBotMessage(bot.bot, channel.id, { eventId: `${i}:${j}`, threadId: root.id, body: `Update ${j}`, eventType: "progress" });
   }
   const command = hive.postMessage(human, { channel: channel.id, body: "Investigate locally" });
   const second = hive.createChannel(human, { name: "second", type: "private", project: "chapter", memberNames: [brain.agent.name, bot.bot.name] });

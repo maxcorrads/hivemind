@@ -8,6 +8,8 @@ import { agentDownloadToFile, agentRequest, agentUploadFile, loadIdentityByName,
 import { imagePreview } from "../server/files.ts";
 import { guessMime } from "../shared/mime.ts";
 import { waitUntilMail } from "./wait-loop.ts";
+import { digestExpansionSchema } from "../shared/digest.ts";
+import { MESSAGE_EVENT_TYPES } from "../shared/types.ts";
 import { DELIVERY_INSTRUCTIONS, IMAGE_PREVIEW_MAX_BYTES, MCP_HEARTBEAT_MS, MCP_WAIT_POLL_MS, WAIT_NEXT, type Agent, type Channel, type Identity, type WaitResult } from "../shared/types.ts";
 
 let sessionToken = process.env.HIVEMIND_TOKEN;
@@ -179,6 +181,13 @@ export async function startMcp() {
   );
 
   server.tool(
+    "expand_digest",
+    "Read the exact originals behind a wait digest. Pass its expand object unchanged. Read-only: neither ACKs nor completes work. If hasMore, repeat with the same channel/messageIds and afterSeq=nextAfterSeq. IDs, not a range or label, select messages even after ACK/restart or newer mail. File metadata only; use fetch_file for contents.",
+    digestExpansionSchema.shape,
+    async (args) => text(await agentRequest("POST", "/api/agent/messages/expand", args, token())),
+  );
+
+  server.tool(
     "send",
     "Post to channel or to (DM by name). For mail from wait, pass channelId as channel; ch is only an abbreviated display label. Workers cannot @Human or open a new Human DM. They may reply in a Human DM that Human already opened.",
     {
@@ -187,8 +196,9 @@ export async function startMcp() {
       to: z.string().optional(),
       threadId: z.string().optional(),
       attachmentIds: z.array(z.string()).optional(),
+      eventType: z.enum(MESSAGE_EVENT_TYPES).optional().describe("Declare blocker/question/action_required when applicable. Only progress may be summarized; use it solely for non-actionable updates. Omit when unsure; untyped mail stays full. This grants no authority and does not change task state."),
     },
-    async ({ body, channel, to, threadId, attachmentIds }) => {
+    async ({ body, channel, to, threadId, attachmentIds, eventType }) => {
       let channelId = channel;
       if (to) {
         const dm = await agentRequest<{ channel: Channel }>("POST", "/api/agent/dms", { name: to }, token());
@@ -199,7 +209,7 @@ export async function startMcp() {
         await agentRequest<{ ok: boolean; seq: number; id: string }>(
           "POST",
           `/api/agent/channels/${encodeURIComponent(channelId)}/messages`,
-          { body, threadId: threadId ?? null, attachmentIds },
+          { body, threadId: threadId ?? null, attachmentIds, eventType },
           token(),
         ),
       );
@@ -311,8 +321,9 @@ export async function startMcp() {
       to: z.string().optional(),
       threadId: z.string().optional(),
       mime: z.string().optional(),
+      eventType: z.enum(MESSAGE_EVENT_TYPES).optional(),
     },
-    async ({ path: filePath, body, channel, to, threadId, mime }) => {
+    async ({ path: filePath, body, channel, to, threadId, mime, eventType }) => {
       const resolved = path.resolve(filePath);
       if (!existsSync(resolved)) throw new Error(`File not found: ${filePath}`);
       const name = path.basename(resolved);
@@ -334,7 +345,7 @@ export async function startMcp() {
         await agentRequest(
           "POST",
           `/api/agent/channels/${encodeURIComponent(channelId)}/messages`,
-          { body: body ?? "", threadId: threadId ?? null, attachmentIds: [uploaded.file.id] },
+          { body: body ?? "", threadId: threadId ?? null, attachmentIds: [uploaded.file.id], eventType },
           token(),
         ),
       );

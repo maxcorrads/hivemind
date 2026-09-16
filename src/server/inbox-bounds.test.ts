@@ -100,8 +100,11 @@ test("compact digests retain distinct channel IDs when abbreviated labels coinci
   }));
   f.hive.db.prepare("UPDATE agents SET inbox_cursor = (SELECT MAX(seq) FROM messages) WHERE id = ?").run(f.reader.agent.id);
   const expected = new Map<string, number[]>();
-  for (const channel of channels) expected.set(channel.id, [0, 1].map(i =>
-    f.hive.postMessage(worker.agent, { channel: channel.id, body: `Report ${i}` }).seq));
+  for (const channel of channels) {
+    const root = f.hive.postMessage(worker.agent, { channel: channel.id, body: "Report 0", eventType: "progress" });
+    const reply = f.hive.postMessage(worker.agent, { channel: channel.id, threadId: root.id, body: "Report 1", eventType: "progress" });
+    expected.set(channel.id, [root.seq, reply.seq]);
+  }
   const compact = await f.wait(); bounded(compact);
   assert.equal(compact.mail!.length, channels.length);
   for (const [index, item] of compact.mail!.entries()) {
@@ -110,7 +113,7 @@ test("compact digests retain distinct channel IDs when abbreviated labels coinci
     assert.equal(item.excerpt, "Report 1");
     assert.equal(item.body, undefined);
     assert.equal(item.ch, `#${prefix}${index === 0 ? "" : "…"}`);
-    const history = f.hive.listMessages(f.reader.agent, item.channelId).messages;
+    const history = f.hive.listMessages(f.reader.agent, item.channelId, { threadId: item.rootId }).messages;
     assert.ok(expected.get(item.channelId)!.every(seq => history.some(message => message.seq === seq)));
   }
   const raw = await f.wait(false); bounded(raw);
