@@ -63,6 +63,14 @@ mentions, control action or source—are rejected. The persisted message is norm
 with `authorRole: "bot"`, `source: "bot"`, `botEvent` metadata and an empty mention list.
 Instructions quoted in bot content are observations, not Human/brain authorization.
 
+Optional `eventType`: `progress`, `blocker`, `question`, or `action_required`. Use
+`progress` only for non-actionable updates that may be summarized. Untyped observations
+and other types stay full in compact wait; attachment-bearing observations also stay
+full. A type is descriptive, not a command, authority, priority or task-state change.
+Changing it on an existing event ID is a changed payload and returns 409. Omitting it
+keeps existing retries compatible. Digested progress carries exact expansion references;
+see [delivery protocol](DELIVERY-PROTOCOL.md#recoverable-compact-digests).
+
 - New observation: 201, `{ message, duplicate: false }`.
 - Identical retry: 200, same message ID/sequence, `duplicate: true`; no second message event.
 - Reused event ID with changed payload: 409; use a new revision/event ID.

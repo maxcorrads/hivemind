@@ -64,7 +64,7 @@ export class InboxReader {
   private hydrate(seq: number): Message {
     const row = this.db.prepare(`SELECT m.id, m.seq, m.channel_id, m.thread_id, m.author_id,
       substr(CAST(m.body AS BLOB), 1, ?) AS body, length(CAST(m.body AS BLOB)) AS body_bytes, m.kind, m.control,
-      m.mentions, m.created_at, a.name AS author_name, a.role AS author_role
+      m.mentions, m.created_at, m.event_type, a.name AS author_name, a.role AS author_role
       FROM messages m LEFT JOIN agents a ON a.id = m.author_id WHERE m.seq = ?`).get(BODY_MAX * 3, seq)!;
     // SQLite's TEXT substr/length stop at NUL. Bound the byte read instead: UTF-8
     // needs at most three bytes per UTF-16 unit (our BODY_MAX convention). A
@@ -86,6 +86,7 @@ export class InboxReader {
       authorId: String(row.author_id), authorName: String(row.author_name ?? "unknown"),
       authorRole: (row.author_role ?? "worker") as Message["authorRole"], body,
       kind: row.kind as Message["kind"], control: row.control as Message["control"],
+      ...(row.event_type ? { eventType: row.event_type as Message["eventType"] } : {}),
       mentions: JSON.parse(String(row.mentions)), createdAt: Number(row.created_at), attachments,
       ...(bot ? { source: "bot" as const,
         ...(bot.oversized ? {} : { botEvent: JSON.parse(String(bot.metadata)) as BotEvent }) } : {}),

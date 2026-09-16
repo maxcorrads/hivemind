@@ -219,6 +219,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       channel: c.req.param("id"),
       body: String(body.body ?? ""),
       threadId: body.threadId ?? null,
+      eventType: body.eventType,
       attachmentIds: Array.isArray(body.attachmentIds) ? body.attachmentIds.map(String) : undefined,
     });
     hive.markRead(human, message.channelId, message.seq);
@@ -383,6 +384,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       channel: c.req.param("id"),
       body: String(body.body ?? ""),
       threadId: body.threadId ?? null,
+      eventType: body.eventType,
       attachmentIds: Array.isArray(body.attachmentIds) ? body.attachmentIds.map(String) : undefined,
     });
     return c.json({ ok: true, seq: message.seq, id: message.id });
@@ -390,6 +392,10 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   agent.get("/messages/:seq", (c) => {
     const me = c.get("me");
     return c.json({ message: hive.getVisibleMessage(me, Number(c.req.param("seq"))) });
+  });
+  agent.post("/messages/expand", async (c) => {
+    const body = await c.req.json().catch(() => { throw new HiveError(400, "Expected JSON"); });
+    return c.json(hive.expandDigest(c.get("me"), body));
   });
   agent.post("/files", async (c) => {
     const me = c.get("me");

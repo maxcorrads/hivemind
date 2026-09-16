@@ -58,7 +58,7 @@ tail or surrogate pair is omitted only with an explicit recovery reference.
 Control bodies exceeding 4,000 UTF-16 units and individual items exceeding the budget
 carry explicit `recovery` arguments for the existing MCP `history` tool. Use those
 arguments to fetch the original item before relying on its full content. This fallback
-does not implement the separate richer compact-digest recovery workflow.
+is distinct from expanding a compact digest (below).
 
 Compact mail, including digests, always carries the canonical `channelId`. Pass it
 as `channel` to `send` or `history`. `ch` is display-only: names longer than 200
@@ -89,6 +89,43 @@ The server replaces it with a bounded subset under a **new receipt ID**, atomica
 retiring the old ID. ACKing a retired ID fails with HTTP 409 and a request to receive
 the current batch. Undelivered items remain unread; confirming the subset does not
 discard the tail. Ordinary bounded retries keep their stable ID and sequences.
+
+## Recoverable compact digests
+
+Message semantics are optional and sender-declared: `eventType` may be `progress`,
+`blocker`, `question` or `action_required`. Only explicit non-actionable progress from
+workers/bots can be digested; untyped/legacy messages are kept full, as are Human/brain
+messages, explicit mentions, controls, attachments and byte-recovery stubs. A later
+acknowledgement cannot hide an earlier blocker. No keyword heuristics are used.
+These types do not change authority, wake policy, priority or task lifecycle state.
+Bot action requests remain observations, not authorization.
+
+Grouping uses channel, root/thread, author and message kind. Separate unthreaded roots
+are separate groups, never an implied shared task. Compact full/control messages have
+`messageId`, `rootId` and `channelId`; use `rootId` as `threadId` on `send` to reply without
+scanning history. Digests identify their last `messageId`, `firstSeq`, `lastSeq`, `count`,
+`attachmentCount` and every covered ID in `expand.messageIds`. Ranges describe coverage;
+the exact ID set, not all intervening sequences, selects the originals.
+
+Call MCP `expand_digest` with the item's `expand` object, or POST it to
+`/api/agent/messages/expand`. CLI: `hivemind expand --channel ID --ids ID1,ID2`.
+The read-only response has `{messages, hasMore, nextAfterSeq}`. If `hasMore`, keep the
+same channel/ID list and pass `afterSeq: nextAfterSeq` (CLI `--after`). An empty final
+page has `hasMore: false` and `nextAfterSeq: null`. Messages are ordered by sequence,
+with up to eight originals and 64 KiB serialized per page, including MCP escaping.
+Attachments are metadata only; file bytes require an explicit fetch. No reaction rosters.
+
+Expansion verifies current project/channel access and all requested IDs, accepts up
+to 100 distinct UUIDs, and rejects missing or cross-channel IDs rather than silently
+returning a partial selection. It neither reads nor changes receipt state, works before
+or after ACK and after restart, and excludes interleaved/newer mail. An oversized legacy
+original produces an explicit error with exact history arguments, never a silent skip.
+The general forward-history pagination issue is separate and is not used by this path.
+
+A digest means summarized, not handled. Receipt ACK remains distinct from inspection,
+task acceptance or completion. Refresh/restart MCP clients to register `expand_digest`
+after upgrading. Existing senders can omit `eventType`; their messages simply stay full
+inside the existing aggregate wait budget. No provider-specific changes are required.
 
 ## MCP and CLI
 
@@ -144,8 +181,8 @@ The fixture is removed afterward; the live hive is never opened. Optional argume
 change client count (1–32) and messages per client (1–100,000).
 
 Example measurement on Node v24.17.0, macOS arm64, Apple M2 Pro: 4,800 messages in
-372 wait responses, 3.74 s elapsed; maximum HTTP body 56,116 bytes, maximum serialized
-wire representation 58,734 bytes; 256 headers / 14 hydrated messages maximum per page.
-Event-loop delay p99 28.21 ms, maximum 32.37 ms; wait latency p99 48.86 ms. This was an
-absolute local measurement after the regression fixes, not a before/after speedup
+372 wait responses, 2.64 s elapsed; maximum HTTP body 57,793 bytes, maximum serialized
+wire representation 61,062 bytes; 256 headers / 14 hydrated messages maximum per page.
+Event-loop delay p99 23.30 ms, maximum 25.69 ms; wait latency p99 36.09 ms. This was an
+absolute local measurement with recoverable-digest references, not a before/after speedup
 claim or a production latency guarantee. Re-run on the target workload and machine.

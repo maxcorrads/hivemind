@@ -7,6 +7,8 @@ import {
   BODY_MAX,
   DEFAULT_WAIT_MS,
   FILES_PER_MESSAGE,
+  MESSAGE_EVENT_TYPES,
+  WAIT_MAX_BYTES,
   PRESENCE_IDLE_MS,
   REACTION_EMOJIS,
   HiveError,
@@ -32,6 +34,7 @@ import {
   type WaitResult,
   type InboxStatus,
   type QueueEstimate,
+  type DigestExpansionResult,
 } from "../shared/types.ts";
 import { InboxDeliveryStore } from "./inbox-delivery.ts";
 import { InboxReader } from "./inbox-reader.ts";
@@ -41,6 +44,7 @@ import { pickName } from "./names.ts";
 import { hiveHome } from "./paths.ts";
 import { packWait } from "./wait-format.ts";
 import { botMessageSchema, createBotSchema } from "../shared/bot-message.ts";
+import { digestExpansionSchema } from "../shared/digest.ts";
 import { assertAllowedMime, commitUpload, openBlob, removeOrphanBlobs, streamUpload } from "./files.ts";
 
 export { hiveHome } from "./paths.ts";
@@ -86,6 +90,7 @@ type MessageRow = {
   body: string;
   kind: "chat" | "system" | "control";
   control: ControlAction | null;
+  event_type?: Message["eventType"] | null;
   mentions: string;
   created_at: number;
 };
@@ -240,6 +245,9 @@ export class Hive {
         payload TEXT NOT NULL
       );
     `);
+    if (!this.db.prepare("PRAGMA table_info(messages)").all().some(column => column.name === "event_type")) {
+      this.db.exec("ALTER TABLE messages ADD COLUMN event_type TEXT");
+    }
   }
 
   private tableSql(name: string): string {
@@ -968,7 +976,8 @@ export class Hive {
       if (!root || root.channel_id !== ch.id || root.thread_id) throw new HiveError(400, "Thread must be a root message in this channel");
     }
     const event: BotEvent = { eventId: input.eventId, ...(input.origin ? { origin: input.origin } : {}) };
-    const payloadHash = hashToken(JSON.stringify({ body: input.body, attachmentIds: input.attachmentIds, ...event }));
+    const payloadHash = hashToken(JSON.stringify({ body: input.body, attachmentIds: input.attachmentIds, ...event,
+      ...(input.eventType ? { eventType: input.eventType } : {}) }));
     let messageId: string;
     this.db.exec("BEGIN IMMEDIATE");
     try {
@@ -981,9 +990,9 @@ export class Hive {
         return { message: this.getMessageById(previous.message_id), duplicate: true };
       }
       messageId = crypto.randomUUID();
-      this.db.prepare(`INSERT INTO messages (id, channel_id, thread_id, author_id, body, kind, mentions, created_at)
-        VALUES (?, ?, ?, ?, ?, 'chat', '[]', ?)`)
-        .run(messageId, ch.id, input.threadId ?? null, actor.id, input.body, now());
+      this.db.prepare(`INSERT INTO messages (id, channel_id, thread_id, author_id, body, kind, mentions, created_at, event_type)
+        VALUES (?, ?, ?, ?, ?, 'chat', '[]', ?, ?)`)
+        .run(messageId, ch.id, input.threadId ?? null, actor.id, input.body, now(), input.eventType ?? null);
       this.db.prepare(`INSERT INTO bot_events (message_id, bot_id, channel_id, thread_id, event_id, metadata, payload_hash)
         VALUES (?, ?, ?, ?, ?, ?, ?)`)
         .run(messageId, actor.id, ch.id, input.threadId ?? "", input.eventId, JSON.stringify(event), payloadHash);
@@ -1008,11 +1017,14 @@ export class Hive {
       body: string;
       threadId?: string | null;
       kind?: Message["kind"];
+      eventType?: Message["eventType"];
       control?: ControlAction | null;
       source?: "hive" | "telegram";
       attachmentIds?: string[];
     },
   ): Message {
+    if (input.eventType !== undefined && !MESSAGE_EVENT_TYPES.includes(input.eventType))
+      throw new HiveError(400, "Unknown message eventType");
     const ch = this.getChannel(input.channel, actor.projectId);
     if (!this.canSeeChannel(actor, ch) || !this.canPost(actor, ch)) {
       throw new HiveError(403, `You cannot post to ${channelLabel(ch)}`);
@@ -1055,8 +1067,8 @@ export class Hive {
       }
     }
     this.db.prepare(
-      `INSERT INTO messages (id, channel_id, thread_id, author_id, body, kind, control, mentions, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO messages (id, channel_id, thread_id, author_id, body, kind, control, mentions, created_at, event_type)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       id,
       ch.id,
@@ -1067,6 +1079,7 @@ export class Hive {
       input.control ?? null,
       JSON.stringify(mentions),
       t,
+      input.eventType ?? null,
     );
     if (input.threadId) {
       this.db.prepare(
@@ -1144,10 +1157,60 @@ export class Hive {
       body: row.body,
       kind: row.kind,
       control: row.control,
+      ...(row.event_type ? { eventType: row.event_type } : {}),
       mentions: JSON.parse(row.mentions) as string[],
       createdAt: row.created_at,
       ...(botRow ? { source: "bot" as const, botEvent: JSON.parse(botRow.metadata) as BotEvent } : {}),
     };
+  }
+
+  /** Expand an immutable set of digest IDs; this never reads or mutates receipt state. */
+  expandDigest(actor: Agent, raw: unknown): DigestExpansionResult {
+    if (actor.role !== "brain" && actor.role !== "worker") throw new HiveError(403, "Only agents expand inbox digests");
+    const parsed = digestExpansionSchema.safeParse(raw);
+    if (!parsed.success) throw new HiveError(400, "Invalid digest reference: " + parsed.error.issues.map(i => i.message).join("; "));
+    const { channel, messageIds, afterSeq = 0 } = parsed.data;
+    const ch = this.getChannel(channel, actor.projectId);
+    if (!this.canSeeChannel(actor, ch)) throw new HiveError(403, "Cannot read this channel");
+    const headers = this.db.prepare(`SELECT id, seq, channel_id, length(CAST(body AS BLOB)) AS body_bytes,
+      COALESCE((SELECT length(CAST(metadata AS BLOB)) FROM bot_events WHERE message_id = messages.id), 0) AS metadata_bytes FROM messages
+      WHERE id IN (SELECT value FROM json_each(?)) ORDER BY seq`).all(JSON.stringify(messageIds)) as
+        { id: string; seq: number; channel_id: string; body_bytes: number; metadata_bytes: number }[];
+    // Validate the entire selection before emitting any content, including past pages.
+    if (headers.length !== messageIds.length || headers.some(m => m.channel_id !== ch.id))
+      throw new HiveError(404, "Digest messages are missing or outside this channel");
+    if (afterSeq !== 0 && !headers.some(m => m.seq === afterSeq))
+      throw new HiveError(400, "afterSeq must be a sequence from this digest");
+    const pending = headers.filter(m => m.seq > afterSeq);
+    const messages: Message[] = [];
+    const result = (items: Message[]): DigestExpansionResult => ({ messages: items,
+      hasMore: items.length < pending.length,
+      nextAfterSeq: items.length < pending.length ? items.at(-1)!.seq : null });
+    for (const header of pending) {
+      // No reaction rosters or file bytes; hydrate one selected original at a time.
+      // Legacy oversized originals are rejected before loading their content.
+      const tooLarge = () => new HiveError(413, "Original exceeds expansion byte limit. Use history with " +
+        JSON.stringify({ channel: ch.id, threadId: header.id, since: header.seq - 1, limit: 1, meta: false }));
+      if (header.body_bytes + header.metadata_bytes > WAIT_MAX_BYTES) {
+        if (!messages.length) throw tooLarge();
+        break;
+      }
+      const row = this.db.prepare("SELECT * FROM messages WHERE id = ?").get(header.id) as MessageRow;
+      const message = this.mapMessage(row);
+      message.attachments = this.db.prepare("SELECT id, name, mime, bytes FROM attachments WHERE message_id = ? ORDER BY id LIMIT ?")
+        .all(header.id, FILES_PER_MESSAGE) as AttachmentMeta[];
+      const candidate = result([...messages, message]);
+      const pretty = JSON.stringify(candidate, null, 2);
+      const bytes = Math.max(Buffer.byteLength(pretty),
+        Buffer.byteLength(JSON.stringify({ content: [{ type: "text", text: pretty }] })));
+      if (bytes > WAIT_MAX_BYTES) {
+        if (!messages.length) throw tooLarge();
+        break;
+      }
+      messages.push(message);
+      if (messages.length === 8) break;
+    }
+    return result(messages);
   }
 
   listMessages(
