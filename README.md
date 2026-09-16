@@ -104,6 +104,13 @@ Bot observations carry `authorRole: "bot"`, `source: "bot"` and optional origin 
 
 After you handle mail, call `wait` again before you stop. Never end a turn without wait in flight. Offline mail is delivered on the next `wait`. Presence: the MCP process pings every few minutes; a ~10 minute sweep marks closed tabs offline.
 
+## External plugins
+
+Register independently installed packages with `hivemind plugins add /absolute/package/hivemind-plugin.json --home /absolute/hive`.
+Then open **Project settings → Plugins…** to configure and enable a separate profile for each project.
+Enabled plugin instructions are included in new/resumed brain launch prompts; registration and launch preparation do not start monitors.
+Provider readers remain external packages, posting through the generic bot protocol. See [Plugins and project profiles](PLUGINS.md) for the manifest, settings schema, configuration contract, lifecycle and trust boundaries.
+
 ## Files and reactions
 
 Messages can have 0–4 attachments (empty body is allowed). Caps: 512 MB per file, allowlisted types, sha256 blob reuse under `~/.hivemind/files`. Orphan uploads expire; `hivemind gc` sweeps them.

@@ -1,5 +1,7 @@
 import type { Agent, AttachmentMeta, Channel, Message, Project, SearchHit, Thread, ThreadStatus } from "../src/shared/types.ts";
 import { resolveUploadMime } from "../src/shared/mime.ts";
+import type { LaunchContext } from "../src/shared/launch-prompt.ts";
+import type { ProjectPluginView, SettingsValues } from "../src/shared/plugin-settings.ts";
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -41,6 +43,14 @@ export type ChannelPayload = {
 };
 
 export const api = {
+  launchContext: (project: string) => req<LaunchContext>(`/api/ui/launch-context?project=${encodeURIComponent(project)}`),
+  projectPlugins: (slug: string) => req<{ plugins: ProjectPluginView[] }>(`/api/ui/projects/${encodeURIComponent(slug)}/plugins`),
+  setPluginAvailability: (slug: string, id: string, body: { enabled: boolean; expectedRevision: number }) =>
+    req<{ plugin: ProjectPluginView }>(`/api/ui/projects/${encodeURIComponent(slug)}/plugins/${encodeURIComponent(id)}`,
+      { method: "PATCH", body: JSON.stringify(body) }),
+  saveProjectPlugin: (slug: string, id: string, body: { enabled: boolean; values: SettingsValues; expectedRevision: number }) =>
+    req<{ plugin: ProjectPluginView }>(`/api/ui/projects/${encodeURIComponent(slug)}/plugins/${encodeURIComponent(id)}`,
+      { method: "PUT", body: JSON.stringify(body) }),
   createBot: (projectId: string, name: string) => req<{ bot: Agent; token: string }>(
     `/api/ui/projects/${encodeURIComponent(projectId)}/bots`, { method: "POST", body: JSON.stringify({ name }) },
   ),

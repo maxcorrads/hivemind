@@ -8,6 +8,7 @@ import { Hive, describeAgent } from "./hive.ts";
 import { safeFileName } from "./files.ts";
 import { publicTelegramView, readTelegramFile, removeTelegramProjectSlug, writeTelegramFile } from "./telegram.ts";
 import { parseProjectSlug } from "../shared/project.ts";
+import { launchContext, projectPlugins, saveProjectPlugin, setProjectPluginAvailability } from "./plugins.ts";
 
 export type AppHooks = {
   telegramRunning?: () => boolean;
@@ -38,6 +39,31 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   app.get("/api/health", (c) => c.json({ ok: true, name: "hivemind" }));
 
   const ui = new Hono();
+  ui.get("/launch-context", (c) => {
+    const slug = c.req.query("project");
+    const project = slug ? hive.getProjectBySlug(slug) : undefined;
+    return c.json(launchContext(hive.home, c.req.url, project));
+  });
+  ui.get("/projects/:slug/plugins", (c) =>
+    c.json({ plugins: projectPlugins(hive.home, hive.getProjectBySlug(c.req.param("slug"))) }));
+  ui.patch("/projects/:slug/plugins/:id", async (c) => {
+    const project = hive.getProjectBySlug(c.req.param("slug"));
+    try {
+      return c.json({ plugin: await setProjectPluginAvailability(hive.home, project,
+        c.req.param("id"), await c.req.json()) });
+    } catch (error) {
+      throw new HiveError(400, error instanceof Error ? error.message : "Could not change plugin availability");
+    }
+  });
+  ui.put("/projects/:slug/plugins/:id", async (c) => {
+    const project = hive.getProjectBySlug(c.req.param("slug"));
+    try {
+      return c.json({ plugin: await saveProjectPlugin(hive.home, project, c.req.url,
+        c.req.param("id"), await c.req.json()) });
+    } catch (error) {
+      throw new HiveError(400, error instanceof Error ? error.message : "Could not save plugin settings");
+    }
+  });
   ui.get("/snapshot", (c) => {
     const human = hive.getAgent("human");
     const inbox = hive.mentionInbox(human, 30);
