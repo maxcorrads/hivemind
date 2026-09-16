@@ -5,6 +5,7 @@ import { isLiveSearchQuery, parseSearchQuery } from "../src/shared/search-query.
 import { api, connectWs, type ChannelPayload, type Snapshot, type TelegramSettings } from "./api.ts";
 import { LaunchSheet } from "./LaunchSheet.tsx";
 import { BotOrigin, BotSetup } from "./Bots.tsx";
+import { ProjectPlugins } from "./ProjectPlugins.tsx";
 import { loadMailLog, mergeMailLog, saveMailLog } from "./mail-log.ts";
 import { renderBody } from "./markdown.tsx";
 
@@ -140,6 +141,7 @@ export function App() {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteNames, setInviteNames] = useState<string[]>([]);
   const [botProject, setBotProject] = useState<string | null>(null);
+  const [pluginsProject, setPluginsProject] = useState<string | null>(null);
   const [botBusy, setBotBusy] = useState(false);
   const [confirmClear, setConfirmClear] = useState<string | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -1066,6 +1068,7 @@ export function App() {
             }}
           >
             <h2>Project {editingProject}</h2>
+            <button type="button" className="text-btn" onClick={() => setPluginsProject(editingProject)}>Plugins…</button>
             <label>
               Name
               <input value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)} autoFocus />
@@ -1134,6 +1137,11 @@ export function App() {
             </div>
           </form>
         </div>
+      )}
+
+      {pluginsProject && projects.some((p) => p.slug === pluginsProject) && (
+        <ProjectPlugins key={pluginsProject} project={projects.find((p) => p.slug === pluginsProject)!}
+          onClose={() => setPluginsProject(null)} />
       )}
 
       {creatingProject && (

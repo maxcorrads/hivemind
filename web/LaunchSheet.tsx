@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Agent, Project, Seniority } from "../src/shared/types.ts";
 import { modelChoiceGroups, parseChoiceId, selectedChoiceId } from "../src/shared/launch-models.ts";
+import { api } from "./api.ts";
+import { projectLaunchTools, type LaunchContext } from "../src/shared/launch-prompt.ts";
 import {
   EFFORTS,
   buildLaunchBlock,
@@ -212,6 +214,21 @@ export function LaunchSheet({
   const [tunes, setTunes] = useState<Record<string, { model: string; effort: string }>>(initial.tunes);
   const [copied, setCopied] = useState<string | null>(null);
   const copiedTimer = useRef<number | null>(null);
+  const [contexts, setContexts] = useState<Record<string, LaunchContext>>({});
+  const [contextErrors, setContextErrors] = useState<Record<string, string>>({});
+  const launchContext = contexts[projectSlug];
+  const contextError = contextErrors[projectSlug];
+  useEffect(() => {
+    let active = true;
+    setContexts({});
+    setContextErrors({});
+    for (const project of projects) {
+      api.launchContext(project.slug)
+        .then((context) => { if (active) setContexts((old) => ({ ...old, [project.slug]: context })); })
+        .catch((error) => { if (active) setContextErrors((old) => ({ ...old, [project.slug]: String(error.message || error) })); });
+    }
+    return () => { active = false; };
+  }, [projects.map((p) => p.id + ":" + p.slug).join("|")]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -263,10 +280,12 @@ export function LaunchSheet({
 
   const built = useMemo(() => {
     try {
+      if (contextError) throw new Error(contextError);
       return {
         ok: true as const,
         text: buildLaunchBlock({
           ...shared,
+          ...projectLaunchTools(launchContext, project ?? projects.find((p) => p.slug === projectSlug), role),
           workspacePath,
           projectSlug: project?.slug ?? projectSlug,
           hiveName,
@@ -279,7 +298,7 @@ export function LaunchSheet({
     } catch (e) {
       return { ok: false as const, error: String((e as Error).message || e) };
     }
-  }, [software, extraFlags, model, effort, workspacePath, cdWorktree, project, projectSlug, hiveName, passProject, role, seniority, focus, adoptUntrusted]);
+  }, [software, extraFlags, model, effort, workspacePath, cdWorktree, project, projects, projectSlug, hiveName, passProject, role, seniority, focus, adoptUntrusted, launchContext, contextError]);
 
   const resumeBlocks = useMemo(() => {
     return roster.map((agent) => {
@@ -294,12 +313,14 @@ export function LaunchSheet({
         if (agent.role !== "brain" && agent.role !== "worker") {
           return { agent, hive, ok: false as const, error: "not an agent", text: "" };
         }
+        if (contextErrors[hive?.slug ?? ""]) throw new Error(contextErrors[hive!.slug]);
         return {
           agent,
           hive,
           ok: true as const,
           text: buildLaunchBlock({
             ...shared,
+            ...projectLaunchTools(contexts[hive?.slug ?? ""], hive, agent.role),
             model: seat.model,
             effort: seat.effort,
             workspacePath: path,
@@ -316,7 +337,7 @@ export function LaunchSheet({
         return { agent, hive, ok: false as const, error: String((e as Error).message || e), text: "" };
       }
     });
-  }, [roster, projects, project, projectSlug, pathDirty, workspacePath, software, extraFlags, model, effort, tunes, cdWorktree, passProject, adoptUntrusted]);
+  }, [roster, projects, project, projectSlug, pathDirty, workspacePath, software, extraFlags, model, effort, tunes, cdWorktree, passProject, adoptUntrusted, contexts, contextErrors]);
 
   const remember = (patch: Partial<Saved> = {}) => {
     const next: Saved = {
@@ -384,13 +405,22 @@ export function LaunchSheet({
   );
 
   const canCopyOne = built.ok && projects.length > 0;
-  const canCopyAll = resume && resumeBlocks.some((b) => b.ok);
+  const canCopyAll = resume && resumeBlocks.length > 0 && resumeBlocks.every((b) => b.ok);
 
   return (
     <div className="modal" onClick={onClose}>
       <div className="sheet sheet-wide" onClick={(e) => e.stopPropagation()}>
         <div className="sheet-body">
           <h2>Launch agent</h2>
+          <p className="help-p" role="status">
+            {contextError ? "Cannot load Hivemind connection: " + contextError : !launchContext ? "Loading Hivemind connection…" :
+              role === "worker" ? "Hivemind connection ready. Workers do not need project plugin instructions." :
+              launchContext.pluginError ? "Cannot load project tools: " + launchContext.pluginError :
+              "Project plugins: " + (launchContext.plugins.map((p) => p.name).join(", ") || "none enabled") + ". Instructions are included; no tool is started here."}
+          </p>
+          {launchContext && softwareFamily(software) !== "claude" && <p className="help-p">
+            Use this CLI’s normal Hivemind MCP configuration. Automatic server binding is available for Claude launchers.
+          </p>}
           <p className="help-p">
             One block: command plus prompt. Paste it in a terminal. One chat is one employee. Hive is the Hivemind project name.
           </p>
