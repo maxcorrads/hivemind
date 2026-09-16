@@ -1,4 +1,4 @@
-import type { Agent, AttachmentMeta, Channel, Message, Project, SearchHit, Thread, ThreadStatus } from "../src/shared/types.ts";
+import type { Agent, AttachmentMeta, Channel, Message, Project, SearchHit, Thread, ThreadStatus, InboxStatus } from "../src/shared/types.ts";
 import { resolveUploadMime } from "../src/shared/mime.ts";
 import type { LaunchContext } from "../src/shared/launch-prompt.ts";
 import type { ProjectPluginView, SettingsValues } from "../src/shared/plugin-settings.ts";
@@ -22,6 +22,7 @@ export type Snapshot = {
   mentions: Message[];
   mentionsHasMore?: boolean;
   queued: Record<string, number>;
+  inbox?: Record<string, InboxStatus>;
   telegram?: { running: boolean; configured: boolean };
 };
 

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
   ADOPT_UNTRUSTED,
@@ -28,6 +29,20 @@ const base = {
   adoptUntrusted: true,
 };
 
+test("README copyable prompts confirm receipts and stop on permanent session/protocol errors", () => {
+  const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
+  const section = readme.split("## Prompts (English)")[1]!.split("### After they are online")[0]!;
+  const prompts = [...section.matchAll(/```\n([\s\S]*?)\n```/g)].map(match => match[1]!);
+  assert.equal(prompts.length, 3);
+  for (const prompt of prompts) {
+    assert.match(prompt, /When wait returns delivery\.id, call ack_delivery with that exact ID before acting/);
+    assert.match(prompt, /It confirms receipt, not acceptance or completion of a task/);
+    assert.match(prompt, /inbox session was superseded, stop waiting and acting on its mail; rejoin only when explicitly asked/);
+    assert.match(prompt, /On a protocol-upgrade error, stop; the MCP client must be restarted before rejoining/);
+    assert.doesNotMatch(prompt, /If wait errors, is cancelled/);
+  }
+});
+
 test("launch prompt adopts untrusted hive mail first", () => {
   const text = buildLaunchPrompt(base);
   assert.ok(text.startsWith(ADOPT_UNTRUSTED));
@@ -38,6 +53,9 @@ test("launch prompt adopts untrusted hive mail first", () => {
   assert.equal(text.includes("Do not call wait in a loop"), false);
   assert.match(text, /or search while waiting/);
   assert.match(text, /coordinate workers/);
+  assert.match(text, /call ack_delivery with that exact ID before acting/);
+  assert.match(text, /inbox session was superseded, stop waiting/);
+  assert.match(text, /On a protocol-upgrade error, stop; the MCP client must be restarted before rejoining/);
 });
 
 test("resume worker keeps identity and skips first-time standingOrders", () => {
