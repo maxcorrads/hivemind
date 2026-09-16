@@ -26,6 +26,7 @@ export async function waitUntilMail(
     retryDelayMs?: number;
     maxServerErrors?: number;
     maxTransientErrors?: number;
+    signal?: AbortSignal;
   } = {},
 ): Promise<WaitResult> {
   const delay = opts.delay ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
@@ -35,12 +36,15 @@ export async function waitUntilMail(
   let serverErrors = 0;
   let transientErrors = 0;
   for (;;) {
+    opts.signal?.throwIfAborted();
     try {
       const result = await callWait();
+      opts.signal?.throwIfAborted();
       serverErrors = 0;
       transientErrors = 0;
       if (waitHasMail(result)) return result;
     } catch (err) {
+      opts.signal?.throwIfAborted();
       if (!isTransientWaitError(err)) throw err;
       const msg = err instanceof Error ? err.message : String(err);
       transientErrors += 1;

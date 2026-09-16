@@ -6,6 +6,8 @@ import { api, connectWs, type ChannelPayload, type Snapshot, type TelegramSettin
 import { LaunchSheet } from "./LaunchSheet.tsx";
 import { BotOrigin, BotSetup } from "./Bots.tsx";
 import { ProjectPlugins } from "./ProjectPlugins.tsx";
+import { InboxReceipt } from "./InboxReceipt.tsx";
+import type { InboxStatus } from "../src/shared/types.ts";
 import { loadMailLog, mergeMailLog, saveMailLog } from "./mail-log.ts";
 import { renderBody } from "./markdown.tsx";
 
@@ -250,8 +252,8 @@ export function App() {
         return;
       }
       if (ev.type === "queued") {
-        const q = ev.payload as { agentId: string; n: number };
-        setSnap((s) => (s ? { ...s, queued: { ...s.queued, [q.agentId]: q.n } } : s));
+        const q = ev.payload as { agentId: string; n: number; inbox: InboxStatus };
+        setSnap((s) => (s ? { ...s, queued: { ...s.queued, [q.agentId]: q.n }, inbox: { ...s.inbox, [q.agentId]: q.inbox } } : s));
         return;
       }
       if (ev.type === "project") {
@@ -692,6 +694,7 @@ export function App() {
                       projectName={project.name}
                       onCreateBot={() => setBotProject(project.id)}
                       queued={snap.queued ?? {}}
+                      inbox={snap.inbox}
                       onOpen={onAgent}
                       confirmClear={confirmClear}
                       setConfirmClear={setConfirmClear}
@@ -1757,6 +1760,7 @@ export function AgentList({
   projectName,
   onCreateBot,
   queued,
+  inbox = {},
   onOpen,
   confirmClear,
   setConfirmClear,
@@ -1766,6 +1770,7 @@ export function AgentList({
   projectName: string;
   onCreateBot: () => void;
   queued: Record<string, number>;
+  inbox?: Record<string, InboxStatus>;
   onOpen: (a: Agent) => void;
   confirmClear: string | null;
   setConfirmClear: (n: string | null) => void;
@@ -1783,7 +1788,7 @@ export function AgentList({
       {human && <PersonRow agent={human} onOpen={() => undefined} self />}
       {brains.length > 0 && <div className="subh">brain</div>}
       {brains.map((a) => (
-        <PersonRow key={a.id} agent={a} queued={queued[a.id] ?? 0} onOpen={() => onOpen(a)} />
+        <PersonRow key={a.id} agent={a} queued={queued[a.id] ?? 0} inbox={inbox[a.id]} onOpen={() => onOpen(a)} />
       ))}
       {workers.length > 0 && <div className="subh">worker</div>}
       {workers.map((a) => (
@@ -1791,6 +1796,7 @@ export function AgentList({
           key={a.id}
           agent={a}
           queued={queued[a.id] ?? 0}
+          inbox={inbox[a.id]}
           onOpen={() => onOpen(a)}
           confirmClear={confirmClear}
           setConfirmClear={setConfirmClear}
@@ -1816,6 +1822,7 @@ export function AgentList({
 function PersonRow({
   agent,
   queued,
+  inbox,
   onOpen,
   self,
   confirmClear,
@@ -1824,6 +1831,7 @@ function PersonRow({
 }: {
   agent: Agent;
   queued?: number;
+  inbox?: InboxStatus;
   onOpen: () => void;
   self?: boolean;
   confirmClear?: string | null;
@@ -1835,16 +1843,21 @@ function PersonRow({
     <div className={`person ${agent.online ? "on" : "off"}`}>
       <button type="button" className="person-main" onClick={onOpen} disabled={self}>
         <Avatar name={agent.name} role={agent.role} online={agent.online} small />
-        <span className="pn">{agent.name}</span>
-        {bars > 0 && (
-          <span className="stripes" title={agent.seniority ?? ""}>
-            {Array.from({ length: bars }, (_, i) => (
-              <i key={i} />
-            ))}
+        <span className="person-details">
+          <span className="person-label">
+            <span className="pn">{agent.name}</span>
+            {bars > 0 && (
+              <span className="stripes" title={agent.seniority ?? ""}>
+                {Array.from({ length: bars }, (_, i) => (
+                  <i key={i} />
+                ))}
+              </span>
+            )}
+            {agent.seniority && <span className="sen">{agent.seniority}</span>}
           </span>
-        )}
-        {agent.seniority && <span className="sen">{agent.seniority}</span>}
-        {agent.focus && <span className="focus">{agent.focus}</span>}
+          {agent.focus && <span className="focus">{agent.focus}</span>}
+          <InboxReceipt status={inbox} />
+        </span>
         {queued ? (
           <em className="queue-badge" title={`${queued} waiting`}>
             {queued > 99 ? "99+" : queued}
