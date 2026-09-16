@@ -194,6 +194,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       hasOlder: listed.hasOlder,
       threads: hive.threadsInChannel(ch.id),
       replyCounts: hive.replyCounts(ch.id),
+      task: threadId && hive.tasks.has(threadId) ? hive.tasks.get(human, threadId) : undefined,
     });
   });
   ui.post("/channels", async (c) => {
@@ -396,6 +397,15 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   agent.post("/messages/expand", async (c) => {
     const body = await c.req.json().catch(() => { throw new HiveError(400, "Expected JSON"); });
     return c.json(hive.expandDigest(c.get("me"), body));
+  });
+  agent.post('/tasks', async c => {
+    const body = await c.req.json().catch(() => { throw new HiveError(400, 'Expected JSON'); });
+    return c.json(hive.tasks.assign(c.get('me'), body));
+  });
+  agent.get('/tasks/:id', c => c.json({ task: hive.tasks.get(c.get('me'), c.req.param('id')) }));
+  agent.post('/tasks/:id/events', async c => {
+    const body = await c.req.json().catch(() => { throw new HiveError(400, 'Expected JSON'); });
+    return c.json(hive.tasks.event(c.get('me'), c.req.param('id'), body));
   });
   agent.post("/files", async (c) => {
     const me = c.get("me");

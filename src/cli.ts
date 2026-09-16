@@ -14,7 +14,7 @@ import {
   loadIdentityByName,
   saveIdentity,
 } from "./client/http.ts";
-import { existsSync, mkdirSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import type { Agent, Channel, Message, WaitResult } from "./shared/types.ts";
 import { parseJoinArgs } from "./shared/join-args.ts";
 
@@ -34,6 +34,9 @@ function help() {
   hivemind gc
   hivemind history --channel NAME [--thread ID]
   hivemind expand --channel ID --ids MESSAGE_ID,MESSAGE_ID [--after SEQ]
+  hivemind task assign --input FILE.json
+  hivemind task get --id TASK_ID
+  hivemind task event --id TASK_ID --input FILE.json
   hivemind search --q TEXT [--channel NAME] [--before N]
   hivemind agents
   hivemind channels
@@ -214,6 +217,22 @@ async function main() {
     const sessionId = arg(argv, "--session");
     if (!deliveryId || !sessionId) throw new Error("ack DELIVERY_ID --session SESSION_ID (from the received wait result)");
     console.log(JSON.stringify(await agentRequest("POST", "/api/agent/inbox/ack", { sessionId, deliveryId }, token)));
+    return;
+  }
+
+  if (cmd === 'task') {
+    const operation = argv[1];
+    const id = arg(argv, '--id');
+    if (operation === 'get' && id) {
+      console.log(JSON.stringify(await agentRequest('GET', `/api/agent/tasks/${encodeURIComponent(id)}`, undefined, token), null, 2));
+      return;
+    }
+    const file = arg(argv, '--input');
+    if (!file || !['assign', 'event'].includes(operation) || (operation === 'event' && !id))
+      throw new Error('task assign --input FILE.json | task get --id ID | task event --id ID --input FILE.json');
+    const input = JSON.parse(readFileSync(file, 'utf8'));
+    console.log(JSON.stringify(await agentRequest('POST', operation === 'assign' ? '/api/agent/tasks' :
+      `/api/agent/tasks/${encodeURIComponent(id!)}/events`, input, token), null, 2));
     return;
   }
 
