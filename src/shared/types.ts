@@ -11,6 +11,9 @@ export const DEFAULT_WAIT_MS = 1_500_000;
 export const MCP_WAIT_POLL_MS = 20_000;
 export const BODY_MAX = 4_000;
 export const WAIT_MAIL_CAP = 8;
+export const WAIT_SCAN_MAX = 256;
+export const WAIT_MAX_BYTES = 64 * 1024;
+export const WAIT_URGENT_RESERVE = 2;
 export const PRESENCE_IDLE_MS = 10 * 60 * 1000;
 export const MCP_HEARTBEAT_MS = 150_000;
 export const FILE_MAX_BYTES = 512 * 1024 * 1024;
@@ -128,6 +131,8 @@ export type Message = {
   attachments?: AttachmentMeta[];
   reactions?: ReactionCount[];
   botEvent?: BotEvent;
+  /** Explicit bounded-wait fallback; full content remains in history. */
+  recovery?: { channel: string; threadId: string; since: number; limit: 1; meta: false };
 };
 
 export type Thread = {
@@ -150,10 +155,14 @@ export type WaitControlItem = {
   from: string;
   action: ControlAction;
   body: string;
+  recovery?: Message["recovery"];
 };
 
 export type WaitMailItem = {
   seq: number;
+  /** Canonical reference for send/history; ch is display-only. */
+  channelId: string;
+  /** Bounded display label; an ellipsis marks an abbreviated name. */
   ch: string;
   from: string;
   authorRole: Role;
@@ -165,6 +174,7 @@ export type WaitMailItem = {
   count?: number;
   threadId?: string | null;
   attachments?: AttachmentMeta[];
+  recovery?: Message["recovery"];
 };
 
 export type WaitYou = Pick<Agent, "name" | "role" | "seniority" | "focus" | "online" | "project">;
@@ -179,6 +189,18 @@ export type WaitResult = {
   messages: Message[];
   mail?: WaitMailItem[];
   more?: number;
+  page?: InboxPage;
+};
+
+export type QueueEstimate = { atLeast: number; exact: boolean };
+export type InboxPage = {
+  scannedRows: number;
+  hydratedMessages: number;
+  scanThroughSeq: number;
+  acknowledgedThroughSeq: number;
+  afterAckThroughSeq: number;
+  continuation: boolean;
+  remaining: QueueEstimate;
 };
 
 export type InboxDelivery = {
@@ -195,6 +217,7 @@ export type InboxStatus = {
   awaitingReceipt: number;
   acknowledgedMessages: number;
   lastAcknowledgedAt: number | null;
+  queued?: QueueEstimate;
 };
 
 export class HiveError extends Error {

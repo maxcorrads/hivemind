@@ -14,7 +14,7 @@ import {
   DEFAULT_PROJECT_SLUG,
   HUMAN_ID,
   HUMAN_NAME,
-  WAIT_MAIL_CAP,
+  WAIT_SCAN_MAX,
   type Agent,
   type BotEvent,
   type AttachmentMeta,
@@ -30,10 +30,11 @@ import {
   type Thread,
   type ThreadStatus,
   type WaitResult,
-  type InboxDelivery,
   type InboxStatus,
+  type QueueEstimate,
 } from "../shared/types.ts";
-import { InboxDeliveryStore, INBOX_BATCH_MAX } from "./inbox-delivery.ts";
+import { InboxDeliveryStore } from "./inbox-delivery.ts";
+import { InboxReader } from "./inbox-reader.ts";
 import { canonicalWorktree, parseProjectSlug, resolveJoinProject } from "../shared/project.ts";
 import { clampSearchLimit, likeNeedle, parseSearchQuery, snippetAround } from "../shared/search-query.ts";
 import { pickName } from "./names.ts";
@@ -112,6 +113,7 @@ export class Hive {
   bus = new EventEmitter();
   readonly home: string;
   readonly inbox: InboxDeliveryStore;
+  private readonly inboxReader: InboxReader;
   private waiters = new Map<string, Waiter>();
   private telegramOrigin = new Set<string>();
 
@@ -126,6 +128,7 @@ export class Hive {
     this.migrateProjects();
     this.bootstrap();
     this.inbox = new InboxDeliveryStore(this.db);
+    this.inboxReader = new InboxReader(this.db, this.inbox);
   }
 
   private migrate() {
@@ -1437,82 +1440,20 @@ export class Hive {
 
   inboxStatuses(): Record<string, InboxStatus> {
     return Object.fromEntries(this.listAgents().filter(a => a.role === "brain" || a.role === "worker")
-      .map(a => [a.id, this.inbox.status(a.id)]));
+      .map(a => [a.id, { ...this.inbox.status(a.id), queued: this.inboxReader.estimate(a) }]));
   }
 
-  private offeredBatch(actor: Agent, sessionId: string, seqs: number[], throughSeq: number) {
-    const delivery = this.inbox.offer(actor.id, sessionId, seqs, throughSeq);
-    const messages = delivery.messageSeqs.map(seq => {
-      const row = this.db.prepare("SELECT * FROM messages WHERE seq = ?").get(seq) as MessageRow | undefined;
-      if (!row || !this.canSeeChannel(actor, this.getChannel(row.channel_id)))
-        throw new HiveError(409, "Pending inbox message is no longer accessible");
-      return this.mapMessage(row);
-    });
-    this.emitQueued(actor.id);
-    return { messages: this.decorate(messages), more: this.countUnseen(actor), delivery };
-  }
-
-  private takeUnseen(actor: Agent, sessionId: string, limit = WAIT_MAIL_CAP): { messages: Message[]; more: number; delivery?: InboxDelivery } {
-    this.inbox.requireSession(actor.id, sessionId);
-    const pending = this.inbox.pending(actor.id);
-    if (pending) return this.offeredBatch(actor, sessionId, JSON.parse(pending.seqs), pending.through_seq);
-    const row = this.db.prepare("SELECT inbox_cursor FROM agents WHERE id = ?").get(actor.id) as {
-      inbox_cursor: number;
-    };
-    let cursor = row?.inbox_cursor ?? 0;
-    const channels = this.listChannels(actor);
-    if (channels.length === 0) return { messages: [], more: 0 };
-    const ids = channels.map((c) => c.id);
-    const placeholders = ids.map(() => "?").join(",");
-    const delivered: Message[] = [];
-    const conversations = new Set<string>();
-    const capConversations = actor.role === "brain";
-    let newCursor = cursor;
-    let scan = cursor;
-    let overflow = false;
-
-    for (;;) {
-      const rows = this.db.prepare(
-        `SELECT * FROM messages WHERE seq > ? AND channel_id IN (${placeholders}) AND author_id != ?
-         ORDER BY seq ASC LIMIT 100`,
-      ).all(scan, ...ids, actor.id) as MessageRow[];
-      if (rows.length === 0) break;
-      for (const r of rows) {
-        const message = this.mapMessage(r);
-        if (!this.isFor(actor, message)) {
-          newCursor = message.seq;
-          scan = message.seq;
-          continue;
-        }
-        const known = conversations.has(message.channelId);
-        const atCap = delivered.length >= INBOX_BATCH_MAX || (capConversations ? !known && conversations.size >= limit : delivered.length >= limit);
-        if (atCap) {
-          overflow = true;
-          break;
-        }
-        delivered.push(message);
-        conversations.add(message.channelId);
-        newCursor = message.seq;
-        scan = message.seq;
-      }
-      if (overflow || rows.length < 100) break;
-      scan = rows[rows.length - 1]!.seq;
-    }
-
-    if (delivered.length) return this.offeredBatch(actor, sessionId, delivered.map(m => m.seq), newCursor);
-
-    // Only unaddressed mail may be skipped without a receipt. Actual deliveries advance on ACK.
-    if (newCursor > cursor) this.inbox.skipUnaddressed(actor.id, sessionId, newCursor);
-    const packed = { messages: [], more: 0 };
-    this.emitQueued(actor.id);
-    return packed;
+  private takeUnseen(actor: Agent, sessionId: string, compact: boolean, scanLimit: number): WaitResult {
+    const result = this.inboxReader.take(this.getAgent(actor.id), sessionId, compact, scanLimit);
+    this.emitQueued(actor.id, result.page!.remaining);
+    return result;
   }
 
   queuedCounts(): Record<string, number> {
     const out: Record<string, number> = {};
     for (const agent of this.listAgents()) {
       if (agent.role !== "brain" && agent.role !== "worker") continue;
-      out[agent.id] = this.countUnseen(agent);
+      out[agent.id] = this.inboxReader.estimate(agent).atLeast;
     }
     return out;
   }
@@ -1525,40 +1466,11 @@ export class Hive {
     );
   }
 
-  private emitQueued(agentId: string) {
+  private emitQueued(agentId: string, estimate?: QueueEstimate) {
     const agent = this.getAgent(agentId);
     if (agent.role !== "brain" && agent.role !== "worker") return;
-    this.bus.emit("queued", { agentId, n: this.countUnseen(agent), inbox: this.inbox.status(agentId) });
-  }
-
-  private countUnseen(actor: Agent, cap = 99): number {
-    if (actor.role !== "brain" && actor.role !== "worker") return 0;
-    const row = this.db.prepare("SELECT inbox_cursor FROM agents WHERE id = ?").get(actor.id) as {
-      inbox_cursor: number;
-    };
-    const cursor = this.inbox.pending(actor.id)?.through_seq ?? row?.inbox_cursor ?? 0;
-    const channels = this.listChannels(actor);
-    if (channels.length === 0) return 0;
-    const ids = channels.map((c) => c.id);
-    const placeholders = ids.map(() => "?").join(",");
-    let n = 0;
-    let scan = cursor;
-    for (let page = 0; page < 40 && n < cap; page += 1) {
-      const rows = this.db.prepare(
-        `SELECT * FROM messages WHERE seq > ? AND channel_id IN (${placeholders}) AND author_id != ?
-         ORDER BY seq ASC LIMIT 100`,
-      ).all(scan, ...ids, actor.id) as MessageRow[];
-      if (rows.length === 0) break;
-      for (const r of rows) {
-        if (this.isFor(actor, this.mapMessage(r))) {
-          n += 1;
-          if (n >= cap) return n;
-        }
-      }
-      scan = rows[rows.length - 1]!.seq;
-      if (rows.length < 100) break;
-    }
-    return n;
+    const queued = estimate ?? this.inboxReader.estimate(agent);
+    this.bus.emit("queued", { agentId, n: queued.atLeast, inbox: { ...this.inbox.status(agentId), queued } });
   }
 
   /** Wait wakes agents only for mail addressed to them, not public chatter. */
@@ -1622,34 +1534,42 @@ export class Hive {
     this.inbox.requireSession(actor.id, sessionId);
     this.touch(actor.id, true);
     const compact = Boolean(opts.compact);
-    const pack = (batch: { messages: Message[]; more: number; delivery?: InboxDelivery }): WaitResult => ({
-      ...packWait(this.getAgent(actor.id), batch.messages, batch.more, compact, (id) =>
-        channelLabel(this.getChannel(id)),
-      ), ...(batch.delivery ? { delivery: batch.delivery } : {}),
-    });
+    const empty = () => packWait(this.getAgent(actor.id), [], 0, compact, () => "");
 
     return new Promise((resolve, reject) => {
       let done = false;
+      let scannedRows = 0;
+      let hydratedMessages = 0;
+      let acknowledgedThroughSeq: number | undefined;
+      const take = () => {
+        const batch = this.takeUnseen(actor, sessionId, compact, WAIT_SCAN_MAX - scannedRows);
+        const page = batch.page!;
+        scannedRows += page.scannedRows;
+        hydratedMessages += page.hydratedMessages;
+        acknowledgedThroughSeq ??= page.acknowledgedThroughSeq;
+        batch.page = { ...page, scannedRows, hydratedMessages, acknowledgedThroughSeq };
+        return batch;
+      };
       let waiter: Waiter;
       const cleanup = () => {
         if (this.waiters.get(actor.id) === waiter) this.waiters.delete(actor.id);
         signal?.removeEventListener("abort", onAbort);
         clearTimeout(timer);
       };
-      const deliver = (batch: { messages: Message[]; more: number; delivery?: InboxDelivery }) => {
+      const deliver = (batch: WaitResult) => {
         if (done) return;
         done = true;
         cleanup();
         this.touch(actor.id, true);
-        try { resolve(pack(batch)); } catch (error) { reject(error); }
+        resolve(batch);
       };
       const finish = (consume: boolean) => {
         if (done) return;
         if (!consume || signal?.aborted) {
-          deliver({ messages: [], more: 0 });
+          deliver(empty());
           return;
         }
-        try { deliver(this.takeUnseen(actor, sessionId)); }
+        try { deliver(take()); }
         catch (error) { done = true; cleanup(); reject(error); }
       };
       waiter = {
@@ -1670,8 +1590,12 @@ export class Hive {
       signal?.addEventListener("abort", onAbort, { once: true });
       if (signal?.aborted) { finish(false); return; }
       try {
-        const first = this.takeUnseen(actor, sessionId);
-        if (first.messages.length > 0) deliver(first);
+        const first = take();
+        // Empty progress pages continue immediately. MCP loops internally; don't
+        // add a full long-poll timeout for each page of unaddressed backlog.
+        // The initial scan and any scan after sleeping share this request's
+        // budget. Return at exhaustion even when only public noise was scanned.
+        if (!first.idle || first.page!.continuation || scannedRows === WAIT_SCAN_MAX) deliver(first);
       } catch (error) { done = true; cleanup(); reject(error); }
     });
   }
