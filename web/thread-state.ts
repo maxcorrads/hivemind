@@ -29,10 +29,13 @@ export function reconcileTask(current: TaskSnapshot | undefined, incoming: TaskS
   if (!current) return incoming;
   if (!incoming) return current;
   if (current.id !== incoming.id || current.channelId !== incoming.channelId) return incoming;
-  const latest = incoming.revision >= current.revision ? incoming : current;
+  let latest = incoming.revision >= current.revision ? incoming : current;
   // ACK does not increment revision. Keep it only for the same dispatch; a revised
   // contract/reassignment must still reset receipt, even if its state looks earlier.
   if (current.dispatchSeq !== incoming.dispatchSeq || current.workerId !== incoming.workerId) return latest;
+  const incomingRoomRevision = incoming.room?.roomRevision ?? 0, currentRoomRevision = current.room?.roomRevision ?? 0;
+  const room = incomingRoomRevision === currentRoomRevision ? latest.room : incomingRoomRevision > currentRoomRevision ? incoming.room : current.room;
+  if (room && latest.room !== room) latest = { ...latest, room };
   const receivedAt = latest.receivedAt ?? current.receivedAt ?? incoming.receivedAt;
   return receivedAt === latest.receivedAt ? latest : {
     ...latest, receivedAt, state: latest.state === 'sent' ? 'delivered' : latest.state,

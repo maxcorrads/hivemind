@@ -843,3 +843,12 @@ html.dark .primary { background: var(--wax); color: #1b2017; }
 .task-card p { margin: 9px 0; white-space: pre-wrap; }
 .task-card summary { cursor: pointer; }
 .task-card small { opacity: .75; }
+.room-panel { border: 1px solid var(--border, #7775); border-radius: 10px; padding: 16px; margin-bottom: 18px; overflow-wrap: anywhere; }
+.room-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.room-panel p { white-space: pre-wrap; }
+.room-panel form { display: grid; gap: 10px; margin-top: 12px; }
+.room-panel form label { display: grid; gap: 5px; }
+.room-panel textarea { min-height: 70px; width: 100%; }
+.room-panel input[type=checkbox] { width: auto; }
+.room-panel button { margin-top: 8px; }
+.room-panel [role=alert] { color: #d85b4b; }

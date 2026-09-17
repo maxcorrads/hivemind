@@ -47,6 +47,7 @@ import { botMessageSchema, createBotSchema } from "../shared/bot-message.ts";
 import { digestExpansionSchema } from "../shared/digest.ts";
 import { TaskStore } from './tasks.ts';
 import { NotificationStore } from './notifications.ts';
+import { RoomStore } from './rooms.ts';
 import { ROUTINE_BATCH_MS } from '../shared/notifications.ts';
 import { isDirectRecipient } from '../shared/message-target.ts';
 import type { TaskEnvelope } from '../shared/tasks.ts';
@@ -125,6 +126,7 @@ export class Hive {
   readonly home: string;
   readonly inbox: InboxDeliveryStore;
   readonly tasks: TaskStore;
+  readonly rooms: RoomStore;
   readonly notifications: NotificationStore;
   private readonly inboxReader: InboxReader;
   private waiters = new Map<string, Waiter>();
@@ -141,6 +143,7 @@ export class Hive {
     this.migrateProjects();
     this.bootstrap();
     this.tasks = new TaskStore(this);
+    this.rooms = new RoomStore(this);
     this.notifications = new NotificationStore(this);
     this.inbox = new InboxDeliveryStore(this.db);
     this.inboxReader = new InboxReader(this.db, this.inbox, this.notifications, options.routineBatchMs ?? ROUTINE_BATCH_MS);
@@ -1004,6 +1007,7 @@ export class Hive {
         this.db.exec("COMMIT");
         return { message: this.getMessageById(previous.message_id), duplicate: true };
       }
+      if (this.rooms.peek(ch.id)?.state === 'archived') throw new HiveError(409, 'Channel is archived; suspend this source link. Do not discard undelivered source events.');
       messageId = crypto.randomUUID();
       this.db.prepare(`INSERT INTO messages (id, channel_id, thread_id, author_id, body, kind, mentions, created_at, event_type)
         VALUES (?, ?, ?, ?, ?, 'chat', '[]', ?, ?)`)
@@ -1045,6 +1049,9 @@ export class Hive {
     if (!this.canSeeChannel(actor, ch) || !this.canPost(actor, ch)) {
       throw new HiveError(403, `You cannot post to ${channelLabel(ch)}`);
     }
+    if (actor.role !== 'human' && this.rooms.peek(ch.id)?.state === 'archived' &&
+      (!input.threadId || !this.tasks.has(input.threadId)))
+      throw new HiveError(409, 'Archived room: no new work or root messages; use an existing task thread for closure');
     if (actor.role === "human" && !ch.memberIds.includes(actor.id)) {
       this.addMember(ch.id, actor.id);
       ch.memberIds.push(actor.id);

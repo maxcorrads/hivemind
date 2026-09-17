@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { roomTaskSchema, type RoomTask } from './rooms.ts';
 
 const text = z.string().trim().min(1).max(700);
 const lines = z.array(z.string().trim().min(1).max(240)).max(8);
@@ -17,7 +18,7 @@ export const taskContractSchema = z.object({
   scope: lines,
   nonGoals: lines,
   acceptanceCriteria: lines.min(1),
-  dependencies: ids,
+  dependencies: ids.describe('Existing task UUIDs only, not descriptions or message sequence numbers. Use [] when there are no task dependencies; put prose in scope.'),
   worktree: relative.optional(),
   branch: z.string().trim().min(1).max(200).regex(/^[^\s\x00-\x1f\x7f]+$/).optional(),
   evidenceSeqs: seqs,
@@ -41,7 +42,7 @@ export const taskActionSchema = z.discriminatedUnion('type', [
 ]);
 const requestId = z.string().min(1).max(100).regex(/^[A-Za-z0-9._-]+$/);
 export const assignTaskSchema = z.object({ requestId, worker: z.string().min(1).max(100),
-  channel: z.string().min(1).max(200).optional(), contract: taskContractSchema }).strict();
+  channel: z.string().min(1).max(200).optional(), contract: taskContractSchema, room: roomTaskSchema.optional() }).strict();
 export const taskEventSchema = z.object({ requestId, expectedRevision: z.number().int().positive().safe(), action: taskActionSchema }).strict();
 export type TaskContract = z.infer<typeof taskContractSchema>;
 export type TaskResult = z.infer<typeof taskResultSchema>;
@@ -54,6 +55,7 @@ export type TaskEnvelope = {
   action: TaskAction | { type: 'assign'; contract: TaskContract };
 };
 export type TaskSnapshot = {
+  room?: RoomTask;
   id: string; channelId: string; assignerId: string; assignerName: string; workerId: string; workerName: string;
   revision: number; contractVersion: number; state: TaskState; contract: TaskContract;
   dispatchSeq: number; receivedAt: number | null; lastEventSeq: number; updatedAt: number;

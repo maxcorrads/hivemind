@@ -1,6 +1,6 @@
 import type { Hive } from './hive.ts';
 import type { StatementSync } from 'node:sqlite';
-import { HiveError, type Agent } from '../shared/types.ts';
+import { HiveError, MESSAGE_EVENT_TYPES, type Agent } from '../shared/types.ts';
 import { notificationRoute, subscriptionSchema, subscriptionScopeSchema,
   type NotificationHeader, type Subscription } from '../shared/notifications.ts';
 
@@ -52,7 +52,12 @@ export class NotificationStore {
   classify(actor: Agent, row: NotificationHeader, pending = false) {
     const rule = row.visible && !row.received && row.author_id !== actor.id && !pending
       ? this.lookup.get(actor.id, row.channel_id, row.root_id) : undefined;
-    const route = notificationRoute(row, actor.id, rule ? JSON.parse(String(rule.event_types)) : undefined);
+    // An active persistent contract makes its coordinating brain the default
+    // observer even in public channels. Explicit subscriptions still win.
+    const room = !rule && row.visible && row.author_role === 'bot' && actor.role === 'brain'
+      ? this.hive.rooms.peek(row.channel_id) : null;
+    const defaults = room?.state === 'active' && room.coordinatorId === actor.id ? ['message', ...MESSAGE_EVENT_TYPES] : undefined;
+    const route = notificationRoute(row, actor.id, rule ? JSON.parse(String(rule.event_types)) : defaults);
     // A changed subscription cannot invalidate or silently consume a receipt already offered.
     // Access and identity are still rechecked on every replay.
     if (pending) route.addressed = Number(Boolean(row.visible && !row.received && row.author_id !== actor.id));

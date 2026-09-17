@@ -12,6 +12,7 @@ import type { InboxStatus } from "../src/shared/types.ts";
 import { loadMailLog, mergeMailLog, saveMailLog } from "./mail-log.ts";
 import { renderBody } from "./markdown.tsx";
 import { TaskCard } from './TaskCard.tsx';
+import { RoomPanel } from './RoomPanel.tsx';
 import type { TaskSnapshot } from '../src/shared/tasks.ts';
 import { selectThread, beginThreadLoad, failThreadLoad, receiveThreadMessage, receiveThreadTask, receiveThreadSnapshot, type ThreadView } from './thread-state.ts';
 
@@ -140,6 +141,7 @@ export function App() {
   const [threadDraft, setThreadDraft] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [live, setLive] = useState(false);
+  const [roomTick, setRoomTick] = useState(0);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [newTopic, setNewTopic] = useState("");
@@ -239,6 +241,7 @@ export function App() {
     refreshSnap().catch((e) => setErr(String(e.message || e)));
     const off = connectWs((ev) => {
       if (ev.type === "hello") {
+        setRoomTick(t => t + 1);
         refreshSnap().catch(() => undefined);
         const selected = selRef.current;
         const root = threadIdRef.current;
@@ -291,8 +294,17 @@ export function App() {
       }
       if (ev.type === 'task') {
         const task = ev.payload as TaskSnapshot;
+        if (selRef.current.kind === 'channel' && selRef.current.id === task.channelId) setRoomTick(t => t + 1);
         if (viewingThread(task.channelId, task.id))
           setThreadView(view => receiveThreadTask(selectThread(view, task.channelId, task.id), task));
+        return;
+      }
+      if (ev.type === 'room') {
+        const payload = ev.payload as { channelId: string };
+        if (selRef.current.kind === 'channel' && selRef.current.id === payload.channelId) {
+          setRoomTick(t => t + 1);
+          if (threadIdRef.current) loadThread(payload.channelId, threadIdRef.current).catch(() => undefined);
+        }
         return;
       }
       if (ev.type === "project") {
@@ -848,6 +860,7 @@ export function App() {
               )}
             </header>
             <div className="stream">
+              {activeChannel && ['private', 'public'].includes(activeChannel.type) && <RoomPanel key={activeChannel.id} channel={activeChannel} agents={snap.agents} tick={roomTick} />}
               {pane?.hasOlder && (
                 <button
                   type="button"

@@ -5,6 +5,11 @@ readers, install their dependencies, or require a particular provider CLI or mod
 An external plugin owns its source integration, monitoring, retries and state; it
 delivers observations directly through the [bot protocol](BOT-PROTOCOL.md).
 
+An optional [channel source-lifecycle protocol](ROOMS.md#archive-and-source-lifecycle)
+lets a plugin register its own subscriptions and report channel-scoped pause/resume
+requests. Existing plugins are not stopped automatically: they must implement that
+extension. Registration/enabling/configuration below retain their existing behavior.
+
 ## Register an installed package
 
 ```sh

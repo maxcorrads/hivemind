@@ -17,7 +17,10 @@ export class TaskStore {
         message_id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES task_records(id) ON DELETE CASCADE,
         actor_id TEXT NOT NULL, request_id TEXT NOT NULL, request_hash TEXT NOT NULL, envelope TEXT NOT NULL,
         UNIQUE(actor_id, request_id));
-      CREATE INDEX IF NOT EXISTS task_event_task ON task_events(task_id);`);
+      CREATE INDEX IF NOT EXISTS task_event_task ON task_events(task_id);
+      CREATE TABLE IF NOT EXISTS task_request_aliases (actor_id TEXT NOT NULL, request_id TEXT NOT NULL,
+        request_hash TEXT NOT NULL, task_id TEXT NOT NULL REFERENCES task_records(id) ON DELETE CASCADE,
+        PRIMARY KEY(actor_id, request_id));`);
   }
   private get db() { return this.hive.db; }
   private row(id: string): Row {
@@ -31,7 +34,7 @@ export class TaskStore {
     if (actor.role === 'bot' || !this.hive.canSeeChannel(actor, this.hive.getChannel(row.channel_id)))
       throw new HiveError(403, 'Cannot read this task');
     const task = JSON.parse(row.snapshot) as TaskSnapshot;
-    return { ...task, receivedAt: row.received_at,
+    return { ...task, room: this.hive.rooms.taskInfo(task), receivedAt: row.received_at,
       state: task.state === 'sent' && row.received_at !== null ? 'delivered' : task.state };
   }
   private worker(actor: Agent, name: string) {
@@ -57,8 +60,9 @@ export class TaskStore {
   }
   private hash(input: unknown) { return createHash('sha256').update(JSON.stringify(input)).digest('hex'); }
   private retry(actor: Agent, requestId: string, hash: string) {
-    const old = this.db.prepare('SELECT message_id, task_id, request_hash FROM task_events WHERE actor_id = ? AND request_id = ?')
-      .get(actor.id, requestId) as StoredEvent | undefined;
+    const old = (this.db.prepare('SELECT message_id, task_id, request_hash FROM task_events WHERE actor_id = ? AND request_id = ?')
+      .get(actor.id, requestId) ?? this.db.prepare('SELECT task_id AS message_id, task_id, request_hash FROM task_request_aliases WHERE actor_id=? AND request_id=?')
+        .get(actor.id, requestId)) as StoredEvent | undefined;
     if (!old) return;
     const task = this.get(actor, old.task_id);
     if (old.request_hash !== hash) throw new HiveError(409, 'requestId was already used for a different task event');
@@ -117,12 +121,20 @@ export class TaskStore {
       this.evidence(worker, input.contract.evidenceSeqs);
       const channel = input.channel ? this.hive.getChannel(input.channel, actor.projectId) : this.hive.openDm(actor, worker.name, true);
       this.writable(actor, worker, channel);
+      const room = this.hive.rooms.assignment(actor, channel, worker, input);
+      if (room?.existing) {
+        this.db.prepare('INSERT INTO task_request_aliases(actor_id,request_id,request_hash,task_id) VALUES(?,?,?,?)')
+          .run(actor.id, input.requestId, hash, room.existing);
+        duplicate = { task: this.get(actor, room.existing), message: this.hive.getMessageById(room.existing), duplicate: true };
+        return;
+      }
       taskId = randomUUID();
       const task: TaskSnapshot = { id: taskId, channelId: channel.id, assignerId: actor.id, assignerName: actor.name,
         workerId: worker.id, workerName: worker.name, revision: 1, contractVersion: 1, state: 'sent', contract: input.contract,
         dispatchSeq: 0, receivedAt: null, lastEventSeq: 0, updatedAt: 0, result: null, review: null };
       this.write(actor, task, { taskId, channelId: channel.id, revision: 1, contractVersion: 1, actorId: actor.id,
         actorRole: 'brain', assignerId: actor.id, workerId: worker.id, action: { type: 'assign', contract: input.contract } }, input.requestId, hash, true);
+      if (input.room && room) this.hive.rooms.linkTask(task, input.room, room.hash);
     });
     if (duplicate!) return duplicate;
     this.hive.bus.emit('channel', this.hive.getChannel(this.row(taskId).channel_id));
@@ -142,9 +154,12 @@ export class TaskStore {
         throw new HiveError(403, 'This event belongs to the assigning brain or the assigned worker');
       if (!this.hive.canPost(actor, this.hive.getChannel(task.channelId))) throw new HiveError(403, 'Cannot post in this task channel');
       if (input.expectedRevision !== task.revision) throw new HiveError(409, 'Task changed; get_task and use its current revision');
+      this.hive.rooms.checkTask(actor, task, action.type);
       const previousWorkerId = task.workerId;
       if (action.type === 'revise') {
         const worker = this.worker(actor, action.worker);
+        const room = this.hive.rooms.peek(task.channelId);
+        if (room && !room.participantIds.includes(worker.id)) throw new HiveError(403, 'Replacement worker must be a declared room participant');
         this.writable(actor, worker, this.hive.getChannel(task.channelId));
         this.contract(actor, action.contract, task.id);
         this.evidence(worker, action.contract.evidenceSeqs);

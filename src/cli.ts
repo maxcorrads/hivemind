@@ -37,6 +37,9 @@ function help() {
   hivemind task assign --input FILE.json
   hivemind task get --id TASK_ID
   hivemind task event --id TASK_ID --input FILE.json
+  hivemind room get --channel NAME
+  hivemind room history --channel NAME [--before REVISION]
+  hivemind room event --channel NAME --input FILE.json
   hivemind subscriptions list
   hivemind subscriptions set --channel NAME [--thread ROOT_ID] --events progress,blocker
   hivemind subscriptions set --channel NAME [--thread ROOT_ID] --mute
@@ -240,6 +243,16 @@ async function main() {
     return;
   }
 
+  if (cmd === 'room') {
+    const operation = argv[1], channel = arg(argv, '--channel');
+    if (!channel || !['get', 'history', 'event'].includes(operation ?? '')) throw new Error('room get|history|event --channel NAME [--input FILE.json]');
+    const endpoint = `/api/agent/channels/${encodeURIComponent(channel)}/room`;
+    const file = arg(argv, '--input');
+    if (operation === 'event' && !file) throw new Error('room event requires --input FILE.json');
+    console.log(JSON.stringify(await agentRequest(operation === 'event' ? 'POST' : 'GET',
+      endpoint + (operation === 'history' ? `/history?before=${encodeURIComponent(arg(argv, '--before') ?? String(Number.MAX_SAFE_INTEGER))}` : ''),
+      operation === 'event' ? JSON.parse(readFileSync(file!, 'utf8')) : undefined, token), null, 2)); return;
+  }
   if (cmd === 'subscriptions') {
     const operation = argv[1];
     if (operation === 'list') {

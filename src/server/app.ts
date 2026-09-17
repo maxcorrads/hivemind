@@ -209,6 +209,10 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     });
     return c.json({ channel });
   });
+  ui.get('/channels/:id/room', c => c.json(hive.rooms.view(hive.getAgent('human'), c.req.param('id'))));
+  ui.get('/channels/:id/room/history', c => c.json({ history: hive.rooms.history(hive.getAgent('human'), c.req.param('id'), Number(c.req.query('before') ?? Number.MAX_SAFE_INTEGER)) }));
+  ui.post('/channels/:id/room', async c => c.json(hive.rooms.event(hive.getAgent('human'), c.req.param('id'),
+    await c.req.json().catch(() => { throw new HiveError(400, 'Expected JSON'); }))));
   ui.post("/projects/:id/bots", async (c) => {
     const body = await c.req.json().catch(() => { throw new HiveError(400, "Expected JSON"); });
     return c.json(hive.createBot(hive.getAgent("human"), c.req.param("id"), body), 201);
@@ -407,6 +411,10 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const body = await c.req.json().catch(() => { throw new HiveError(400, 'Expected JSON'); });
     return c.json(hive.tasks.assign(c.get('me'), body));
   });
+  agent.get('/channels/:id/room', c => c.json(hive.rooms.view(c.get('me'), c.req.param('id'), c.req.query('beforeTask'))));
+  agent.get('/channels/:id/room/history', c => c.json({ history: hive.rooms.history(c.get('me'), c.req.param('id'), Number(c.req.query('before') ?? Number.MAX_SAFE_INTEGER)) }));
+  agent.post('/channels/:id/room', async c => c.json(hive.rooms.event(c.get('me'), c.req.param('id'),
+    await c.req.json().catch(() => { throw new HiveError(400, 'Expected JSON'); }))));
   agent.get('/tasks/:id', c => c.json({ task: hive.tasks.get(c.get('me'), c.req.param('id')) }));
   agent.post('/tasks/:id/events', async c => {
     const body = await c.req.json().catch(() => { throw new HiveError(400, 'Expected JSON'); });
@@ -502,6 +510,11 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const result = hive.postBotMessage(c.get("me"), c.req.param("id"), body);
     return c.json(result, result.duplicate ? 200 : 201);
   });
+  bot.get('/channels/:id/links', c => c.json({ links: hive.rooms.botLinks(c.get('me'), c.req.param('id')) }));
+  bot.post('/channels/:id/links', async c => c.json({ link: hive.rooms.registerLink(c.get('me'), c.req.param('id'),
+    await c.req.json().catch(() => { throw new HiveError(400, 'Expected JSON'); })) }));
+  bot.post('/channels/:id/links/:link/status', async c => c.json({ link: hive.rooms.reportLink(c.get('me'), c.req.param('id'), c.req.param('link'),
+    await c.req.json().catch(() => { throw new HiveError(400, 'Expected JSON'); })) }));
   bot.post("/files", async (c) => {
     const name = c.req.header("x-file-name") || "attachment";
     const file = await hive.createFile(c.get("me"), {
