@@ -51,12 +51,16 @@ export async function agentRequest<T>(
   body?: unknown,
   token?: string | null,
   timeoutMs?: number,
+  signal?: AbortSignal,
 ): Promise<T> {
   const headers: Record<string, string> = { "content-type": "application/json" };
   const t = token === null ? undefined : (token ?? currentToken());
   if (t) headers.authorization = `Bearer ${t}`;
   const ctrl = new AbortController();
-  const timer = timeoutMs ? setTimeout(() => ctrl.abort(), timeoutMs) : undefined;
+  const onAbort = () => ctrl.abort(signal?.reason);
+  if (signal?.aborted) onAbort();
+  else signal?.addEventListener("abort", onAbort, { once: true });
+  const timer = timeoutMs ? setTimeout(() => ctrl.abort(new DOMException("Request timed out", "TimeoutError")), timeoutMs) : undefined;
   try {
     const res = await fetch(`${hiveUrl()}${pathname}`, {
       method,
@@ -72,6 +76,7 @@ export async function agentRequest<T>(
     return data as T;
   } finally {
     if (timer) clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
   }
 }
 
