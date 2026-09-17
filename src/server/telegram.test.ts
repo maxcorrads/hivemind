@@ -86,8 +86,9 @@ test("telegram notify: brains and @Human and Human DM, not worker DM or general"
 
 test("telegram reaction ignore keys match across attachment message ids", () => {
   const emojis = ["👀", "👍"];
-  assert.equal(reactionIgnoreKey(11, emojis), reactionIgnoreKey(11, [...emojis].reverse()));
-  assert.notEqual(reactionIgnoreKey(11, emojis), reactionIgnoreKey(12, emojis));
+  assert.equal(reactionIgnoreKey(-1001, 11, emojis), reactionIgnoreKey(-1001, 11, [...emojis].reverse()));
+  assert.notEqual(reactionIgnoreKey(-1001, 11, emojis), reactionIgnoreKey(-1001, 12, emojis));
+  assert.notEqual(reactionIgnoreKey(-1001, 11, emojis), reactionIgnoreKey(-1002, 11, emojis));
 });
 
 test("telegram outbound pending drops oldest when the hive bursts", () => {
@@ -210,4 +211,30 @@ test("telegram text format stays under Telegram and hive caps", () => {
   assert.equal(inboundPostBody("Sara", "", true), "");
   assert.equal(inboundPostBody("Sara", "go", true), "[Sara] go");
   assert.equal(inboundPostBody("Sara", "", false), "[Sara]");
+});
+
+
+test("telegram config rejects duplicate project chat ids without replacing the previous file", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "hive-tg-unique-"));
+  writeTelegramFile(
+    { botToken: "tok", allowUserIds: [1], projects: { chapter: { groupChatId: -1001 } } },
+    dir,
+  );
+  assert.throws(
+    () =>
+      writeTelegramFile(
+        {
+          botToken: "tok",
+          allowUserIds: [1],
+          projects: {
+            chapter: { groupChatId: -1002 },
+            altro: { groupChatId: -1002 },
+          },
+        },
+        dir,
+      ),
+    /already assigned/,
+  );
+  assert.equal(loadTelegramConfig(dir)?.groups.chapter, -1001);
+  rmSync(dir, { recursive: true, force: true });
 });
