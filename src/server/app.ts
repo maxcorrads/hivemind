@@ -11,7 +11,7 @@ import { parseProjectSlug } from "../shared/project.ts";
 
 export type AppHooks = {
   telegramRunning?: () => boolean;
-  reloadTelegram?: () => boolean;
+  reloadTelegram?: () => boolean | Promise<boolean>;
 };
 
 function fileDownload(hive: Hive, actor: Agent, id: string) {
@@ -80,7 +80,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       },
       hive.home,
     );
-    const running = Boolean(hooks.reloadTelegram?.());
+    const running = Boolean(await hooks.reloadTelegram?.());
     return c.json(publicTelegramView(hive.home, running));
   });
   ui.post("/projects", async (c) => {
@@ -102,7 +102,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     });
     return c.json({ project });
   });
-  ui.delete("/projects/:slug", (c) => {
+  ui.delete("/projects/:slug", async (c) => {
     const human = hive.getAgent("human");
     const slug = parseProjectSlug(c.req.param("slug"));
     const chatId = readTelegramFile(hive.home)?.projects[slug];
@@ -113,7 +113,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       /* hive row is already gone */
     }
     try {
-      hooks.reloadTelegram?.();
+      await hooks.reloadTelegram?.();
     } catch {
       /* next serve still rereads telegram.json */
     }
