@@ -20,7 +20,7 @@ export type Snapshot = {
   mentions: Message[];
   mentionsHasMore?: boolean;
   queued: Record<string, number>;
-  telegram?: { running: boolean; configured: boolean };
+  telegram?: { running: boolean; configured: boolean; failures?: number };
 };
 
 export type TelegramSettings = {
@@ -30,6 +30,7 @@ export type TelegramSettings = {
   tokenHint: string | null;
   allowUserIds: number[];
   projects: Record<string, number>;
+  failures?: number;
 };
 
 export type ChannelPayload = {
