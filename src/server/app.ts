@@ -61,27 +61,58 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     return c.json(publicTelegramView(hive.home, Boolean(hooks.telegramRunning?.())));
   });
   ui.put("/telegram", async (c) => {
-    hive.getAgent("human");
+    const human = hive.getAgent("human");
     const body = await c.req.json();
-    const known = new Set(hive.listProjects().map((p) => p.slug));
+    const knownProjects = hive.listProjects();
+    const known = new Map(knownProjects.map((p) => [p.slug, p]));
     const projects: Record<string, { groupChatId: number }> = {};
     for (const [rawSlug, raw] of Object.entries(body.projects ?? {})) {
       const slug = parseProjectSlug(rawSlug);
       if (!known.has(slug)) throw new HiveError(404, `No project named ${slug}`);
       const id = raw && typeof raw === "object" ? Number((raw as { groupChatId?: unknown }).groupChatId) : Number(raw);
-      if (!Number.isFinite(id)) continue;
+      if (!Number.isSafeInteger(id) || id === 0) throw new HiveError(400, `Invalid Telegram group id for ${slug}`);
       projects[slug] = { groupChatId: id };
     }
-    writeTelegramFile(
+
+    const previous = readTelegramFile(hive.home);
+    const next = writeTelegramFile(
       {
         botToken: body.botToken,
-        allowUserIds: Array.isArray(body.allowUserIds) ? body.allowUserIds : String(body.allowUserIds ?? "").split(/[,\s]+/),
+        allowUserIds: Array.isArray(body.allowUserIds)
+          ? body.allowUserIds
+          : String(body.allowUserIds ?? "").split(/[,\s]+/),
         projects,
       },
       hive.home,
     );
+
+    const tokenChanged = Boolean(previous?.botToken && previous.botToken !== next.botToken);
+    const changedProjects = knownProjects.filter(
+      (project) => previous?.projects[project.slug] !== next.projects[project.slug],
+    );
+    const cancelledPending = tokenChanged
+      ? hive.resetTelegramRouting()
+      : changedProjects.length
+        ? hive.resetTelegramRouting(changedProjects.map((project) => project.id))
+        : 0;
+
+    if (cancelledPending > 0) {
+      const affected = tokenChanged ? knownProjects : changedProjects;
+      for (const project of affected) {
+        const general = hive.listChannels(human).find(
+          (channel) => channel.projectId === project.id && channel.name === "general",
+        );
+        if (general) {
+          hive.postSystem(
+            general.id,
+            `Telegram route changed; cancelled ${cancelledPending} queued mirror job(s). Hive messages were kept locally.`,
+          );
+        }
+      }
+    }
+
     const running = Boolean(hooks.reloadTelegram?.());
-    return c.json(publicTelegramView(hive.home, running));
+    return c.json({ ...publicTelegramView(hive.home, running), cancelledPending });
   });
   ui.post("/projects", async (c) => {
     const human = hive.getAgent("human");
