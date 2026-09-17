@@ -84,6 +84,18 @@ test("telegram notify: brains and @Human and Human DM, not worker DM or general"
   assert.equal(shouldNotify(msg(), ch(), true), false);
 });
 
+test('Telegram treats explicit Human recipients like mentions without bypassing mute or message-kind checks', () => {
+  for (const type of ['public', 'private'] as const) {
+    const channel = ch({ type, name: 'work' });
+    assert.equal(shouldNotify(msg({ recipientIds: ['human'] }), channel, false), true);
+    assert.equal(shouldNotify(msg({ recipientIds: ['human'], mentions: ['human'] }), channel, false), true);
+    assert.equal(shouldNotify(msg({ recipientIds: ['human'] }), channel, true), false);
+    assert.equal(shouldNotify(msg({ recipientIds: ['human'], kind: 'system' }), channel, false), false);
+    assert.equal(shouldNotify(msg({ recipientIds: ['other-agent'], body: 'Quoted Human' }), channel, false), false);
+    assert.equal(shouldNotify(msg({ recipientIds: ['human-other'] }), channel, false), false);
+  }
+});
+
 test("telegram reaction ignore keys match across attachment message ids", () => {
   const emojis = ["👀", "👍"];
   assert.equal(reactionIgnoreKey(11, emojis), reactionIgnoreKey(11, [...emojis].reverse()));

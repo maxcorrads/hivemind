@@ -46,6 +46,9 @@ import { packWait } from "./wait-format.ts";
 import { botMessageSchema, createBotSchema } from "../shared/bot-message.ts";
 import { digestExpansionSchema } from "../shared/digest.ts";
 import { TaskStore } from './tasks.ts';
+import { NotificationStore } from './notifications.ts';
+import { ROUTINE_BATCH_MS } from '../shared/notifications.ts';
+import { isDirectRecipient } from '../shared/message-target.ts';
 import type { TaskEnvelope } from '../shared/tasks.ts';
 import { assertAllowedMime, commitUpload, openBlob, removeOrphanBlobs, streamUpload } from "./files.ts";
 
@@ -94,6 +97,7 @@ type MessageRow = {
   control: ControlAction | null;
   event_type?: Message["eventType"] | null;
   mentions: string;
+  recipients?: string;
   created_at: number;
 };
 
@@ -121,11 +125,12 @@ export class Hive {
   readonly home: string;
   readonly inbox: InboxDeliveryStore;
   readonly tasks: TaskStore;
+  readonly notifications: NotificationStore;
   private readonly inboxReader: InboxReader;
   private waiters = new Map<string, Waiter>();
   private telegramOrigin = new Set<string>();
 
-  constructor(dbPath = path.join(hiveHome(), "hive.db")) {
+  constructor(dbPath = path.join(hiveHome(), "hive.db"), options: { routineBatchMs?: number } = {}) {
     this.home = path.dirname(dbPath);
     this.bus.setMaxListeners(200);
     mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -136,8 +141,9 @@ export class Hive {
     this.migrateProjects();
     this.bootstrap();
     this.tasks = new TaskStore(this);
+    this.notifications = new NotificationStore(this);
     this.inbox = new InboxDeliveryStore(this.db);
-    this.inboxReader = new InboxReader(this.db, this.inbox);
+    this.inboxReader = new InboxReader(this.db, this.inbox, this.notifications, options.routineBatchMs ?? ROUTINE_BATCH_MS);
   }
 
   private migrate() {
@@ -251,6 +257,9 @@ export class Hive {
     `);
     if (!this.db.prepare("PRAGMA table_info(messages)").all().some(column => column.name === "event_type")) {
       this.db.exec("ALTER TABLE messages ADD COLUMN event_type TEXT");
+    }
+    if (!this.db.prepare('PRAGMA table_info(messages)').all().some(column => column.name === 'recipients')) {
+      this.db.exec("ALTER TABLE messages ADD COLUMN recipients TEXT NOT NULL DEFAULT '[]'");
     }
   }
 
@@ -528,6 +537,7 @@ export class Hive {
         this.db.prepare(`DELETE FROM telegram_out WHERE channel_id IN (${ph})`).run(...channelIds);
         this.db.prepare(`DELETE FROM telegram_topics WHERE channel_id IN (${ph})`).run(...channelIds);
         this.db.prepare(`DELETE FROM task_records WHERE channel_id IN (${ph})`).run(...channelIds);
+        this.db.prepare(`DELETE FROM notification_subscriptions WHERE channel_id IN (${ph})`).run(...channelIds);
         this.db.prepare(`DELETE FROM threads WHERE channel_id IN (${ph})`).run(...channelIds);
         this.db.prepare(`DELETE FROM bot_events WHERE channel_id IN (${ph})`).run(...channelIds);
         this.db.prepare(`DELETE FROM reads WHERE channel_id IN (${ph})`).run(...channelIds);
@@ -1026,6 +1036,7 @@ export class Hive {
       control?: ControlAction | null;
       source?: "hive" | "telegram";
       attachmentIds?: string[];
+      recipients?: string[];
     },
   ): Message {
     if (input.eventType !== undefined && !MESSAGE_EVENT_TYPES.includes(input.eventType))
@@ -1038,6 +1049,14 @@ export class Hive {
       this.addMember(ch.id, actor.id);
       ch.memberIds.push(actor.id);
     }
+    if (input.recipients !== undefined && (!Array.isArray(input.recipients) || !input.recipients.length || input.recipients.length > 32 ||
+      input.recipients.some(name => typeof name !== 'string'))) throw new HiveError(400, 'Provide 1–32 recipient names');
+    const recipients = [...new Set((input.recipients ?? []).map(name => {
+      const target = this.getAgentByName(name);
+      if (!target || target.role === 'bot' || !this.canSeeChannel(target, ch) ||
+        (actor.role === 'worker' && target.role === 'human')) throw new HiveError(403, 'Recipient must be an accessible permitted person');
+      return target.id;
+    }))];
     const body = input.body.trim();
     const attachmentIds = input.attachmentIds ?? [];
     if (attachmentIds.length > FILES_PER_MESSAGE) {
@@ -1072,8 +1091,8 @@ export class Hive {
       }
     }
     this.db.prepare(
-      `INSERT INTO messages (id, channel_id, thread_id, author_id, body, kind, control, mentions, created_at, event_type)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO messages (id, channel_id, thread_id, author_id, body, kind, control, mentions, created_at, event_type, recipients)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       id,
       ch.id,
@@ -1085,6 +1104,7 @@ export class Hive {
       JSON.stringify(mentions),
       t,
       input.eventType ?? null,
+      JSON.stringify(recipients),
     );
     if (input.threadId) {
       this.db.prepare(
@@ -1166,6 +1186,7 @@ export class Hive {
       ...(row.event_type ? { eventType: row.event_type } : {}),
       ...(taskRow ? { taskEvent: JSON.parse(String(taskRow.envelope)) as TaskEnvelope } : {}),
       mentions: JSON.parse(row.mentions) as string[],
+      ...(row.recipients && row.recipients !== '[]' ? { recipientIds: JSON.parse(row.recipients) as string[] } : {}),
       createdAt: row.created_at,
       ...(botRow ? { source: "bot" as const, botEvent: JSON.parse(botRow.metadata) as BotEvent } : {}),
     };
@@ -1461,11 +1482,13 @@ export class Hive {
   ): { messages: Message[]; hasMore: boolean } {
     const reads = this.readsFor(actor);
     const rows = this.db.prepare(
-      `SELECT * FROM messages WHERE mentions LIKE ? ORDER BY seq DESC LIMIT 400`,
-    ).all(`%${actor.id}%`) as MessageRow[];
+      `SELECT * FROM messages WHERE mentions LIKE ? OR
+        EXISTS (SELECT 1 FROM json_each(messages.recipients) WHERE value = ?)
+        ORDER BY seq DESC LIMIT 400`,
+    ).all(`%${actor.id}%`, actor.id) as MessageRow[];
     const unseen = rows
       .map((r) => this.mapMessage(r))
-      .filter((m) => m.mentions.includes(actor.id) && m.seq > (reads[m.channelId] ?? 0))
+      .filter((m) => isDirectRecipient(m, actor.id) && m.seq > (reads[m.channelId] ?? 0))
       .filter((m) => beforeSeq == null || m.seq < beforeSeq)
       .filter((m) => {
         if (!projectId) return true;
@@ -1556,16 +1579,7 @@ export class Hive {
 
   /** Wait wakes agents only for mail addressed to them, not public chatter. */
   isFor(actor: Agent, msg: Message): boolean {
-    if (actor.role === "bot") return false;
-    if (msg.mentions.includes(actor.id)) return true;
-    if (msg.kind === "control") {
-      const ch = this.getChannel(msg.channelId);
-      return this.canSeeChannel(actor, ch);
-    }
-    const ch = this.getChannel(msg.channelId);
-    if (ch.type === "dm" || ch.type === "private") return true;
-    if (ch.type === "brains" && actor.role === "brain") return true;
-    return false;
+    return (actor.role === 'brain' || actor.role === 'worker') && this.inboxReader.isFor(actor, msg.seq);
   }
 
   invite(actor: Agent, channelRef: string, memberNames: string[]): Channel {
@@ -1622,6 +1636,8 @@ export class Hive {
       let scannedRows = 0;
       let hydratedMessages = 0;
       let acknowledgedThroughSeq: number | undefined;
+      let routineTimer: ReturnType<typeof setTimeout> | undefined;
+      const deadline = Date.now() + (Number.isFinite(timeoutMs) ? Math.max(1, timeoutMs) : DEFAULT_WAIT_MS);
       const take = () => {
         const batch = this.takeUnseen(actor, sessionId, compact, WAIT_SCAN_MAX - scannedRows);
         const page = batch.page!;
@@ -1636,6 +1652,7 @@ export class Hive {
         if (this.waiters.get(actor.id) === waiter) this.waiters.delete(actor.id);
         signal?.removeEventListener("abort", onAbort);
         clearTimeout(timer);
+        clearTimeout(routineTimer);
       };
       const deliver = (batch: WaitResult) => {
         if (done) return;
@@ -1650,7 +1667,13 @@ export class Hive {
           deliver(empty());
           return;
         }
-        try { deliver(take()); }
+        try {
+          clearTimeout(routineTimer);
+          const batch = take();
+          if (batch.idle && batch.retryAfterMs && Date.now() < deadline && scannedRows < WAIT_SCAN_MAX) {
+            routineTimer = setTimeout(() => finish(true), Math.min(batch.retryAfterMs, deadline - Date.now()));
+          } else deliver(batch);
+        }
         catch (error) { done = true; cleanup(); reject(error); }
       };
       waiter = {
@@ -1677,6 +1700,7 @@ export class Hive {
         // The initial scan and any scan after sleeping share this request's
         // budget. Return at exhaustion even when only public noise was scanned.
         if (!first.idle || first.page!.continuation || scannedRows === WAIT_SCAN_MAX) deliver(first);
+        else if (first.retryAfterMs) routineTimer = setTimeout(() => finish(true), Math.min(first.retryAfterMs, ms));
       } catch (error) { done = true; cleanup(); reject(error); }
     });
   }

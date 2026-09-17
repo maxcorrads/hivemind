@@ -46,8 +46,8 @@ export type Seniority = "junior" | "mid" | "senior";
 export type ChannelType = "public" | "brains" | "private" | "dm";
 export type ThreadStatus = "open" | "in_progress" | "blocked" | "done";
 export type MessageKind = "chat" | "system" | "control";
-/** Sender-declared semantics, not authority, priority or task lifecycle state. */
-export const MESSAGE_EVENT_TYPES = ["progress", "blocker", "question", "action_required"] as const;
+/** Sender-declared routing semantics, not authority or task lifecycle state. */
+export const MESSAGE_EVENT_TYPES = ["progress", "blocker", "question", "action_required", "assignment", "decision", "acknowledgement"] as const;
 export type MessageEventType = typeof MESSAGE_EVENT_TYPES[number];
 export type ControlAction = "clear_context";
 export type MessageSource = "hive" | "telegram" | "bot";
@@ -121,6 +121,8 @@ export type SearchHit = {
 };
 
 export type Message = {
+  /** Intended identity IDs; not an access grant. Omitted means normal routing. */
+  recipientIds?: string[];
   taskEvent?: TaskEnvelope;
   id: string;
   seq: number;
@@ -170,6 +172,7 @@ export type WaitControlItem = {
 };
 
 export type WaitMailItem = {
+  recipientIds?: string[];
   taskEvent?: TaskEnvelope;
   messageId: string;
   rootId: string;
@@ -203,6 +206,8 @@ export type DigestExpansionResult = { messages: Message[]; hasMore: boolean; nex
 export type WaitYou = Pick<Agent, "name" | "role" | "seniority" | "focus" | "online" | "project">;
 
 export type WaitResult = {
+  /** Transport-only routine batching delay, never a reason for a model turn. */
+  retryAfterMs?: number;
   delivery?: InboxDelivery;
   idle: boolean;
   next: string;

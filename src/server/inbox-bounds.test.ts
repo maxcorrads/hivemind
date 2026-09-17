@@ -12,7 +12,8 @@ import { BODY_MAX, WAIT_MAIL_CAP, WAIT_MAX_BYTES, WAIT_SCAN_MAX, WAIT_NEXT, type
 function fixture(t: TestContext, role: "brain" | "worker" = "brain") {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-bounds-"));
   const file = path.join(dir, "hive.db");
-  const hive = new Hive(file);
+  // Byte/scan-limit tests are independent of the routine batching timer.
+  const hive = new Hive(file, { routineBatchMs: 0 });
   t.after(() => { try { hive.db.close(); } catch {} rmSync(dir, { recursive: true, force: true }); });
   const reader = hive.join(role === "brain" ? { role } : { role, seniority: "mid" });
   const writer = hive.join({ role: "brain" });

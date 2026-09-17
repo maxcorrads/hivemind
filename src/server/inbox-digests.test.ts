@@ -11,7 +11,8 @@ import { WAIT_MAX_BYTES, type DigestExpansionResult, type Message, type WaitResu
 function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-digests-"));
   const file = path.join(dir, "hive.db");
-  let hive = new Hive(file);
+  // Formatting/expansion tests flush immediately; notifications.test covers the default timer.
+  let hive = new Hive(file, { routineBatchMs: 0 });
   t.after(() => { hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
   const brain = hive.join({ role: "brain" });
   const worker = hive.join({ role: "worker", seniority: "mid" });
@@ -24,7 +25,7 @@ function fixture(t: TestContext) {
   const other = () => send("Other task", "progress", undefined, room.id);
   const wait = () => hive.wait(brain.agent, 1, undefined, { compact: true, sessionId });
   return { get hive() { return hive; }, dir, file, brain, worker, dm, room, sessionId, send, other, wait,
-    reopen() { hive.db.close(); hive = new Hive(file); return hive; },
+    reopen() { hive.db.close(); hive = new Hive(file, { routineBatchMs: 0 }); return hive; },
   };
 }
 

@@ -76,11 +76,15 @@ export class TaskStore {
     const id = initial ? task.id : randomUUID();
     const target = ['assign', 'revise', 'review'].includes(envelope.action.type) ? task.workerId : task.assignerId;
     const now = Date.now();
-    this.db.prepare(`INSERT INTO messages(id, channel_id, thread_id, author_id, body, kind, event_type, mentions, created_at)
-      VALUES (?, ?, ?, ?, ?, 'chat', ?, ?, ?)`)
+    const recipients = JSON.stringify([...new Set([target, ...(envelope.previousWorkerId ? [envelope.previousWorkerId] : [])])]);
+    this.db.prepare(`INSERT INTO messages(id, channel_id, thread_id, author_id, body, kind, event_type, mentions, created_at, recipients)
+      VALUES (?, ?, ?, ?, ?, 'chat', ?, ?, ?, ?)`)
       .run(id, task.channelId, initial ? null : task.id, actor.id, body,
-        envelope.action.type === 'block' ? 'blocker' : 'action_required',
-        JSON.stringify([...new Set([target, ...(envelope.previousWorkerId ? [envelope.previousWorkerId] : [])])]), now);
+        envelope.action.type === 'block' || envelope.action.type === 'reject' ? 'blocker' :
+          envelope.action.type === 'assign' || envelope.action.type === 'revise' ? 'assignment' :
+            envelope.action.type === 'review' ? 'decision' :
+              envelope.action.type === 'accept' ? 'acknowledgement' : 'action_required',
+        recipients, now, recipients);
     const seq = Number(this.db.prepare('SELECT seq FROM messages WHERE id = ?').get(id)!.seq);
     task.lastEventSeq = seq; task.updatedAt = now;
     if (initial || envelope.action.type === 'revise') { task.dispatchSeq = seq; task.receivedAt = null; }

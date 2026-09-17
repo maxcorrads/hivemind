@@ -221,6 +221,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       body: String(body.body ?? ""),
       threadId: body.threadId ?? null,
       eventType: body.eventType,
+      recipients: body.recipients,
       attachmentIds: Array.isArray(body.attachmentIds) ? body.attachmentIds.map(String) : undefined,
     });
     hive.markRead(human, message.channelId, message.seq);
@@ -343,6 +344,9 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     });
     return c.json(found);
   });
+  agent.get('/subscriptions', c => c.json({ subscriptions: hive.notifications.list(c.get('me')) }));
+  agent.post('/subscriptions', async c => c.json({ subscriptions: hive.notifications.set(c.get('me'), await c.req.json()) }));
+  agent.post('/subscriptions/reset', async c => c.json({ subscriptions: hive.notifications.reset(c.get('me'), await c.req.json()) }));
   agent.get("/channels", (c) => {
     const me = c.get("me");
     const unread = c.req.query("unread") === "1" ? hive.unreadCounts(me) : undefined;
@@ -386,6 +390,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       body: String(body.body ?? ""),
       threadId: body.threadId ?? null,
       eventType: body.eventType,
+      recipients: body.recipients,
       attachmentIds: Array.isArray(body.attachmentIds) ? body.attachmentIds.map(String) : undefined,
     });
     return c.json({ ok: true, seq: message.seq, id: message.id });

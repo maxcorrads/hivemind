@@ -250,7 +250,7 @@ test("brain wait caps conversations not a single flooded DM", async () => {
     root ??= message.id;
   }
   hive.postMessage(other.agent, { channel: otherDm.id, body: "second conversation", eventType: "progress" });
-  const first = await hive.wait(brain.agent, 200, undefined, { compact: true });
+  const first = await hive.wait(brain.agent, 500, undefined, { compact: true });
   assert.equal(first.mail?.length, 2);
   assert.equal(first.mail?.find(m => m.rootId === root)?.count, 8);
   assert.ok(first.mail?.some((m) => /second conversation/.test(m.excerpt ?? m.body ?? "")));

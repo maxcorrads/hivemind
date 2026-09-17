@@ -264,7 +264,10 @@ export function buildLaunchPrompt(input: LaunchInput): string {
       (!input.pluginProject || !input.passProject || input.projectSlug !== input.pluginProject)) {
     throw new Error("Plugin instructions require an explicit matching launch project");
   }
-  const call = `Call the hivemind MCP tool join with ${joinArgs(input)}.`;
+  const call = `Call the hivemind MCP tool join with ${joinArgs(input)}. ` +
+    "Use a real tool call; never simulate a tool result or invent an agent name. " +
+    "If join is not visible yet, use the host's available tool discovery to load Hivemind's tools first. " +
+    "If join is unavailable or fails, report the startup failure and stop; only follow the remaining instructions after a successful join.";
   const hive = hiveLine(input);
   const isolation = [
     input.passProject ? "" : "Join from the project worktree.",
@@ -292,7 +295,12 @@ export function buildLaunchBlock(input: LaunchInput): string {
     buildModelFlags(software, input.model, input.effort),
     sanitizeExtraFlags(input.extraFlags ?? ""),
     input.hivemindMcp && softwareFamily(software) === "claude"
-      ? "--mcp-config " + shSingleQuote(JSON.stringify({ mcpServers: { hivemind: input.hivemindMcp } }))
+      // Request eager loading for this server only, retaining normal permissions
+      // and the other servers' loading policy. Keep host tool discovery available
+      // too: some interactive clients still start while MCP is connecting.
+      ? "--mcp-config " + shSingleQuote(JSON.stringify({
+        mcpServers: { hivemind: { ...input.hivemindMcp, alwaysLoad: true } },
+      }))
       : "",
   ]
     .filter(Boolean)
