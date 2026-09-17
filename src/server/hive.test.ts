@@ -594,3 +594,26 @@ test("Human can delete an idle project but not one with online or waiting agents
   assert.equal(again.slug, "nuovo");
   rmSync(dir, { recursive: true, force: true });
 });
+
+
+test("already-cancelled wait does not consume queued mail", async () => {
+  const { hive, dir } = tempHive();
+  const human = hive.getAgent("human");
+  const worker = hive.join({ role: "worker", seniority: "mid" }).agent;
+  const dm = hive.openDm(human, worker.name);
+  const queued = hive.postMessage(human, { channel: dm.id, body: "keep queued" });
+  const before = (hive.db.prepare("SELECT inbox_cursor FROM agents WHERE id = ?").get(worker.id) as { inbox_cursor: number }).inbox_cursor;
+
+  const ac = new AbortController();
+  ac.abort(new DOMException("cancelled", "AbortError"));
+  const cancelled = await hive.wait(worker, 5_000, ac.signal);
+  assert.equal(cancelled.idle, true);
+  const after = (hive.db.prepare("SELECT inbox_cursor FROM agents WHERE id = ?").get(worker.id) as { inbox_cursor: number }).inbox_cursor;
+  assert.equal(after, before);
+
+  const next = await hive.wait(worker, 200);
+  assert.equal(next.idle, false);
+  assert.ok(next.messages.some((message) => message.id === queued.id));
+
+  rmSync(dir, { recursive: true, force: true });
+});
