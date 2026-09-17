@@ -6,6 +6,22 @@ import { test } from "node:test";
 import { Hive } from "./hive.ts";
 import { startServer } from "./serve.ts";
 
+const humanCookies = new Map<string, string>();
+
+async function humanCookie(base: string): Promise<string> {
+  const cached = humanCookies.get(base);
+  if (cached) return cached;
+  const res = await fetch(`${base}/api/ui/session`, {
+    method: "POST",
+    headers: { origin: base, "content-type": "application/json" },
+  });
+  assert.equal(res.status, 200);
+  const cookie = res.headers.get("set-cookie")?.split(";")[0];
+  assert.ok(cookie);
+  humanCookies.set(base, cookie);
+  return cookie;
+}
+
 async function json(
   base: string,
   method: string,
@@ -13,11 +29,13 @@ async function json(
   body?: unknown,
   token?: string,
 ) {
+  const uiCookie = url.startsWith("/api/ui/") ? await humanCookie(base) : undefined;
   const res = await fetch(`${base}${url}`, {
     method,
     headers: {
       "content-type": "application/json",
       ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...(uiCookie ? { cookie: uiCookie } : {}),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
@@ -233,6 +251,46 @@ test("Human Telegram UI saves settings and never returns the bot token", async (
     assert.equal(tg.data.projects.chapter, -1002);
   } finally {
     started.shutdown();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test("Human HTTP API rejects untrusted browser origin before mutation", async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "hive-http-origin-"));
+  const hive = new Hive(path.join(dir, "hive.db"));
+  const started = startServer({ port: 0, hive, telegram: false });
+  const port = await started.ready;
+  const base = `http://127.0.0.1:${port}`;
+  try {
+    const before = hive.listProjects().length;
+    const res = await fetch(`${base}/api/ui/projects`, {
+      method: "POST",
+      headers: {
+        origin: "https://evil.example",
+        "content-type": "text/plain",
+      },
+      body: JSON.stringify({ name: "Injected" }),
+    });
+    assert.equal(res.status, 403);
+    assert.equal(hive.listProjects().length, before);
+
+    const noSession = await fetch(`${base}/api/ui/snapshot`);
+    assert.equal(noSession.status, 401);
+
+    const nullOrigin = await fetch(`${base}/api/ui/session`, {
+      method: "POST",
+      headers: { origin: "null", "content-type": "application/json" },
+    });
+    assert.equal(nullOrigin.status, 403);
+
+    const badHost = await fetch(`${base}/api/ui/session`, {
+      method: "POST",
+      headers: { origin: base, host: "evil.example" },
+    });
+    assert.equal(badHost.status, 403);
+  } finally {
+    await started.shutdown();
     rmSync(dir, { recursive: true, force: true });
   }
 });
