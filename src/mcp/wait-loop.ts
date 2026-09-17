@@ -22,25 +22,42 @@ export function isTransientWaitError(err: unknown): boolean {
 export async function waitUntilMail(
   callWait: () => Promise<WaitResult>,
   opts: {
-    delay?: (ms: number) => Promise<void>;
+    delay?: (ms: number, signal?: AbortSignal) => Promise<void>;
     retryDelayMs?: number;
     maxServerErrors?: number;
     maxTransientErrors?: number;
+    signal?: AbortSignal;
   } = {},
 ): Promise<WaitResult> {
-  const delay = opts.delay ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const delay =
+    opts.delay ??
+    ((ms: number, signal?: AbortSignal) =>
+      new Promise<void>((resolve, reject) => {
+        if (signal?.aborted) {
+          reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+          return;
+        }
+        const timer = setTimeout(resolve, ms);
+        const onAbort = () => {
+          clearTimeout(timer);
+          reject(signal?.reason ?? new DOMException("Aborted", "AbortError"));
+        };
+        signal?.addEventListener("abort", onAbort, { once: true });
+      }));
   const retryDelayMs = opts.retryDelayMs ?? 1500;
   const maxServerErrors = opts.maxServerErrors ?? Number.POSITIVE_INFINITY;
   const maxTransientErrors = opts.maxTransientErrors ?? Number.POSITIVE_INFINITY;
   let serverErrors = 0;
   let transientErrors = 0;
   for (;;) {
+    if (opts.signal?.aborted) throw opts.signal.reason ?? new DOMException("Aborted", "AbortError");
     try {
       const result = await callWait();
       serverErrors = 0;
       transientErrors = 0;
       if (waitHasMail(result)) return result;
     } catch (err) {
+      if (opts.signal?.aborted) throw opts.signal.reason ?? err;
       if (!isTransientWaitError(err)) throw err;
       const msg = err instanceof Error ? err.message : String(err);
       transientErrors += 1;
@@ -49,7 +66,7 @@ export async function waitUntilMail(
         if (serverErrors >= maxServerErrors) throw err;
       }
       if (transientErrors >= maxTransientErrors) throw err;
-      await delay(retryDelayMs);
+      await delay(retryDelayMs, opts.signal);
     }
   }
 }
