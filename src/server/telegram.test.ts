@@ -29,6 +29,9 @@ import {
   telegramFileTooLarge,
   telegramGeneralThreadId,
   telegramMessageHasFiles,
+  TelegramRateLimitError,
+  telegramRetryAfterMs,
+  selectTelegramPendingJob,
 } from "./telegram.ts";
 import type { Channel, Message } from "../shared/types.ts";
 
@@ -210,4 +213,48 @@ test("telegram text format stays under Telegram and hive caps", () => {
   assert.equal(inboundPostBody("Sara", "", true), "");
   assert.equal(inboundPostBody("Sara", "go", true), "[Sara] go");
   assert.equal(inboundPostBody("Sara", "", false), "[Sara]");
+});
+
+
+test("telegram rate limits preserve retry_after without recursive sleeping", () => {
+  assert.equal(telegramRetryAfterMs(429, { parameters: { retry_after: 30 } }), 30_000);
+  assert.equal(telegramRetryAfterMs(429, {}, 2_500), 2_500);
+  assert.equal(telegramRetryAfterMs(200, { parameters: { retry_after: 30 } }), null);
+  const err = new TelegramRateLimitError(30_000);
+  assert.equal(err.retryAfterMs, 30_000);
+  assert.match(err.message, /30s/);
+});
+
+test("telegram pending scheduler skips a cooling chat and exposes its wake deadline", () => {
+  const jobs = [
+    { seq: 1, kind: "message" as const },
+    { seq: 2, kind: "message" as const },
+  ];
+  const chats = new Map([[1, -1001], [2, -1002]]);
+  const until = new Map([[-1001, 30_000], [-1002, 0]]);
+
+  const selected = selectTelegramPendingJob(
+    jobs,
+    (seq) => chats.get(seq),
+    (chat) => until.get(chat) ?? 0,
+    1_000,
+  );
+  assert.equal(selected.job?.seq, 2);
+
+  const onlyCooling = selectTelegramPendingJob(
+    [jobs[0]!],
+    (seq) => chats.get(seq),
+    (chat) => until.get(chat) ?? 0,
+    1_000,
+  );
+  assert.equal(onlyCooling.job, undefined);
+  assert.equal(onlyCooling.wakeAt, 30_000);
+
+  const resumed = selectTelegramPendingJob(
+    [jobs[0]!],
+    (seq) => chats.get(seq),
+    (chat) => until.get(chat) ?? 0,
+    30_000,
+  );
+  assert.equal(resumed.job?.seq, 1);
 });
