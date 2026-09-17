@@ -537,6 +537,44 @@ export class Hive {
     this.bus.emit("project", { deleted: project.slug });
   }
 
+  resetTelegramRouting(projectIds?: string[]): number {
+    if (projectIds && projectIds.length > 0) {
+      const ph = projectIds.map(() => "?").join(",");
+      const cancelled = (this.db.prepare(
+        `SELECT COUNT(*) AS n FROM telegram_pending
+         WHERE seq IN (
+           SELECT seq FROM messages WHERE channel_id IN (
+             SELECT id FROM channels WHERE project_id IN (${ph})
+           )
+         )`,
+      ).get(...projectIds) as { n: number }).n;
+      this.db.prepare(
+        `DELETE FROM telegram_pending
+         WHERE seq IN (
+           SELECT seq FROM messages WHERE channel_id IN (
+             SELECT id FROM channels WHERE project_id IN (${ph})
+           )
+         )`,
+      ).run(...projectIds);
+      this.db.prepare(
+        `DELETE FROM telegram_out WHERE channel_id IN (
+           SELECT id FROM channels WHERE project_id IN (${ph})
+         )`,
+      ).run(...projectIds);
+      this.db.prepare(
+        `DELETE FROM telegram_topics WHERE channel_id IN (
+           SELECT id FROM channels WHERE project_id IN (${ph})
+         )`,
+      ).run(...projectIds);
+      return cancelled;
+    }
+    const cancelled = (this.db.prepare("SELECT COUNT(*) AS n FROM telegram_pending").get() as { n: number }).n;
+    this.db.prepare("DELETE FROM telegram_pending").run();
+    this.db.prepare("DELETE FROM telegram_out").run();
+    this.db.prepare("DELETE FROM telegram_topics").run();
+    return cancelled;
+  }
+
   forgetTelegramChat(chatId: number) {
     if (!Number.isFinite(chatId)) return;
     this.db.prepare("DELETE FROM telegram_hold WHERE telegram_chat_id = ?").run(chatId);
