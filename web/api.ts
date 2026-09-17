@@ -1,7 +1,25 @@
 import type { Agent, AttachmentMeta, Channel, Message, Project, SearchHit, Thread, ThreadStatus } from "../src/shared/types.ts";
 import { resolveUploadMime } from "../src/shared/mime.ts";
 
+let humanSession: Promise<void> | null = null;
+
+async function ensureHumanSession(): Promise<void> {
+  if (!humanSession) {
+    humanSession = fetch("/api/ui/session", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+    }).then(async (res) => {
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+    });
+  }
+  return humanSession;
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
+  if (path.startsWith("/api/ui/") && path !== "/api/ui/session") await ensureHumanSession();
   const res = await fetch(path, {
     ...init,
     headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
@@ -95,6 +113,7 @@ export const api = {
       body: JSON.stringify({ body, threadId: threadId ?? null, attachmentIds }),
     }),
   upload: async (file: File): Promise<AttachmentMeta> => {
+    await ensureHumanSession();
     const res = await fetch("/api/ui/files", {
       method: "POST",
       headers: {
