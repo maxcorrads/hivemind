@@ -91,10 +91,19 @@ export function writeTelegramFile(
     .filter((n) => Number.isFinite(n) && n > 0);
   if (allowUserIds.length === 0) throw new HiveError(400, "At least one Telegram user id");
   const projects: Record<string, number> = {};
-  for (const [slug, value] of Object.entries(input.projects ?? {})) {
-    if (!slug) continue;
+  const chatOwners = new Map<number, string>();
+  for (const [rawSlug, value] of Object.entries(input.projects ?? {})) {
+    if (!rawSlug) continue;
+    const slug = parseProjectSlug(rawSlug);
     const id = value && typeof value === "object" ? Number(value.groupChatId) : Number(value);
-    if (!Number.isFinite(id)) continue;
+    if (!Number.isSafeInteger(id) || id === 0) {
+      throw new HiveError(400, `Invalid Telegram group id for ${slug}`);
+    }
+    const owner = chatOwners.get(id);
+    if (owner && owner !== slug) {
+      throw new HiveError(400, `Telegram group ${id} is already assigned to project ${owner}`);
+    }
+    chatOwners.set(id, slug);
     projects[slug] = id;
   }
   const disk = {
@@ -152,8 +161,8 @@ export function formatOutbound(msg: Message): string {
   return `${msg.authorName}\n${body}`.slice(0, 4096);
 }
 
-export function reactionIgnoreKey(telegramMessageId: number, emojis: string[]): string {
-  return `${telegramMessageId}:${[...emojis].sort().join(",")}`;
+export function reactionIgnoreKey(chatId: number, telegramMessageId: number, emojis: string[]): string {
+  return `${chatId}:${telegramMessageId}:${[...emojis].sort().join(",")}`;
 }
 
 export function inboundBody(firstName: string | undefined, text: string): string {
@@ -349,10 +358,11 @@ class TelegramBridge {
   private async ensureTopic(ch: Channel): Promise<number | null> {
     const chatId = this.chatForChannel(ch);
     if (chatId == null) return null;
-    const row = this.hive.db.prepare("SELECT telegram_thread_id AS id FROM telegram_topics WHERE channel_id = ?").get(
-      ch.id,
-    ) as { id: number } | undefined;
-    if (row) return row.id;
+    const row = this.hive.db.prepare(
+      "SELECT telegram_thread_id AS id, telegram_chat_id AS chatId FROM telegram_topics WHERE channel_id = ?",
+    ).get(ch.id) as { id: number; chatId: number | null } | undefined;
+    if (row?.chatId === chatId) return row.id;
+    if (row) this.hive.db.prepare("DELETE FROM telegram_topics WHERE channel_id = ?").run(ch.id);
     const generalThread = telegramGeneralThreadId(ch);
     if (generalThread != null) {
       this.hive.db.prepare(
@@ -381,12 +391,13 @@ class TelegramBridge {
   }
 
   private async createTopic(ch: Channel): Promise<number | null> {
-    const again = this.hive.db.prepare("SELECT telegram_thread_id AS id FROM telegram_topics WHERE channel_id = ?").get(
-      ch.id,
-    ) as { id: number } | undefined;
-    if (again) return again.id;
     const chatId = this.chatForChannel(ch);
     if (chatId == null) return null;
+    const again = this.hive.db.prepare(
+      "SELECT telegram_thread_id AS id, telegram_chat_id AS chatId FROM telegram_topics WHERE channel_id = ?",
+    ).get(ch.id) as { id: number; chatId: number | null } | undefined;
+    if (again?.chatId === chatId) return again.id;
+    if (again) this.hive.db.prepare("DELETE FROM telegram_topics WHERE channel_id = ?").run(ch.id);
     const name = channelLabel(ch).slice(0, 128);
     const created = await this.api("createForumTopic", { chat_id: chatId, name });
     const result = created.result as { message_thread_id?: number } | undefined;
@@ -500,7 +511,7 @@ class TelegramBridge {
     if (!mapped) return;
     const next = new Set(hiveEmojisOf(update.new_reaction));
     const prev = new Set(hiveEmojisOf(update.old_reaction));
-    const key = reactionIgnoreKey(update.message_id, telegramEmojisOf(update.new_reaction));
+    const key = reactionIgnoreKey(Number(update.chat?.id), update.message_id, telegramEmojisOf(update.new_reaction));
     const ignoredAt = this.ignoreReaction.get(key);
     if (ignoredAt != null && Date.now() - ignoredAt < 120_000) return;
     this.pruneIgnoreReactions();
@@ -799,7 +810,7 @@ class TelegramBridge {
     const reaction = telegramOutboundReactionPayload((msg.reactions ?? []).map((r) => r.emoji));
     const emojis = reaction.map((r) => r.emoji);
     const now = Date.now();
-    for (const row of rows) this.ignoreReaction.set(reactionIgnoreKey(row.id, emojis), now);
+    for (const row of rows) this.ignoreReaction.set(reactionIgnoreKey(chatId, row.id, emojis), now);
     for (const row of rows) {
       requireTelegramOk(
         await this.api("setMessageReaction", {
