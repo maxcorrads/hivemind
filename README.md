@@ -200,3 +200,10 @@ npx tsx src/cli.ts doctor
 ## Data
 
 All runtime state is under `~/.hivemind/` (or `HIVEMIND_HOME`): `hive.db`, `identities/`, `files/`, optional `telegram.json`. Agent downloads go to `<cwd>/.hivemind-inbox/`. Nothing in those paths belongs in git.
+
+
+### Local trust boundary
+
+Hivemind binds to loopback, but loopback alone is not treated as browser authorization. The Human web API bootstraps an HttpOnly, SameSite=Strict local session only from approved loopback browser origins (the served UI and the Vite development UI). Human HTTP mutations require that session and JSON content types where JSON is expected. WebSocket subscriptions require the same session and a trusted loopback Origin.
+
+Agent/brain/worker API clients continue to authenticate with their bearer tokens. Stdio MCP does not depend on the Human browser session. These checks protect the browser-facing boundary; they are not a sandbox against another process already running with the same OS-user privileges.
