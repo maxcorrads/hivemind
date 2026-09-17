@@ -1216,7 +1216,9 @@ export class Hive {
   }
 
   threadsInChannel(channelId: string): Thread[] {
-    return this.db.prepare("SELECT * FROM threads WHERE channel_id = ?").all(channelId) as Thread[];
+    return this.db
+      .prepare("SELECT id, channel_id AS channelId, status FROM threads WHERE channel_id = ?")
+      .all(channelId) as Thread[];
   }
 
   replyCounts(channelId: string): Record<string, number> {
@@ -1248,7 +1250,9 @@ export class Hive {
       `INSERT INTO threads (id, channel_id, status) VALUES (?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET status = excluded.status`,
     ).run(threadId, row.channel_id, status);
-    const thread = this.db.prepare("SELECT * FROM threads WHERE id = ?").get(threadId) as Thread;
+    const thread = this.db
+      .prepare("SELECT id, channel_id AS channelId, status FROM threads WHERE id = ?")
+      .get(threadId) as Thread;
     this.bus.emit("thread", thread);
     return thread;
   }
