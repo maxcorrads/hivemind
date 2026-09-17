@@ -214,6 +214,27 @@ export class Hive {
         kind TEXT NOT NULL,
         PRIMARY KEY (seq, kind)
       );
+      CREATE TABLE IF NOT EXISTS telegram_delivery_parts (
+        seq INTEGER NOT NULL,
+        part_key TEXT NOT NULL,
+        telegram_chat_id INTEGER NOT NULL,
+        telegram_message_id INTEGER NOT NULL,
+        completed_at INTEGER NOT NULL,
+        PRIMARY KEY (seq, part_key, telegram_chat_id)
+      );
+      CREATE TABLE IF NOT EXISTS telegram_failures (
+        id TEXT PRIMARY KEY,
+        seq INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        telegram_chat_id INTEGER,
+        reason TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        resolved_at INTEGER,
+        resolution TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_telegram_failures_open ON telegram_failures(resolved_at, created_at);
+
       CREATE TABLE IF NOT EXISTS telegram_hold (
         telegram_message_id INTEGER PRIMARY KEY,
         telegram_thread_id INTEGER NOT NULL,
@@ -535,6 +556,52 @@ export class Hive {
       /* sweep can drop leftover blobs later */
     }
     this.bus.emit("project", { deleted: project.slug });
+  }
+
+  telegramFailureCount(): number {
+    return (this.db.prepare("SELECT COUNT(*) AS n FROM telegram_failures WHERE resolved_at IS NULL").get() as { n: number }).n;
+  }
+
+  telegramFailures(limit = 50): Array<{
+    id: string;
+    seq: number;
+    kind: string;
+    telegramChatId: number | null;
+    reason: string;
+    attempts: number;
+    createdAt: number;
+  }> {
+    const rows = this.db.prepare(
+      `SELECT id, seq, kind, telegram_chat_id AS telegramChatId, reason, attempts, created_at AS createdAt
+       FROM telegram_failures WHERE resolved_at IS NULL ORDER BY created_at DESC LIMIT ?`,
+    ).all(Math.min(Math.max(1, limit), 200)) as Array<{
+      id: string;
+      seq: number;
+      kind: string;
+      telegramChatId: number | null;
+      reason: string;
+      attempts: number;
+      createdAt: number;
+    }>;
+    return rows;
+  }
+
+  retryTelegramFailure(id: string): void {
+    const row = this.db.prepare(
+      "SELECT seq, kind FROM telegram_failures WHERE id = ? AND resolved_at IS NULL",
+    ).get(id) as { seq: number; kind: string } | undefined;
+    if (!row) throw new HiveError(404, "Telegram failure not found");
+    this.db.prepare("INSERT OR IGNORE INTO telegram_pending (seq, kind) VALUES (?, ?)").run(row.seq, row.kind);
+    this.db.prepare(
+      "UPDATE telegram_failures SET resolved_at = ?, resolution = 'retried' WHERE id = ?",
+    ).run(now(), id);
+  }
+
+  discardTelegramFailure(id: string): void {
+    const changed = this.db.prepare(
+      "UPDATE telegram_failures SET resolved_at = ?, resolution = 'discarded' WHERE id = ? AND resolved_at IS NULL",
+    ).run(now(), id).changes;
+    if (!changed) throw new HiveError(404, "Telegram failure not found");
   }
 
   forgetTelegramChat(chatId: number) {
