@@ -252,6 +252,35 @@ export function telegramGeneralThreadId(ch: Channel | string): number | null {
 
 export const TELEGRAM_PENDING_CAP = 200;
 
+export function recordTelegramFailure(
+  db: Hive["db"],
+  seq: number,
+  kind: string,
+  reason: string,
+  attempts = 0,
+  telegramChatId?: number,
+) {
+  db.prepare(
+    `INSERT INTO telegram_failures
+      (id, seq, kind, telegram_chat_id, reason, attempts, created_at, resolved_at, resolution)
+     VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
+  ).run(crypto.randomUUID(), seq, kind, telegramChatId ?? null, reason.slice(0, 1000), attempts, Date.now());
+}
+
+export function telegramPartDelivered(
+  db: Hive["db"],
+  seq: number,
+  partKey: string,
+  chatId: number,
+): boolean {
+  return Boolean(
+    db.prepare(
+      "SELECT 1 AS ok FROM telegram_delivery_parts WHERE seq = ? AND part_key = ? AND telegram_chat_id = ?",
+    ).get(seq, partKey, chatId),
+  );
+}
+
+
 export function enqueueTelegramPending(
   db: Hive["db"],
   seq: number,
@@ -261,11 +290,15 @@ export function enqueueTelegramPending(
   db.prepare("INSERT OR IGNORE INTO telegram_pending (seq, kind) VALUES (?, ?)").run(seq, kind);
   const n = (db.prepare("SELECT COUNT(*) AS n FROM telegram_pending").get() as { n: number }).n;
   if (n <= cap) return;
-  db.prepare(
-    `DELETE FROM telegram_pending WHERE rowid IN (
-      SELECT rowid FROM telegram_pending ORDER BY seq ASC, kind ASC LIMIT ?
-    )`,
-  ).run(n - cap);
+  const overflow = db.prepare(
+    `SELECT seq, kind FROM telegram_pending
+     ORDER BY CASE WHEN kind = 'reaction' THEN 0 ELSE 1 END, seq ASC, kind ASC
+     LIMIT ?`,
+  ).all(n - cap) as Array<{ seq: number; kind: "message" | "reaction" }>;
+  for (const dropped of overflow) {
+    recordTelegramFailure(db, dropped.seq, dropped.kind, "queue_overflow");
+    db.prepare("DELETE FROM telegram_pending WHERE seq = ? AND kind = ?").run(dropped.seq, dropped.kind);
+  }
 }
 
 export type TelegramHandle = {
@@ -694,6 +727,14 @@ class TelegramBridge {
         const chat = this.chatForSeq(job.seq);
         if (isTelegramPermanentOutError(err)) {
           console.error(`telegram out giving up seq=${job.seq} kind=${job.kind}`);
+          recordTelegramFailure(
+            this.hive.db,
+            job.seq,
+            job.kind,
+            err instanceof Error ? err.message : String(err),
+            this.pumpFails?.n ?? 1,
+            chat,
+          );
           this.clearPending(job.seq, job.kind);
           this.pumpFails = null;
           continue;
@@ -712,6 +753,14 @@ class TelegramBridge {
         this.pumpFails = nextTelegramFailure(this.pumpFails, job.seq, job.kind);
         if (shouldDropTelegramJob(this.pumpFails.n)) {
           console.error(`telegram out giving up seq=${job.seq} kind=${job.kind}`);
+          recordTelegramFailure(
+            this.hive.db,
+            job.seq,
+            job.kind,
+            err instanceof Error ? err.message : String(err),
+            this.pumpFails.n,
+            chat,
+          );
           this.clearPending(job.seq, job.kind);
           this.pumpFails = null;
           continue;
@@ -742,7 +791,10 @@ class TelegramBridge {
     const silent = !shouldNotify(msg, ch, muted);
     const atts = msg.attachments ?? [];
     const text = formatOutbound(msg);
+
     if (atts.length === 0) {
+      const partKey = "text";
+      if (telegramPartDelivered(this.hive.db, msg.seq, partKey, chatId)) return;
       const sent = requireTelegramOk(
         await this.api("sendMessage", {
           chat_id: chatId,
@@ -752,10 +804,11 @@ class TelegramBridge {
         }),
         "sendMessage",
       );
-      this.recordOut(sent, msg, chatId);
+      this.recordOut(sent, msg, chatId, partKey);
       return;
     }
-    if (text.length > 1000) {
+
+    if (text.length > 1000 && !telegramPartDelivered(this.hive.db, msg.seq, "text", chatId)) {
       const sent = requireTelegramOk(
         await this.api("sendMessage", {
           chat_id: chatId,
@@ -765,19 +818,22 @@ class TelegramBridge {
         }),
         "sendMessage",
       );
-      this.recordOut(sent, msg, chatId);
+      this.recordOut(sent, msg, chatId, "text");
     }
+
     const human = this.hive.getAgent(HUMAN_ID);
     for (let i = 0; i < atts.length; i += 1) {
       const att = atts[i]!;
+      const partKey = `attachment:${att.id}`;
+      if (telegramPartDelivered(this.hive.db, msg.seq, partKey, chatId)) continue;
       const opened = this.hive.getAttachment(human, att.id);
       const disk = filePathForHash(opened.sha256, this.hive.home);
       const caption = text.length <= 1000 && i === 0 ? text : `${msg.authorName} · ${att.name}`;
       const sent = requireTelegramOk(
-        await this.sendFile(chatId, thread, att.mime, att.name, disk, caption, silent && i > 0 ? true : silent),
+        await this.sendFile(chatId, thread, att.mime, att.name, disk, caption, silent),
         "sendFile",
       );
-      this.recordOut(sent, msg, chatId);
+      this.recordOut(sent, msg, chatId, partKey);
     }
   }
 
@@ -812,12 +868,30 @@ class TelegramBridge {
     }
   }
 
-  private recordOut(sent: ApiResult, msg: Message, chatId: number) {
+  private recordOut(sent: ApiResult, msg: Message, chatId: number, partKey: string) {
     const result = sent.result as { message_id?: number } | undefined;
     if (!sent.ok || !result?.message_id) return;
-    this.hive.db.prepare(
-      `INSERT OR REPLACE INTO telegram_out (telegram_chat_id, telegram_message_id, seq, channel_id, thread_id) VALUES (?, ?, ?, ?, ?)`,
-    ).run(chatId, result.message_id, msg.seq, msg.channelId, msg.threadId);
+    try {
+      this.hive.db.exec("BEGIN IMMEDIATE");
+      this.hive.db.prepare(
+        `INSERT OR REPLACE INTO telegram_out
+          (telegram_chat_id, telegram_message_id, seq, channel_id, thread_id)
+         VALUES (?, ?, ?, ?, ?)`,
+      ).run(chatId, result.message_id, msg.seq, msg.channelId, msg.threadId);
+      this.hive.db.prepare(
+        `INSERT OR REPLACE INTO telegram_delivery_parts
+          (seq, part_key, telegram_chat_id, telegram_message_id, completed_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      ).run(msg.seq, partKey, chatId, result.message_id, Date.now());
+      this.hive.db.exec("COMMIT");
+    } catch (err) {
+      try {
+        this.hive.db.exec("ROLLBACK");
+      } catch {
+        /* no open transaction */
+      }
+      throw err;
+    }
   }
 
   private async sendFile(
