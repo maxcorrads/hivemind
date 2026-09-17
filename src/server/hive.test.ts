@@ -594,3 +594,60 @@ test("Human can delete an idle project but not one with online or waiting agents
   assert.equal(again.slug, "nuovo");
   rmSync(dir, { recursive: true, force: true });
 });
+
+
+test("failed attachment sends leave messages, threads, and bindings unchanged", async () => {
+  const { hive, dir } = tempHive();
+  const human = hive.getAgent("human");
+  const worker = hive.join({ role: "worker", seniority: "mid" }).agent;
+  const project = hive.listProjects()[0]!;
+  const general = hive.getChannel("general", project.id);
+  const beforeMessages = hive.listMessages(human, general.id, { limit: 200 }).messages.length;
+
+  const reusable = await hive.createFileFromBytes(human, {
+    name: "reusable.txt",
+    mime: "text/plain",
+    bytes: new TextEncoder().encode("reusable"),
+  });
+  assert.throws(
+    () => hive.postMessage(human, { channel: general.id, body: "missing", attachmentIds: [reusable.id, "missing-id"] }),
+    /Attachment not found/,
+  );
+  assert.equal(
+    (hive.db.prepare("SELECT message_id FROM attachments WHERE id = ?").get(reusable.id) as { message_id: string | null }).message_id,
+    null,
+  );
+
+  assert.throws(
+    () => hive.postMessage(human, { channel: general.id, body: "duplicate", attachmentIds: [reusable.id, reusable.id] }),
+    /Duplicate attachment/,
+  );
+  assert.equal(
+    (hive.db.prepare("SELECT message_id FROM attachments WHERE id = ?").get(reusable.id) as { message_id: string | null }).message_id,
+    null,
+  );
+
+  const foreign = await hive.createFileFromBytes(worker, {
+    name: "foreign.txt",
+    mime: "text/plain",
+    bytes: new TextEncoder().encode("foreign"),
+  });
+  assert.throws(
+    () => hive.postMessage(human, { channel: general.id, body: "foreign", attachmentIds: [foreign.id] }),
+    /not yours/,
+  );
+
+  const sent = hive.postMessage(human, { channel: general.id, body: "valid", attachmentIds: [reusable.id] });
+  assert.equal(sent.attachments?.[0]?.id, reusable.id);
+  const afterValid = hive.listMessages(human, general.id, { limit: 200 }).messages.length;
+  assert.equal(afterValid, beforeMessages + 1);
+
+  assert.throws(
+    () => hive.postMessage(human, { channel: general.id, body: "reuse", attachmentIds: [reusable.id] }),
+    /already sent/,
+  );
+  assert.equal(hive.listMessages(human, general.id, { limit: 200 }).messages.length, afterValid);
+  assert.equal(hive.threadsInChannel(general.id).length, 0);
+
+  rmSync(dir, { recursive: true, force: true });
+});
