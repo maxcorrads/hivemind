@@ -250,6 +250,40 @@ export function telegramGeneralThreadId(ch: Channel | string): number | null {
   return ch.name === "general" && ch.type === "public" ? 1 : null;
 }
 
+export class TelegramRateLimitError extends Error {
+  constructor(public readonly retryAfterMs: number) {
+    super(`Telegram rate limited; retry after ${Math.ceil(retryAfterMs / 1000)}s`);
+    this.name = "TelegramRateLimitError";
+  }
+}
+
+export function telegramRetryAfterMs(
+  status: number,
+  data: { parameters?: { retry_after?: number } } | null | undefined,
+  fallbackMs = 2_000,
+): number | null {
+  if (status !== 429) return null;
+  const seconds = Number(data?.parameters?.retry_after);
+  return Number.isFinite(seconds) && seconds >= 0 ? Math.max(1, seconds * 1000) : fallbackMs;
+}
+
+export function selectTelegramPendingJob(
+  jobs: Array<{ seq: number; kind: "message" | "reaction" }>,
+  chatForSeq: (seq: number) => number | undefined,
+  cooldownUntil: (chatId: number) => number,
+  now: number,
+): { job?: { seq: number; kind: "message" | "reaction" }; wakeAt?: number } {
+  let wakeAt: number | undefined;
+  for (const job of jobs) {
+    const chat = chatForSeq(job.seq);
+    if (chat == null) return { job };
+    const until = cooldownUntil(chat);
+    if (until <= now) return { job };
+    wakeAt = wakeAt == null ? until : Math.min(wakeAt, until);
+  }
+  return { wakeAt };
+}
+
 export const TELEGRAM_PENDING_CAP = 200;
 
 export function enqueueTelegramPending(
@@ -308,6 +342,7 @@ class TelegramBridge {
   private poll: Promise<void> | null = null;
   private ignoreReaction = new Map<string, number>();
   private skipChatUntil = new Map<number, number>();
+  private pumpTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private hive: Hive,
@@ -328,6 +363,8 @@ class TelegramBridge {
 
   stop() {
     this.stopped = true;
+    if (this.pumpTimer) clearTimeout(this.pumpTimer);
+    this.pumpTimer = null;
     this.hive.bus.off("message", this.onHiveMessage);
     this.hive.bus.off("reaction", this.onHiveReaction);
   }
@@ -662,16 +699,36 @@ class TelegramBridge {
     }
   }
 
-  private nextPending(): { seq: number; kind: "message" | "reaction" } | undefined {
+  private pendingSelection() {
     const jobs = this.hive.db.prepare(
       "SELECT seq, kind FROM telegram_pending ORDER BY seq ASC, kind ASC",
     ).all() as { seq: number; kind: "message" | "reaction" }[];
-    const now = Date.now();
-    for (const job of jobs) {
-      const chat = this.chatForSeq(job.seq);
-      if (chat != null && (this.skipChatUntil.get(chat) ?? 0) > now) continue;
-      return job;
-    }
+    return selectTelegramPendingJob(
+      jobs,
+      (seq) => this.chatForSeq(seq),
+      (chat) => this.skipChatUntil.get(chat) ?? 0,
+      Date.now(),
+    );
+  }
+
+  private nextPending(): { seq: number; kind: "message" | "reaction" } | undefined {
+    return this.pendingSelection().job;
+  }
+
+  private schedulePump(at: number) {
+    if (this.stopped) return;
+    if (this.pumpTimer) clearTimeout(this.pumpTimer);
+    const delay = Math.max(1, at - Date.now());
+    this.pumpTimer = setTimeout(() => {
+      this.pumpTimer = null;
+      void this.pump();
+    }, delay);
+    this.pumpTimer.unref?.();
+  }
+
+  private coolDownChat(chatId: number, retryAfterMs: number) {
+    const until = Date.now() + Math.max(1, retryAfterMs);
+    this.skipChatUntil.set(chatId, Math.max(this.skipChatUntil.get(chatId) ?? 0, until));
   }
 
   private clearPending(seq: number, kind: string) {
@@ -682,8 +739,12 @@ class TelegramBridge {
     if (this.pumping) return;
     this.pumping = true;
     while (!this.stopped) {
-      const job = this.nextPending();
-      if (!job) break;
+      const selection = this.pendingSelection();
+      const job = selection.job;
+      if (!job) {
+        if (selection.wakeAt != null) this.schedulePump(selection.wakeAt);
+        break;
+      }
       try {
         if (job.kind === "reaction") await this.sendPendingReaction(job.seq);
         else await this.sendPendingMessage(job.seq);
@@ -700,13 +761,15 @@ class TelegramBridge {
         }
         if (isTelegramTopicRightsError(err)) {
           this.hintTopicRights();
-          if (chat != null) this.skipChatUntil.set(chat, Date.now() + 15_000);
-          if (!this.nextPending()) await sleep(15_000);
+          if (chat != null) this.coolDownChat(chat, 15_000);
           continue;
         }
-        if (chat != null && /429|Too Many Requests/i.test(err instanceof Error ? err.message : String(err))) {
-          this.skipChatUntil.set(chat, Date.now() + 15_000);
-          if (!this.nextPending()) await sleep(15_000);
+        if (err instanceof TelegramRateLimitError) {
+          if (chat != null) {
+            this.coolDownChat(chat, err.retryAfterMs);
+            continue;
+          }
+          await sleep(err.retryAfterMs);
           continue;
         }
         this.pumpFails = nextTelegramFailure(this.pumpFails, job.seq, job.kind);
@@ -840,10 +903,8 @@ class TelegramBridge {
     const method = mime.startsWith("image/") ? "sendPhoto" : "sendDocument";
     const res = await fetch(`https://api.telegram.org/bot${this.cfg.botToken}/${method}`, { method: "POST", body: form });
     const data = (await res.json().catch(() => ({}))) as ApiResult;
-    if (res.status === 429) {
-      await sleep(Number(data.parameters?.retry_after ?? 2) * 1000);
-      return this.sendFile(chatId, thread, mime, name, filePath, caption, silent);
-    }
+    const retryAfterMs = telegramRetryAfterMs(res.status, data);
+    if (retryAfterMs != null) throw new TelegramRateLimitError(retryAfterMs);
     return data;
   }
 
@@ -893,11 +954,8 @@ class TelegramBridge {
       body: JSON.stringify(body),
     });
     const data = (await res.json().catch(() => ({}))) as ApiResult;
-    if (res.status === 429) {
-      const wait = Number(data.parameters?.retry_after ?? 2);
-      await sleep(wait * 1000);
-      return this.api(method, body);
-    }
+    const retryAfterMs = telegramRetryAfterMs(res.status, data);
+    if (retryAfterMs != null) throw new TelegramRateLimitError(retryAfterMs);
     return data;
   }
 }
