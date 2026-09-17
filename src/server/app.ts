@@ -157,9 +157,10 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       limit: Number(c.req.query("limit") ?? 80),
     });
     const ch = hive.getChannel(id);
-    if (!threadId) {
-      const latest = hive.latestSeq(ch.id);
-      if (latest) hive.markRead(human, ch.id, latest);
+    const displayedLatest = listed.messages.at(-1)?.seq;
+    if (displayedLatest) {
+      if (threadId) hive.markThreadRead(human, threadId, displayedLatest);
+      else hive.markRead(human, ch.id, displayedLatest);
     }
     return c.json({
       channel: ch,
