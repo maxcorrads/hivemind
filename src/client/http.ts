@@ -45,6 +45,24 @@ export function hiveUrl(): string {
   return process.env.HIVEMIND_URL ?? "http://127.0.0.1:7420";
 }
 
+export class HttpError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string,
+    public readonly code?: string,
+  ) {
+    super(message);
+    this.name = "HttpError";
+  }
+}
+
+function responseError(res: Response, data: unknown): HttpError {
+  const payload = data && typeof data === "object" ? (data as { error?: unknown; code?: unknown }) : {};
+  const message = typeof payload.error === "string" && payload.error ? payload.error : `HTTP ${res.status}`;
+  const code = typeof payload.code === "string" && payload.code ? payload.code : undefined;
+  return new HttpError(res.status, message, code);
+}
+
 export async function agentRequest<T>(
   method: string,
   pathname: string,
@@ -67,7 +85,7 @@ export async function agentRequest<T>(
     const text = await res.text();
     const data = text ? JSON.parse(text) : {};
     if (!res.ok) {
-      throw new Error(data.error || `HTTP ${res.status}`);
+      throw responseError(res, data);
     }
     return data as T;
   } finally {
@@ -123,7 +141,7 @@ export async function agentUploadFile<T>(
 async function parseJsonResponse<T>(res: Response): Promise<T> {
   const text = await res.text();
   const data = text ? JSON.parse(text) : {};
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  if (!res.ok) throw responseError(res, data);
   return data as T;
 }
 
@@ -148,7 +166,7 @@ export async function agentDownloadToFile(
     } catch {
       /* keep */
     }
-    throw new Error(error);
+    throw new HttpError(res.status, error);
   }
   if (!res.body) throw new Error("Empty download");
   const name = fileNameFromDisposition(res.headers.get("content-disposition") ?? "");
