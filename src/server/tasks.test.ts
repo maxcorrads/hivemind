@@ -131,6 +131,88 @@ test('project/access boundaries and evidence are checked before creating a task'
   assert.throws(() => f.hive.tasks.get(f.worker.agent, task.id), /Cannot read/);
 });
 
+for (const source of ['private', 'brains'] as const) {
+  test(`HTTP changes-requested review rejects ${source} evidence atomically and accepts a shared alternative`, async t => {
+    const f = fixture(t); const task = f.assign().task;
+    f.event(task.id, f.worker.agent, { type: 'accept' });
+    f.event(task.id, f.worker.agent, { type: 'result', result: result() });
+    const notes = source === 'brains' ? f.hive.getChannel('brains', f.brain.agent.projectId) :
+      f.hive.createChannel(f.brain.agent, { name: 'private-review-notes', type: 'private' });
+    const privateEvidence = f.hive.postMessage(f.brain.agent, { channel: notes.id, body: 'Invented private review detail' });
+    const shared = f.hive.createChannel(f.brain.agent, { name: 'shared-review-evidence', type: 'private', memberNames: [f.worker.agent.name] });
+    const evidence = f.hive.postMessage(f.brain.agent, { channel: shared.id, body: 'Shared parser regression fixture' });
+    const before = f.hive.tasks.get(f.brain.agent, task.id);
+    const counts = () => ['messages', 'task_events'].map(table => f.hive.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()!.n);
+    const beforeCounts = counts();
+    const membership = () => f.hive.db.prepare('SELECT * FROM channel_members ORDER BY channel_id, agent_id').all();
+    const beforeMembership = membership();
+    const notifications: string[] = [];
+    for (const name of ['message', 'task', 'channel', 'queued']) f.hive.bus.on(name, () => notifications.push(name));
+    const input = { requestId: 'review-evidence', expectedRevision: before.revision,
+      action: { type: 'review', decision: 'changes_requested', summary: 'Add a parser regression', evidenceSeqs: [evidence.seq, privateEvidence.seq] } };
+    const app = createApp(f.hive);
+    const response = await app.request(`/api/agent/tasks/${task.id}/events`, { method: 'POST',
+      headers: { authorization: `Bearer ${f.brain.token}`, 'content-type': 'application/json' }, body: JSON.stringify(input) });
+    assert.equal(response.status, 403);
+    const error = await response.json() as { error: string };
+    assert.match(error.error, /assigned worker.*shared channel/);
+    assert.ok(!error.error.includes(privateEvidence.body));
+    assert.deepEqual(f.hive.tasks.get(f.brain.agent, task.id), before);
+    assert.deepEqual(counts(), beforeCounts);
+    assert.deepEqual(membership(), beforeMembership);
+    assert.deepEqual(notifications, []);
+    assert.throws(() => f.hive.getVisibleMessage(f.worker.agent, privateEvidence.seq), /Cannot read/);
+
+    // A definitively rejected request did not reserve its ID or publish a review.
+    const corrected = { ...input, action: { ...input.action, evidenceSeqs: [evidence.seq] } };
+    const reviewed = f.hive.tasks.event(f.brain.agent, task.id, corrected);
+    assert.equal(reviewed.task.state, 'changes_requested');
+    assert.equal(reviewed.task.revision, before.revision + 1);
+    assert.ok(reviewed.message.mentions.includes(f.worker.agent.id));
+    assert.equal(f.hive.getVisibleMessage(f.worker.agent, evidence.seq).body, evidence.body);
+    assert.deepEqual(membership(), beforeMembership, 'Review must never grant channel access');
+
+    // Access is checked at submission, not granted by a reference or rechecked on a committed retry.
+    f.hive.db.prepare('DELETE FROM channel_members WHERE channel_id = ? AND agent_id = ?').run(shared.id, f.worker.agent.id);
+    f.reopen();
+    const afterCounts = counts();
+    const retry = f.hive.tasks.event(f.brain.agent, task.id, corrected);
+    assert.equal(retry.duplicate, true); assert.equal(retry.message.id, reviewed.message.id);
+    assert.deepEqual(counts(), afterCounts);
+    assert.throws(() => f.hive.getVisibleMessage(f.worker.agent, evidence.seq), /Cannot read/);
+  });
+}
+
+test('changes-requested evidence is checked against the current worker after reassignment', t => {
+  const f = fixture(t); const next = f.hive.join({ role: 'worker', seniority: 'mid' }).agent;
+  const room = f.hive.createChannel(f.brain.agent, { name: 'shared-task', type: 'private', memberNames: [f.worker.agent.name, next.name] });
+  const task = f.assign({ channel: room.id }).task;
+  f.event(task.id, f.brain.agent, { type: 'revise', worker: next.name, reason: 'Hand off the fixture', contract: contract() });
+  f.event(task.id, next, { type: 'accept' });
+  f.event(task.id, next, { type: 'result', result: result() });
+  const oldDm = f.hive.openDm(f.brain.agent, f.worker.agent.name);
+  const oldEvidence = f.hive.postMessage(f.brain.agent, { channel: oldDm.id, body: 'Only shared with the previous worker' });
+  assert.equal(f.hive.getVisibleMessage(f.worker.agent, oldEvidence.seq).seq, oldEvidence.seq);
+  assert.throws(() => f.event(task.id, f.brain.agent, { type: 'review', decision: 'changes_requested',
+    summary: 'Use the regression', evidenceSeqs: [oldEvidence.seq] }), /assigned worker.*shared channel/);
+  const newDm = f.hive.openDm(f.brain.agent, next.name);
+  const evidence = f.hive.postMessage(f.brain.agent, { channel: newDm.id, body: 'Evidence shared with the current worker' });
+  assert.throws(() => f.hive.getVisibleMessage(f.worker.agent, evidence.seq), /Cannot read/);
+  assert.equal(f.event(task.id, f.brain.agent, { type: 'review', decision: 'changes_requested',
+    summary: 'Use the shared regression', evidenceSeqs: [evidence.seq] }).task.state, 'changes_requested');
+});
+
+test('accepted review evidence remains reviewer-visible and grants no worker access', t => {
+  const f = fixture(t); const task = f.assign().task;
+  f.event(task.id, f.worker.agent, { type: 'accept' });
+  f.event(task.id, f.worker.agent, { type: 'result', result: result() });
+  const notes = f.hive.createChannel(f.brain.agent, { name: 'acceptance-notes', type: 'private' });
+  const evidence = f.hive.postMessage(f.brain.agent, { channel: notes.id, body: 'Private record of reviewer checks' });
+  const review = f.event(task.id, f.brain.agent, { type: 'review', decision: 'accepted', summary: 'Reviewed', evidenceSeqs: [evidence.seq] });
+  assert.equal(review.task.state, 'accepted_complete');
+  assert.throws(() => f.hive.getVisibleMessage(f.worker.agent, evidence.seq), /Cannot read/);
+});
+
 test('assignment failure rolls back the message, task, DM and all notifications', t => {
   const f = fixture(t); const events: string[] = [];
   for (const name of ['message', 'channel', 'task']) f.hive.bus.on(name, () => events.push(name));

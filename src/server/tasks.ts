@@ -149,6 +149,14 @@ export class TaskStore {
       } else if (action.type === 'review') {
         if (task.state !== 'result_submitted') throw new HiveError(409, 'Review requires a submitted result');
         this.evidence(actor, action.evidenceSeqs);
+        if (action.decision === 'changes_requested' && action.evidenceSeqs.length) {
+          try { this.evidence(this.hive.getAgent(task.workerId), action.evidenceSeqs); }
+          catch (error) {
+            if (error instanceof HiveError && error.status === 403)
+              throw new HiveError(403, 'Changes-requested review evidence must be readable by the assigned worker; use a reference in a shared channel');
+            throw error;
+          }
+        }
         task.review = { reviewerId: actor.id, decision: action.decision, summary: action.summary };
         task.state = action.decision === 'accepted' ? 'accepted_complete' : 'changes_requested';
       } else if (action.type === 'accept' || action.type === 'reject') {
