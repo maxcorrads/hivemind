@@ -594,3 +594,40 @@ test("Human can delete an idle project but not one with online or waiting agents
   assert.equal(again.slug, "nuovo");
   rmSync(dir, { recursive: true, force: true });
 });
+
+
+test("history forward pagination visits every channel message without skipping", () => {
+  const { hive, dir } = tempHive();
+  const human = hive.getAgent("human");
+  const worker = hive.join({ role: "worker", seniority: "mid" }).agent;
+  const dm = hive.openDm(human, worker.name);
+  const expected: number[] = [];
+
+  for (let i = 0; i < 65; i += 1) {
+    const msg = hive.postMessage(human, { channel: "general", body: `general ${i}` });
+    expected.push(msg.seq);
+    if (i % 3 === 0) hive.postMessage(human, { channel: dm.id, body: `gap ${i}` });
+  }
+
+  const latest = hive.listMessages(human, "general", { limit: 20 });
+  assert.deepEqual(latest.messages.map((msg) => msg.seq), expected.slice(-20));
+  assert.equal(latest.hasOlder, true);
+  assert.equal(latest.hasNewer, false);
+  assert.equal(latest.cursors.before, expected.at(-20));
+
+  const seen: number[] = [];
+  let after = 0;
+  for (;;) {
+    const page = hive.listMessages(human, "general", { afterSeq: after, limit: 17 });
+    seen.push(...page.messages.map((msg) => msg.seq));
+    if (!page.hasNewer) break;
+    assert.ok(page.cursors.after);
+    after = page.cursors.after!;
+  }
+  assert.deepEqual(seen, expected);
+
+  const backward = hive.listMessages(human, "general", { beforeSeq: expected.at(-20), limit: 20 });
+  assert.deepEqual(backward.messages.map((msg) => msg.seq), expected.slice(-40, -20));
+
+  rmSync(dir, { recursive: true, force: true });
+});
