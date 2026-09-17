@@ -594,3 +594,24 @@ test("Human can delete an idle project but not one with online or waiting agents
   assert.equal(again.slug, "nuovo");
   rmSync(dir, { recursive: true, force: true });
 });
+
+
+test("thread APIs expose channelId instead of raw channel_id", () => {
+  const { hive, dir } = tempHive();
+  const human = hive.getAgent("human");
+  const project = hive.listProjects()[0]!;
+  const channel = hive.getChannel("general", project.id);
+  const root = hive.postMessage(human, { channel: channel.id, body: "thread root" });
+
+  const updated = hive.setThreadStatus(human, root.id, "in_progress");
+  assert.equal(updated.channelId, channel.id);
+  assert.equal((updated as unknown as Record<string, unknown>).channel_id, undefined);
+
+  const listed = hive.threadsInChannel(channel.id);
+  const thread = listed.find((item) => item.id === root.id);
+  assert.ok(thread);
+  assert.equal(thread.channelId, channel.id);
+  assert.equal((thread as unknown as Record<string, unknown>).channel_id, undefined);
+
+  rmSync(dir, { recursive: true, force: true });
+});
