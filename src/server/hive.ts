@@ -171,6 +171,12 @@ export class Hive {
         last_read_seq INTEGER NOT NULL,
         PRIMARY KEY (agent_id, channel_id)
       );
+      CREATE TABLE IF NOT EXISTS thread_reads (
+        agent_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        last_read_seq INTEGER NOT NULL,
+        PRIMARY KEY (agent_id, thread_id)
+      );
       CREATE INDEX IF NOT EXISTS idx_messages_channel_seq ON messages(channel_id, seq);
       CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
       CREATE TABLE IF NOT EXISTS telegram_topics (
@@ -1260,6 +1266,13 @@ export class Hive {
     ).run(actor.id, channelId, seq);
   }
 
+  markThreadRead(actor: Agent, threadId: string, seq: number) {
+    this.db.prepare(
+      `INSERT INTO thread_reads (agent_id, thread_id, last_read_seq) VALUES (?, ?, ?)
+       ON CONFLICT(agent_id, thread_id) DO UPDATE SET last_read_seq = MAX(last_read_seq, excluded.last_read_seq)`,
+    ).run(actor.id, threadId, seq);
+  }
+
   readsFor(actor: Agent): Record<string, number> {
     const rows = this.db.prepare("SELECT channel_id, last_read_seq FROM reads WHERE agent_id = ?").all(actor.id) as {
       channel_id: string;
@@ -1283,8 +1296,22 @@ export class Hive {
   }
 
   markMentionsSeen(actor: Agent, projectId?: string) {
-    const inbox = this.mentionInbox(actor, 400, undefined, projectId);
-    for (const m of inbox.messages) this.markRead(actor, m.channelId, m.seq);
+    const rows = this.db.prepare(
+      `SELECT m.channel_id, m.thread_id, MAX(m.seq) AS seq
+       FROM messages m
+       JOIN channels c ON c.id = m.channel_id
+       WHERE EXISTS (SELECT 1 FROM json_each(m.mentions) WHERE value = ?)
+         AND (? IS NULL OR c.project_id = ?)
+       GROUP BY m.channel_id, m.thread_id`,
+    ).all(actor.id, projectId ?? null, projectId ?? null) as {
+      channel_id: string;
+      thread_id: string | null;
+      seq: number;
+    }[];
+    for (const row of rows) {
+      if (row.thread_id) this.markThreadRead(actor, row.thread_id, row.seq);
+      else this.markRead(actor, row.channel_id, row.seq);
+    }
   }
 
   mentionInbox(
@@ -1293,25 +1320,36 @@ export class Hive {
     beforeSeq?: number,
     projectId?: string,
   ): { messages: Message[]; hasMore: boolean } {
-    const reads = this.readsFor(actor);
+    const pageSize = Math.min(Math.max(1, Number.isFinite(limit) ? Number(limit) : 30), 200);
     const rows = this.db.prepare(
-      `SELECT * FROM messages WHERE mentions LIKE ? ORDER BY seq DESC LIMIT 400`,
-    ).all(`%${actor.id}%`) as MessageRow[];
-    const unseen = rows
-      .map((r) => this.mapMessage(r))
-      .filter((m) => m.mentions.includes(actor.id) && m.seq > (reads[m.channelId] ?? 0))
-      .filter((m) => beforeSeq == null || m.seq < beforeSeq)
-      .filter((m) => {
-        if (!projectId) return true;
-        try {
-          return this.getChannel(m.channelId).projectId === projectId;
-        } catch {
-          return false;
-        }
-      });
+      `SELECT m.*
+       FROM messages m
+       JOIN channels c ON c.id = m.channel_id
+       LEFT JOIN reads r ON r.agent_id = ? AND r.channel_id = m.channel_id
+       LEFT JOIN thread_reads tr ON tr.agent_id = ? AND tr.thread_id = m.thread_id
+       WHERE EXISTS (SELECT 1 FROM json_each(m.mentions) WHERE value = ?)
+         AND (
+           (m.thread_id IS NULL AND m.seq > COALESCE(r.last_read_seq, 0))
+           OR
+           (m.thread_id IS NOT NULL AND m.seq > COALESCE(tr.last_read_seq, 0))
+         )
+         AND (? IS NULL OR m.seq < ?)
+         AND (? IS NULL OR c.project_id = ?)
+       ORDER BY m.seq DESC
+       LIMIT ?`,
+    ).all(
+      actor.id,
+      actor.id,
+      actor.id,
+      beforeSeq ?? null,
+      beforeSeq ?? null,
+      projectId ?? null,
+      projectId ?? null,
+      pageSize + 1,
+    ) as MessageRow[];
     return {
-      messages: this.decorate(unseen.slice(0, limit), actor.id),
-      hasMore: unseen.length > limit,
+      messages: this.decorate(rows.slice(0, pageSize).map((row) => this.mapMessage(row)), actor.id),
+      hasMore: rows.length > pageSize,
     };
   }
 
