@@ -20,7 +20,13 @@ export type Snapshot = {
   mentions: Message[];
   mentionsHasMore?: boolean;
   queued: Record<string, number>;
-  telegram?: { running: boolean; configured: boolean };
+  telegram?: {
+    running: boolean;
+    configured: boolean;
+    lastSuccessAt?: number | null;
+    lastError?: string | null;
+    quarantined?: number;
+  };
 };
 
 export type TelegramSettings = {
