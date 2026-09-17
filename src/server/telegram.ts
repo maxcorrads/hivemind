@@ -232,6 +232,20 @@ export function hiveEmojiFromTelegram(emoji: string): string | undefined {
   return TELEGRAM_REACTION_IN[emoji];
 }
 
+export function telegramPollBackoffMs(
+  failures: number,
+  random: () => number = Math.random,
+  terminal = false,
+): number {
+  if (terminal) return 30_000;
+  const base = Math.min(30_000, 1_000 * 2 ** Math.max(0, failures - 1));
+  return Math.round(base * (0.75 + random() * 0.5));
+}
+
+export function isTelegramTerminalPollError(description: string): boolean {
+  return /unauthorized|invalid token|not found|forbidden/i.test(description);
+}
+
 export function isTelegramPermanentOutError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   return /REACTION_INVALID|MESSAGE_ID_INVALID|message to react not found|chat not found/i.test(msg);
@@ -408,14 +422,24 @@ class TelegramBridge {
   }
 
   private async pollLoop() {
+    let failures = 0;
     while (!this.stopped) {
       try {
+        await this.replayQuarantined();
         const offset = Number(this.state("offset") ?? "0");
         const data = await this.api("getUpdates", {
           offset: offset || undefined,
           timeout: 25,
           allowed_updates: ["message", "message_reaction"],
         });
+        if (!data.ok) {
+          const description = data.description ?? "Telegram getUpdates failed";
+          const terminal = isTelegramTerminalPollError(description);
+          throw Object.assign(new Error(description), { terminal });
+        }
+        failures = 0;
+        this.setState("poll:last_success", String(Date.now()));
+        this.setState("poll:last_error", "");
         const updates = (data.result as Array<{
           update_id: number;
           message?: TelegramMessage;
@@ -427,20 +451,94 @@ class TelegramBridge {
             continue;
           }
           try {
-            if (update.message) await this.onTelegramMessage(update.message);
-            if (update.message_reaction) await this.onTelegramReaction(update.message_reaction);
+            await this.processUpdate(update);
             this.markSeen(update.update_id);
+            this.hive.db.prepare("DELETE FROM telegram_update_failures WHERE update_id = ?").run(update.update_id);
             this.setState("offset", String(update.update_id + 1));
           } catch (err) {
+            const attempts = this.recordUpdateFailure(update, err);
+            if (attempts >= 3) {
+              this.markSeen(update.update_id);
+              this.hive.db.prepare(
+                "UPDATE telegram_update_failures SET state = 'quarantined', updated_at = ? WHERE update_id = ?",
+              ).run(Date.now(), update.update_id);
+              this.setState("offset", String(update.update_id + 1));
+              console.error(`telegram update quarantined id=${update.update_id}`);
+              continue;
+            }
             console.error("telegram update", err instanceof Error ? err.message : err);
             break;
           }
         }
       } catch (err) {
         if (this.stopped) return;
-        console.error("telegram poll", err instanceof Error ? err.message : err);
-        await sleep(2000);
+        failures += 1;
+        const message = err instanceof Error ? err.message : String(err);
+        this.setState("poll:last_error", message);
+        const terminal = Boolean((err as { terminal?: unknown })?.terminal);
+        console.error("telegram poll", message);
+        await sleep(telegramPollBackoffMs(failures, Math.random, terminal));
       }
+    }
+  }
+
+  private async processUpdate(update: {
+    update_id: number;
+    message?: TelegramMessage;
+    message_reaction?: TelegramReaction;
+  }) {
+    if (update.message) await this.onTelegramMessage(update.message);
+    if (update.message_reaction) await this.onTelegramReaction(update.message_reaction);
+  }
+
+  private recordUpdateFailure(
+    update: { update_id: number; message?: TelegramMessage; message_reaction?: TelegramReaction },
+    err: unknown,
+  ): number {
+    const previous = this.hive.db.prepare(
+      "SELECT attempts FROM telegram_update_failures WHERE update_id = ?",
+    ).get(update.update_id) as { attempts: number } | undefined;
+    const attempts = (previous?.attempts ?? 0) + 1;
+    const message = err instanceof Error ? err.message : String(err);
+    this.hive.db.prepare(
+      `INSERT INTO telegram_update_failures
+        (update_id, payload, attempts, last_error, state, updated_at)
+       VALUES (?, ?, ?, ?, 'retrying', ?)
+       ON CONFLICT(update_id) DO UPDATE SET
+         payload = excluded.payload,
+         attempts = excluded.attempts,
+         last_error = excluded.last_error,
+         state = excluded.state,
+         updated_at = excluded.updated_at`,
+    ).run(update.update_id, JSON.stringify(update), attempts, message.slice(0, 1000), Date.now());
+    return attempts;
+  }
+
+  private async replayQuarantined() {
+    const row = this.hive.db.prepare(
+      "SELECT update_id AS updateId, payload FROM telegram_update_failures WHERE state = 'retry' ORDER BY updated_at ASC LIMIT 1",
+    ).get() as { updateId: number; payload: string } | undefined;
+    if (!row) return;
+    try {
+      const update = JSON.parse(row.payload) as {
+        update_id: number;
+        message?: TelegramMessage;
+        message_reaction?: TelegramReaction;
+      };
+      await this.processUpdate(update);
+      this.hive.db.prepare(
+        "UPDATE telegram_update_failures SET state = 'resolved', updated_at = ? WHERE update_id = ?",
+      ).run(Date.now(), row.updateId);
+    } catch (err) {
+      const update = JSON.parse(row.payload) as {
+        update_id: number;
+        message?: TelegramMessage;
+        message_reaction?: TelegramReaction;
+      };
+      this.recordUpdateFailure(update, err);
+      this.hive.db.prepare(
+        "UPDATE telegram_update_failures SET state = 'quarantined', updated_at = ? WHERE update_id = ?",
+      ).run(Date.now(), row.updateId);
     }
   }
 
@@ -467,7 +565,11 @@ class TelegramBridge {
       this.holdMessage(message);
       return;
     }
+    const expectedFiles = (message.photo?.length ? 1 : 0) + (message.document ? 1 : 0);
     const attachmentIds = await this.filesFromMessage(message);
+    if (attachmentIds.length < expectedFiles) {
+      throw new Error(`Telegram attachment ingestion failed (${attachmentIds.length}/${expectedFiles})`);
+    }
     if (!text && attachmentIds.length === 0) return;
     let threadId: string | null = null;
     const replyId = message.reply_to_message?.message_id;
