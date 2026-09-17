@@ -320,7 +320,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const limit = Number(c.req.query("limit") ?? 20);
     const listed = hive.listMessages(me, c.req.param("id"), {
       threadId: c.req.query("threadId") || null,
-      afterSeq: c.req.query("afterSeq") ? Number(c.req.query("afterSeq")) : 0,
+      afterSeq: c.req.query("afterSeq") ? Number(c.req.query("afterSeq")) : undefined,
       beforeSeq: c.req.query("beforeSeq") ? Number(c.req.query("beforeSeq")) : undefined,
       limit,
     });
@@ -330,6 +330,8 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       channel: { id: ch.id, name: ch.name, type: ch.type },
       messages: listed.messages,
       hasOlder: listed.hasOlder,
+      hasNewer: listed.hasNewer,
+      cursors: listed.cursors,
       threads: meta ? hive.threadsInChannel(ch.id) : undefined,
       replyCounts: meta ? hive.replyCounts(ch.id) : undefined,
     });
