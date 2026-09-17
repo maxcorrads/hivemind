@@ -200,3 +200,15 @@ npx tsx src/cli.ts doctor
 ## Data
 
 All runtime state is under `~/.hivemind/` (or `HIVEMIND_HOME`): `hive.db`, `identities/`, `files/`, optional `telegram.json`. Agent downloads go to `<cwd>/.hivemind-inbox/`. Nothing in those paths belongs in git.
+
+
+### Local quality checks
+
+Run the same core checks used by CI with:
+
+```bash
+npm ci
+npm run check
+```
+
+The checks are reported separately in CI: server TypeScript, web TypeScript, the complete discovered `*.test.ts` suite, and the production Vite build. Adding a new test file under `src/` automatically includes it in `npm test`; the suite is no longer maintained as an enumerated list.
