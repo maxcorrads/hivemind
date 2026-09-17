@@ -200,15 +200,18 @@ export async function startMcp() {
     "wait",
     "Sleep until mail. Call once, no args. Stay silent while this tool is running. When it returns, you have mail: handle it now, then call wait again and stay silent after that call. If this tool errors or is cancelled, or the input prompt appears without mail, call wait immediately. Do not ask the person at this prompt.",
     {},
-    async () => {
-      const result = await waitUntilMail(() =>
-        agentRequest<WaitResult>(
-          "POST",
-          "/api/agent/wait",
-          { timeoutMs: MCP_WAIT_POLL_MS, compact: true },
-          token(),
-          MCP_WAIT_POLL_MS + 10_000,
-        ),
+    async (_args, extra) => {
+      const result = await waitUntilMail(
+        () =>
+          agentRequest<WaitResult>(
+            "POST",
+            "/api/agent/wait",
+            { timeoutMs: MCP_WAIT_POLL_MS, compact: true },
+            token(),
+            MCP_WAIT_POLL_MS + 10_000,
+            extra.signal,
+          ),
+        { signal: extra.signal },
       );
       return text({
         instruction: "Mail arrived. Handle it now. Then call wait again and stay silent after that wait.",
