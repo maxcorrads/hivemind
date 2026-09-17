@@ -106,3 +106,30 @@ test("stable HTTP 5xx stops after a few retries", async () => {
   );
   assert.equal(calls, 5);
 });
+
+
+test("waitUntilMail stops immediately when cancelled during retry delay", async () => {
+  const ac = new AbortController();
+  let calls = 0;
+  let delayEntered = false;
+  const pending = waitUntilMail(
+    async () => {
+      calls += 1;
+      throw new Error("fetch failed");
+    },
+    {
+      signal: ac.signal,
+      delay: async (_ms, signal) => {
+        delayEntered = true;
+        await new Promise<void>((resolve, reject) => {
+          if (signal?.aborted) return reject(signal.reason);
+          signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+      },
+    },
+  );
+  while (!delayEntered) await new Promise((resolve) => setTimeout(resolve, 0));
+  ac.abort(new DOMException("cancelled", "AbortError"));
+  await assert.rejects(() => pending, /cancelled/);
+  assert.equal(calls, 1);
+});
