@@ -35,7 +35,7 @@ import { clampSearchLimit, likeNeedle, parseSearchQuery, snippetAround } from ".
 import { pickName } from "./names.ts";
 import { hiveHome } from "./paths.ts";
 import { packWait } from "./wait-format.ts";
-import { assertAllowedMime, commitUpload, openBlob, removeOrphanBlobs, streamUpload } from "./files.ts";
+import { assertAllowedMime, commitUpload, openBlob, releasePublishedBlob, removeOrphanBlobs, streamUpload } from "./files.ts";
 
 export { hiveHome } from "./paths.ts";
 
@@ -1572,12 +1572,16 @@ export class Hive {
     assertAllowedMime(input.mime);
     const uploaded = await streamUpload(input.body, input.mime, this.home);
     await commitUpload(uploaded.tmp, uploaded.sha256, this.home);
-    const id = crypto.randomUUID();
-    this.db.prepare(
-      `INSERT INTO attachments (id, message_id, name, mime, bytes, sha256, created_by, created_at)
-       VALUES (?, NULL, ?, ?, ?, ?, ?, ?)`,
-    ).run(id, input.name.slice(0, 180), input.mime, uploaded.bytes, uploaded.sha256, actor.id, now());
-    return { id, name: input.name.slice(0, 180), mime: input.mime, bytes: uploaded.bytes };
+    try {
+      const id = crypto.randomUUID();
+      this.db.prepare(
+        `INSERT INTO attachments (id, message_id, name, mime, bytes, sha256, created_by, created_at)
+         VALUES (?, NULL, ?, ?, ?, ?, ?, ?)`,
+      ).run(id, input.name.slice(0, 180), input.mime, uploaded.bytes, uploaded.sha256, actor.id, now());
+      return { id, name: input.name.slice(0, 180), mime: input.mime, bytes: uploaded.bytes };
+    } finally {
+      releasePublishedBlob(uploaded.sha256);
+    }
   }
 
   async createFileFromBytes(
