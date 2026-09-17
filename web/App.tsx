@@ -177,6 +177,14 @@ export function App() {
   const threadIdRef = useRef(threadId);
   threadIdRef.current = threadId;
   const channelsRef = useRef<Channel[]>([]);
+  const channelLoadRef = useRef<{ generation: number; controller: AbortController | null }>({
+    generation: 0,
+    controller: null,
+  });
+  const threadLoadRef = useRef<{ generation: number; controller: AbortController | null }>({
+    generation: 0,
+    controller: null,
+  });
 
   const refreshSnap = useCallback(async () => {
     const next = await api.snapshot();
@@ -185,7 +193,14 @@ export function App() {
   }, []);
 
   const loadChannel = useCallback(async (id: string) => {
-    const data = await api.messages(id);
+    channelLoadRef.current.controller?.abort();
+    const controller = new AbortController();
+    const generation = channelLoadRef.current.generation + 1;
+    channelLoadRef.current = { generation, controller };
+    const data = await api.messages(id, null, undefined, controller.signal);
+    if (controller.signal.aborted || channelLoadRef.current.generation !== generation) return;
+    const current = selRef.current;
+    if (current.kind !== "channel" || current.id !== id) return;
     setPane(data);
     setSnap((s) =>
       s
@@ -198,11 +213,35 @@ export function App() {
     );
   }, []);
 
+  const loadThread = useCallback(async (channelId: string, rootId: string) => {
+    threadLoadRef.current.controller?.abort();
+    const controller = new AbortController();
+    const generation = threadLoadRef.current.generation + 1;
+    threadLoadRef.current = { generation, controller };
+    const data = await api.messages(channelId, rootId, undefined, controller.signal);
+    if (controller.signal.aborted || threadLoadRef.current.generation !== generation) return;
+    const current = selRef.current;
+    if (current.kind !== "channel" || current.id !== channelId || threadIdRef.current !== rootId) return;
+    setThreadPane(data);
+  }, []);
+
   useEffect(() => {
     refreshSnap().catch((e) => setErr(String(e.message || e)));
     const off = connectWs((ev) => {
       if (ev.type === "hello") {
         refreshSnap().catch(() => undefined);
+        const current = selRef.current;
+        if (current.kind === "channel") {
+          loadChannel(current.id).catch((e) => {
+            if (e?.name !== "AbortError") setErr(String(e?.message || e));
+          });
+          const root = threadIdRef.current;
+          if (root) {
+            loadThread(current.id, root).catch((e) => {
+              if (e?.name !== "AbortError") setErr(String(e?.message || e));
+            });
+          }
+        }
         return;
       }
       if (ev.type === "message") {
@@ -262,9 +301,11 @@ export function App() {
     window.addEventListener("hashchange", onHash);
     return () => {
       off();
+      channelLoadRef.current.controller?.abort();
+      threadLoadRef.current.controller?.abort();
       window.removeEventListener("hashchange", onHash);
     };
-  }, [loadChannel, refreshSnap]);
+  }, [loadChannel, loadThread, refreshSnap]);
 
   const missingChannel = Boolean(snap && sel.kind === "channel" && !snap.channels.some((c) => c.id === sel.id));
 
@@ -289,23 +330,30 @@ export function App() {
 
   useEffect(() => {
     if (sel.kind !== "channel") {
+      channelLoadRef.current.controller?.abort();
       setPane(null);
       return;
     }
     if (missingChannel) {
+      channelLoadRef.current.controller?.abort();
       setPane(null);
       return;
     }
-    loadChannel(sel.id).catch((e) => setErr(String(e.message || e)));
+    loadChannel(sel.id).catch((e) => {
+      if (e?.name !== "AbortError") setErr(String(e?.message || e));
+    });
   }, [sel, loadChannel, missingChannel]);
 
   useEffect(() => {
     if (!threadId || sel.kind !== "channel" || missingChannel) {
+      threadLoadRef.current.controller?.abort();
       setThreadPane(null);
       return;
     }
-    api.messages(sel.id, threadId).then(setThreadPane).catch((e) => setErr(String(e.message || e)));
-  }, [threadId, sel, missingChannel]);
+    loadThread(sel.id, threadId).catch((e) => {
+      if (e?.name !== "AbortError") setErr(String(e?.message || e));
+    });
+  }, [threadId, sel, missingChannel, loadThread]);
 
   useEffect(() => {
     const apply = () => {
