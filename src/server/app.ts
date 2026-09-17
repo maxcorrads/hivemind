@@ -53,12 +53,30 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       telegram: {
         running: Boolean(hooks.telegramRunning?.()),
         configured: publicTelegramView(hive.home).configured,
+        failures: hive.telegramFailureCount(),
       },
     });
   });
   ui.get("/telegram", (c) => {
     hive.getAgent("human");
-    return c.json(publicTelegramView(hive.home, Boolean(hooks.telegramRunning?.())));
+    return c.json({
+      ...publicTelegramView(hive.home, Boolean(hooks.telegramRunning?.())),
+      failures: hive.telegramFailureCount(),
+    });
+  });
+  ui.get("/telegram/failures", (c) => {
+    hive.getAgent("human");
+    return c.json({ failures: hive.telegramFailures(Number(c.req.query("limit") ?? 50)) });
+  });
+  ui.post("/telegram/failures/:id/retry", (c) => {
+    hive.getAgent("human");
+    hive.retryTelegramFailure(c.req.param("id"));
+    return c.json({ ok: true, failures: hive.telegramFailureCount() });
+  });
+  ui.post("/telegram/failures/:id/discard", (c) => {
+    hive.getAgent("human");
+    hive.discardTelegramFailure(c.req.param("id"));
+    return c.json({ ok: true, failures: hive.telegramFailureCount() });
   });
   ui.put("/telegram", async (c) => {
     hive.getAgent("human");
