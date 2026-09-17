@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { Readable } from "node:stream";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -8,10 +9,12 @@ import { Hive, describeAgent } from "./hive.ts";
 import { safeFileName } from "./files.ts";
 import { publicTelegramView, readTelegramFile, removeTelegramProjectSlug, writeTelegramFile } from "./telegram.ts";
 import { parseProjectSlug } from "../shared/project.ts";
+import { hasHumanSession, humanSessionCookie, isLoopbackHost, isTrustedBrowserOrigin } from "./local-auth.ts";
 
 export type AppHooks = {
   telegramRunning?: () => boolean;
   reloadTelegram?: () => boolean;
+  humanSession?: string;
 };
 
 function fileDownload(hive: Hive, actor: Agent, id: string) {
@@ -38,6 +41,33 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   app.get("/api/health", (c) => c.json({ ok: true, name: "hivemind" }));
 
   const ui = new Hono();
+  const humanSession = hooks.humanSession ?? randomBytes(32).toString("base64url");
+  ui.use("*", async (c, next) => {
+    const host = c.req.header("host");
+    if (!isLoopbackHost(host)) throw new HiveError(403, "Invalid local Host");
+    const origin = c.req.header("origin");
+    if (origin && !isTrustedBrowserOrigin(origin, host)) throw new HiveError(403, "Untrusted Origin");
+
+    if (c.req.path.endsWith("/session")) {
+      if (!isTrustedBrowserOrigin(origin, host)) throw new HiveError(403, "Trusted browser Origin required");
+      return next();
+    }
+    if (!hasHumanSession(c.req.header("cookie"), humanSession, c.req.header("x-hivemind-human"))) {
+      throw new HiveError(401, "Human session required");
+    }
+    if (
+      ["POST", "PUT", "PATCH"].includes(c.req.method) &&
+      !c.req.path.endsWith("/files") &&
+      !c.req.header("content-type")?.toLowerCase().startsWith("application/json")
+    ) {
+      throw new HiveError(415, "Human mutations require application/json");
+    }
+    return next();
+  });
+  ui.post("/session", (c) => {
+    c.header("Set-Cookie", humanSessionCookie(humanSession));
+    return c.json({ ok: true });
+  });
   ui.get("/snapshot", (c) => {
     const human = hive.getAgent("human");
     const inbox = hive.mentionInbox(human, 30);
