@@ -156,6 +156,16 @@ export function reactionIgnoreKey(telegramMessageId: number, emojis: string[]): 
   return `${telegramMessageId}:${[...emojis].sort().join(",")}`;
 }
 
+export function telegramReplyThreadId(
+  mapped: { channelId: string; threadId: string | null } | null | undefined,
+  original: Pick<Message, "id" | "channelId" | "threadId"> | null | undefined,
+  inboundChannelId: string,
+): string | null {
+  if (!mapped || !original) return null;
+  if (mapped.channelId !== inboundChannelId || original.channelId !== inboundChannelId) return null;
+  return original.threadId ?? original.id;
+}
+
 export function inboundBody(firstName: string | undefined, text: string): string {
   const name = (firstName ?? "Human").replace(/[\[\]]/g, "").slice(0, 40);
   const trimmed = text.trim();
@@ -473,9 +483,18 @@ class TelegramBridge {
     const replyId = message.reply_to_message?.message_id;
     if (replyId) {
       const mapped = this.hive.db.prepare(
-        "SELECT thread_id AS id FROM telegram_out WHERE telegram_message_id = ? AND telegram_chat_id = ?",
-      ).get(replyId, chatId) as { id: string | null } | undefined;
-      threadId = mapped?.id ?? null;
+        `SELECT seq, channel_id AS channelId, thread_id AS threadId
+         FROM telegram_out WHERE telegram_message_id = ? AND telegram_chat_id = ?`,
+      ).get(replyId, chatId) as { seq: number; channelId: string; threadId: string | null } | undefined;
+      let original: Message | null = null;
+      if (mapped) {
+        try {
+          original = this.hive.getMessageBySeq(mapped.seq);
+        } catch {
+          original = null;
+        }
+      }
+      threadId = telegramReplyThreadId(mapped, original, channelId);
     }
     const posted = this.hive.postMessage(this.hive.getAgent(HUMAN_ID), {
       channel: channelId,
