@@ -173,6 +173,10 @@ export class Hive {
       );
       CREATE INDEX IF NOT EXISTS idx_messages_channel_seq ON messages(channel_id, seq);
       CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
+      CREATE INDEX IF NOT EXISTS idx_agents_project_role ON agents(project_id, role);
+      CREATE INDEX IF NOT EXISTS idx_channels_project_type_name ON channels(project_id, type, name);
+      CREATE INDEX IF NOT EXISTS idx_channel_members_agent_channel ON channel_members(agent_id, channel_id);
+      CREATE INDEX IF NOT EXISTS idx_messages_author_seq ON messages(author_id, seq);
       CREATE TABLE IF NOT EXISTS telegram_topics (
         channel_id TEXT PRIMARY KEY,
         telegram_thread_id INTEGER NOT NULL UNIQUE
@@ -630,10 +634,7 @@ export class Hive {
     return this.mapAgent(row);
   }
 
-  private mapAgent(row: AgentRow): Agent {
-    const project = row.project_id
-      ? this.db.prepare("SELECT * FROM projects WHERE id = ?").get(row.project_id) as ProjectRow | undefined
-      : undefined;
+  private agentFromRow(row: AgentRow, projectSlug?: string | null): Agent {
     return {
       id: row.id,
       name: row.name,
@@ -644,15 +645,33 @@ export class Hive {
       lastSeenAt: row.last_seen_at,
       createdAt: row.created_at,
       projectId: row.project_id,
-      project: project?.slug ?? null,
+      project: projectSlug ?? null,
     };
   }
 
+  private mapAgent(row: AgentRow): Agent {
+    const project = row.project_id
+      ? this.db.prepare("SELECT slug FROM projects WHERE id = ?").get(row.project_id) as { slug: string } | undefined
+      : undefined;
+    return this.agentFromRow(row, project?.slug ?? null);
+  }
+
   listAgents(viewer?: Agent): Agent[] {
-    const rows = this.db.prepare("SELECT * FROM agents ORDER BY role, seniority, name").all() as AgentRow[];
-    const all = rows.map((r) => this.mapAgent(r));
-    if (!viewer || viewer.role === "human") return all;
-    return all.filter((a) => a.role === "human" || a.projectId === viewer.projectId);
+    type JoinedAgentRow = AgentRow & { project_slug: string | null };
+    const rows =
+      !viewer || viewer.role === "human"
+        ? (this.db.prepare(
+            `SELECT a.*, p.slug AS project_slug
+             FROM agents a LEFT JOIN projects p ON p.id = a.project_id
+             ORDER BY a.role, a.seniority, a.name`,
+          ).all() as JoinedAgentRow[])
+        : (this.db.prepare(
+            `SELECT a.*, p.slug AS project_slug
+             FROM agents a LEFT JOIN projects p ON p.id = a.project_id
+             WHERE a.role = 'human' OR a.project_id = ?
+             ORDER BY a.role, a.seniority, a.name`,
+          ).all(viewer.projectId) as JoinedAgentRow[]);
+    return rows.map((row) => this.agentFromRow(row, row.project_slug));
   }
 
   private assertSameProject(agent: Agent, project: Project) {
@@ -764,10 +783,46 @@ export class Hive {
   }
 
   listChannels(actor: Agent): Channel[] {
-    const rows = this.db.prepare("SELECT * FROM channels ORDER BY type, name").all() as ChannelRow[];
-    return rows
-      .map((r) => this.mapChannel(r))
-      .filter((ch) => this.canSeeChannel(actor, ch));
+    type JoinedChannelRow = ChannelRow & { project_slug: string | null };
+    const rows =
+      actor.role === "human"
+        ? (this.db.prepare(
+            `SELECT c.*, p.slug AS project_slug
+             FROM channels c LEFT JOIN projects p ON p.id = c.project_id
+             ORDER BY c.type, c.name`,
+          ).all() as JoinedChannelRow[])
+        : (this.db.prepare(
+            `SELECT c.*, p.slug AS project_slug
+             FROM channels c
+             JOIN channel_members cm ON cm.channel_id = c.id AND cm.agent_id = ?
+             LEFT JOIN projects p ON p.id = c.project_id
+             WHERE c.project_id = ? AND (c.type != 'brains' OR ? = 'brain')
+             ORDER BY c.type, c.name`,
+          ).all(actor.id, actor.projectId, actor.role) as JoinedChannelRow[]);
+    if (rows.length === 0) return [];
+
+    const ids = rows.map((row) => row.id);
+    const ph = ids.map(() => "?").join(",");
+    const memberships = this.db.prepare(
+      `SELECT channel_id, agent_id FROM channel_members WHERE channel_id IN (${ph}) ORDER BY channel_id, agent_id`,
+    ).all(...ids) as Array<{ channel_id: string; agent_id: string }>;
+    const members = new Map<string, string[]>();
+    for (const membership of memberships) {
+      const list = members.get(membership.channel_id) ?? [];
+      list.push(membership.agent_id);
+      members.set(membership.channel_id, list);
+    }
+    return rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      type: row.type,
+      topic: row.topic,
+      createdBy: row.created_by,
+      createdAt: row.created_at,
+      memberIds: members.get(row.id) ?? [],
+      projectId: row.project_id,
+      project: row.project_slug ?? DEFAULT_PROJECT_SLUG,
+    }));
   }
 
   getChannel(idOrName: string, projectId?: string | null): Channel {
@@ -1024,15 +1079,22 @@ export class Hive {
     return this.decorate([this.mapMessage(row)])[0]!;
   }
 
-  private mapMessage(row: MessageRow): Message {
-    let author: Agent;
-    try {
-      author = this.getAgent(row.author_id);
-    } catch {
-      author = {
+  private mapMessages(rows: MessageRow[]): Message[] {
+    if (rows.length === 0) return [];
+    const authorIds = [...new Set(rows.map((row) => row.author_id))];
+    const ph = authorIds.map(() => "?").join(",");
+    type JoinedAuthorRow = AgentRow & { project_slug: string | null };
+    const authors = this.db.prepare(
+      `SELECT a.*, p.slug AS project_slug
+       FROM agents a LEFT JOIN projects p ON p.id = a.project_id
+       WHERE a.id IN (${ph})`,
+    ).all(...authorIds) as JoinedAuthorRow[];
+    const byId = new Map(authors.map((row) => [row.id, this.agentFromRow(row, row.project_slug)]));
+    return rows.map((row) => {
+      const author = byId.get(row.author_id) ?? {
         id: row.author_id,
         name: "unknown",
-        role: "worker",
+        role: "worker" as const,
         seniority: null,
         focus: null,
         online: false,
@@ -1041,21 +1103,25 @@ export class Hive {
         projectId: null,
         project: null,
       };
-    }
-    return {
-      id: row.id,
-      seq: row.seq,
-      channelId: row.channel_id,
-      threadId: row.thread_id,
-      authorId: author.id,
-      authorName: author.name,
-      authorRole: author.role,
-      body: row.body,
-      kind: row.kind,
-      control: row.control,
-      mentions: JSON.parse(row.mentions) as string[],
-      createdAt: row.created_at,
-    };
+      return {
+        id: row.id,
+        seq: row.seq,
+        channelId: row.channel_id,
+        threadId: row.thread_id,
+        authorId: author.id,
+        authorName: author.name,
+        authorRole: author.role,
+        body: row.body,
+        kind: row.kind,
+        control: row.control,
+        mentions: JSON.parse(row.mentions) as string[],
+        createdAt: row.created_at,
+      };
+    });
+  }
+
+  private mapMessage(row: MessageRow): Message {
+    return this.mapMessages([row])[0]!;
   }
 
   listMessages(
@@ -1091,7 +1157,7 @@ export class Hive {
       ).all(ch.id, after, limit) as MessageRow[];
       rows.reverse();
     }
-    const messages = this.decorate(rows.map((r) => this.mapMessage(r)), actor.id);
+    const messages = this.decorate(this.mapMessages(rows), actor.id);
     const scope = opts.threadId
       ? this.db.prepare(
           `SELECT COALESCE(MIN(seq), 0) AS n FROM messages WHERE channel_id = ? AND (id = ? OR thread_id = ?)`,
@@ -1351,9 +1417,8 @@ export class Hive {
          ORDER BY seq ASC LIMIT 100`,
       ).all(scan, ...ids, actor.id) as MessageRow[];
       if (rows.length === 0) break;
-      for (const r of rows) {
-        const message = this.mapMessage(r);
-        if (!this.isFor(actor, message)) {
+      for (const message of this.mapMessages(rows)) {
+        if (!this.isFor(actor, message, channelById.get(message.channelId))) {
           newCursor = message.seq;
           scan = message.seq;
           continue;
@@ -1387,8 +1452,8 @@ export class Hive {
         ).all(countScan, ...ids, actor.id) as MessageRow[];
         if (rows.length === 0) break;
         for (const r of rows) {
-          const message = this.mapMessage(r);
-          if (!this.isFor(actor, message)) continue;
+          const message = this.mapMessages([r])[0]!;
+          if (!this.isFor(actor, message, channelById.get(message.channelId))) continue;
           if (capConversations) {
             if (!conversations.has(message.channelId)) {
               conversations.add(message.channelId);
@@ -1437,6 +1502,7 @@ export class Hive {
     const cursor = row?.inbox_cursor ?? 0;
     const channels = this.listChannels(actor);
     if (channels.length === 0) return 0;
+    const channelById = new Map(channels.map((channel) => [channel.id, channel]));
     const ids = channels.map((c) => c.id);
     const placeholders = ids.map(() => "?").join(",");
     let n = 0;
@@ -1447,8 +1513,8 @@ export class Hive {
          ORDER BY seq ASC LIMIT 100`,
       ).all(scan, ...ids, actor.id) as MessageRow[];
       if (rows.length === 0) break;
-      for (const r of rows) {
-        if (this.isFor(actor, this.mapMessage(r))) {
+      for (const message of this.mapMessages(rows)) {
+        if (this.isFor(actor, message, channelById.get(message.channelId))) {
           n += 1;
           if (n >= cap) return n;
         }
@@ -1460,13 +1526,12 @@ export class Hive {
   }
 
   /** Wait wakes agents only for mail addressed to them, not public chatter. */
-  isFor(actor: Agent, msg: Message): boolean {
+  isFor(actor: Agent, msg: Message, knownChannel?: Channel): boolean {
     if (msg.mentions.includes(actor.id)) return true;
+    const ch = knownChannel ?? this.getChannel(msg.channelId);
     if (msg.kind === "control") {
-      const ch = this.getChannel(msg.channelId);
       return this.canSeeChannel(actor, ch);
     }
-    const ch = this.getChannel(msg.channelId);
     if (ch.type === "dm" || ch.type === "private") return true;
     if (ch.type === "brains" && actor.role === "brain") return true;
     return false;
