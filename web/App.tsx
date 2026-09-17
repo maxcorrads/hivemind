@@ -513,7 +513,11 @@ export function App() {
             <button
               type="button"
               className="icon-btn"
-              title="Telegram"
+              title={
+                snap.telegram?.lastError || snap.telegram?.quarantined
+                  ? `Telegram degraded${snap.telegram?.quarantined ? ` · ${snap.telegram.quarantined} quarantined update(s)` : ""}`
+                  : "Telegram"
+              }
               onClick={() => {
                 api
                   .telegram()
@@ -534,7 +538,7 @@ export function App() {
                   .catch((e) => setErr(String(e.message || e)));
               }}
             >
-              {snap.telegram?.running ? "✈" : "⌬"}
+              {snap.telegram?.lastError || snap.telegram?.quarantined ? "⚠" : snap.telegram?.running ? "✈" : "⌬"}
             </button>
             <button type="button" className="icon-btn" title="Launch agent" onClick={() => setLaunchOpen(true)}>
               ▶
