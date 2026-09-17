@@ -964,26 +964,38 @@ export class Hive {
         throw new HiveError(400, "Unknown control action");
       }
     }
-    this.db.prepare(
-      `INSERT INTO messages (id, channel_id, thread_id, author_id, body, kind, control, mentions, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      id,
-      ch.id,
-      input.threadId ?? null,
-      actor.id,
-      body,
-      kind,
-      input.control ?? null,
-      JSON.stringify(mentions),
-      t,
-    );
-    if (input.threadId) {
+    try {
+      this.db.exec("BEGIN IMMEDIATE");
+      if (attachmentIds.length) this.validateAttachments(actor, attachmentIds);
       this.db.prepare(
-        `INSERT OR IGNORE INTO threads (id, channel_id, status) VALUES (?, ?, 'open')`,
-      ).run(input.threadId, ch.id);
+        `INSERT INTO messages (id, channel_id, thread_id, author_id, body, kind, control, mentions, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        id,
+        ch.id,
+        input.threadId ?? null,
+        actor.id,
+        body,
+        kind,
+        input.control ?? null,
+        JSON.stringify(mentions),
+        t,
+      );
+      if (input.threadId) {
+        this.db.prepare(
+          `INSERT OR IGNORE INTO threads (id, channel_id, status) VALUES (?, ?, 'open')`,
+        ).run(input.threadId, ch.id);
+      }
+      if (attachmentIds.length) this.bindAttachments(id, attachmentIds);
+      this.db.exec("COMMIT");
+    } catch (err) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* no open transaction */
+      }
+      throw err;
     }
-    if (attachmentIds.length) this.bindAttachments(actor, id, attachmentIds);
     this.touch(actor.id, true);
     const msg = this.getMessageById(id);
     if (input.source === "telegram") this.telegramOrigin.add(msg.id);
@@ -1589,15 +1601,23 @@ export class Hive {
     return this.createFile(actor, { name: input.name, mime: input.mime, body: stream as ReadableStream<Uint8Array> });
   }
 
-  private bindAttachments(actor: Agent, messageId: string, ids: string[]) {
+  private validateAttachments(actor: Agent, ids: string[]) {
+    if (new Set(ids).size !== ids.length) throw new HiveError(400, "Duplicate attachment");
     for (const id of ids) {
-      const row = this.db.prepare("SELECT * FROM attachments WHERE id = ?").get(id) as
+      const row = this.db.prepare("SELECT id, message_id, created_by FROM attachments WHERE id = ?").get(id) as
         | { id: string; message_id: string | null; created_by: string }
         | undefined;
       if (!row) throw new HiveError(404, "Attachment not found");
       if (row.created_by !== actor.id) throw new HiveError(403, "Attachment is not yours");
       if (row.message_id) throw new HiveError(409, "Attachment already sent");
-      this.db.prepare("UPDATE attachments SET message_id = ? WHERE id = ?").run(messageId, id);
+    }
+  }
+
+  private bindAttachments(messageId: string, ids: string[]) {
+    const bind = this.db.prepare("UPDATE attachments SET message_id = ? WHERE id = ? AND message_id IS NULL");
+    for (const id of ids) {
+      const result = bind.run(messageId, id);
+      if (result.changes !== 1) throw new HiveError(409, "Attachment already sent");
     }
   }
 
