@@ -1514,12 +1514,14 @@ export class Hive {
     signal?: AbortSignal,
     opts: { compact?: boolean } = {},
   ): Promise<WaitResult> {
-    this.touch(actor.id, true);
     const compact = Boolean(opts.compact);
     const pack = (batch: { messages: Message[]; more: number }): WaitResult =>
       packWait(this.getAgent(actor.id), batch.messages, batch.more, compact, (id) =>
         channelLabel(this.getChannel(id)),
       );
+
+    if (signal?.aborted) return pack({ messages: [], more: 0 });
+    this.touch(actor.id, true);
 
     return new Promise((resolve, reject) => {
       let done = false;
@@ -1560,6 +1562,10 @@ export class Hive {
       const ms = Number.isFinite(timeoutMs) ? Math.max(1, timeoutMs) : DEFAULT_WAIT_MS;
       const timer = setTimeout(() => finish(true), ms);
       signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted) {
+        finish(false);
+        return;
+      }
       const first = this.takeUnseen(actor);
       if (first.messages.length > 0) deliver(first);
     });
