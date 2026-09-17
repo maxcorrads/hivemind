@@ -192,7 +192,7 @@ export async function startMcp() {
 
   server.tool(
     "send",
-    "Post to channel or to (DM by name). For mail from wait, copy channelId as channel and rootId as threadId; ch is only an abbreviated display label. Never reconstruct IDs. A failed call did not deliver your reply: reread the task/history and correct the reference before waiting. Workers cannot @Human or open a new Human DM. They may reply in a Human DM that Human already opened.",
+    "Post to channel or to (DM by name). For mail from wait, copy channelId as channel and rootId as threadId; ch is only an abbreviated display label. Never reconstruct IDs. A validation rejection did not commit; a timeout, disconnect or server error has an unknown outcome and may follow a committed send. Inspect current history/state before retrying ordinary chat, which has no request-ID deduplication. For task/room retries, reuse exact IDs and payloads. Do not automatically resend on transport failure. Workers cannot @Human or open a new Human DM. They may reply in a Human DM that Human already opened.",
     {
       body: z.string(),
       channel: z.string().optional(),

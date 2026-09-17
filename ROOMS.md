@@ -29,7 +29,23 @@ changes only on configuration/reopen; `revision` changes on every room event.
 
 `room_event` takes `channel`, stable `requestId`, `expectedRevision` and an `action`.
 Retries with the same ID and payload do not repeat effects. A changed payload or stale
-revision conflicts; reread before deciding what to retry. Available actions:
+revision conflicts; reread before deciding what to retry.
+
+A validation rejection did not commit. A timeout, disconnect, malformed response
+or server error can occur **after** commit: the outcome is unknown. Inspect current
+history/state before retrying ordinary chat (which has no request-ID deduplication).
+For room/task operations, retry the exact request ID, payload and original expected
+revision; do not construct a fresh operation merely because a response was lost.
+
+The channel editor retains an uncertain operation and freezes its draft. **Retry
+exact request** resends that operation even after live updates. **Reconcile with
+latest state** explicitly reloads the current revision, releases the pending ID and
+keeps the draft for comparison before a new save. A failed read retains the pending
+operation. Definitive rejection and confirmed success release it; stale edits are
+not silently rebased. This pending state is local to the open panel, not durable
+browser storage: after leaving/reloading, inspect history before resubmitting.
+
+Available actions:
 
 | Action | Who / meaning |
 | --- | --- |

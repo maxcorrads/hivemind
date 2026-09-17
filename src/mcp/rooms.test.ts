@@ -31,6 +31,12 @@ test('real MCP and CLI room lifecycle shares durable rules, task fences, source 
   };
   try {
     const b = await connect(brain.token), w = await connect(worker.token);
+    const sendDescription = (await b.listTools()).tools.find(t => t.name === 'send')!.description!;
+    assert.match(sendDescription, /validation rejection did not commit/);
+    assert.match(sendDescription, /unknown outcome and may follow a committed send/);
+    assert.match(sendDescription, /ordinary chat, which has no request-ID deduplication/);
+    assert.match(sendDescription, /reuse exact IDs and payloads/);
+    assert.doesNotMatch(sendDescription, /failed call did not deliver/);
     const created = await call(b, 'room_event', { channel: channel.id, requestId: 'setup', expectedRevision: 0, humanInstructionSeq,
       action: { type: 'configure', reason: 'Human requested ongoing checks', contract: { mode: 'ongoing', purpose: 'Inspect synthetic anomalies',
         rules: ['Assign an anomaly check'], limits: ['No external writes'], coordinator: brain.agent.name,

@@ -5,13 +5,17 @@ import type { ProjectPluginView, SettingsValues } from "../src/shared/plugin-set
 import type { TaskSnapshot } from '../src/shared/tasks.ts';
 import type { RoomView, Room } from '../src/shared/rooms.ts';
 
+export class ApiError extends Error {
+  constructor(readonly status: number, message: string) { super(message); }
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
     headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  if (!res.ok) throw new ApiError(res.status, data.error || `HTTP ${res.status}`);
   return data as T;
 }
 

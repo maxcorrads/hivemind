@@ -314,6 +314,11 @@ test('collaboration instructions require own-task progress and explicit recovery
   const f = fixture(t), orders = standingOrders(f.a.agent);
   assert.match(orders, /replying to a peer does not finish your own assigned task/);
   assert.match(orders, /never reconstruct identifiers/);
+  assert.match(orders, /validation rejection did not commit/);
+  assert.match(orders, /unknown outcome and may follow a committed operation/);
+  assert.match(orders, /ordinary chat, which has no request-ID deduplication/);
+  assert.match(orders, /reuse exact IDs and payloads, including the original expectedRevision/);
+  assert.doesNotMatch(orders, /failed send or task operation is not a delivered/);
   assert.match(orders, /report the actual error to the coordinator instead of silently waiting/);
 });
 
