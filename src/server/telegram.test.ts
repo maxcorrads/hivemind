@@ -29,6 +29,7 @@ import {
   telegramFileTooLarge,
   telegramGeneralThreadId,
   telegramMessageHasFiles,
+  telegramReplyThreadId,
 } from "./telegram.ts";
 import type { Channel, Message } from "../shared/types.ts";
 
@@ -210,4 +211,19 @@ test("telegram text format stays under Telegram and hive caps", () => {
   assert.equal(inboundPostBody("Sara", "", true), "");
   assert.equal(inboundPostBody("Sara", "go", true), "[Sara] go");
   assert.equal(inboundPostBody("Sara", "", false), "[Sara]");
+});
+
+
+test("telegram replies resolve top-level messages and replies to the same Hivemind root", () => {
+  const top = msg({ id: "root", channelId: "c", threadId: null });
+  assert.equal(telegramReplyThreadId({ channelId: "c", threadId: null }, top, "c"), "root");
+
+  const reply = msg({ id: "reply", channelId: "c", threadId: "root" });
+  assert.equal(telegramReplyThreadId({ channelId: "c", threadId: "root" }, reply, "c"), "root");
+
+  assert.equal(telegramReplyThreadId({ channelId: "other", threadId: null }, top, "c"), null);
+  assert.equal(
+    telegramReplyThreadId({ channelId: "c", threadId: null }, msg({ channelId: "other" }), "c"),
+    null,
+  );
 });
