@@ -594,3 +594,59 @@ test("Human can delete an idle project but not one with online or waiting agents
   assert.equal(again.slug, "nuovo");
   rmSync(dir, { recursive: true, force: true });
 });
+
+
+test("mention inbox filters project and pagination before limit", () => {
+  const { hive, dir } = tempHive();
+  const human = hive.getAgent("human");
+  const chapter = hive.listProjects()[0]!;
+  const brainA = hive.join({ role: "brain", project: chapter.slug }).agent;
+  const other = hive.createProject(human, { name: "Other", slug: "other" });
+  const brainB = hive.join({ role: "brain", project: other.slug }).agent;
+
+  const oldA = hive.postMessage(brainA, { channel: "general", body: "old important @Human" });
+  for (let i = 0; i < 1000; i += 1) {
+    hive.postMessage(brainB, { channel: "general", body: `other ${i} @Human` });
+  }
+
+  const aInbox = hive.mentionInbox(human, 30, undefined, chapter.id);
+  assert.ok(aInbox.messages.some((message) => message.id === oldA.id));
+
+  const aSeqs: number[] = [];
+  for (let i = 0; i < 55; i += 1) {
+    aSeqs.push(hive.postMessage(brainA, { channel: "general", body: `page ${i} @Human` }).seq);
+  }
+  const seen: number[] = [];
+  let before: number | undefined;
+  for (;;) {
+    const page = hive.mentionInbox(human, 20, before, chapter.id);
+    seen.push(...page.messages.map((message) => message.seq));
+    if (!page.hasMore) break;
+    before = page.messages.at(-1)!.seq;
+  }
+  assert.ok(seen.includes(oldA.seq));
+  for (const seq of aSeqs) assert.ok(seen.includes(seq));
+
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("channel reads do not clear unopened thread mentions", () => {
+  const { hive, dir } = tempHive();
+  const human = hive.getAgent("human");
+  const brain = hive.join({ role: "brain" }).agent;
+  const root = hive.postMessage(brain, { channel: "general", body: "root" });
+  const threadMention = hive.postMessage(brain, {
+    channel: "general",
+    threadId: root.id,
+    body: "thread question @Human",
+  });
+  const laterRoot = hive.postMessage(brain, { channel: "general", body: "later root" });
+
+  hive.markRead(human, laterRoot.channelId, laterRoot.seq);
+  assert.ok(hive.mentionInbox(human, 30).messages.some((message) => message.id === threadMention.id));
+
+  hive.markThreadRead(human, root.id, threadMention.seq);
+  assert.ok(!hive.mentionInbox(human, 30).messages.some((message) => message.id === threadMention.id));
+
+  rmSync(dir, { recursive: true, force: true });
+});
