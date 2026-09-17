@@ -77,18 +77,27 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
     });
   });
 
+  let shutdownTask: Promise<void> | null = null;
   const shutdown = () => {
-    clearInterval(sweep);
-    telegram.stop();
-    hive.bus.off("message", onMessage);
-    hive.bus.off("agent", onAgent);
-    hive.bus.off("channel", onChannel);
-    hive.bus.off("thread", onThread);
-    hive.bus.off("reaction", onReaction);
-    hive.bus.off("queued", onQueued);
-    hive.bus.off("project", onProject);
-    wss.close();
-    server.close();
+    if (shutdownTask) return shutdownTask;
+    shutdownTask = (async () => {
+      clearInterval(sweep);
+      hive.bus.off("message", onMessage);
+      hive.bus.off("agent", onAgent);
+      hive.bus.off("channel", onChannel);
+      hive.bus.off("thread", onThread);
+      hive.bus.off("reaction", onReaction);
+      hive.bus.off("queued", onQueued);
+      hive.bus.off("project", onProject);
+      hive.cancelWaits();
+      for (const ws of clients) ws.close(1001, "server shutdown");
+      await telegram.stop();
+      await new Promise<void>((resolve) => wss.close(() => resolve()));
+      await new Promise<void>((resolve, reject) =>
+        server.close((err) => (err ? reject(err) : resolve())),
+      );
+    })();
+    return shutdownTask;
   };
   return { server, hive, port, shutdown, ready };
 }
