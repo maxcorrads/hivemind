@@ -1,5 +1,5 @@
-import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import {
   createWriteStream,
   createReadStream,
@@ -23,6 +23,12 @@ export function filesDir(home = hiveHome()): string {
 
 export function filePathForHash(sha256: string, home = hiveHome()): string {
   return path.join(filesDir(home), sha256);
+}
+
+const activePublications = new Set<string>();
+
+export function releasePublishedBlob(sha256: string) {
+  activePublications.delete(sha256);
 }
 
 export function assertAllowedMime(mime: string) {
@@ -67,12 +73,18 @@ export async function streamUpload(
 
 export async function commitUpload(tmp: string, sha256: string, home = hiveHome()): Promise<string> {
   const dest = filePathForHash(sha256, home);
-  if (existsSync(dest)) {
-    await unlink(tmp).catch(() => undefined);
+  activePublications.add(sha256);
+  try {
+    if (existsSync(dest)) {
+      await unlink(tmp).catch(() => undefined);
+      return dest;
+    }
+    await rename(tmp, dest);
     return dest;
+  } catch (err) {
+    activePublications.delete(sha256);
+    throw err;
   }
-  await rename(tmp, dest);
-  return dest;
 }
 
 export function openBlob(sha256: string, home = hiveHome()) {
@@ -81,44 +93,130 @@ export function openBlob(sha256: string, home = hiveHome()) {
   return { stream: createReadStream(dest), bytes: statSync(dest).size };
 }
 
-export function removeOrphanBlobs(usedHashes: Set<string>, home = hiveHome()) {
+export function removeOrphanBlobs(
+  usedHashes: Set<string>,
+  home = hiveHome(),
+  opts: { now?: number; staleTempMs?: number } = {},
+) {
   if (!existsSync(filesDir(home))) return 0;
+  const nowMs = opts.now ?? Date.now();
+  const staleTempMs = opts.staleTempMs ?? 24 * 60 * 60 * 1000;
   let n = 0;
   for (const name of readdirSync(filesDir(home))) {
-    if (name.startsWith("part-") || name.startsWith("tg-")) continue;
-    if (usedHashes.has(name)) continue;
-    unlinkSync(path.join(filesDir(home), name));
+    const full = path.join(filesDir(home), name);
+    const temporary = name.startsWith("part-") || name.startsWith("tg-") || name.includes(".thumb-");
+    if (temporary) {
+      if (nowMs - statSync(full).mtimeMs < staleTempMs) continue;
+      unlinkSync(full);
+      n += 1;
+      continue;
+    }
+    if (usedHashes.has(name) || activePublications.has(name)) continue;
+    unlinkSync(full);
     n += 1;
   }
   return n;
 }
 
-/** Store keeps the original. Models get a ≤1600px / ≤1.5MB preview — never a 12 MB frame. */
-export function imagePreview(filePath: string, mime: string, bytes: Buffer): { data: Buffer; mime: string } | null {
-  if (!mime.startsWith("image/")) return null;
-  const out = `${filePath}.thumb.jpg`;
-  const jobs: Array<[string, string[]]> = [];
-  if (process.platform === "darwin") {
-    jobs.push(["sips", ["-Z", "1600", "-s", "format", "jpeg", filePath, "--out", out]]);
+/** Store keeps the original. Models get a bounded preview; conversion work never blocks the event loop. */
+export const IMAGE_PREVIEW_MAX_DIMENSION = 12_000;
+export const IMAGE_PREVIEW_MAX_PIXELS = 40_000_000;
+
+export function imageDimensions(bytes: Buffer, mime: string): { width: number; height: number } | null {
+  if (mime === "image/png" && bytes.length >= 24 && bytes.subarray(1, 4).toString() === "PNG") {
+    return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
   }
-  jobs.push(
-    ["ffmpeg", ["-y", "-i", filePath, "-vf", "scale=1600:1600:force_original_aspect_ratio=decrease", "-q:v", "5", out]],
-    ["magick", [filePath, "-resize", "1600x1600>", out]],
-    ["convert", [filePath, "-resize", "1600x1600>", out]],
+  if ((mime === "image/jpeg" || mime === "image/jpg") && bytes.length >= 4) {
+    let offset = 2;
+    while (offset + 9 < bytes.length && bytes[offset] === 0xff) {
+      const marker = bytes[offset + 1]!;
+      const length = bytes.readUInt16BE(offset + 2);
+      if (length < 2 || offset + 2 + length > bytes.length) break;
+      if ([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf].includes(marker)) {
+        return { height: bytes.readUInt16BE(offset + 5), width: bytes.readUInt16BE(offset + 7) };
+      }
+      offset += 2 + length;
+    }
+  }
+  return null;
+}
+
+function previewWithinDimensionBudget(bytes: Buffer, mime: string): boolean {
+  const dimensions = imageDimensions(bytes, mime);
+  if (!dimensions) return true;
+  return (
+    dimensions.width > 0 &&
+    dimensions.height > 0 &&
+    dimensions.width <= IMAGE_PREVIEW_MAX_DIMENSION &&
+    dimensions.height <= IMAGE_PREVIEW_MAX_DIMENSION &&
+    dimensions.width * dimensions.height <= IMAGE_PREVIEW_MAX_PIXELS
   );
-  for (const [bin, args] of jobs) {
+}
+
+function runPreviewCommand(
+  bin: string,
+  args: string[],
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      bin,
+      args,
+      {
+        timeout: timeoutMs,
+        killSignal: "SIGKILL",
+        windowsHide: true,
+        maxBuffer: 64 * 1024,
+        signal,
+      },
+      (err) => (err ? reject(err) : resolve()),
+    );
+  });
+}
+
+export async function imagePreview(
+  filePath: string,
+  mime: string,
+  bytes: Buffer,
+  opts: {
+    signal?: AbortSignal;
+    timeoutMs?: number;
+    commands?: Array<[string, (input: string, output: string) => string[]]>;
+  } = {},
+): Promise<{ data: Buffer; mime: string } | null> {
+  if (!mime.startsWith("image/")) return null;
+  if (!previewWithinDimensionBudget(bytes, mime)) return null;
+  const timeoutMs = Math.min(Math.max(50, opts.timeoutMs ?? 5_000), 15_000);
+  const commands =
+    opts.commands ??
+    [
+      ...(process.platform === "darwin"
+        ? ([["sips", (input: string, output: string) => ["-Z", "1600", "-s", "format", "jpeg", input, "--out", output]]] as Array<
+            [string, (input: string, output: string) => string[]]
+          >)
+        : []),
+      ["ffmpeg", (input: string, output: string) => ["-y", "-i", input, "-vf", "scale=1600:1600:force_original_aspect_ratio=decrease", "-q:v", "5", output]],
+      ["magick", (input: string, output: string) => [input, "-resize", "1600x1600>", output]],
+      ["convert", (input: string, output: string) => [input, "-resize", "1600x1600>", output]],
+    ];
+  for (const [bin, argsFor] of commands) {
+    const out = `${filePath}.thumb-${randomUUID()}.jpg`;
     try {
-      execFileSync(bin, args, { stdio: "ignore" });
+      await runPreviewCommand(bin, argsFor(filePath, out), timeoutMs, opts.signal);
       if (!existsSync(out)) continue;
       const data = readFileSync(out);
-      unlinkSync(out);
       if (data.length > 0 && data.length <= IMAGE_PREVIEW_MAX_BYTES) {
         return { data, mime: "image/jpeg" };
       }
     } catch {
+      if (opts.signal?.aborted) return null;
       /* try the next encoder */
+    } finally {
+      await unlink(out).catch(() => undefined);
     }
   }
   if (bytes.length <= IMAGE_PREVIEW_MAX_BYTES) return { data: bytes, mime };
   return null;
 }
+
