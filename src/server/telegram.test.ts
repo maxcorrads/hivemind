@@ -29,6 +29,8 @@ import {
   telegramFileTooLarge,
   telegramGeneralThreadId,
   telegramMessageHasFiles,
+  telegramPollBackoffMs,
+  isTelegramTerminalPollError,
 } from "./telegram.ts";
 import type { Channel, Message } from "../shared/types.ts";
 
@@ -210,4 +212,41 @@ test("telegram text format stays under Telegram and hive caps", () => {
   assert.equal(inboundPostBody("Sara", "", true), "");
   assert.equal(inboundPostBody("Sara", "go", true), "[Sara] go");
   assert.equal(inboundPostBody("Sara", "", false), "[Sara]");
+});
+
+
+test("telegram poll backoff is bounded, jitterable, and terminal config errors cool down", () => {
+  assert.equal(telegramPollBackoffMs(1, () => 0), 750);
+  assert.equal(telegramPollBackoffMs(1, () => 1), 1250);
+  assert.equal(telegramPollBackoffMs(20, () => 0.5), 30_000);
+  assert.equal(telegramPollBackoffMs(1, () => 0, true), 30_000);
+  assert.equal(isTelegramTerminalPollError("Unauthorized"), true);
+  assert.equal(isTelegramTerminalPollError("Bad Gateway"), false);
+});
+
+test("telegram poison update retry state survives restart and remains inspectable", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "hive-tg-poison-"));
+  const dbPath = path.join(dir, "hive.db");
+  const hive = new Hive(dbPath);
+  hive.db.prepare(
+    `INSERT INTO telegram_update_failures
+      (update_id, payload, attempts, last_error, state, updated_at)
+     VALUES (?, ?, ?, ?, 'quarantined', ?)`,
+  ).run(77, JSON.stringify({ update_id: 77, message: { message_id: 1 } }), 3, "malformed", Date.now());
+  assert.equal(hive.telegramPollHealth().quarantined, 1);
+  assert.equal(hive.telegramQuarantine()[0]?.updateId, 77);
+  hive.retryTelegramUpdate(77);
+  assert.equal(
+    (hive.db.prepare("SELECT state FROM telegram_update_failures WHERE update_id = 77").get() as { state: string }).state,
+    "retry",
+  );
+  hive.db.close();
+
+  const reopened = new Hive(dbPath);
+  assert.equal(
+    (reopened.db.prepare("SELECT state FROM telegram_update_failures WHERE update_id = 77").get() as { state: string }).state,
+    "retry",
+  );
+  reopened.db.close();
+  rmSync(dir, { recursive: true, force: true });
 });
