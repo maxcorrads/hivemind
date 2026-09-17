@@ -1565,6 +1565,11 @@ export class Hive {
     });
   }
 
+  cancelWaits() {
+    for (const waiter of [...this.waiters.values()]) waiter.supersede();
+    this.waiters.clear();
+  }
+
   async createFile(
     actor: Agent,
     input: { name: string; mime: string; body: ReadableStream<Uint8Array> | null },
