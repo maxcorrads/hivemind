@@ -594,3 +594,36 @@ test("Human can delete an idle project but not one with online or waiting agents
   assert.equal(again.slug, "nuovo");
   rmSync(dir, { recursive: true, force: true });
 });
+
+
+test("agent and channel listings are scoped in SQL and backed by lookup-direction indexes", () => {
+  const { hive, dir } = tempHive();
+  const human = hive.getAgent("human");
+  const chapter = hive.listProjects()[0]!;
+  const a = hive.join({ role: "worker", seniority: "mid", project: chapter.slug }).agent;
+  const other = hive.createProject(human, { name: "Other", slug: "other" });
+
+  for (let i = 0; i < 40; i += 1) {
+    hive.join({ role: "worker", seniority: "mid", project: other.slug, focus: `other-${i}` });
+  }
+  for (let i = 0; i < 20; i += 1) {
+    hive.createChannel(human, { name: `other-room-${i}`, type: "private", project: other.slug });
+  }
+
+  const agents = hive.listAgents(a);
+  assert.ok(agents.every((agent) => agent.role === "human" || agent.projectId === chapter.id));
+  assert.equal(agents.some((agent) => agent.projectId === other.id), false);
+
+  const channels = hive.listChannels(a);
+  assert.ok(channels.every((channel) => channel.projectId === chapter.id));
+  assert.equal(channels.some((channel) => channel.projectId === other.id), false);
+
+  const indexes = new Set(
+    (hive.db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as { name: string }[]).map((row) => row.name),
+  );
+  assert.ok(indexes.has("idx_agents_project_role"));
+  assert.ok(indexes.has("idx_channels_project_type_name"));
+  assert.ok(indexes.has("idx_channel_members_agent_channel"));
+
+  rmSync(dir, { recursive: true, force: true });
+});
