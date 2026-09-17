@@ -1062,7 +1062,7 @@ export class Hive {
     actor: Agent,
     channelRef: string,
     opts: { threadId?: string | null; afterSeq?: number; beforeSeq?: number; limit?: number } = {},
-  ): { messages: Message[]; hasOlder: boolean } {
+  ): { messages: Message[]; hasOlder: boolean; hasNewer: boolean; cursors: { before?: number; after?: number } } {
     const ch = this.getChannel(channelRef, actor.projectId);
     if (!this.canSeeChannel(actor, ch)) throw new HiveError(403, "Cannot read this channel");
     const limit = Math.min(Math.max(1, Number.isFinite(opts.limit) ? Number(opts.limit) : 80), 200);
@@ -1083,24 +1083,43 @@ export class Hive {
          ORDER BY seq DESC LIMIT ?`,
       ).all(ch.id, before, limit) as MessageRow[];
       rows.reverse();
-    } else {
+    } else if (opts.afterSeq !== undefined) {
       rows = this.db.prepare(
         `SELECT * FROM messages
          WHERE channel_id = ? AND thread_id IS NULL AND seq > ?
-         ORDER BY seq DESC LIMIT ?`,
+         ORDER BY seq ASC LIMIT ?`,
       ).all(ch.id, after, limit) as MessageRow[];
+    } else {
+      rows = this.db.prepare(
+        `SELECT * FROM messages
+         WHERE channel_id = ? AND thread_id IS NULL
+         ORDER BY seq DESC LIMIT ?`,
+      ).all(ch.id, limit) as MessageRow[];
       rows.reverse();
     }
     const messages = this.decorate(rows.map((r) => this.mapMessage(r)), actor.id);
     const scope = opts.threadId
       ? this.db.prepare(
-          `SELECT COALESCE(MIN(seq), 0) AS n FROM messages WHERE channel_id = ? AND (id = ? OR thread_id = ?)`,
-        ).get(ch.id, opts.threadId, opts.threadId) as { n: number }
+          `SELECT COALESCE(MIN(seq), 0) AS minSeq, COALESCE(MAX(seq), 0) AS maxSeq
+           FROM messages WHERE channel_id = ? AND (id = ? OR thread_id = ?)`,
+        ).get(ch.id, opts.threadId, opts.threadId) as { minSeq: number; maxSeq: number }
       : this.db.prepare(
-          `SELECT COALESCE(MIN(seq), 0) AS n FROM messages WHERE channel_id = ? AND thread_id IS NULL`,
-        ).get(ch.id) as { n: number };
+          `SELECT COALESCE(MIN(seq), 0) AS minSeq, COALESCE(MAX(seq), 0) AS maxSeq
+           FROM messages WHERE channel_id = ? AND thread_id IS NULL`,
+        ).get(ch.id) as { minSeq: number; maxSeq: number };
     const oldest = messages[0]?.seq ?? 0;
-    return { messages, hasOlder: Boolean(oldest && scope.n && scope.n < oldest) };
+    const newest = messages[messages.length - 1]?.seq ?? 0;
+    const hasOlder = Boolean(oldest && scope.minSeq && scope.minSeq < oldest);
+    const hasNewer = Boolean(newest && scope.maxSeq && scope.maxSeq > newest);
+    return {
+      messages,
+      hasOlder,
+      hasNewer,
+      cursors: {
+        before: hasOlder ? oldest : undefined,
+        after: hasNewer ? newest : undefined,
+      },
+    };
   }
 
   searchMessages(
