@@ -27,7 +27,7 @@ function help() {
   hivemind join --as brain [--focus …] [--project slug] [--resume Name]
   hivemind wait [--timeout ${Math.round(DEFAULT_WAIT_MS / 1000)}] [--session UUID]
   hivemind ack DELIVERY_ID --session SESSION_ID
-  hivemind send --channel NAME --body TEXT [--thread ID] [--file PATH] [--event-type progress|blocker|question|action_required]
+  hivemind send --channel NAME --body TEXT [--thread ID] [--file PATH] [--event-type TYPE] [--recipients NAME,NAME]
   hivemind send --to NAME --body TEXT [--file PATH]
   hivemind fetch --id ATT_ID [--out DIR]
   hivemind react --seq N --emoji 👍
@@ -37,6 +37,10 @@ function help() {
   hivemind task assign --input FILE.json
   hivemind task get --id TASK_ID
   hivemind task event --id TASK_ID --input FILE.json
+  hivemind subscriptions list
+  hivemind subscriptions set --channel NAME [--thread ROOT_ID] --events progress,blocker
+  hivemind subscriptions set --channel NAME [--thread ROOT_ID] --mute
+  hivemind subscriptions reset --channel NAME [--thread ROOT_ID]
   hivemind search --q TEXT [--channel NAME] [--before N]
   hivemind agents
   hivemind channels
@@ -236,8 +240,24 @@ async function main() {
     return;
   }
 
+  if (cmd === 'subscriptions') {
+    const operation = argv[1];
+    if (operation === 'list') {
+      console.log(JSON.stringify(await agentRequest('GET', '/api/agent/subscriptions', undefined, token), null, 2)); return;
+    }
+    if (operation !== 'set' && operation !== 'reset') throw new Error('subscriptions list|set|reset');
+    const channel = arg(argv, '--channel'), threadId = arg(argv, '--thread');
+    if (!channel) throw new Error('subscriptions requires --channel');
+    const events = arg(argv, '--events');
+    if (operation === 'set' && (!events && !argv.includes('--mute') || events && argv.includes('--mute')))
+      throw new Error('Choose --events TYPE,TYPE or --mute');
+    console.log(JSON.stringify(await agentRequest('POST', operation === 'set' ? '/api/agent/subscriptions' : '/api/agent/subscriptions/reset',
+      { channel, threadId, ...(operation === 'set' ? { eventTypes: events ? events.split(',') : [] } : {}) }, token), null, 2)); return;
+  }
+
   if (cmd === "send") {
     const eventType = arg(argv, "--event-type") as MessageEventType | undefined;
+    const recipients = arg(argv, '--recipients')?.split(',');
     if (eventType !== undefined && !MESSAGE_EVENT_TYPES.includes(eventType)) throw new Error("Unknown --event-type");
     const body = argRest(argv, "--body") ?? "";
     const file = arg(argv, "--file");
@@ -266,7 +286,7 @@ async function main() {
     const result = await agentRequest<{ ok: boolean; seq: number; id: string }>(
       "POST",
       `/api/agent/channels/${encodeURIComponent(channel)}/messages`,
-      { body, threadId: thread ?? null, attachmentIds, eventType },
+      { body, threadId: thread ?? null, attachmentIds, eventType, recipients },
       token,
     );
     console.log(`sent ${result.id} seq ${result.seq}`);

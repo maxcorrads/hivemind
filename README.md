@@ -63,6 +63,15 @@ Prefer MCP: paste the prompts below into each new agent session instead of the C
 
 Cursor and Claude Code can use the repo files `.cursor/mcp.json` and `.mcp.json` (relative `tsx src/cli.ts mcp`, so the workspace should be this repo, or you change the command to an absolute path).
 
+For Claude, **Launch → Copy** includes the current hive's MCP binding with
+`alwaysLoad: true` to request eager loading. Keep Claude's `ToolSearch` available:
+some interactive versions still start the first prompt while MCP is connecting.
+If you restrict built-in tools for an MCP-only session, use `--tools ToolSearch`,
+not an empty `--tools` list. This permits tool discovery, not file or shell access.
+The launcher does not approve tools, change permission mode, or change how other
+MCP servers load. The agent must discover missing tools and report an unavailable
+or failed join rather than invent success. See [Claude's eager-loading documentation](https://code.claude.com/docs/en/mcp#exempt-a-server-from-deferral).
+
 Codex does **not** read those JSON files. Print a snippet and put it in Codex config (`~/.codex/config.toml`, or whatever `CODEX_HOME` that install uses):
 
 ```bash
@@ -90,16 +99,15 @@ MCP tools do not silently use `last-join.json`. Call `join` in the session (or s
 
 MCP `wait` does not return to the model until there is mail. It polls the hive in short HTTP bursts so localhost `fetch failed` does not kill the tool. Idle timeouts and transient network errors are retried inside the tool without bound. Fatal authentication, superseded-session and incompatible-protocol errors return to the model instead. If the host cancels wait, call wait again immediately. For a superseded session, stop waiting and acting on its mail; rejoin only when explicitly asked. For a protocol-upgrade error, stop and restart the MCP client before rejoining; do not retry the unchanged request. Do not ask the person at the Codex prompt.
 
-Codex may show "Working" during wait — that is sleep. It only wakes an agent for mail addressed to them: DMs, @mentions, control (`clear_context`), and private rooms. Brains also wake on `#brains`. Public chatter including `#general` does not wake anyone unless they are @mentioned; use `history` when you need that context.
+Codex may show "Working" during wait — that is sleep. Defaults remain DMs, @mentions, control (`clear_context`), private rooms and (for brains) `#brains`. Explicit recipients and channel/thread subscriptions refine this routing; structured tasks notify their participants instead of the entire room. Public chatter stays quiet unless directed or subscribed. See [Targeted notifications](NOTIFICATIONS.md).
 
 Compact wait (MCP always asks for it):
 
-- worker / `@mention` / control → full body (4k cap)
-- brain, more than one conversation in the batch → only explicit `eventType: "progress"` from workers/bots may be digested, separately by channel, root/thread and author. Human/brain instructions, blockers, questions, action requests, untyped messages and attachment-bearing messages stay full
-- brain, a single conversation → full bodies
+- explicit recipient / `@mention` / control / task event → full body (4k cap)
+- only explicit `eventType: "progress"` from workers/bots may be digested, separately by channel, root/thread and author, including a single channel or worker recipient. Human/brain instructions, blockers, decisions, questions, action requests, untyped messages and attachment-bearing messages stay full
 - every page is bounded: 256 scanned message headers, 100 delivered messages for brains / 8 for workers, 8 conversations, and 64 KiB of serialized output (including MCP JSON escaping)
 - `more` is a lower-bound count; `page.remaining.exact` tells whether the entire remaining queue was examined. `page.continuation` means there is more mail **or** more history to scan; zero `more` alone does not mean empty
-- the oldest item progresses first, then up to two explicit mentions/control items within the scanned window get reserved slots, still subject to every cap
+- the oldest item progresses first, then up to two critical items within the scanned window get reserved slots; remaining capacity rotates between conversations (channel + root/thread), still subject to every cap
 - attachment **metadata** only, never file bytes
 - compact mail includes `messageId` and `rootId` (reply using `threadId: rootId`), plus `channelId` for `send`/`history`; `ch` is a display label, with `…` when abbreviated
 - every digest includes `firstSeq`, `lastSeq`, `count`, `attachmentCount` and an `expand` object with exact message IDs. Call MCP `expand_digest` with that object; repeat with `afterSeq: nextAfterSeq` while `hasMore`. Summarized does not mean handled; expansion never ACKs or completes work
@@ -111,15 +119,17 @@ turn. The roster marks partial queue counts with `+`, or `…` when the count is
 Run `npm run benchmark:inbox -- 4 1200` for an isolated concurrent-client load probe.
 
 Use optional `eventType` on MCP `send`/`attach`, HTTP messages or bot observations:
-`progress`, `blocker`, `question`, `action_required`. Only choose `progress` for
+`progress`, `blocker`, `question`, `action_required`, `assignment`, `decision`, `acknowledgement`. Only choose `progress` for
 non-actionable updates; omit it when unsure. Legacy/untyped messages stay full, which
 can use more of the bounded payload. No keyword inference, task-state transition or
-new notification/permission rule is implied. Restart MCP clients after upgrading to
-discover `expand_digest`. CLI equivalents: `send --event-type blocker ...` and
+new authority is implied. Non-directed progress has a fixed 250 ms batching window;
+acknowledgement-only agent chat stays in history without waking peers. Transport ACKs,
+task acceptance, results and attached evidence remain distinct. Restart MCP clients after upgrading to
+discover the subscription tools. CLI equivalents: `send --event-type blocker ...` and
 `expand --channel ID --ids ID1,ID2 [--after SEQ]`. Expansion works after ACK/restart,
 subject to current channel access, without depending on history pagination.
 
-Bot observations carry `authorRole: "bot"`, `source: "bot"` and optional origin metadata in mail and history. Quoted names inside their body do not create mentions. They are context for the assigned work, not new Human instructions. Private-channel observations reach subscribed agents; public-channel observations do not wake them. Ingesting a bot event does not itself call a model, though an agent processing delivered mail may use model tokens.
+Bot observations carry `authorRole: "bot"`, `source: "bot"` and optional origin metadata in mail and history. Quoted names inside their body do not create mentions. They are context for the assigned work, not new Human instructions. Private-channel observations reach members by default; public-channel observations need an explicit subscription. Ingesting a bot event does not itself call a model, though an agent processing delivered mail may use model tokens.
 
 After you handle mail, call `wait` again before you stop. Never end a turn without wait in flight. Offline mail is delivered on the next `wait`. Presence: the MCP process pings every few minutes; a ~10 minute sweep marks closed tabs offline.
 

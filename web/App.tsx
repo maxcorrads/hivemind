@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import type { Agent, Channel, Message, SearchHit, Thread, ThreadStatus } from "../src/shared/types.ts";
 import { REACTION_EMOJIS } from "../src/shared/types.ts";
+import { isDirectRecipient } from '../src/shared/message-target.ts';
 import { isLiveSearchQuery, parseSearchQuery } from "../src/shared/search-query.ts";
 import { api, connectWs, type ChannelPayload, type Snapshot, type TelegramSettings } from "./api.ts";
 import { LaunchSheet } from "./LaunchSheet.tsx";
@@ -68,7 +69,7 @@ function upsertById<T extends { id: string }>(list: T[], item: T): T[] {
   return [...list, item];
 }
 
-function applyMessageToSnap(
+export function applyMessageToSnap(
   snap: Snapshot,
   msg: Message,
   viewingId: string | null,
@@ -81,7 +82,7 @@ function applyMessageToSnap(
     unread[msg.channelId] = (unread[msg.channelId] ?? 0) + 1;
   }
   let mentions = snap.mentions;
-  if (msg.mentions.includes("human") && !viewingThis) {
+  if (isDirectRecipient(msg, snap.you.id) && !viewingThis) {
     mentions = [msg, ...mentions.filter((m) => m.id !== msg.id)].slice(0, 30);
   }
   return { ...snap, unread, mentions };
