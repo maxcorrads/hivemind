@@ -186,6 +186,15 @@ export class Hive {
       CREATE TABLE IF NOT EXISTS telegram_in (
         update_id INTEGER PRIMARY KEY
       );
+      CREATE TABLE IF NOT EXISTS telegram_update_failures (
+        update_id INTEGER PRIMARY KEY,
+        payload TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT NOT NULL,
+        state TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS telegram_state (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
@@ -535,6 +544,53 @@ export class Hive {
       /* sweep can drop leftover blobs later */
     }
     this.bus.emit("project", { deleted: project.slug });
+  }
+
+  telegramPollHealth(): {
+    lastSuccessAt: number | null;
+    lastError: string | null;
+    quarantined: number;
+  } {
+    const read = (key: string) =>
+      (this.db.prepare("SELECT value FROM telegram_state WHERE key = ?").get(key) as { value: string } | undefined)?.value;
+    const success = Number(read("poll:last_success") ?? 0);
+    const lastError = read("poll:last_error") ?? null;
+    const quarantined = (this.db.prepare(
+      "SELECT COUNT(*) AS n FROM telegram_update_failures WHERE state = 'quarantined'",
+    ).get() as { n: number }).n;
+    return { lastSuccessAt: success > 0 ? success : null, lastError, quarantined };
+  }
+
+  telegramQuarantine(limit = 50): Array<{
+    updateId: number;
+    attempts: number;
+    lastError: string;
+    updatedAt: number;
+  }> {
+    return this.db.prepare(
+      `SELECT update_id AS updateId, attempts, last_error AS lastError, updated_at AS updatedAt
+       FROM telegram_update_failures WHERE state = 'quarantined'
+       ORDER BY updated_at DESC LIMIT ?`,
+    ).all(Math.min(Math.max(1, limit), 200)) as Array<{
+      updateId: number;
+      attempts: number;
+      lastError: string;
+      updatedAt: number;
+    }>;
+  }
+
+  retryTelegramUpdate(updateId: number) {
+    const changed = this.db.prepare(
+      "UPDATE telegram_update_failures SET state = 'retry', updated_at = ? WHERE update_id = ? AND state = 'quarantined'",
+    ).run(now(), updateId).changes;
+    if (!changed) throw new HiveError(404, "Quarantined Telegram update not found");
+  }
+
+  discardTelegramUpdate(updateId: number) {
+    const changed = this.db.prepare(
+      "UPDATE telegram_update_failures SET state = 'discarded', updated_at = ? WHERE update_id = ? AND state IN ('quarantined', 'retry')",
+    ).run(now(), updateId).changes;
+    if (!changed) throw new HiveError(404, "Quarantined Telegram update not found");
   }
 
   forgetTelegramChat(chatId: number) {
