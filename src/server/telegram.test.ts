@@ -29,6 +29,8 @@ import {
   telegramFileTooLarge,
   telegramGeneralThreadId,
   telegramMessageHasFiles,
+  recordTelegramFailure,
+  telegramPartDelivered,
 } from "./telegram.ts";
 import type { Channel, Message } from "../shared/types.ts";
 
@@ -210,4 +212,47 @@ test("telegram text format stays under Telegram and hive caps", () => {
   assert.equal(inboundPostBody("Sara", "", true), "");
   assert.equal(inboundPostBody("Sara", "go", true), "[Sara] go");
   assert.equal(inboundPostBody("Sara", "", false), "[Sara]");
+});
+
+
+test("telegram queue overflow dead-letters reactions before messages", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "hive-tg-dead-"));
+  const hive = new Hive(path.join(dir, "hive.db"));
+  enqueueTelegramPending(hive.db, 1, "message", 2);
+  enqueueTelegramPending(hive.db, 1, "reaction", 2);
+  enqueueTelegramPending(hive.db, 2, "message", 2);
+  const pending = hive.db.prepare("SELECT seq, kind FROM telegram_pending ORDER BY seq, kind").all() as Array<{seq:number;kind:string}>;
+  assert.deepEqual(pending, [{ seq: 1, kind: "message" }, { seq: 2, kind: "message" }]);
+  const failure = hive.telegramFailures(10)[0];
+  assert.equal(failure?.seq, 1);
+  assert.equal(failure?.kind, "reaction");
+  assert.equal(failure?.reason, "queue_overflow");
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("telegram delivery checkpoints survive restart and dead letters are retryable without erasing audit", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "hive-tg-progress-"));
+  const dbPath = path.join(dir, "hive.db");
+  const hive = new Hive(dbPath);
+  hive.db.prepare(
+    `INSERT INTO telegram_delivery_parts
+      (seq, part_key, telegram_chat_id, telegram_message_id, completed_at)
+     VALUES (?, ?, ?, ?, ?)`,
+  ).run(9, "attachment:a", -1001, 44, Date.now());
+  assert.equal(telegramPartDelivered(hive.db, 9, "attachment:a", -1001), true);
+  recordTelegramFailure(hive.db, 9, "message", "boom", 5, -1001);
+  const failure = hive.telegramFailures(10)[0]!;
+  hive.retryTelegramFailure(failure.id);
+  assert.equal(hive.telegramFailureCount(), 0);
+  assert.ok(hive.db.prepare("SELECT 1 FROM telegram_pending WHERE seq = 9 AND kind = 'message'").get());
+  assert.equal(
+    (hive.db.prepare("SELECT resolution FROM telegram_failures WHERE id = ?").get(failure.id) as { resolution: string }).resolution,
+    "retried",
+  );
+  hive.db.close();
+
+  const reopened = new Hive(dbPath);
+  assert.equal(telegramPartDelivered(reopened.db, 9, "attachment:a", -1001), true);
+  reopened.db.close();
+  rmSync(dir, { recursive: true, force: true });
 });
