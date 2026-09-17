@@ -1,3 +1,4 @@
+import { HttpError } from "../client/http.ts";
 import type { WaitResult } from "../shared/types.ts";
 
 const FATAL = /join first|no token|HTTP 401|HTTP 403|HTTP 404|HTTP 409|superseded/i;
@@ -14,6 +15,10 @@ export function waitHasMail(result: WaitResult): boolean {
 }
 
 export function isTransientWaitError(err: unknown): boolean {
+  if (err instanceof HttpError) {
+    if ([401, 403, 404, 409].includes(err.status)) return false;
+    return true;
+  }
   const msg = err instanceof Error ? err.message : String(err);
   if (FATAL.test(msg)) return false;
   return true;
@@ -44,7 +49,8 @@ export async function waitUntilMail(
       if (!isTransientWaitError(err)) throw err;
       const msg = err instanceof Error ? err.message : String(err);
       transientErrors += 1;
-      if (SERVER.test(msg)) {
+      const isServerError = err instanceof HttpError ? err.status >= 500 && err.status <= 599 : SERVER.test(msg);
+      if (isServerError) {
         serverErrors += 1;
         if (serverErrors >= maxServerErrors) throw err;
       }
