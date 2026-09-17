@@ -350,7 +350,7 @@ export async function startMcp() {
       if (file.mime.startsWith("image/")) {
         const hint =
           file.bytes <= IMAGE_PREVIEW_MAX_BYTES ? readFileSync(file.path) : Buffer.alloc(IMAGE_PREVIEW_MAX_BYTES + 1);
-        const preview = imagePreview(file.path, file.mime, hint);
+        const preview = await imagePreview(file.path, file.mime, hint);
         if (preview) content.push({ type: "image", data: preview.data.toString("base64"), mimeType: preview.mime });
       }
       return { content };
