@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { readFileSync, existsSync, statSync } from "node:fs";
 import path from "node:path";
@@ -8,6 +9,7 @@ import { DEFAULT_PORT } from "../shared/types.ts";
 import { Hive } from "./hive.ts";
 import { createApp } from "./app.ts";
 import { startTelegram } from "./telegram.ts";
+import { hasHumanSession, isLoopbackHost, isTrustedBrowserOrigin } from "./local-auth.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(here, "../..");
@@ -16,9 +18,11 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
   const port = opts.port ?? Number(process.env.HIVEMIND_PORT ?? DEFAULT_PORT);
   const hive = opts.hive ?? new Hive();
   const telegram = startTelegram(hive, opts.telegram !== false);
+  const humanSession = randomBytes(32).toString("base64url");
   const app = createApp(hive, {
     telegramRunning: () => telegram.running(),
     reloadTelegram: () => telegram.reload(),
+    humanSession,
   });
 
   const listener = getRequestListener(app.fetch);
@@ -32,7 +36,20 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
     listener(req, res);
   });
 
-  const wss = new WebSocketServer({ server, path: "/ws" });
+  const wss = new WebSocketServer({
+    server,
+    path: "/ws",
+    verifyClient: ({ req }, done) => {
+      const host = req.headers.host;
+      const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
+      const cookie = typeof req.headers.cookie === "string" ? req.headers.cookie : undefined;
+      const allowed =
+        isLoopbackHost(host) &&
+        isTrustedBrowserOrigin(origin, host) &&
+        hasHumanSession(cookie, humanSession);
+      done(Boolean(allowed), allowed ? undefined : 403, allowed ? undefined : "Forbidden");
+    },
+  });
   const clients = new Set<WebSocket>();
   wss.on("connection", (ws) => {
     clients.add(ws);
