@@ -189,7 +189,12 @@ test("HTTP protocol: join, isolate, wait, Human admin", async () => {
   }
 });
 
-test("Human Telegram UI saves settings and never returns the bot token", async () => {
+test("Human Telegram UI saves settings and never returns the bot token", async t => {
+  const originalFetch = globalThis.fetch;
+  t.mock.method(globalThis, "fetch", (url: string | URL | Request, init?: RequestInit) => {
+    if (String(url).startsWith("https://api.telegram.org/")) return Promise.resolve(Response.json({ ok: true, result: { id: 42, is_bot: true } }));
+    return originalFetch(url, init);
+  });
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-http-tg-"));
   const hive = new Hive(path.join(dir, "hive.db"));
   const started = startServer({ port: 0, hive, telegram: false });

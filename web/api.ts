@@ -1,3 +1,4 @@
+import type { TelegramHealth } from "./telegram-health.ts";
 import type { Agent, BotCredentialView, AttachmentMeta, Channel, Message, Project, SearchHit, Thread, ThreadStatus } from "../src/shared/types.ts";
 import { resolveUploadMime } from "../src/shared/mime.ts";
 import type { LaunchContext } from "../src/shared/launch-prompt.ts";
@@ -23,16 +24,17 @@ export type Snapshot = {
   mentions: Message[];
   mentionsHasMore?: boolean;
   queued: Record<string, number>;
-  telegram?: { running: boolean; configured: boolean };
+  telegram?: { running: boolean; configured: boolean } & TelegramHealth;
 };
 
-export type TelegramSettings = {
+export type TelegramSettings = TelegramHealth & {
   running: boolean;
   configured: boolean;
   tokenSet: boolean;
   tokenHint: string | null;
   allowUserIds: number[];
   projects: Record<string, number>;
+  diagnosticsPruned?: number; failures?: number;
 };
 
 export type ChannelPayload = {

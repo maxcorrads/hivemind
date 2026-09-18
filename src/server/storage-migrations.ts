@@ -43,24 +43,26 @@ export function storageVersion(db: DatabaseSync): number {
 }
 
 export function validateCurrentStorage(db: DatabaseSync): void {
-  for (const [table, required, key] of [
-    ["agents", ["id", "name", "role", "seniority", "focus", "token_hash", "online", "last_seen_at", "created_at", "inbox_cursor", "project_id"], "id"],
-    ["channels", ["id", "name", "type", "topic", "created_by", "created_at", "project_id"], "id"],
-    ["projects", ["id", "slug", "name", "worktree", "created_at"], "id"],
-    ["channel_members", ["channel_id", "agent_id"], "channel_id,agent_id"],
-    ["messages", ["seq", "id", "channel_id", "thread_id", "author_id", "body", "kind", "control", "mentions", "created_at"], "seq"],
-    ["threads", ["id", "channel_id", "status"], "id"],
-    ["reads", ["agent_id", "channel_id", "last_read_seq"], "agent_id,channel_id"],
-    ["attachments", ["id", "message_id", "name", "mime", "bytes", "sha256", "created_by", "created_at"], "id"],
-    ["reactions", ["message_id", "agent_id", "emoji", "created_at"], "message_id,agent_id,emoji"],
-    ["telegram_in", ["update_id"], "update_id"],
-    ["telegram_state", ["key", "value"], "key"],
-    ["telegram_pending", ["seq", "kind"], "seq,kind"],
-    ["telegram_hold", ["telegram_chat_id", "telegram_message_id", "telegram_thread_id", "payload"], "telegram_chat_id,telegram_message_id"],
-    ["telegram_out", ["telegram_chat_id", "telegram_message_id", "seq", "channel_id", "thread_id"], "telegram_chat_id,telegram_message_id"],
-    ["telegram_topics", ["channel_id", "telegram_thread_id", "telegram_chat_id"], "channel_id"],
+  for (const [table, required, keys] of [
+    ["agents", ["id", "name", "role", "seniority", "focus", "token_hash", "online", "last_seen_at", "created_at", "inbox_cursor", "project_id"], ["id"]],
+    ["channels", ["id", "name", "type", "topic", "created_by", "created_at", "project_id"], ["id"]],
+    ["projects", ["id", "slug", "name", "worktree", "created_at"], ["id"]],
+    ["channel_members", ["channel_id", "agent_id"], ["channel_id,agent_id"]],
+    ["messages", ["seq", "id", "channel_id", "thread_id", "author_id", "body", "kind", "control", "mentions", "created_at"], ["seq"]],
+    ["threads", ["id", "channel_id", "status"], ["id"]],
+    ["reads", ["agent_id", "channel_id", "last_read_seq"], ["agent_id,channel_id"]],
+    ["attachments", ["id", "message_id", "name", "mime", "bytes", "sha256", "created_by", "created_at"], ["id"]],
+    ["reactions", ["message_id", "agent_id", "emoji", "created_at"], ["message_id,agent_id,emoji"]],
+    ["telegram_in", ["update_id"], ["update_id", "bot_key,update_id"]],
+    ["telegram_state", ["key", "value"], ["key"]],
+    ["telegram_pending", ["seq", "kind"], ["seq,kind"]],
+    ["telegram_hold", ["telegram_chat_id", "telegram_message_id", "telegram_thread_id", "payload"],
+      ["telegram_chat_id,telegram_message_id", "bot_key,telegram_chat_id,telegram_message_id"]],
+    ["telegram_out", ["telegram_chat_id", "telegram_message_id", "seq", "channel_id", "thread_id"],
+      ["telegram_chat_id,telegram_message_id", "bot_key,telegram_chat_id,telegram_message_id"]],
+    ["telegram_topics", ["channel_id", "telegram_thread_id", "telegram_chat_id"], ["channel_id", "bot_key,channel_id"]],
   ] as const) {
-    requireKey(requireShape(db, table, [...required]), table, [key]);
+    requireKey(requireShape(db, table, [...required]), table, [...keys]);
   }
   for (const table of ["telegram_hold", "telegram_out"]) {
     for (const col of columns(db, table)) {
@@ -68,6 +70,10 @@ export function validateCurrentStorage(db: DatabaseSync): void {
         throw new Error(`Invalid storage schema: ${table}.${col.name} must be NOT NULL`);
       }
     }
+  }
+  for (const table of ["telegram_in", "telegram_hold", "telegram_out", "telegram_topics"]) {
+    const botKey = columns(db, table).find((col) => col.name === "bot_key");
+    if (botKey && !botKey.notnull) throw new Error(`Invalid storage schema: ${table}.bot_key must be NOT NULL`);
   }
   if (db.prepare("SELECT 1 FROM sqlite_master WHERE name GLOB '_hive_migrate_*'").get()) {
     throw new Error("Invalid storage schema: leftover migration staging table");
@@ -97,10 +103,16 @@ export function migrateProjectStorage(db: DatabaseSync): void {
       : ["telegram_message_id", "seq", "channel_id", "thread_id"];
     const cols = requireShape(db, table, fields);
     const key = primaryKey(cols);
-    requireKey(cols, table, ["telegram_message_id", "telegram_chat_id,telegram_message_id"]);
+    requireKey(cols, table, [
+      "telegram_message_id",
+      "telegram_chat_id,telegram_message_id",
+      "bot_key,telegram_chat_id,telegram_message_id",
+    ]);
     const hasChat = cols.some((col) => col.name === "telegram_chat_id");
-    if (key === "telegram_chat_id,telegram_message_id") {
+    const hasBot = cols.some((col) => col.name === "bot_key");
+    if (key === "telegram_chat_id,telegram_message_id" || key === "bot_key,telegram_chat_id,telegram_message_id") {
       if (!hasChat) throw new Error(`Invalid storage schema: ${table}.telegram_chat_id is missing`);
+      if (key.startsWith("bot_key,") && !hasBot) throw new Error(`Invalid storage schema: ${table}.bot_key is missing`);
       continue;
     }
     const definitions = hold
@@ -111,9 +123,10 @@ export function migrateProjectStorage(db: DatabaseSync): void {
   }
 
   const topics = requireShape(db, "telegram_topics", ["channel_id", "telegram_thread_id"]);
-  requireKey(topics, "telegram_topics", ["channel_id"]);
+  requireKey(topics, "telegram_topics", ["channel_id", "bot_key,channel_id"]);
   const hasChat = topics.some((col) => col.name === "telegram_chat_id");
-  if (!hasChat || hasUniqueKey(db, "telegram_topics", ["telegram_thread_id"])) {
+  const hasBot = topics.some((col) => col.name === "bot_key");
+  if (!hasBot && (!hasChat || hasUniqueKey(db, "telegram_topics", ["telegram_thread_id"]))) {
     rebuild(db, "telegram_topics", "channel_id TEXT PRIMARY KEY, telegram_thread_id INTEGER NOT NULL, telegram_chat_id INTEGER",
       `channel_id, telegram_thread_id, ${hasChat ? "telegram_chat_id" : "NULL"}`);
   }
