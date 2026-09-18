@@ -116,12 +116,15 @@ const SUFFIXES = [
 const GENERATED = PREFIXES.flatMap((prefix) => SUFFIXES.map((suffix) => `${prefix}${suffix}`));
 
 /**
- * Shared pool across brain/worker roles. The original role-specific names are kept as
- * the first-choice pool, then both roles draw from the same remaining names so a hive
- * can assign 500 globally unique human-readable identities regardless of role mix.
+ * The actual production pool, shared across roles after their preferred names.
+ * Frozen so consumers (including regression tests) cannot change allocation.
+ * Names are labels, not roles; numbered fallback is not a 500-agent limit.
  */
-const AGENT_NAMES = [...new Set([...BRAINS, ...WORKERS, ...GENERATED])].slice(0, 500);
+export const AGENT_NAMES: readonly string[] = Object.freeze(
+  [...new Set([...BRAINS, ...WORKERS, ...GENERATED])].slice(0, 500),
+);
 
+/** `taken` contains lowercase names, including offline/persisted identities. */
 export function pickName(role: "brain" | "worker", taken: Set<string>): string {
   const preferred = role === "brain" ? BRAINS : WORKERS;
   const availablePreferred = preferred.filter((name) => !taken.has(name.toLowerCase()));
