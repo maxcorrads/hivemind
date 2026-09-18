@@ -1,3 +1,4 @@
+import { CoalescingPump } from "./coalescing-pump.ts";
 import { existsSync, mkdirSync, openAsBlob, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DEFAULT_PROJECT_SLUG, FILE_MAX_BYTES, HiveError, HUMAN_ID, REACTION_EMOJIS, type Channel, type Message } from "../shared/types.ts";
@@ -311,22 +312,25 @@ export function startTelegram(hive: Hive, enabled = true): TelegramHandle {
   };
 }
 
-class TelegramBridge {
+export class TelegramBridge {
   private stopped = false;
   private abort = new AbortController();
-  private pumping = false;
   private pumpFails: { key: string; n: number } | null = null;
   private topicRightsHinted = false;
   private topicLocks = new Map<string, Promise<number | null>>();
   private poll: Promise<void> | null = null;
-  private pumpTask: Promise<void> | null = null;
+  private readonly outbound: CoalescingPump;
   private ignoreReaction = new Map<string, number>();
   private skipChatUntil = new Map<number, number>();
 
   constructor(
     private hive: Hive,
     private cfg: TelegramConfig,
-  ) {}
+  ) {
+    this.outbound = new CoalescingPump(() => this.pump(), error => {
+      if (!this.stopped) console.error("telegram pump", error instanceof Error ? error.message : error);
+    });
+  }
 
   private chatForChannel(ch: Channel): number | undefined {
     return chatIdForProject(this.cfg, ch.project);
@@ -335,21 +339,19 @@ class TelegramBridge {
   start() {
     this.hive.bus.on("message", this.onHiveMessage);
     this.hive.bus.on("reaction", this.onHiveReaction);
-    this.poll = this.pollLoop();
+    this.poll = this.pollLoop().catch(error => {
+      if (!this.stopped) console.error("telegram poll stopped", error instanceof Error ? error.message : error);
+    });
     this.kickPump();
     console.error("hivemind telegram bridge on");
   }
 
   async stop() {
-    if (this.stopped) {
-      await Promise.allSettled([this.poll, this.pumpTask, ...this.topicLocks.values()].filter(Boolean) as Promise<unknown>[]);
-      return;
-    }
     this.stopped = true;
     this.abort.abort(new DOMException("Telegram bridge stopped", "AbortError"));
     this.hive.bus.off("message", this.onHiveMessage);
     this.hive.bus.off("reaction", this.onHiveReaction);
-    await Promise.allSettled([this.poll, this.pumpTask, ...this.topicLocks.values()].filter(Boolean) as Promise<unknown>[]);
+    await Promise.allSettled([this.poll, this.outbound.stop(), ...this.topicLocks.values()]);
   }
 
   private ensureActive() {
@@ -359,10 +361,7 @@ class TelegramBridge {
   }
 
   private kickPump() {
-    if (this.stopped || this.pumpTask) return;
-    this.pumpTask = this.pump().finally(() => {
-      this.pumpTask = null;
-    });
+    this.outbound.wake();
   }
 
   private onHiveMessage = (payload: unknown) => {
@@ -635,6 +634,7 @@ class TelegramBridge {
       if (message.chat?.id != null && Number(message.chat.id) !== chatId) continue;
       await this.onTelegramMessage(message);
     }
+    this.ensureActive();
     this.hive.db.prepare(
       "DELETE FROM telegram_hold WHERE telegram_thread_id = ? AND (telegram_chat_id = ? OR telegram_chat_id IS NULL)",
     ).run(telegramThreadId, chatId);
@@ -690,6 +690,7 @@ class TelegramBridge {
   }
 
   private queuePending(seq: number, kind: "message" | "reaction") {
+    if (this.stopped) return;
     enqueueTelegramPending(this.hive.db, seq, kind);
     this.kickPump();
   }
@@ -719,8 +720,6 @@ class TelegramBridge {
   }
 
   private async pump() {
-    if (this.pumping) return;
-    this.pumping = true;
     while (!this.stopped) {
       const job = this.nextPending();
       if (!job) break;
@@ -743,12 +742,12 @@ class TelegramBridge {
         if (isTelegramTopicRightsError(err)) {
           this.hintTopicRights();
           if (chat != null) this.skipChatUntil.set(chat, Date.now() + 15_000);
-          if (!this.nextPending()) await sleep(15_000);
+          if (!this.nextPending()) await sleep(15_000, this.abort.signal);
           continue;
         }
         if (chat != null && /429|Too Many Requests/i.test(err instanceof Error ? err.message : String(err))) {
           this.skipChatUntil.set(chat, Date.now() + 15_000);
-          if (!this.nextPending()) await sleep(15_000);
+          if (!this.nextPending()) await sleep(15_000, this.abort.signal);
           continue;
         }
         this.pumpFails = nextTelegramFailure(this.pumpFails, job.seq, job.kind);
@@ -763,7 +762,6 @@ class TelegramBridge {
       }
       await sleep(1000, this.abort.signal);
     }
-    this.pumping = false;
   }
 
   private async sendPendingMessage(seq: number) {
@@ -939,6 +937,7 @@ class TelegramBridge {
   }
 
   private async api(method: string, body: Record<string, unknown>): Promise<ApiResult> {
+    this.ensureActive();
     const res = await fetch(`https://api.telegram.org/bot${this.cfg.botToken}/${method}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -946,6 +945,7 @@ class TelegramBridge {
       signal: this.abort.signal,
     });
     const data = (await res.json().catch(() => ({}))) as ApiResult;
+    this.ensureActive();
     if (res.status === 429) {
       const wait = Number(data.parameters?.retry_after ?? 2);
       await sleep(wait * 1000, this.abort.signal);
