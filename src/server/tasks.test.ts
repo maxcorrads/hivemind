@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Hive } from './hive.ts';
 import { createApp } from './app.ts';
+import { InboxDeliveryStore } from './inbox-delivery.ts';
 import { waitWireBytes } from './wait-format.ts';
 import { WAIT_MAX_BYTES, type Agent } from '../shared/types.ts';
 import type { TaskAction, TaskSnapshot } from '../shared/tasks.ts';
@@ -94,8 +95,17 @@ test('reassignment is versioned, resets receipt/acceptance and informs the old w
   assert.equal(revised.task.contractVersion, 2); assert.equal(revised.task.workerId, second.id);
   assert.ok(revised.message.mentions.includes(f.worker.agent.id)); assert.ok(revised.message.mentions.includes(second.id));
   f.hive.acknowledgeInbox(f.worker.agent, sessionId, oldDelivery.delivery!.id);
+  const oldCount = f.hive.inbox.status(f.worker.agent.id).acknowledgedMessages;
+  assert.equal(oldCount, oldDelivery.delivery!.messageSeqs.length);
+  assert.equal(f.hive.acknowledgeInbox(f.worker.agent, sessionId, oldDelivery.delivery!.id).duplicate, true);
+  assert.equal(f.hive.inbox.status(f.worker.agent.id).acknowledgedMessages, oldCount);
   assert.equal(f.hive.tasks.get(f.brain.agent, id).receivedAt, null);
   assert.throws(() => f.event(id, f.worker.agent, { type: 'accept' }), /assigned worker/);
+  const newSession = f.hive.openInboxSession(second, crypto.randomUUID());
+  const newDelivery = await f.hive.wait(second, 1, undefined, { sessionId: newSession, compact: true });
+  f.hive.acknowledgeInbox(second, newSession, newDelivery.delivery!.id);
+  assert.equal(f.hive.tasks.get(f.brain.agent, id).state, 'delivered');
+  assert.equal(f.hive.inbox.status(second.id).acknowledgedMessages, newDelivery.delivery!.messageSeqs.length);
   assert.equal(f.event(id, second, { type: 'accept' }).task.state, 'accepted');
   f.reopen();
   assert.equal(f.hive.tasks.get(f.brain.agent, id).contract.acceptanceCriteria[0], 'Also handle empty input');
@@ -225,19 +235,49 @@ test('assignment failure rolls back the message, task, DM and all notifications'
   assert.deepEqual(events, []);
 });
 
-test('task receipt update and transport ACK commit or roll back together', async t => {
-  const f = fixture(t); const task = f.assign().task;
+for (const historical of [0, 10_000]) test(`task receipt, cursor and totals roll back together with ${historical} old receipts`, async t => {
+  const f = fixture(t);
   const sessionId = f.hive.openInboxSession(f.worker.agent, crypto.randomUUID());
+  if (historical) {
+    f.hive.db.exec('DROP TABLE inbox_receipt_totals');
+    f.hive.db.prepare(`WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+      INSERT INTO inbox_deliveries(id, agent_id, session_id, through_seq, seqs, attempts, offered_at, lease_until, acknowledged_at)
+      SELECT 'task-history-' || i, ?, ?, 0, '[0]', 1, 1, 2, 100 FROM n`)
+      .run(historical, f.worker.agent.id, sessionId);
+    new InboxDeliveryStore(f.hive.db);
+  }
+  f.hive.db.function('json_array_length', () => { throw new Error('unexpected task-path aggregation'); });
+  const task = f.assign().task;
   const batch = await f.hive.wait(f.worker.agent, 1, undefined, { compact: true, sessionId });
-  const before = f.hive.inbox.status(f.worker.agent.id);
-  f.hive.db.exec("CREATE TRIGGER fail_receipt BEFORE UPDATE ON task_records BEGIN SELECT RAISE(ABORT, 'receipt failure'); END");
-  assert.throws(() => f.hive.acknowledgeInbox(f.worker.agent, sessionId, batch.delivery!.id), /receipt failure/);
-  assert.deepEqual(f.hive.inbox.status(f.worker.agent.id), before);
-  assert.equal(f.hive.tasks.get(f.brain.agent, task.id).receivedAt, null);
-  f.hive.db.exec('DROP TRIGGER fail_receipt');
+  const snapshot = () => ({
+    status: f.hive.inbox.status(f.worker.agent.id),
+    cursor: f.hive.db.prepare('SELECT inbox_cursor FROM agents WHERE id = ?').get(f.worker.agent.id),
+    early: f.hive.db.prepare('SELECT * FROM inbox_early_receipts WHERE agent_id = ?').all(f.worker.agent.id),
+    receipt: f.hive.db.prepare('SELECT * FROM inbox_deliveries WHERE id = ?').get(batch.delivery!.id),
+    totals: f.hive.db.prepare('SELECT * FROM inbox_receipt_totals WHERE agent_id = ?').get(f.worker.agent.id),
+    task: f.hive.tasks.get(f.brain.agent, task.id),
+  });
+  const before = snapshot();
+  const events: unknown[] = [];
+  f.hive.bus.on('task', e => events.push(e)); f.hive.bus.on('queued', e => events.push(e));
+  for (const target of [historical ? 'BEFORE UPDATE ON inbox_receipt_totals' : 'BEFORE INSERT ON inbox_receipt_totals',
+    'AFTER UPDATE ON task_records']) {
+    f.hive.db.exec(`CREATE TEMP TRIGGER fail_receipt ${target} BEGIN SELECT RAISE(ABORT, 'receipt failure'); END`);
+    assert.throws(() => f.hive.acknowledgeInbox(f.worker.agent, sessionId, batch.delivery!.id), /receipt failure/);
+    assert.deepEqual(snapshot(), before, 'receipt, cursor, sparse entries, totals and task must all roll back');
+    assert.deepEqual(events, [], 'failed ACK must not publish changed state');
+    f.hive.db.exec('DROP TRIGGER fail_receipt');
+  }
   f.hive.acknowledgeInbox(f.worker.agent, sessionId, batch.delivery!.id);
   const after = f.hive.tasks.get(f.brain.agent, task.id);
-  f.hive.acknowledgeInbox(f.worker.agent, sessionId, batch.delivery!.id);
+  assert.equal(after.state, 'delivered');
+  assert.equal(f.hive.inbox.status(f.worker.agent.id).acknowledgedMessages, historical + batch.delivery!.messageSeqs.length);
+  assert.equal(f.hive.acknowledgeInbox(f.worker.agent, sessionId, batch.delivery!.id).duplicate, true);
+  assert.deepEqual(f.hive.tasks.get(f.brain.agent, task.id), after);
+  f.reopen();
+  f.hive.db.function('json_array_length', () => { throw new Error('unexpected task restart aggregation'); });
+  assert.equal(f.hive.acknowledgeInbox(f.worker.agent, sessionId, batch.delivery!.id).duplicate, true);
+  assert.equal(f.hive.inbox.status(f.worker.agent.id).acknowledgedMessages, historical + batch.delivery!.messageSeqs.length);
   assert.deepEqual(f.hive.tasks.get(f.brain.agent, task.id), after);
 });
 

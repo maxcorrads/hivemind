@@ -298,6 +298,51 @@ test("project settings round trip through local configure; profiles and launch i
     404,
   );
 });
+test("HTTP load and unchanged save retain exact list values in the plugin profile", async (t) => {
+  const f = setup(t);
+  writeFileSync(path.join(f.pkg, "settings.json"), JSON.stringify({
+    version: 1,
+    fields: [
+      { key: "free", label: "Free", type: "strings" },
+      { key: "choices", label: "Choices", type: "strings", choices: [" padded ", "", "ordinary"] },
+      { key: "empty", label: "Empty", type: "strings", minLength: 1 },
+      { key: "emptyEntry", label: "Empty entry", type: "strings" },
+      { key: "unset", label: "Unset", type: "strings" },
+    ],
+  }));
+  registerPlugin(f.home, f.manifest);
+  const hive = new Hive(path.join(f.home, "hive.db"));
+  t.after(() => hive.db.close());
+  const project = hive.getProjectBySlug("chapter");
+  const app = createApp(hive);
+  const url = "http://127.0.0.1:23456";
+  const endpoint = url + `/api/ui/projects/${project.slug}/plugins`;
+  const values = {
+    free: ["  significant whitespace  ", "", "ordinary", "\t", "line\nbreak", "\r", "ordinary"],
+    choices: [" padded ", "", "ordinary"],
+    empty: [],
+    emptyEntry: [""],
+  };
+  const save = (input: unknown, expectedRevision: number) => app.request(endpoint + "/invented-source", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ values: input, expectedRevision, enabled: true }),
+  });
+  assert.equal((await save(values, 0)).status, 200);
+  const loaded = await (await app.request(endpoint)).json() as { plugins: Array<{
+    values: typeof values; revision: number; home: string;
+  }> };
+  const view = loaded.plugins[0]!;
+  assert.deepEqual(view.values, values);
+  const configFile = path.join(view.home, "config.json");
+  const before = readFileSync(configFile, "utf8");
+  const saved = await save(view.values, view.revision);
+  assert.equal(saved.status, 200);
+  assert.deepEqual((await saved.json() as { plugin: { values: unknown } }).plugin.values, values);
+  assert.equal(readFileSync(configFile, "utf8"), before);
+  assert.deepEqual(projectPlugins(f.home, project)[0]!.values, values);
+});
+
 test("schema rejects unknown fields, duplicate keys, reserved keys and invalid values", () => {
   assert.throws(() =>
     settingsSchema.parse({

@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { Hive } from "./hive.ts";
 import { createApp } from "./app.ts";
+import { InboxDeliveryStore } from "./inbox-delivery.ts";
 import { waitWireBytes } from "./wait-format.ts";
 import { WAIT_MAX_BYTES, type DigestExpansionResult, type Message, type WaitResult } from "../shared/types.ts";
 
@@ -95,6 +96,15 @@ test("a first-message compact result can start a reply without a history scan", 
 
 test("exact digest expansion paginates after ACK and restart without including interleaved or newer mail", async t => {
   const f = fixture(t);
+  // Keep active traffic fixed while exercising the integrated counter migration.
+  const historical = 10_000;
+  f.hive.db.exec("DROP TABLE inbox_receipt_totals");
+  f.hive.db.prepare(`WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+    INSERT INTO inbox_deliveries(id, agent_id, session_id, through_seq, seqs, attempts, offered_at, lease_until, acknowledged_at)
+    SELECT 'digest-history-' || i, ?, ?, 0, '[0]', 1, 1, 2, 100 FROM n`)
+    .run(historical, f.brain.agent.id, f.sessionId);
+  new InboxDeliveryStore(f.hive.db);
+  f.hive.db.function("json_array_length", () => { throw new Error("unexpected digest-path aggregation"); });
   const root = f.send("Step zero", "progress");
   const expected = [root];
   for (let i = 1; i < 35; i++) {
@@ -106,14 +116,22 @@ test("exact digest expansion paginates after ACK and restart without including i
   const digest = batch.mail!.find(m => m.rootId === root.id)!;
   assert.equal(digest.count, expected.length);
   const pending = f.hive.inbox.status(f.brain.agent.id);
+  assert.equal(pending.acknowledgedMessages, historical);
+  const replay = await f.wait();
+  assert.equal(replay.delivery!.id, batch.delivery!.id);
+  assert.deepEqual(replay.mail, batch.mail);
   const first = f.hive.expandDigest(f.brain.agent, digest.expand); bounded(first);
   assert.equal(first.hasMore, true);
   assert.equal(first.messages.length, 8);
   assert.deepEqual(f.hive.inbox.status(f.brain.agent.id), pending, "Expansion must not ACK");
   f.hive.acknowledgeInbox(f.brain.agent, f.sessionId, batch.delivery!.id);
+  assert.equal(f.hive.acknowledgeInbox(f.brain.agent, f.sessionId, batch.delivery!.id).duplicate, true);
   const acked = f.hive.inbox.status(f.brain.agent.id);
+  assert.equal(acked.acknowledgedMessages, historical + batch.delivery!.messageSeqs.length);
   f.send("Later update", "progress", root.id);
   f.reopen();
+  f.hive.db.function("json_array_length", () => { throw new Error("unexpected restarted digest aggregation"); });
+  assert.equal(f.hive.acknowledgeInbox(f.brain.agent, f.sessionId, batch.delivery!.id).duplicate, true);
   const seen = [...first.messages];
   let page = first;
   while (page.hasMore) {

@@ -71,8 +71,11 @@ and return the original message plus current task state. Changed payload under t
 same ID returns 409. A new event also requires `expectedRevision` from `get_task`;
 stale writers get 409 and must reread/reconcile, not blindly choose a new ID.
 
-Messages, envelopes and state commit atomically. Receipt updates commit with the
-transport ACK. Unknown types/fields, forged authors, forbidden transitions and
+Messages, envelopes and state commit atomically. Task receipt updates, transport
+ACK, inbox cursor, sparse receipts and receipt totals commit in one transaction.
+A failed counter update or task receipt callback rolls back the entire ACK;
+duplicate ACKs update neither the task receipt nor the totals a second time.
+Unknown types/fields, forged authors, forbidden transitions and
 unauthorized participants fail without creating a message or changing a task.
 No pre-commit notifications escape a failed assignment, including a new DM.
 

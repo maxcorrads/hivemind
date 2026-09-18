@@ -94,6 +94,11 @@ This is a small declarative schema, not arbitrary JSON Schema or executable UI c
 Unknown keys, invalid defaults, incompatible constraints and reserved keys are rejected.
 In the settings form, boolean fields are two-state checkboxes: absent values use their
 declared default or `false`, and saving submits that displayed value explicitly.
+List entries are validated as entered, without trimming spaces or dropping empty
+strings; saving an untouched list preserves its values, order and duplicates.
+While editing, each line is an entry (including blank lines). Clearing the editor
+sets an empty array, which is valid only when the schema permits it. Blank entries
+that violate required/length/choice constraints are rejected, not silently removed.
 There are no provider-specific fields in Hivemind. Do not put secrets into this form;
 authentication belongs to the provider's credential store or the plugin's private setup.
 
