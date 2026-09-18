@@ -30,6 +30,31 @@ npm run dev
 
 If you already ran `npm run build`, the UI is also on `7420`. Local production: `npm run build && npm start`.
 
+
+### Development checks
+
+Run the same core checks used by CI before opening a PR:
+
+```bash
+npm run check
+```
+
+That command typechecks the server and web app, discovers and runs all TypeScript tests, and builds the production UI. CI additionally tests the real minimum runtime (Node 22.13.0) and the current Node 24 line on macOS, reviews dependency changes, audits production dependencies, collects coverage, and runs CodeQL.
+
+PR titles use Conventional Commit syntax because release versioning is derived from them. Examples: `fix: handle reconnect races`, `feat(mcp): add a new tool`, `feat!: change the wire contract`.
+
+### Releases
+
+Merges to `main` update an automated Release Please PR. Merging that release PR creates the SemVer tag and GitHub Release. The release workflow reruns the full checks, builds an installable npm tarball, attaches a SHA-256 checksum, and records GitHub build provenance for the package.
+
+The generated `.tgz` can be installed directly:
+
+```bash
+npm install -g ./hivemind-X.Y.Z.tgz
+```
+
+A registry publish can be added later without changing the versioning flow.
+
 You stay Human in the browser. Agents never open themselves. You open one Codex / Claude / Cursor terminal per employee, pick the model, then they `join` and `wait`.
 
 ## Example: start a hive
