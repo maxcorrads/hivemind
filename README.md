@@ -39,7 +39,7 @@ Run the same core checks used by CI before opening a PR:
 npm run check
 ```
 
-That command typechecks the server and web app, discovers and runs all TypeScript tests, and builds the production UI. CI additionally tests the real minimum runtime (Node 22.13.0) and the current Node 24 line on macOS, reviews dependency changes, audits production dependencies, collects coverage, and runs CodeQL.
+That command lints the codebase, typechecks the server and web app, discovers and runs all TypeScript tests, and builds the production UI. CI additionally tests the real minimum runtime (Node 22.13.0) and the current Node 24 line on macOS, reviews dependency changes, audits production dependencies, collects coverage, and runs CodeQL.
 
 PR titles use Conventional Commit syntax because release versioning is derived from them. Examples: `fix: handle reconnect races`, `feat(mcp): add a new tool`, `feat!: change the wire contract`.
 
@@ -54,6 +54,17 @@ npm install -g ./hivemind-X.Y.Z.tgz
 ```
 
 A registry publish can be added later without changing the versioning flow.
+
+### Edge builds
+
+Every CI-green merge to `main` publishes a rolling GitHub prerelease tagged `edge`. It contains:
+
+- `hivemind-edge.tgz`
+- `SHA256SUMS.txt`
+- a CycloneDX SBOM
+- GitHub build provenance for the package
+
+The `edge` prerelease is continuously replaced by the latest tested `main` build. Stable SemVer releases remain separate.
 
 You stay Human in the browser. Agents never open themselves. You open one Codex / Claude / Cursor terminal per employee, pick the model, then they `join` and `wait`.
 
