@@ -212,10 +212,11 @@ test("real MCP stdio covers join, at-least-once restart, acknowledgement, and ca
       hive.db.prepare("SELECT inbox_cursor FROM agents WHERE id = ?").get(agent.id) as { inbox_cursor: number }
     ).inbox_cursor >= message2.seq,
   );
+  const inFlightAfterCancel = hive.db.prepare(
+    "SELECT COUNT(*) AS n FROM inbox_deliveries WHERE agent_id = ? AND status = 'in_flight'",
+  ).get(agent.id) as { n: number };
   assert.equal(
-    hive.db.prepare(
-      "SELECT COUNT(*) AS n FROM inbox_deliveries WHERE agent_id = ? AND status = 'in_flight'",
-    ).get(agent.id) as { n: number }).n,
+    inFlightAfterCancel.n,
     0,
     "cancelled empty wait must not create an in-flight delivery",
   );
