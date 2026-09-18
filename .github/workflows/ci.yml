@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   server-typecheck:
     runs-on: ubuntu-latest
@@ -16,9 +20,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: '22.16.0'
           cache: npm
-      - run: node --version
       - run: npm ci
       - run: npm run typecheck
 
@@ -29,7 +32,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: '22.16.0'
           cache: npm
       - run: npm ci
       - run: npm run typecheck:web
@@ -37,14 +40,42 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22.16.0', '24']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - name: Provision shell used by launcher syntax tests
+        run: sudo apt-get update && sudo apt-get install --yes zsh
+      - run: node --version && zsh --version
+      - run: node --input-type=module -e "import { DatabaseSync } from 'node:sqlite'; const db = new DatabaseSync(':memory:'); db.close();"
+      - run: npm ci
+      - name: Server and transport tests
+        run: set -o pipefail; npm test 2>&1 | tee server-tests.log
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: server-test-failures-${{ matrix.node }}
+          path: server-tests.log
+          retention-days: 7
+
+  ui-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
           cache: npm
       - run: npm ci
-      - run: npm test
+      - name: UI regressions (not a native browser acceptance run)
+        run: npm run test:ui
 
   build:
     runs-on: ubuntu-latest
@@ -53,7 +84,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: '22.16.0'
           cache: npm
       - run: npm ci
       - run: npm run build

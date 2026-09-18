@@ -1,25 +1,37 @@
-import { readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 
-function walk(dir) {
-  const out = [];
-  for (const name of readdirSync(dir)) {
-    const full = path.join(dir, name);
-    if (statSync(full).isDirectory()) out.push(...walk(full));
-    else if (name.endsWith(".test.ts")) out.push(full);
+export function discoverTests(dir) {
+  if (!existsSync(dir)) return [];
+  const files = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) files.push(...discoverTests(full));
+    else if (entry.isFile() && /\.test\.tsx?$/.test(entry.name)) files.push(full);
   }
-  return out;
+  return files.sort();
 }
 
-const files = walk("src").sort();
-if (files.length === 0) {
-  console.error("No test files found");
-  process.exit(1);
+export function run(suite) {
+  if (!['server', 'ui'].includes(suite)) throw new Error('Expected suite: server or ui');
+  const files = discoverTests(suite === 'ui' ? 'web' : 'src');
+  if (files.length === 0) {
+    console.error(`No ${suite} test files present`);
+    return suite === 'ui' ? 0 : 1;
+  }
+  console.error(`Running ${files.length} ${suite} test files`);
+  const require = createRequire(import.meta.url);
+  const args = [require.resolve('tsx/cli')];
+  if (suite === 'ui') args.push('--tsconfig', 'tsconfig.web.json');
+  args.push('--test', ...files);
+  const result = spawnSync(process.execPath, args, { stdio: 'inherit', env: process.env });
+  if (result.error) console.error(result.error.message);
+  return result.status ?? 1;
 }
-console.error(`Running ${files.length} test files`);
-const result = spawnSync(process.execPath, ["--import", "tsx", "--test", ...files], {
-  stdio: "inherit",
-  env: process.env,
-});
-process.exit(result.status ?? 1);
+
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  process.exitCode = run(process.argv[2] ?? 'server');
+}

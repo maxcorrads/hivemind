@@ -233,7 +233,8 @@ test("roster paste is a macOS script that opens one Terminal window per employee
   assert.match(text, /'Alpha - Ada'/);
   assert.equal(text.includes("does not launch anyone"), false);
   const chk = spawnSync("zsh", ["-n"], { input: text, encoding: "utf8" });
-  assert.equal(chk.status, 0, chk.stderr);
+  assert.ifError(chk.error);
+  assert.equal(chk.status, 0, chk.stderr || `zsh exited with signal ${chk.signal}`);
   const empty = buildRosterPaste([]);
   assert.match(empty, /No employees to launch/);
 });

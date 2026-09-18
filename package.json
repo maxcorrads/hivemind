@@ -13,13 +13,14 @@
     "build": "vite build",
     "mcp": "tsx src/mcp/index.ts",
     "hivemind": "tsx src/cli.ts",
-    "test": "node scripts/run-tests.mjs",
+    "test": "node --test scripts/test-discovery.test.mjs && node scripts/run-tests.mjs server",
     "typecheck": "tsc -p tsconfig.json",
     "typecheck:web": "tsc -p tsconfig.web.json",
-    "check": "npm run typecheck && npm run typecheck:web && npm test && npm run build"
+    "check": "npm run typecheck && npm run typecheck:web && npm test && npm run test:ui && npm run build",
+    "test:ui": "node scripts/run-tests.mjs ui"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.16.0"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.6",

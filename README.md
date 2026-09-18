@@ -212,3 +212,8 @@ npm run check
 ```
 
 The checks are reported separately in CI: server TypeScript, web TypeScript, the complete discovered `*.test.ts` suite, and the production Vite build. Adding a new test file under `src/` automatically includes it in `npm test`; the suite is no longer maintained as an enumerated list.
+
+
+The tested minimum runtime is **Node 22.16.0** (including `node:sqlite`); CI also runs the server suite on Node 24. Install `zsh` locally for the macOS launcher **syntax** test. A missing shell is a test-environment failure, not proof that a generated launcher is invalid. CI provisions that dependency explicitly.
+
+`npm test` discovers both `.test.ts` and `.test.tsx` beneath `src/`; `npm run test:ui` independently discovers those extensions beneath `web/` using the web TypeScript configuration. Both are included in `npm run check`. The UI job explicitly reports when a branch has no UI test files; it is not native-browser acceptance. The wider fault-injection, security-diagnostic and browser-smoke scope of issue #25 remains incremental work, not completed by CI configuration alone.
