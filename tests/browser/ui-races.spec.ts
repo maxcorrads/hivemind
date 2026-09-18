@@ -466,3 +466,38 @@ test("selected channel is discarded when its project disappears during an in-fli
   await expect(page.getByText("stale deleted-project content", { exact: true })).toHaveCount(0);
   await expect(page.getByPlaceholder("Message #Alpha")).toHaveCount(0);
 });
+
+
+test("selected channel removal repairs to a valid state without stale content", async ({ page }) => {
+  const alpha = project("alpha", "Alpha Hive");
+  const a = channel("a", "Alpha", alpha);
+  const b = channel("b", "Beta", alpha);
+  let snap = snapshot([alpha], [a, b]);
+  await installSnapshot(page, () => snap);
+  await installMessages(page, async (route, channelId, threadId) => {
+    expect(threadId).toBeNull();
+    if (channelId === "a") {
+      await fulfillJson(route, payload(a, [message("a1", 1, "a", "channel that will disappear")]));
+      return;
+    }
+    if (channelId === "b") {
+      await fulfillJson(route, payload(b, [message("b1", 2, "b", "surviving channel")]));
+      return;
+    }
+    await fulfillJson(route, { error: "missing" }, 404);
+  });
+  const sockets = await installSocketHarness(page);
+
+  await page.goto("/#/c/a");
+  await expect(page.getByText("channel that will disappear", { exact: true })).toBeVisible();
+  await expect.poll(() => sockets.length).toBe(1);
+
+  snap = snapshot([alpha], [b]);
+  sockets[0]!.send(JSON.stringify({ type: "hello", at: Date.now() }));
+
+  await expect(page.getByRole("heading", { name: "For you" })).toBeVisible();
+  await expect(page).toHaveURL(/#\/inbox\/alpha$/);
+  await expect(page.getByText("channel that will disappear", { exact: true })).toHaveCount(0);
+  await expect(page.getByPlaceholder("Message #Alpha")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "# Beta" })).toBeVisible();
+});
