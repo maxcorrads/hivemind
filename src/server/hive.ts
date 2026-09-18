@@ -700,10 +700,20 @@ export class Hive {
   }
 
   touch(agentId: string, online = true) {
+    const current = this.db.prepare(
+      "SELECT online, last_seen_at AS lastSeenAt FROM agents WHERE id = ?",
+    ).get(agentId) as { online: number; lastSeenAt: number } | undefined;
+    if (!current) return;
+    const wanted = online ? 1 : 0;
+    const at = now();
+    const stateChanged = current.online !== wanted;
+    const needsHeartbeatWrite = online && at - current.lastSeenAt >= 15_000;
+    if (!stateChanged && !needsHeartbeatWrite) return;
+
     this.db.prepare(
       `UPDATE agents SET last_seen_at = ?, online = ? WHERE id = ?`,
-    ).run(now(), online ? 1 : 0, agentId);
-    this.afterCommit(() => this.bus.emit("agent", this.getAgent(agentId)));
+    ).run(at, wanted, agentId);
+    if (stateChanged) this.afterCommit(() => this.bus.emit("agent", this.getAgent(agentId)));
   }
 
   setOffline(agentId: string) {

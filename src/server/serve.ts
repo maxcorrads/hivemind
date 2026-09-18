@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
 import { readFileSync, existsSync, statSync } from "node:fs";
@@ -6,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import { getRequestListener } from "@hono/node-server";
 import { DEFAULT_PORT } from "../shared/types.ts";
+import { createRealtimeStream } from "../shared/realtime-client.ts";
 import { Hive } from "./hive.ts";
 import { createApp } from "./app.ts";
 import { startTelegram } from "./telegram.ts";
@@ -58,15 +60,16 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
     },
   });
   const clients = new Set<WebSocket>();
+  const stream = createRealtimeStream(randomUUID());
   wss.on("connection", (ws) => {
     if (closing) { ws.terminate(); return; }
     clients.add(ws);
-    ws.send(JSON.stringify({ type: "hello", at: Date.now() }));
+    ws.send(JSON.stringify({ ...stream.hello(), at: Date.now() }));
     ws.on("close", () => clients.delete(ws));
   });
 
   const emit = (type: string, payload: unknown) => {
-    const data = JSON.stringify({ type, payload });
+    const data = JSON.stringify(stream.event(type, payload));
     for (const ws of clients) {
       if (ws.readyState === ws.OPEN) ws.send(data);
     }
