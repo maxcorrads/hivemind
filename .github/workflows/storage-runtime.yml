@@ -1,0 +1,38 @@
+name: Storage validation runtimes
+on:
+  push:
+    branches: [fix/storage-reliability-integrated]
+    paths: [.github/workflows/storage-runtime.yml]
+permissions:
+  contents: read
+jobs:
+  runtime:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22.13.0'
+      - name: Export Node 22
+        run: |
+          mkdir -p "$RUNNER_TEMP/runtime"
+          cp "$(command -v node)" "$RUNNER_TEMP/runtime/node22"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+      - name: Export Node 24 and shell parser
+        run: |
+          set -euo pipefail
+          cp "$(command -v node)" "$RUNNER_TEMP/runtime/node24"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq zsh
+          cp /usr/bin/zsh "$RUNNER_TEMP/runtime/zsh"
+          ldd /usr/bin/zsh | awk '$3 ~ /^\// {print $3}' | while read lib; do cp -L "$lib" "$RUNNER_TEMP/runtime/"; done
+          rm -f "$RUNNER_TEMP/runtime/libc.so.6"
+          tar -C "$RUNNER_TEMP/runtime" -czf "$RUNNER_TEMP/storage-runtime.tar.gz" .
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: storage-runtime
+          path: ${{ runner.temp }}/storage-runtime.tar.gz
+          retention-days: 1
+          if-no-files-found: error
