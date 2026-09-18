@@ -1,5 +1,8 @@
 import { mkdirSync, readFileSync, writeFileSync, existsSync, createReadStream, createWriteStream, statSync } from "node:fs";
-import { Readable } from "node:stream";
+import { randomUUID } from "node:crypto";
+import { lstat, opendir, rename, unlink } from "node:fs/promises";
+import { FILE_MAX_BYTES } from "../shared/types.ts";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import path from "node:path";
 import { hiveHome } from "../server/hive.ts";
@@ -163,26 +166,66 @@ function fileNameFromDisposition(disp: string): string {
   return /filename="([^"]+)"/.exec(disp)?.[1] ?? "file";
 }
 
+/** Reap only old downloads whose owner is provably gone; a live/reused PID is always preserved. */
+export async function cleanupDownloadTemps(dir: string, nowMs = Date.now()): Promise<void> {
+  const directory = await opendir(dir);
+  let visited = 0;
+  for await (const entry of directory) {
+    if (visited++ >= 256) break;
+    const match = /^\.download-(\d+)-[a-f0-9-]+$/.exec(entry.name);
+    if (!match || Number(match[1]) <= 0) continue;
+    try {
+      const full = path.join(dir, entry.name);
+      const info = await lstat(full);
+      if ((!info.isFile() && !info.isSymbolicLink()) || nowMs - info.mtimeMs < 86_400_000) continue;
+      try { process.kill(Number(match[1]), 0); continue; } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") continue;
+      }
+      await unlink(full);
+    } catch { /* Races with another cleanup do not invalidate this download. */ }
+  }
+}
+
 export async function agentDownloadToFile(
   pathname: string,
   token: string,
   destDir: string,
   filePrefix: string,
+  signal?: AbortSignal,
 ): Promise<{ path: string; mime: string; name: string; bytes: number }> {
+  signal?.throwIfAborted();
+  await cleanupDownloadTemps(destDir);
   const res = await fetch(`${hiveUrl()}${pathname}`, {
-    headers: { authorization: `Bearer ${token}` },
+    headers: { authorization: `Bearer ${token}` }, signal,
   });
   if (!res.ok) throw await errorFromResponse(res);
   if (!res.body) throw new Error("Empty download");
   const name = fileNameFromDisposition(res.headers.get("content-disposition") ?? "");
-  const dest = path.join(destDir, `${filePrefix}-${safeFileName(name)}`);
-  await pipeline(Readable.fromWeb(res.body as import("node:stream/web").ReadableStream), createWriteStream(dest));
-  return {
-    path: dest,
-    mime: res.headers.get("content-type") || "application/octet-stream",
-    name,
-    bytes: statSync(dest).size,
-  };
+  const dest = path.join(destDir, `${safeFileName(filePrefix)}-${safeFileName(name)}`);
+  const tmp = path.join(destDir, `.download-${process.pid}-${randomUUID()}`);
+  let bytes = 0;
+  const meter = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      bytes += chunk.length;
+      callback(bytes > FILE_MAX_BYTES ? new Error("Download exceeds file limit") : null, chunk);
+    },
+  });
+  const input = Readable.fromWeb(res.body as import("node:stream/web").ReadableStream);
+  let ownsTemp = false;
+  const output = createWriteStream(tmp, { flags: "wx", mode: 0o600 });
+  output.once("open", () => { ownsTemp = true; });
+  try {
+    await pipeline(input, meter,
+      output, { signal });
+    // Fetch may transparently decompress content; compare length only for identity encoding.
+    const declared = res.headers.get("content-length");
+    const encoding = res.headers.get("content-encoding");
+    if (declared !== null && (!encoding || encoding === "identity") &&
+        (!/^\d+$/.test(declared) || Number(declared) !== bytes)) throw new Error("Incomplete download");
+    signal?.throwIfAborted();
+    await rename(tmp, dest);
+    return { path: dest, mime: res.headers.get("content-type") || "application/octet-stream", name, bytes };
+  } finally { if (ownsTemp) await unlink(tmp).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; }); }
 }
 
 export async function agentDownload(
