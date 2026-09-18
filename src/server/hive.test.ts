@@ -435,7 +435,6 @@ test("Human can see brain-worker DMs and invite to private rooms", () => {
 test("search stays in one project and only rooms the actor can see", async () => {
   const { hive, dir } = tempHive();
   const human = hive.getAgent("human");
-  const chapter = hive.listProjects()[0]!;
   const solace = hive.join({ role: "brain" });
   const dowel = hive.join({ role: "worker", seniority: "senior" });
   hive.createProject(human, { name: "Altro", slug: "altro" });
