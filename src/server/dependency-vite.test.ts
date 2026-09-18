@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import type { Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +15,11 @@ test("Vite builds on the test runtime and serves React with real API and WS prox
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-vite-"));
   const previousUrl = process.env.HIVEMIND_URL;
+  const connections = new Set<Socket>();
+  const track = (connection: Socket) => {
+    connections.add(connection);
+    connection.once("close", () => connections.delete(connection));
+  };
   let hive: Hive | undefined;
   let server: ReturnType<typeof startServer> | undefined;
   let vite: ViteDevServer | undefined;
@@ -21,25 +27,26 @@ test("Vite builds on the test runtime and serves React with real API and WS prox
   t.after(async () => {
     socket?.terminate();
     try {
-      await vite?.close();
-    } finally {
-      try {
-        if (server) {
-          const closed = once(server.server, "close");
-          server.shutdown();
-          server.server.closeAllConnections();
-          await closed;
-        }
-      } finally {
-        hive?.db.close();
-        if (previousUrl === undefined) delete process.env.HIVEMIND_URL;
-        else process.env.HIVEMIND_URL = previousUrl;
-        rmSync(dir, { recursive: true, force: true });
+      let backendClosed: Promise<unknown> = Promise.resolve();
+      if (server) {
+        backendClosed = once(server.server, "close");
+        server.shutdown();
+        server.server.closeAllConnections();
       }
+      // Close both ends before awaiting either server. HTTP closeAllConnections
+      // does not destroy upgraded WebSocket connections.
+      for (const connection of connections) connection.destroy();
+      await Promise.all([vite?.close(), backendClosed]);
+    } finally {
+      hive?.db.close();
+      if (previousUrl === undefined) delete process.env.HIVEMIND_URL;
+      else process.env.HIVEMIND_URL = previousUrl;
+      rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, { timeout: 10_000 });
   hive = new Hive(path.join(dir, "hive.db"));
   server = startServer({ hive, port: 0, telegram: false });
+  server.server.on("connection", track);
   const backendPort = await server.ready;
   process.env.HIVEMIND_URL = `http://127.0.0.1:${backendPort}`;
   const configFile = path.join(root, "vite.config.ts");
@@ -53,6 +60,7 @@ test("Vite builds on the test runtime and serves React with real API and WS prox
     server: { port: 0, strictPort: false },
   });
   assert.deepEqual(vite.config.build.target, ["chrome107", "edge107", "firefox104", "safari16"]);
+  vite.httpServer!.on("connection", track);
   await vite.listen();
   const address = vite.httpServer!.address();
   assert.ok(address && typeof address !== "string");
@@ -77,7 +85,9 @@ test("Vite builds on the test runtime and serves React with real API and WS prox
     body: JSON.stringify({ role: "brain" }), signal: t.signal,
   });
   assert.equal(joined.status, 200);
-  assert.equal((await joined.json()).created, true);
+  const payload: unknown = await joined.json();
+  assert.ok(payload !== null && typeof payload === "object" && "created" in payload);
+  assert.equal(payload.created, true);
   const [event] = await notification;
   assert.ok(["message", "agent"].includes(JSON.parse(String(event)).type));
 });
