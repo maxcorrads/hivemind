@@ -189,3 +189,83 @@ test("HTTP wait keeps a delivered-but-unacknowledged response in flight across r
   assert.equal((duplicate.data as { duplicate: boolean }).duplicate, true);
   assert.ok(cursor(hive, joined.agent.id) >= sent.seq);
 });
+
+
+test("dropped HTTP response after server delivery preserves the batch for reconnect", async (t) => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "hive-delivery-drop-"));
+  const hive = new Hive(path.join(dir, "hive.db"));
+  const human = hive.getAgent("human");
+  const joined = hive.join({ role: "worker", seniority: "mid" });
+  const dm = hive.openDm(human, joined.agent.name);
+  const sent = hive.postMessage(human, { channel: dm.id, body: "drop-response-fixture" });
+  const cursorBefore = cursor(hive, joined.agent.id);
+
+  let claimedResolve!: () => void;
+  const claimed = new Promise<void>((resolve) => {
+    claimedResolve = resolve;
+  });
+  let releaseResolve!: () => void;
+  const release = new Promise<void>((resolve) => {
+    releaseResolve = resolve;
+  });
+  let gateFirstResponse = true;
+  const started = startServer({
+    port: 0,
+    hive,
+    telegram: false,
+    beforeWaitResponse: async () => {
+      if (!gateFirstResponse) return;
+      claimedResolve();
+      await release;
+    },
+  });
+  const port = await started.ready;
+  const base = `http://127.0.0.1:${port}`;
+
+  t.after(async () => {
+    gateFirstResponse = false;
+    releaseResolve();
+    const closed = new Promise<void>((resolve) => started.server.once("close", () => resolve()));
+    started.shutdown();
+    await closed;
+    hive.db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const ac = new AbortController();
+  const dropped = fetch(`${base}/api/agent/wait`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${joined.token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ timeoutMs: 1_000, sessionId: "drop-a" }),
+    signal: ac.signal,
+  });
+  await claimed;
+  const inFlight = hive.db.prepare(
+    "SELECT delivery_id, session_id, status FROM inbox_deliveries WHERE agent_id = ? AND status = 'in_flight'",
+  ).get(joined.agent.id) as { delivery_id: string; session_id: string; status: string };
+  assert.equal(inFlight.session_id, "drop-a");
+  assert.equal(cursor(hive, joined.agent.id), cursorBefore);
+
+  ac.abort(new DOMException("drop response", "AbortError"));
+  await assert.rejects(dropped, /drop response|abort/i);
+  gateFirstResponse = false;
+  releaseResolve();
+
+  const replay = await postJson(
+    base,
+    "/api/agent/wait",
+    { timeoutMs: 1_000, sessionId: "drop-b" },
+    joined.token,
+  );
+  assert.equal(replay.status, 200);
+  const replayed = replay.data as {
+    deliveryId: string;
+    messages: Array<{ id: string }>;
+  };
+  assert.equal(replayed.messages[0]?.id, sent.id);
+  assert.notEqual(replayed.deliveryId, inFlight.delivery_id);
+  assert.equal(cursor(hive, joined.agent.id), cursorBefore);
+});
