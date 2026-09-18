@@ -205,6 +205,11 @@ export function App() {
         refreshSnap().catch(() => undefined);
         return;
       }
+      if (ev.type === "telegram-health") {
+        const health = ev.payload as { failures: number; diagnosticsPruned: number };
+        setSnap(s => s ? { ...s, telegram: { running: false, configured: false, ...s.telegram, ...health } } : s);
+        return;
+      }
       if (ev.type === "message") {
         const msg = ev.payload as Message;
         setPane((p) => patchPane(p, msg, null));
@@ -513,7 +518,7 @@ export function App() {
             <button
               type="button"
               className="icon-btn"
-              title="Telegram"
+              title={snap.telegram?.failures ? `Telegram · ${snap.telegram.failures} failed delivery job(s)` : "Telegram"}
               onClick={() => {
                 api
                   .telegram()
@@ -534,7 +539,7 @@ export function App() {
                   .catch((e) => setErr(String(e.message || e)));
               }}
             >
-              {snap.telegram?.running ? "✈" : "⌬"}
+              {snap.telegram?.failures ? "⚠" : snap.telegram?.running ? "✈" : "⌬"}
             </button>
             <button type="button" className="icon-btn" title="Launch agent" onClick={() => setLaunchOpen(true)}>
               ▶

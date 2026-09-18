@@ -6,12 +6,13 @@ import { resolveUploadMime } from "../shared/mime.ts";
 import { standingOrders } from "../shared/standing-orders.ts";
 import { Hive, describeAgent } from "./hive.ts";
 import { safeFileName } from "./files.ts";
-import { publicTelegramView, readTelegramFile, removeTelegramProjectSlug, writeTelegramFile } from "./telegram.ts";
+import { telegramDestinationForSeq, publicTelegramView, readTelegramFile, removeTelegramProjectSlug, writeTelegramFile, type TelegramFileInput } from "./telegram.ts";
 import { parseProjectSlug } from "../shared/project.ts";
 
 export type AppHooks = {
   telegramRunning?: () => boolean;
-  reloadTelegram?: () => boolean;
+  reloadTelegram?: () => boolean | Promise<boolean>;
+  configureTelegram?: (input: TelegramFileInput) => Promise<boolean>;
 };
 
 function fileDownload(hive: Hive, actor: Agent, id: string) {
@@ -53,66 +54,55 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       telegram: {
         running: Boolean(hooks.telegramRunning?.()),
         configured: publicTelegramView(hive.home).configured,
+        ...hive.telegramOutboxHealth(),
       },
     });
   });
   ui.get("/telegram", (c) => {
     hive.getAgent("human");
-    return c.json(publicTelegramView(hive.home, Boolean(hooks.telegramRunning?.())));
+    return c.json({
+      ...publicTelegramView(hive.home, Boolean(hooks.telegramRunning?.())),
+      ...hive.telegramOutboxHealth(),
+    });
+  });
+  ui.get("/telegram/failures", (c) => {
+    hive.getAgent("human");
+    return c.json({ failures: hive.telegramFailures(Number(c.req.query("limit") ?? 50)) });
+  });
+  ui.post("/telegram/failures/:id/retry", (c) => {
+    hive.getAgent("human");
+    hive.retryTelegramFailure(c.req.param("id"), seq => telegramDestinationForSeq(hive, seq));
+    return c.json({ ok: true, failures: hive.telegramFailureCount() });
+  });
+  ui.post("/telegram/failures/:id/discard", (c) => {
+    hive.getAgent("human");
+    hive.discardTelegramFailure(c.req.param("id"));
+    return c.json({ ok: true, failures: hive.telegramFailureCount() });
   });
   ui.put("/telegram", async (c) => {
-    const human = hive.getAgent("human");
+    hive.getAgent("human");
     const body = await c.req.json();
-    const knownProjects = hive.listProjects();
-    const known = new Map(knownProjects.map((p) => [p.slug, p]));
+    const known = new Set(hive.listProjects().map((p) => p.slug));
     const projects: Record<string, { groupChatId: number }> = {};
     for (const [rawSlug, raw] of Object.entries(body.projects ?? {})) {
       const slug = parseProjectSlug(rawSlug);
       if (!known.has(slug)) throw new HiveError(404, `No project named ${slug}`);
-      const id = raw && typeof raw === "object" ? Number((raw as { groupChatId?: unknown }).groupChatId) : Number(raw);
+      const value = raw && typeof raw === "object" ? (raw as { groupChatId?: unknown }).groupChatId : raw;
+      const id = typeof value === "number" || typeof value === "string" ? Number(value) : NaN;
       if (!Number.isSafeInteger(id) || id === 0) throw new HiveError(400, `Invalid Telegram group id for ${slug}`);
       projects[slug] = { groupChatId: id };
     }
+    const input: TelegramFileInput = {
+      botToken: body.botToken,
+      allowUserIds: Array.isArray(body.allowUserIds) ? body.allowUserIds : String(body.allowUserIds ?? "").split(/[,\s]+/).filter(Boolean),
+      projects,
+    };
+    if (hooks.telegramRunning?.() && !hooks.configureTelegram) throw new HiveError(503, "Telegram configuration lifecycle unavailable");
+    const running = hooks.configureTelegram
+      ? await hooks.configureTelegram(input)
+      : (writeTelegramFile(input, hive.home), false);
 
-    const previous = readTelegramFile(hive.home);
-    const next = writeTelegramFile(
-      {
-        botToken: body.botToken,
-        allowUserIds: Array.isArray(body.allowUserIds)
-          ? body.allowUserIds
-          : String(body.allowUserIds ?? "").split(/[,\s]+/),
-        projects,
-      },
-      hive.home,
-    );
-
-    const tokenChanged = Boolean(previous?.botToken && previous.botToken !== next.botToken);
-    const changedProjects = knownProjects.filter(
-      (project) => previous?.projects[project.slug] !== next.projects[project.slug],
-    );
-    const cancelledPending = tokenChanged
-      ? hive.resetTelegramRouting()
-      : changedProjects.length
-        ? hive.resetTelegramRouting(changedProjects.map((project) => project.id))
-        : 0;
-
-    if (cancelledPending > 0) {
-      const affected = tokenChanged ? knownProjects : changedProjects;
-      for (const project of affected) {
-        const general = hive.listChannels(human).find(
-          (channel) => channel.projectId === project.id && channel.name === "general",
-        );
-        if (general) {
-          hive.postSystem(
-            general.id,
-            `Telegram route changed; cancelled ${cancelledPending} queued mirror job(s). Hive messages were kept locally.`,
-          );
-        }
-      }
-    }
-
-    const running = Boolean(hooks.reloadTelegram?.());
-    return c.json({ ...publicTelegramView(hive.home, running), cancelledPending });
+    return c.json(publicTelegramView(hive.home, running));
   });
   ui.post("/projects", async (c) => {
     const human = hive.getAgent("human");
@@ -133,7 +123,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     });
     return c.json({ project });
   });
-  ui.delete("/projects/:slug", (c) => {
+  ui.delete("/projects/:slug", async (c) => {
     const human = hive.getAgent("human");
     const slug = parseProjectSlug(c.req.param("slug"));
     const chatId = readTelegramFile(hive.home)?.projects[slug];
@@ -144,7 +134,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       /* hive row is already gone */
     }
     try {
-      hooks.reloadTelegram?.();
+      await hooks.reloadTelegram?.();
     } catch {
       /* next serve still rereads telegram.json */
     }
