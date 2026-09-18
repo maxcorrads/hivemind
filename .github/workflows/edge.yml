@@ -86,7 +86,7 @@ jobs:
         run: |
           set -euo pipefail
           notes="$(cat <<EOF
-          Rolling prerelease from the latest CI-green commit on `main`.
+          Rolling prerelease from the latest CI-green commit on main.
 
           Version: ${EDGE_VERSION}
           Commit: ${EDGE_SHA}
