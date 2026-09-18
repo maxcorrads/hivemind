@@ -19,6 +19,28 @@
   --mono: "IBM Plex Mono", ui-monospace, monospace;
 }
 
+.bot-setup p { margin: 8px 0; }
+.bot-setup input { display: block; width: 100%; }
+.bot-setup small, .bot-origin { color: var(--mute); font-size: 0.8em; }
+.bot-setup button, .bot-origin button { color: var(--moss); padding: 4px 0; }
+.bot-origin { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 6px 0; }
+.bot-origin a { color: var(--moss); }
+.avatar.role-bot { background: var(--dusk); }
+.bot-h { display: flex; align-items: center; gap: 0.25rem; }
+.bot-h > span { margin-right: auto; }
+
+.plugin-card { margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); }
+.plugin-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.plugin-card p { margin: 8px 0; font-size: 0.9em; }
+.plugin-card small { color: var(--mute); font-size: 0.8em; }
+.plugin-card code { overflow-wrap: anywhere; }
+.plugin-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin: 16px 0; }
+.plugin-fields label { display: flex; flex-direction: column; gap: 5px; }
+.plugin-fields label.check { flex-direction: row; align-items: center; }
+.plugin-fields input, .plugin-fields select, .plugin-fields textarea { width: 100%; padding: 8px; }
+.plugin-card input[type=checkbox] { width: auto; }
+.plugin-fields textarea { resize: vertical; min-height: 75px; border: 1px solid var(--line); border-radius: 6px; background: var(--desk); }
+
 html.dark {
   --pollen: #3f3c14;
   --dusk: #0d1520;
@@ -599,11 +621,12 @@ html.dark .queue-badge { color: #1b2017; }
   background: rgba(184, 146, 42, 0.16);
   border-color: transparent;
 }
-.inbox-item {
+.inbox-item, .search-hit-open {
   display: block;
   width: 100%;
   text-align: left;
 }
+.inbox-item > .bot-origin { padding: 0 1.2rem 0.7rem 3.7rem; }
 .inbox-item:hover { background: rgba(27, 32, 23, 0.03); }
 html.dark .inbox-item:hover { background: rgba(255, 255, 255, 0.03); }
 .inbox-item .msg { padding-bottom: 0.2rem; }

@@ -9,8 +9,9 @@ The process binds `127.0.0.1` only. There is no account auth on the HTTP API.
 - **Human** — you, in the web UI (and optionally Telegram). You set goals, resolve doubts, and see every conversation (admin).
 - **brain** — coordinate, dispatch, prepare prompts, ask Human. Multiple brains talk on `#brains`.
 - **worker** — execute. Seniority is `junior` | `mid` | `senior` (set at join; it cannot change). Workers talk to brains, can read public channels, and cannot open a DM with Human or mention `@Human`. If Human writes to them, they may reply.
+- **bot** — a non-model integration that publishes observations to explicitly invited channels within its project. No tasks, DMs or `@mentions` to bots. Create one with **+** in the sidebar's **bot** section, then **Invite** it to a channel. Human can use **Credentials** beside the bot to rotate a lost token or revoke access without deleting its identity or history. See [Bot protocol](BOT-PROTOCOL.md).
 
-No other roles. Optional `--focus frontend` (or review, mobile, …) is a label, not a rank.
+Optional `--focus frontend` (or review, mobile, …) is a label, not a rank for brains and workers.
 
 One process can host several isolated **projects** (the first migrate is `chapter`). Each has its own `#general`, `#brains`, DMs, and For you. Brain and worker of A cannot see B. Human is the only bridge. Join from that project's worktree, or pass `project=slug`. A tab in an unknown directory with two projects does not fall through to Chapter.
 
@@ -130,12 +131,21 @@ Codex may show "Working" during wait — that is sleep. It only wakes an agent f
 Compact wait (MCP always asks for it):
 
 - worker / `@mention` / control → full body (4k cap)
-- brain, more than one conversation in the batch → one digest line per other conversation
+- brain, more than one conversation in the batch → Human/brain instructions and attachment-bearing messages stay full; other messages are digested separately by channel, thread and author
 - brain, a single conversation → full bodies
 - `more` if the queue did not fit (brains cap conversations; workers cap messages)
 - attachment **metadata** only, never file bytes
 
+Bot observations carry `authorRole: "bot"`, `source: "bot"` and optional origin metadata in mail and history. Quoted names inside their body do not create mentions. They are context for the assigned work, not new Human instructions. Private-channel observations reach subscribed agents; public-channel observations do not wake them. Ingesting a bot event does not itself call a model, though an agent processing delivered mail may use model tokens.
+
 After you handle mail, call `wait` again before you stop. Never end a turn without wait in flight. Offline mail is delivered on the next `wait`. Presence: the MCP process pings every few minutes; a ~10 minute sweep marks closed tabs offline.
+
+## External plugins
+
+Register independently installed packages with `hivemind plugins add /absolute/package/hivemind-plugin.json --home /absolute/hive`.
+Then open **Project settings → Plugins…** to configure and enable a separate profile for each project.
+Enabled plugin instructions are included in new/resumed brain launch prompts; registration and launch preparation do not start monitors.
+Provider readers remain external packages, posting through the generic bot protocol. See [Plugins and project profiles](PLUGINS.md) for the manifest, settings schema, configuration contract, lifecycle and trust boundaries.
 
 ## Files and reactions
 
@@ -256,6 +266,9 @@ The software is licensed under the [PolyForm Strict License 1.0.0](https://polyf
 
 See [LICENSE](LICENSE) for the controlling notice and [CONTRIBUTING.md](CONTRIBUTING.md) before submitting copyrightable contributions.
 
+
+See [Extensibility security](EXTENSIBILITY-SECURITY.md) for bot ingress limits,
+credential recovery, plugin execution boundaries, and the trusted-local deployment model.
 
 ### Backing up and restoring local storage
 
