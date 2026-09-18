@@ -58,7 +58,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release-artifacts
-          package_file="$(npm pack --silent --pack-destination release-artifacts)"
+          package_file="$(npm pack --silent --pack-destination release-artifacts | tail -n 1)"
           package_path="release-artifacts/${package_file}"
           npm sbom --sbom-format cyclonedx > release-artifacts/SBOM.cdx.json
           shasum -a 256 "${package_path}" release-artifacts/SBOM.cdx.json > release-artifacts/SHA256SUMS.txt
