@@ -51,17 +51,24 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
+      - name: Lint
+        run: npm run lint
+
       - name: Typecheck server and web
         run: npm run typecheck
 
       - name: Build production web UI
         run: npm run build
 
-      - name: Validate release package contents
+      - name: Validate and smoke-test release package
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p artifacts
-          npm pack --dry-run --json > artifacts/npm-pack.json
+          npm pack --json --pack-destination artifacts > artifacts/npm-pack.json
           cat artifacts/npm-pack.json
+          package_file="$(node -e 'const fs=require("fs"); const p=JSON.parse(fs.readFileSync("artifacts/npm-pack.json","utf8")); process.stdout.write(p[0].filename)')"
+          bash scripts/smoke-package.sh "artifacts/${package_file}"
 
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
