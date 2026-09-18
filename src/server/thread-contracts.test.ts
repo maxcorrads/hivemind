@@ -54,7 +54,7 @@ test("thread creation/list/update/reset stays camelCase across Hive HTTP and Web
   hive.postMessage(human, { channel: "general", threadId: root.id, body: "reply creates thread" });
 
   const created = hive.threadsInChannel("general").find((thread) => thread.id === root.id);
-  assert.deepEqual(created, { id: root.id, channelId: "general", status: "open" });
+  assert.deepEqual(created && { ...created }, { id: root.id, channelId: "general", status: "open" });
   assert.equal((created as unknown as Record<string, unknown>).channel_id, undefined);
 
   const reader = hive.join({ role: "brain", focus: "thread-reader" });
@@ -94,11 +94,11 @@ test("thread creation/list/update/reset stays camelCase across Hive HTTP and Web
   );
   assert.equal(changed.status, 200);
   assert.deepEqual(changed.data.thread, { id: root.id, channelId: "general", status: "in_progress" });
-  assert.equal(changed.data.thread.channel_id, undefined);
+  assert.equal((changed.data.thread as unknown as Record<string, unknown>).channel_id, undefined);
 
   const wsChanged = await inProgressEvent;
   assert.deepEqual(wsChanged.payload, { id: root.id, channelId: "general", status: "in_progress" });
-  assert.equal(wsChanged.payload.channel_id, undefined);
+  assert.equal((wsChanged.payload as unknown as Record<string, unknown>).channel_id, undefined);
   liveState.set(wsChanged.payload.id, wsChanged.payload as Thread);
   assert.equal(liveState.get(root.id)?.status, "in_progress");
 
