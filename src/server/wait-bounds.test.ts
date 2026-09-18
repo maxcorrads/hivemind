@@ -55,8 +55,13 @@ test("worker and brain wait batches are independently bounded by count and seria
     assert.ok(batch.deliveryId);
     assert.ok((batch.mail?.length ?? 0) <= WAIT_MESSAGE_CAP);
     assert.ok(serializedBytes(batch) <= WAIT_PAYLOAD_MAX_BYTES, `batch ${batchNumber} exceeded byte cap`);
-    seen.push(...(batch.mail ?? []).map((item) => item.seq));
+    const batchSeqs = (batch.mail ?? []).map((item) => item.seq);
+    seen.push(...batchSeqs);
     const remaining = batch.more ?? 0;
+    if (batchNumber === 1) {
+      assert.equal(remaining, expectedSeqs.length - batchSeqs.length);
+      assert.ok(remaining > 99, "more must remain exact rather than saturating at the historical 99 cap");
+    }
     hive.ackDelivery(brain, batch.deliveryId!, "brain-bounds");
     if (remaining === 0) break;
     assert.ok(batchNumber < 30, "bounded batches must make progress through a flooded conversation");
