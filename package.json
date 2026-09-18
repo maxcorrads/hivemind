@@ -14,12 +14,13 @@
     "mcp": "tsx src/mcp/index.ts",
     "hivemind": "tsx src/cli.ts",
     "test": "node scripts/run-tests.mjs",
-    "test:coverage": "node scripts/run-tests.mjs --experimental-test-coverage",
+    "test:coverage": "node scripts/run-tests.mjs --experimental-test-coverage --test-coverage-lines=80 --test-coverage-branches=75 --test-coverage-functions=75",
     "typecheck:server": "tsc -p tsconfig.json",
     "typecheck:web": "tsc -p tsconfig.web.json",
     "typecheck": "npm run typecheck:server && npm run typecheck:web",
-    "check": "npm run typecheck && npm test && npm run build",
-    "prepack": "npm run build"
+    "check": "npm run lint && npm run typecheck && npm test && npm run build",
+    "prepack": "npm run build",
+    "lint": "oxlint --deny-warnings src web scripts vite.config.ts"
   },
   "engines": {
     "node": ">=22.13.0"
@@ -42,7 +43,8 @@
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "typescript": "^5.9.2",
-    "vite": "^7.1.7"
+    "vite": "^7.1.7",
+    "oxlint": "1.83.0"
   },
   "files": [
     "bin",
