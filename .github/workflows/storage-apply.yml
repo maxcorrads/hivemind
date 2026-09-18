@@ -1,0 +1,86 @@
+name: Storage repair staging
+on:
+  push:
+    branches: [work/storage-validation-20260918]
+    paths: [.storage-submission.json]
+permissions:
+  contents: write
+concurrency:
+  group: storage-repair-staging
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22.13.0'
+      - name: Validate submission and restore exact reviewed patch
+        id: input
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const zlib = require('node:zlib');
+          const crypto = require('node:crypto');
+          const m = JSON.parse(fs.readFileSync('.storage-submission.json', 'utf8'));
+          if (![56, 62, 64].includes(m.pr)) throw Error('Unexpected PR');
+          if (![m.base, m.head].every(s => /^[a-f0-9]{40}$/.test(s))) throw Error('Invalid SHA');
+          if (!/^[a-f0-9]{64}$/.test(m.digest)) throw Error('Invalid digest');
+          const patch = zlib.gunzipSync(Buffer.from(m.patch, 'base64'), { maxOutputLength: 2000000 });
+          if (crypto.createHash('sha256').update(patch).digest('hex') !== m.digest) throw Error('Patch digest mismatch');
+          fs.writeFileSync(process.env.RUNNER_TEMP + '/storage.patch', patch);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `pr=${m.pr}\nbase=${m.base}\nhead=${m.head}\n`);
+          NODE
+      - name: Apply only the repair to its declared base
+        env:
+          BASE: ${{ steps.input.outputs.base }}
+          HEAD: ${{ steps.input.outputs.head }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin "$BASE" "$HEAD"
+          git checkout --detach "$BASE"
+          git apply --check "$RUNNER_TEMP/storage.patch"
+          git apply --index "$RUNNER_TEMP/storage.patch"
+          git diff --cached --check
+          git diff --cached --name-only > "$RUNNER_TEMP/changed-files.txt"
+          if grep -E '^(LICENSE|package(-lock)?\.json|\.github/|\.storage-)' "$RUNNER_TEMP/changed-files.txt"; then
+            echo 'Repair unexpectedly changes a protected policy/build file'
+            exit 1
+          fi
+      - run: npm ci
+      - name: Full quality gate on the minimum supported runtime
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run check 2>&1 | tee "$RUNNER_TEMP/storage-check.log"
+      - name: Stage a fast-forwardable repair without changing the PR or main
+        env:
+          BASE: ${{ steps.input.outputs.base }}
+          HEAD: ${{ steps.input.outputs.head }}
+          PR: ${{ steps.input.outputs.pr }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          tree="$(git write-tree)"
+          commit="$(printf 'fix(storage): reconcile and validate PR #%s\n' "$PR" | git commit-tree "$tree" -p "$HEAD" -p "$BASE")"
+          branch="work/storage-staged-${PR}-${GITHUB_RUN_ID}"
+          git push origin "$commit:refs/heads/$branch"
+          printf 'branch=%s\ncommit=%s\ntree=%s\nbase=%s\nhead=%s\n' "$branch" "$commit" "$tree" "$BASE" "$HEAD" | tee "$RUNNER_TEMP/storage-staged.txt"
+          cat "$RUNNER_TEMP/storage-staged.txt" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: storage-staging-result
+          path: |
+            ${{ runner.temp }}/storage-check.log
+            ${{ runner.temp }}/storage-staged.txt
+            ${{ runner.temp }}/changed-files.txt
+          retention-days: 1
