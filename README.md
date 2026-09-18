@@ -233,6 +233,15 @@ npx tsx src/cli.ts doctor
 
 `clear_context` cannot reset the Codex/Claude/Cursor runtime. It tells the worker to drop task memory and `wait`. Never send it automatically at `done`.
 
+
+## Project-scoped query validation
+
+Roster queries scope non-Human agents by project before hydration, using indexed role and project lookups. Channel membership, search scope and inbox queries share a constant-parameter authorization subquery rather than an `IN` placeholder for every visible channel. Message authors, attachments and reactions use batches of at most 400 bindings; compact wait formatting reuses one label lookup per channel. Indexes are created only after the project migration inside the startup transaction. Null-project non-Human identities fail closed in both list and point authorization.
+
+Run `node --import tsx scripts/benchmark-storage-queries.mjs` for a deterministic SQL-count fixture. An optional path to another checkout's `src/server/hive.ts` measures the same operations against that checkout. On Node 22.13.0, with 50,000 unrelated agents and 2,000 unrelated channels, main `738c1dd2` used 50,002 statements/100,003 returned hydration rows for a two-result roster and 4,009 statements/8,013 returned rows for a one-result channel list. This repair uses 1 statement/2 rows and 2 statements/3 rows respectively. These are executed statement/returned-row measurements, not wall-clock speedup claims or VM rows-examined counts.
+
+The regression suite also exercises 33,000 visible channels, 600-message waits, an unrelated 10,000-message backlog, fresh/legacy/repeated startup, private/brains/project isolation, invitation and restart. Recipient ledgers, bounded delivery/ACK semantics, FTS/search design, whole-snapshot queue projections and p50/p95 latency measurement remain separate work; this change does not introduce a competing inbox ledger or change history pagination semantics.
+
 ## Data
 
 All runtime state is under `~/.hivemind/` (or `HIVEMIND_HOME`): `hive.db`, `identities/`, `files/`, optional `telegram.json`. Agent downloads go to `<cwd>/.hivemind-inbox/`. Nothing in those paths belongs in git.
