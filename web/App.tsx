@@ -177,6 +177,15 @@ export function App() {
   const threadIdRef = useRef(threadId);
   threadIdRef.current = threadId;
   const channelsRef = useRef<Channel[]>([]);
+  const channelLoadRef = useRef<{ generation: number; controller: AbortController | null }>({
+    generation: 0,
+    controller: null,
+  });
+  const threadLoadRef = useRef<{ generation: number; controller: AbortController | null }>({
+    generation: 0,
+    controller: null,
+  });
+  const seenMessageIdsRef = useRef(new Set<string>());
 
   const refreshSnap = useCallback(async () => {
     const next = await api.snapshot();
@@ -185,7 +194,15 @@ export function App() {
   }, []);
 
   const loadChannel = useCallback(async (id: string) => {
-    const data = await api.messages(id);
+    channelLoadRef.current.controller?.abort();
+    const controller = new AbortController();
+    const generation = channelLoadRef.current.generation + 1;
+    channelLoadRef.current = { generation, controller };
+    const data = await api.messages(id, null, undefined, controller.signal);
+    if (controller.signal.aborted || channelLoadRef.current.generation !== generation) return;
+    const current = selRef.current;
+    if (current.kind !== "channel" || current.id !== id) return;
+    for (const message of data.messages) seenMessageIdsRef.current.add(message.id);
     setPane(data);
     setSnap((s) =>
       s
@@ -198,17 +215,46 @@ export function App() {
     );
   }, []);
 
+  const loadThread = useCallback(async (channelId: string, rootId: string) => {
+    threadLoadRef.current.controller?.abort();
+    const controller = new AbortController();
+    const generation = threadLoadRef.current.generation + 1;
+    threadLoadRef.current = { generation, controller };
+    const data = await api.messages(channelId, rootId, undefined, controller.signal);
+    if (controller.signal.aborted || threadLoadRef.current.generation !== generation) return;
+    const current = selRef.current;
+    if (current.kind !== "channel" || current.id !== channelId || threadIdRef.current !== rootId) return;
+    for (const message of data.messages) seenMessageIdsRef.current.add(message.id);
+    setThreadPane(data);
+  }, []);
+
   useEffect(() => {
     refreshSnap().catch((e) => setErr(String(e.message || e)));
     const off = connectWs((ev) => {
       if (ev.type === "hello") {
         refreshSnap().catch(() => undefined);
+        const current = selRef.current;
+        if (current.kind === "channel") {
+          loadChannel(current.id).catch((e) => {
+            if (e?.name !== "AbortError") setErr(String(e?.message || e));
+          });
+          const root = threadIdRef.current;
+          if (root) {
+            loadThread(current.id, root).catch((e) => {
+              if (e?.name !== "AbortError") setErr(String(e?.message || e));
+            });
+          }
+        }
         return;
       }
       if (ev.type === "message") {
         const msg = ev.payload as Message;
-        setPane((p) => patchPane(p, msg, null));
-        setThreadPane((p) => patchPane(p, msg, threadIdRef.current));
+        const duplicate = seenMessageIdsRef.current.has(msg.id);
+        seenMessageIdsRef.current.add(msg.id);
+        setPane((p) => (duplicate ? replaceMessage(p, msg) : patchPane(p, msg, null)));
+        setThreadPane((p) =>
+          duplicate ? replaceMessage(p, msg) : patchPane(p, msg, threadIdRef.current),
+        );
         const viewing = selRef.current.kind === "channel" ? selRef.current.id : null;
         setSnap((s) => (s ? applyMessageToSnap(s, msg, viewing, threadIdRef.current) : s));
         setMailLog((prev) => {
@@ -262,9 +308,11 @@ export function App() {
     window.addEventListener("hashchange", onHash);
     return () => {
       off();
+      channelLoadRef.current.controller?.abort();
+      threadLoadRef.current.controller?.abort();
       window.removeEventListener("hashchange", onHash);
     };
-  }, [loadChannel, refreshSnap]);
+  }, [loadChannel, loadThread, refreshSnap]);
 
   const missingChannel = Boolean(snap && sel.kind === "channel" && !snap.channels.some((c) => c.id === sel.id));
 
@@ -289,23 +337,30 @@ export function App() {
 
   useEffect(() => {
     if (sel.kind !== "channel") {
+      channelLoadRef.current.controller?.abort();
       setPane(null);
       return;
     }
     if (missingChannel) {
+      channelLoadRef.current.controller?.abort();
       setPane(null);
       return;
     }
-    loadChannel(sel.id).catch((e) => setErr(String(e.message || e)));
+    loadChannel(sel.id).catch((e) => {
+      if (e?.name !== "AbortError") setErr(String(e?.message || e));
+    });
   }, [sel, loadChannel, missingChannel]);
 
   useEffect(() => {
     if (!threadId || sel.kind !== "channel" || missingChannel) {
+      threadLoadRef.current.controller?.abort();
       setThreadPane(null);
       return;
     }
-    api.messages(sel.id, threadId).then(setThreadPane).catch((e) => setErr(String(e.message || e)));
-  }, [threadId, sel, missingChannel]);
+    loadThread(sel.id, threadId).catch((e) => {
+      if (e?.name !== "AbortError") setErr(String(e?.message || e));
+    });
+  }, [threadId, sel, missingChannel, loadThread]);
 
   useEffect(() => {
     const apply = () => {
@@ -431,15 +486,34 @@ export function App() {
 
   const send = async (body: string, tid?: string | null, files?: File[]) => {
     if (sel.kind !== "channel") return;
+    const channelId = sel.id;
     const attachmentIds: string[] = [];
     for (const file of files ?? []) {
       attachmentIds.push((await api.upload(file)).id);
     }
     if (!body.trim() && attachmentIds.length === 0) return;
-    await api.send(sel.id, body.trim(), tid, attachmentIds);
+    const { message } = await api.send(channelId, body.trim(), tid, attachmentIds);
+    const alreadySeen = seenMessageIdsRef.current.has(message.id);
+    seenMessageIdsRef.current.add(message.id);
+    if (!alreadySeen) {
+      setPane((p) => patchPane(p, message, null));
+      if (tid) setThreadPane((p) => patchPane(p, message, tid));
+    } else {
+      setPane((p) => replaceMessage(p, message));
+      if (tid) setThreadPane((p) => replaceMessage(p, message));
+    }
+    setSnap((current) =>
+      current
+        ? applyMessageToSnap(
+            current,
+            message,
+            selRef.current.kind === "channel" ? selRef.current.id : null,
+            threadIdRef.current,
+          )
+        : current,
+    );
     if (tid) setThreadDraft("");
     else setDraft("");
-    if (tid) setThreadPane(await api.messages(sel.id, tid));
   };
 
   const onCreate = async () => {
