@@ -1,0 +1,37 @@
+name: Storage repair workspace
+on:
+  push:
+    branches: [fix/storage-reliability-integrated]
+    paths: [.github/workflows/storage-workspace.yml]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22.13.0'
+      - run: npm ci
+      - name: Export source and locked Linux dependencies without Git credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p upstream-patches
+          for pr in 56 62 64; do
+            git fetch --no-tags origin "refs/pull/${pr}/head:refs/remotes/origin/review-${pr}"
+            git diff 90e1cc3df20483fc1797005961e4c345df0b6bc7..."refs/remotes/origin/review-${pr}" > "upstream-patches/${pr}.patch"
+          done
+          git rev-parse HEAD > upstream-patches/workspace-sha.txt
+          tar --exclude='./.git' -czf "$RUNNER_TEMP/storage-workspace.tar.gz" .
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: storage-workspace
+          path: ${{ runner.temp }}/storage-workspace.tar.gz
+          retention-days: 1
+          if-no-files-found: error
