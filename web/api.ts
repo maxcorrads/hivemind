@@ -82,12 +82,12 @@ export const api = {
     if (limit) params.set("limit", String(limit));
     return req<{ hits: SearchHit[]; hasMore: boolean }>(`/api/ui/search?${params}`, { signal });
   },
-  messages: (id: string, threadId?: string | null, beforeSeq?: number) => {
+  messages: (id: string, threadId?: string | null, beforeSeq?: number, signal?: AbortSignal) => {
     const q = new URLSearchParams();
     if (threadId) q.set("threadId", threadId);
     if (beforeSeq) q.set("beforeSeq", String(beforeSeq));
     const suffix = q.toString() ? `?${q}` : "";
-    return req<ChannelPayload>(`/api/ui/channels/${encodeURIComponent(id)}/messages${suffix}`);
+    return req<ChannelPayload>(`/api/ui/channels/${encodeURIComponent(id)}/messages${suffix}`, { signal });
   },
   send: (id: string, body: string, threadId?: string | null, attachmentIds?: string[]) =>
     req<{ message: Message }>(`/api/ui/channels/${encodeURIComponent(id)}/messages`, {
