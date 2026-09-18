@@ -579,6 +579,7 @@ export class Hive {
         this.db.prepare("DELETE FROM reads WHERE agent_id = ?").run(agent.id);
         this.db.prepare("DELETE FROM reactions WHERE agent_id = ?").run(agent.id);
         this.db.prepare("DELETE FROM attachments WHERE created_by = ? AND message_id IS NULL").run(agent.id);
+        this.db.prepare("DELETE FROM inbox_deliveries WHERE agent_id = ?").run(agent.id);
         this.db.prepare("DELETE FROM agents WHERE id = ?").run(agent.id);
       }
 
@@ -1620,6 +1621,7 @@ export class Hive {
           now(),
         );
         this.db.exec("COMMIT");
+        this.pruneDeliveryHistory(actor.id);
       } catch (err) {
         try {
           this.db.exec("ROLLBACK");
@@ -1673,6 +1675,21 @@ export class Hive {
     };
   }
 
+  private pruneDeliveryHistory(agentId: string, keep = 128) {
+    this.db.prepare(
+      `DELETE FROM inbox_deliveries
+       WHERE agent_id = ?
+         AND status != 'in_flight'
+         AND delivery_id NOT IN (
+           SELECT delivery_id
+           FROM inbox_deliveries
+           WHERE agent_id = ? AND status != 'in_flight'
+           ORDER BY created_at DESC, delivery_id DESC
+           LIMIT ?
+         )`,
+    ).run(agentId, agentId, keep);
+  }
+
   ackDelivery(
     actor: Agent,
     deliveryId: string,
@@ -1724,6 +1741,7 @@ export class Hive {
       throw err;
     }
 
+    this.pruneDeliveryHistory(actor.id);
     this.emitQueued(actor.id);
     const cursor = this.db.prepare("SELECT inbox_cursor FROM agents WHERE id = ?").get(actor.id) as {
       inbox_cursor: number;
