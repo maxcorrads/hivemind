@@ -115,6 +115,7 @@ test("cancelled and superseded Hive waits do not consume queued mail or leak sig
   const worker = joined.agent;
   const dm = hive.openDm(human, worker.name);
 
+  const alreadyQueued = hive.postMessage(human, { channel: dm.id, body: "already queued before cancellation" });
   const pre = new AbortController();
   pre.abort(new DOMException("already cancelled", "AbortError"));
   const beforeCursor = (hive.db.prepare("SELECT inbox_cursor FROM agents WHERE id = ?").get(worker.id) as {
@@ -127,6 +128,8 @@ test("cancelled and superseded Hive waits do not consume queued mail or leak sig
     inbox_cursor: number;
   }).inbox_cursor;
   assert.equal(afterCursor, beforeCursor);
+  const afterCancelled = await hive.wait(worker, 60_000);
+  assert.equal(afterCancelled.messages.filter((message) => message.id === alreadyQueued.id).length, 1);
 
   const active = new AbortController();
   const cancelledWait = hive.wait(worker, 60_000, active.signal);
