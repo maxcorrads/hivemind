@@ -32,6 +32,14 @@ jobs:
           import base64, hashlib, json, pathlib
           manifest = json.loads(pathlib.Path('repair-transfer.json').read_text())
           data = pathlib.Path('transfer/received.bundle').read_bytes()
+          encoding_file = pathlib.Path('repair-encoding-corrections.json')
+          if encoding_file.exists():
+              encoded = base64.b64encode(data).decode('ascii')
+              for change in sorted(json.loads(encoding_file.read_text()), key=lambda x: x['offset'], reverse=True):
+                  offset, old, new = change['offset'], change['old'], change['new']
+                  assert encoded[offset:offset + len(old)] == old, 'Encoding correction does not match'
+                  encoded = encoded[:offset] + new + encoded[offset + len(old):]
+              data = base64.b64decode(encoded, validate=True)
           for change in sorted(manifest['corrections'], key=lambda x: x['offset'], reverse=True):
               offset = change['offset']
               old = base64.b64decode(change['old'])
