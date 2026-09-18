@@ -265,6 +265,7 @@ test("inbox cursor does not skip capped mail", async () => {
   const first = await hive.wait(brain.agent, 200, undefined, { compact: true });
   assert.equal(first.idle, false);
   assert.ok((first.more ?? 0) > 0);
+  hive.acknowledgeInbox(brain.agent, first.delivery!.sessionId, first.delivery!.id);
   const second = await hive.wait(brain.agent, 200, undefined, { compact: true });
   assert.equal(second.idle, false);
   rmSync(dir, { recursive: true, force: true });

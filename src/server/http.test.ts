@@ -61,6 +61,8 @@ test("HTTP protocol: join, isolate, wait, Human admin", async () => {
     assert.equal(worker.status, 200);
     const brainTok = brain.data.token as string;
     const workerTok = worker.data.token as string;
+    const sessionId = crypto.randomUUID();
+    assert.equal((await json(base, "POST", "/api/agent/inbox/session", { sessionId }, workerTok)).status, 200);
     const workerName = worker.data.agent.name as string;
     const brainName = brain.data.agent.name as string;
 
@@ -79,7 +81,7 @@ test("HTTP protocol: join, isolate, wait, Human admin", async () => {
     await json(base, "POST", "/api/ui/channels/general/messages", {
       body: "public chatter only",
     });
-    const idle = await json(base, "POST", "/api/agent/wait", { timeoutMs: 400 }, workerTok);
+    const idle = await json(base, "POST", "/api/agent/wait", { timeoutMs: 400, sessionId }, workerTok);
     assert.equal(idle.data.idle, true);
 
     await json(base, "POST", "/api/agent/dms", { name: workerName }, brainTok);
@@ -98,7 +100,7 @@ test("HTTP protocol: join, isolate, wait, Human admin", async () => {
       { body: "build the login form" },
       brainTok,
     );
-    const mail = await json(base, "POST", "/api/agent/wait", { timeoutMs: 800 }, workerTok);
+    const mail = await json(base, "POST", "/api/agent/wait", { timeoutMs: 800, sessionId }, workerTok);
     assert.equal(mail.data.idle, false);
     const bodies = [...mail.data.messages, ...mail.data.mentions].map((m: { body: string }) => m.body);
     assert.ok(bodies.some((b: string) => /login/.test(b)));

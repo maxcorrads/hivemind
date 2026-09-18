@@ -1,5 +1,5 @@
 import type { TelegramHealth } from "./telegram-health.ts";
-import type { Agent, BotCredentialView, AttachmentMeta, Channel, Message, Project, SearchHit, Thread, ThreadStatus } from "../src/shared/types.ts";
+import type { Agent, BotCredentialView, AttachmentMeta, Channel, Message, Project, SearchHit, Thread, ThreadStatus, InboxStatus } from "../src/shared/types.ts";
 import type { MentionPage, ReadSnapshot } from "../src/shared/read-state.ts";
 import { resolveUploadMime } from "../src/shared/mime.ts";
 import type { LaunchContext } from "../src/shared/launch-prompt.ts";
@@ -22,6 +22,7 @@ export type Snapshot = ReadSnapshot & {
   agents: Agent[];
   channels: Channel[];
   queued: Record<string, number>;
+  inbox?: Record<string, InboxStatus>;
   telegram?: { running: boolean; configured: boolean } & TelegramHealth;
 };
 
