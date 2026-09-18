@@ -1,21 +1,77 @@
 {
   "repairs": [
     {
-      "pr": 54,
-      "branch": "fix/issue-12-telegram-rate-limit-scheduling",
-      "expectedHead": "a0b5b615007c9f3e7254e9d035837eca189d5a40",
-      "expectedTree": "06dae6a21cf5d8cde5c1a5dad22ed2996b2dfee3",
+      "pr": 57,
+      "branch": "fix/issue-14-telegram-routing",
+      "expectedHead": "842e7505467d9a5c6ab13cd804305c9e62dda83f",
+      "expectedTree": "0eb7db7eab83eb2adda53e64233a0a73efe6bf8c",
       "contentBase": {
-        "pr": 58,
-        "expectedTree": "352998722da0c2328430a7b754570e641f19e484"
+        "pr": 54,
+        "expectedTree": "06dae6a21cf5d8cde5c1a5dad22ed2996b2dfee3"
       },
       "patchParts": [
-        "54/part-0.txt",
-        "54/part-1.txt",
-        "54/part-2.txt",
-        "54/part-3.txt"
+        "57/part-0.txt",
+        "57/part-1.txt",
+        "57/part-2.txt",
+        "57/part-3.txt",
+        "57/part-4.txt",
+        "57/part-5.txt",
+        "57/part-6.txt",
+        "57/part-7.txt",
+        "57/part-8.txt"
       ],
-      "message": "Honor Telegram retry deadlines across poll and outbound paths without repeating confirmed parts"
+      "message": "Serialize verified Telegram route transitions and namespace bot state"
+    },
+    {
+      "pr": 59,
+      "branch": "fix/issue-17-telegram-polling",
+      "expectedHead": "c0b999901416f56512717282c85be4fc2d8a34d7",
+      "expectedTree": "522f92dd01762c07b28a95263be02a2613e48771",
+      "contentBase": {
+        "pr": 57,
+        "expectedTree": "0eb7db7eab83eb2adda53e64233a0a73efe6bf8c"
+      },
+      "parents": [
+        {
+          "pr": 48,
+          "expectedTree": "a4451de0365a7d17dcff76f0334b1ca8da895b02"
+        },
+        {
+          "pr": 53,
+          "expectedTree": "9ce84871a6559a76ab1e3033a6edc435eac628dc"
+        }
+      ],
+      "patchParts": [
+        "59s/p000.txt",
+        "59s/p001.txt",
+        "59s/p002.txt",
+        "59s/p003.txt",
+        "59s/p004.txt",
+        "59s/p005.txt",
+        "59s/p006.txt",
+        "59s/p007.txt",
+        "59s/p008.txt",
+        "59s/p009.txt",
+        "59s/p010.txt",
+        "59s/p011.txt",
+        "59s/p012.txt",
+        "59s/p013.txt",
+        "59s/p014.txt",
+        "59s/p015.txt",
+        "59s/p016.txt",
+        "59s/p017.txt",
+        "59s/p018.txt",
+        "59s/p019.txt",
+        "59s/p020.txt",
+        "59s/p021.txt",
+        "59s/p022.txt",
+        "59s/p023.txt",
+        "59s/p024.txt",
+        "59s/p025.txt",
+        "59s/p026.txt",
+        "59s/p027.txt"
+      ],
+      "message": "Commit Telegram quarantine atomically with scoped recovery and live health"
     }
   ]
 }
