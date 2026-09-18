@@ -234,7 +234,8 @@ test("query capabilities and encoded/suffix paths cannot bypass the Human gate",
     assert.equal(res.status, 401);
     assert.ok(!res.body.includes(value));
   }
-  for (const path of ["/%ZZ", "/%2fapi/ui/snapshot", "/api%5cui/snapshot"]) {
+  for (const path of ["/%ZZ", "/%2fapi/ui/snapshot", "/api%5cui/snapshot",
+    "/api/ui/files/%2f..%2f..%2f..%2fagent/join", "/api/ui/channels/.%2fmessages"]) {
     assert.equal((await send(f.base, path)).status, 400);
   }
   assert.equal(f.calls(), 0);

@@ -111,14 +111,20 @@ test("real WebSocket handshakes reject unauthorized combinations before any subs
   assert.equal((await handshake(t, f.base, { cookie, origin: f.base }, "/ws?session=ignored")).status, 403);
   const live = await handshake(t, f.base, { cookie, origin: f.base });
   assert.equal(live.status, 101);
-  const event = nextEvent(live.ws, "project");
   const created = await json(f.base, "/api/ui/projects", {
     method: "POST", headers: { cookie, origin: f.base, "content-type": "application/json" },
     body: JSON.stringify({ name: "Security test", slug: "security-test" }),
   });
   assert.equal(created.status, 200);
-  assert.equal((await event).type, "project");
   assert.ok(f.hive.listProjects().some((p) => p.slug === "security-test"));
+  // Current Hive emits a project event on deletion, not on creation.
+  const event = nextEvent(live.ws, "project");
+  const deleted = await json(f.base, "/api/ui/projects/security-test", {
+    method: "DELETE", headers: { cookie, origin: f.base },
+  });
+  assert.equal(deleted.status, 200);
+  assert.deepEqual((await event).payload, { deleted: "security-test" });
+  assert.equal(f.hive.listProjects().some((p) => p.slug === "security-test"), false);
 
   const brain = f.hive.join({ role: "brain", project: "chapter" }).agent;
   const dm = f.hive.openDm(f.hive.getAgent("human"), brain.name);

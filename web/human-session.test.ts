@@ -322,4 +322,5 @@ test("failed refresh and failed socket construction each recover through the rec
   await connected.promise;
   assert.equal(refreshes, 3);
   assert.equal(sockets, 2);
+  assert.equal(failures, 2);
 });
