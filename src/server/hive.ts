@@ -1558,24 +1558,22 @@ export class Hive {
       scan = rows[rows.length - 1]!.seq;
     }
 
-    let more = 0;
-    let countScan = newCursor;
-    for (let page = 0; page < 40 && more < 99; page += 1) {
-      const rows = this.db.prepare(
-        `SELECT * FROM messages WHERE seq > ? AND channel_id IN (${placeholders}) AND author_id != ?
-         ORDER BY seq ASC LIMIT 100`,
-      ).all(countScan, ...ids, actor.id) as MessageRow[];
-      if (rows.length === 0) break;
-      for (const messageRow of rows) {
-        if (!this.isFor(actor, this.mapMessage(messageRow))) continue;
-        more += 1;
-        if (more >= 99) break;
-      }
-      countScan = rows[rows.length - 1]!.seq;
-      if (rows.length < 100) break;
-    }
+    const remaining = this.db.prepare(
+      `SELECT COUNT(*) AS n
+       FROM messages m
+       JOIN channels c ON c.id = m.channel_id
+       WHERE m.seq > ?
+         AND m.channel_id IN (${placeholders})
+         AND m.author_id != ?
+         AND (
+           EXISTS (SELECT 1 FROM json_each(m.mentions) WHERE value = ?)
+           OR m.kind = 'control'
+           OR c.type IN ('dm', 'private')
+           OR (? = 'brain' AND c.type = 'brains')
+         )`,
+    ).get(newCursor, ...ids, actor.id, actor.id, actor.role) as { n: number };
 
-    return { messages: delivered, more, advanceCursor: newCursor };
+    return { messages: delivered, more: remaining.n, advanceCursor: newCursor };
   }
 
   private claimDelivery(
