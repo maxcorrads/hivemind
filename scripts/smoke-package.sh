@@ -55,4 +55,26 @@ fi
 HIVEMIND_HOME="$home_root" HIVEMIND_URL="http://127.0.0.1:$port" "$hivemind" doctor | grep -q "^ok "
 curl --fail --silent "http://127.0.0.1:$port/" | grep -qi "<!doctype html>"
 
+# Check the installed package, not the source worktree. A SPA fallback must
+# not disguise a missing JS/CSS asset as a successful HTTP 200 response.
+HIVEMIND_URL="http://127.0.0.1:$port" node --input-type=module <<'NODE'
+import assert from "node:assert/strict";
+const origin = process.env.HIVEMIND_URL;
+const page = await fetch(origin, { signal: AbortSignal.timeout(5000) });
+assert.equal(page.status, 200);
+const html = await page.text();
+const assets = [...new Set([...html.matchAll(/(?:src|href)="(\/assets\/[^"?]+\.(?:js|css))"/g)].map((match) => match[1]))];
+assert.ok(assets.some((asset) => asset.endsWith(".js")), "Packaged HTML has no built JS entry");
+for (const asset of assets) {
+  const response = await fetch(new URL(asset, origin), { signal: AbortSignal.timeout(5000) });
+  assert.equal(response.status, 200, asset);
+  const expected = asset.endsWith(".css") ? /text\/css/ : /(?:text|application)\/javascript/;
+  assert.match(response.headers.get("content-type") ?? "", expected, asset);
+  const body = await response.text();
+  assert.ok(body.length > 0, `Empty asset: ${asset}`);
+  assert.doesNotMatch(body, /^\s*<!doctype html>/i, `SPA fallback returned for ${asset}`);
+}
+console.log(`Installed UI assets verified: ${assets.length}`);
+NODE
+
 echo "Package smoke test passed"

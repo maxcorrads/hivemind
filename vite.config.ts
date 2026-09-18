@@ -16,6 +16,8 @@ export default defineConfig({
     },
   },
   build: {
+    // Preserve Vite 7's baseline rather than silently dropping older browsers.
+    target: ["chrome107", "edge107", "firefox104", "safari16"],
     outDir: "../dist/web",
     emptyOutDir: true,
   },
