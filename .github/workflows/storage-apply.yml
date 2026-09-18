@@ -31,10 +31,15 @@ jobs:
           if (![56, 62, 64].includes(m.pr)) throw Error('Unexpected PR');
           if (![m.base, m.head].every(s => /^[a-f0-9]{40}$/.test(s))) throw Error('Invalid SHA');
           if (!/^[a-f0-9]{64}$/.test(m.digest)) throw Error('Invalid digest');
-          // Correct the identified extra character in the first transport submission.
-          // The original locally tested patch SHA-256 remains mandatory below.
+          // Repair identified transport transcription errors only. The original
+          // locally tested, uncompressed patch SHA-256 remains mandatory below.
           if (m.digest === '894c9a6272e5d2b66001719a3de246950d590e92f919a5ee9de92b044c473b3e') {
             m.patch = m.patch.replace('Dzm6vA48', 'Dzm6v48');
+          }
+          if (m.digest === 'aa8504ccdf9980f84f79c60bff1eac5ae0732b9ea57489b69d0e5873b8f7a416') {
+            m.patch = m.patch.replace('7ytftakruff933', '7ytft933')
+              .replace('DgvAyB0qWVA', 'DgvAyB8qWVA')
+              .replace('H6ah7efGqMdAo', 'H6ah7efGqDqMdAo');
           }
           const patch = zlib.gunzipSync(Buffer.from(m.patch, 'base64'), { maxOutputLength: 2000000 });
           if (crypto.createHash('sha256').update(patch).digest('hex') !== m.digest) throw Error('Patch digest mismatch');
