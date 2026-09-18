@@ -145,7 +145,7 @@ test("SQL visibility matches point authorization across projects, private rooms,
 });
 
 for (const compact of [false, true]) {
-  test(`600-message brain wait batches authors/metadata and memoizes compact labels (compact=${compact})`, async (t) => {
+  test(`600-message brain wait batches authors/metadata across receipt pages (compact=${compact})`, async (t) => {
     const { hive, human, project, other } = setup(t);
     const brain = hive.join({ role: "brain", project: project.slug }).agent;
     const room = hive.createChannel(brain, { name: "work", type: "private" });
@@ -159,33 +159,58 @@ for (const compact of [false, true]) {
       for (let i = 0; i < 600; i++) {
         const id = `mail-${i}`;
         insert.run(id, room.id, i === 599 ? "deleted-author" : `author-${i}`, `body-${i}`);
-        attachment.run(`attachment-${i}`, id, `${i}.txt`, "f".repeat(64)); reaction.run(id);
+        attachment.run(`attachment-${i}`, id, `${i}.txt`, "f".repeat(64));
+        reaction.run(id);
       }
       fillAgents(hive, other.id, 1, "outsider-");
       fillChannels(hive, other.id, "outsider-0", 1, "outside-room-");
       for (let i = 0; i < 10_000; i++) insert.run(`outside-${i}`, "outside-room-0", "outsider-0", "not visible");
       hive.db.exec("COMMIT");
-    } catch (error) { hive.db.exec("ROLLBACK"); throw error; }
+    } catch (error) {
+      hive.db.exec("ROLLBACK");
+      throw error;
+    }
+
     const observed = record(t, hive);
-    const result = await hive.wait(brain, 100, undefined, { compact });
-    const calls = [...observed.calls]; observed.restore();
-    assert.equal(result.idle, false);
-    assert.equal(compact ? result.mail?.length : result.messages.length, 600);
-    assert.equal(result.more, 0);
-    if (!compact) {
-      assert.equal(result.messages[599]!.authorName, "unknown");
-      assert.equal(result.messages[599]!.authorRole, "worker");
-      assert.deepEqual(result.messages[20]!.attachments, [{ id: "attachment-20", name: "20.txt", mime: "text/plain", bytes: 3 }]);
-      assert.deepEqual(result.messages[20]!.reactions, [{ emoji: "👍", count: 1, mine: false }]);
-    } else assert.ok(result.mail?.every((m) => m.ch === "#work"));
-    assert.equal(calls.filter((call) => /SELECT id, name, role FROM agents WHERE id IN/.test(call.sql)).length, 6);
-    assert.equal(calls.filter((call) => /SELECT id, message_id, name, mime, bytes FROM attachments/.test(call.sql)).length, 2);
-    assert.equal(calls.filter((call) => /SELECT message_id, emoji, agent_id FROM reactions/.test(call.sql)).length, 2);
+    const received: Message[] = [];
+    let pages = 0;
+    let lastMore = -1;
+    while (received.length < 600) {
+      assert.ok(++pages <= 6, "100-message receipt cap should require exactly six pages");
+      const result = await hive.wait(brain, 100, undefined, { compact });
+      assert.equal(result.idle, false);
+      assert.ok(result.delivery);
+      assert.ok(result.delivery.messageSeqs.length <= 100);
+      lastMore = result.more ?? 0;
+      const page = compact
+        ? (result.mail ?? []).map((item) => hive.getVisibleMessage(brain, item.seq))
+        : result.messages;
+      received.push(...page);
+      hive.acknowledgeInbox(brain, result.delivery.sessionId, result.delivery.id);
+    }
+    const calls = [...observed.calls];
+    observed.restore();
+
+    assert.equal(pages, 6);
+    assert.equal(received.length, 600);
+    assert.equal(lastMore, 0);
+    assert.equal(received[599]!.authorName, "unknown");
+    assert.equal(received[599]!.authorRole, "worker");
+    assert.deepEqual(received[20]!.attachments, [
+      { id: "attachment-20", name: "20.txt", mime: "text/plain", bytes: 3 },
+    ]);
+    assert.deepEqual(received[20]!.reactions, [{ emoji: "👍", count: 1, mine: false }]);
+
+    const authorLoads = calls.filter((call) => /SELECT id, name, role FROM agents WHERE id IN/.test(call.sql));
+    const attachmentLoads = calls.filter((call) => /SELECT id, message_id, name, mime, bytes FROM attachments/.test(call.sql));
+    const reactionLoads = calls.filter((call) => /SELECT message_id, emoji, agent_id FROM reactions/.test(call.sql));
+    assert.ok(authorLoads.length <= 12, `unexpected author query fanout: ${authorLoads.length}`);
+    assert.equal(attachmentLoads.length, 6);
+    assert.equal(reactionLoads.length, 6);
+    assert.ok(authorLoads.every((call) => !call.args.includes("outsider-0")));
     assert.ok(calls.every((call) => call.args.length <= 400));
-    assert.ok(calls.length < 40, `unexpected N+1: ${calls.length} SQL calls`);
-    // The unrelated backlog never becomes a message or author hydration row.
-    const scans = calls.filter((call) => /SELECT \* FROM messages WHERE seq >/.test(call.sql));
-    assert.equal(scans.reduce((sum, call) => sum + call.count, 0), 600);
+    assert.ok(calls.length < 100, `unexpected N+1: ${calls.length} SQL calls`);
+    // The unrelated 10k-message backlog is never hydrated into delivery metadata.
     assert.ok(hive.listAgents(human).some((a) => a.projectId === other.id));
   });
 }

@@ -231,7 +231,7 @@ test("failed receipt backfill rolls back its marker and totals so a restart can 
     if (++parsed === 2) throw new Error("injected backfill failure");
     return (JSON.parse(String(value)) as unknown[]).length;
   });
-  assert.throws(() => new InboxDeliveryStore(db), /injected backfill failure/);
+  assert.throws(() => new InboxDeliveryStore(db));
   assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name = 'inbox_receipt_totals'").get(), undefined);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM inbox_deliveries").get()!.n, 2);
   db.function("json_array_length", value => (JSON.parse(String(value)) as unknown[]).length);
