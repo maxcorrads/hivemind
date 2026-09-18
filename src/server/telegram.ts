@@ -157,7 +157,7 @@ export function reactionIgnoreKey(telegramMessageId: number, emojis: string[]): 
 }
 
 export function inboundBody(firstName: string | undefined, text: string): string {
-  const name = (firstName ?? "Human").replace(/[\[\]]/g, "").slice(0, 40);
+  const name = (firstName ?? "Human").replaceAll("[", "").replaceAll("]", "").slice(0, 40);
   const trimmed = text.trim();
   return (trimmed ? `[${name}] ${trimmed}` : `[${name}]`).slice(0, 4000);
 }
