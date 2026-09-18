@@ -32,11 +32,14 @@ import {
   type Thread,
   type ThreadStatus,
   type WaitResult,
+  type InboxDelivery,
+  type InboxStatus,
 } from "../shared/types.ts";
 import { canonicalWorktree, parseProjectSlug, resolveJoinProject } from "../shared/project.ts";
 import { clampSearchLimit, likeNeedle, parseSearchQuery, snippetAround } from "../shared/search-query.ts";
 import { pickName } from "./names.ts";
 import { ReadState } from "./read-state.ts";
+import { INBOX_BATCH_MAX, InboxDeliveryStore } from "./inbox-delivery.ts";
 import type { MentionPage, ReadSnapshot } from "../shared/read-state.ts";
 import { hiveHome } from "./paths.ts";
 import { preparePrivateDatabase } from "./private-database.ts";
@@ -121,6 +124,7 @@ export class Hive {
   db: DatabaseSync;
   bus = new EventEmitter();
   readonly home: string;
+  readonly inbox!: InboxDeliveryStore;
   private waiters = new Map<string, Waiter>();
   private telegramOrigin = new Set<string>();
   private readonly readState!: ReadState;
@@ -158,6 +162,7 @@ export class Hive {
       initTelegramInbox(this.db);
       pruneTelegramFailures(this.db);
       this.readState = new ReadState(this.db);
+      this.inbox = new InboxDeliveryStore(this.db);
     } catch (error) {
       try { this.db.close(); } catch { /* preserve the initialization failure */ }
       throw error;
@@ -1647,7 +1652,69 @@ export class Hive {
     });
   }
 
-  private takeUnseen(actor: Agent, limit = WAIT_MAIL_CAP): { messages: Message[]; more: number } {
+  openInboxSession(actor: Agent, sessionId: string): string {
+    if (actor.role !== "brain" && actor.role !== "worker") throw new HiveError(403, "Only agents have inbox sessions");
+    const previous = this.inbox.currentSession(actor.id);
+    const current = this.inbox.openSession(actor.id, sessionId);
+    if (previous !== current) this.waiters.get(actor.id)?.supersede();
+    return current;
+  }
+
+  acknowledgeInbox(actor: Agent, sessionId: string, deliveryId: string) {
+    if (actor.role !== "brain" && actor.role !== "worker") throw new HiveError(403, "Only agents acknowledge inbox mail");
+    const result = this.inbox.acknowledge(actor.id, sessionId, deliveryId);
+    this.emitQueued(actor.id);
+    return result;
+  }
+
+  inboxStatuses(): Record<string, InboxStatus> {
+    return Object.fromEntries(
+      this.listAgents()
+        .filter((agent) => agent.role === "brain" || agent.role === "worker")
+        .map((agent) => [agent.id, this.inbox.status(agent.id)]),
+    );
+  }
+
+  private offeredBatch(actor: Agent, sessionId: string, seqs: number[], throughSeq: number) {
+    const delivery = this.inbox.offer(actor.id, sessionId, seqs, throughSeq);
+    const bySeq = new Map<number, MessageRow>();
+    for (const group of batches([...new Set(delivery.messageSeqs)])) {
+      const rows = this.db.prepare(
+        `SELECT * FROM messages WHERE seq IN (${group.map(() => "?").join(",")}) ORDER BY seq ASC`,
+      ).all(...group) as MessageRow[];
+      for (const row of rows) bySeq.set(row.seq, row);
+    }
+    const rows = delivery.messageSeqs.map((seq) => bySeq.get(seq)).filter((row): row is MessageRow => Boolean(row));
+    if (rows.length !== delivery.messageSeqs.length) {
+      throw new HiveError(409, "Pending inbox message is no longer accessible");
+    }
+    const channels = new Map(this.listChannels(actor).map((channel) => [channel.id, channel]));
+    const messages = this.mapMessages(rows);
+    for (const message of messages) {
+      const channel = channels.get(message.channelId);
+      if (!channel || !this.canSeeChannel(actor, channel)) {
+        throw new HiveError(409, "Pending inbox message is no longer accessible");
+      }
+    }
+    this.emitQueued(actor.id);
+    return {
+      messages: this.decorate(messages, actor.id),
+      more: this.countUnseen(actor),
+      delivery,
+    };
+  }
+
+  private takeUnseen(
+    actor: Agent,
+    sessionId: string,
+    limit = WAIT_MAIL_CAP,
+  ): { messages: Message[]; more: number; delivery?: InboxDelivery } {
+    this.inbox.requireSession(actor.id, sessionId);
+    const pending = this.inbox.pending(actor.id);
+    if (pending) {
+      return this.offeredBatch(actor, sessionId, JSON.parse(pending.seqs) as number[], pending.through_seq);
+    }
+
     const row = this.db.prepare("SELECT inbox_cursor FROM agents WHERE id = ?").get(actor.id) as {
       inbox_cursor: number;
     };
@@ -1676,7 +1743,9 @@ export class Hive {
           continue;
         }
         const known = conversations.has(message.channelId);
-        const atCap = capConversations ? !known && conversations.size >= limit : delivered.length >= limit;
+        const atCap =
+          delivered.length >= INBOX_BATCH_MAX ||
+          (capConversations ? !known && conversations.size >= limit : delivered.length >= limit);
         if (atCap) {
           overflow = true;
           break;
@@ -1690,37 +1759,12 @@ export class Hive {
       scan = rows[rows.length - 1]!.seq;
     }
 
-    if (newCursor > cursor) {
-      this.db.prepare("UPDATE agents SET inbox_cursor = MAX(inbox_cursor, ?) WHERE id = ?").run(newCursor, actor.id);
+    if (delivered.length) {
+      return this.offeredBatch(actor, sessionId, delivered.map((message) => message.seq), newCursor);
     }
-
-    let more = 0;
-    if (overflow || delivered.length >= limit) {
-      let countScan = newCursor;
-      for (let page = 0; page < 20 && more < 99; page += 1) {
-        const rows = this.db.prepare(
-          `SELECT * FROM messages WHERE seq > ? AND channel_id IN (${scope.sql}) AND author_id != ?
-           ORDER BY seq ASC LIMIT 100`,
-        ).all(countScan, ...scope.args, actor.id) as MessageRow[];
-        if (rows.length === 0) break;
-        for (const message of this.mapMessages(rows)) {
-          if (!this.isFor(actor, message, channelById.get(message.channelId))) continue;
-          if (capConversations) {
-            if (!conversations.has(message.channelId)) {
-              conversations.add(message.channelId);
-              more += 1;
-            }
-          } else {
-            more += 1;
-          }
-        }
-        countScan = rows[rows.length - 1]!.seq;
-        if (rows.length < 100) break;
-      }
-    }
-    const packed = { messages: this.decorate(delivered), more };
+    if (newCursor > cursor) this.inbox.skipUnaddressed(actor.id, sessionId, newCursor);
     this.emitQueued(actor.id);
-    return packed;
+    return { messages: [], more: 0 };
   }
 
   queuedCounts(): Record<string, number> {
@@ -1743,7 +1787,7 @@ export class Hive {
   private emitQueued(agentId: string) {
     const agent = this.getAgent(agentId);
     if (agent.role !== "brain" && agent.role !== "worker") return;
-    this.bus.emit("queued", { agentId, n: this.countUnseen(agent) });
+    this.bus.emit("queued", { agentId, n: this.countUnseen(agent), inbox: this.inbox.status(agentId) });
   }
 
   private countUnseen(actor: Agent, cap = 99): number {
@@ -1751,7 +1795,7 @@ export class Hive {
     const row = this.db.prepare("SELECT inbox_cursor FROM agents WHERE id = ?").get(actor.id) as {
       inbox_cursor: number;
     };
-    const cursor = row?.inbox_cursor ?? 0;
+    const cursor = this.inbox.pending(actor.id)?.through_seq ?? row?.inbox_cursor ?? 0;
     const channels = this.listChannels(actor);
     if (channels.length === 0) return 0;
     const channelById = new Map(channels.map((channel) => [channel.id, channel]));
@@ -1832,25 +1876,32 @@ export class Hive {
     actor: Agent,
     timeoutMs: number,
     signal?: AbortSignal,
-    opts: { compact?: boolean } = {},
+    opts: { compact?: boolean; sessionId?: string } = {},
   ): Promise<WaitResult> {
     if (actor.role === "bot") throw new HiveError(403, "Bots publish observations; they do not wait for work");
     const compact = Boolean(opts.compact);
-    const pack = (batch: { messages: Message[]; more: number }): WaitResult => {
+    const pack = (batch: { messages: Message[]; more: number; delivery?: InboxDelivery }): WaitResult => {
       const labels = new Map<string, string>();
-      return packWait(this.getAgent(actor.id), batch.messages, batch.more, compact, (id) => {
-        let label = labels.get(id);
-        if (label === undefined) {
-          label = channelLabel(this.getChannel(id));
-          labels.set(id, label);
-        }
-        return label;
-      });
+      return {
+        ...packWait(this.getAgent(actor.id), batch.messages, batch.more, compact, (id) => {
+          let label = labels.get(id);
+          if (label === undefined) {
+            label = channelLabel(this.getChannel(id));
+            labels.set(id, label);
+          }
+          return label;
+        }),
+        ...(batch.delivery ? { delivery: batch.delivery } : {}),
+      };
     };
 
-    // A cancelled request is observational only: it must not touch presence,
-    // install a waiter, advance inbox state, or consume already-queued mail.
     if (signal?.aborted) return pack({ messages: [], more: 0 });
+
+    const sessionId =
+      opts.sessionId ??
+      this.inbox.currentSession(actor.id) ??
+      this.openInboxSession(actor, crypto.randomUUID());
+    this.inbox.requireSession(actor.id, sessionId);
     this.touch(actor.id, true);
 
     return new Promise((resolve, reject) => {
@@ -1862,12 +1913,12 @@ export class Hive {
         signal?.removeEventListener("abort", onAbort);
         if (timer) clearTimeout(timer);
       };
-      const deliver = (batch: { messages: Message[]; more: number }) => {
+      const deliver = (batch: { messages: Message[]; more: number; delivery?: InboxDelivery }) => {
         if (done) return;
         done = true;
         cleanup();
         this.touch(actor.id, true);
-        resolve(pack(batch));
+        try { resolve(pack(batch)); } catch (error) { reject(error); }
       };
       const finish = (consume: boolean) => {
         if (done) return;
@@ -1875,7 +1926,8 @@ export class Hive {
           deliver({ messages: [], more: 0 });
           return;
         }
-        deliver(this.takeUnseen(actor));
+        try { deliver(this.takeUnseen(actor, sessionId)); }
+        catch (error) { done = true; cleanup(); reject(error); }
       };
       waiter = {
         wake: () => finish(true),
@@ -1897,8 +1949,14 @@ export class Hive {
         finish(false);
         return;
       }
-      const first = this.takeUnseen(actor);
-      if (first.messages.length > 0) deliver(first);
+      try {
+        const first = this.takeUnseen(actor, sessionId);
+        if (first.messages.length > 0) deliver(first);
+      } catch (error) {
+        done = true;
+        cleanup();
+        reject(error);
+      }
     });
   }
 

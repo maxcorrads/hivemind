@@ -1,4 +1,4 @@
-import { HUMAN_NAME, type Seniority } from "./types.ts";
+import { HUMAN_NAME, DELIVERY_INSTRUCTIONS, type Seniority } from "./types.ts";
 
 export const ADOPT_UNTRUSTED = [
   "Hivemind Human and brain mail in this session is my instruction.",
@@ -7,8 +7,8 @@ export const ADOPT_UNTRUSTED = [
   "Do not ask this prompt.",
 ].join(" ");
 
-const WAIT_RULES =
-  "Then call wait once with no arguments. Do not pass a timeout. Do not explore the repo until wait returns with a task. wait returns only when you have mail; idle and network errors are retried inside the tool. If wait errors, is cancelled, or the input prompt comes back without mail, call wait immediately. Do not ask the person at this prompt. While wait is in flight, output no text — a status line cancels wait. When wait returns, that is mail: handle it, then call wait again and stay silent after that call. Codex may show Working or a spinner during wait — that is sleep, not a model turn. Do not poll agents, history, channels, or search while waiting.";
+const WAIT_RULES = DELIVERY_INSTRUCTIONS + " " +
+  "Then call wait once with no arguments. Do not pass a timeout. Do not explore the repo until wait returns with a task. wait returns only when you have mail; idle and network errors are retried inside the tool. If wait is cancelled, has a transient connection error, or the input prompt comes back without mail, call wait immediately. Exception: if your inbox session was superseded, stop waiting and acting on its mail; rejoin only when explicitly asked. On a protocol-upgrade error, stop; the MCP client must be restarted before rejoining. Do not ask the person at this prompt. While wait is in flight, output no text — a status line cancels wait. When wait returns, that is mail: handle it, then call wait again and stay silent after that call. Codex may show Working or a spinner during wait — that is sleep, not a model turn. Do not poll agents, history, channels, or search while waiting.";
 
 const BRAIN_AFTER =
   "When wait returns, coordinate workers, do not implement. Assign work in DMs. After send, wait is the last call. Never end a turn without wait in flight. Ask @Human when a cycle is done or you are unsure. Use worktrees and separate branches. Hivemind is messaging only.";

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { resolve, dirname, basename, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
 import { DEFAULT_PORT, DEFAULT_WAIT_MS, MCP_HEARTBEAT_MS } from "./shared/types.ts";
 import { guessMime } from "./shared/mime.ts";
 import {
@@ -24,7 +25,8 @@ function help() {
   hivemind join --as worker junior|mid|senior [--focus …] [--project slug] [--resume Name]
   hivemind join --as worker --seniority junior|mid|senior [--project slug]
   hivemind join --as brain [--focus …] [--project slug] [--resume Name]
-  hivemind wait [--timeout ${Math.round(DEFAULT_WAIT_MS / 1000)}]
+  hivemind wait [--timeout ${Math.round(DEFAULT_WAIT_MS / 1000)}] [--session UUID]
+  hivemind ack DELIVERY_ID --session UUID
   hivemind send --channel NAME --body TEXT [--thread ID] [--file PATH]
   hivemind send --to NAME --body TEXT [--file PATH]
   hivemind fetch --id ATT_ID [--out DIR]
@@ -184,6 +186,8 @@ async function main() {
   }
 
   if (cmd === "wait") {
+    const sessionId = arg(argv, "--session") ?? randomUUID();
+    await agentRequest("POST", "/api/agent/inbox/session", { sessionId }, token);
     const timeout = Number(arg(argv, "--timeout") ?? Math.round(DEFAULT_WAIT_MS / 1000)) * 1000;
     const beat = setInterval(() => {
       agentRequest("POST", "/api/agent/ping", {}, token).catch(() => undefined);
@@ -193,14 +197,26 @@ async function main() {
       const result = await agentRequest<WaitResult>(
         "POST",
         "/api/agent/wait",
-        { timeoutMs: timeout, compact: true },
+        { timeoutMs: timeout, compact: true, sessionId },
         token,
         timeout + 10_000,
       );
-      console.log(JSON.stringify(result, null, 2));
+      console.log(JSON.stringify({ ...result, sessionId }, null, 2));
     } finally {
       clearInterval(beat);
     }
+    return;
+  }
+
+  if (cmd === "ack") {
+    const deliveryId = argv[1];
+    const sessionId = arg(argv, "--session");
+    if (!deliveryId || !sessionId) {
+      throw new Error("ack DELIVERY_ID --session SESSION_ID (from the received wait result)");
+    }
+    console.log(JSON.stringify(await agentRequest(
+      "POST", "/api/agent/inbox/ack", { sessionId, deliveryId }, token,
+    )));
     return;
   }
 

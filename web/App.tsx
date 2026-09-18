@@ -1,12 +1,13 @@
 import { newerTelegramHealth, telegramDegraded, type TelegramHealth } from "./telegram-health.ts";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
-import type { Agent, Channel, Message, SearchHit, Thread, ThreadStatus } from "../src/shared/types.ts";
+import type { Agent, Channel, Message, SearchHit, Thread, ThreadStatus, InboxStatus } from "../src/shared/types.ts";
 import { REACTION_EMOJIS } from "../src/shared/types.ts";
 import { isLiveSearchQuery, parseSearchQuery } from "../src/shared/search-query.ts";
 import { api, connectWs, type ChannelPayload, type Snapshot, type TelegramSettings } from "./api.ts";
 import { LaunchSheet } from "./LaunchSheet.tsx";
 import { BotOrigin, BotSetup, BotCredentials } from "./Bots.tsx";
 import { ProjectPlugins } from "./ProjectPlugins.tsx";
+import { InboxReceipt } from "./InboxReceipt.tsx";
 import { loadMailLog, mergeMailLog, saveMailLog } from "./mail-log.ts";
 import type { MentionPage, ReadSnapshot } from "../src/shared/read-state.ts";
 import { createReadFence, createReadRefresh, createReceiptQueue, createRequestGate, readFields } from "../src/shared/read-client.ts";
@@ -808,6 +809,7 @@ export function App() {
                       onCreateBot={() => setBotProject(project.id)}
                       onManageBot={setCredentialBot}
                       queued={snap.queued ?? {}}
+                      inbox={snap.inbox}
                       onOpen={onAgent}
                       confirmClear={confirmClear}
                       setConfirmClear={setConfirmClear}
@@ -1899,6 +1901,7 @@ export function AgentList({
   onCreateBot,
   onManageBot,
   queued,
+  inbox = {},
   onOpen,
   confirmClear,
   setConfirmClear,
@@ -1909,6 +1912,7 @@ export function AgentList({
   onCreateBot: () => void;
   onManageBot?: (a: Agent) => void;
   queued: Record<string, number>;
+  inbox?: Record<string, InboxStatus>;
   onOpen: (a: Agent) => void;
   confirmClear: string | null;
   setConfirmClear: (n: string | null) => void;
@@ -1926,7 +1930,7 @@ export function AgentList({
       {human && <PersonRow agent={human} onOpen={() => undefined} self />}
       {brains.length > 0 && <div className="subh">brain</div>}
       {brains.map((a) => (
-        <PersonRow key={a.id} agent={a} queued={queued[a.id] ?? 0} onOpen={() => onOpen(a)} />
+        <PersonRow key={a.id} agent={a} queued={queued[a.id] ?? 0} inbox={inbox[a.id]} onOpen={() => onOpen(a)} />
       ))}
       {workers.length > 0 && <div className="subh">worker</div>}
       {workers.map((a) => (
@@ -1934,6 +1938,7 @@ export function AgentList({
           key={a.id}
           agent={a}
           queued={queued[a.id] ?? 0}
+          inbox={inbox[a.id]}
           onOpen={() => onOpen(a)}
           confirmClear={confirmClear}
           setConfirmClear={setConfirmClear}
@@ -1962,6 +1967,7 @@ export function AgentList({
 function PersonRow({
   agent,
   queued,
+  inbox,
   onOpen,
   self,
   confirmClear,
@@ -1970,6 +1976,7 @@ function PersonRow({
 }: {
   agent: Agent;
   queued?: number;
+  inbox?: InboxStatus;
   onOpen: () => void;
   self?: boolean;
   confirmClear?: string | null;
@@ -1991,6 +1998,7 @@ function PersonRow({
         )}
         {agent.seniority && <span className="sen">{agent.seniority}</span>}
         {agent.focus && <span className="focus">{agent.focus}</span>}
+        <InboxReceipt status={inbox} />
         {queued ? (
           <em className="queue-badge" title={`${queued} waiting`}>
             {queued > 99 ? "99+" : queued}

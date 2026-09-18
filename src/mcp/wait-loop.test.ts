@@ -24,6 +24,14 @@ test("empty idle-false payloads are not mail", () => {
   assert.equal(waitHasMail(mail()), true);
 });
 
+test("a cancelled MCP wait does not retry or expose mail received after cancellation", async () => {
+  const controller = new AbortController(); let calls = 0;
+  await assert.rejects(waitUntilMail(async () => {
+    calls++; controller.abort(new Error("cancelled by host")); return mail();
+  }, { signal: controller.signal }), /cancelled by host/);
+  assert.equal(calls, 1);
+});
+
 test("waitUntilMail does not return idle to the model", async () => {
   let calls = 0;
   const result = await waitUntilMail(async () => {
