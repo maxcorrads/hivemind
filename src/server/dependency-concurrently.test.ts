@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import { mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
@@ -118,13 +118,25 @@ async function assertPortReleased(port: number) {
   }
 }
 
-function assertGroupStopped(pid: number) {
-  // Ignore already-dead zombies while the OS reaps them. Never kill or inspect
-  // command lines outside the process group created by this test.
-  const members = execFileSync("ps", ["-A", "-o", "pid=,pgid=,stat="], { encoding: "utf8" })
-    .trim().split("\n").map((line) => line.trim().split(/\s+/))
-    .filter((fields) => Number(fields[1]) === pid && !fields[2]?.startsWith("Z"));
-  assert.deepEqual(members, [], "a live process survived in the dev process group");
+async function assertGroupStopped(pid: number, signal: AbortSignal) {
+  // Native helpers can outlive npm's close event while reacting to pipe EOF.
+  // Observe actual group exit within a bound, rather than require a synchronous
+  // snapshot or wait an arbitrary sleep. No extra signal is sent to make it pass.
+  const until = performance.now() + 8_000;
+  let members: string[][] = [];
+  do {
+    const output = await new Promise<string>((resolve, reject) => {
+      execFile("ps", ["-A", "-o", "pid=,pgid=,stat="], {
+        encoding: "utf8", timeout: 1_000, signal,
+      }, (error, stdout) => error ? reject(error) : resolve(stdout));
+    });
+    // Ignore already-dead zombies while the OS reaps them. Do not inspect
+    // command lines outside the process group created by this test.
+    members = output.trim().split("\n").map((line) => line.trim().split(/\s+/))
+      .filter((fields) => Number(fields[1]) === pid && !fields[2]?.startsWith("Z"));
+    if (members.length === 0) return;
+  } while (performance.now() < until);
+  assert.deepEqual(members, [], "a live process survived the bounded dev shutdown");
 }
 
 const workerSource = String.raw`
@@ -185,7 +197,7 @@ for (const mode of ["failure", "SIGINT", "SIGTERM"] as const) {
     assert.match(child.output(), new RegExp(`STOP leader ${expectedSignal}`));
     assert.match(child.output(), new RegExp(`STOP grandchild ${expectedSignal}`));
     for (const port of ports) await assertPortReleased(port);
-    assertGroupStopped(child.pid);
+    await assertGroupStopped(child.pid, t.signal);
   });
 }
 
@@ -223,5 +235,5 @@ test("npm run dev starts the actual server and Vite and leaves no processes afte
   await deadline(child.closed, `npm run dev shutdown: ${child.output()}`);
   await assertPortReleased(Number(backend[2]));
   await assertPortReleased(Number(ui[2]));
-  assertGroupStopped(child.pid);
+  await assertGroupStopped(child.pid, t.signal);
 });
