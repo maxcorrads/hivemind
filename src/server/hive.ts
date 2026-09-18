@@ -173,8 +173,6 @@ export class Hive {
       );
       CREATE INDEX IF NOT EXISTS idx_messages_channel_seq ON messages(channel_id, seq);
       CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
-      CREATE INDEX IF NOT EXISTS idx_agents_project_role ON agents(project_id, role);
-      CREATE INDEX IF NOT EXISTS idx_channels_project_type_name ON channels(project_id, type, name);
       CREATE INDEX IF NOT EXISTS idx_channel_members_agent_channel ON channel_members(agent_id, channel_id);
       CREATE INDEX IF NOT EXISTS idx_messages_author_seq ON messages(author_id, seq);
       CREATE TABLE IF NOT EXISTS telegram_topics (
@@ -264,6 +262,11 @@ export class Hive {
     if (!this.hasColumn("channels", "project_id")) {
       this.db.exec("ALTER TABLE channels ADD COLUMN project_id TEXT");
     }
+    // These columns are introduced above, not by the legacy base schema.
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_agents_project_role ON agents(project_id, role);
+      CREATE INDEX IF NOT EXISTS idx_channels_project_type_name ON channels(project_id, type, name);
+    `);
     const holdSql = this.tableSql("telegram_hold");
     if (!this.hasColumn("telegram_hold", "telegram_chat_id") || /telegram_message_id INTEGER PRIMARY KEY/i.test(holdSql)) {
       const holds = holdSql
@@ -1402,6 +1405,7 @@ export class Hive {
     let cursor = row?.inbox_cursor ?? 0;
     const channels = this.listChannels(actor);
     if (channels.length === 0) return { messages: [], more: 0 };
+    const channelById = new Map(channels.map((channel) => [channel.id, channel]));
     const ids = channels.map((c) => c.id);
     const placeholders = ids.map(() => "?").join(",");
     const delivered: Message[] = [];
@@ -1451,8 +1455,7 @@ export class Hive {
            ORDER BY seq ASC LIMIT 100`,
         ).all(countScan, ...ids, actor.id) as MessageRow[];
         if (rows.length === 0) break;
-        for (const r of rows) {
-          const message = this.mapMessages([r])[0]!;
+        for (const message of this.mapMessages(rows)) {
           if (!this.isFor(actor, message, channelById.get(message.channelId))) continue;
           if (capConversations) {
             if (!conversations.has(message.channelId)) {
