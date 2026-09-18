@@ -346,7 +346,7 @@ test("reconnect converges open channel and thread after missed message reaction 
   await expect(page.getByText("missed while websocket was down", { exact: true })).toBeVisible();
   await expect(page.getByText("thread reply missed while disconnected", { exact: true })).toBeVisible();
   await expect(page.locator("aside.thread select")).toHaveValue("done");
-  await expect(page.locator(".react").filter({ hasText: "✅" })).toHaveCount(1);
+  await expect(page.locator("aside.thread .react").filter({ hasText: "✅" })).toHaveCount(1);
 });
 
 test("HTTP-confirmed send appears without WebSocket echo and stays single after echo plus reconnect", async ({ page }) => {
