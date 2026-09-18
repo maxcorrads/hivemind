@@ -35,7 +35,7 @@ import { pickName } from "./names.ts";
 import { hiveHome } from "./paths.ts";
 import { packWait } from "./wait-format.ts";
 import { STORAGE_VERSION, storageVersion, validateCurrentStorage, migrateProjectStorage } from "./storage-migrations.ts";
-import { assertAllowedMime, commitUpload, openBlob, removeOrphanBlobs, streamUpload } from "./files.ts";
+import { assertAllowedMime, commitUpload, openBlob, removeOrphanBlobs, removeUploadTemp, streamUpload } from "./files.ts";
 
 export { hiveHome } from "./paths.ts";
 
@@ -457,10 +457,7 @@ export class Hive {
     }
 
     try {
-      const used = new Set(
-        (this.db.prepare("SELECT DISTINCT sha256 AS h FROM attachments").all() as { h: string }[]).map((row) => row.h),
-      );
-      removeOrphanBlobs(used, this.home);
+      this.collectUnusedBlobs();
     } catch {
       /* sweep can drop leftover blobs later */
     }
@@ -1558,17 +1555,22 @@ export class Hive {
 
   async createFile(
     actor: Agent,
-    input: { name: string; mime: string; body: ReadableStream<Uint8Array> | null },
+    input: { name: string; mime: string; body: ReadableStream<Uint8Array> | null; signal?: AbortSignal },
   ): Promise<AttachmentMeta> {
     assertAllowedMime(input.mime);
-    const uploaded = await streamUpload(input.body, input.mime, this.home);
-    await commitUpload(uploaded.tmp, uploaded.sha256, this.home);
-    const id = crypto.randomUUID();
-    this.db.prepare(
-      `INSERT INTO attachments (id, message_id, name, mime, bytes, sha256, created_by, created_at)
-       VALUES (?, NULL, ?, ?, ?, ?, ?, ?)`,
-    ).run(id, input.name.slice(0, 180), input.mime, uploaded.bytes, uploaded.sha256, actor.id, now());
-    return { id, name: input.name.slice(0, 180), mime: input.mime, bytes: uploaded.bytes };
+    const uploaded = await streamUpload(input.body, input.mime, this.home, input.signal);
+    try {
+      input.signal?.throwIfAborted();
+      return this.transaction(() => {
+        commitUpload(uploaded.tmp, uploaded.sha256, this.home);
+        const id = crypto.randomUUID();
+        this.db.prepare(
+          `INSERT INTO attachments (id, message_id, name, mime, bytes, sha256, created_by, created_at)
+           VALUES (?, NULL, ?, ?, ?, ?, ?, ?)`,
+        ).run(id, input.name.slice(0, 180), input.mime, uploaded.bytes, uploaded.sha256, actor.id, now());
+        return { id, name: input.name.slice(0, 180), mime: input.mime, bytes: uploaded.bytes };
+      });
+    } finally { removeUploadTemp(uploaded.tmp); }
   }
 
   async createFileFromBytes(
@@ -1630,18 +1632,22 @@ export class Hive {
     return { ...att, ...openBlob(att.sha256, this.home) };
   }
 
+  private collectUnusedBlobs(): number {
+    // Acquire the same cross-process writer lock as publication BEFORE reading the live set.
+    return this.transaction(() => {
+      const used = new Set(
+        (this.db.prepare("SELECT DISTINCT sha256 AS h FROM attachments").all() as { h: string }[]).map((r) => r.h),
+      );
+      return removeOrphanBlobs(used, this.home);
+    });
+  }
+
   gcFiles(): { attachments: number; blobs: number } {
-    const cutoff = now() - 24 * 60 * 60 * 1000;
-    const orphans = this.db.prepare(
-      "SELECT id FROM attachments WHERE message_id IS NULL AND created_at < ?",
-    ).all(cutoff) as { id: string }[];
-    for (const row of orphans) {
-      this.db.prepare("DELETE FROM attachments WHERE id = ?").run(row.id);
-    }
-    const used = new Set(
-      (this.db.prepare("SELECT DISTINCT sha256 AS h FROM attachments").all() as { h: string }[]).map((r) => r.h),
-    );
-    return { attachments: orphans.length, blobs: removeOrphanBlobs(used, this.home) };
+    // Commit metadata removal first. A failed COMMIT must never resurrect references to unlinked blobs.
+    const attachments = this.transaction(() => Number(this.db.prepare(
+      "DELETE FROM attachments WHERE message_id IS NULL AND created_at < ?",
+    ).run(now() - 86_400_000).changes));
+    return { attachments, blobs: this.collectUnusedBlobs() };
   }
 
   toggleReaction(actor: Agent, seq: number, emoji: string): { message: Message; added: boolean } {
