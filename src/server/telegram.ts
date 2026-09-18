@@ -246,7 +246,7 @@ export function telegramMessageHasFiles(message: { photo?: unknown[]; document?:
 }
 
 export function telegramGeneralThreadId(ch: Channel | string): number | null {
-  if (typeof ch === "string") return ch === "general" || /:general$/.test(ch) ? 1 : null;
+  if (typeof ch === "string") return ch === "general" || ch.endsWith(":general") ? 1 : null;
   return ch.name === "general" && ch.type === "public" ? 1 : null;
 }
 
