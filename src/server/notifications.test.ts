@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Hive } from './hive.ts';
 import { createApp } from './app.ts';
+import { InboxDeliveryStore } from './inbox-delivery.ts';
 import { ROUTINE_BATCH_MS } from '../shared/notifications.ts';
 import { WAIT_SCAN_MAX, type WaitResult, type Message } from '../shared/types.ts';
 import { waitUntilMail } from '../mcp/wait-loop.ts';
@@ -80,6 +81,43 @@ test('pending receipts replay unchanged across subscription edits and restart; r
   f.hive.db.prepare('DELETE FROM channel_members WHERE channel_id = ? AND agent_id = ?').run(f.room.id, f.brain.agent.id);
   await assert.rejects(f.wait(), /no longer accessible/);
   assert.equal(f.hive.inbox.pending(f.brain.agent.id)!.id, first.delivery!.id);
+});
+
+test('aged receipt totals survive progress batching, mute, session replacement and pending replay', async t => {
+  const f = fixture(t, true), historical = 10_000;
+  f.hive.db.exec('DROP TABLE inbox_receipt_totals');
+  f.hive.db.prepare(`WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+    INSERT INTO inbox_deliveries(id, agent_id, session_id, through_seq, seqs, attempts, offered_at, lease_until, acknowledged_at)
+    SELECT 'notification-history-' || i, ?, ?, 0, '[0]', 1, 1, 2, 100 FROM n`)
+    .run(historical, f.brain.agent.id, f.session);
+  new InboxDeliveryStore(f.hive.db);
+  const forbidAggregation = () => f.hive.db.function('json_array_length', () => { throw new Error('unexpected notification aggregation'); });
+  forbidAggregation();
+  let returned = false;
+  const waiting = f.wait(1000).then(mail => { returned = true; return mail; });
+  const root = f.send('First progress', 'progress');
+  t.mock.timers.tick(100); const update = f.send('Next progress', 'progress', root.id);
+  t.mock.timers.tick(ROUTINE_BATCH_MS - 101); await flush(); assert.equal(returned, false);
+  t.mock.timers.tick(1); const first = await waiting;
+  assert.deepEqual(first.delivery!.messageSeqs, [root.seq, update.seq]);
+  assert.equal(first.mail![0].count, 2);
+  assert.equal(f.hive.inbox.status(f.brain.agent.id).acknowledgedMessages, historical);
+  f.hive.notifications.set(f.brain.agent, { channel: f.room.id, eventTypes: [] });
+  const session = f.hive.openInboxSession(f.brain.agent, crypto.randomUUID());
+  assert.throws(() => f.ack(first), /superseded/);
+  f.reopen(); forbidAggregation();
+  const replay = await f.hive.wait(f.brain.agent, 1, undefined, { sessionId: session, compact: true });
+  assert.equal(replay.delivery!.id, first.delivery!.id);
+  assert.deepEqual(replay.delivery!.messageSeqs, first.delivery!.messageSeqs);
+  assert.deepEqual(replay.mail, first.mail);
+  assert.equal(f.hive.inbox.status(f.brain.agent.id).acknowledgedMessages, historical);
+  f.hive.acknowledgeInbox(f.brain.agent, session, replay.delivery!.id);
+  assert.equal(f.hive.acknowledgeInbox(f.brain.agent, session, replay.delivery!.id).duplicate, true);
+  assert.equal(f.hive.inboxStatuses()[f.brain.agent.id].acknowledgedMessages, historical + 2);
+  f.send('Muted after the offered batch', 'progress', root.id);
+  const quiet = f.hive.wait(f.brain.agent, 1, undefined, { sessionId: session, compact: true });
+  t.mock.timers.tick(1); assert.equal((await quiet).idle, true);
+  assert.equal(f.hive.inbox.status(f.brain.agent.id).acknowledgedMessages, historical + 2);
 });
 
 test('upgrade adds routing storage without reclassifying legacy chat or losing an offered receipt', async t => {

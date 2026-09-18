@@ -168,6 +168,19 @@ upgrade; messages already consumed by the old version cannot retroactively be re
 passes them. `superseded_by` retains the identity of retired oversized batches so stale
 confirmations cannot consume their tail. Schema/index replacement is transactional.
 
+`inbox_receipt_totals` keeps each identity's confirmed-message count and latest ACK
+timestamp. The first successful ACK updates these values in the same transaction as
+the receipt and cursor; duplicate ACKs do not increment them. Status updates read this
+single summary row and the pending batch, not the entire acknowledged ledger. The
+latest timestamp remains the maximum even if the wall clock moves backward.
+
+On the first upgrade, summary-table creation and backfill from acknowledged receipts
+commit together. Pending batches are excluded. A failed migration rolls back and can
+retry; subsequent restarts do not reaggregate history. Stop the old server before
+upgrading: older server binaries do not maintain these counters and must not write to
+the upgraded database. Receipt IDs/history are retained, and summaries also follow
+agent/project deletion via foreign-key cascades.
+
 Tests use temporary SQLite databases, dropped HTTP responses and real local stdio MCP
 clients. No provider, model session or real user inbox is needed for those tests.
 

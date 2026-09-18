@@ -1,16 +1,19 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { Children, isValidElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   PluginEditor,
   PluginFields,
   ProjectPlugins,
   pluginFormValues,
+  pluginSavePayload,
 } from "./ProjectPlugins.tsx";
 import {
   settingsSchema,
   validateSettings,
   type ProjectPluginView,
+  type SettingsValues,
 } from "../src/shared/plugin-settings.ts";
 
 const project = {
@@ -30,6 +33,90 @@ const plugin: ProjectPluginView = {
   values: {},
   settings: { version: 1, fields: [] },
 };
+
+for (const [name, choices] of [
+  ["free-form strings", undefined],
+  ["whitespace-sensitive choices", ["  significant whitespace  ", "", "ordinary", "\t"]],
+] as const) {
+  test(`load and save without edits preserves ${name}, empty entries and empty arrays`, () => {
+    const settings = settingsSchema.parse({
+      version: 1,
+      fields: [
+        { key: "values", label: "Values", type: "strings", choices },
+        { key: "emptyList", label: "Empty list", type: "strings", minLength: 1 },
+        { key: "emptyEntry", label: "Empty entry", type: "strings" },
+        { key: "unset", label: "Unset", type: "strings" },
+      ],
+    });
+    const saved = {
+      values: ["  significant whitespace  ", "", "ordinary", "\t", "ordinary"],
+      emptyList: [],
+      emptyEntry: [""],
+    };
+    const original = structuredClone(saved);
+    const values = pluginFormValues({ settings, values: saved });
+    const payload = pluginSavePayload(settings, values, false, 7);
+    assert.deepEqual(payload, { enabled: false, values: original, expectedRevision: 7 });
+    assert.deepEqual(saved, original, "Saved settings must not be mutated");
+    assert.deepEqual(values, original, "The form draft must not be mutated");
+    assert.deepEqual(
+      pluginSavePayload(settings, pluginFormValues({ settings, values: payload.values }), true, 8),
+      { enabled: true, values: original, expectedRevision: 8 },
+    );
+  });
+}
+
+test("saving retains schema list defaults and validates blank entries rather than dropping them", () => {
+  const settings = settingsSchema.parse({
+    version: 1,
+    fields: [
+      { key: "defaults", label: "Defaults", type: "strings", default: [" spaced ", ""] },
+      { key: "bounded", label: "Bounded", type: "strings", minLength: 1 },
+      { key: "required", label: "Required", type: "strings", required: true },
+    ],
+  });
+  assert.deepEqual(pluginSavePayload(settings, { required: ["ok"], bounded: [] }, true, 0).values,
+    { defaults: [" spaced ", ""], bounded: [], required: ["ok"] });
+  const invalidValues: SettingsValues[] = [
+    { required: ["ok", ""] },
+    { required: [] },
+    { required: ["ok"], bounded: ["valid", ""] },
+  ];
+  for (const values of invalidValues) {
+    assert.throws(() => pluginSavePayload(settings, values, true, 0), /invalid value/);
+  }
+});
+
+function textareaProps(node: ReactNode): {
+  value: string;
+  onChange: (event: { target: { value: string } }) => void;
+} | undefined {
+  for (const child of Children.toArray(node)) {
+    if (!isValidElement<{ children?: ReactNode; value: string; onChange: (event: { target: { value: string } }) => void }>(child)) continue;
+    if (child.type === "textarea") return child.props;
+    const found = textareaProps(child.props.children);
+    if (found) return found;
+  }
+}
+
+test("editing list fields preserves spaces and blank lines; clearing the editor saves an empty list", () => {
+  const settings = settingsSchema.parse({
+    version: 1,
+    fields: [{ key: "values", label: "Values", type: "strings" }],
+  });
+  let values: SettingsValues = { values: ["initial"] };
+  const control = textareaProps(PluginFields({ settings, values, disabled: false,
+    onChange: (key, value) => { assert.notEqual(value, undefined); values = { [key]: value! }; },
+  }));
+  assert.ok(control);
+  assert.equal(control.value, "initial");
+  control.onChange({ target: { value: "  first  \n\n\t\nlast\n" } });
+  assert.deepEqual(pluginSavePayload(settings, values, true, 2).values,
+    { values: ["  first  ", "", "\t", "last", ""] });
+  control.onChange({ target: { value: "" } });
+  assert.deepEqual(values, { values: [] });
+  assert.deepEqual(pluginSavePayload(settings, values, true, 2).values, { values: [] });
+});
 
 test("untouched required and optional checkboxes submit explicit false without mutating saved values", () => {
   const settings = settingsSchema.parse({
