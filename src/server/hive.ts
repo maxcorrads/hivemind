@@ -172,7 +172,7 @@ export class Hive {
         PRIMARY KEY (agent_id, channel_id)
       );
       CREATE INDEX IF NOT EXISTS idx_messages_channel_seq ON messages(channel_id, seq);
-      CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
+      CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);\n      CREATE INDEX IF NOT EXISTS idx_messages_channel_thread_seq ON messages(channel_id, thread_id, seq);
       CREATE TABLE IF NOT EXISTS telegram_topics (
         channel_id TEXT PRIMARY KEY,
         telegram_thread_id INTEGER NOT NULL UNIQUE
@@ -927,10 +927,6 @@ export class Hive {
     if (!this.canSeeChannel(actor, ch) || !this.canPost(actor, ch)) {
       throw new HiveError(403, `You cannot post to ${channelLabel(ch)}`);
     }
-    if (actor.role === "human" && !ch.memberIds.includes(actor.id)) {
-      this.addMember(ch.id, actor.id);
-      ch.memberIds.push(actor.id);
-    }
     const body = input.body.trim();
     const attachmentIds = input.attachmentIds ?? [];
     if (attachmentIds.length > FILES_PER_MESSAGE) {
@@ -964,26 +960,48 @@ export class Hive {
         throw new HiveError(400, "Unknown control action");
       }
     }
-    this.db.prepare(
-      `INSERT INTO messages (id, channel_id, thread_id, author_id, body, kind, control, mentions, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      id,
-      ch.id,
-      input.threadId ?? null,
-      actor.id,
-      body,
-      kind,
-      input.control ?? null,
-      JSON.stringify(mentions),
-      t,
-    );
-    if (input.threadId) {
+
+    // Validate the complete attachment set before any mutation. The transaction
+    // below then owns every remaining database write caused by the send.
+    if (attachmentIds.length) this.validateAttachments(actor, attachmentIds);
+
+    try {
+      this.db.exec("BEGIN IMMEDIATE");
+      if (actor.role === "human" && !ch.memberIds.includes(actor.id)) {
+        this.addMember(ch.id, actor.id);
+        ch.memberIds.push(actor.id);
+      }
       this.db.prepare(
-        `INSERT OR IGNORE INTO threads (id, channel_id, status) VALUES (?, ?, 'open')`,
-      ).run(input.threadId, ch.id);
+        `INSERT INTO messages (id, channel_id, thread_id, author_id, body, kind, control, mentions, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        id,
+        ch.id,
+        input.threadId ?? null,
+        actor.id,
+        body,
+        kind,
+        input.control ?? null,
+        JSON.stringify(mentions),
+        t,
+      );
+      if (input.threadId) {
+        this.db.prepare(
+          `INSERT OR IGNORE INTO threads (id, channel_id, status) VALUES (?, ?, 'open')`,
+        ).run(input.threadId, ch.id);
+      }
+      if (attachmentIds.length) this.bindAttachments(id, attachmentIds);
+      this.db.exec("COMMIT");
+    } catch (err) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        // No open transaction.
+      }
+      throw err;
     }
-    if (attachmentIds.length) this.bindAttachments(actor, id, attachmentIds);
+
+    // Side effects happen only after the committed state is visible.
     this.touch(actor.id, true);
     const msg = this.getMessageById(id);
     if (input.source === "telegram") this.telegramOrigin.add(msg.id);
@@ -1062,45 +1080,76 @@ export class Hive {
     actor: Agent,
     channelRef: string,
     opts: { threadId?: string | null; afterSeq?: number; beforeSeq?: number; limit?: number } = {},
-  ): { messages: Message[]; hasOlder: boolean } {
+  ): { messages: Message[]; hasOlder: boolean; hasNewer: boolean; cursors: { before?: number; after?: number } } {
     const ch = this.getChannel(channelRef, actor.projectId);
     if (!this.canSeeChannel(actor, ch)) throw new HiveError(403, "Cannot read this channel");
-    const limit = Math.min(Math.max(1, Number.isFinite(opts.limit) ? Number(opts.limit) : 80), 200);
-    const after = opts.afterSeq ?? 0;
-    const before = opts.beforeSeq;
+    for (const [name, value] of [["afterSeq", opts.afterSeq], ["beforeSeq", opts.beforeSeq]] as const) {
+      if (value !== undefined && (!Number.isSafeInteger(value) || value < 0)) {
+        throw new HiveError(400, `${name} must be a nonnegative safe integer`);
+      }
+    }
+    if (opts.afterSeq !== undefined && opts.beforeSeq !== undefined) {
+      throw new HiveError(400, "Use either afterSeq or beforeSeq, not both");
+    }
+    if (opts.limit !== undefined && (!Number.isSafeInteger(opts.limit) || opts.limit < 1)) {
+      throw new HiveError(400, "limit must be a positive safe integer");
+    }
+    const limit = Math.min(opts.limit ?? 80, 200);
+    // Root-channel reads default to latest-N. Explicit forward cursors and a
+    // thread's default opening page are oldest-first.
+    const ascending = opts.beforeSeq === undefined && (opts.afterSeq !== undefined || Boolean(opts.threadId));
+    const op = ascending ? ">" : "<";
+    const order = ascending ? "ASC" : "DESC";
+    const boundary = ascending ? (opts.afterSeq ?? 0) : (opts.beforeSeq ?? Number.MAX_SAFE_INTEGER);
     let rows: MessageRow[];
+
     if (opts.threadId) {
-      const sqlBefore = before
-        ? `SELECT * FROM messages WHERE channel_id = ? AND (id = ? OR thread_id = ?) AND seq < ? ORDER BY seq DESC LIMIT ?`
-        : `SELECT * FROM messages WHERE channel_id = ? AND (id = ? OR thread_id = ?) AND seq > ? ORDER BY seq ASC LIMIT ?`;
-      rows = before
-        ? (this.db.prepare(sqlBefore).all(ch.id, opts.threadId, opts.threadId, before, limit) as MessageRow[]).reverse()
-        : (this.db.prepare(sqlBefore).all(ch.id, opts.threadId, opts.threadId, after, limit) as MessageRow[]);
-    } else if (before) {
-      rows = this.db.prepare(
-        `SELECT * FROM messages
-         WHERE channel_id = ? AND thread_id IS NULL AND seq < ?
-         ORDER BY seq DESC LIMIT ?`,
-      ).all(ch.id, before, limit) as MessageRow[];
-      rows.reverse();
+      // Keep the root PK lookup separate from the indexed reply range. An OR
+      // over id/thread_id can otherwise scan unrelated channel history.
+      const root = this.db.prepare(
+        `SELECT * FROM messages WHERE id = ? AND channel_id = ? AND seq ${op} ?`,
+      ).get(opts.threadId, ch.id, boundary) as MessageRow | undefined;
+      const replies = this.db.prepare(
+        `SELECT * FROM messages WHERE channel_id = ? AND thread_id = ? AND seq ${op} ?
+         ORDER BY seq ${order} LIMIT ?`,
+      ).all(ch.id, opts.threadId, boundary, limit) as MessageRow[];
+      rows = [...(root ? [root] : []), ...replies]
+        .sort((a, b) => (ascending ? a.seq - b.seq : b.seq - a.seq))
+        .slice(0, limit);
     } else {
       rows = this.db.prepare(
-        `SELECT * FROM messages
-         WHERE channel_id = ? AND thread_id IS NULL AND seq > ?
-         ORDER BY seq DESC LIMIT ?`,
-      ).all(ch.id, after, limit) as MessageRow[];
-      rows.reverse();
+        `SELECT * FROM messages WHERE channel_id = ? AND thread_id IS NULL AND seq ${op} ?
+         ORDER BY seq ${order} LIMIT ?`,
+      ).all(ch.id, boundary, limit) as MessageRow[];
     }
+
+    if (!ascending) rows.reverse();
     const messages = this.decorate(rows.map((r) => this.mapMessage(r)), actor.id);
-    const scope = opts.threadId
-      ? this.db.prepare(
-          `SELECT COALESCE(MIN(seq), 0) AS n FROM messages WHERE channel_id = ? AND (id = ? OR thread_id = ?)`,
-        ).get(ch.id, opts.threadId, opts.threadId) as { n: number }
-      : this.db.prepare(
-          `SELECT COALESCE(MIN(seq), 0) AS n FROM messages WHERE channel_id = ? AND thread_id IS NULL`,
-        ).get(ch.id) as { n: number };
-    const oldest = messages[0]?.seq ?? 0;
-    return { messages, hasOlder: Boolean(oldest && scope.n && scope.n < oldest) };
+    const existsBeyond = (operator: "<" | ">", seq: number): boolean => {
+      if (opts.threadId) {
+        return Boolean(this.db.prepare(
+          `SELECT 1 FROM messages WHERE id = ? AND channel_id = ? AND seq ${operator} ? LIMIT 1`,
+        ).get(opts.threadId, ch.id, seq)) || Boolean(this.db.prepare(
+          `SELECT 1 FROM messages WHERE channel_id = ? AND thread_id = ? AND seq ${operator} ? LIMIT 1`,
+        ).get(ch.id, opts.threadId, seq));
+      }
+      return Boolean(this.db.prepare(
+        `SELECT 1 FROM messages WHERE channel_id = ? AND thread_id IS NULL AND seq ${operator} ? LIMIT 1`,
+      ).get(ch.id, seq));
+    };
+    const oldest = messages[0]?.seq;
+    const newest = messages.at(-1)?.seq;
+    const hasOlder = oldest !== undefined && existsBeyond("<", oldest);
+    const hasNewer = newest !== undefined && existsBeyond(">", newest);
+    return {
+      messages,
+      hasOlder,
+      hasNewer,
+      cursors: {
+        before: hasOlder ? oldest : undefined,
+        after: hasNewer ? newest : undefined,
+      },
+    };
   }
 
   searchMessages(
@@ -1216,7 +1265,9 @@ export class Hive {
   }
 
   threadsInChannel(channelId: string): Thread[] {
-    return this.db.prepare("SELECT * FROM threads WHERE channel_id = ?").all(channelId) as Thread[];
+    return this.db
+      .prepare("SELECT id, channel_id AS channelId, status FROM threads WHERE channel_id = ?")
+      .all(channelId) as Thread[];
   }
 
   replyCounts(channelId: string): Record<string, number> {
@@ -1248,7 +1299,9 @@ export class Hive {
       `INSERT INTO threads (id, channel_id, status) VALUES (?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET status = excluded.status`,
     ).run(threadId, row.channel_id, status);
-    const thread = this.db.prepare("SELECT * FROM threads WHERE id = ?").get(threadId) as Thread;
+    const thread = this.db
+      .prepare("SELECT id, channel_id AS channelId, status FROM threads WHERE id = ?")
+      .get(threadId) as Thread;
     this.bus.emit("thread", thread);
     return thread;
   }
@@ -1514,20 +1567,25 @@ export class Hive {
     signal?: AbortSignal,
     opts: { compact?: boolean } = {},
   ): Promise<WaitResult> {
-    this.touch(actor.id, true);
     const compact = Boolean(opts.compact);
     const pack = (batch: { messages: Message[]; more: number }): WaitResult =>
       packWait(this.getAgent(actor.id), batch.messages, batch.more, compact, (id) =>
         channelLabel(this.getChannel(id)),
       );
 
+    // A cancelled request is observational only: it must not touch presence,
+    // install a waiter, advance inbox state, or consume already-queued mail.
+    if (signal?.aborted) return pack({ messages: [], more: 0 });
+    this.touch(actor.id, true);
+
     return new Promise((resolve, reject) => {
       let done = false;
       let waiter: Waiter;
+      let timer: ReturnType<typeof setTimeout> | undefined;
       const cleanup = () => {
         if (this.waiters.get(actor.id) === waiter) this.waiters.delete(actor.id);
         signal?.removeEventListener("abort", onAbort);
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
       };
       const deliver = (batch: { messages: Message[]; more: number }) => {
         if (done) return;
@@ -1558,8 +1616,12 @@ export class Hive {
       if (prev) prev.supersede();
       this.waiters.set(actor.id, waiter);
       const ms = Number.isFinite(timeoutMs) ? Math.max(1, timeoutMs) : DEFAULT_WAIT_MS;
-      const timer = setTimeout(() => finish(true), ms);
+      timer = setTimeout(() => finish(true), ms);
       signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted) {
+        finish(false);
+        return;
+      }
       const first = this.takeUnseen(actor);
       if (first.messages.length > 0) deliver(first);
     });
@@ -1589,15 +1651,23 @@ export class Hive {
     return this.createFile(actor, { name: input.name, mime: input.mime, body: stream as ReadableStream<Uint8Array> });
   }
 
-  private bindAttachments(actor: Agent, messageId: string, ids: string[]) {
+  private validateAttachments(actor: Agent, ids: string[]) {
+    if (new Set(ids).size !== ids.length) throw new HiveError(400, "Duplicate attachment");
     for (const id of ids) {
-      const row = this.db.prepare("SELECT * FROM attachments WHERE id = ?").get(id) as
+      const row = this.db.prepare("SELECT id, message_id, created_by FROM attachments WHERE id = ?").get(id) as
         | { id: string; message_id: string | null; created_by: string }
         | undefined;
       if (!row) throw new HiveError(404, "Attachment not found");
       if (row.created_by !== actor.id) throw new HiveError(403, "Attachment is not yours");
       if (row.message_id) throw new HiveError(409, "Attachment already sent");
-      this.db.prepare("UPDATE attachments SET message_id = ? WHERE id = ?").run(messageId, id);
+    }
+  }
+
+  private bindAttachments(messageId: string, ids: string[]) {
+    const bind = this.db.prepare("UPDATE attachments SET message_id = ? WHERE id = ? AND message_id IS NULL");
+    for (const id of ids) {
+      const result = bind.run(messageId, id);
+      if (result.changes !== 1) throw new HiveError(409, "Attachment already sent");
     }
   }
 
