@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { WebSocket } from "ws";
+import { WebSocket, type RawData } from "ws";
 import { Hive } from "./hive.ts";
 import { startServer } from "./serve.ts";
 import type { Thread } from "../shared/types.ts";
@@ -18,7 +18,7 @@ function nextEvent(ws: WebSocket, type: string): Promise<Record<string, any>> {
       cleanup();
       reject(error);
     };
-    const onMessage = (data: WebSocket.RawData) => {
+    const onMessage = (data: RawData) => {
       const event = JSON.parse(String(data)) as Record<string, any>;
       if (event.type !== type) return;
       cleanup();
@@ -64,7 +64,7 @@ test("thread creation/list/update/reset stays camelCase across Hive HTTP and Web
   const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
 
   t.after(async () => {
-    ws.close();
+    ws.terminate();
     const closed = new Promise<void>((resolve) => started.server.once("close", () => resolve()));
     started.shutdown();
     await closed;
