@@ -60,8 +60,17 @@ jobs:
           mkdir -p release-artifacts
           package_file="$(npm pack --silent --pack-destination release-artifacts)"
           package_path="release-artifacts/${package_file}"
-          shasum -a 256 "${package_path}" > release-artifacts/SHA256SUMS.txt
+          npm sbom --sbom-format cyclonedx > release-artifacts/SBOM.cdx.json
+          shasum -a 256 "${package_path}" release-artifacts/SBOM.cdx.json > release-artifacts/SHA256SUMS.txt
           echo "package_file=${package_path}" >> "${GITHUB_OUTPUT}"
+
+      - name: Smoke-test packaged release
+        if: ${{ steps.release.outputs.release_created }}
+        run: bash scripts/smoke-package.sh "${{ steps.package.outputs.package_file }}"
+
+      - name: Enforce coverage thresholds
+        if: ${{ steps.release.outputs.release_created }}
+        run: npm run test:coverage
 
       - name: Attest package provenance
         if: ${{ steps.release.outputs.release_created }}
@@ -77,4 +86,5 @@ jobs:
           gh release upload "${{ steps.release.outputs.tag_name }}" \
             "${{ steps.package.outputs.package_file }}" \
             release-artifacts/SHA256SUMS.txt \
+            release-artifacts/SBOM.cdx.json \
             --clobber
