@@ -1,5 +1,13 @@
-import type { Agent, AttachmentMeta, Channel, Message, Project, SearchHit, Thread, ThreadStatus } from "../src/shared/types.ts";
+import type { Agent, AttachmentMeta, Channel, Message, Project, SearchHit, Thread, ThreadStatus, InboxStatus } from "../src/shared/types.ts";
 import { resolveUploadMime } from "../src/shared/mime.ts";
+import type { LaunchContext } from "../src/shared/launch-prompt.ts";
+import type { ProjectPluginView, SettingsValues } from "../src/shared/plugin-settings.ts";
+import type { TaskSnapshot } from '../src/shared/tasks.ts';
+import type { RoomView, Room } from '../src/shared/rooms.ts';
+
+export class ApiError extends Error {
+  constructor(readonly status: number, message: string) { super(message); }
+}
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -7,7 +15,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { "content-type": "application/json", ...init?.headers },
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  if (!res.ok) throw new ApiError(res.status, data.error || `HTTP ${res.status}`);
   return data as T;
 }
 
@@ -20,6 +28,7 @@ export type Snapshot = {
   mentions: Message[];
   mentionsHasMore?: boolean;
   queued: Record<string, number>;
+  inbox?: Record<string, InboxStatus>;
   telegram?: { running: boolean; configured: boolean };
 };
 
@@ -33,6 +42,7 @@ export type TelegramSettings = {
 };
 
 export type ChannelPayload = {
+  task?: TaskSnapshot;
   channel: Channel;
   messages: Message[];
   hasOlder?: boolean;
@@ -41,6 +51,20 @@ export type ChannelPayload = {
 };
 
 export const api = {
+  room: (channel: string) => req<RoomView>(`/api/ui/channels/${encodeURIComponent(channel)}/room`),
+  roomHistory: (channel: string, before?: number) => req<{ history: Room[] }>(`/api/ui/channels/${encodeURIComponent(channel)}/room/history?before=${before ?? Number.MAX_SAFE_INTEGER}`),
+  roomEvent: (channel: string, body: unknown) => req<RoomView>(`/api/ui/channels/${encodeURIComponent(channel)}/room`, { method: 'POST', body: JSON.stringify(body) }),
+  launchContext: (project: string) => req<LaunchContext>(`/api/ui/launch-context?project=${encodeURIComponent(project)}`),
+  projectPlugins: (slug: string) => req<{ plugins: ProjectPluginView[] }>(`/api/ui/projects/${encodeURIComponent(slug)}/plugins`),
+  setPluginAvailability: (slug: string, id: string, body: { enabled: boolean; expectedRevision: number }) =>
+    req<{ plugin: ProjectPluginView }>(`/api/ui/projects/${encodeURIComponent(slug)}/plugins/${encodeURIComponent(id)}`,
+      { method: "PATCH", body: JSON.stringify(body) }),
+  saveProjectPlugin: (slug: string, id: string, body: { enabled: boolean; values: SettingsValues; expectedRevision: number }) =>
+    req<{ plugin: ProjectPluginView }>(`/api/ui/projects/${encodeURIComponent(slug)}/plugins/${encodeURIComponent(id)}`,
+      { method: "PUT", body: JSON.stringify(body) }),
+  createBot: (projectId: string, name: string) => req<{ bot: Agent; token: string }>(
+    `/api/ui/projects/${encodeURIComponent(projectId)}/bots`, { method: "POST", body: JSON.stringify({ name }) },
+  ),
   snapshot: () => req<Snapshot>("/api/ui/snapshot"),
   mentions: (beforeSeq?: number, project?: string) => {
     const q = new URLSearchParams();

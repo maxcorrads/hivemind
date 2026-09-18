@@ -30,7 +30,13 @@ if (testFiles.length === 0) {
 const child = spawn(
   process.execPath,
   ["--import", "tsx", "--test", ...process.argv.slice(2), ...testFiles],
-  { cwd: root, stdio: "inherit", env: process.env },
+  {
+    cwd: root,
+    stdio: "inherit",
+    // Runtime-only JSX transform for every discovered UI test. The production
+    // server/web typechecks still use their separate strict configurations.
+    env: { ...process.env, TSX_TSCONFIG_PATH: path.join(root, "tsconfig.test.json") },
+  },
 );
 
 child.on("error", (error) => {

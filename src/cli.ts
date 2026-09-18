@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { resolve, dirname, basename, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_PORT, DEFAULT_WAIT_MS, MCP_HEARTBEAT_MS } from "./shared/types.ts";
+import { randomUUID } from "node:crypto";
+import { DEFAULT_PORT, DEFAULT_WAIT_MS, MCP_HEARTBEAT_MS, MESSAGE_EVENT_TYPES, type MessageEventType } from "./shared/types.ts";
 import { guessMime } from "./shared/mime.ts";
 import {
   agentDownloadToFile,
@@ -13,7 +14,7 @@ import {
   loadIdentityByName,
   saveIdentity,
 } from "./client/http.ts";
-import { existsSync, mkdirSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import type { Agent, Channel, Message, WaitResult } from "./shared/types.ts";
 import { parseJoinArgs } from "./shared/join-args.ts";
 
@@ -24,13 +25,25 @@ function help() {
   hivemind join --as worker junior|mid|senior [--focus …] [--project slug] [--resume Name]
   hivemind join --as worker --seniority junior|mid|senior [--project slug]
   hivemind join --as brain [--focus …] [--project slug] [--resume Name]
-  hivemind wait [--timeout ${Math.round(DEFAULT_WAIT_MS / 1000)}]
-  hivemind send --channel NAME --body TEXT [--thread ID] [--file PATH]
+  hivemind wait [--timeout ${Math.round(DEFAULT_WAIT_MS / 1000)}] [--session UUID]
+  hivemind ack DELIVERY_ID --session SESSION_ID
+  hivemind send --channel NAME --body TEXT [--thread ID] [--file PATH] [--event-type TYPE] [--recipients NAME,NAME]
   hivemind send --to NAME --body TEXT [--file PATH]
   hivemind fetch --id ATT_ID [--out DIR]
   hivemind react --seq N --emoji 👍
   hivemind gc
-  hivemind history --channel NAME [--thread ID]
+  hivemind history --channel NAME [--thread ID] [--since N | --before N]
+  hivemind expand --channel ID --ids MESSAGE_ID,MESSAGE_ID [--after SEQ]
+  hivemind task assign --input FILE.json
+  hivemind task get --id TASK_ID
+  hivemind task event --id TASK_ID --input FILE.json
+  hivemind room get --channel NAME
+  hivemind room history --channel NAME [--before REVISION]
+  hivemind room event --channel NAME --input FILE.json
+  hivemind subscriptions list
+  hivemind subscriptions set --channel NAME [--thread ROOT_ID] --events progress,blocker
+  hivemind subscriptions set --channel NAME [--thread ROOT_ID] --mute
+  hivemind subscriptions reset --channel NAME [--thread ROOT_ID]
   hivemind search --q TEXT [--channel NAME] [--before N]
   hivemind agents
   hivemind channels
@@ -43,6 +56,9 @@ function help() {
   hivemind leave
   hivemind mcp
   hivemind mcp-config
+  hivemind plugins add /absolute/hivemind-plugin.json [--home /hive]
+  hivemind plugins list | remove ID [--home /hive]
+  hivemind plugins bind ID --project SLUG --config-home /existing/profile [--home /hive]
 
 Environment: HIVEMIND_URL (default ${hiveUrl()})  HIVEMIND_TOKEN  HIVEMIND_HOME
 `);
@@ -83,6 +99,12 @@ async function main() {
   if (cmd === "mcp") {
     const { startMcp } = await import("./mcp/index.ts");
     await startMcp();
+    return;
+  }
+
+  if (cmd === "plugins") {
+    const { pluginsMain } = await import("./server/plugins.ts");
+    await pluginsMain(argv.slice(1));
     return;
   }
 
@@ -175,6 +197,8 @@ async function main() {
   }
 
   if (cmd === "wait") {
+    const sessionId = arg(argv, "--session") ?? randomUUID();
+    await agentRequest("POST", "/api/agent/inbox/session", { sessionId }, token);
     const timeout = Number(arg(argv, "--timeout") ?? Math.round(DEFAULT_WAIT_MS / 1000)) * 1000;
     const beat = setInterval(() => {
       agentRequest("POST", "/api/agent/ping", {}, token).catch(() => undefined);
@@ -184,18 +208,70 @@ async function main() {
       const result = await agentRequest<WaitResult>(
         "POST",
         "/api/agent/wait",
-        { timeoutMs: timeout, compact: true },
+        { timeoutMs: timeout, compact: true, sessionId },
         token,
         timeout + 10_000,
       );
-      console.log(JSON.stringify(result, null, 2));
+      console.log(JSON.stringify({ ...result, sessionId }, null, 2));
     } finally {
       clearInterval(beat);
     }
     return;
   }
 
+  if (cmd === "ack") {
+    const deliveryId = argv[1];
+    const sessionId = arg(argv, "--session");
+    if (!deliveryId || !sessionId) throw new Error("ack DELIVERY_ID --session SESSION_ID (from the received wait result)");
+    console.log(JSON.stringify(await agentRequest("POST", "/api/agent/inbox/ack", { sessionId, deliveryId }, token)));
+    return;
+  }
+
+  if (cmd === 'task') {
+    const operation = argv[1];
+    const id = arg(argv, '--id');
+    if (operation === 'get' && id) {
+      console.log(JSON.stringify(await agentRequest('GET', `/api/agent/tasks/${encodeURIComponent(id)}`, undefined, token), null, 2));
+      return;
+    }
+    const file = arg(argv, '--input');
+    if (!file || !['assign', 'event'].includes(operation) || (operation === 'event' && !id))
+      throw new Error('task assign --input FILE.json | task get --id ID | task event --id ID --input FILE.json');
+    const input = JSON.parse(readFileSync(file, 'utf8'));
+    console.log(JSON.stringify(await agentRequest('POST', operation === 'assign' ? '/api/agent/tasks' :
+      `/api/agent/tasks/${encodeURIComponent(id!)}/events`, input, token), null, 2));
+    return;
+  }
+
+  if (cmd === 'room') {
+    const operation = argv[1], channel = arg(argv, '--channel');
+    if (!channel || !['get', 'history', 'event'].includes(operation ?? '')) throw new Error('room get|history|event --channel NAME [--input FILE.json]');
+    const endpoint = `/api/agent/channels/${encodeURIComponent(channel)}/room`;
+    const file = arg(argv, '--input');
+    if (operation === 'event' && !file) throw new Error('room event requires --input FILE.json');
+    console.log(JSON.stringify(await agentRequest(operation === 'event' ? 'POST' : 'GET',
+      endpoint + (operation === 'history' ? `/history?before=${encodeURIComponent(arg(argv, '--before') ?? String(Number.MAX_SAFE_INTEGER))}` : ''),
+      operation === 'event' ? JSON.parse(readFileSync(file!, 'utf8')) : undefined, token), null, 2)); return;
+  }
+  if (cmd === 'subscriptions') {
+    const operation = argv[1];
+    if (operation === 'list') {
+      console.log(JSON.stringify(await agentRequest('GET', '/api/agent/subscriptions', undefined, token), null, 2)); return;
+    }
+    if (operation !== 'set' && operation !== 'reset') throw new Error('subscriptions list|set|reset');
+    const channel = arg(argv, '--channel'), threadId = arg(argv, '--thread');
+    if (!channel) throw new Error('subscriptions requires --channel');
+    const events = arg(argv, '--events');
+    if (operation === 'set' && (!events && !argv.includes('--mute') || events && argv.includes('--mute')))
+      throw new Error('Choose --events TYPE,TYPE or --mute');
+    console.log(JSON.stringify(await agentRequest('POST', operation === 'set' ? '/api/agent/subscriptions' : '/api/agent/subscriptions/reset',
+      { channel, threadId, ...(operation === 'set' ? { eventTypes: events ? events.split(',') : [] } : {}) }, token), null, 2)); return;
+  }
+
   if (cmd === "send") {
+    const eventType = arg(argv, "--event-type") as MessageEventType | undefined;
+    const recipients = arg(argv, '--recipients')?.split(',');
+    if (eventType !== undefined && !MESSAGE_EVENT_TYPES.includes(eventType)) throw new Error("Unknown --event-type");
     const body = argRest(argv, "--body") ?? "";
     const file = arg(argv, "--file");
     if (!body && !file) throw new Error("send --body TEXT  and/or  --file PATH");
@@ -223,10 +299,20 @@ async function main() {
     const result = await agentRequest<{ ok: boolean; seq: number; id: string }>(
       "POST",
       `/api/agent/channels/${encodeURIComponent(channel)}/messages`,
-      { body, threadId: thread ?? null, attachmentIds },
+      { body, threadId: thread ?? null, attachmentIds, eventType, recipients },
       token,
     );
     console.log(`sent ${result.id} seq ${result.seq}`);
+    return;
+  }
+
+  if (cmd === "expand") {
+    const channel = arg(argv, "--channel");
+    const ids = arg(argv, "--ids");
+    if (!channel || !ids) throw new Error("expand --channel ID --ids MESSAGE_ID,MESSAGE_ID [--after SEQ]");
+    const after = arg(argv, "--after");
+    console.log(JSON.stringify(await agentRequest("POST", "/api/agent/messages/expand",
+      { channel, messageIds: ids.split(","), ...(after === undefined ? {} : { afterSeq: Number(after) }) }, token), null, 2));
     return;
   }
 
@@ -289,15 +375,33 @@ async function main() {
     if (!channel) throw new Error("history --channel NAME");
     const thread = arg(argv, "--thread");
     const since = arg(argv, "--since");
-    const result = await agentRequest<{ messages: Message[] }>(
+    const before = arg(argv, "--before");
+    if (since !== undefined && before !== undefined) throw new Error("Use --since or --before, not both");
+    const query = new URLSearchParams({
+      limit: arg(argv, "--limit") ?? "20",
+      meta: arg(argv, "--meta") ?? "0",
+    });
+    if (thread) query.set("threadId", thread);
+    if (since !== undefined) query.set("afterSeq", since);
+    if (before !== undefined) query.set("beforeSeq", before);
+    const result = await agentRequest<{
+      messages: Message[];
+      cursors?: { before?: number; after?: number };
+    }>(
       "GET",
-      `/api/agent/channels/${encodeURIComponent(channel)}/messages?limit=${arg(argv, "--limit") ?? 20}&meta=${arg(argv, "--meta") ?? "0"}${thread ? `&threadId=${thread}` : ""}${since ? `&afterSeq=${since}` : ""}`,
+      `/api/agent/channels/${encodeURIComponent(channel)}/messages?${query}`,
       undefined,
       token,
     );
     for (const m of result.messages) {
       const when = new Date(m.createdAt).toISOString().slice(11, 19);
       console.log(`[${when}] ${m.authorName}: ${m.body}`);
+    }
+    if (result.cursors?.before !== undefined) {
+      console.log(`older: history --channel ${channel} --before ${result.cursors.before}${thread ? ` --thread ${thread}` : ""}`);
+    }
+    if (result.cursors?.after !== undefined) {
+      console.log(`newer: history --channel ${channel} --since ${result.cursors.after}${thread ? ` --thread ${thread}` : ""}`);
     }
     return;
   }
