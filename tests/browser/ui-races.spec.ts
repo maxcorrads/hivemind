@@ -324,6 +324,14 @@ test("reconnect converges open channel and thread after missed message reaction 
   await expect(page.getByText("reply before disconnect", { exact: true })).toBeVisible();
   await expect.poll(() => sockets.length).toBe(1);
 
+  sockets[0]!.send(
+    JSON.stringify({
+      type: "thread",
+      payload: { id: root.id, channelId: "a", status: "blocked" },
+    }),
+  );
+  await expect(page.locator("aside.thread select")).toHaveValue("blocked");
+
   const updatedRoot = { ...root, reactions: [{ emoji: "✅", count: 1 }] };
   const missed = message("missed", 3, "a", "missed while websocket was down");
   const reply2 = message("reply-2", 4, "a", "thread reply missed while disconnected", root.id);
