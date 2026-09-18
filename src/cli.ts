@@ -181,14 +181,29 @@ async function main() {
     }, MCP_HEARTBEAT_MS);
     beat.unref();
     try {
+      const sessionId = crypto.randomUUID();
       const result = await agentRequest<WaitResult>(
         "POST",
         "/api/agent/wait",
-        { timeoutMs: timeout, compact: true },
+        { timeoutMs: timeout, compact: true, sessionId },
         token,
         timeout + 10_000,
       );
-      console.log(JSON.stringify(result, null, 2));
+      await new Promise<void>((resolve, reject) => {
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`, (err) => {
+          if (err) reject(err);
+          else resolve();
+        });
+      });
+      if (result.deliveryId) {
+        await agentRequest(
+          "POST",
+          "/api/agent/wait/ack",
+          { deliveryId: result.deliveryId, sessionId },
+          token,
+          10_000,
+        );
+      }
     } finally {
       clearInterval(beat);
     }
