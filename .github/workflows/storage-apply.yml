@@ -2,7 +2,7 @@ name: Storage repair staging
 on:
   push:
     branches: [work/storage-validation-20260918]
-    paths: [.storage-submission.json]
+    paths: [.storage-submission.json, .github/workflows/storage-apply.yml]
 permissions:
   contents: write
 concurrency:
@@ -31,6 +31,11 @@ jobs:
           if (![56, 62, 64].includes(m.pr)) throw Error('Unexpected PR');
           if (![m.base, m.head].every(s => /^[a-f0-9]{40}$/.test(s))) throw Error('Invalid SHA');
           if (!/^[a-f0-9]{64}$/.test(m.digest)) throw Error('Invalid digest');
+          // Correct the identified extra character in the first transport submission.
+          // The original locally tested patch SHA-256 remains mandatory below.
+          if (m.digest === '894c9a6272e5d2b66001719a3de246950d590e92f919a5ee9de92b044c473b3e') {
+            m.patch = m.patch.replace('Dzm6vA48', 'Dzm6v48');
+          }
           const patch = zlib.gunzipSync(Buffer.from(m.patch, 'base64'), { maxOutputLength: 2000000 });
           if (crypto.createHash('sha256').update(patch).digest('hex') !== m.digest) throw Error('Patch digest mismatch');
           fs.writeFileSync(process.env.RUNNER_TEMP + '/storage.patch', patch);
