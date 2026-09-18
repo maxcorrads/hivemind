@@ -15,6 +15,8 @@ import {
   HUMAN_ID,
   HUMAN_NAME,
   WAIT_MAIL_CAP,
+  WAIT_MESSAGE_CAP,
+  WAIT_PAYLOAD_MAX_BYTES,
   type Agent,
   type AttachmentMeta,
   type Channel,
@@ -82,6 +84,19 @@ type MessageRow = {
   control: ControlAction | null;
   mentions: string;
   created_at: number;
+};
+
+type DeliveryRow = {
+  delivery_id: string;
+  agent_id: string;
+  session_id: string;
+  seqs: string;
+  advance_cursor: number;
+  more: number;
+  status: "in_flight" | "acked" | "superseded";
+  created_at: number;
+  acked_at: number | null;
+  superseded_at: number | null;
 };
 
 
@@ -219,6 +234,22 @@ export class Hive {
         telegram_thread_id INTEGER NOT NULL,
         payload TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS inbox_deliveries (
+        delivery_id TEXT PRIMARY KEY,
+        agent_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        seqs TEXT NOT NULL,
+        advance_cursor INTEGER NOT NULL,
+        more INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        acked_at INTEGER,
+        superseded_at INTEGER
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_inbox_delivery_inflight
+        ON inbox_deliveries(agent_id) WHERE status = 'in_flight';
+      CREATE INDEX IF NOT EXISTS idx_inbox_delivery_agent_created
+        ON inbox_deliveries(agent_id, created_at DESC);
     `);
   }
 
