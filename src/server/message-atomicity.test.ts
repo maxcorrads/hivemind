@@ -122,3 +122,72 @@ test("failed attachment sends are atomic and emit no recipient-visible side effe
   const thread = hive.db.prepare("SELECT id FROM threads WHERE id = ?").get(root.id) as { id: string } | undefined;
   assert.equal(thread?.id, root.id);
 });
+
+
+test("mid-transaction attachment failure rolls back message, thread, and earlier binding", async (t) => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "hive-atomic-fault-"));
+  const hive = new Hive(path.join(dir, "hive.db"));
+  t.after(() => {
+    hive.db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const human = hive.getAgent("human");
+  const worker = hive.join({ role: "worker", seniority: "mid" }).agent;
+  const dm = hive.openDm(human, worker.name);
+  const root = hive.postMessage(human, { channel: dm.id, body: "thread root" });
+  const first = await hive.createFileFromBytes(human, {
+    name: "first.txt",
+    mime: "text/plain",
+    bytes: new TextEncoder().encode("first"),
+  });
+  const second = await hive.createFileFromBytes(human, {
+    name: "second.txt",
+    mime: "text/plain",
+    bytes: new TextEncoder().encode("second"),
+  });
+
+  // Both attachments pass normal validation. The trigger fails only when the
+  // second binding update executes, after the message insert and first binding.
+  // This exercises SQLite rollback rather than an early validation return.
+  hive.db.exec(`
+    CREATE TRIGGER fixture_fail_second_bind
+    BEFORE UPDATE OF message_id ON attachments
+    WHEN OLD.id = '${second.id}' AND NEW.message_id IS NOT NULL
+    BEGIN
+      SELECT RAISE(ABORT, 'fixture bind failure');
+    END;
+  `);
+
+  const messageEvents: Message[] = [];
+  const queuedEvents: unknown[] = [];
+  hive.bus.on("message", (message: Message) => messageEvents.push(message));
+  hive.bus.on("queued", (event) => queuedEvents.push(event));
+  const before = dbState(hive);
+
+  assert.throws(
+    () =>
+      hive.postMessage(human, {
+        channel: dm.id,
+        threadId: root.id,
+        body: "must roll back",
+        attachmentIds: [first.id, second.id],
+      }),
+    /fixture bind failure/,
+  );
+
+  assert.deepEqual(dbState(hive), before);
+  assert.equal(messageEvents.length, 0);
+  assert.equal(queuedEvents.length, 0);
+  assert.equal(
+    (hive.db.prepare("SELECT message_id FROM attachments WHERE id = ?").get(first.id) as { message_id: string | null })
+      .message_id,
+    null,
+  );
+  assert.equal(
+    (hive.db.prepare("SELECT message_id FROM attachments WHERE id = ?").get(second.id) as { message_id: string | null })
+      .message_id,
+    null,
+  );
+  assert.equal(hive.db.prepare("SELECT 1 FROM threads WHERE id = ?").get(root.id), undefined);
+});
