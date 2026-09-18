@@ -8,5 +8,6 @@
   "bump-patch-for-minor-pre-major": false,
   "packages": {
     ".": {}
-  }
+  },
+  "draft-pull-request": true
 }
