@@ -159,18 +159,20 @@ test("storage history visits 200+ eligible messages exactly once through sequenc
 test("HTTP, CLI, and real MCP stdio expose the same history cursor semantics", async (t) => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-history-contract-"));
   const hive = new Hive(path.join(dir, "hive.db"));
-  const startSeq = hive.latestSeq("general");
   const human = hive.getAgent("human");
-  const expected: number[] = [];
   const gapWorker = hive.join({ role: "worker", seniority: "junior", focus: "gap" });
   const dm = hive.openDm(human, gapWorker.agent.name);
+  const reader = hive.join({ role: "brain", focus: "history-reader" });
+  // Joins may create visible system history. Establish the cursor only after all
+  // participants exist so the fixture's expected set contains only messages
+  // intentionally created below.
+  const startSeq = hive.latestSeq("general");
+  const expected: number[] = [];
 
   for (let i = 0; i < 225; i += 1) {
     expected.push(hive.postMessage(human, { channel: "general", body: `root ${i}` }).seq);
     if (i % 4 === 0) hive.postMessage(human, { channel: dm.id, body: `interleaved ${i}` });
   }
-
-  const reader = hive.join({ role: "brain", focus: "history-reader" });
   const started = startServer({ port: 0, hive, telegram: false });
   const port = await started.ready;
   const base = `http://127.0.0.1:${port}`;
