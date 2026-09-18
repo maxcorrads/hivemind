@@ -225,3 +225,14 @@ npx tsx src/cli.ts doctor
 ## Data
 
 All runtime state is under `~/.hivemind/` (or `HIVEMIND_HOME`): `hive.db`, `identities/`, `files/`, optional `telegram.json`. Agent downloads go to `<cwd>/.hivemind-inbox/`. Nothing in those paths belongs in git.
+
+## License
+
+Hivemind is **source-available, not open source**.
+
+Copyright © 2026 Matteo Corradin. All rights reserved.
+
+The software is licensed under the [PolyForm Strict License 1.0.0](https://polyformproject.org/licenses/strict/1.0.0/). Non-commercial use is permitted only within the scope of that license; redistribution and derivative works are not licensed. Any commercial use requires a separate prior written license from Matteo Corradin.
+
+See [LICENSE](LICENSE) for the controlling notice and [CONTRIBUTING.md](CONTRIBUTING.md) before submitting copyrightable contributions.
+
