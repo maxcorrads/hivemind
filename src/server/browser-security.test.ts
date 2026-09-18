@@ -114,7 +114,7 @@ async function instance(t: TestContext) {
   // adding a test document which imports the real production web/api.ts.
   const vite = await createViteServer({
     logLevel: "silent",
-    server: { port: 0, strictPort: false, proxy: { "/api": { target: base }, "/ws": { target: base.replace("http", "ws") } } },
+    server: { port: 0, strictPort: false, proxy: { "^/api(?:[/?]|$)": { target: base }, "/ws": { target: base.replace("http", "ws") } } },
     plugins: [{ name: "human-security-test-document", configureServer(dev) {
       dev.middlewares.use((req, res, next) => {
         if (req.url !== "/__human_security_test__") return next();
