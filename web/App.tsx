@@ -50,6 +50,37 @@ function patchPane(pane: ChannelPayload | null, msg: Message, viewingThread: str
   return { ...pane, messages: [...pane.messages, msg] };
 }
 
+type ConversationEventPayload =
+  | { kind: "message"; message: Message }
+  | { kind: "reaction"; message: Message }
+  | { kind: "thread"; thread: Thread };
+
+type ConversationEvent = ConversationEventPayload & { revision: number };
+
+function replayConversationEvents(
+  pane: ChannelPayload,
+  events: ConversationEvent[],
+  afterRevision: number,
+  viewingThread: string | null,
+): ChannelPayload {
+  let current: ChannelPayload | null = pane;
+  for (const event of events) {
+    if (event.revision <= afterRevision) continue;
+    if (event.kind === "message") {
+      current = patchPane(current, event.message, viewingThread);
+      continue;
+    }
+    if (event.kind === "reaction") {
+      current = replaceMessage(current, event.message);
+      continue;
+    }
+    if (current.channel.id === event.thread.channelId) {
+      current = { ...current, threads: upsertById(current.threads, event.thread) };
+    }
+  }
+  return current ?? pane;
+}
+
 function replaceMessage(pane: ChannelPayload | null, msg: Message): ChannelPayload | null {
   if (!pane) return pane;
   if (!pane.messages.some((m) => m.id === msg.id)) return pane;
@@ -198,6 +229,14 @@ export function App() {
     }
     return duplicate;
   }, []);
+  const conversationRevisionRef = useRef(0);
+  const conversationEventsRef = useRef<ConversationEvent[]>([]);
+  const recordConversationEvent = useCallback((event: ConversationEventPayload) => {
+    const recorded = { ...event, revision: ++conversationRevisionRef.current } as ConversationEvent;
+    const events = conversationEventsRef.current;
+    events.push(recorded);
+    if (events.length > 4_096) events.splice(0, events.length - 4_096);
+  }, []);
 
   const refreshSnap = useCallback(async () => {
     const next = await api.snapshot();
@@ -210,12 +249,19 @@ export function App() {
     const controller = new AbortController();
     const generation = channelLoadRef.current.generation + 1;
     channelLoadRef.current = { generation, controller };
+    const eventRevision = conversationRevisionRef.current;
     const data = await api.messages(id, null, undefined, controller.signal);
     if (controller.signal.aborted || channelLoadRef.current.generation !== generation) return;
     const current = selRef.current;
     if (current.kind !== "channel" || current.id !== id) return;
-    for (const message of data.messages) rememberMessageId(message.id);
-    setPane(data);
+    const reconciled = replayConversationEvents(
+      data,
+      conversationEventsRef.current,
+      eventRevision,
+      null,
+    );
+    for (const message of reconciled.messages) rememberMessageId(message.id);
+    setPane(reconciled);
     setSnap((s) =>
       s
         ? {
@@ -232,12 +278,19 @@ export function App() {
     const controller = new AbortController();
     const generation = threadLoadRef.current.generation + 1;
     threadLoadRef.current = { generation, controller };
+    const eventRevision = conversationRevisionRef.current;
     const data = await api.messages(channelId, rootId, undefined, controller.signal);
     if (controller.signal.aborted || threadLoadRef.current.generation !== generation) return;
     const current = selRef.current;
     if (current.kind !== "channel" || current.id !== channelId || threadIdRef.current !== rootId) return;
-    for (const message of data.messages) rememberMessageId(message.id);
-    setThreadPane(data);
+    const reconciled = replayConversationEvents(
+      data,
+      conversationEventsRef.current,
+      eventRevision,
+      rootId,
+    );
+    for (const message of reconciled.messages) rememberMessageId(message.id);
+    setThreadPane(reconciled);
   }, [rememberMessageId]);
 
   useEffect(() => {
@@ -261,6 +314,7 @@ export function App() {
       }
       if (ev.type === "message") {
         const msg = ev.payload as Message;
+        recordConversationEvent({ kind: "message", message: msg });
         const duplicate = rememberMessageId(msg.id);
         setPane((p) => (duplicate ? replaceMessage(p, msg) : patchPane(p, msg, null)));
         setThreadPane((p) =>
@@ -278,6 +332,7 @@ export function App() {
       if (ev.type === "reaction") {
         const payload = ev.payload as { message?: Message };
         if (payload.message) {
+          recordConversationEvent({ kind: "reaction", message: payload.message });
           setPane((p) => replaceMessage(p, payload.message!));
           setThreadPane((p) => replaceMessage(p, payload.message!));
         }
@@ -295,6 +350,7 @@ export function App() {
       }
       if (ev.type === "thread") {
         const thread = ev.payload as Thread;
+        recordConversationEvent({ kind: "thread", thread });
         const applyThread = (current: ChannelPayload | null): ChannelPayload | null => {
           if (!current || current.channel.id !== thread.channelId) return current;
           return { ...current, threads: upsertById(current.threads, thread) };
@@ -325,7 +381,7 @@ export function App() {
       threadLoadRef.current.controller?.abort();
       window.removeEventListener("hashchange", onHash);
     };
-  }, [loadChannel, loadThread, refreshSnap, rememberMessageId]);
+  }, [loadChannel, loadThread, refreshSnap, rememberMessageId, recordConversationEvent]);
 
   const missingChannel = Boolean(snap && sel.kind === "channel" && !snap.channels.some((c) => c.id === sel.id));
 
@@ -506,6 +562,7 @@ export function App() {
     }
     if (!body.trim() && attachmentIds.length === 0) return;
     const { message } = await api.send(channelId, body.trim(), tid, attachmentIds);
+    recordConversationEvent({ kind: "message", message });
     const alreadySeen = rememberMessageId(message.id);
     if (!alreadySeen) {
       setPane((p) => patchPane(p, message, null));
