@@ -8,6 +8,16 @@ import { WebSocket } from "ws";
 import { Hive } from "./hive.ts";
 import { startServer } from "./serve.ts";
 
+function record(value: unknown): Record<string, unknown> {
+  assert.ok(value !== null && typeof value === "object" && !Array.isArray(value));
+  return value as Record<string, unknown>;
+}
+
+function text(value: unknown): string {
+  assert.ok(typeof value === "string");
+  return value;
+}
+
 test("Hono dependency preserves live HTTP routes, JSON errors and WebSocket events", { timeout: 20_000 }, async (t) => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-hono-"));
   let hive: Hive | undefined;
@@ -38,33 +48,34 @@ test("Hono dependency preserves live HTTP routes, JSON errors and WebSocket even
   const unauthorized = await fetch(`${base}/api/agent/me`, { signal: t.signal });
   assert.equal(unauthorized.status, 401);
   assert.match(unauthorized.headers.get("content-type") ?? "", /application\/json/);
-  assert.match((await unauthorized.json()).error, /token/i);
+  assert.match(text(record(await unauthorized.json()).error), /token/i);
 
   const invalid = await fetch(`${base}/api/agent/join`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ role: "human" }), signal: t.signal,
   });
   assert.equal(invalid.status, 400);
-  assert.match((await invalid.json()).error, /role/);
+  assert.match(text(record(await invalid.json()).error), /role/);
 
   socket = new WebSocket(`ws://127.0.0.1:${port}/ws`);
   const [hello] = await once(socket, "message", { signal: t.signal });
-  assert.equal(JSON.parse(String(hello)).type, "hello");
+  assert.equal(record(JSON.parse(String(hello))).type, "hello");
   const event = once(socket, "message", { signal: t.signal });
   const joined = await fetch(`${base}/api/agent/join`, {
     method: "POST", headers: { "content-type": "application/json; charset=utf-8" },
     body: JSON.stringify({ role: "brain", focus: "JSON café 🧪" }), signal: t.signal,
   });
   assert.equal(joined.status, 200);
-  const result = await joined.json();
-  assert.equal(result.agent.focus, "JSON café 🧪");
+  const result = record(await joined.json());
+  const agent = record(result.agent);
+  assert.equal(agent.focus, "JSON café 🧪");
   assert.equal(result.created, true);
   const [message] = await event;
-  assert.ok(["message", "agent"].includes(JSON.parse(String(message)).type));
+  assert.ok(["message", "agent"].includes(text(record(JSON.parse(String(message))).type)));
 
   const me = await fetch(`${base}/api/agent/me`, {
-    headers: { authorization: `Bearer ${result.token}` }, signal: t.signal,
+    headers: { authorization: `Bearer ${text(result.token)}` }, signal: t.signal,
   });
   assert.equal(me.status, 200);
-  assert.equal((await me.json()).you.name, result.agent.name);
+  assert.equal(record(record(await me.json()).you).name, agent.name);
 });
