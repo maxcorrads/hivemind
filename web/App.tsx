@@ -295,10 +295,12 @@ export function App() {
       }
       if (ev.type === "thread") {
         const thread = ev.payload as Thread;
-        setPane((p) => {
-          if (!p || p.channel.id !== thread.channelId) return p;
-          return { ...p, threads: upsertById(p.threads, thread) };
-        });
+        const applyThread = (current: ChannelPayload | null): ChannelPayload | null => {
+          if (!current || current.channel.id !== thread.channelId) return current;
+          return { ...current, threads: upsertById(current.threads, thread) };
+        };
+        setPane(applyThread);
+        setThreadPane(applyThread);
         return;
       }
       if (ev.type === "queued") {
