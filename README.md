@@ -45,7 +45,7 @@ PR titles use Conventional Commit syntax because release versioning is derived f
 
 ### Releases
 
-Merges to `main` update an automated Release Please PR. Merging that release PR creates the SemVer tag and GitHub Release. The release workflow reruns the full checks, builds an installable npm tarball, attaches a SHA-256 checksum, and records GitHub build provenance for the package.
+Merges to `main` update an automated draft Release Please PR. When you want a stable release, mark that PR ready for review; CI and CodeQL then validate its current head. Merging the validated release PR creates the SemVer tag and GitHub Release. The release workflow reruns the full checks, builds an installable npm tarball, attaches a SHA-256 checksum, and records GitHub build provenance for the package.
 
 The generated `.tgz` can be installed directly:
 
