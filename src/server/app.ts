@@ -8,6 +8,8 @@ import { Hive, describeAgent } from "./hive.ts";
 import { safeFileName } from "./files.ts";
 import { publicTelegramView, readTelegramFile, removeTelegramProjectSlug, writeTelegramFile } from "./telegram.ts";
 import { parseProjectSlug } from "../shared/project.ts";
+import { launchContext, projectPlugins, saveProjectPlugin, setProjectPluginAvailability, pluginErrorMessage } from "./plugins.ts";
+import { BotIngressBudget, readLimitedJson, assertLocalHumanRequest, BOT_JSON_BYTES, PLUGIN_REQUEST_BYTES, CREDENTIAL_JSON_BYTES } from "./ingress.ts";
 
 export type AppHooks = {
   telegramRunning?: () => boolean;
@@ -30,14 +32,49 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   app.use("*", cors({ origin: ["http://127.0.0.1:7421", "http://localhost:7421", "http://127.0.0.1:7420"] }));
 
   app.onError((err, c) => {
-    if (err instanceof HiveError) return c.json({ error: err.message }, err.status as 400);
-    console.error(err);
-    return c.json({ error: err.message || "internal error" }, 500);
+    if (err instanceof HiveError) {
+      if (err.status === 429) c.header("Retry-After", "1");
+      return c.json({ error: err.message }, err.status as 400);
+    }
+    console.error("Unexpected Hivemind request failure");
+    return c.json({ error: "Internal server error" }, 500);
   });
 
   app.get("/api/health", (c) => c.json({ ok: true, name: "hivemind" }));
 
   const ui = new Hono();
+  ui.use("*", async (c, next) => {
+    c.header("Cache-Control", "no-store");
+    assertLocalHumanRequest(c.req.raw);
+    await next();
+  });
+  ui.get("/launch-context", (c) => {
+    const slug = c.req.query("project");
+    const project = slug ? hive.getProjectBySlug(slug) : undefined;
+    return c.json(launchContext(hive.home, c.req.url, project));
+  });
+  ui.get("/projects/:slug/plugins", (c) =>
+    c.json({ plugins: projectPlugins(hive.home, hive.getProjectBySlug(c.req.param("slug"))) }));
+  ui.patch("/projects/:slug/plugins/:id", async (c) => {
+    const project = hive.getProjectBySlug(c.req.param("slug"));
+    try {
+      return c.json({ plugin: await setProjectPluginAvailability(hive.home, project,
+        c.req.param("id"), await readLimitedJson(c.req.raw, PLUGIN_REQUEST_BYTES)) });
+    } catch (error) {
+      if (error instanceof HiveError) throw error;
+      throw new HiveError(400, pluginErrorMessage(error));
+    }
+  });
+  ui.put("/projects/:slug/plugins/:id", async (c) => {
+    const project = hive.getProjectBySlug(c.req.param("slug"));
+    try {
+      return c.json({ plugin: await saveProjectPlugin(hive.home, project, c.req.url,
+        c.req.param("id"), await readLimitedJson(c.req.raw, PLUGIN_REQUEST_BYTES)) });
+    } catch (error) {
+      if (error instanceof HiveError) throw error;
+      throw new HiveError(400, pluginErrorMessage(error));
+    }
+  });
   ui.get("/snapshot", (c) => {
     const human = hive.getAgent("human");
     const inbox = hive.mentionInbox(human, 30);
@@ -185,6 +222,20 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     });
     return c.json({ channel });
   });
+  ui.post("/projects/:id/bots", async (c) => {
+    c.header('Cache-Control', 'no-store');
+    const body = await readLimitedJson(c.req.raw, CREDENTIAL_JSON_BYTES);
+    return c.json(hive.createBot(hive.getAgent("human"), c.req.param("id"), body), 201);
+  });
+  ui.get('/projects/:id/bots/:botId/credential', c => {
+    c.header('Cache-Control', 'no-store');
+    return c.json(hive.botCredential(hive.getAgent('human'), c.req.param('id'), c.req.param('botId')));
+  });
+  ui.post('/projects/:id/bots/:botId/credential', async c => {
+    c.header('Cache-Control', 'no-store');
+    const body = await readLimitedJson(c.req.raw, CREDENTIAL_JSON_BYTES);
+    return c.json(hive.changeBotCredential(hive.getAgent('human'), c.req.param('id'), c.req.param('botId'), body));
+  });
   ui.post("/channels/:id/messages", async (c) => {
     const human = hive.getAgent("human");
     const body = await c.req.json();
@@ -253,7 +304,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const token = header.replace(/^Bearer\s+/i, "").trim();
     if (!token) throw new HiveError(401, "Missing token. Join first.");
     const me = hive.agentByToken(token);
-    if (me.role === "human") throw new HiveError(403, "Human uses the web UI, not the agent API");
+    if (me.role !== "brain" && me.role !== "worker") throw new HiveError(403, "Only brains and workers use the agent API");
     hive.touch(me.id, true);
     c.set("me", me);
     c.set("token", token);
@@ -427,6 +478,40 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     return c.json({ ok: true });
   });
 
+  // Provider-neutral ingress. The credential determines identity, never the payload.
+  const botBudget = new BotIngressBudget();
+  const bot = new Hono<{ Variables: { me: Agent; token: string } }>();
+  bot.use("*", async (c, next) => {
+    const match = /^Bearer\s+(\S+)$/i.exec(c.req.header("authorization") ?? "");
+    if (!match) throw new HiveError(401, "A Bearer bot token is required");
+    const me = hive.agentByToken(match[1]!);
+    if (me.role !== "bot") throw new HiveError(403, "A bot identity is required");
+    const release = botBudget.acquire(me.id);
+    if (!release) {
+      c.header("Retry-After", "1");
+      throw new HiveError(429, "Bot ingress is busy; retry with the same event ID");
+    }
+    c.set("me", me);
+    c.set("token", match[1]!);
+    try { await next(); } finally { release(); }
+  });
+  bot.post("/channels/:id/messages", async (c) => {
+    const body = await readLimitedJson(c.req.raw, BOT_JSON_BYTES);
+    // Parsing can yield while Human rotates/revokes. Authorize again at commit.
+    const actor = hive.agentByToken(c.get("token"));
+    const result = hive.postBotMessage(actor, c.req.param("id"), body);
+    return c.json(result, result.duplicate ? 200 : 201);
+  });
+  bot.post("/files", async (c) => {
+    const name = c.req.header("x-file-name") || "attachment";
+    const file = await hive.createFile(c.get("me"), {
+      name,
+      mime: resolveUploadMime(c.req.header("x-file-mime"), name),
+      body: c.req.raw.body,
+    });
+    return c.json({ file }, 201);
+  });
+  app.route("/api/bot", bot);
   app.route("/api/ui", ui);
   app.route("/api/agent", agent);
   return app;

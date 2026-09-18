@@ -111,16 +111,16 @@ test("Codex rename falls back to the assigned name when the hive title is blank"
   assert.match(fresh, /\/rename with that assigned name/);
 });
 
-test("one block cds then runs the alias with a heredoc prompt", () => {
+test("one block cds then runs the alias with a literal prompt", () => {
   const block = buildLaunchBlock({ ...base, software: "codex-tw" });
-  assert.ok(block.startsWith("cd -- '/tmp/hive-work' && codex-tw \"$(cat <<'HIVEMIND_PROMPT'"));
-  assert.match(block, /HIVEMIND_PROMPT\n\)"\n$/);
+  assert.equal(block, "cd -- '/tmp/hive-work' && codex-tw " +
+    shSingleQuote(buildLaunchPrompt({ ...base, software: "codex-tw" })) + "\n");
   assert.ok(block.includes(ADOPT_UNTRUSTED));
 });
 
 test("cd toggle off skips the worktree", () => {
   const block = buildLaunchBlock({ ...base, cdWorktree: false, software: "claude" });
-  assert.ok(block.startsWith("claude \"$(cat <<'HIVEMIND_PROMPT'"));
+  assert.ok(block.startsWith("claude '"));
   assert.equal(block.includes("cd "), false);
 });
 
@@ -144,7 +144,7 @@ test("empty software becomes codex; flags stay optional", () => {
   assert.equal(sanitizeExtraFlags(" --full-auto "), "--full-auto");
   assert.throws(() => sanitizeExtraFlags("--foo; bar"), /metacharacters/);
   const block = buildLaunchBlock({ ...base, extraFlags: "--full-auto" });
-  assert.match(block, /codex --full-auto "\$\(cat/);
+  assert.match(block, /codex --full-auto '/);
 });
 
 test("model and effort become software-aware flags", () => {

@@ -51,6 +51,10 @@ export function packWait(
     seq: m.seq,
     ch: label(m.channelId),
     from: m.authorName,
+    authorRole: m.authorRole,
+    kind: m.kind,
+    source: m.source,
+    botEvent: m.botEvent,
     body: m.body.length > BODY_MAX ? m.body.slice(0, BODY_MAX) : m.body,
     threadId: m.threadId,
     attachments: m.attachments,
@@ -63,6 +67,10 @@ export function packWait(
       seq: last.seq,
       ch: label(last.channelId),
       from: last.authorName,
+      authorRole: last.authorRole,
+      kind: last.kind,
+      source: last.source,
+      botEvent: last.botEvent,
       excerpt,
       count: items.length,
       threadId: last.threadId,
@@ -73,13 +81,21 @@ export function packWait(
   let mail: WaitMailItem[];
   const conversations = new Set([...mentions, ...other].map((m) => m.channelId));
   if (actor.role === "brain" && conversations.size > 1) {
-    const byChannel = new Map<string, Message[]>();
+    const byScope = new Map<string, Message[]>();
+    const instructions: Message[] = [];
     for (const m of other) {
-      const list = byChannel.get(m.channelId) ?? [];
+      // Do not hide Human instructions or attachment metadata among bot observations.
+      if (m.authorRole === "human" || m.authorRole === "brain" || m.attachments?.length) {
+        instructions.push(m);
+        continue;
+      }
+      const scope = JSON.stringify([m.channelId, m.threadId, m.authorId, m.kind]);
+      const list = byScope.get(scope) ?? [];
       list.push(m);
-      byChannel.set(m.channelId, list);
+      byScope.set(scope, list);
     }
-    mail = [...mentions.map(full), ...[...byChannel.values()].map(digestLine)];
+    mail = [...mentions.map(full), ...instructions.map(full), ...[...byScope.values()].map(digestLine)]
+      .sort((a, b) => a.seq - b.seq);
   } else {
     mail = [...mentions, ...other].map(full);
   }

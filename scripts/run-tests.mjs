@@ -30,7 +30,12 @@ if (testFiles.length === 0) {
 const child = spawn(
   process.execPath,
   ["--import", "tsx", "--test", ...process.argv.slice(2), ...testFiles],
-  { cwd: root, stdio: "inherit", env: process.env },
+  {
+    cwd: root,
+    stdio: "inherit",
+    // Runtime JSX transformation must match Vite; both typechecks remain separate.
+    env: { ...process.env, TSX_TSCONFIG_PATH: path.join(root, "tsconfig.web.json") },
+  },
 );
 
 child.on("error", (error) => {
