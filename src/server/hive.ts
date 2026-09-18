@@ -10,7 +10,6 @@ import {
   PRESENCE_IDLE_MS,
   REACTION_EMOJIS,
   HiveError,
-  DEFAULT_PROJECT_NAME,
   DEFAULT_PROJECT_SLUG,
   HUMAN_ID,
   HUMAN_NAME,
@@ -35,6 +34,7 @@ import { clampSearchLimit, likeNeedle, parseSearchQuery, snippetAround } from ".
 import { pickName } from "./names.ts";
 import { hiveHome } from "./paths.ts";
 import { packWait } from "./wait-format.ts";
+import { STORAGE_VERSION, storageVersion, validateCurrentStorage, migrateProjectStorage } from "./storage-migrations.ts";
 import { assertAllowedMime, commitUpload, openBlob, removeOrphanBlobs, streamUpload } from "./files.ts";
 
 export { hiveHome } from "./paths.ts";
@@ -108,17 +108,66 @@ export class Hive {
   readonly home: string;
   private waiters = new Map<string, Waiter>();
   private telegramOrigin = new Set<string>();
+  private transactionDepth = 0;
+  private committedEffects: Array<() => void> = [];
 
   constructor(dbPath = path.join(hiveHome(), "hive.db")) {
     this.home = path.dirname(dbPath);
     this.bus.setMaxListeners(200);
     mkdirSync(path.dirname(dbPath), { recursive: true });
     this.db = new DatabaseSync(dbPath);
-    this.db.exec("PRAGMA journal_mode = WAL");
-    this.db.exec("PRAGMA foreign_keys = ON");
-    this.migrate();
-    this.migrateProjects();
-    this.bootstrap();
+    try {
+      storageVersion(this.db);
+      this.db.exec("PRAGMA journal_mode = WAL");
+      this.db.exec("PRAGMA foreign_keys = ON");
+      this.db.exec("PRAGMA busy_timeout = 5000");
+      this.transaction(() => {
+        const version = storageVersion(this.db);
+        // A versioned but partial schema must not be silently bootstrapped.
+        if (version === STORAGE_VERSION) validateCurrentStorage(this.db);
+        this.migrate();
+        migrateProjectStorage(this.db);
+        this.bootstrap();
+        this.db.exec(`PRAGMA user_version = ${STORAGE_VERSION}`);
+      });
+    } catch (error) {
+      try { this.db.close(); } catch { /* preserve the initialization failure */ }
+      throw error;
+    }
+  }
+
+  /** Synchronous transactions compose through savepoints. Effects wait for the outer commit. */
+  private transaction<T>(body: () => T): T {
+    const depth = this.transactionDepth;
+    const savepoint = `hive_${depth}`;
+    const effectCount = this.committedEffects.length;
+    this.db.exec(depth === 0 ? "BEGIN IMMEDIATE" : `SAVEPOINT ${savepoint}`);
+    this.transactionDepth += 1;
+    let result: T;
+    try {
+      result = body();
+      this.db.exec(depth === 0 ? "COMMIT" : `RELEASE ${savepoint}`);
+    } catch (error) {
+      this.committedEffects.length = effectCount;
+      try {
+        this.db.exec(depth === 0 ? "ROLLBACK" : `ROLLBACK TO ${savepoint}; RELEASE ${savepoint}`);
+      } catch {
+        // Preserve the original failure, including a failed COMMIT.
+      }
+      throw error;
+    } finally {
+      this.transactionDepth = depth;
+    }
+    if (depth === 0) {
+      const effects = this.committedEffects.splice(0);
+      for (const effect of effects) effect();
+    }
+    return result;
+  }
+
+  private afterCommit(effect: () => void): void {
+    if (this.transactionDepth > 0) this.committedEffects.push(effect);
+    else effect();
   }
 
   private migrate() {
@@ -172,7 +221,7 @@ export class Hive {
         PRIMARY KEY (agent_id, channel_id)
       );
       CREATE INDEX IF NOT EXISTS idx_messages_channel_seq ON messages(channel_id, seq);
-      CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
+      CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);\n      CREATE INDEX IF NOT EXISTS idx_messages_channel_thread_seq ON messages(channel_id, thread_id, seq);
       CREATE TABLE IF NOT EXISTS telegram_topics (
         channel_id TEXT PRIMARY KEY,
         telegram_thread_id INTEGER NOT NULL UNIQUE
@@ -222,18 +271,6 @@ export class Hive {
     `);
   }
 
-  private tableSql(name: string): string {
-    const row = this.db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) as
-      | { sql: string }
-      | undefined;
-    return row?.sql ?? "";
-  }
-
-  private hasColumn(table: string, col: string): boolean {
-    const cols = this.db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
-    return cols.some((c) => c.name === col);
-  }
-
   private mapProject(row: ProjectRow): Project {
     return {
       id: row.id,
@@ -242,128 +279,6 @@ export class Hive {
       worktree: row.worktree,
       createdAt: row.created_at,
     };
-  }
-
-  private migrateProjects() {
-    const version = (this.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
-    try {
-      this.db.exec("BEGIN IMMEDIATE");
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS projects (
-          id TEXT PRIMARY KEY,
-          slug TEXT NOT NULL UNIQUE,
-          name TEXT NOT NULL,
-          worktree TEXT,
-          created_at INTEGER NOT NULL
-        );
-      `);
-      if (!this.hasColumn("agents", "project_id")) {
-        this.db.exec("ALTER TABLE agents ADD COLUMN project_id TEXT");
-      }
-      if (!this.hasColumn("channels", "project_id")) {
-        this.db.exec("ALTER TABLE channels ADD COLUMN project_id TEXT");
-      }
-      const holdSql = this.tableSql("telegram_hold");
-      if (!this.hasColumn("telegram_hold", "telegram_chat_id") || /telegram_message_id INTEGER PRIMARY KEY/i.test(holdSql)) {
-        const holds = holdSql
-          ? (this.db.prepare("SELECT * FROM telegram_hold").all() as Array<{
-              telegram_message_id: number;
-              telegram_thread_id: number;
-              payload: string;
-              telegram_chat_id?: number | null;
-            }>)
-          : [];
-        this.db.exec(`
-          DROP TABLE IF EXISTS telegram_hold;
-          CREATE TABLE telegram_hold (
-            telegram_chat_id INTEGER NOT NULL,
-            telegram_message_id INTEGER NOT NULL,
-            telegram_thread_id INTEGER NOT NULL,
-            payload TEXT NOT NULL,
-            PRIMARY KEY (telegram_chat_id, telegram_message_id)
-          );
-        `);
-        const insHold = this.db.prepare(
-          "INSERT INTO telegram_hold (telegram_chat_id, telegram_message_id, telegram_thread_id, payload) VALUES (?, ?, ?, ?)",
-        );
-        for (const row of holds) {
-          insHold.run(row.telegram_chat_id ?? 0, row.telegram_message_id, row.telegram_thread_id, row.payload);
-        }
-      }
-      const topicSql = this.tableSql("telegram_topics");
-      if (!this.hasColumn("telegram_out", "telegram_chat_id") || /telegram_message_id INTEGER PRIMARY KEY/i.test(this.tableSql("telegram_out"))) {
-        const rows = this.db.prepare("SELECT * FROM telegram_out").all() as Array<{
-          telegram_message_id: number;
-          seq: number;
-          channel_id: string;
-          thread_id: string | null;
-          telegram_chat_id?: number | null;
-        }>;
-        this.db.exec(`
-          DROP TABLE telegram_out;
-          CREATE TABLE telegram_out (
-            telegram_chat_id INTEGER NOT NULL,
-            telegram_message_id INTEGER NOT NULL,
-            seq INTEGER NOT NULL,
-            channel_id TEXT NOT NULL,
-            thread_id TEXT,
-            PRIMARY KEY (telegram_chat_id, telegram_message_id)
-          );
-          CREATE INDEX IF NOT EXISTS idx_telegram_out_seq ON telegram_out(seq);
-        `);
-        const ins = this.db.prepare(
-          "INSERT INTO telegram_out (telegram_chat_id, telegram_message_id, seq, channel_id, thread_id) VALUES (?, ?, ?, ?, ?)",
-        );
-        for (const row of rows) {
-          ins.run(row.telegram_chat_id ?? 0, row.telegram_message_id, row.seq, row.channel_id, row.thread_id);
-        }
-      }
-  
-      if (
-        !this.hasColumn("telegram_topics", "telegram_chat_id") ||
-        /telegram_thread_id INTEGER NOT NULL UNIQUE/i.test(topicSql)
-      ) {
-        const rows = this.db.prepare("SELECT * FROM telegram_topics").all() as Array<{
-          channel_id: string;
-          telegram_thread_id: number;
-          telegram_chat_id?: number | null;
-        }>;
-        this.db.exec(`
-          DROP TABLE telegram_topics;
-          CREATE TABLE telegram_topics (
-            channel_id TEXT PRIMARY KEY,
-            telegram_thread_id INTEGER NOT NULL,
-            telegram_chat_id INTEGER
-          );
-        `);
-        const ins = this.db.prepare(
-          "INSERT INTO telegram_topics (channel_id, telegram_thread_id, telegram_chat_id) VALUES (?, ?, ?)",
-        );
-        for (const row of rows) ins.run(row.channel_id, row.telegram_thread_id, row.telegram_chat_id ?? null);
-      }
-  
-      const count = (this.db.prepare("SELECT COUNT(*) AS n FROM projects").get() as { n: number }).n;
-      if (count === 0) {
-        this.db.prepare("INSERT INTO projects (id, slug, name, worktree, created_at) VALUES (?, ?, ?, NULL, ?)").run(
-          crypto.randomUUID(),
-          DEFAULT_PROJECT_SLUG,
-          DEFAULT_PROJECT_NAME,
-          now(),
-        );
-      }
-      const seed = this.db.prepare("SELECT * FROM projects ORDER BY created_at ASC LIMIT 1").get() as ProjectRow;
-      this.db.prepare("UPDATE agents SET project_id = ? WHERE project_id IS NULL AND id != ?").run(seed.id, HUMAN_ID);
-      this.db.prepare("UPDATE channels SET project_id = ? WHERE project_id IS NULL").run(seed.id);
-      if (version < 2) this.db.exec("PRAGMA user_version = 2");
-      this.db.exec("COMMIT");
-    } catch (err) {
-      try {
-        this.db.exec("ROLLBACK");
-      } catch {
-        /* no open transaction */
-      }
-      throw err;
-    }
   }
 
   listProjects(): Project[] {
@@ -427,11 +342,10 @@ export class Hive {
     const name = input.name.trim();
     if (!name) throw new HiveError(400, "Project name required");
     const slug = parseProjectSlug(input.slug?.trim() || name.replace(/[^a-z0-9]+/gi, "-").toLowerCase());
-    const exists = this.db.prepare("SELECT id FROM projects WHERE slug = ?").get(slug);
-    if (exists) throw new HiveError(409, `Project ${slug} already exists`);
     const id = crypto.randomUUID();
-    try {
-      this.db.exec("BEGIN IMMEDIATE");
+    return this.transaction(() => {
+      const exists = this.db.prepare("SELECT id FROM projects WHERE slug = ?").get(slug);
+      if (exists) throw new HiveError(409, `Project ${slug} already exists`);
       this.db.prepare("INSERT INTO projects (id, slug, name, worktree, created_at) VALUES (?, ?, ?, ?, ?)").run(
         id,
         slug,
@@ -443,16 +357,8 @@ export class Hive {
       this.ensureBuiltinChannel(project, "general", "public", "Town square");
       this.ensureBuiltinChannel(project, "brains", "brains", "Human and brains only");
       this.addHumanToAllChannels();
-      this.db.exec("COMMIT");
-    } catch (err) {
-      try {
-        this.db.exec("ROLLBACK");
-      } catch {
-        /* no open transaction */
-      }
-      throw err;
-    }
-    return this.getProject(id);
+      return this.getProject(id);
+    });
   }
 
   updateProject(
@@ -625,7 +531,7 @@ export class Hive {
     this.db.prepare(
       `UPDATE agents SET last_seen_at = ?, online = ? WHERE id = ?`,
     ).run(now(), online ? 1 : 0, agentId);
-    this.bus.emit("agent", this.getAgent(agentId));
+    this.afterCommit(() => this.bus.emit("agent", this.getAgent(agentId)));
   }
 
   setOffline(agentId: string) {
@@ -744,47 +650,49 @@ export class Hive {
     }
 
     const project = resolveJoinProject(this.listProjects(), { project: input.project, cwd: input.cwd });
-    const taken = new Set(
-      (this.db.prepare("SELECT lower(name) AS n FROM agents").all() as { n: string }[]).map((r) => r.n),
-    );
-    const name = pickName(input.role, taken);
-    const id = crypto.randomUUID();
-    const token = newToken();
-    const t = now();
-    this.db.prepare(
-      `INSERT INTO agents (id, name, role, seniority, focus, token_hash, online, last_seen_at, created_at, inbox_cursor, project_id)
-       VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, 0, ?)`,
-    ).run(
-      id,
-      name,
-      input.role,
-      input.role === "worker" ? (input.seniority ?? null) : null,
-      input.focus ?? null,
-      hashToken(token),
-      t,
-      t,
-      project.id,
-    );
+    return this.transaction(() => {
+      const taken = new Set(
+        (this.db.prepare("SELECT lower(name) AS n FROM agents").all() as { n: string }[]).map((r) => r.n),
+      );
+      const name = pickName(input.role, taken);
+      const id = crypto.randomUUID();
+      const token = newToken();
+      const t = now();
+      this.db.prepare(
+        `INSERT INTO agents (id, name, role, seniority, focus, token_hash, online, last_seen_at, created_at, inbox_cursor, project_id)
+         VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, 0, ?)`,
+      ).run(
+        id,
+        name,
+        input.role,
+        input.role === "worker" ? (input.seniority ?? null) : null,
+        input.focus ?? null,
+        hashToken(token),
+        t,
+        t,
+        project.id,
+      );
 
-    for (const ch of this.db.prepare("SELECT id, type FROM channels WHERE project_id = ?").all(project.id) as {
-      id: string;
-      type: ChannelType;
-    }[]) {
-      if (ch.type === "public") this.addMember(ch.id, id);
-      if (ch.type === "brains" && input.role === "brain") this.addMember(ch.id, id);
-    }
+      for (const ch of this.db.prepare("SELECT id, type FROM channels WHERE project_id = ?").all(project.id) as {
+        id: string;
+        type: ChannelType;
+      }[]) {
+        if (ch.type === "public") this.addMember(ch.id, id);
+        if (ch.type === "brains" && input.role === "brain") this.addMember(ch.id, id);
+      }
 
-    const agent = this.getAgent(id);
-    const general = this.db.prepare(
-      "SELECT id FROM channels WHERE project_id = ? AND lower(name) = 'general'",
-    ).get(project.id) as { id: string } | undefined;
-    if (general) {
-      this.postSystem(general.id, `${agent.name} has joined as ${describeAgent(agent)}.`);
-    }
-    const maxSeq = this.db.prepare("SELECT COALESCE(MAX(seq), 0) AS n FROM messages").get() as { n: number };
-    this.db.prepare("UPDATE agents SET inbox_cursor = ? WHERE id = ?").run(maxSeq.n, id);
-    this.bus.emit("agent", agent);
-    return { agent: this.getAgent(id), token, created: true };
+      const agent = this.getAgent(id);
+      const general = this.db.prepare(
+        "SELECT id FROM channels WHERE project_id = ? AND lower(name) = 'general'",
+      ).get(project.id) as { id: string } | undefined;
+      if (general) {
+        this.postMessage(this.getAgent(HUMAN_ID), { channel: general.id, body: `${agent.name} has joined as ${describeAgent(agent)}.`, kind: "system" });
+      }
+      const maxSeq = this.db.prepare("SELECT COALESCE(MAX(seq), 0) AS n FROM messages").get() as { n: number };
+      this.db.prepare("UPDATE agents SET inbox_cursor = ? WHERE id = ?").run(maxSeq.n, id);
+      this.afterCommit(() => this.bus.emit("agent", agent));
+      return { agent: this.getAgent(id), token, created: true };
+    });
   }
 
   listChannels(actor: Agent): Channel[] {
@@ -865,35 +773,37 @@ export class Hive {
     const project = this.requireActorProject(actor, input.project);
     const slug = slugify(input.name);
     if (!slug) throw new HiveError(400, "Invalid channel name");
-    const exists = this.db.prepare(
-      "SELECT id FROM channels WHERE project_id = ? AND lower(name) = ?",
-    ).get(project.id, slug);
-    if (exists) throw new HiveError(409, `#${slug} already exists`);
-    const id = crypto.randomUUID();
-    this.db.prepare(
-      `INSERT INTO channels (id, name, type, topic, created_by, created_at, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    ).run(id, slug, input.type, input.topic ?? null, actor.id, now(), project.id);
-    this.addMember(id, HUMAN_ID);
-    const roster = this.listAgents().filter((a) => a.role === "human" || a.projectId === project.id);
-    if (input.type === "public") {
-      for (const a of roster) {
-        if (a.role !== "human") this.addMember(id, a.id);
+    return this.transaction(() => {
+      const exists = this.db.prepare(
+        "SELECT id FROM channels WHERE project_id = ? AND lower(name) = ?",
+      ).get(project.id, slug);
+      if (exists) throw new HiveError(409, `#${slug} already exists`);
+      const id = crypto.randomUUID();
+      this.db.prepare(
+        `INSERT INTO channels (id, name, type, topic, created_by, created_at, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ).run(id, slug, input.type, input.topic ?? null, actor.id, now(), project.id);
+      this.addMember(id, HUMAN_ID);
+      const roster = this.listAgents().filter((a) => a.role === "human" || a.projectId === project.id);
+      if (input.type === "public") {
+        for (const a of roster) {
+          if (a.role !== "human") this.addMember(id, a.id);
+        }
+      } else if (input.type === "brains") {
+        for (const a of roster) {
+          if (a.role === "brain") this.addMember(id, a.id);
+        }
+      } else {
+        this.addMember(id, actor.id);
+        for (const name of input.memberNames ?? []) {
+          const m = this.getAgentByName(name);
+          if (m && (m.role === "human" || m.projectId === project.id)) this.addMember(id, m.id);
+        }
       }
-    } else if (input.type === "brains") {
-      for (const a of roster) {
-        if (a.role === "brain") this.addMember(id, a.id);
-      }
-    } else {
-      this.addMember(id, actor.id);
-      for (const name of input.memberNames ?? []) {
-        const m = this.getAgentByName(name);
-        if (m && (m.role === "human" || m.projectId === project.id)) this.addMember(id, m.id);
-      }
-    }
-    const ch = this.getChannel(id);
-    this.bus.emit("channel", ch);
-    this.postSystem(id, `${actor.name} created #${slug}`);
-    return this.getChannel(id);
+      const ch = this.getChannel(id);
+      this.afterCommit(() => this.bus.emit("channel", ch));
+      this.postMessage(this.getAgent(HUMAN_ID), { channel: id, body: `${actor.name} created #${slug}`, kind: "system" });
+      return this.getChannel(id);
+    });
   }
 
   openDm(actor: Agent, otherName: string): Channel {
@@ -911,20 +821,22 @@ export class Hive {
     if (actor.role === "worker" && other.role === "worker") {
       throw new HiveError(403, "Workers cannot DM other workers. Talk to a brain.");
     }
-    const found = this.findDm(actor.id, other.id);
-    if (found) return found;
-    const projectId = actor.role === "human" ? other.projectId : actor.projectId;
-    if (!projectId) throw new HiveError(400, "DM needs a project");
-    const [a, b] = [actor.id, other.id].sort();
-    const id = `dm:${a}:${b}`;
-    this.db.prepare(
-      `INSERT INTO channels (id, name, type, topic, created_by, created_at, project_id) VALUES (?, ?, 'dm', NULL, ?, ?, ?)`,
-    ).run(id, dmLabel(actor, other), actor.id, now(), projectId);
-    this.addMember(id, actor.id);
-    this.addMember(id, other.id);
-    const ch = this.getChannel(id);
-    this.bus.emit("channel", ch);
-    return ch;
+    return this.transaction(() => {
+      const found = this.findDm(actor.id, other.id);
+      if (found) return found;
+      const projectId = actor.role === "human" ? other.projectId : actor.projectId;
+      if (!projectId) throw new HiveError(400, "DM needs a project");
+      const [a, b] = [actor.id, other.id].sort();
+      const id = `dm:${a}:${b}`;
+      this.db.prepare(
+        `INSERT INTO channels (id, name, type, topic, created_by, created_at, project_id) VALUES (?, ?, 'dm', NULL, ?, ?, ?)`,
+      ).run(id, dmLabel(actor, other), actor.id, now(), projectId);
+      this.addMember(id, actor.id);
+      this.addMember(id, other.id);
+      const ch = this.getChannel(id);
+      this.afterCommit(() => this.bus.emit("channel", ch));
+      return ch;
+    });
   }
 
   findDm(a: string, b: string): Channel | null {
@@ -950,10 +862,6 @@ export class Hive {
     const ch = this.getChannel(input.channel, actor.projectId);
     if (!this.canSeeChannel(actor, ch) || !this.canPost(actor, ch)) {
       throw new HiveError(403, `You cannot post to ${channelLabel(ch)}`);
-    }
-    if (actor.role === "human" && !ch.memberIds.includes(actor.id)) {
-      this.addMember(ch.id, actor.id);
-      ch.memberIds.push(actor.id);
     }
     const body = input.body.trim();
     const attachmentIds = input.attachmentIds ?? [];
@@ -988,32 +896,45 @@ export class Hive {
         throw new HiveError(400, "Unknown control action");
       }
     }
-    this.db.prepare(
-      `INSERT INTO messages (id, channel_id, thread_id, author_id, body, kind, control, mentions, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      id,
-      ch.id,
-      input.threadId ?? null,
-      actor.id,
-      body,
-      kind,
-      input.control ?? null,
-      JSON.stringify(mentions),
-      t,
-    );
-    if (input.threadId) {
+
+    // Validate the complete attachment set before any mutation. The transaction
+    // below then owns every remaining database write caused by the send.
+    if (attachmentIds.length) this.validateAttachments(actor, attachmentIds);
+
+    return this.transaction(() => {
+      if (actor.role === "human" && !ch.memberIds.includes(actor.id)) {
+        this.addMember(ch.id, actor.id);
+        ch.memberIds.push(actor.id);
+      }
       this.db.prepare(
-        `INSERT OR IGNORE INTO threads (id, channel_id, status) VALUES (?, ?, 'open')`,
-      ).run(input.threadId, ch.id);
-    }
-    if (attachmentIds.length) this.bindAttachments(actor, id, attachmentIds);
-    this.touch(actor.id, true);
-    const msg = this.getMessageById(id);
-    if (input.source === "telegram") this.telegramOrigin.add(msg.id);
-    this.bus.emit("message", msg);
-    this.wakeMembers(ch, msg);
-    return msg;
+        `INSERT INTO messages (id, channel_id, thread_id, author_id, body, kind, control, mentions, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        id,
+        ch.id,
+        input.threadId ?? null,
+        actor.id,
+        body,
+        kind,
+        input.control ?? null,
+        JSON.stringify(mentions),
+        t,
+      );
+      if (input.threadId) {
+        this.db.prepare(
+          `INSERT OR IGNORE INTO threads (id, channel_id, status) VALUES (?, ?, 'open')`,
+        ).run(input.threadId, ch.id);
+      }
+      if (attachmentIds.length) this.bindAttachments(id, attachmentIds);
+      this.touch(actor.id, true);
+      const msg = this.getMessageById(id);
+      this.afterCommit(() => {
+        if (input.source === "telegram") this.telegramOrigin.add(msg.id);
+        this.bus.emit("message", msg);
+        this.wakeMembers(ch, msg);
+      });
+      return msg;
+    });
   }
 
   fromTelegram(messageId: string): boolean {
@@ -1086,45 +1007,76 @@ export class Hive {
     actor: Agent,
     channelRef: string,
     opts: { threadId?: string | null; afterSeq?: number; beforeSeq?: number; limit?: number } = {},
-  ): { messages: Message[]; hasOlder: boolean } {
+  ): { messages: Message[]; hasOlder: boolean; hasNewer: boolean; cursors: { before?: number; after?: number } } {
     const ch = this.getChannel(channelRef, actor.projectId);
     if (!this.canSeeChannel(actor, ch)) throw new HiveError(403, "Cannot read this channel");
-    const limit = Math.min(Math.max(1, Number.isFinite(opts.limit) ? Number(opts.limit) : 80), 200);
-    const after = opts.afterSeq ?? 0;
-    const before = opts.beforeSeq;
+    for (const [name, value] of [["afterSeq", opts.afterSeq], ["beforeSeq", opts.beforeSeq]] as const) {
+      if (value !== undefined && (!Number.isSafeInteger(value) || value < 0)) {
+        throw new HiveError(400, `${name} must be a nonnegative safe integer`);
+      }
+    }
+    if (opts.afterSeq !== undefined && opts.beforeSeq !== undefined) {
+      throw new HiveError(400, "Use either afterSeq or beforeSeq, not both");
+    }
+    if (opts.limit !== undefined && (!Number.isSafeInteger(opts.limit) || opts.limit < 1)) {
+      throw new HiveError(400, "limit must be a positive safe integer");
+    }
+    const limit = Math.min(opts.limit ?? 80, 200);
+    // Root-channel reads default to latest-N. Explicit forward cursors and a
+    // thread's default opening page are oldest-first.
+    const ascending = opts.beforeSeq === undefined && (opts.afterSeq !== undefined || Boolean(opts.threadId));
+    const op = ascending ? ">" : "<";
+    const order = ascending ? "ASC" : "DESC";
+    const boundary = ascending ? (opts.afterSeq ?? 0) : (opts.beforeSeq ?? Number.MAX_SAFE_INTEGER);
     let rows: MessageRow[];
+
     if (opts.threadId) {
-      const sqlBefore = before
-        ? `SELECT * FROM messages WHERE channel_id = ? AND (id = ? OR thread_id = ?) AND seq < ? ORDER BY seq DESC LIMIT ?`
-        : `SELECT * FROM messages WHERE channel_id = ? AND (id = ? OR thread_id = ?) AND seq > ? ORDER BY seq ASC LIMIT ?`;
-      rows = before
-        ? (this.db.prepare(sqlBefore).all(ch.id, opts.threadId, opts.threadId, before, limit) as MessageRow[]).reverse()
-        : (this.db.prepare(sqlBefore).all(ch.id, opts.threadId, opts.threadId, after, limit) as MessageRow[]);
-    } else if (before) {
-      rows = this.db.prepare(
-        `SELECT * FROM messages
-         WHERE channel_id = ? AND thread_id IS NULL AND seq < ?
-         ORDER BY seq DESC LIMIT ?`,
-      ).all(ch.id, before, limit) as MessageRow[];
-      rows.reverse();
+      // Keep the root PK lookup separate from the indexed reply range. An OR
+      // over id/thread_id can otherwise scan unrelated channel history.
+      const root = this.db.prepare(
+        `SELECT * FROM messages WHERE id = ? AND channel_id = ? AND seq ${op} ?`,
+      ).get(opts.threadId, ch.id, boundary) as MessageRow | undefined;
+      const replies = this.db.prepare(
+        `SELECT * FROM messages WHERE channel_id = ? AND thread_id = ? AND seq ${op} ?
+         ORDER BY seq ${order} LIMIT ?`,
+      ).all(ch.id, opts.threadId, boundary, limit) as MessageRow[];
+      rows = [...(root ? [root] : []), ...replies]
+        .sort((a, b) => (ascending ? a.seq - b.seq : b.seq - a.seq))
+        .slice(0, limit);
     } else {
       rows = this.db.prepare(
-        `SELECT * FROM messages
-         WHERE channel_id = ? AND thread_id IS NULL AND seq > ?
-         ORDER BY seq DESC LIMIT ?`,
-      ).all(ch.id, after, limit) as MessageRow[];
-      rows.reverse();
+        `SELECT * FROM messages WHERE channel_id = ? AND thread_id IS NULL AND seq ${op} ?
+         ORDER BY seq ${order} LIMIT ?`,
+      ).all(ch.id, boundary, limit) as MessageRow[];
     }
+
+    if (!ascending) rows.reverse();
     const messages = this.decorate(rows.map((r) => this.mapMessage(r)), actor.id);
-    const scope = opts.threadId
-      ? this.db.prepare(
-          `SELECT COALESCE(MIN(seq), 0) AS n FROM messages WHERE channel_id = ? AND (id = ? OR thread_id = ?)`,
-        ).get(ch.id, opts.threadId, opts.threadId) as { n: number }
-      : this.db.prepare(
-          `SELECT COALESCE(MIN(seq), 0) AS n FROM messages WHERE channel_id = ? AND thread_id IS NULL`,
-        ).get(ch.id) as { n: number };
-    const oldest = messages[0]?.seq ?? 0;
-    return { messages, hasOlder: Boolean(oldest && scope.n && scope.n < oldest) };
+    const existsBeyond = (operator: "<" | ">", seq: number): boolean => {
+      if (opts.threadId) {
+        return Boolean(this.db.prepare(
+          `SELECT 1 FROM messages WHERE id = ? AND channel_id = ? AND seq ${operator} ? LIMIT 1`,
+        ).get(opts.threadId, ch.id, seq)) || Boolean(this.db.prepare(
+          `SELECT 1 FROM messages WHERE channel_id = ? AND thread_id = ? AND seq ${operator} ? LIMIT 1`,
+        ).get(ch.id, opts.threadId, seq));
+      }
+      return Boolean(this.db.prepare(
+        `SELECT 1 FROM messages WHERE channel_id = ? AND thread_id IS NULL AND seq ${operator} ? LIMIT 1`,
+      ).get(ch.id, seq));
+    };
+    const oldest = messages[0]?.seq;
+    const newest = messages.at(-1)?.seq;
+    const hasOlder = oldest !== undefined && existsBeyond("<", oldest);
+    const hasNewer = newest !== undefined && existsBeyond(">", newest);
+    return {
+      messages,
+      hasOlder,
+      hasNewer,
+      cursors: {
+        before: hasOlder ? oldest : undefined,
+        after: hasNewer ? newest : undefined,
+      },
+    };
   }
 
   searchMessages(
@@ -1240,7 +1192,9 @@ export class Hive {
   }
 
   threadsInChannel(channelId: string): Thread[] {
-    return this.db.prepare("SELECT * FROM threads WHERE channel_id = ?").all(channelId) as Thread[];
+    return this.db
+      .prepare("SELECT id, channel_id AS channelId, status FROM threads WHERE channel_id = ?")
+      .all(channelId) as Thread[];
   }
 
   replyCounts(channelId: string): Record<string, number> {
@@ -1272,7 +1226,9 @@ export class Hive {
       `INSERT INTO threads (id, channel_id, status) VALUES (?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET status = excluded.status`,
     ).run(threadId, row.channel_id, status);
-    const thread = this.db.prepare("SELECT * FROM threads WHERE id = ?").get(threadId) as Thread;
+    const thread = this.db
+      .prepare("SELECT id, channel_id AS channelId, status FROM threads WHERE id = ?")
+      .get(threadId) as Thread;
     this.bus.emit("thread", thread);
     return thread;
   }
@@ -1502,22 +1458,24 @@ export class Hive {
     const ch = this.getChannel(channelRef, actor.projectId);
     if (!this.canSeeChannel(actor, ch)) throw new HiveError(403, "Cannot access channel");
     if (ch.type === "dm") throw new HiveError(400, "Cannot invite to a DM");
-    const added: string[] = [];
-    for (const name of memberNames) {
-      const member = this.getAgentByName(name);
-      if (!member) throw new HiveError(404, `No agent named ${name}`);
-      if (member.role !== "human" && member.projectId !== ch.projectId) {
-        throw new HiveError(403, `${member.name} is not in this project`);
+    return this.transaction(() => {
+      const added: string[] = [];
+      for (const name of memberNames) {
+        const member = this.getAgentByName(name);
+        if (!member) throw new HiveError(404, `No agent named ${name}`);
+        if (member.role !== "human" && member.projectId !== ch.projectId) {
+          throw new HiveError(403, `${member.name} is not in this project`);
+        }
+        if (ch.type === "brains" && member.role === "worker") {
+          throw new HiveError(403, "Workers cannot join brains channels");
+        }
+        this.addMember(ch.id, member.id);
+        added.push(member.name);
       }
-      if (ch.type === "brains" && member.role === "worker") {
-        throw new HiveError(403, "Workers cannot join brains channels");
-      }
-      this.addMember(ch.id, member.id);
-      added.push(member.name);
-    }
-    this.bus.emit("channel", this.getChannel(ch.id));
-    this.postSystem(ch.id, `${actor.name} invited ${added.join(", ")}`);
-    return this.getChannel(ch.id);
+      this.afterCommit(() => this.bus.emit("channel", this.getChannel(ch.id)));
+      this.postMessage(this.getAgent(HUMAN_ID), { channel: ch.id, body: `${actor.name} invited ${added.join(", ")}`, kind: "system" });
+      return this.getChannel(ch.id);
+    });
   }
 
   private wakeMembers(ch: Channel, msg: Message) {
@@ -1538,20 +1496,25 @@ export class Hive {
     signal?: AbortSignal,
     opts: { compact?: boolean } = {},
   ): Promise<WaitResult> {
-    this.touch(actor.id, true);
     const compact = Boolean(opts.compact);
     const pack = (batch: { messages: Message[]; more: number }): WaitResult =>
       packWait(this.getAgent(actor.id), batch.messages, batch.more, compact, (id) =>
         channelLabel(this.getChannel(id)),
       );
 
+    // A cancelled request is observational only: it must not touch presence,
+    // install a waiter, advance inbox state, or consume already-queued mail.
+    if (signal?.aborted) return pack({ messages: [], more: 0 });
+    this.touch(actor.id, true);
+
     return new Promise((resolve, reject) => {
       let done = false;
       let waiter: Waiter;
+      let timer: ReturnType<typeof setTimeout> | undefined;
       const cleanup = () => {
         if (this.waiters.get(actor.id) === waiter) this.waiters.delete(actor.id);
         signal?.removeEventListener("abort", onAbort);
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
       };
       const deliver = (batch: { messages: Message[]; more: number }) => {
         if (done) return;
@@ -1582,8 +1545,12 @@ export class Hive {
       if (prev) prev.supersede();
       this.waiters.set(actor.id, waiter);
       const ms = Number.isFinite(timeoutMs) ? Math.max(1, timeoutMs) : DEFAULT_WAIT_MS;
-      const timer = setTimeout(() => finish(true), ms);
+      timer = setTimeout(() => finish(true), ms);
       signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted) {
+        finish(false);
+        return;
+      }
       const first = this.takeUnseen(actor);
       if (first.messages.length > 0) deliver(first);
     });
@@ -1613,15 +1580,23 @@ export class Hive {
     return this.createFile(actor, { name: input.name, mime: input.mime, body: stream as ReadableStream<Uint8Array> });
   }
 
-  private bindAttachments(actor: Agent, messageId: string, ids: string[]) {
+  private validateAttachments(actor: Agent, ids: string[]) {
+    if (new Set(ids).size !== ids.length) throw new HiveError(400, "Duplicate attachment");
     for (const id of ids) {
-      const row = this.db.prepare("SELECT * FROM attachments WHERE id = ?").get(id) as
+      const row = this.db.prepare("SELECT id, message_id, created_by FROM attachments WHERE id = ?").get(id) as
         | { id: string; message_id: string | null; created_by: string }
         | undefined;
       if (!row) throw new HiveError(404, "Attachment not found");
       if (row.created_by !== actor.id) throw new HiveError(403, "Attachment is not yours");
       if (row.message_id) throw new HiveError(409, "Attachment already sent");
-      this.db.prepare("UPDATE attachments SET message_id = ? WHERE id = ?").run(messageId, id);
+    }
+  }
+
+  private bindAttachments(messageId: string, ids: string[]) {
+    const bind = this.db.prepare("UPDATE attachments SET message_id = ? WHERE id = ? AND message_id IS NULL");
+    for (const id of ids) {
+      const result = bind.run(messageId, id);
+      if (result.changes !== 1) throw new HiveError(409, "Attachment already sent");
     }
   }
 

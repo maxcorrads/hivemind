@@ -30,6 +30,42 @@ npm run dev
 
 If you already ran `npm run build`, the UI is also on `7420`. Local production: `npm run build && npm start`.
 
+
+### Development checks
+
+Run the same core checks used by CI before opening a PR:
+
+```bash
+npm run check
+```
+
+That command lints the codebase, typechecks the server and web app, discovers and runs all TypeScript tests, and builds the production UI. CI additionally tests the real minimum runtime (Node 22.13.0) and the current Node 24 line on macOS, reviews dependency changes, audits production dependencies, collects coverage, and runs CodeQL.
+
+PR titles use Conventional Commit syntax because release versioning is derived from them. Examples: `fix: handle reconnect races`, `feat(mcp): add a new tool`, `feat!: change the wire contract`.
+
+### Releases
+
+Merges to `main` update an automated draft Release Please PR. When you want a stable release, mark that PR ready for review; CI and CodeQL then validate its current head. Merging the validated release PR creates the SemVer tag and GitHub Release. The release workflow reruns the full checks, builds an installable npm tarball, attaches a SHA-256 checksum, and records GitHub build provenance for the package.
+
+The generated `.tgz` can be installed directly:
+
+```bash
+npm install -g ./hivemind-X.Y.Z.tgz
+```
+
+A registry publish can be added later without changing the versioning flow.
+
+### Edge builds
+
+Every CI-green merge to `main` publishes a rolling GitHub prerelease tagged `edge`. It contains:
+
+- `hivemind-edge.tgz`
+- `SHA256SUMS.txt`
+- a CycloneDX SBOM
+- GitHub build provenance for the package
+
+The `edge` prerelease is continuously replaced by the latest tested `main` build. Stable SemVer releases remain separate.
+
 You stay Human in the browser. Agents never open themselves. You open one Codex / Claude / Cursor terminal per employee, pick the model, then they `join` and `wait`.
 
 ## Example: start a hive
@@ -201,9 +237,23 @@ npx tsx src/cli.ts doctor
 
 All runtime state is under `~/.hivemind/` (or `HIVEMIND_HOME`): `hive.db`, `identities/`, `files/`, optional `telegram.json`. Agent downloads go to `<cwd>/.hivemind-inbox/`. Nothing in those paths belongs in git.
 
+## License
 
-### Backing up the local Hive database
+Hivemind is **source-available, not open source**.
 
-Hivemind uses SQLite in WAL mode. Do not copy only `hive.db` while the server is running: committed data may still be present in `hive.db-wal`.
+Copyright © 2026 Matteo Corradin. All rights reserved.
 
-For a file-level backup, stop Hivemind cleanly first, then copy `hive.db` together with any `hive.db-wal` and `hive.db-shm` files that remain. Restore those files as a set while Hivemind is stopped. For an online backup, use SQLite's backup API/tooling rather than a plain filesystem copy of the main database file.
+The software is licensed under the [PolyForm Strict License 1.0.0](https://polyformproject.org/licenses/strict/1.0.0/). Non-commercial use is permitted only within the scope of that license; redistribution and derivative works are not licensed. Any commercial use requires a separate prior written license from Matteo Corradin.
+
+See [LICENSE](LICENSE) for the controlling notice and [CONTRIBUTING.md](CONTRIBUTING.md) before submitting copyrightable contributions.
+
+
+### Backing up and restoring local storage
+
+Stop **all** Hivemind servers and CLI operations that use the home directory before making a filesystem backup. Copy the complete `HIVEMIND_HOME` (normally `~/.hivemind`), including `files/`, identities/configuration, `hive.db`, and any remaining `hive.db-wal` / `hive.db-shm` files. Protect the backup as it contains credentials and private messages.
+
+Restore into an empty home directory while Hivemind is stopped. Restore the database and any WAL/SHM sidecars as the same set; never combine a restored database with sidecars from another database. Keep `files/` with the matching database so attachments retain their content. Start Hivemind only after the restore is complete.
+
+Do **not** copy only a running `hive.db`: committed data can still be in its WAL. An online SQLite backup API or `VACUUM INTO` can produce a consistent database snapshot, but backing up its attachment files additionally requires coordinating writes and garbage collection. The stopped-home procedure above is the tested full-storage backup procedure.
+
+The project schema supports unversioned shipped databases (`user_version=0`) and version 2. Startup validates the schema, migrates and bootstraps in one transaction, and advances the marker only before commit. Unknown versions and inconsistent keys/partial versioned schemas are rejected without repair-by-data-loss. Retain the original home and investigate the error rather than deleting tables or lowering `user_version`.
