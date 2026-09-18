@@ -133,3 +133,34 @@ test("waitUntilMail stops immediately when cancelled during retry delay", async 
   await assert.rejects(() => pending, /cancelled/);
   assert.equal(calls, 1);
 });
+
+
+test("production retry delay removes listeners after both expiry and cancellation", async () => {
+  const { default: events } = await import("node:events");
+  const ac = new AbortController();
+  let calls = 0;
+  const mail = { idle: false, messages: [{ id: "fixture" }], mentions: [], control: [], more: 0 } as unknown as WaitResult;
+  await waitUntilMail(async () => {
+    if (++calls <= 25) throw new Error("fetch failed");
+    return mail;
+  }, { signal: ac.signal, retryDelayMs: 1 });
+  assert.equal(calls, 26);
+  assert.equal(events.getEventListeners(ac.signal, "abort").length, 0);
+
+  const cancelled = new AbortController();
+  const pending = waitUntilMail(async () => { throw new Error("fetch failed"); }, { signal: cancelled.signal, retryDelayMs: 10_000 });
+  const rejected = assert.rejects(pending, /cancelled/);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  cancelled.abort(new DOMException("cancelled", "AbortError"));
+  await rejected;
+  assert.equal(events.getEventListeners(cancelled.signal, "abort").length, 0);
+});
+
+test("cancellation wins when the poll resolves with mail in the same turn", async () => {
+  const ac = new AbortController();
+  const mail = { idle: false, messages: [{ id: "fixture" }], mentions: [], control: [], more: 0 } as unknown as WaitResult;
+  await assert.rejects(() => waitUntilMail(async () => {
+    ac.abort(new DOMException("cancelled", "AbortError"));
+    return mail;
+  }, { signal: ac.signal }), /cancelled/);
+});

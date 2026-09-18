@@ -19,6 +19,22 @@ export function isTransientWaitError(err: unknown): boolean {
   return true;
 }
 
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(signal.reason); return; }
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const onAbort = () => {
+      cleanup();
+      reject(signal?.reason ?? new DOMException("Aborted", "AbortError"));
+    };
+    const timer = setTimeout(() => { cleanup(); resolve(); }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 export async function waitUntilMail(
   callWait: () => Promise<WaitResult>,
   opts: {
@@ -29,21 +45,7 @@ export async function waitUntilMail(
     signal?: AbortSignal;
   } = {},
 ): Promise<WaitResult> {
-  const delay =
-    opts.delay ??
-    ((ms: number, signal?: AbortSignal) =>
-      new Promise<void>((resolve, reject) => {
-        if (signal?.aborted) {
-          reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
-          return;
-        }
-        const timer = setTimeout(resolve, ms);
-        const onAbort = () => {
-          clearTimeout(timer);
-          reject(signal?.reason ?? new DOMException("Aborted", "AbortError"));
-        };
-        signal?.addEventListener("abort", onAbort, { once: true });
-      }));
+  const delay = opts.delay ?? abortableDelay;
   const retryDelayMs = opts.retryDelayMs ?? 1500;
   const maxServerErrors = opts.maxServerErrors ?? Number.POSITIVE_INFINITY;
   const maxTransientErrors = opts.maxTransientErrors ?? Number.POSITIVE_INFINITY;
@@ -53,6 +55,7 @@ export async function waitUntilMail(
     if (opts.signal?.aborted) throw opts.signal.reason ?? new DOMException("Aborted", "AbortError");
     try {
       const result = await callWait();
+      opts.signal?.throwIfAborted();
       serverErrors = 0;
       transientErrors = 0;
       if (waitHasMail(result)) return result;
