@@ -1,0 +1,254 @@
+diff --git a/package.json b/package.json
+index c8dbf7d..c15874d 100644
+--- a/package.json
++++ b/package.json
+@@ -13,7 +13,7 @@
+     "build": "vite build",
+     "mcp": "tsx src/mcp/index.ts",
+     "hivemind": "tsx src/cli.ts",
+-    "test": "tsx --test src/server/hive.test.ts src/server/http.test.ts src/server/telegram.test.ts src/shared/join-args.test.ts src/shared/launch-models.test.ts src/shared/launch-prompt.test.ts src/shared/mime.test.ts src/shared/project.test.ts src/shared/search-query.test.ts src/mcp/mcp.test.ts src/mcp/wait-loop.test.ts"
++    "test": "tsx --test src/server/hive.test.ts src/server/http.test.ts src/server/telegram.test.ts src/shared/join-args.test.ts src/shared/launch-models.test.ts src/shared/launch-prompt.test.ts src/shared/mime.test.ts src/shared/project.test.ts src/shared/search-query.test.ts src/mcp/mcp.test.ts src/mcp/wait-loop.test.ts src/server/history-pagination.test.ts"
+   },
+   "engines": {
+     "node": ">=22"
+diff --git a/src/cli.ts b/src/cli.ts
+index 8015d1d..11c78d2 100644
+--- a/src/cli.ts
++++ b/src/cli.ts
+@@ -30,7 +30,7 @@ function help() {
+   hivemind fetch --id ATT_ID [--out DIR]
+   hivemind react --seq N --emoji 👍
+   hivemind gc
+-  hivemind history --channel NAME [--thread ID]
++  hivemind history --channel NAME [--thread ID] [--since N | --before N]
+   hivemind search --q TEXT [--channel NAME] [--before N]
+   hivemind agents
+   hivemind channels
+@@ -289,16 +289,21 @@ async function main() {
+     if (!channel) throw new Error("history --channel NAME");
+     const thread = arg(argv, "--thread");
+     const since = arg(argv, "--since");
+-    const result = await agentRequest<{ messages: Message[] }>(
+-      "GET",
+-      `/api/agent/channels/${encodeURIComponent(channel)}/messages?limit=${arg(argv, "--limit") ?? 20}&meta=${arg(argv, "--meta") ?? "0"}${thread ? `&threadId=${thread}` : ""}${since ? `&afterSeq=${since}` : ""}`,
+-      undefined,
+-      token,
++    const before = arg(argv, "--before");
++    if (since !== undefined && before !== undefined) throw new Error("Use --since or --before, not both");
++    const query = new URLSearchParams({ limit: arg(argv, "--limit") ?? "20", meta: arg(argv, "--meta") ?? "0" });
++    if (thread) query.set("threadId", thread);
++    if (since !== undefined) query.set("afterSeq", since);
++    if (before !== undefined) query.set("beforeSeq", before);
++    const result = await agentRequest<{ messages: Message[]; cursors?: { before?: number; after?: number } }>(
++      "GET", `/api/agent/channels/${encodeURIComponent(channel)}/messages?${query}`, undefined, token,
+     );
+     for (const m of result.messages) {
+       const when = new Date(m.createdAt).toISOString().slice(11, 19);
+       console.log(`[${when}] ${m.authorName}: ${m.body}`);
+     }
++    if (result.cursors?.before !== undefined) console.log(`older: history --channel ${channel} --before ${result.cursors.before}${thread ? ` --thread ${thread}` : ""}`);
++    if (result.cursors?.after !== undefined) console.log(`newer: history --channel ${channel} --since ${result.cursors.after}${thread ? ` --thread ${thread}` : ""}`);
+     return;
+   }
+ 
+diff --git a/src/mcp/index.ts b/src/mcp/index.ts
+index 7b4c840..0f4ecc8 100644
+--- a/src/mcp/index.ts
++++ b/src/mcp/index.ts
+@@ -141,7 +141,7 @@ export async function startMcp() {
+ 
+   server.tool(
+     "history",
+-    "Read a channel or DM. Default is the latest 20 messages. Use since to page forward or before to page backward without skipping messages.",
++    "Read a channel or DM. Default is the latest 20 channel roots, or the first 20 messages of a thread. Use since to page forward or before to page backward without skipping messages.",
+     {
+       channel: z.string(),
+       threadId: z.string().optional(),
+diff --git a/src/server/history-pagination.test.ts b/src/server/history-pagination.test.ts
+new file mode 100644
+index 0000000..da67efd
+--- /dev/null
++++ b/src/server/history-pagination.test.ts
+@@ -0,0 +1,46 @@
++import assert from "node:assert/strict";
++import { mkdtempSync, rmSync } from "node:fs";
++import os from "node:os";
++import path from "node:path";
++import { test } from "node:test";
++import { Hive } from "./hive.ts";
++
++test("thread history pages both ways through gaps and rejects conflicting cursors", (t) => {
++  const dir = mkdtempSync(path.join(os.tmpdir(), "hive-history-"));
++  const hive = new Hive(path.join(dir, "hive.db"));
++  t.after(() => { hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
++  const human = hive.getAgent("human");
++  const root = hive.postMessage(human, { channel: "general", body: "root" });
++  const expected = [root.seq];
++  for (let i = 0; i < 215; i++) {
++    expected.push(hive.postMessage(human, { channel: "general", threadId: root.id, body: `reply ${i}` }).seq);
++    hive.postMessage(human, { channel: "general", body: `unrelated ${i}` });
++  }
++  const actual: number[] = [];
++  let after: number | undefined;
++  for (let pages = 0; pages < 30; pages++) {
++    const page = hive.listMessages(human, "general", { threadId: root.id, afterSeq: after, limit: 17 });
++    actual.push(...page.messages.map(m => m.seq));
++    if (!page.hasNewer) break;
++    after = page.cursors.after;
++  }
++  assert.deepEqual(actual, expected);
++  assert.equal(hive.listMessages(human, "general", { beforeSeq: 0 }).messages.length, 0);
++  const backwards: number[] = [];
++  let before = Number.MAX_SAFE_INTEGER;
++  for (let pages = 0; pages < 30; pages++) {
++    const page = hive.listMessages(human, "general", { threadId: root.id, beforeSeq: before, limit: 19 });
++    backwards.unshift(...page.messages.map(m => m.seq));
++    if (!page.hasOlder) break;
++    before = page.cursors.before!;
++  }
++  assert.deepEqual(backwards, expected);
++  assert.throws(() => hive.listMessages(human, "general", { afterSeq: 0, beforeSeq: 10 }), /not both/);
++  for (const invalid of [NaN, -1, 0.5, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
++    assert.throws(() => hive.listMessages(human, "general", { afterSeq: invalid }), /safe integer/);
++  }
++  const plan = hive.db.prepare("EXPLAIN QUERY PLAN SELECT 1 FROM messages WHERE channel_id = ? AND thread_id = ? AND seq > ? LIMIT 1")
++    .all("general", root.id, root.seq) as { detail: string }[];
++  assert.ok(plan.some(row => row.detail.includes("idx_messages_channel_thread_seq")));
++  assert.equal(plan.some(row => /SCAN messages/.test(row.detail)), false);
++});
+diff --git a/src/server/hive.test.ts b/src/server/hive.test.ts
+index e9c3c8d..a240cd8 100644
+--- a/src/server/hive.test.ts
++++ b/src/server/hive.test.ts
+@@ -601,6 +601,7 @@ test("history forward pagination visits every channel message without skipping",
+   const human = hive.getAgent("human");
+   const worker = hive.join({ role: "worker", seniority: "mid" }).agent;
+   const dm = hive.openDm(human, worker.name);
++  const startingCursor = hive.latestSeq("general");
+   const expected: number[] = [];
+ 
+   for (let i = 0; i < 65; i += 1) {
+@@ -616,7 +617,7 @@ test("history forward pagination visits every channel message without skipping",
+   assert.equal(latest.cursors.before, expected.at(-20));
+ 
+   const seen: number[] = [];
+-  let after = 0;
++  let after = startingCursor;
+   for (;;) {
+     const page = hive.listMessages(human, "general", { afterSeq: after, limit: 17 });
+     seen.push(...page.messages.map((msg) => msg.seq));
+diff --git a/src/server/hive.ts b/src/server/hive.ts
+index 0c323cc..4196164 100644
+--- a/src/server/hive.ts
++++ b/src/server/hive.ts
+@@ -173,6 +173,7 @@ export class Hive {
+       );
+       CREATE INDEX IF NOT EXISTS idx_messages_channel_seq ON messages(channel_id, seq);
+       CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
++      CREATE INDEX IF NOT EXISTS idx_messages_channel_thread_seq ON messages(channel_id, thread_id, seq);
+       CREATE TABLE IF NOT EXISTS telegram_topics (
+         channel_id TEXT PRIMARY KEY,
+         telegram_thread_id INTEGER NOT NULL UNIQUE
+@@ -1065,52 +1066,62 @@ export class Hive {
+   ): { messages: Message[]; hasOlder: boolean; hasNewer: boolean; cursors: { before?: number; after?: number } } {
+     const ch = this.getChannel(channelRef, actor.projectId);
+     if (!this.canSeeChannel(actor, ch)) throw new HiveError(403, "Cannot read this channel");
+-    const limit = Math.min(Math.max(1, Number.isFinite(opts.limit) ? Number(opts.limit) : 80), 200);
+-    const after = opts.afterSeq ?? 0;
+-    const before = opts.beforeSeq;
++    for (const [name, value] of [["afterSeq", opts.afterSeq], ["beforeSeq", opts.beforeSeq]] as const) {
++      if (value !== undefined && (!Number.isSafeInteger(value) || value < 0)) {
++        throw new HiveError(400, `${name} must be a nonnegative safe integer`);
++      }
++    }
++    if (opts.afterSeq !== undefined && opts.beforeSeq !== undefined) {
++      throw new HiveError(400, "Use either afterSeq or beforeSeq, not both");
++    }
++    if (opts.limit !== undefined && (!Number.isSafeInteger(opts.limit) || opts.limit < 1)) {
++      throw new HiveError(400, "limit must be a positive safe integer");
++    }
++    const limit = Math.min(opts.limit ?? 80, 200);
++    // Root-channel reads default to the newest page; thread reads retain their
++    // oldest-first default so opening a task starts with its original contract.
++    const ascending = opts.beforeSeq === undefined && (opts.afterSeq !== undefined || Boolean(opts.threadId));
++    const op = ascending ? ">" : "<";
++    const order = ascending ? "ASC" : "DESC";
++    const boundary = ascending ? (opts.afterSeq ?? 0) : (opts.beforeSeq ?? Number.MAX_SAFE_INTEGER);
+     let rows: MessageRow[];
+     if (opts.threadId) {
+-      const sqlBefore = before
+-        ? `SELECT * FROM messages WHERE channel_id = ? AND (id = ? OR thread_id = ?) AND seq < ? ORDER BY seq DESC LIMIT ?`
+-        : `SELECT * FROM messages WHERE channel_id = ? AND (id = ? OR thread_id = ?) AND seq > ? ORDER BY seq ASC LIMIT ?`;
+-      rows = before
+-        ? (this.db.prepare(sqlBefore).all(ch.id, opts.threadId, opts.threadId, before, limit) as MessageRow[]).reverse()
+-        : (this.db.prepare(sqlBefore).all(ch.id, opts.threadId, opts.threadId, after, limit) as MessageRow[]);
+-    } else if (before) {
+-      rows = this.db.prepare(
+-        `SELECT * FROM messages
+-         WHERE channel_id = ? AND thread_id IS NULL AND seq < ?
+-         ORDER BY seq DESC LIMIT ?`,
+-      ).all(ch.id, before, limit) as MessageRow[];
+-      rows.reverse();
+-    } else if (opts.afterSeq !== undefined) {
+-      rows = this.db.prepare(
+-        `SELECT * FROM messages
+-         WHERE channel_id = ? AND thread_id IS NULL AND seq > ?
+-         ORDER BY seq ASC LIMIT ?`,
+-      ).all(ch.id, after, limit) as MessageRow[];
++      // Keep the PK root lookup separate from the indexed reply range; an OR
++      // across id/thread_id can otherwise traverse unrelated channel history.
++      const root = this.db.prepare(
++        `SELECT * FROM messages WHERE id = ? AND channel_id = ? AND seq ${op} ?`,
++      ).get(opts.threadId, ch.id, boundary) as MessageRow | undefined;
++      const replies = this.db.prepare(
++        `SELECT * FROM messages WHERE channel_id = ? AND thread_id = ? AND seq ${op} ?
++         ORDER BY seq ${order} LIMIT ?`,
++      ).all(ch.id, opts.threadId, boundary, limit) as MessageRow[];
++      rows = [...(root ? [root] : []), ...replies]
++        .sort((a, b) => ascending ? a.seq - b.seq : b.seq - a.seq)
++        .slice(0, limit);
+     } else {
+       rows = this.db.prepare(
+-        `SELECT * FROM messages
+-         WHERE channel_id = ? AND thread_id IS NULL
+-         ORDER BY seq DESC LIMIT ?`,
+-      ).all(ch.id, limit) as MessageRow[];
+-      rows.reverse();
++        `SELECT * FROM messages WHERE channel_id = ? AND thread_id IS NULL AND seq ${op} ?
++         ORDER BY seq ${order} LIMIT ?`,
++      ).all(ch.id, boundary, limit) as MessageRow[];
+     }
++    if (!ascending) rows.reverse();
+     const messages = this.decorate(rows.map((r) => this.mapMessage(r)), actor.id);
+-    const scope = opts.threadId
+-      ? this.db.prepare(
+-          `SELECT COALESCE(MIN(seq), 0) AS minSeq, COALESCE(MAX(seq), 0) AS maxSeq
+-           FROM messages WHERE channel_id = ? AND (id = ? OR thread_id = ?)`,
+-        ).get(ch.id, opts.threadId, opts.threadId) as { minSeq: number; maxSeq: number }
+-      : this.db.prepare(
+-          `SELECT COALESCE(MIN(seq), 0) AS minSeq, COALESCE(MAX(seq), 0) AS maxSeq
+-           FROM messages WHERE channel_id = ? AND thread_id IS NULL`,
+-        ).get(ch.id) as { minSeq: number; maxSeq: number };
+-    const oldest = messages[0]?.seq ?? 0;
+-    const newest = messages[messages.length - 1]?.seq ?? 0;
+-    const hasOlder = Boolean(oldest && scope.minSeq && scope.minSeq < oldest);
+-    const hasNewer = Boolean(newest && scope.maxSeq && scope.maxSeq > newest);
++    const existsBeyond = (operator: "<" | ">", seq: number): boolean => {
++      if (opts.threadId) {
++        return Boolean(this.db.prepare(
++          `SELECT 1 FROM messages WHERE id = ? AND channel_id = ? AND seq ${operator} ? LIMIT 1`,
++        ).get(opts.threadId, ch.id, seq)) || Boolean(this.db.prepare(
++          `SELECT 1 FROM messages WHERE channel_id = ? AND thread_id = ? AND seq ${operator} ? LIMIT 1`,
++        ).get(ch.id, opts.threadId, seq));
++      }
++      return Boolean(this.db.prepare(
++        `SELECT 1 FROM messages WHERE channel_id = ? AND thread_id IS NULL AND seq ${operator} ? LIMIT 1`,
++      ).get(ch.id, seq));
++    };
++    const oldest = messages[0]?.seq;
++    const newest = messages.at(-1)?.seq;
++    const hasOlder = oldest !== undefined && existsBeyond("<", oldest);
++    const hasNewer = newest !== undefined && existsBeyond(">", newest);
+     return {
+       messages,
+       hasOlder,
