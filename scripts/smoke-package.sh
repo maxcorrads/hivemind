@@ -53,5 +53,6 @@ if [[ "$healthy" -ne 1 ]]; then
 fi
 
 HIVEMIND_HOME="$home_root" HIVEMIND_URL="http://127.0.0.1:$port" "$hivemind" doctor | grep -q "^ok "
+curl --fail --silent "http://127.0.0.1:$port/" | grep -qi "<!doctype html>"
 
 echo "Package smoke test passed"
