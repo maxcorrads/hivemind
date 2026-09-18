@@ -262,10 +262,18 @@ test("inbox cursor does not skip capped mail", async () => {
     const dm = hive.openDm(brain.agent, w.agent.name);
     hive.postMessage(w.agent, { channel: dm.id, body: `ping ${w.agent.name}` });
   }
-  const first = await hive.wait(brain.agent, 200, undefined, { compact: true });
+  const first = await hive.wait(brain.agent, 200, undefined, {
+    compact: true,
+    sessionId: "cursor-contract",
+  });
   assert.equal(first.idle, false);
   assert.ok((first.more ?? 0) > 0);
-  const second = await hive.wait(brain.agent, 200, undefined, { compact: true });
+  assert.ok(first.deliveryId);
+  hive.ackDelivery(brain.agent, first.deliveryId!, "cursor-contract");
+  const second = await hive.wait(brain.agent, 200, undefined, {
+    compact: true,
+    sessionId: "cursor-contract",
+  });
   assert.equal(second.idle, false);
   rmSync(dir, { recursive: true, force: true });
 });
@@ -359,7 +367,10 @@ test("queued counts pending isFor mail and drops after wait", async () => {
   hive.postMessage(brain.agent, { channel: dm.id, body: "do the settings" });
   assert.equal(hive.queuedCounts()[worker.agent.id], 1);
   assert.equal(hive.queuedCounts()[brain.agent.id] ?? 0, 0);
-  await hive.wait(worker.agent, 200);
+  const delivered = await hive.wait(worker.agent, 200, undefined, { sessionId: "queue-contract" });
+  assert.equal(hive.queuedCounts()[worker.agent.id], 1, "in-flight mail remains unacknowledged");
+  assert.ok(delivered.deliveryId);
+  hive.ackDelivery(worker.agent, delivered.deliveryId!, "queue-contract");
   assert.equal(hive.queuedCounts()[worker.agent.id], 0);
   rmSync(dir, { recursive: true, force: true });
 });
