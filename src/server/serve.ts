@@ -12,13 +12,21 @@ import { startTelegram } from "./telegram.ts";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(here, "../..");
 
-export function startServer(opts: { port?: number; hive?: Hive; telegram?: boolean } = {}) {
+export function startServer(
+  opts: {
+    port?: number;
+    hive?: Hive;
+    telegram?: boolean;
+    beforeWaitResponse?: () => void | Promise<void>;
+  } = {},
+) {
   const port = opts.port ?? Number(process.env.HIVEMIND_PORT ?? DEFAULT_PORT);
   const hive = opts.hive ?? new Hive();
   const telegram = startTelegram(hive, opts.telegram !== false);
   const app = createApp(hive, {
     telegramRunning: () => telegram.running(),
     reloadTelegram: () => telegram.reload(),
+    beforeWaitResponse: opts.beforeWaitResponse,
   });
 
   const listener = getRequestListener(app.fetch);
