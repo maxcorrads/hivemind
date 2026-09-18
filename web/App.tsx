@@ -7,7 +7,7 @@ import { api, connectWs, type ChannelPayload, type Snapshot, type TelegramSettin
 import { LaunchSheet } from "./LaunchSheet.tsx";
 import { BotOrigin, BotSetup, BotCredentials } from "./Bots.tsx";
 import { ProjectPlugins } from "./ProjectPlugins.tsx";
-import { InboxReceipt } from "./InboxReceipt.tsx";
+import { InboxReceipt, QueueBadge } from "./InboxReceipt.tsx";
 import { loadMailLog, mergeMailLog, saveMailLog } from "./mail-log.ts";
 import type { MentionPage, ReadSnapshot } from "../src/shared/read-state.ts";
 import { createReadFence, createReadRefresh, createReceiptQueue, createRequestGate, readFields } from "../src/shared/read-client.ts";
@@ -1999,11 +1999,7 @@ function PersonRow({
         {agent.seniority && <span className="sen">{agent.seniority}</span>}
         {agent.focus && <span className="focus">{agent.focus}</span>}
         <InboxReceipt status={inbox} />
-        {queued ? (
-          <em className="queue-badge" title={`${queued} waiting`}>
-            {queued > 99 ? "99+" : queued}
-          </em>
-        ) : null}
+        <QueueBadge count={queued} estimate={inbox?.queued} />
       </button>
       {agent.role === "worker" && setConfirmClear && onClear && (
         confirmClear === agent.name ? (

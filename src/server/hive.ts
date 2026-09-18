@@ -15,7 +15,7 @@ import {
   DEFAULT_PROJECT_SLUG,
   HUMAN_ID,
   HUMAN_NAME,
-  WAIT_MAIL_CAP,
+  WAIT_SCAN_MAX,
   type Agent,
   type BotEvent,
   type BotCredentialView,
@@ -32,14 +32,15 @@ import {
   type Thread,
   type ThreadStatus,
   type WaitResult,
-  type InboxDelivery,
   type InboxStatus,
+  type QueueEstimate,
 } from "../shared/types.ts";
 import { canonicalWorktree, parseProjectSlug, resolveJoinProject } from "../shared/project.ts";
 import { clampSearchLimit, likeNeedle, parseSearchQuery, snippetAround } from "../shared/search-query.ts";
 import { pickName } from "./names.ts";
 import { ReadState } from "./read-state.ts";
-import { INBOX_BATCH_MAX, InboxDeliveryStore } from "./inbox-delivery.ts";
+import { InboxDeliveryStore } from "./inbox-delivery.ts";
+import { InboxReader } from "./inbox-reader.ts";
 import type { MentionPage, ReadSnapshot } from "../shared/read-state.ts";
 import { hiveHome } from "./paths.ts";
 import { preparePrivateDatabase } from "./private-database.ts";
@@ -125,6 +126,7 @@ export class Hive {
   bus = new EventEmitter();
   readonly home: string;
   readonly inbox!: InboxDeliveryStore;
+  private readonly inboxReader!: InboxReader;
   private waiters = new Map<string, Waiter>();
   private telegramOrigin = new Set<string>();
   private readonly readState!: ReadState;
@@ -163,6 +165,7 @@ export class Hive {
       pruneTelegramFailures(this.db);
       this.readState = new ReadState(this.db);
       this.inbox = new InboxDeliveryStore(this.db);
+      this.inboxReader = new InboxReader(this.db, this.inbox);
     } catch (error) {
       try { this.db.close(); } catch { /* preserve the initialization failure */ }
       throw error;
@@ -1671,113 +1674,21 @@ export class Hive {
     return Object.fromEntries(
       this.listAgents()
         .filter((agent) => agent.role === "brain" || agent.role === "worker")
-        .map((agent) => [agent.id, this.inbox.status(agent.id)]),
+        .map((agent) => [agent.id, { ...this.inbox.status(agent.id), queued: this.inboxReader.estimate(agent) }]),
     );
   }
 
-  private offeredBatch(actor: Agent, sessionId: string, seqs: number[], throughSeq: number) {
-    const delivery = this.inbox.offer(actor.id, sessionId, seqs, throughSeq);
-    const bySeq = new Map<number, MessageRow>();
-    for (const group of batches([...new Set(delivery.messageSeqs)])) {
-      const rows = this.db.prepare(
-        `SELECT * FROM messages WHERE seq IN (${group.map(() => "?").join(",")}) ORDER BY seq ASC`,
-      ).all(...group) as MessageRow[];
-      for (const row of rows) bySeq.set(row.seq, row);
-    }
-    const rows = delivery.messageSeqs.map((seq) => bySeq.get(seq)).filter((row): row is MessageRow => Boolean(row));
-    if (rows.length !== delivery.messageSeqs.length) {
-      throw new HiveError(409, "Pending inbox message is no longer accessible");
-    }
-    const channels = new Map(this.listChannels(actor).map((channel) => [channel.id, channel]));
-    const messages = this.mapMessages(rows);
-    for (const message of messages) {
-      const channel = channels.get(message.channelId);
-      if (!channel || !this.canSeeChannel(actor, channel)) {
-        throw new HiveError(409, "Pending inbox message is no longer accessible");
-      }
-    }
-    this.emitQueued(actor.id);
-    return {
-      messages: this.decorate(messages, actor.id),
-      more: this.countUnseen(actor),
-      delivery,
-    };
-  }
-
-  private takeUnseen(
-    actor: Agent,
-    sessionId: string,
-    limit = WAIT_MAIL_CAP,
-  ): { messages: Message[]; more: number; delivery?: InboxDelivery } {
-    this.inbox.requireSession(actor.id, sessionId);
-    const pending = this.inbox.pending(actor.id);
-    if (pending) {
-      return this.offeredBatch(actor, sessionId, JSON.parse(pending.seqs) as number[], pending.through_seq);
-    }
-
-    const row = this.db.prepare("SELECT inbox_cursor FROM agents WHERE id = ?").get(actor.id) as {
-      inbox_cursor: number;
-    };
-    const cursor = row?.inbox_cursor ?? 0;
-    const channels = this.listChannels(actor);
-    if (channels.length === 0) return { messages: [], more: 0 };
-    const channelById = new Map(channels.map((channel) => [channel.id, channel]));
-    const scope = this.visibleChannelScope(actor);
-    const delivered: Message[] = [];
-    const conversations = new Set<string>();
-    const capConversations = actor.role === "brain";
-    let newCursor = cursor;
-    let scan = cursor;
-    let overflow = false;
-
-    for (;;) {
-      const rows = this.db.prepare(
-        `SELECT * FROM messages WHERE seq > ? AND channel_id IN (${scope.sql}) AND author_id != ?
-         ORDER BY seq ASC LIMIT 100`,
-      ).all(scan, ...scope.args, actor.id) as MessageRow[];
-      if (rows.length === 0) break;
-      for (const message of this.mapMessages(rows)) {
-        if (!this.isFor(actor, message, channelById.get(message.channelId))) {
-          newCursor = message.seq;
-          scan = message.seq;
-          continue;
-        }
-        const known = conversations.has(message.channelId);
-        const atCap =
-          delivered.length >= INBOX_BATCH_MAX ||
-          (capConversations ? !known && conversations.size >= limit : delivered.length >= limit);
-        if (atCap) {
-          overflow = true;
-          break;
-        }
-        delivered.push(message);
-        conversations.add(message.channelId);
-        newCursor = message.seq;
-        scan = message.seq;
-      }
-      if (overflow || rows.length < 100) break;
-      scan = rows[rows.length - 1]!.seq;
-    }
-
-    if (delivered.length) {
-      const delivery = this.inbox.offer(actor.id, sessionId, delivered.map((message) => message.seq), newCursor);
-      this.emitQueued(actor.id);
-      return {
-        messages: this.decorate(delivered, actor.id),
-        more: this.countUnseen(actor),
-        delivery,
-      };
-    }
-    if (newCursor > cursor) this.inbox.skipUnaddressed(actor.id, sessionId, newCursor);
-    this.emitQueued(actor.id);
-    return { messages: [], more: 0 };
+  private takeUnseen(actor: Agent, sessionId: string, compact: boolean, scanLimit: number): WaitResult {
+    const result = this.inboxReader.take(this.getAgent(actor.id), sessionId, compact, scanLimit);
+    this.emitQueued(actor.id, result.page!.remaining);
+    return result;
   }
 
   queuedCounts(): Record<string, number> {
     const out: Record<string, number> = {};
     for (const agent of this.listAgents()) {
       if (agent.role !== "brain" && agent.role !== "worker") continue;
-      out[agent.id] = this.countUnseen(agent);
+      out[agent.id] = this.inboxReader.estimate(agent).atLeast;
     }
     return out;
   }
@@ -1790,40 +1701,15 @@ export class Hive {
     );
   }
 
-  private emitQueued(agentId: string) {
+  private emitQueued(agentId: string, estimate?: QueueEstimate) {
     const agent = this.getAgent(agentId);
     if (agent.role !== "brain" && agent.role !== "worker") return;
-    this.bus.emit("queued", { agentId, n: this.countUnseen(agent), inbox: this.inbox.status(agentId) });
-  }
-
-  private countUnseen(actor: Agent, cap = 99): number {
-    if (actor.role !== "brain" && actor.role !== "worker") return 0;
-    const row = this.db.prepare("SELECT inbox_cursor FROM agents WHERE id = ?").get(actor.id) as {
-      inbox_cursor: number;
-    };
-    const cursor = this.inbox.pending(actor.id)?.through_seq ?? row?.inbox_cursor ?? 0;
-    const channels = this.listChannels(actor);
-    if (channels.length === 0) return 0;
-    const channelById = new Map(channels.map((channel) => [channel.id, channel]));
-    const scope = this.visibleChannelScope(actor);
-    let n = 0;
-    let scan = cursor;
-    for (let page = 0; page < 40 && n < cap; page += 1) {
-      const rows = this.db.prepare(
-        `SELECT * FROM messages WHERE seq > ? AND channel_id IN (${scope.sql}) AND author_id != ?
-         ORDER BY seq ASC LIMIT 100`,
-      ).all(scan, ...scope.args, actor.id) as MessageRow[];
-      if (rows.length === 0) break;
-      for (const message of this.mapMessages(rows)) {
-        if (this.isFor(actor, message, channelById.get(message.channelId))) {
-          n += 1;
-          if (n >= cap) return n;
-        }
-      }
-      scan = rows[rows.length - 1]!.seq;
-      if (rows.length < 100) break;
-    }
-    return n;
+    const queued = estimate ?? this.inboxReader.estimate(agent);
+    this.bus.emit("queued", {
+      agentId,
+      n: queued.atLeast,
+      inbox: { ...this.inbox.status(agentId), queued },
+    });
   }
 
   /** Wait wakes agents only for mail addressed to them, not public chatter. */
@@ -1886,22 +1772,10 @@ export class Hive {
   ): Promise<WaitResult> {
     if (actor.role === "bot") throw new HiveError(403, "Bots publish observations; they do not wait for work");
     const compact = Boolean(opts.compact);
-    const pack = (batch: { messages: Message[]; more: number; delivery?: InboxDelivery }): WaitResult => {
-      const labels = new Map<string, string>();
-      return {
-        ...packWait(this.getAgent(actor.id), batch.messages, batch.more, compact, (id) => {
-          let label = labels.get(id);
-          if (label === undefined) {
-            label = channelLabel(this.getChannel(id));
-            labels.set(id, label);
-          }
-          return label;
-        }),
-        ...(batch.delivery ? { delivery: batch.delivery } : {}),
-      };
-    };
+    const empty = () => packWait(this.getAgent(actor.id), [], 0, compact, () => "");
 
-    if (signal?.aborted) return pack({ messages: [], more: 0 });
+    // No session/presence/cursor side effects for work cancelled before admission.
+    if (signal?.aborted) return empty();
 
     const sessionId =
       opts.sessionId ??
@@ -1912,6 +1786,18 @@ export class Hive {
 
     return new Promise((resolve, reject) => {
       let done = false;
+      let scannedRows = 0;
+      let hydratedMessages = 0;
+      let acknowledgedThroughSeq: number | undefined;
+      const take = () => {
+        const batch = this.takeUnseen(actor, sessionId, compact, WAIT_SCAN_MAX - scannedRows);
+        const page = batch.page!;
+        scannedRows += page.scannedRows;
+        hydratedMessages += page.hydratedMessages;
+        acknowledgedThroughSeq ??= page.acknowledgedThroughSeq;
+        batch.page = { ...page, scannedRows, hydratedMessages, acknowledgedThroughSeq };
+        return batch;
+      };
       let waiter: Waiter;
       let timer: ReturnType<typeof setTimeout> | undefined;
       const cleanup = () => {
@@ -1919,20 +1805,20 @@ export class Hive {
         signal?.removeEventListener("abort", onAbort);
         if (timer) clearTimeout(timer);
       };
-      const deliver = (batch: { messages: Message[]; more: number; delivery?: InboxDelivery }) => {
+      const deliver = (batch: WaitResult) => {
         if (done) return;
         done = true;
         cleanup();
         this.touch(actor.id, true);
-        try { resolve(pack(batch)); } catch (error) { reject(error); }
+        resolve(batch);
       };
       const finish = (consume: boolean) => {
         if (done) return;
         if (!consume || signal?.aborted) {
-          deliver({ messages: [], more: 0 });
+          deliver(empty());
           return;
         }
-        try { deliver(this.takeUnseen(actor, sessionId)); }
+        try { deliver(take()); }
         catch (error) { done = true; cleanup(); reject(error); }
       };
       waiter = {
@@ -1956,8 +1842,8 @@ export class Hive {
         return;
       }
       try {
-        const first = this.takeUnseen(actor, sessionId);
-        if (first.messages.length > 0) deliver(first);
+        const first = take();
+        if (!first.idle || first.page!.continuation || scannedRows === WAIT_SCAN_MAX) deliver(first);
       } catch (error) {
         done = true;
         cleanup();

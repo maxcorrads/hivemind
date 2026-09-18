@@ -133,8 +133,17 @@ Compact wait (MCP always asks for it):
 - worker / `@mention` / control → full body (4k cap)
 - brain, more than one conversation in the batch → Human/brain instructions and attachment-bearing messages stay full; other messages are digested separately by channel, thread and author
 - brain, a single conversation → full bodies
-- `more` if the queue did not fit (brains cap conversations; workers cap messages; every delivery also caps at 100 messages)
+- every page is bounded: 256 scanned message headers, 100 delivered messages for brains / 8 for workers, 8 conversations, and 64 KiB of serialized output (including MCP JSON escaping)
+- `more` is a lower-bound count; `page.remaining.exact` tells whether the entire remaining queue was examined. `page.continuation` means there is more mail **or** more history to scan; zero `more` alone does not mean empty
+- the oldest item progresses first, then up to two explicit mentions/control items within the scanned window get reserved slots, still subject to every cap
 - attachment **metadata** only, never file bytes
+- compact mail and digests include `channelId` for `send`/`history`; `ch` is a display label, with `…` when abbreviated
+
+An oversized legacy/control item includes `recovery` arguments for `history`; the
+original is retained. This is a byte-budget fallback, not the richer digest-recovery
+workflow. Empty scan-progress pages stay inside the MCP wait loop, without a model
+turn. The roster marks partial queue counts with `+`, or `…` when the count is unknown.
+Run `npm run benchmark:inbox -- 4 1200` for an isolated concurrent-client load probe.
 
 Bot observations carry `authorRole: "bot"`, `source: "bot"` and optional origin metadata in mail and history. Quoted names inside their body do not create mentions. They are context for the assigned work, not new Human instructions. Private-channel observations reach subscribed agents; public-channel observations do not wake them. Ingesting a bot event does not itself call a model, though an agent processing delivered mail may use model tokens.
 
