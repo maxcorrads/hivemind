@@ -1,3 +1,4 @@
+import { newerTelegramHealth, telegramDegraded, type TelegramHealth } from "./telegram-health.ts";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import type { Agent, Channel, Message, SearchHit, Thread, ThreadStatus } from "../src/shared/types.ts";
 import { REACTION_EMOJIS } from "../src/shared/types.ts";
@@ -122,6 +123,7 @@ function memberNames(ch: Channel, agents: Agent[]): string {
 
 export function App() {
   const [snap, setSnap] = useState<Snapshot | null>(null);
+  const latestTelegramHealth = useRef<TelegramHealth | null>(null);
   const [sel, setSel] = useState<Sel>(parseHash);
   const [pane, setPane] = useState<ChannelPayload | null>(null);
   const [threadId, setThreadId] = useState<string | null>(() => {
@@ -187,7 +189,8 @@ export function App() {
 
   const refreshSnap = useCallback(async () => {
     const next = await api.snapshot();
-    setSnap(next);
+    latestTelegramHealth.current = newerTelegramHealth(latestTelegramHealth.current, next.telegram);
+    setSnap({ ...next, telegram: { running: false, configured: false, ...next.telegram, ...latestTelegramHealth.current } });
     return next;
   }, []);
 
@@ -210,6 +213,12 @@ export function App() {
     const off = connectWs((ev) => {
       if (ev.type === "hello") {
         refreshSnap().catch(() => undefined);
+        return;
+      }
+      if (ev.type === "telegram-health") {
+        const health = newerTelegramHealth(latestTelegramHealth.current, ev.payload as TelegramHealth);
+        latestTelegramHealth.current = health;
+        setSnap(s => s ? { ...s, telegram: { running: false, configured: false, ...s.telegram, ...health } } : s);
         return;
       }
       if (ev.type === "message") {
@@ -520,7 +529,7 @@ export function App() {
             <button
               type="button"
               className="icon-btn"
-              title="Telegram"
+              title={telegramDegraded(snap.telegram) ? `Telegram · ${snap.telegram?.failures ?? 0} outbound failures · ${snap.telegram?.quarantined ?? 0} quarantined · ${snap.telegram?.retrying ?? 0} retrying${snap.telegram?.lastError ? ` · ${snap.telegram.lastError}` : ""}` : "Telegram"}
               onClick={() => {
                 api
                   .telegram()
@@ -541,7 +550,7 @@ export function App() {
                   .catch((e) => setErr(String(e.message || e)));
               }}
             >
-              {snap.telegram?.running ? "✈" : "⌬"}
+              {telegramDegraded(snap.telegram) ? "⚠" : snap.telegram?.running ? "✈" : "⌬"}
             </button>
             <button type="button" className="icon-btn" title="Launch agent" onClick={() => setLaunchOpen(true)}>
               ▶
@@ -1222,7 +1231,8 @@ export function App() {
                 .then((t) => {
                   setTelegram(t);
                   setTgToken("");
-                  setSnap((s) => (s ? { ...s, telegram: { running: t.running, configured: t.configured } } : s));
+                  latestTelegramHealth.current = newerTelegramHealth(latestTelegramHealth.current, t);
+                  setSnap((s) => (s ? { ...s, telegram: { running: t.running, configured: t.configured, ...latestTelegramHealth.current } } : s));
                 })
                 .catch((ex) => setErr(String(ex.message || ex)));
             }}

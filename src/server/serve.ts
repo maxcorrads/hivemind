@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import type { Socket } from "node:net";
 import { readFileSync, existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,18 +14,26 @@ import { LocalHumanAuth } from "./local-auth.ts";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(here, "../..");
 
-export function startServer(opts: { port?: number; hive?: Hive; telegram?: boolean } = {}) {
+export function startServer(opts: { port?: number; hive?: Hive; telegram?: boolean; shutdownGraceMs?: number } = {}) {
   const port = opts.port ?? Number(process.env.HIVEMIND_PORT ?? DEFAULT_PORT);
   const hive = opts.hive ?? new Hive();
   const telegram = startTelegram(hive, opts.telegram !== false);
   const app = createApp(hive, {
     telegramRunning: () => telegram.running(),
     reloadTelegram: () => telegram.reload(),
+    configureTelegram: input => telegram.configure(input),
   });
 
   const humanAuth = new LocalHumanAuth();
+  let closing = false;
+  const sockets = new Set<Socket>();
   const listener = getRequestListener(app.fetch);
   const server = createServer((req, res) => {
+    if (closing) {
+      res.writeHead(503, { "Connection": "close", "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Server is shutting down" }));
+      return;
+    }
     if (!humanAuth.handleHttp(req, res)) return;
     const url = req.url ?? "/";
     if (url.startsWith("/api") || url.startsWith("/ws")) {
@@ -35,16 +44,22 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
     listener(req, res);
   });
 
+  server.on("connection", socket => {
+    if (closing) { socket.destroy(); return; }
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+  });
   const wss = new WebSocketServer({
-    server,
-    path: "/ws",
+    server, path: "/ws",
     verifyClient: ({ req }, done) => {
+      if (closing) { done(false, 503, "Server is shutting down"); return; }
       const allowed = humanAuth.allowsWebSocket(req);
       done(allowed, allowed ? undefined : 403, allowed ? undefined : "Forbidden");
     },
   });
   const clients = new Set<WebSocket>();
   wss.on("connection", (ws) => {
+    if (closing) { ws.terminate(); return; }
     clients.add(ws);
     ws.send(JSON.stringify({ type: "hello", at: Date.now() }));
     ws.on("close", () => clients.delete(ws));
@@ -62,6 +77,7 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
   const onThread = (payload: unknown) => emit("thread", payload);
   const onReaction = (payload: unknown) => emit("reaction", payload);
   const onQueued = (payload: unknown) => emit("queued", payload);
+  const onTelegramHealth = (payload: unknown) => emit("telegram-health", payload);
   const onProject = (payload: unknown) => emit("project", payload);
   hive.bus.on("message", onMessage);
   hive.bus.on("agent", onAgent);
@@ -70,6 +86,7 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
   hive.bus.on("reaction", onReaction);
   hive.bus.on("queued", onQueued);
   hive.bus.on("project", onProject);
+  hive.bus.on("telegram-health", onTelegramHealth);
 
   server.requestTimeout = 0;
   server.headersTimeout = 0;
@@ -87,11 +104,20 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
     });
   });
 
-  let stopped: Promise<void> | undefined;
-  const shutdown = (): Promise<void> => {
-    if (stopped) return stopped;
+  let shutdownTask: Promise<void> | null = null;
+  const shutdown = () => {
+    if (shutdownTask) return shutdownTask;
+    // Fence admission synchronously, before cancellation or any drain await.
+    closing = true;
+    const closeHttp = () => new Promise<void>((resolve, reject) => {
+      server.close(error => {
+        if (error && (error as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING") reject(error);
+        else resolve();
+      });
+      server.closeIdleConnections();
+    });
+    const httpClosed = server.listening ? closeHttp() : ready.then(closeHttp, () => undefined);
     clearInterval(sweep);
-    telegram.stop();
     hive.bus.off("message", onMessage);
     hive.bus.off("agent", onAgent);
     hive.bus.off("channel", onChannel);
@@ -99,19 +125,30 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
     hive.bus.off("reaction", onReaction);
     hive.bus.off("queued", onQueued);
     hive.bus.off("project", onProject);
-    // Revoked sessions must not retain a live subscription during shutdown.
-    for (const ws of clients) ws.terminate();
-    clients.clear();
-    stopped = Promise.all([
-      new Promise<void>((resolve) => wss.close(() => resolve())),
-      new Promise<void>((resolve) => {
-        server.close(() => resolve());
-        server.closeIdleConnections();
-      }),
-    ]).then(() => undefined);
-    // Hive ownership is unchanged: the caller closes its database after any
-    // non-HTTP integrations have drained. Do not close it under active work.
-    return stopped;
+    hive.bus.off("telegram-health", onTelegramHealth);
+    hive.cancelWaits();
+    for (const ws of clients) ws.close(1001, "server shutdown");
+    const wsClosed = new Promise<void>(resolve => wss.close(() => resolve()));
+    const bridgeStopped = telegram.stop();
+    const grace = Math.min(30_000, Math.max(50, opts.shutdownGraceMs ?? 5_000));
+    let timer: ReturnType<typeof setTimeout>;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        for (const ws of clients) ws.terminate();
+        for (const socket of sockets) socket.destroy();
+        // Do not close the database under a bridge that has not drained.
+        reject(new Error("Shutdown drain deadline exceeded; connections terminated"));
+      }, grace);
+    });
+    // Even if the grace deadline wins, close an owned database when its users eventually finish.
+    const drained = Promise.allSettled([bridgeStopped, httpClosed, wsClosed]).then(results => {
+      // A completed drain may report a persistence error; its users are still finished.
+      if (!opts.hive) hive.db.close();
+      const failed = results.find(result => result.status === "rejected");
+      if (failed?.status === "rejected") throw failed.reason;
+    });
+    shutdownTask = Promise.race([drained, deadline]).finally(() => clearTimeout(timer));
+    return shutdownTask;
   };
   return { server, hive, port, shutdown, ready };
 }
