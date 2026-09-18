@@ -49,5 +49,6 @@
     "src",
     "dist/web",
     "README.md"
-  ]
+  ],
+  "license": "SEE LICENSE IN LICENSE"
 }
