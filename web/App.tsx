@@ -1,11 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import type { Agent, Channel, Message, SearchHit, Thread, ThreadStatus } from "../src/shared/types.ts";
 import { REACTION_EMOJIS } from "../src/shared/types.ts";
+import { isDirectRecipient } from '../src/shared/message-target.ts';
 import { isLiveSearchQuery, parseSearchQuery } from "../src/shared/search-query.ts";
 import { api, connectWs, type ChannelPayload, type Snapshot, type TelegramSettings } from "./api.ts";
 import { LaunchSheet } from "./LaunchSheet.tsx";
+import { BotOrigin, BotSetup } from "./Bots.tsx";
+import { ProjectPlugins } from "./ProjectPlugins.tsx";
+import { InboxReceipt, QueueBadge } from "./InboxReceipt.tsx";
+import type { InboxStatus } from "../src/shared/types.ts";
 import { loadMailLog, mergeMailLog, saveMailLog } from "./mail-log.ts";
 import { renderBody } from "./markdown.tsx";
+import { TaskCard } from './TaskCard.tsx';
+import { RoomPanel } from './RoomPanel.tsx';
+import type { TaskSnapshot } from '../src/shared/tasks.ts';
+import { selectThread, beginThreadLoad, failThreadLoad, receiveThreadMessage, receiveThreadTask, receiveThreadSnapshot, type ThreadView } from './thread-state.ts';
 
 type InboxBox = "unread" | "all";
 
@@ -61,7 +70,7 @@ function upsertById<T extends { id: string }>(list: T[], item: T): T[] {
   return [...list, item];
 }
 
-function applyMessageToSnap(
+export function applyMessageToSnap(
   snap: Snapshot,
   msg: Message,
   viewingId: string | null,
@@ -74,7 +83,7 @@ function applyMessageToSnap(
     unread[msg.channelId] = (unread[msg.channelId] ?? 0) + 1;
   }
   let mentions = snap.mentions;
-  if (msg.mentions.includes("human") && !viewingThis) {
+  if (isDirectRecipient(msg, snap.you.id) && !viewingThis) {
     mentions = [msg, ...mentions.filter((m) => m.id !== msg.id)].slice(0, 30);
   }
   return { ...snap, unread, mentions };
@@ -126,11 +135,13 @@ export function App() {
     const start = parseHash();
     return start.kind === "channel" ? start.thread ?? null : null;
   });
-  const [threadPane, setThreadPane] = useState<ChannelPayload | null>(null);
+  const [threadView, setThreadView] = useState<ThreadView | null>(null);
+  const threadPane = sel.kind === 'channel' && threadView?.channelId === sel.id && threadView.threadId === threadId ? threadView.pane : null;
   const [draft, setDraft] = useState("");
   const [threadDraft, setThreadDraft] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [live, setLive] = useState(false);
+  const [roomTick, setRoomTick] = useState(0);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [newTopic, setNewTopic] = useState("");
@@ -138,6 +149,9 @@ export function App() {
   const [newMembers, setNewMembers] = useState<string[]>([]);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteNames, setInviteNames] = useState<string[]>([]);
+  const [botProject, setBotProject] = useState<string | null>(null);
+  const [pluginsProject, setPluginsProject] = useState<string | null>(null);
+  const [botBusy, setBotBusy] = useState(false);
   const [confirmClear, setConfirmClear] = useState<string | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [launchOpen, setLaunchOpen] = useState(false);
@@ -177,6 +191,31 @@ export function App() {
   const threadIdRef = useRef(threadId);
   threadIdRef.current = threadId;
   const channelsRef = useRef<Channel[]>([]);
+  const threadLoadIdRef = useRef(0);
+
+  const viewingThread = useCallback((channelId: string, root: string) =>
+    selRef.current.kind === 'channel' && selRef.current.id === channelId && threadIdRef.current === root, []);
+
+  const loadThread = useCallback(async (channelId: string, root: string) => {
+    if (!viewingThread(channelId, root)) return;
+    const requestId = ++threadLoadIdRef.current;
+    setThreadView(view => beginThreadLoad(view, channelId, root, requestId));
+    try {
+      const data = await api.messages(channelId, root);
+      if (viewingThread(channelId, root)) setThreadView(view => receiveThreadSnapshot(view, root, data, requestId));
+    } catch (error) {
+      if (viewingThread(channelId, root) && requestId === threadLoadIdRef.current) {
+        setThreadView(view => failThreadLoad(view, requestId));
+        throw error;
+      }
+    }
+  }, [viewingThread]);
+
+  const onThreadMessage = useCallback((message: Message) => {
+    const root = threadIdRef.current;
+    if (root && viewingThread(message.channelId, root))
+      setThreadView(view => receiveThreadMessage(selectThread(view, message.channelId, root), message));
+  }, [viewingThread]);
 
   const refreshSnap = useCallback(async () => {
     const next = await api.snapshot();
@@ -202,13 +241,17 @@ export function App() {
     refreshSnap().catch((e) => setErr(String(e.message || e)));
     const off = connectWs((ev) => {
       if (ev.type === "hello") {
+        setRoomTick(t => t + 1);
         refreshSnap().catch(() => undefined);
+        const selected = selRef.current;
+        const root = threadIdRef.current;
+        if (selected.kind === 'channel' && root) loadThread(selected.id, root).catch(() => undefined);
         return;
       }
       if (ev.type === "message") {
         const msg = ev.payload as Message;
         setPane((p) => patchPane(p, msg, null));
-        setThreadPane((p) => patchPane(p, msg, threadIdRef.current));
+        onThreadMessage(msg);
         const viewing = selRef.current.kind === "channel" ? selRef.current.id : null;
         setSnap((s) => (s ? applyMessageToSnap(s, msg, viewing, threadIdRef.current) : s));
         setMailLog((prev) => {
@@ -222,7 +265,7 @@ export function App() {
         const payload = ev.payload as { message?: Message };
         if (payload.message) {
           setPane((p) => replaceMessage(p, payload.message!));
-          setThreadPane((p) => replaceMessage(p, payload.message!));
+          onThreadMessage(payload.message);
         }
         return;
       }
@@ -245,8 +288,23 @@ export function App() {
         return;
       }
       if (ev.type === "queued") {
-        const q = ev.payload as { agentId: string; n: number };
-        setSnap((s) => (s ? { ...s, queued: { ...s.queued, [q.agentId]: q.n } } : s));
+        const q = ev.payload as { agentId: string; n: number; inbox: InboxStatus };
+        setSnap((s) => (s ? { ...s, queued: { ...s.queued, [q.agentId]: q.n }, inbox: { ...s.inbox, [q.agentId]: q.inbox } } : s));
+        return;
+      }
+      if (ev.type === 'task') {
+        const task = ev.payload as TaskSnapshot;
+        if (selRef.current.kind === 'channel' && selRef.current.id === task.channelId) setRoomTick(t => t + 1);
+        if (viewingThread(task.channelId, task.id))
+          setThreadView(view => receiveThreadTask(selectThread(view, task.channelId, task.id), task));
+        return;
+      }
+      if (ev.type === 'room') {
+        const payload = ev.payload as { channelId: string };
+        if (selRef.current.kind === 'channel' && selRef.current.id === payload.channelId) {
+          setRoomTick(t => t + 1);
+          if (threadIdRef.current) loadThread(payload.channelId, threadIdRef.current).catch(() => undefined);
+        }
         return;
       }
       if (ev.type === "project") {
@@ -264,7 +322,7 @@ export function App() {
       off();
       window.removeEventListener("hashchange", onHash);
     };
-  }, [loadChannel, refreshSnap]);
+  }, [loadChannel, refreshSnap, loadThread, onThreadMessage, viewingThread]);
 
   const missingChannel = Boolean(snap && sel.kind === "channel" && !snap.channels.some((c) => c.id === sel.id));
 
@@ -301,11 +359,13 @@ export function App() {
 
   useEffect(() => {
     if (!threadId || sel.kind !== "channel" || missingChannel) {
-      setThreadPane(null);
+      setThreadView(null);
       return;
     }
-    api.messages(sel.id, threadId).then(setThreadPane).catch((e) => setErr(String(e.message || e)));
-  }, [threadId, sel, missingChannel]);
+    loadThread(sel.id, threadId).catch((e) => {
+      if (viewingThread(sel.id, threadId)) setErr(String(e.message || e));
+    });
+  }, [threadId, sel, missingChannel, loadThread, viewingThread]);
 
   useEffect(() => {
     const apply = () => {
@@ -439,7 +499,7 @@ export function App() {
     await api.send(sel.id, body.trim(), tid, attachmentIds);
     if (tid) setThreadDraft("");
     else setDraft("");
-    if (tid) setThreadPane(await api.messages(sel.id, tid));
+    if (tid) await loadThread(sel.id, tid);
   };
 
   const onCreate = async () => {
@@ -684,7 +744,10 @@ export function App() {
                     </div>
                     <AgentList
                       agents={hiveAgents}
+                      projectName={project.name}
+                      onCreateBot={() => setBotProject(project.id)}
                       queued={snap.queued ?? {}}
+                      inbox={snap.inbox}
                       onOpen={onAgent}
                       confirmClear={confirmClear}
                       setConfirmClear={setConfirmClear}
@@ -790,13 +853,14 @@ export function App() {
                   </p>
                 )}
               </div>
-              {activeChannel?.type === "private" && (
+              {(activeChannel?.type === "private" || activeChannel?.type === "public") && (
                 <button type="button" className="text-btn" onClick={() => setInviteOpen(true)}>
                   Invite
                 </button>
               )}
             </header>
             <div className="stream">
+              {activeChannel && ['private', 'public'].includes(activeChannel.type) && <RoomPanel key={activeChannel.id} channel={activeChannel} agents={snap.agents} tick={roomTick} />}
               {pane?.hasOlder && (
                 <button
                   type="button"
@@ -860,12 +924,12 @@ export function App() {
               <p>replies on this message</p>
             </div>
             <div className="thread-tools">
-              <select
+              {threadPane.task ? <span className="st">{threadPane.task.state.replaceAll('_', ' ')}</span> : <select
                 value={threadPane.threads.find((t) => t.id === threadId)?.status ?? "open"}
                 onChange={(e) => {
                   const status = e.target.value as ThreadStatus;
                   api.setStatus(threadId, status).then(() =>
-                    api.messages(sel.id, threadId).then(setThreadPane),
+                    loadThread(sel.id, threadId),
                   );
                 }}
               >
@@ -874,7 +938,7 @@ export function App() {
                     {s.replace("_", " ")}
                   </option>
                 ))}
-              </select>
+              </select>}
               <button
                 type="button"
                 className="plus"
@@ -888,13 +952,14 @@ export function App() {
             </div>
           </header>
           <div className="stream">
+            {threadPane.task && <TaskCard task={threadPane.task} />}
             {threadPane.messages.map((m) => (
               <Msg
                 key={m.id}
                 m={m}
                 replies={0}
                 status={null}
-                onReact={(emoji) => api.react(m.seq, emoji).then((r) => setThreadPane((p) => replaceMessage(p, r.message)))}
+                onReact={(emoji) => api.react(m.seq, emoji).then((r) => onThreadMessage(r.message))}
               />
             ))}
             <div ref={threadBottomRef} />
@@ -968,6 +1033,17 @@ export function App() {
         </div>
       )}
 
+      {botProject && projects.some((p) => p.id === botProject) && (
+        <div className="modal">
+          <div className="sheet" role="dialog" aria-modal="true" aria-label="Create project bot">
+            <h2>Create bot</h2>
+            <BotSetup key={botProject} project={projects.find((p) => p.id === botProject)!}
+              onBusy={setBotBusy} onCreated={() => { void refreshSnap().catch((e) => setErr(String(e.message || e))); }} />
+            <div className="row"><button type="button" disabled={botBusy} onClick={() => setBotProject(null)}>Close</button></div>
+          </div>
+        </div>
+      )}
+
       {inviteOpen && activeChannel && (
         <div className="modal" onClick={() => setInviteOpen(false)}>
           <form
@@ -988,7 +1064,7 @@ export function App() {
           >
             <h2>Invite to #{activeChannel.name}</h2>
             <fieldset className="checks">
-              <legend>Agents</legend>
+              <legend>Agents and bots</legend>
               {snap.agents
                 .filter(
                   (a) =>
@@ -1050,6 +1126,7 @@ export function App() {
             }}
           >
             <h2>Project {editingProject}</h2>
+            <button type="button" className="text-btn" onClick={() => setPluginsProject(editingProject)}>Plugins…</button>
             <label>
               Name
               <input value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)} autoFocus />
@@ -1118,6 +1195,11 @@ export function App() {
             </div>
           </form>
         </div>
+      )}
+
+      {pluginsProject && projects.some((p) => p.slug === pluginsProject) && (
+        <ProjectPlugins key={pluginsProject} project={projects.find((p) => p.slug === pluginsProject)!}
+          onClose={() => setPluginsProject(null)} />
       )}
 
       {creatingProject && (
@@ -1358,7 +1440,7 @@ function SearchHitMsg({ hit, q }: { hit: SearchHit; q: string }) {
   );
 }
 
-function SearchDesk({
+export function SearchDesk({
   hiveName,
   q,
   hits,
@@ -1397,13 +1479,16 @@ function SearchDesk({
         {hits.map((hit) => {
           const where = hit.channelType === "dm" ? hit.channelName : `#${hit.channelName}`;
           return (
-            <button key={hit.seq} type="button" className="inbox-item" onClick={() => onOpen(hit)}>
-              <SearchHitMsg hit={hit} q={q} />
-              <span className="open-link">
-                {where}
-                {hit.threadId ? " · open thread" : " · open conversation"}
-              </span>
-            </button>
+            <div key={hit.seq} className="inbox-item">
+              <button type="button" className="search-hit-open" onClick={() => onOpen(hit)}>
+                <SearchHitMsg hit={hit} q={q} />
+                <span className="open-link">
+                  {where}
+                  {hit.threadId ? " · open thread" : " · open conversation"}
+                </span>
+              </button>
+              <BotOrigin event={hit.botEvent} />
+            </div>
           );
         })}
         {hasMore && (
@@ -1521,9 +1606,11 @@ function Msg({
           <strong>{m.authorName}</strong>
           <span className="role">{m.authorRole}</span>
           <time>{time}</time>
+          {m.taskEvent && <span className="st">Task {m.taskEvent.action.type} · v{m.taskEvent.revision}</span>}
           {status && <span className={`st st-${status}`}>{status.replace("_", " ")}</span>}
         </div>
         {m.body && <div className="msg-b">{renderBody(m.body)}</div>}
+        <BotOrigin event={m.botEvent} />
         {(m.attachments?.length ?? 0) > 0 && (
           <div className="atts">
             {m.attachments!.map((a) =>
@@ -1599,7 +1686,7 @@ function Composer({
 }) {
   const [hint, setHint] = useState<Agent[]>([]);
   const [files, setFiles] = useState<File[]>([]);
-  const names = useMemo(() => agents, [agents]);
+  const names = useMemo(() => agents.filter((a) => a.role !== "bot"), [agents]);
   const pick = useRef<HTMLInputElement>(null);
 
   const addFiles = (list: FileList | File[]) => {
@@ -1724,16 +1811,22 @@ function Avatar({ name, role, online, small }: { name: string; role?: string; on
   );
 }
 
-function AgentList({
+export function AgentList({
   agents,
+  projectName,
+  onCreateBot,
   queued,
+  inbox = {},
   onOpen,
   confirmClear,
   setConfirmClear,
   onClear,
 }: {
   agents: Agent[];
+  projectName: string;
+  onCreateBot: () => void;
   queued: Record<string, number>;
+  inbox?: Record<string, InboxStatus>;
   onOpen: (a: Agent) => void;
   confirmClear: string | null;
   setConfirmClear: (n: string | null) => void;
@@ -1742,6 +1835,7 @@ function AgentList({
   const human = agents.find((a) => a.role === "human");
   const brains = agents.filter((a) => a.role === "brain");
   const workers = agents.filter((a) => a.role === "worker");
+  const bots = agents.filter((a) => a.role === "bot");
   const rank = { senior: 0, mid: 1, junior: 2 } as const;
   workers.sort((a, b) => (rank[a.seniority ?? "mid"] ?? 3) - (rank[b.seniority ?? "mid"] ?? 3) || a.name.localeCompare(b.name));
 
@@ -1750,7 +1844,7 @@ function AgentList({
       {human && <PersonRow agent={human} onOpen={() => undefined} self />}
       {brains.length > 0 && <div className="subh">brain</div>}
       {brains.map((a) => (
-        <PersonRow key={a.id} agent={a} queued={queued[a.id] ?? 0} onOpen={() => onOpen(a)} />
+        <PersonRow key={a.id} agent={a} queued={queued[a.id] ?? 0} inbox={inbox[a.id]} onOpen={() => onOpen(a)} />
       ))}
       {workers.length > 0 && <div className="subh">worker</div>}
       {workers.map((a) => (
@@ -1758,12 +1852,19 @@ function AgentList({
           key={a.id}
           agent={a}
           queued={queued[a.id] ?? 0}
+          inbox={inbox[a.id]}
           onOpen={() => onOpen(a)}
           confirmClear={confirmClear}
           setConfirmClear={setConfirmClear}
           onClear={onClear}
         />
       ))}
+      <div className="subh bot-h">
+        <span>bot · context only</span>
+        <button type="button" className="plus" title={`Create bot in ${projectName}`}
+          aria-label={`Create bot in ${projectName}`} onClick={onCreateBot}>+</button>
+      </div>
+      {bots.map((a) => <PersonRow key={a.id} agent={a} onOpen={() => undefined} self />)}
       {brains.length + workers.length === 0 && (
         <p className="empty-mini">
           Open Codex, Claude, or Cursor, then <code>hivemind join --as brain</code> or{" "}
@@ -1777,6 +1878,7 @@ function AgentList({
 function PersonRow({
   agent,
   queued,
+  inbox,
   onOpen,
   self,
   confirmClear,
@@ -1785,6 +1887,7 @@ function PersonRow({
 }: {
   agent: Agent;
   queued?: number;
+  inbox?: InboxStatus;
   onOpen: () => void;
   self?: boolean;
   confirmClear?: string | null;
@@ -1796,21 +1899,22 @@ function PersonRow({
     <div className={`person ${agent.online ? "on" : "off"}`}>
       <button type="button" className="person-main" onClick={onOpen} disabled={self}>
         <Avatar name={agent.name} role={agent.role} online={agent.online} small />
-        <span className="pn">{agent.name}</span>
-        {bars > 0 && (
-          <span className="stripes" title={agent.seniority ?? ""}>
-            {Array.from({ length: bars }, (_, i) => (
-              <i key={i} />
-            ))}
+        <span className="person-details">
+          <span className="person-label">
+            <span className="pn">{agent.name}</span>
+            {bars > 0 && (
+              <span className="stripes" title={agent.seniority ?? ""}>
+                {Array.from({ length: bars }, (_, i) => (
+                  <i key={i} />
+                ))}
+              </span>
+            )}
+            {agent.seniority && <span className="sen">{agent.seniority}</span>}
           </span>
-        )}
-        {agent.seniority && <span className="sen">{agent.seniority}</span>}
-        {agent.focus && <span className="focus">{agent.focus}</span>}
-        {queued ? (
-          <em className="queue-badge" title={`${queued} waiting`}>
-            {queued > 99 ? "99+" : queued}
-          </em>
-        ) : null}
+          {agent.focus && <span className="focus">{agent.focus}</span>}
+          <InboxReceipt status={inbox} />
+        </span>
+        <QueueBadge count={queued} estimate={inbox?.queued} />
       </button>
       {agent.role === "worker" && setConfirmClear && onClear && (
         confirmClear === agent.name ? (

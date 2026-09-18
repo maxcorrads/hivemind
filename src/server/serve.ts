@@ -53,6 +53,8 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
   const onReaction = (payload: unknown) => emit("reaction", payload);
   const onQueued = (payload: unknown) => emit("queued", payload);
   const onProject = (payload: unknown) => emit("project", payload);
+  const onTask = (payload: unknown) => emit('task', payload);
+  const onRoom = (payload: unknown) => emit('room', payload);
   hive.bus.on("message", onMessage);
   hive.bus.on("agent", onAgent);
   hive.bus.on("channel", onChannel);
@@ -60,6 +62,8 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
   hive.bus.on("reaction", onReaction);
   hive.bus.on("queued", onQueued);
   hive.bus.on("project", onProject);
+  hive.bus.on('task', onTask);
+  hive.bus.on('room', onRoom);
 
   server.requestTimeout = 0;
   server.headersTimeout = 0;
@@ -87,6 +91,8 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
     hive.bus.off("reaction", onReaction);
     hive.bus.off("queued", onQueued);
     hive.bus.off("project", onProject);
+    hive.bus.off('task', onTask);
+    hive.bus.off('room', onRoom);
     wss.close();
     server.close();
   };
