@@ -1,0 +1,132 @@
+name: Validate and publish reviewed fixes
+
+on:
+  push:
+    branches: [maintenance/review-fixes-20260918]
+    paths: [.github/workflows/review-fix-publish.yml, repair-transfer.json]
+
+permissions:
+  contents: read
+
+jobs:
+  transfer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.manifest.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Load the selected Git object bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p transfer
+          blob=$(jq -r .blob_sha repair-transfer.json)
+          gh api "repos/$GITHUB_REPOSITORY/git/blobs/$blob" --jq .content | base64 --decode > transfer/received.bundle
+          cp repair-transfer.json transfer/manifest.json
+      - name: Verify byte integrity before using any transferred commit
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, json, pathlib
+          manifest = json.loads(pathlib.Path('repair-transfer.json').read_text())
+          data = pathlib.Path('transfer/received.bundle').read_bytes()
+          for change in sorted(manifest['corrections'], key=lambda x: x['offset'], reverse=True):
+              offset = change['offset']
+              old = base64.b64decode(change['old'])
+              new = base64.b64decode(change['new'])
+              assert data[offset:offset + len(old)] == old, 'Transfer correction does not match'
+              data = data[:offset] + new + data[offset + len(old):]
+          actual = hashlib.sha256(data).hexdigest()
+          print('Bundle SHA-256:', actual)
+          assert actual == manifest['bundle_sha256'], 'Transfer checksum mismatch; no branch updates permitted'
+          pathlib.Path('transfer/verified.bundle').write_bytes(data)
+          PY
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*'
+          git bundle verify transfer/verified.bundle
+      - id: manifest
+        run: echo "matrix=$(jq -c .prs repair-transfer.json)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verified-repair-transfer
+          path: transfer/
+          retention-days: 1
+          if-no-files-found: error
+
+  validate-and-push:
+    needs: transfer
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.transfer.outputs.matrix) }}
+    env:
+      TARGET_PR: ${{ matrix.pr }}
+      TARGET_BRANCH: ${{ matrix.branch }}
+      EXPECTED_OLD: ${{ matrix.old }}
+      EXPECTED_NEW: ${{ matrix.new }}
+      EXPECTED_TREE: ${{ matrix.tree }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: verified-repair-transfer
+          path: transfer
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Provision the actual launcher syntax dependency
+        run: sudo apt-get update && sudo apt-get install --yes zsh
+      - name: Verify ancestry and create an isolated PR checkout
+        run: |
+          case "$TARGET_BRANCH" in fix/issue-*|feature/500-agent-names) ;; *) echo 'Not an authorized repair branch'; exit 1;; esac
+          current=$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | cut -f1)
+          test "$current" = "$EXPECTED_OLD" || test "$current" = "$EXPECTED_NEW"
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*'
+          git fetch "$GITHUB_WORKSPACE/transfer/verified.bundle" "refs/heads/repair-$TARGET_PR:refs/remotes/repair/$TARGET_PR"
+          test "$(git rev-parse refs/remotes/repair/$TARGET_PR)" = "$EXPECTED_NEW"
+          test "$(git rev-parse $EXPECTED_NEW^{tree})" = "$EXPECTED_TREE"
+          git merge-base --is-ancestor "$EXPECTED_OLD" "$EXPECTED_NEW"
+          git worktree add --detach ../pr-checkout "$EXPECTED_NEW"
+          mkdir -p results
+          git diff --stat "$EXPECTED_OLD" "$EXPECTED_NEW" > results/changed-files.txt
+      - name: Install the PR lockfile
+        working-directory: ../pr-checkout
+        run: npm ci
+      - name: Server and web typechecks
+        working-directory: ../pr-checkout
+        run: |
+          npx tsc --noEmit -p tsconfig.json
+          npx tsc --noEmit -p tsconfig.web.json
+      - name: Full server and transport suite
+        working-directory: ../pr-checkout
+        run: set -o pipefail; npm test 2>&1 | tee "$GITHUB_WORKSPACE/results/server-tests.log"
+      - name: UI suite when present
+        working-directory: ../pr-checkout
+        run: set -o pipefail; npm run test:ui --if-present 2>&1 | tee "$GITHUB_WORKSPACE/results/ui-tests.log"
+      - name: Production build and clean diff
+        working-directory: ../pr-checkout
+        run: |
+          npm run build
+          git diff --check
+          git diff --exit-code
+      - name: Fast-forward the unchanged PR branch only after successful checks
+        run: |
+          current=$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | cut -f1)
+          test "$current" = "$EXPECTED_OLD" || test "$current" = "$EXPECTED_NEW"
+          git push origin "$EXPECTED_NEW:refs/heads/$TARGET_BRANCH"
+          printf '{"pr":%s,"head":"%s","tree":"%s","validated":true,"run":"%s/%s/actions/runs/%s"}\n' "$TARGET_PR" "$EXPECTED_NEW" "$EXPECTED_TREE" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > results/published.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: repaired-pr-${{ matrix.pr }}
+          path: results/
+          retention-days: 7
+          if-no-files-found: warn
