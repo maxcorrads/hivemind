@@ -1,0 +1,105 @@
+name: Edge
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: edge-main
+  cancel-in-progress: true
+
+jobs:
+  publish-edge:
+    name: Publish edge
+    if: >-
+      ${{ github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_branch == 'main' }}
+    runs-on: macos-latest
+    timeout-minutes: 20
+    env:
+      EDGE_SHA: ${{ github.event.workflow_run.head_sha }}
+      CI_RUN_ID: ${{ github.event.workflow_run.id }}
+
+    steps:
+      - name: Checkout tested commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Re-run core checks
+        run: npm run check
+
+      - name: Enforce coverage thresholds
+        run: npm run test:coverage
+
+      - name: Build edge package
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p edge-artifacts
+          short_sha="${EDGE_SHA:0:12}"
+          edge_version="0.0.0-edge.${{ github.event.workflow_run.run_number }}.${short_sha}"
+          npm version --no-git-tag-version "${edge_version}"
+          package_file="$(npm pack --silent --pack-destination edge-artifacts)"
+          mv "edge-artifacts/${package_file}" edge-artifacts/hivemind-edge.tgz
+          npm sbom --sbom-format cyclonedx > edge-artifacts/hivemind-edge.sbom.cdx.json
+          shasum -a 256             edge-artifacts/hivemind-edge.tgz             edge-artifacts/hivemind-edge.sbom.cdx.json             > edge-artifacts/SHA256SUMS.txt
+          echo "edge_version=${edge_version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Smoke-test packaged edge
+        run: bash scripts/smoke-package.sh edge-artifacts/hivemind-edge.tgz
+
+      - name: Attest edge package provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: edge-artifacts/hivemind-edge.tgz
+
+      - name: Move rolling edge tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          git tag --force edge "${EDGE_SHA}"
+          git push --force origin refs/tags/edge
+
+      - name: Create or update rolling edge prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EDGE_VERSION: ${{ steps.package.outputs.edge_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          notes="$(cat <<EOF
+          Rolling prerelease from the latest CI-green commit on `main`.
+
+          Version: ${EDGE_VERSION}
+          Commit: ${EDGE_SHA}
+          CI run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${CI_RUN_ID}
+
+          This build is for testing. Stable versions are published separately.
+          EOF
+          )"
+
+          if gh release view edge >/dev/null 2>&1; then
+            gh release edit edge --title "Hivemind Edge" --prerelease --notes "${notes}"
+          else
+            gh release create edge --title "Hivemind Edge" --prerelease --notes "${notes}"
+          fi
+
+          gh release upload edge             edge-artifacts/hivemind-edge.tgz             edge-artifacts/SHA256SUMS.txt             edge-artifacts/hivemind-edge.sbom.cdx.json             --clobber
