@@ -33,12 +33,13 @@ test("Vite builds on the test runtime and serves React with real API and WS prox
         server.shutdown();
         server.server.closeAllConnections();
       }
-      // Start Vite's teardown before destroying sockets so its close listeners
-      // are installed. Force destruction remains failure-path cleanup, not a
-      // substitute for the successful WebSocket close handshake asserted below.
       const viteClosed = vite?.close().then(() => t.diagnostic("Vite closed"));
-      for (const connection of connections) connection.destroy();
-      await Promise.all([viteClosed, backendClosed]);
+      const socketsClosed = [...connections].map((connection) => {
+        const closed = once(connection, "close");
+        connection.destroy();
+        return closed;
+      });
+      await Promise.all([viteClosed, backendClosed, ...socketsClosed]);
       assert.equal(connections.size, 0, "server sockets survived teardown");
     } finally {
       hive?.db.close();
@@ -74,7 +75,20 @@ test("Vite builds on the test runtime and serves React with real API and WS prox
   const module = await fetch(`${base}/main.tsx`, { signal: t.signal });
   assert.equal(module.status, 200);
   assert.match(module.headers.get("content-type") ?? "", /javascript/);
-  assert.match(await module.text(), /createRoot/);
+  const source = await module.text();
+  assert.match(source, /createRoot/);
+  // Fetch the optimized imports a browser actually needs, not just their URLs
+  // in main.tsx. This also observes completion of the asynchronous optimizer.
+  const imports = [...source.matchAll(/from\s+["']([^"']*\/deps\/[^"']+)["']/g)];
+  assert.ok(imports.length > 0, "React's optimized dependencies were not advertised");
+  for (const dependency of imports) {
+    const response = await fetch(new URL(dependency[1]!, base), { signal: t.signal });
+    assert.equal(response.status, 200, dependency[1]);
+    assert.match(response.headers.get("content-type") ?? "", /javascript/);
+    assert.ok((await response.text()).length > 0);
+  }
+  await vite.environments.client.waitForRequestsIdle();
+  t.diagnostic("React dependencies served and initial transforms drained");
   const health = await fetch(`${base}/api/health`, { signal: t.signal });
   assert.equal(health.status, 200);
   assert.deepEqual(await health.json(), { ok: true, name: "hivemind" });
@@ -94,8 +108,7 @@ test("Vite builds on the test runtime and serves React with real API and WS prox
   const [event] = await notification;
   assert.ok(["message", "agent"].includes(JSON.parse(String(event)).type));
 
-  // Exercise the close frame through both proxy endpoints instead of tearing
-  // down three TCP endpoints in the same event-loop turn.
+  // Exercise the close frame through both proxy endpoints before teardown.
   const closed = once(socket, "close", { signal: t.signal });
   socket.close(1000);
   const [code] = await closed;
