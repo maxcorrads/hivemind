@@ -12,6 +12,7 @@ import { parseProjectSlug } from "../shared/project.ts";
 export type AppHooks = {
   telegramRunning?: () => boolean;
   reloadTelegram?: () => boolean;
+  beforeWaitResponse?: () => void | Promise<void>;
 };
 
 function fileDownload(hive: Hive, actor: Agent, id: string) {
@@ -421,6 +422,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       compact: Boolean(body.compact),
       sessionId,
     });
+    await hooks.beforeWaitResponse?.();
     return c.json(result);
   });
   agent.post("/wait/ack", async (c) => {
