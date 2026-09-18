@@ -57,7 +57,7 @@ jobs:
           short_sha="${EDGE_SHA:0:12}"
           edge_version="0.0.0-edge.${{ github.event.workflow_run.run_number }}.${short_sha}"
           npm version --no-git-tag-version "${edge_version}"
-          package_file="$(npm pack --silent --pack-destination edge-artifacts)"
+          package_file="$(npm pack --silent --pack-destination edge-artifacts | tail -n 1)"
           mv "edge-artifacts/${package_file}" edge-artifacts/hivemind-edge.tgz
           npm sbom --sbom-format cyclonedx > edge-artifacts/hivemind-edge.sbom.cdx.json
           shasum -a 256             edge-artifacts/hivemind-edge.tgz             edge-artifacts/hivemind-edge.sbom.cdx.json             > edge-artifacts/SHA256SUMS.txt
