@@ -97,6 +97,17 @@ function toolJson(response: Rpc): Record<string, any> {
 test("real MCP stdio covers join, at-least-once restart, acknowledgement, and cancellation", async (t) => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-mcp-stdio-delivery-"));
   const hive = new Hive(path.join(dir, "hive.db"));
+  const originalWait = hive.wait.bind(hive);
+  let observeCancellation = false;
+  let waitStartedResolve: (() => void) | undefined;
+  let waitAbortedResolve: (() => void) | undefined;
+  hive.wait = async (actor, timeoutMs, signal, opts) => {
+    if (observeCancellation && signal) {
+      waitStartedResolve?.();
+      signal.addEventListener("abort", () => waitAbortedResolve?.(), { once: true });
+    }
+    return originalWait(actor, timeoutMs, signal, opts);
+  };
   const started = startServer({ port: 0, hive, telegram: false });
   const port = await started.ready;
   const base = `http://127.0.0.1:${port}`;
@@ -110,7 +121,7 @@ test("real MCP stdio covers join, at-least-once restart, acknowledgement, and ca
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const baseEnv = {
+  const baseEnv: NodeJS.ProcessEnv = {
     ...process.env,
     HIVEMIND_URL: base,
     HIVEMIND_HOME: dir,
@@ -169,16 +180,44 @@ test("real MCP stdio covers join, at-least-once restart, acknowledgement, and ca
     ).inbox_cursor < message2.seq,
   );
 
-  // The next wait acknowledges message2, then blocks. Cancellation travels
-  // through the real SDK request context and must not manufacture/consume mail.
-  const pending = second.tool(13, "wait", {}, 8_000);
+  // The next wait acknowledges message2, then blocks. MCP cancellation
+  // notifications do not require a JSON-RPC response, so observe propagation
+  // at the actual server-side AbortSignal instead of waiting for a reply.
+  observeCancellation = true;
+  const waitStarted = new Promise<void>((resolve) => {
+    waitStartedResolve = resolve;
+  });
+  const waitAborted = new Promise<void>((resolve) => {
+    waitAbortedResolve = resolve;
+  });
+  second.child.stdin.write(
+    `${JSON.stringify({
+      jsonrpc: "2.0",
+      id: 13,
+      method: "tools/call",
+      params: { name: "wait", arguments: {} },
+    })}\n`,
+  );
+  await waitStarted;
   second.notify("notifications/cancelled", { requestId: 13, reason: "fixture cancellation" });
-  const cancelled = await pending;
-  assert.ok(cancelled.error || cancelled.result?.isError, "cancelled MCP call should not look successful");
+  await Promise.race([
+    waitAborted,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("MCP cancellation did not reach server wait")), 4_000),
+    ),
+  ]);
+  observeCancellation = false;
   assert.ok(
     (
       hive.db.prepare("SELECT inbox_cursor FROM agents WHERE id = ?").get(agent.id) as { inbox_cursor: number }
     ).inbox_cursor >= message2.seq,
+  );
+  assert.equal(
+    hive.db.prepare(
+      "SELECT COUNT(*) AS n FROM inbox_deliveries WHERE agent_id = ? AND status = 'in_flight'",
+    ).get(agent.id) as { n: number }).n,
+    0,
+    "cancelled empty wait must not create an in-flight delivery",
   );
 
   const message3 = hive.postMessage(human, { channel: dm.id, body: "mail after cancelled wait" });
