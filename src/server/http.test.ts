@@ -87,10 +87,25 @@ test("HTTP protocol: join, isolate, wait, Human admin", async () => {
       { body: "build the login form" },
       brainTok,
     );
-    const mail = await json(base, "POST", "/api/agent/wait", { timeoutMs: 800 }, workerTok);
+    const mail = await json(
+      base,
+      "POST",
+      "/api/agent/wait",
+      { timeoutMs: 800, sessionId: "http-protocol-test" },
+      workerTok,
+    );
     assert.equal(mail.data.idle, false);
     const bodies = [...mail.data.messages, ...mail.data.mentions].map((m: { body: string }) => m.body);
     assert.ok(bodies.some((b: string) => /login/.test(b)));
+    assert.ok(mail.data.deliveryId);
+    const ack = await json(
+      base,
+      "POST",
+      "/api/agent/wait/ack",
+      { deliveryId: mail.data.deliveryId, sessionId: "http-protocol-test" },
+      workerTok,
+    );
+    assert.equal(ack.status, 200);
 
     const after = await json(base, "GET", "/api/ui/snapshot");
     assert.ok(after.data.channels.some((c: { type: string }) => c.type === "dm"));
