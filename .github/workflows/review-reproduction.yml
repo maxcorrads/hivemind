@@ -1,0 +1,49 @@
+name: Review reproduction
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/review-reproduction.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  reproduction:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Capture reviewed PR heads without credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          refs=()
+          for n in $(seq 36 64); do refs+=("+refs/pull/$n/head:refs/remotes/review/pr-$n"); done
+          git fetch origin "${refs[@]}"
+          mkdir -p reproduction
+          git bundle create reproduction/review.bundle --all
+          git config --local --unset-all http.https://github.com/.extraheader || true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+          cache: npm
+      - run: npm ci
+      - name: Package installed dependencies for offline tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -czf reproduction/node_modules.tgz node_modules
+          node --version > reproduction/runtime.txt
+          npm --version >> reproduction/runtime.txt
+          git rev-parse HEAD >> reproduction/runtime.txt
+          cp package-lock.json reproduction/package-lock.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: review-reproduction
+          path: reproduction/
+          retention-days: 1
+          if-no-files-found: error
