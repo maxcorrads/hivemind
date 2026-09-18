@@ -63,22 +63,22 @@ function replayConversationEvents(
   afterRevision: number,
   viewingThread: string | null,
 ): ChannelPayload {
-  let current: ChannelPayload | null = pane;
+  let current: ChannelPayload = pane;
   for (const event of events) {
     if (event.revision <= afterRevision) continue;
     if (event.kind === "message") {
-      current = patchPane(current, event.message, viewingThread);
+      current = patchPane(current, event.message, viewingThread) ?? current;
       continue;
     }
     if (event.kind === "reaction") {
-      current = replaceMessage(current, event.message);
+      current = replaceMessage(current, event.message) ?? current;
       continue;
     }
     if (current.channel.id === event.thread.channelId) {
       current = { ...current, threads: upsertById(current.threads, event.thread) };
     }
   }
-  return current ?? pane;
+  return current;
 }
 
 function replaceMessage(pane: ChannelPayload | null, msg: Message): ChannelPayload | null {
