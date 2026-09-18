@@ -1,0 +1,38 @@
+name: Coordination current-main input
+
+# Temporary branch-only source export, removed from the final feature tree.
+on:
+  push:
+    branches: [agent/structured-tasks-rooms-integration]
+    paths: [.github/workflows/coordination-refresh.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  inputs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 738c1dd2cf3b89d7da35d6f8528c1a31bf83149f
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+      - name: Export immutable source and Node 24 runtime
+        run: |
+          set -euo pipefail
+          git branch review-current 738c1dd2cf3b89d7da35d6f8528c1a31bf83149f
+          git bundle create coordination-refresh.bundle review-current
+          mkdir runtime24
+          cp "$(command -v node)" runtime24/node
+          node --version > runtime24/version.txt
+          tar -czf coordination-refresh.tgz coordination-refresh.bundle runtime24
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: coordination-refresh
+          path: coordination-refresh.tgz
+          retention-days: 1
