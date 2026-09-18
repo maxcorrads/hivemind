@@ -1,0 +1,14 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "overrides": [
+    {
+      "files": [
+        "src/shared/launch-prompt.ts",
+        "src/shared/search-query.ts"
+      ],
+      "rules": {
+        "no-control-regex": "off"
+      }
+    }
+  ]
+}

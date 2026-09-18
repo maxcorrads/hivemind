@@ -1,0 +1,156 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pr-title:
+    name: PR title
+    if: github.event_name == 'pull_request'
+    runs-on: macos-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate Conventional Commit title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          node <<'NODE'
+          const title = process.env.PR_TITLE ?? "";
+          const conventional = /^(feat|fix|perf|refactor|docs|test|build|ci|chore|revert|style)(\([a-z0-9._/-]+\))?(!)?: .+/i;
+          if (!conventional.test(title)) {
+            console.error(`Invalid PR title: "${title}"`);
+            console.error("Use e.g. feat: ..., fix(api): ..., or chore(deps): ...");
+            process.exit(1);
+          }
+          NODE
+
+  quality:
+    name: Quality / build / package
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck server and web
+        run: npm run typecheck
+
+      - name: Build production web UI
+        run: npm run build
+
+      - name: Validate and smoke-test release package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          package_file="$(npm pack --silent --pack-destination artifacts | tail -n 1)"
+          echo "Packed artifacts/${package_file}"
+          tar -tzf "artifacts/${package_file}" | sort
+          npm sbom --sbom-format cyclonedx > artifacts/SBOM.cdx.json
+          node -e 'const fs=require("fs"); const sbom=JSON.parse(fs.readFileSync("artifacts/SBOM.cdx.json","utf8")); if (!sbom.bomFormat || !sbom.metadata) process.exit(1)'
+          bash scripts/smoke-package.sh "artifacts/${package_file}"
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+  tests:
+    name: Tests / Node ${{ matrix.node-version }}
+    runs-on: macos-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version:
+          - '22.13.0'
+          - '24'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run tests
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p artifacts
+          npm test 2>&1 | tee "artifacts/tests-node-${{ matrix.node-version }}.log"
+
+      - name: Retain failing test log
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tests-node-${{ matrix.node-version }}
+          path: artifacts/tests-node-${{ matrix.node-version }}.log
+          retention-days: 7
+
+  coverage:
+    name: Coverage
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Collect coverage
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p artifacts
+          npm run test:coverage 2>&1 | tee artifacts/coverage.log
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage
+          path: artifacts/coverage.log
+          retention-days: 7
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
