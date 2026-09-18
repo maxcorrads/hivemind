@@ -1,4 +1,5 @@
 type Fetcher = (path: string, init?: RequestInit) => Promise<Response>;
+import { connectRealtime } from "../src/shared/realtime-client.ts";
 
 /** One coordinator per tab; the HttpOnly cookie itself is shared by all tabs. */
 export function createHumanSession(fetcher: Fetcher = (path, init) => fetch(path, init)) {
@@ -76,45 +77,37 @@ export function connectHumanWs(
     return new WebSocket(`${protocol}://${location.host}/ws`);
   },
 ): () => void {
-  let closed = false;
-  let socket: WebSocket | null = null;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const schedule = () => {
-    if (closed) return;
-    timer = setTimeout(() => { timer = undefined; void connect(); }, 1500);
+  const later = (delay: number) => (run: () => void) => {
+    const timer = setTimeout(run, delay);
+    return () => clearTimeout(timer);
   };
-  const connect = async () => {
-    try {
-      await session.refresh();
-      if (closed) return;
-      const current = makeSocket();
-      socket = current;
-      current.onopen = () => { if (!closed && socket === current) onLive?.(true); };
-      current.onmessage = (event) => {
-        if (closed || socket !== current) return;
-        try { onEvent(JSON.parse(String(event.data))); } catch { /* Ignore invalid events. */ }
-      };
-      current.onerror = () => { /* Failed browser handshakes also emit close. */ };
-      current.onclose = () => {
-        if (closed || socket !== current) return;
+  return connectRealtime(onEvent, onLive, {
+    open: (callbacks) => {
+      let stopped = false;
+      let socket: WebSocket | null = null;
+      void session.refresh().then(() => {
+        if (stopped) return;
+        const current = makeSocket();
+        socket = current;
+        current.onopen = () => { if (!stopped && socket === current) callbacks.opened(); };
+        current.onmessage = (event) => { if (!stopped && socket === current) callbacks.message(event.data); };
+        current.onerror = () => { /* Failed browser handshakes also emit close. */ };
+        current.onclose = () => {
+          if (stopped || socket !== current) return;
+          socket = null;
+          callbacks.closed();
+        };
+      }).catch(() => { if (!stopped) callbacks.closed(); });
+      return () => {
+        stopped = true;
+        if (!socket) return;
+        const current = socket;
         socket = null;
-        onLive?.(false);
-        schedule();
+        current.onopen = current.onmessage = current.onclose = null;
+        current.close();
       };
-    } catch {
-      if (closed) return;
-      onLive?.(false);
-      schedule();
-    }
-  };
-  void connect();
-  return () => {
-    closed = true;
-    if (timer !== undefined) clearTimeout(timer);
-    if (socket) {
-      socket.onopen = socket.onmessage = socket.onclose = null;
-      socket.close();
-      socket = null;
-    }
-  };
+    },
+    deferPresence: later(16),
+    retry: later(1500),
+  });
 }
