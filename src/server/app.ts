@@ -6,12 +6,12 @@ import { resolveUploadMime } from "../shared/mime.ts";
 import { standingOrders } from "../shared/standing-orders.ts";
 import { Hive, describeAgent } from "./hive.ts";
 import { safeFileName } from "./files.ts";
-import { publicTelegramView, readTelegramFile, removeTelegramProjectSlug, writeTelegramFile } from "./telegram.ts";
+import { telegramDestinationForSeq, publicTelegramView, readTelegramFile, removeTelegramProjectSlug, writeTelegramFile } from "./telegram.ts";
 import { parseProjectSlug } from "../shared/project.ts";
 
 export type AppHooks = {
   telegramRunning?: () => boolean;
-  reloadTelegram?: () => boolean;
+  reloadTelegram?: () => boolean | Promise<boolean>;
 };
 
 function fileDownload(hive: Hive, actor: Agent, id: string) {
@@ -53,7 +53,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       telegram: {
         running: Boolean(hooks.telegramRunning?.()),
         configured: publicTelegramView(hive.home).configured,
-        failures: hive.telegramFailureCount(),
+        ...hive.telegramOutboxHealth(),
       },
     });
   });
@@ -61,7 +61,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     hive.getAgent("human");
     return c.json({
       ...publicTelegramView(hive.home, Boolean(hooks.telegramRunning?.())),
-      failures: hive.telegramFailureCount(),
+      ...hive.telegramOutboxHealth(),
     });
   });
   ui.get("/telegram/failures", (c) => {
@@ -70,7 +70,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   });
   ui.post("/telegram/failures/:id/retry", (c) => {
     hive.getAgent("human");
-    hive.retryTelegramFailure(c.req.param("id"));
+    hive.retryTelegramFailure(c.req.param("id"), seq => telegramDestinationForSeq(hive, seq));
     return c.json({ ok: true, failures: hive.telegramFailureCount() });
   });
   ui.post("/telegram/failures/:id/discard", (c) => {
@@ -98,7 +98,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       },
       hive.home,
     );
-    const running = Boolean(hooks.reloadTelegram?.());
+    const running = Boolean(await hooks.reloadTelegram?.());
     return c.json(publicTelegramView(hive.home, running));
   });
   ui.post("/projects", async (c) => {
@@ -120,7 +120,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     });
     return c.json({ project });
   });
-  ui.delete("/projects/:slug", (c) => {
+  ui.delete("/projects/:slug", async (c) => {
     const human = hive.getAgent("human");
     const slug = parseProjectSlug(c.req.param("slug"));
     const chatId = readTelegramFile(hive.home)?.projects[slug];
@@ -131,7 +131,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       /* hive row is already gone */
     }
     try {
-      hooks.reloadTelegram?.();
+      await hooks.reloadTelegram?.();
     } catch {
       /* next serve still rereads telegram.json */
     }

@@ -205,6 +205,11 @@ export function App() {
         refreshSnap().catch(() => undefined);
         return;
       }
+      if (ev.type === "telegram-health") {
+        const health = ev.payload as { failures: number; diagnosticsPruned: number };
+        setSnap(s => s ? { ...s, telegram: { running: false, configured: false, ...s.telegram, ...health } } : s);
+        return;
+      }
       if (ev.type === "message") {
         const msg = ev.payload as Message;
         setPane((p) => patchPane(p, msg, null));
