@@ -63,6 +63,14 @@ function responseError(res: Response, data: unknown): HttpError {
   return new HttpError(res.status, message, code);
 }
 
+async function errorFromResponse(res: Response): Promise<HttpError> {
+  // The HTTP status remains authoritative even when the body is empty, HTML,
+  // malformed JSON, or interrupted while being read. Do not echo arbitrary HTML.
+  let payload: unknown;
+  try { payload = await res.json(); } catch { /* best-effort error details */ }
+  return responseError(res, payload);
+}
+
 export async function agentRequest<T>(
   method: string,
   pathname: string,
@@ -82,12 +90,7 @@ export async function agentRequest<T>(
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: ctrl.signal,
     });
-    const text = await res.text();
-    const data = text ? JSON.parse(text) : {};
-    if (!res.ok) {
-      throw responseError(res, data);
-    }
-    return data as T;
+    return await parseJsonResponse<T>(res);
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -139,10 +142,10 @@ export async function agentUploadFile<T>(
 }
 
 async function parseJsonResponse<T>(res: Response): Promise<T> {
+  if (!res.ok) throw await errorFromResponse(res);
   const text = await res.text();
-  const data = text ? JSON.parse(text) : {};
-  if (!res.ok) throw responseError(res, data);
-  return data as T;
+  // A malformed successful response is a protocol error, not an HTTP error.
+  return (text ? JSON.parse(text) : {}) as T;
 }
 
 function fileNameFromDisposition(disp: string): string {
@@ -158,16 +161,7 @@ export async function agentDownloadToFile(
   const res = await fetch(`${hiveUrl()}${pathname}`, {
     headers: { authorization: `Bearer ${token}` },
   });
-  if (!res.ok) {
-    const text = await res.text();
-    let error = `HTTP ${res.status}`;
-    try {
-      error = JSON.parse(text).error || error;
-    } catch {
-      /* keep */
-    }
-    throw new HttpError(res.status, error);
-  }
+  if (!res.ok) throw await errorFromResponse(res);
   if (!res.body) throw new Error("Empty download");
   const name = fileNameFromDisposition(res.headers.get("content-disposition") ?? "");
   const dest = path.join(destDir, `${filePrefix}-${safeFileName(name)}`);
@@ -187,16 +181,7 @@ export async function agentDownload(
   const res = await fetch(`${hiveUrl()}${pathname}`, {
     headers: { authorization: `Bearer ${token}` },
   });
-  if (!res.ok) {
-    const text = await res.text();
-    let error = `HTTP ${res.status}`;
-    try {
-      error = JSON.parse(text).error || error;
-    } catch {
-      /* keep */
-    }
-    throw new Error(error);
-  }
+  if (!res.ok) throw await errorFromResponse(res);
   const bytes = Buffer.from(await res.arrayBuffer());
   const mime = res.headers.get("content-type") || "application/octet-stream";
   return { bytes, mime, name: fileNameFromDisposition(res.headers.get("content-disposition") ?? "") };
