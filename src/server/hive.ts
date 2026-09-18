@@ -1413,21 +1413,69 @@ export class Hive {
     });
   }
 
-  private takeUnseen(actor: Agent, limit = WAIT_MAIL_CAP): { messages: Message[]; more: number } {
+  private loadDeliveryMessages(actor: Agent, seqs: number[]): Message[] {
+    if (seqs.length === 0) return [];
+    const placeholders = seqs.map(() => "?").join(",");
+    const rows = this.db.prepare(
+      `SELECT * FROM messages WHERE seq IN (${placeholders})`,
+    ).all(...seqs) as MessageRow[];
+    const bySeq = new Map(rows.map((row) => [row.seq, row]));
+    const ordered = seqs
+      .map((seq) => bySeq.get(seq))
+      .filter((row): row is MessageRow => Boolean(row))
+      .map((row) => this.mapMessage(row));
+    return this.decorate(ordered, actor.id);
+  }
+
+  private activeDelivery(agentId: string): DeliveryRow | undefined {
+    return this.db.prepare(
+      "SELECT * FROM inbox_deliveries WHERE agent_id = ? AND status = 'in_flight' LIMIT 1",
+    ).get(agentId) as DeliveryRow | undefined;
+  }
+
+  private deliveryBatch(actor: Agent, row: DeliveryRow): {
+    messages: Message[];
+    more: number;
+    deliveryId: string;
+    deliverySessionId: string;
+  } {
+    const seqs = JSON.parse(row.seqs) as number[];
+    return {
+      messages: this.loadDeliveryMessages(actor, seqs),
+      more: row.more,
+      deliveryId: row.delivery_id,
+      deliverySessionId: row.session_id,
+    };
+  }
+
+  private selectUnseen(actor: Agent, limit = WAIT_MAIL_CAP): {
+    messages: Message[];
+    more: number;
+    advanceCursor: number;
+  } {
     const row = this.db.prepare("SELECT inbox_cursor FROM agents WHERE id = ?").get(actor.id) as {
       inbox_cursor: number;
     };
-    let cursor = row?.inbox_cursor ?? 0;
+    const cursor = row?.inbox_cursor ?? 0;
     const channels = this.listChannels(actor);
-    if (channels.length === 0) return { messages: [], more: 0 };
-    const ids = channels.map((c) => c.id);
+    if (channels.length === 0) return { messages: [], more: 0, advanceCursor: cursor };
+    const ids = channels.map((channel) => channel.id);
     const placeholders = ids.map(() => "?").join(",");
     const delivered: Message[] = [];
     const conversations = new Set<string>();
     const capConversations = actor.role === "brain";
+    const maxMessages = actor.role === "brain" ? WAIT_MESSAGE_CAP : limit;
+    const byteBudget = WAIT_PAYLOAD_MAX_BYTES - 1024;
     let newCursor = cursor;
     let scan = cursor;
     let overflow = false;
+
+    const fitsPayloadBudget = (messages: Message[]) => {
+      // Full (non-compact) format is the conservative case; MCP compact output
+      // can only be smaller. Reserve room for delivery IDs and framing.
+      const trial = packWait(actor, messages, 99, false, (id) => channelLabel(this.getChannel(id)));
+      return Buffer.byteLength(JSON.stringify(trial), "utf8") <= byteBudget;
+    };
 
     for (;;) {
       const rows = this.db.prepare(
@@ -1435,60 +1483,260 @@ export class Hive {
          ORDER BY seq ASC LIMIT 100`,
       ).all(scan, ...ids, actor.id) as MessageRow[];
       if (rows.length === 0) break;
-      for (const r of rows) {
-        const message = this.mapMessage(r);
+
+      for (const messageRow of rows) {
+        const message = this.mapMessage(messageRow);
         if (!this.isFor(actor, message)) {
           newCursor = message.seq;
           scan = message.seq;
           continue;
         }
-        const known = conversations.has(message.channelId);
-        const atCap = capConversations ? !known && conversations.size >= limit : delivered.length >= limit;
-        if (atCap) {
+
+        const knownConversation = conversations.has(message.channelId);
+        const atConversationCap =
+          capConversations && !knownConversation && conversations.size >= limit;
+        const atMessageCap = delivered.length >= maxMessages;
+        if (atConversationCap || atMessageCap) {
           overflow = true;
           break;
         }
-        delivered.push(message);
+
+        const decorated = this.decorate([message], actor.id)[0]!;
+        if (!fitsPayloadBudget([...delivered, decorated])) {
+          // A single legal message is comfortably below the hard budget. If
+          // that invariant ever changes, fail loudly rather than silently skip it.
+          if (delivered.length === 0) {
+            throw new HiveError(500, "Single wait message exceeds payload budget");
+          }
+          overflow = true;
+          break;
+        }
+
+        delivered.push(decorated);
         conversations.add(message.channelId);
         newCursor = message.seq;
         scan = message.seq;
       }
+
       if (overflow || rows.length < 100) break;
       scan = rows[rows.length - 1]!.seq;
     }
 
-    if (newCursor > cursor) {
-      this.db.prepare("UPDATE agents SET inbox_cursor = MAX(inbox_cursor, ?) WHERE id = ?").run(newCursor, actor.id);
+    let more = 0;
+    let countScan = newCursor;
+    for (let page = 0; page < 40 && more < 99; page += 1) {
+      const rows = this.db.prepare(
+        `SELECT * FROM messages WHERE seq > ? AND channel_id IN (${placeholders}) AND author_id != ?
+         ORDER BY seq ASC LIMIT 100`,
+      ).all(countScan, ...ids, actor.id) as MessageRow[];
+      if (rows.length === 0) break;
+      for (const messageRow of rows) {
+        if (!this.isFor(actor, this.mapMessage(messageRow))) continue;
+        more += 1;
+        if (more >= 99) break;
+      }
+      countScan = rows[rows.length - 1]!.seq;
+      if (rows.length < 100) break;
     }
 
-    let more = 0;
-    if (overflow || delivered.length >= limit) {
-      let countScan = newCursor;
-      for (let page = 0; page < 20 && more < 99; page += 1) {
-        const rows = this.db.prepare(
-          `SELECT * FROM messages WHERE seq > ? AND channel_id IN (${placeholders}) AND author_id != ?
-           ORDER BY seq ASC LIMIT 100`,
-        ).all(countScan, ...ids, actor.id) as MessageRow[];
-        if (rows.length === 0) break;
-        for (const r of rows) {
-          const message = this.mapMessage(r);
-          if (!this.isFor(actor, message)) continue;
-          if (capConversations) {
-            if (!conversations.has(message.channelId)) {
-              conversations.add(message.channelId);
-              more += 1;
-            }
-          } else {
-            more += 1;
-          }
+    return { messages: delivered, more, advanceCursor: newCursor };
+  }
+
+  private claimDelivery(
+    actor: Agent,
+    sessionId: string,
+  ): {
+    messages: Message[];
+    more: number;
+    deliveryId?: string;
+    deliverySessionId?: string;
+  } {
+    const active = this.activeDelivery(actor.id);
+    if (active) {
+      if (active.session_id === sessionId) return this.deliveryBatch(actor, active);
+
+      // A reconnect adopts the exact same batch under a new fenced delivery ID.
+      // The previous session can no longer acknowledge it.
+      const replacementId = crypto.randomUUID();
+      try {
+        this.db.exec("BEGIN IMMEDIATE");
+        const current = this.activeDelivery(actor.id);
+        if (!current) {
+          this.db.exec("ROLLBACK");
+          return this.claimDelivery(actor, sessionId);
         }
-        countScan = rows[rows.length - 1]!.seq;
-        if (rows.length < 100) break;
+        if (current.session_id === sessionId) {
+          this.db.exec("COMMIT");
+          return this.deliveryBatch(actor, current);
+        }
+        this.db.prepare(
+          "UPDATE inbox_deliveries SET status = 'superseded', superseded_at = ? WHERE delivery_id = ? AND status = 'in_flight'",
+        ).run(now(), current.delivery_id);
+        this.db.prepare(
+          `INSERT INTO inbox_deliveries
+           (delivery_id, agent_id, session_id, seqs, advance_cursor, more, status, created_at, acked_at, superseded_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'in_flight', ?, NULL, NULL)`,
+        ).run(
+          replacementId,
+          actor.id,
+          sessionId,
+          current.seqs,
+          current.advance_cursor,
+          current.more,
+          now(),
+        );
+        this.db.exec("COMMIT");
+      } catch (err) {
+        try {
+          this.db.exec("ROLLBACK");
+        } catch {
+          // No open transaction.
+        }
+        throw err;
       }
+      const replacement = this.activeDelivery(actor.id);
+      if (!replacement) throw new HiveError(500, "Failed to replace in-flight delivery");
+      return this.deliveryBatch(actor, replacement);
     }
-    const packed = { messages: this.decorate(delivered), more };
+
+    const selected = this.selectUnseen(actor);
+    if (selected.messages.length === 0) {
+      // Scanned messages that are not addressed to this agent never require an
+      // acknowledgement and can safely move the acknowledged cursor forward.
+      const current = (this.db.prepare("SELECT inbox_cursor FROM agents WHERE id = ?").get(actor.id) as {
+        inbox_cursor: number;
+      }).inbox_cursor;
+      if (selected.advanceCursor > current) {
+        this.db.prepare("UPDATE agents SET inbox_cursor = MAX(inbox_cursor, ?) WHERE id = ?").run(
+          selected.advanceCursor,
+          actor.id,
+        );
+        this.emitQueued(actor.id);
+      }
+      return { messages: [], more: 0 };
+    }
+
+    const deliveryId = crypto.randomUUID();
+    this.db.prepare(
+      `INSERT INTO inbox_deliveries
+       (delivery_id, agent_id, session_id, seqs, advance_cursor, more, status, created_at, acked_at, superseded_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'in_flight', ?, NULL, NULL)`,
+    ).run(
+      deliveryId,
+      actor.id,
+      sessionId,
+      JSON.stringify(selected.messages.map((message) => message.seq)),
+      selected.advanceCursor,
+      selected.more,
+      now(),
+    );
     this.emitQueued(actor.id);
-    return packed;
+    return {
+      messages: selected.messages,
+      more: selected.more,
+      deliveryId,
+      deliverySessionId: sessionId,
+    };
+  }
+
+  ackDelivery(
+    actor: Agent,
+    deliveryId: string,
+    sessionId: string,
+  ): { ok: true; duplicate: boolean; cursor: number } {
+    const row = this.db.prepare(
+      "SELECT * FROM inbox_deliveries WHERE delivery_id = ? AND agent_id = ?",
+    ).get(deliveryId, actor.id) as DeliveryRow | undefined;
+    if (!row) throw new HiveError(404, "Delivery not found");
+    if (row.session_id !== sessionId) throw new HiveError(409, "Delivery belongs to another session");
+    if (row.status === "superseded") throw new HiveError(409, "Delivery session is superseded");
+    if (row.status === "acked") {
+      const current = this.db.prepare("SELECT inbox_cursor FROM agents WHERE id = ?").get(actor.id) as {
+        inbox_cursor: number;
+      };
+      return { ok: true, duplicate: true, cursor: current.inbox_cursor };
+    }
+
+    try {
+      this.db.exec("BEGIN IMMEDIATE");
+      const current = this.db.prepare(
+        "SELECT * FROM inbox_deliveries WHERE delivery_id = ? AND agent_id = ?",
+      ).get(deliveryId, actor.id) as DeliveryRow | undefined;
+      if (!current) throw new HiveError(404, "Delivery not found");
+      if (current.session_id !== sessionId || current.status === "superseded") {
+        throw new HiveError(409, "Delivery session is superseded");
+      }
+      if (current.status === "acked") {
+        this.db.exec("COMMIT");
+        const cursor = this.db.prepare("SELECT inbox_cursor FROM agents WHERE id = ?").get(actor.id) as {
+          inbox_cursor: number;
+        };
+        return { ok: true, duplicate: true, cursor: cursor.inbox_cursor };
+      }
+      this.db.prepare("UPDATE agents SET inbox_cursor = MAX(inbox_cursor, ?) WHERE id = ?").run(
+        current.advance_cursor,
+        actor.id,
+      );
+      this.db.prepare(
+        "UPDATE inbox_deliveries SET status = 'acked', acked_at = ? WHERE delivery_id = ?",
+      ).run(now(), deliveryId);
+      this.db.exec("COMMIT");
+    } catch (err) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        // No open transaction.
+      }
+      throw err;
+    }
+
+    this.emitQueued(actor.id);
+    const cursor = this.db.prepare("SELECT inbox_cursor FROM agents WHERE id = ?").get(actor.id) as {
+      inbox_cursor: number;
+    };
+    return { ok: true, duplicate: false, cursor: cursor.inbox_cursor };
+  }
+
+  deliveryStates(): Record<
+    string,
+    {
+      acknowledgedCursor: number;
+      queued: number;
+      inFlight: { deliveryId: string; count: number } | null;
+      lastAcknowledged: { deliveryId: string; at: number } | null;
+    }
+  > {
+    const out: Record<
+      string,
+      {
+        acknowledgedCursor: number;
+        queued: number;
+        inFlight: { deliveryId: string; count: number } | null;
+        lastAcknowledged: { deliveryId: string; at: number } | null;
+      }
+    > = {};
+    for (const agent of this.listAgents()) {
+      if (agent.role === "human") continue;
+      const cursor = (this.db.prepare("SELECT inbox_cursor FROM agents WHERE id = ?").get(agent.id) as {
+        inbox_cursor: number;
+      }).inbox_cursor;
+      const active = this.activeDelivery(agent.id);
+      const activeCount = active ? (JSON.parse(active.seqs) as number[]).length : 0;
+      const lastAcked = this.db.prepare(
+        `SELECT delivery_id, acked_at FROM inbox_deliveries
+         WHERE agent_id = ? AND status = 'acked' ORDER BY acked_at DESC LIMIT 1`,
+      ).get(agent.id) as { delivery_id: string; acked_at: number } | undefined;
+      const totalUnacknowledged = this.countUnseen(agent);
+      out[agent.id] = {
+        acknowledgedCursor: cursor,
+        queued: Math.max(0, totalUnacknowledged - activeCount),
+        inFlight: active ? { deliveryId: active.delivery_id, count: activeCount } : null,
+        lastAcknowledged: lastAcked
+          ? { deliveryId: lastAcked.delivery_id, at: lastAcked.acked_at }
+          : null,
+      };
+    }
+    return out;
   }
 
   queuedCounts(): Record<string, number> {
@@ -1596,16 +1844,25 @@ export class Hive {
     actor: Agent,
     timeoutMs: number,
     signal?: AbortSignal,
-    opts: { compact?: boolean } = {},
+    opts: { compact?: boolean; sessionId?: string } = {},
   ): Promise<WaitResult> {
     const compact = Boolean(opts.compact);
-    const pack = (batch: { messages: Message[]; more: number }): WaitResult =>
-      packWait(this.getAgent(actor.id), batch.messages, batch.more, compact, (id) =>
+    const sessionId = opts.sessionId?.trim() || `legacy:${actor.id}`;
+    const pack = (batch: {
+      messages: Message[];
+      more: number;
+      deliveryId?: string;
+      deliverySessionId?: string;
+    }): WaitResult => ({
+      ...packWait(this.getAgent(actor.id), batch.messages, batch.more, compact, (id) =>
         channelLabel(this.getChannel(id)),
-      );
+      ),
+      ...(batch.deliveryId ? { deliveryId: batch.deliveryId } : {}),
+      ...(batch.deliverySessionId ? { deliverySessionId: batch.deliverySessionId } : {}),
+    });
 
     // A cancelled request is observational only: it must not touch presence,
-    // install a waiter, advance inbox state, or consume already-queued mail.
+    // install a waiter, claim a delivery, or consume already-queued mail.
     if (signal?.aborted) return pack({ messages: [], more: 0 });
     this.touch(actor.id, true);
 
@@ -1618,20 +1875,25 @@ export class Hive {
         signal?.removeEventListener("abort", onAbort);
         if (timer) clearTimeout(timer);
       };
-      const deliver = (batch: { messages: Message[]; more: number }) => {
+      const deliver = (batch: {
+        messages: Message[];
+        more: number;
+        deliveryId?: string;
+        deliverySessionId?: string;
+      }) => {
         if (done) return;
         done = true;
         cleanup();
         this.touch(actor.id, true);
         resolve(pack(batch));
       };
-      const finish = (consume: boolean) => {
+      const finish = (claim: boolean) => {
         if (done) return;
-        if (!consume || signal?.aborted) {
+        if (!claim || signal?.aborted) {
           deliver({ messages: [], more: 0 });
           return;
         }
-        deliver(this.takeUnseen(actor));
+        deliver(this.claimDelivery(actor, sessionId));
       };
       waiter = {
         wake: () => finish(true),
@@ -1653,7 +1915,7 @@ export class Hive {
         finish(false);
         return;
       }
-      const first = this.takeUnseen(actor);
+      const first = this.claimDelivery(actor, sessionId);
       if (first.messages.length > 0) deliver(first);
     });
   }
