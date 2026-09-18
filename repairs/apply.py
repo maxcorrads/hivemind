@@ -1,4 +1,5 @@
 import base64
+import gzip
 import json
 import os
 from pathlib import Path
@@ -28,6 +29,14 @@ def run(args, cwd=ROOT, env=None, log=None, timeout=300):
 def pr_info(number):
     return json.loads(run(['gh', 'api', f'repos/{REPO}/pulls/{number}'], env=os.environ))
 
+def dependency_head(spec):
+    current = pr_info(int(spec['pr']))
+    assert current['head']['repo']['full_name'] == REPO
+    sha = current['head']['sha']
+    run(['git', 'fetch', 'origin', sha], env=HEAD_ENV)
+    assert run(['git', 'rev-parse', sha + '^{tree}']) == spec['expectedTree'], 'Dependency changed since integration test'
+    return sha
+
 manifest = json.loads((ROOT / 'repairs' / 'current.json').read_text())
 results = []
 for entry in manifest['repairs']:
@@ -43,8 +52,22 @@ for entry in manifest['repairs']:
         work = ROOT / ('work-pr-' + str(number))
         run(['git', 'fetch', 'origin', entry['expectedHead']], env=HEAD_ENV)
         run(['git', 'worktree', 'add', '--detach', str(work), entry['expectedHead']])
+        parents = [entry['expectedHead']]
+        dependencies = entry.get('parents', [])
+        if entry.get('contentBase'):
+            base = dependency_head(entry['contentBase'])
+            parents.append(base)
+            run(['git', 'read-tree', '--reset', '-u', base], cwd=work)
+        for dependency in dependencies:
+            sha = dependency_head(dependency)
+            if sha not in parents:
+                parents.append(sha)
         patch = ROOT / 'repairs' / entry['patch']
         assert patch.resolve().is_relative_to((ROOT / 'repairs').resolve())
+        if patch.name.endswith('.gz.b64'):
+            decoded = OUT / f'{number}-decoded.patch'
+            decoded.write_bytes(gzip.decompress(base64.b64decode(patch.read_text())))
+            patch = decoded
         run(['git', 'apply', '--index', '--whitespace=error', str(patch)], cwd=work)
         run(['git', 'diff', '--cached', '--check'], cwd=work)
         tree = run(['git', 'write-tree'], cwd=work)
@@ -68,15 +91,8 @@ for entry in manifest['repairs']:
         report['steps']['ui'] = {'passed': True, 'files': len(ui)}
         run(['node', 'node_modules/vite/bin/vite.js', 'build'], cwd=work, log=OUT / f'{number}-build.log')
         report['steps']['build'] = {'passed': True}
-        parents = [entry['expectedHead']]
-        for dependency in entry.get('parents', []):
-            current = pr_info(int(dependency['pr']))
-            assert current['head']['repo']['full_name'] == REPO
-            sha = current['head']['sha']
-            run(['git', 'fetch', 'origin', sha], env=HEAD_ENV)
-            actual = run(['git', 'rev-parse', sha + '^{tree}'])
-            assert actual == dependency['expectedTree'], 'Dependency changed since integration test'
-            parents.append(sha)
+        for dependency in dependencies + ([entry['contentBase']] if entry.get('contentBase') else []):
+            assert dependency_head(dependency) in parents, 'Dependency moved during tests'
         assert pr_info(number)['head']['sha'] == entry['expectedHead'], 'PR moved during tests'
         author_env = dict(TEST_ENV, GIT_AUTHOR_NAME='Matteo Corradin', GIT_AUTHOR_EMAIL='16559094+maxcorrads@users.noreply.github.com', GIT_COMMITTER_NAME='Matteo Corradin', GIT_COMMITTER_EMAIL='16559094+maxcorrads@users.noreply.github.com')
         args = ['git', 'commit-tree', tree]
