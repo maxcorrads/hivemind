@@ -21,6 +21,20 @@ export function pluginFormValues(
   return values;
 }
 
+/** Validate the draft without normalizing schema-valid list entries. */
+export function pluginSavePayload(
+  settings: PluginSettings,
+  values: SettingsValues,
+  enabled: boolean,
+  expectedRevision: number,
+) {
+  return {
+    enabled,
+    values: validateSettings(settings, values),
+    expectedRevision,
+  };
+}
+
 export function PluginFields({
   settings,
   values,
@@ -64,7 +78,12 @@ export function PluginFields({
                     value={Array.isArray(value) ? value.join("\n") : ""}
                     disabled={disabled}
                     onChange={(event) =>
-                      onChange(field.key, event.target.value.split("\n"))
+                      onChange(
+                        field.key,
+                        event.target.value === ""
+                          ? []
+                          : event.target.value.split("\n"),
+                      )
                     }
                   />
                 ) : field.choices ? (
@@ -115,8 +134,11 @@ export function PluginFields({
             {field.description && <small>{field.description}</small>}
             {field.type === "strings" && (
               <small>
-                One value per line
-                {field.choices ? ": " + field.choices.join(", ") : ""}.
+                One value per line; spaces and blank lines are preserved. Clear
+                the editor to empty the list.
+                {field.choices
+                  ? " Allowed values: " + field.choices.join(", ") + "."
+                  : ""}
               </small>
             )}
           </label>
@@ -200,20 +222,16 @@ export function PluginEditor({
           onSubmit={(event) => {
             event.preventDefault();
             void run(async () => {
-              const normalized = Object.fromEntries(
-                Object.entries(values).map(([key, value]) => [
-                  key,
-                  Array.isArray(value)
-                    ? value.map((item) => item.trim()).filter(Boolean)
-                    : value,
-                ]),
+              return api.saveProjectPlugin(
+                project.slug,
+                plugin.id,
+                pluginSavePayload(
+                  plugin.settings!,
+                  values,
+                  enabled,
+                  plugin.revision,
+                ),
               );
-              const checked = validateSettings(plugin.settings!, normalized);
-              return api.saveProjectPlugin(project.slug, plugin.id, {
-                enabled,
-                values: checked,
-                expectedRevision: plugin.revision,
-              });
             });
           }}
         >
