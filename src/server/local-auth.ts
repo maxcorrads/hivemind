@@ -44,7 +44,10 @@ function requestPath(target: string): string | null {
     // a path the router would 404, but must never under-protect an encoded API.
     const decoded = decodeURIComponent(new URL(target, "http://local.invalid").pathname);
     if (decoded.startsWith("//") || decoded.includes("\\")) return null;
-    return new URL(decoded, "http://local.invalid").pathname;
+    // Do not normalize newly decoded slashes/dot segments out of /api/ui while
+    // the router still sees a Human route containing an encoded parameter.
+    if (decoded.split("/").some((part) => part === "." || part === "..")) return null;
+    return decoded;
   } catch {
     return null;
   }
