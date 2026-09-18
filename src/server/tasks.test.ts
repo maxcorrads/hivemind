@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Hive } from './hive.ts';
 import { createApp } from './app.ts';
+import { InboxDeliveryStore } from './inbox-delivery.ts';
 import { waitWireBytes } from './wait-format.ts';
 import { WAIT_MAX_BYTES, type Agent } from '../shared/types.ts';
 import type { TaskAction, TaskSnapshot } from '../shared/tasks.ts';
@@ -94,8 +95,17 @@ test('reassignment is versioned, resets receipt/acceptance and informs the old w
   assert.equal(revised.task.contractVersion, 2); assert.equal(revised.task.workerId, second.id);
   assert.ok(revised.message.mentions.includes(f.worker.agent.id)); assert.ok(revised.message.mentions.includes(second.id));
   f.hive.acknowledgeInbox(f.worker.agent, sessionId, oldDelivery.delivery!.id);
+  const oldCount = f.hive.inbox.status(f.worker.agent.id).acknowledgedMessages;
+  assert.equal(oldCount, oldDelivery.delivery!.messageSeqs.length);
+  assert.equal(f.hive.acknowledgeInbox(f.worker.agent, sessionId, oldDelivery.delivery!.id).duplicate, true);
+  assert.equal(f.hive.inbox.status(f.worker.agent.id).acknowledgedMessages, oldCount);
   assert.equal(f.hive.tasks.get(f.brain.agent, id).receivedAt, null);
   assert.throws(() => f.event(id, f.worker.agent, { type: 'accept' }), /assigned worker/);
+  const newSession = f.hive.openInboxSession(second, crypto.randomUUID());
+  const newDelivery = await f.hive.wait(second, 1, undefined, { sessionId: newSession, compact: true });
+  f.hive.acknowledgeInbox(second, newSession, newDelivery.delivery!.id);
+  assert.equal(f.hive.tasks.get(f.brain.agent, id).state, 'delivered');
+  assert.equal(f.hive.inbox.status(second.id).acknowledgedMessages, newDelivery.delivery!.messageSeqs.length);
   assert.equal(f.event(id, second, { type: 'accept' }).task.state, 'accepted');
   f.reopen();
   assert.equal(f.hive.tasks.get(f.brain.agent, id).contract.acceptanceCriteria[0], 'Also handle empty input');
@@ -131,6 +141,88 @@ test('project/access boundaries and evidence are checked before creating a task'
   assert.throws(() => f.hive.tasks.get(f.worker.agent, task.id), /Cannot read/);
 });
 
+for (const source of ['private', 'brains'] as const) {
+  test(`HTTP changes-requested review rejects ${source} evidence atomically and accepts a shared alternative`, async t => {
+    const f = fixture(t); const task = f.assign().task;
+    f.event(task.id, f.worker.agent, { type: 'accept' });
+    f.event(task.id, f.worker.agent, { type: 'result', result: result() });
+    const notes = source === 'brains' ? f.hive.getChannel('brains', f.brain.agent.projectId) :
+      f.hive.createChannel(f.brain.agent, { name: 'private-review-notes', type: 'private' });
+    const privateEvidence = f.hive.postMessage(f.brain.agent, { channel: notes.id, body: 'Invented private review detail' });
+    const shared = f.hive.createChannel(f.brain.agent, { name: 'shared-review-evidence', type: 'private', memberNames: [f.worker.agent.name] });
+    const evidence = f.hive.postMessage(f.brain.agent, { channel: shared.id, body: 'Shared parser regression fixture' });
+    const before = f.hive.tasks.get(f.brain.agent, task.id);
+    const counts = () => ['messages', 'task_events'].map(table => f.hive.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()!.n);
+    const beforeCounts = counts();
+    const membership = () => f.hive.db.prepare('SELECT * FROM channel_members ORDER BY channel_id, agent_id').all();
+    const beforeMembership = membership();
+    const notifications: string[] = [];
+    for (const name of ['message', 'task', 'channel', 'queued']) f.hive.bus.on(name, () => notifications.push(name));
+    const input = { requestId: 'review-evidence', expectedRevision: before.revision,
+      action: { type: 'review', decision: 'changes_requested', summary: 'Add a parser regression', evidenceSeqs: [evidence.seq, privateEvidence.seq] } };
+    const app = createApp(f.hive);
+    const response = await app.request(`/api/agent/tasks/${task.id}/events`, { method: 'POST',
+      headers: { authorization: `Bearer ${f.brain.token}`, 'content-type': 'application/json' }, body: JSON.stringify(input) });
+    assert.equal(response.status, 403);
+    const error = await response.json() as { error: string };
+    assert.match(error.error, /assigned worker.*shared channel/);
+    assert.ok(!error.error.includes(privateEvidence.body));
+    assert.deepEqual(f.hive.tasks.get(f.brain.agent, task.id), before);
+    assert.deepEqual(counts(), beforeCounts);
+    assert.deepEqual(membership(), beforeMembership);
+    assert.deepEqual(notifications, []);
+    assert.throws(() => f.hive.getVisibleMessage(f.worker.agent, privateEvidence.seq), /Cannot read/);
+
+    // A definitively rejected request did not reserve its ID or publish a review.
+    const corrected = { ...input, action: { ...input.action, evidenceSeqs: [evidence.seq] } };
+    const reviewed = f.hive.tasks.event(f.brain.agent, task.id, corrected);
+    assert.equal(reviewed.task.state, 'changes_requested');
+    assert.equal(reviewed.task.revision, before.revision + 1);
+    assert.ok(reviewed.message.mentions.includes(f.worker.agent.id));
+    assert.equal(f.hive.getVisibleMessage(f.worker.agent, evidence.seq).body, evidence.body);
+    assert.deepEqual(membership(), beforeMembership, 'Review must never grant channel access');
+
+    // Access is checked at submission, not granted by a reference or rechecked on a committed retry.
+    f.hive.db.prepare('DELETE FROM channel_members WHERE channel_id = ? AND agent_id = ?').run(shared.id, f.worker.agent.id);
+    f.reopen();
+    const afterCounts = counts();
+    const retry = f.hive.tasks.event(f.brain.agent, task.id, corrected);
+    assert.equal(retry.duplicate, true); assert.equal(retry.message.id, reviewed.message.id);
+    assert.deepEqual(counts(), afterCounts);
+    assert.throws(() => f.hive.getVisibleMessage(f.worker.agent, evidence.seq), /Cannot read/);
+  });
+}
+
+test('changes-requested evidence is checked against the current worker after reassignment', t => {
+  const f = fixture(t); const next = f.hive.join({ role: 'worker', seniority: 'mid' }).agent;
+  const room = f.hive.createChannel(f.brain.agent, { name: 'shared-task', type: 'private', memberNames: [f.worker.agent.name, next.name] });
+  const task = f.assign({ channel: room.id }).task;
+  f.event(task.id, f.brain.agent, { type: 'revise', worker: next.name, reason: 'Hand off the fixture', contract: contract() });
+  f.event(task.id, next, { type: 'accept' });
+  f.event(task.id, next, { type: 'result', result: result() });
+  const oldDm = f.hive.openDm(f.brain.agent, f.worker.agent.name);
+  const oldEvidence = f.hive.postMessage(f.brain.agent, { channel: oldDm.id, body: 'Only shared with the previous worker' });
+  assert.equal(f.hive.getVisibleMessage(f.worker.agent, oldEvidence.seq).seq, oldEvidence.seq);
+  assert.throws(() => f.event(task.id, f.brain.agent, { type: 'review', decision: 'changes_requested',
+    summary: 'Use the regression', evidenceSeqs: [oldEvidence.seq] }), /assigned worker.*shared channel/);
+  const newDm = f.hive.openDm(f.brain.agent, next.name);
+  const evidence = f.hive.postMessage(f.brain.agent, { channel: newDm.id, body: 'Evidence shared with the current worker' });
+  assert.throws(() => f.hive.getVisibleMessage(f.worker.agent, evidence.seq), /Cannot read/);
+  assert.equal(f.event(task.id, f.brain.agent, { type: 'review', decision: 'changes_requested',
+    summary: 'Use the shared regression', evidenceSeqs: [evidence.seq] }).task.state, 'changes_requested');
+});
+
+test('accepted review evidence remains reviewer-visible and grants no worker access', t => {
+  const f = fixture(t); const task = f.assign().task;
+  f.event(task.id, f.worker.agent, { type: 'accept' });
+  f.event(task.id, f.worker.agent, { type: 'result', result: result() });
+  const notes = f.hive.createChannel(f.brain.agent, { name: 'acceptance-notes', type: 'private' });
+  const evidence = f.hive.postMessage(f.brain.agent, { channel: notes.id, body: 'Private record of reviewer checks' });
+  const review = f.event(task.id, f.brain.agent, { type: 'review', decision: 'accepted', summary: 'Reviewed', evidenceSeqs: [evidence.seq] });
+  assert.equal(review.task.state, 'accepted_complete');
+  assert.throws(() => f.hive.getVisibleMessage(f.worker.agent, evidence.seq), /Cannot read/);
+});
+
 test('assignment failure rolls back the message, task, DM and all notifications', t => {
   const f = fixture(t); const events: string[] = [];
   for (const name of ['message', 'channel', 'task']) f.hive.bus.on(name, () => events.push(name));
@@ -143,19 +235,49 @@ test('assignment failure rolls back the message, task, DM and all notifications'
   assert.deepEqual(events, []);
 });
 
-test('task receipt update and transport ACK commit or roll back together', async t => {
-  const f = fixture(t); const task = f.assign().task;
+for (const historical of [0, 10_000]) test(`task receipt, cursor and totals roll back together with ${historical} old receipts`, async t => {
+  const f = fixture(t);
   const sessionId = f.hive.openInboxSession(f.worker.agent, crypto.randomUUID());
+  if (historical) {
+    f.hive.db.exec('DROP TABLE inbox_receipt_totals');
+    f.hive.db.prepare(`WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+      INSERT INTO inbox_deliveries(id, agent_id, session_id, through_seq, seqs, attempts, offered_at, lease_until, acknowledged_at)
+      SELECT 'task-history-' || i, ?, ?, 0, '[0]', 1, 1, 2, 100 FROM n`)
+      .run(historical, f.worker.agent.id, sessionId);
+    new InboxDeliveryStore(f.hive.db);
+  }
+  f.hive.db.function('json_array_length', () => { throw new Error('unexpected task-path aggregation'); });
+  const task = f.assign().task;
   const batch = await f.hive.wait(f.worker.agent, 1, undefined, { compact: true, sessionId });
-  const before = f.hive.inbox.status(f.worker.agent.id);
-  f.hive.db.exec("CREATE TRIGGER fail_receipt BEFORE UPDATE ON task_records BEGIN SELECT RAISE(ABORT, 'receipt failure'); END");
-  assert.throws(() => f.hive.acknowledgeInbox(f.worker.agent, sessionId, batch.delivery!.id), /receipt failure/);
-  assert.deepEqual(f.hive.inbox.status(f.worker.agent.id), before);
-  assert.equal(f.hive.tasks.get(f.brain.agent, task.id).receivedAt, null);
-  f.hive.db.exec('DROP TRIGGER fail_receipt');
+  const snapshot = () => ({
+    status: f.hive.inbox.status(f.worker.agent.id),
+    cursor: f.hive.db.prepare('SELECT inbox_cursor FROM agents WHERE id = ?').get(f.worker.agent.id),
+    early: f.hive.db.prepare('SELECT * FROM inbox_early_receipts WHERE agent_id = ?').all(f.worker.agent.id),
+    receipt: f.hive.db.prepare('SELECT * FROM inbox_deliveries WHERE id = ?').get(batch.delivery!.id),
+    totals: f.hive.db.prepare('SELECT * FROM inbox_receipt_totals WHERE agent_id = ?').get(f.worker.agent.id),
+    task: f.hive.tasks.get(f.brain.agent, task.id),
+  });
+  const before = snapshot();
+  const events: unknown[] = [];
+  f.hive.bus.on('task', e => events.push(e)); f.hive.bus.on('queued', e => events.push(e));
+  for (const target of [historical ? 'BEFORE UPDATE ON inbox_receipt_totals' : 'BEFORE INSERT ON inbox_receipt_totals',
+    'AFTER UPDATE ON task_records']) {
+    f.hive.db.exec(`CREATE TEMP TRIGGER fail_receipt ${target} BEGIN SELECT RAISE(ABORT, 'receipt failure'); END`);
+    assert.throws(() => f.hive.acknowledgeInbox(f.worker.agent, sessionId, batch.delivery!.id), /receipt failure/);
+    assert.deepEqual(snapshot(), before, 'receipt, cursor, sparse entries, totals and task must all roll back');
+    assert.deepEqual(events, [], 'failed ACK must not publish changed state');
+    f.hive.db.exec('DROP TRIGGER fail_receipt');
+  }
   f.hive.acknowledgeInbox(f.worker.agent, sessionId, batch.delivery!.id);
   const after = f.hive.tasks.get(f.brain.agent, task.id);
-  f.hive.acknowledgeInbox(f.worker.agent, sessionId, batch.delivery!.id);
+  assert.equal(after.state, 'delivered');
+  assert.equal(f.hive.inbox.status(f.worker.agent.id).acknowledgedMessages, historical + batch.delivery!.messageSeqs.length);
+  assert.equal(f.hive.acknowledgeInbox(f.worker.agent, sessionId, batch.delivery!.id).duplicate, true);
+  assert.deepEqual(f.hive.tasks.get(f.brain.agent, task.id), after);
+  f.reopen();
+  f.hive.db.function('json_array_length', () => { throw new Error('unexpected task restart aggregation'); });
+  assert.equal(f.hive.acknowledgeInbox(f.worker.agent, sessionId, batch.delivery!.id).duplicate, true);
+  assert.equal(f.hive.inbox.status(f.worker.agent.id).acknowledgedMessages, historical + batch.delivery!.messageSeqs.length);
   assert.deepEqual(f.hive.tasks.get(f.brain.agent, task.id), after);
 });
 

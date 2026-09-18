@@ -19,7 +19,15 @@ revision and contract version are produced by the authenticated server, not pars
 from prose. Bots cannot create or transition tasks. Only the assigning brain can
 revise/review; only the current worker can accept/reject/block/submit a result.
 Evidence messages must be visible to their sender; assignment evidence must also
-be visible to the worker, and result evidence to the assigning brain. Dependencies
+be visible to the worker, and result evidence to the assigning brain. A review
+requesting changes also requires its evidence to be readable by the **current**
+assigned worker at submission time. An inaccessible reference rejects the entire
+review without changing task state/revision or publishing a message. Use a reference
+in a channel both participants can already read; review never invites a worker,
+copies private evidence or grants access. Accepted reviews keep the existing
+reviewer-only visibility requirement: their references may still be private to the
+brain and do not grant the worker access. Later permission changes do not rewrite
+past reviews, and retries of committed events remain idempotent. Dependencies
 are visible task references for the assigning brain, not automatic scheduling or
 authority to access another worker's private thread. Cycles are not a scheduler:
 this feature does not execute or automatically unblock dependencies.
@@ -63,8 +71,11 @@ and return the original message plus current task state. Changed payload under t
 same ID returns 409. A new event also requires `expectedRevision` from `get_task`;
 stale writers get 409 and must reread/reconcile, not blindly choose a new ID.
 
-Messages, envelopes and state commit atomically. Receipt updates commit with the
-transport ACK. Unknown types/fields, forged authors, forbidden transitions and
+Messages, envelopes and state commit atomically. Task receipt updates, transport
+ACK, inbox cursor, sparse receipts and receipt totals commit in one transaction.
+A failed counter update or task receipt callback rolls back the entire ACK;
+duplicate ACKs update neither the task receipt nor the totals a second time.
+Unknown types/fields, forged authors, forbidden transitions and
 unauthorized participants fail without creating a message or changing a task.
 No pre-commit notifications escape a failed assignment, including a new DM.
 

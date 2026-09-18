@@ -46,11 +46,33 @@ test('real MCP clients assign/receive/accept/result/review and CLI reads the sam
     const workerReview = await assignee.callTool({ name: 'task_event', arguments: { taskId, requestId: 'self-review', expectedRevision: 3,
       action: { type: 'review', decision: 'accepted', summary: 'Self review', evidenceSeqs: [] } } });
     assert.equal(workerReview.isError, true);
-    await call(assigner, 'task_event', { taskId, requestId: 'mcp-review', expectedRevision: 3,
+    const notes = hive.createChannel(brain.agent, { name: 'private-review', type: 'private' });
+    const privateEvidence = hive.postMessage(brain.agent, { channel: notes.id, body: 'Invented private evidence' });
+    const inaccessible = await assigner.callTool({ name: 'task_event', arguments: { taskId, requestId: 'mcp-changes', expectedRevision: 3,
+      action: { type: 'review', decision: 'changes_requested', summary: 'Add a regression', evidenceSeqs: [privateEvidence.seq] } } });
+    assert.equal(inaccessible.isError, true);
+    assert.match(JSON.stringify(inaccessible.content), /assigned worker.*shared channel/);
+    assert.equal((await call(assigner, 'get_task', { taskId })).task.revision, 3);
+    const shared = await call(assigner, 'send', { channel: assigned.task.channelId, threadId: taskId, body: 'Shared regression evidence' });
+    const changes = { taskId, requestId: 'mcp-changes', expectedRevision: 3,
+      action: { type: 'review', decision: 'changes_requested', summary: 'Add a regression', evidenceSeqs: [shared.seq] } };
+    const reviewed = await call(assigner, 'task_event', changes);
+    assert.equal((await call(assigner, 'task_event', changes)).duplicate, true);
+    const reviewMail = await call(assignee, 'wait', {});
+    const reviewEntry = reviewMail.mail.find((entry: { messageId: string }) => entry.messageId === reviewed.message.id);
+    assert.deepEqual(reviewEntry.taskEvent.action.evidenceSeqs, [shared.seq]);
+    await call(assignee, 'ack_delivery', { deliveryId: reviewMail.delivery.id });
+    const history = await call(assignee, 'history', { channel: assigned.task.channelId, threadId: taskId });
+    assert.ok(history.messages.some((entry: { seq: number; body: string }) => entry.seq === shared.seq && entry.body === 'Shared regression evidence'));
+    const deniedHistory = await assignee.callTool({ name: 'history', arguments: { channel: notes.id } });
+    assert.equal(deniedHistory.isError, true);
+    await call(assignee, 'task_event', { taskId, requestId: 'mcp-revised-result', expectedRevision: 4, action: { type: 'result', result: {
+      summary: 'Regression added', artifacts: [], checks: [], gaps: [], evidenceSeqs: [shared.seq] } } });
+    await call(assigner, 'task_event', { taskId, requestId: 'mcp-review', expectedRevision: 5,
       action: { type: 'review', decision: 'accepted', summary: 'Evidence checked', evidenceSeqs: [] } });
     const cli = await promisify(execFile)(process.execPath, [...args, 'task', 'get', '--id', taskId], { cwd: dir, env: env(brain.token), timeout: 10000 });
     assert.equal(JSON.parse(cli.stdout).task.state, 'accepted_complete');
-    assert.equal(hive.listMessages(brain.agent, assigned.task.channelId, { threadId: taskId }).messages.filter(m => m.taskEvent).length, 4);
+    assert.equal(hive.listMessages(brain.agent, assigned.task.channelId, { threadId: taskId }).messages.filter(m => m.taskEvent).length, 6);
   } finally {
     for (const client of clients) await client.close();
     server.shutdown(); server.server.closeAllConnections(); hive.db.close(); rmSync(dir, { recursive: true, force: true });

@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Hive } from './hive.ts';
 import { createApp } from './app.ts';
+import { InboxDeliveryStore } from './inbox-delivery.ts';
 import type { Agent } from '../shared/types.ts';
 import type { RoomContract } from '../shared/rooms.ts';
 import { standingOrders } from '../shared/standing-orders.ts';
@@ -308,6 +309,61 @@ test('room task list shows transport delivery without inventing worker acceptanc
   f.hive.acknowledgeInbox(f.a.agent, session, mail.delivery!.id);
   assert.equal(f.hive.tasks.get(f.a.agent, task.id).state, 'delivered');
   assert.equal(f.hive.rooms.view(f.human, f.channel.id).tasks[0]!.state, 'delivered');
+});
+
+test('aged receipt totals remain atomic through room archive retries and source generations', async t => {
+  const f = fixture(t); f.configure(); f.ack();
+  const bot = f.hive.createBot(f.human, f.channel.projectId, { name: 'IntegratedFeed' }).bot;
+  f.hive.invite(f.human, f.channel.id, [bot.name]);
+  f.hive.rooms.registerLink(bot, f.channel.id, { id: 'sensor', label: 'Synthetic sensor', suspendSupported: true });
+  f.hive.rooms.reportLink(bot, f.channel.id, 'sensor', { generation: 1, observed: 'running' });
+  const session = f.hive.openInboxSession(f.a.agent, crypto.randomUUID()), historical = 10_000;
+  f.hive.db.prepare('UPDATE agents SET inbox_cursor = (SELECT MAX(seq) FROM messages) WHERE id = ?').run(f.a.agent.id);
+  f.hive.db.exec('DROP TABLE inbox_receipt_totals');
+  f.hive.db.prepare(`WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+    INSERT INTO inbox_deliveries(id, agent_id, session_id, through_seq, seqs, attempts, offered_at, lease_until, acknowledged_at)
+    SELECT 'room-history-' || i, ?, ?, 0, '[0]', 1, 1, 2, 100 FROM n`)
+    .run(historical, f.a.agent.id, session);
+  new InboxDeliveryStore(f.hive.db);
+  const forbidAggregation = () => f.hive.db.function('json_array_length', () => { throw new Error('unexpected room-path aggregation'); });
+  forbidAggregation();
+  const task = f.assign().task;
+  const mail = await f.hive.wait(f.a.agent, 1, undefined, { sessionId: session, compact: true });
+  assert.deepEqual(mail.delivery!.messageSeqs, [task.dispatchSeq]);
+  const archive = { requestId: 'archive-with-pending-receipt', expectedRevision: f.hive.rooms.peek(f.channel.id)!.revision,
+    action: { type: 'archive', running: 'finish', reason: 'Finish the offered task' } };
+  f.hive.rooms.event(f.human, f.channel.id, archive); f.reopen(); forbidAggregation();
+  assert.equal(f.hive.rooms.event(f.human, f.channel.id, archive).duplicate, true);
+  const link = () => f.hive.rooms.botLinks(bot, f.channel.id)[0]!;
+  assert.equal(link().generation, 2); assert.equal(link().desired, 'paused');
+  assert.equal(link().observed, 'pending');
+  assert.throws(() => f.hive.rooms.reportLink(bot, f.channel.id, 'sensor', { generation: 1, observed: 'paused' }), /Stale/);
+  f.hive.rooms.reportLink(bot, f.channel.id, 'sensor', { generation: 2, observed: 'paused' });
+  assert.throws(() => f.hive.postBotMessage(bot, f.channel.id, { eventId: 'after-archive', body: 'Synthetic observation' }), /archived/);
+  assert.throws(() => f.assign('new-work'), /archived/);
+  const replay = await f.hive.wait(f.a.agent, 1, undefined, { sessionId: session, compact: true });
+  assert.equal(replay.delivery!.id, mail.delivery!.id);
+  assert.deepEqual(replay.delivery!.messageSeqs, mail.delivery!.messageSeqs);
+  const before = f.hive.rooms.view(f.human, f.channel.id);
+  f.hive.db.exec("CREATE TEMP TRIGGER room_ack_failure AFTER UPDATE ON task_records BEGIN SELECT RAISE(ABORT, 'room receipt failure'); END");
+  assert.throws(() => f.hive.acknowledgeInbox(f.a.agent, session, replay.delivery!.id), /room receipt failure/);
+  assert.equal(f.hive.inbox.status(f.a.agent.id).acknowledgedMessages, historical);
+  assert.equal(f.hive.inbox.pending(f.a.agent.id)!.id, mail.delivery!.id);
+  assert.deepEqual(f.hive.rooms.view(f.human, f.channel.id), before);
+  f.hive.db.exec('DROP TRIGGER room_ack_failure');
+  f.hive.acknowledgeInbox(f.a.agent, session, replay.delivery!.id);
+  assert.equal(f.hive.acknowledgeInbox(f.a.agent, session, replay.delivery!.id).duplicate, true);
+  assert.equal(f.hive.inboxStatuses()[f.a.agent.id].acknowledgedMessages, historical + 1);
+  assert.equal(f.hive.rooms.view(f.human, f.channel.id).tasks[0]!.state, 'delivered');
+  f.event({ type: 'reopen', reason: 'Channel only', resumeSources: false }, f.human);
+  assert.equal(link().desired, 'paused'); assert.equal(link().generation, 2);
+  f.event({ type: 'archive', reason: 'Close again', running: 'finish' }, f.human);
+  f.event({ type: 'reopen', reason: 'Resume source explicitly', resumeSources: true }, f.human);
+  assert.equal(link().desired, 'running');
+  assert.ok(link().generation > 2);
+  assert.throws(() => f.hive.rooms.reportLink(bot, f.channel.id, 'sensor', { generation: 2, observed: 'paused' }), /Stale/);
+  f.hive.rooms.reportLink(bot, f.channel.id, 'sensor', { generation: link().generation, observed: 'running' });
+  assert.equal(f.hive.inbox.status(f.a.agent.id).acknowledgedMessages, historical + 1);
 });
 
 test('collaboration instructions require own-task progress and explicit recovery from failed replies', t => {
