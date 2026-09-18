@@ -11,6 +11,10 @@ export const DEFAULT_WAIT_MS = 1_500_000;
 export const MCP_WAIT_POLL_MS = 20_000;
 export const BODY_MAX = 4_000;
 export const WAIT_MAIL_CAP = 8;
+/** Hard cap for a brain batch even when one conversation is flooded. */
+export const WAIT_MESSAGE_CAP = 32;
+/** Hard serialized wait response budget; selection reserves overhead for delivery metadata. */
+export const WAIT_PAYLOAD_MAX_BYTES = 64 * 1024;
 export const PRESENCE_IDLE_MS = 10 * 60 * 1000;
 export const MCP_HEARTBEAT_MS = 150_000;
 export const FILE_MAX_BYTES = 512 * 1024 * 1024;
@@ -165,6 +169,10 @@ export type WaitResult = {
   messages: Message[];
   mail?: WaitMailItem[];
   more?: number;
+  /** Durable at-least-once delivery receipt. Acknowledge only after the client consumed this result. */
+  deliveryId?: string;
+  /** Session fence attached to deliveryId. */
+  deliverySessionId?: string;
 };
 
 export class HiveError extends Error {
