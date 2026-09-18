@@ -15,6 +15,8 @@ import {
   HUMAN_ID,
   HUMAN_NAME,
   WAIT_MAIL_CAP,
+  WAIT_MESSAGE_CAP,
+  WAIT_PAYLOAD_MAX_BYTES,
   type Agent,
   type AttachmentMeta,
   type Channel,
@@ -84,6 +86,19 @@ type MessageRow = {
   created_at: number;
 };
 
+type DeliveryRow = {
+  delivery_id: string;
+  agent_id: string;
+  session_id: string;
+  seqs: string;
+  advance_cursor: number;
+  more: number;
+  status: "in_flight" | "acked" | "superseded";
+  created_at: number;
+  acked_at: number | null;
+  superseded_at: number | null;
+};
+
 
 export function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
@@ -114,11 +129,16 @@ export class Hive {
     this.bus.setMaxListeners(200);
     mkdirSync(path.dirname(dbPath), { recursive: true });
     this.db = new DatabaseSync(dbPath);
-    this.db.exec("PRAGMA journal_mode = WAL");
-    this.db.exec("PRAGMA foreign_keys = ON");
-    this.migrate();
-    this.migrateProjects();
-    this.bootstrap();
+    try {
+      this.db.exec("PRAGMA journal_mode = WAL");
+      this.db.exec("PRAGMA foreign_keys = ON");
+      this.migrate();
+      this.migrateProjects();
+      this.bootstrap();
+    } catch (err) {
+      this.db.close();
+      throw err;
+    }
   }
 
   private migrate() {
@@ -219,6 +239,22 @@ export class Hive {
         telegram_thread_id INTEGER NOT NULL,
         payload TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS inbox_deliveries (
+        delivery_id TEXT PRIMARY KEY,
+        agent_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        seqs TEXT NOT NULL,
+        advance_cursor INTEGER NOT NULL,
+        more INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        acked_at INTEGER,
+        superseded_at INTEGER
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_inbox_delivery_inflight
+        ON inbox_deliveries(agent_id) WHERE status = 'in_flight';
+      CREATE INDEX IF NOT EXISTS idx_inbox_delivery_agent_created
+        ON inbox_deliveries(agent_id, created_at DESC);
     `);
   }
 
@@ -245,112 +281,132 @@ export class Hive {
   }
 
   private migrateProjects() {
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS projects (
-        id TEXT PRIMARY KEY,
-        slug TEXT NOT NULL UNIQUE,
-        name TEXT NOT NULL,
-        worktree TEXT,
-        created_at INTEGER NOT NULL
-      );
-    `);
-    if (!this.hasColumn("agents", "project_id")) {
-      this.db.exec("ALTER TABLE agents ADD COLUMN project_id TEXT");
-    }
-    if (!this.hasColumn("channels", "project_id")) {
-      this.db.exec("ALTER TABLE channels ADD COLUMN project_id TEXT");
-    }
-    const holdSql = this.tableSql("telegram_hold");
-    if (!this.hasColumn("telegram_hold", "telegram_chat_id") || /telegram_message_id INTEGER PRIMARY KEY/i.test(holdSql)) {
-      const holds = holdSql
-        ? (this.db.prepare("SELECT * FROM telegram_hold").all() as Array<{
-            telegram_message_id: number;
-            telegram_thread_id: number;
-            payload: string;
-            telegram_chat_id?: number | null;
-          }>)
-        : [];
+    const version = (this.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
+    try {
+      this.db.exec("BEGIN IMMEDIATE");
       this.db.exec(`
-        DROP TABLE IF EXISTS telegram_hold;
-        CREATE TABLE telegram_hold (
-          telegram_chat_id INTEGER NOT NULL,
-          telegram_message_id INTEGER NOT NULL,
-          telegram_thread_id INTEGER NOT NULL,
-          payload TEXT NOT NULL,
-          PRIMARY KEY (telegram_chat_id, telegram_message_id)
+        CREATE TABLE IF NOT EXISTS projects (
+          id TEXT PRIMARY KEY,
+          slug TEXT NOT NULL UNIQUE,
+          name TEXT NOT NULL,
+          worktree TEXT,
+          created_at INTEGER NOT NULL
         );
       `);
-      const insHold = this.db.prepare(
-        "INSERT INTO telegram_hold (telegram_chat_id, telegram_message_id, telegram_thread_id, payload) VALUES (?, ?, ?, ?)",
-      );
-      for (const row of holds) {
-        insHold.run(row.telegram_chat_id ?? 0, row.telegram_message_id, row.telegram_thread_id, row.payload);
+      if (!this.hasColumn("agents", "project_id")) {
+        this.db.exec("ALTER TABLE agents ADD COLUMN project_id TEXT");
       }
-    }
-    const topicSql = this.tableSql("telegram_topics");
-    if (!this.hasColumn("telegram_out", "telegram_chat_id") || /telegram_message_id INTEGER PRIMARY KEY/i.test(this.tableSql("telegram_out"))) {
-      const rows = this.db.prepare("SELECT * FROM telegram_out").all() as Array<{
-        telegram_message_id: number;
-        seq: number;
-        channel_id: string;
-        thread_id: string | null;
-        telegram_chat_id?: number | null;
-      }>;
-      this.db.exec(`
-        DROP TABLE telegram_out;
-        CREATE TABLE telegram_out (
-          telegram_chat_id INTEGER NOT NULL,
-          telegram_message_id INTEGER NOT NULL,
-          seq INTEGER NOT NULL,
-          channel_id TEXT NOT NULL,
-          thread_id TEXT,
-          PRIMARY KEY (telegram_chat_id, telegram_message_id)
-        );
-        CREATE INDEX IF NOT EXISTS idx_telegram_out_seq ON telegram_out(seq);
-      `);
-      const ins = this.db.prepare(
-        "INSERT INTO telegram_out (telegram_chat_id, telegram_message_id, seq, channel_id, thread_id) VALUES (?, ?, ?, ?, ?)",
-      );
-      for (const row of rows) {
-        ins.run(row.telegram_chat_id ?? 0, row.telegram_message_id, row.seq, row.channel_id, row.thread_id);
+      if (!this.hasColumn("channels", "project_id")) {
+        this.db.exec("ALTER TABLE channels ADD COLUMN project_id TEXT");
       }
-    }
 
-    if (
-      !this.hasColumn("telegram_topics", "telegram_chat_id") ||
-      /telegram_thread_id INTEGER NOT NULL UNIQUE/i.test(topicSql)
-    ) {
-      const rows = this.db.prepare("SELECT * FROM telegram_topics").all() as Array<{
-        channel_id: string;
-        telegram_thread_id: number;
-        telegram_chat_id?: number | null;
-      }>;
-      this.db.exec(`
-        DROP TABLE telegram_topics;
-        CREATE TABLE telegram_topics (
-          channel_id TEXT PRIMARY KEY,
-          telegram_thread_id INTEGER NOT NULL,
-          telegram_chat_id INTEGER
+      const holdSql = this.tableSql("telegram_hold");
+      if (
+        !this.hasColumn("telegram_hold", "telegram_chat_id") ||
+        /telegram_message_id INTEGER PRIMARY KEY/i.test(holdSql)
+      ) {
+        const holds = holdSql
+          ? (this.db.prepare("SELECT * FROM telegram_hold").all() as Array<{
+              telegram_message_id: number;
+              telegram_thread_id: number;
+              payload: string;
+              telegram_chat_id?: number | null;
+            }>)
+          : [];
+        this.db.exec(`
+          DROP TABLE IF EXISTS telegram_hold;
+          CREATE TABLE telegram_hold (
+            telegram_chat_id INTEGER NOT NULL,
+            telegram_message_id INTEGER NOT NULL,
+            telegram_thread_id INTEGER NOT NULL,
+            payload TEXT NOT NULL,
+            PRIMARY KEY (telegram_chat_id, telegram_message_id)
+          );
+        `);
+        const insertHold = this.db.prepare(
+          "INSERT INTO telegram_hold (telegram_chat_id, telegram_message_id, telegram_thread_id, payload) VALUES (?, ?, ?, ?)",
         );
-      `);
-      const ins = this.db.prepare(
-        "INSERT INTO telegram_topics (channel_id, telegram_thread_id, telegram_chat_id) VALUES (?, ?, ?)",
-      );
-      for (const row of rows) ins.run(row.channel_id, row.telegram_thread_id, row.telegram_chat_id ?? null);
-    }
+        for (const row of holds) {
+          insertHold.run(row.telegram_chat_id ?? 0, row.telegram_message_id, row.telegram_thread_id, row.payload);
+        }
+      }
 
-    const count = (this.db.prepare("SELECT COUNT(*) AS n FROM projects").get() as { n: number }).n;
-    if (count === 0) {
-      this.db.prepare("INSERT INTO projects (id, slug, name, worktree, created_at) VALUES (?, ?, ?, NULL, ?)").run(
-        crypto.randomUUID(),
-        DEFAULT_PROJECT_SLUG,
-        DEFAULT_PROJECT_NAME,
-        now(),
-      );
+      if (
+        !this.hasColumn("telegram_out", "telegram_chat_id") ||
+        /telegram_message_id INTEGER PRIMARY KEY/i.test(this.tableSql("telegram_out"))
+      ) {
+        const rows = this.db.prepare("SELECT * FROM telegram_out").all() as Array<{
+          telegram_message_id: number;
+          seq: number;
+          channel_id: string;
+          thread_id: string | null;
+          telegram_chat_id?: number | null;
+        }>;
+        this.db.exec(`
+          DROP TABLE telegram_out;
+          CREATE TABLE telegram_out (
+            telegram_chat_id INTEGER NOT NULL,
+            telegram_message_id INTEGER NOT NULL,
+            seq INTEGER NOT NULL,
+            channel_id TEXT NOT NULL,
+            thread_id TEXT,
+            PRIMARY KEY (telegram_chat_id, telegram_message_id)
+          );
+          CREATE INDEX IF NOT EXISTS idx_telegram_out_seq ON telegram_out(seq);
+        `);
+        const insertOut = this.db.prepare(
+          "INSERT INTO telegram_out (telegram_chat_id, telegram_message_id, seq, channel_id, thread_id) VALUES (?, ?, ?, ?, ?)",
+        );
+        for (const row of rows) {
+          insertOut.run(row.telegram_chat_id ?? 0, row.telegram_message_id, row.seq, row.channel_id, row.thread_id);
+        }
+      }
+
+      const topicSql = this.tableSql("telegram_topics");
+      if (
+        !this.hasColumn("telegram_topics", "telegram_chat_id") ||
+        /telegram_thread_id INTEGER NOT NULL UNIQUE/i.test(topicSql)
+      ) {
+        const rows = this.db.prepare("SELECT * FROM telegram_topics").all() as Array<{
+          channel_id: string;
+          telegram_thread_id: number;
+          telegram_chat_id?: number | null;
+        }>;
+        this.db.exec(`
+          DROP TABLE telegram_topics;
+          CREATE TABLE telegram_topics (
+            channel_id TEXT PRIMARY KEY,
+            telegram_thread_id INTEGER NOT NULL,
+            telegram_chat_id INTEGER
+          );
+        `);
+        const insertTopic = this.db.prepare(
+          "INSERT INTO telegram_topics (channel_id, telegram_thread_id, telegram_chat_id) VALUES (?, ?, ?)",
+        );
+        for (const row of rows) {
+          insertTopic.run(row.channel_id, row.telegram_thread_id, row.telegram_chat_id ?? null);
+        }
+      }
+
+      const count = (this.db.prepare("SELECT COUNT(*) AS n FROM projects").get() as { n: number }).n;
+      if (count === 0) {
+        this.db.prepare(
+          "INSERT INTO projects (id, slug, name, worktree, created_at) VALUES (?, ?, ?, NULL, ?)",
+        ).run(crypto.randomUUID(), DEFAULT_PROJECT_SLUG, DEFAULT_PROJECT_NAME, now());
+      }
+      const seed = this.db.prepare("SELECT * FROM projects ORDER BY created_at ASC LIMIT 1").get() as ProjectRow;
+      this.db.prepare("UPDATE agents SET project_id = ? WHERE project_id IS NULL AND id != ?").run(seed.id, HUMAN_ID);
+      this.db.prepare("UPDATE channels SET project_id = ? WHERE project_id IS NULL").run(seed.id);
+      if (version < 2) this.db.exec("PRAGMA user_version = 2");
+      this.db.exec("COMMIT");
+    } catch (err) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        // No open transaction.
+      }
+      throw err;
     }
-    const seed = this.db.prepare("SELECT * FROM projects ORDER BY created_at ASC LIMIT 1").get() as ProjectRow;
-    this.db.prepare("UPDATE agents SET project_id = ? WHERE project_id IS NULL AND id != ?").run(seed.id, HUMAN_ID);
-    this.db.prepare("UPDATE channels SET project_id = ? WHERE project_id IS NULL").run(seed.id);
   }
 
   listProjects(): Project[] {
@@ -417,17 +473,28 @@ export class Hive {
     const exists = this.db.prepare("SELECT id FROM projects WHERE slug = ?").get(slug);
     if (exists) throw new HiveError(409, `Project ${slug} already exists`);
     const id = crypto.randomUUID();
-    this.db.prepare("INSERT INTO projects (id, slug, name, worktree, created_at) VALUES (?, ?, ?, ?, ?)").run(
-      id,
-      slug,
-      name.slice(0, 80),
-      canonicalWorktree(input.worktree),
-      now(),
-    );
-    const project = this.getProject(id);
-    this.ensureBuiltinChannel(project, "general", "public", "Town square");
-    this.ensureBuiltinChannel(project, "brains", "brains", "Human and brains only");
-    this.addHumanToAllChannels();
+    try {
+      this.db.exec("BEGIN IMMEDIATE");
+      this.db.prepare("INSERT INTO projects (id, slug, name, worktree, created_at) VALUES (?, ?, ?, ?, ?)").run(
+        id,
+        slug,
+        name.slice(0, 80),
+        canonicalWorktree(input.worktree),
+        now(),
+      );
+      const project = this.getProject(id);
+      this.ensureBuiltinChannel(project, "general", "public", "Town square");
+      this.ensureBuiltinChannel(project, "brains", "brains", "Human and brains only");
+      this.addHumanToAllChannels();
+      this.db.exec("COMMIT");
+    } catch (err) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        // No open transaction.
+      }
+      throw err;
+    }
     return this.getProject(id);
   }
 
@@ -1382,21 +1449,69 @@ export class Hive {
     });
   }
 
-  private takeUnseen(actor: Agent, limit = WAIT_MAIL_CAP): { messages: Message[]; more: number } {
+  private loadDeliveryMessages(actor: Agent, seqs: number[]): Message[] {
+    if (seqs.length === 0) return [];
+    const placeholders = seqs.map(() => "?").join(",");
+    const rows = this.db.prepare(
+      `SELECT * FROM messages WHERE seq IN (${placeholders})`,
+    ).all(...seqs) as MessageRow[];
+    const bySeq = new Map(rows.map((row) => [row.seq, row]));
+    const ordered = seqs
+      .map((seq) => bySeq.get(seq))
+      .filter((row): row is MessageRow => Boolean(row))
+      .map((row) => this.mapMessage(row));
+    return this.decorate(ordered, actor.id);
+  }
+
+  private activeDelivery(agentId: string): DeliveryRow | undefined {
+    return this.db.prepare(
+      "SELECT * FROM inbox_deliveries WHERE agent_id = ? AND status = 'in_flight' LIMIT 1",
+    ).get(agentId) as DeliveryRow | undefined;
+  }
+
+  private deliveryBatch(actor: Agent, row: DeliveryRow): {
+    messages: Message[];
+    more: number;
+    deliveryId: string;
+    deliverySessionId: string;
+  } {
+    const seqs = JSON.parse(row.seqs) as number[];
+    return {
+      messages: this.loadDeliveryMessages(actor, seqs),
+      more: row.more,
+      deliveryId: row.delivery_id,
+      deliverySessionId: row.session_id,
+    };
+  }
+
+  private selectUnseen(actor: Agent, limit = WAIT_MAIL_CAP): {
+    messages: Message[];
+    more: number;
+    advanceCursor: number;
+  } {
     const row = this.db.prepare("SELECT inbox_cursor FROM agents WHERE id = ?").get(actor.id) as {
       inbox_cursor: number;
     };
-    let cursor = row?.inbox_cursor ?? 0;
+    const cursor = row?.inbox_cursor ?? 0;
     const channels = this.listChannels(actor);
-    if (channels.length === 0) return { messages: [], more: 0 };
-    const ids = channels.map((c) => c.id);
+    if (channels.length === 0) return { messages: [], more: 0, advanceCursor: cursor };
+    const ids = channels.map((channel) => channel.id);
     const placeholders = ids.map(() => "?").join(",");
     const delivered: Message[] = [];
     const conversations = new Set<string>();
     const capConversations = actor.role === "brain";
+    const maxMessages = actor.role === "brain" ? WAIT_MESSAGE_CAP : limit;
+    const byteBudget = WAIT_PAYLOAD_MAX_BYTES - 1024;
     let newCursor = cursor;
     let scan = cursor;
     let overflow = false;
+
+    const fitsPayloadBudget = (messages: Message[]) => {
+      // Full (non-compact) format is the conservative case; MCP compact output
+      // can only be smaller. Reserve room for delivery IDs and framing.
+      const trial = packWait(actor, messages, 99, false, (id) => channelLabel(this.getChannel(id)));
+      return Buffer.byteLength(JSON.stringify(trial), "utf8") <= byteBudget;
+    };
 
     for (;;) {
       const rows = this.db.prepare(
@@ -1404,60 +1519,260 @@ export class Hive {
          ORDER BY seq ASC LIMIT 100`,
       ).all(scan, ...ids, actor.id) as MessageRow[];
       if (rows.length === 0) break;
-      for (const r of rows) {
-        const message = this.mapMessage(r);
+
+      for (const messageRow of rows) {
+        const message = this.mapMessage(messageRow);
         if (!this.isFor(actor, message)) {
           newCursor = message.seq;
           scan = message.seq;
           continue;
         }
-        const known = conversations.has(message.channelId);
-        const atCap = capConversations ? !known && conversations.size >= limit : delivered.length >= limit;
-        if (atCap) {
+
+        const knownConversation = conversations.has(message.channelId);
+        const atConversationCap =
+          capConversations && !knownConversation && conversations.size >= limit;
+        const atMessageCap = delivered.length >= maxMessages;
+        if (atConversationCap || atMessageCap) {
           overflow = true;
           break;
         }
-        delivered.push(message);
+
+        const decorated = this.decorate([message], actor.id)[0]!;
+        if (!fitsPayloadBudget([...delivered, decorated])) {
+          // A single legal message is comfortably below the hard budget. If
+          // that invariant ever changes, fail loudly rather than silently skip it.
+          if (delivered.length === 0) {
+            throw new HiveError(500, "Single wait message exceeds payload budget");
+          }
+          overflow = true;
+          break;
+        }
+
+        delivered.push(decorated);
         conversations.add(message.channelId);
         newCursor = message.seq;
         scan = message.seq;
       }
+
       if (overflow || rows.length < 100) break;
       scan = rows[rows.length - 1]!.seq;
     }
 
-    if (newCursor > cursor) {
-      this.db.prepare("UPDATE agents SET inbox_cursor = MAX(inbox_cursor, ?) WHERE id = ?").run(newCursor, actor.id);
+    let more = 0;
+    let countScan = newCursor;
+    for (let page = 0; page < 40 && more < 99; page += 1) {
+      const rows = this.db.prepare(
+        `SELECT * FROM messages WHERE seq > ? AND channel_id IN (${placeholders}) AND author_id != ?
+         ORDER BY seq ASC LIMIT 100`,
+      ).all(countScan, ...ids, actor.id) as MessageRow[];
+      if (rows.length === 0) break;
+      for (const messageRow of rows) {
+        if (!this.isFor(actor, this.mapMessage(messageRow))) continue;
+        more += 1;
+        if (more >= 99) break;
+      }
+      countScan = rows[rows.length - 1]!.seq;
+      if (rows.length < 100) break;
     }
 
-    let more = 0;
-    if (overflow || delivered.length >= limit) {
-      let countScan = newCursor;
-      for (let page = 0; page < 20 && more < 99; page += 1) {
-        const rows = this.db.prepare(
-          `SELECT * FROM messages WHERE seq > ? AND channel_id IN (${placeholders}) AND author_id != ?
-           ORDER BY seq ASC LIMIT 100`,
-        ).all(countScan, ...ids, actor.id) as MessageRow[];
-        if (rows.length === 0) break;
-        for (const r of rows) {
-          const message = this.mapMessage(r);
-          if (!this.isFor(actor, message)) continue;
-          if (capConversations) {
-            if (!conversations.has(message.channelId)) {
-              conversations.add(message.channelId);
-              more += 1;
-            }
-          } else {
-            more += 1;
-          }
+    return { messages: delivered, more, advanceCursor: newCursor };
+  }
+
+  private claimDelivery(
+    actor: Agent,
+    sessionId: string,
+  ): {
+    messages: Message[];
+    more: number;
+    deliveryId?: string;
+    deliverySessionId?: string;
+  } {
+    const active = this.activeDelivery(actor.id);
+    if (active) {
+      if (active.session_id === sessionId) return this.deliveryBatch(actor, active);
+
+      // A reconnect adopts the exact same batch under a new fenced delivery ID.
+      // The previous session can no longer acknowledge it.
+      const replacementId = crypto.randomUUID();
+      try {
+        this.db.exec("BEGIN IMMEDIATE");
+        const current = this.activeDelivery(actor.id);
+        if (!current) {
+          this.db.exec("ROLLBACK");
+          return this.claimDelivery(actor, sessionId);
         }
-        countScan = rows[rows.length - 1]!.seq;
-        if (rows.length < 100) break;
+        if (current.session_id === sessionId) {
+          this.db.exec("COMMIT");
+          return this.deliveryBatch(actor, current);
+        }
+        this.db.prepare(
+          "UPDATE inbox_deliveries SET status = 'superseded', superseded_at = ? WHERE delivery_id = ? AND status = 'in_flight'",
+        ).run(now(), current.delivery_id);
+        this.db.prepare(
+          `INSERT INTO inbox_deliveries
+           (delivery_id, agent_id, session_id, seqs, advance_cursor, more, status, created_at, acked_at, superseded_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'in_flight', ?, NULL, NULL)`,
+        ).run(
+          replacementId,
+          actor.id,
+          sessionId,
+          current.seqs,
+          current.advance_cursor,
+          current.more,
+          now(),
+        );
+        this.db.exec("COMMIT");
+      } catch (err) {
+        try {
+          this.db.exec("ROLLBACK");
+        } catch {
+          // No open transaction.
+        }
+        throw err;
       }
+      const replacement = this.activeDelivery(actor.id);
+      if (!replacement) throw new HiveError(500, "Failed to replace in-flight delivery");
+      return this.deliveryBatch(actor, replacement);
     }
-    const packed = { messages: this.decorate(delivered), more };
+
+    const selected = this.selectUnseen(actor);
+    if (selected.messages.length === 0) {
+      // Scanned messages that are not addressed to this agent never require an
+      // acknowledgement and can safely move the acknowledged cursor forward.
+      const current = (this.db.prepare("SELECT inbox_cursor FROM agents WHERE id = ?").get(actor.id) as {
+        inbox_cursor: number;
+      }).inbox_cursor;
+      if (selected.advanceCursor > current) {
+        this.db.prepare("UPDATE agents SET inbox_cursor = MAX(inbox_cursor, ?) WHERE id = ?").run(
+          selected.advanceCursor,
+          actor.id,
+        );
+        this.emitQueued(actor.id);
+      }
+      return { messages: [], more: 0 };
+    }
+
+    const deliveryId = crypto.randomUUID();
+    this.db.prepare(
+      `INSERT INTO inbox_deliveries
+       (delivery_id, agent_id, session_id, seqs, advance_cursor, more, status, created_at, acked_at, superseded_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'in_flight', ?, NULL, NULL)`,
+    ).run(
+      deliveryId,
+      actor.id,
+      sessionId,
+      JSON.stringify(selected.messages.map((message) => message.seq)),
+      selected.advanceCursor,
+      selected.more,
+      now(),
+    );
     this.emitQueued(actor.id);
-    return packed;
+    return {
+      messages: selected.messages,
+      more: selected.more,
+      deliveryId,
+      deliverySessionId: sessionId,
+    };
+  }
+
+  ackDelivery(
+    actor: Agent,
+    deliveryId: string,
+    sessionId: string,
+  ): { ok: true; duplicate: boolean; cursor: number } {
+    const row = this.db.prepare(
+      "SELECT * FROM inbox_deliveries WHERE delivery_id = ? AND agent_id = ?",
+    ).get(deliveryId, actor.id) as DeliveryRow | undefined;
+    if (!row) throw new HiveError(404, "Delivery not found");
+    if (row.session_id !== sessionId) throw new HiveError(409, "Delivery belongs to another session");
+    if (row.status === "superseded") throw new HiveError(409, "Delivery session is superseded");
+    if (row.status === "acked") {
+      const current = this.db.prepare("SELECT inbox_cursor FROM agents WHERE id = ?").get(actor.id) as {
+        inbox_cursor: number;
+      };
+      return { ok: true, duplicate: true, cursor: current.inbox_cursor };
+    }
+
+    try {
+      this.db.exec("BEGIN IMMEDIATE");
+      const current = this.db.prepare(
+        "SELECT * FROM inbox_deliveries WHERE delivery_id = ? AND agent_id = ?",
+      ).get(deliveryId, actor.id) as DeliveryRow | undefined;
+      if (!current) throw new HiveError(404, "Delivery not found");
+      if (current.session_id !== sessionId || current.status === "superseded") {
+        throw new HiveError(409, "Delivery session is superseded");
+      }
+      if (current.status === "acked") {
+        this.db.exec("COMMIT");
+        const cursor = this.db.prepare("SELECT inbox_cursor FROM agents WHERE id = ?").get(actor.id) as {
+          inbox_cursor: number;
+        };
+        return { ok: true, duplicate: true, cursor: cursor.inbox_cursor };
+      }
+      this.db.prepare("UPDATE agents SET inbox_cursor = MAX(inbox_cursor, ?) WHERE id = ?").run(
+        current.advance_cursor,
+        actor.id,
+      );
+      this.db.prepare(
+        "UPDATE inbox_deliveries SET status = 'acked', acked_at = ? WHERE delivery_id = ?",
+      ).run(now(), deliveryId);
+      this.db.exec("COMMIT");
+    } catch (err) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        // No open transaction.
+      }
+      throw err;
+    }
+
+    this.emitQueued(actor.id);
+    const cursor = this.db.prepare("SELECT inbox_cursor FROM agents WHERE id = ?").get(actor.id) as {
+      inbox_cursor: number;
+    };
+    return { ok: true, duplicate: false, cursor: cursor.inbox_cursor };
+  }
+
+  deliveryStates(): Record<
+    string,
+    {
+      acknowledgedCursor: number;
+      queued: number;
+      inFlight: { deliveryId: string; count: number } | null;
+      lastAcknowledged: { deliveryId: string; at: number } | null;
+    }
+  > {
+    const out: Record<
+      string,
+      {
+        acknowledgedCursor: number;
+        queued: number;
+        inFlight: { deliveryId: string; count: number } | null;
+        lastAcknowledged: { deliveryId: string; at: number } | null;
+      }
+    > = {};
+    for (const agent of this.listAgents()) {
+      if (agent.role === "human") continue;
+      const cursor = (this.db.prepare("SELECT inbox_cursor FROM agents WHERE id = ?").get(agent.id) as {
+        inbox_cursor: number;
+      }).inbox_cursor;
+      const active = this.activeDelivery(agent.id);
+      const activeCount = active ? (JSON.parse(active.seqs) as number[]).length : 0;
+      const lastAcked = this.db.prepare(
+        `SELECT delivery_id, acked_at FROM inbox_deliveries
+         WHERE agent_id = ? AND status = 'acked' ORDER BY acked_at DESC LIMIT 1`,
+      ).get(agent.id) as { delivery_id: string; acked_at: number } | undefined;
+      const totalUnacknowledged = this.countUnseen(agent);
+      out[agent.id] = {
+        acknowledgedCursor: cursor,
+        queued: Math.max(0, totalUnacknowledged - activeCount),
+        inFlight: active ? { deliveryId: active.delivery_id, count: activeCount } : null,
+        lastAcknowledged: lastAcked
+          ? { deliveryId: lastAcked.delivery_id, at: lastAcked.acked_at }
+          : null,
+      };
+    }
+    return out;
   }
 
   queuedCounts(): Record<string, number> {
@@ -1565,16 +1880,25 @@ export class Hive {
     actor: Agent,
     timeoutMs: number,
     signal?: AbortSignal,
-    opts: { compact?: boolean } = {},
+    opts: { compact?: boolean; sessionId?: string } = {},
   ): Promise<WaitResult> {
     const compact = Boolean(opts.compact);
-    const pack = (batch: { messages: Message[]; more: number }): WaitResult =>
-      packWait(this.getAgent(actor.id), batch.messages, batch.more, compact, (id) =>
+    const sessionId = opts.sessionId?.trim() || `legacy:${actor.id}`;
+    const pack = (batch: {
+      messages: Message[];
+      more: number;
+      deliveryId?: string;
+      deliverySessionId?: string;
+    }): WaitResult => ({
+      ...packWait(this.getAgent(actor.id), batch.messages, batch.more, compact, (id) =>
         channelLabel(this.getChannel(id)),
-      );
+      ),
+      ...(batch.deliveryId ? { deliveryId: batch.deliveryId } : {}),
+      ...(batch.deliverySessionId ? { deliverySessionId: batch.deliverySessionId } : {}),
+    });
 
     // A cancelled request is observational only: it must not touch presence,
-    // install a waiter, advance inbox state, or consume already-queued mail.
+    // install a waiter, claim a delivery, or consume already-queued mail.
     if (signal?.aborted) return pack({ messages: [], more: 0 });
     this.touch(actor.id, true);
 
@@ -1587,20 +1911,25 @@ export class Hive {
         signal?.removeEventListener("abort", onAbort);
         if (timer) clearTimeout(timer);
       };
-      const deliver = (batch: { messages: Message[]; more: number }) => {
+      const deliver = (batch: {
+        messages: Message[];
+        more: number;
+        deliveryId?: string;
+        deliverySessionId?: string;
+      }) => {
         if (done) return;
         done = true;
         cleanup();
         this.touch(actor.id, true);
         resolve(pack(batch));
       };
-      const finish = (consume: boolean) => {
+      const finish = (claim: boolean) => {
         if (done) return;
-        if (!consume || signal?.aborted) {
+        if (!claim || signal?.aborted) {
           deliver({ messages: [], more: 0 });
           return;
         }
-        deliver(this.takeUnseen(actor));
+        deliver(this.claimDelivery(actor, sessionId));
       };
       waiter = {
         wake: () => finish(true),
@@ -1622,7 +1951,7 @@ export class Hive {
         finish(false);
         return;
       }
-      const first = this.takeUnseen(actor);
+      const first = this.claimDelivery(actor, sessionId);
       if (first.messages.length > 0) deliver(first);
     });
   }
