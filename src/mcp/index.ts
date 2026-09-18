@@ -157,7 +157,7 @@ export async function startMcp() {
 
   server.tool(
     "history",
-    "Read a channel or DM. Default is the latest 20 channel roots, or the first 20 messages of a thread. Use since to page forward or before to page backward without skipping messages.",
+    "Read a channel or DM. Default is the latest 20 channel roots, or the first 20 messages of a thread. Use since to page forward or before to page backward without skipping messages. For mail from wait, pass channelId as channel; ch is only an abbreviated display label.",
     {
       channel: z.string(),
       threadId: z.string().optional(),
@@ -188,7 +188,7 @@ export async function startMcp() {
 
   server.tool(
     "send",
-    "Post to channel or to (DM by name). Workers cannot @Human or open a new Human DM. They may reply in a Human DM that Human already opened.",
+    "Post to channel or to (DM by name). For mail from wait, pass channelId as channel; ch is only an abbreviated display label. Workers cannot @Human or open a new Human DM. They may reply in a Human DM that Human already opened.",
     {
       body: z.string(),
       channel: z.string().optional(),

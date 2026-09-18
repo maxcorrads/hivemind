@@ -20,7 +20,9 @@
     "typecheck": "npm run typecheck:server && npm run typecheck:web",
     "check": "npm run lint && npm run typecheck && npm test && npm run build",
     "prepack": "npm run build",
-    "lint": "oxlint --deny-warnings src web scripts vite.config.ts"
+    "lint": "oxlint --deny-warnings src web scripts vite.config.ts",
+    "test:inbox-bounds": "tsx --test src/server/inbox-bounds.test.ts",
+    "benchmark:inbox": "tsx scripts/benchmark-inbox.ts"
   },
   "engines": {
     "node": ">=22.13.0"
