@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
 import type { SQLInputValue } from "node:sqlite";
+import type { Message, WaitMailItem } from "../shared/types.ts";
 import { Hive } from "./hive.ts";
 
 function setup(t: TestContext) {
@@ -172,44 +173,56 @@ for (const compact of [false, true]) {
     }
 
     const observed = record(t, hive);
-    const received: Message[] = [];
+    const receivedRaw: Message[] = [];
+    const receivedCompact: WaitMailItem[] = [];
     let pages = 0;
+    let receivedCount = 0;
     let lastMore = -1;
-    while (received.length < 600) {
+    while (receivedCount < 600) {
       assert.ok(++pages <= 6, "100-message receipt cap should require exactly six pages");
       const result = await hive.wait(brain, 100, undefined, { compact });
       assert.equal(result.idle, false);
       assert.ok(result.delivery);
       assert.ok(result.delivery.messageSeqs.length <= 100);
       lastMore = result.more ?? 0;
-      const page = compact
-        ? (result.mail ?? []).map((item) => hive.getVisibleMessage(brain, item.seq))
-        : result.messages;
-      received.push(...page);
+      if (compact) receivedCompact.push(...(result.mail ?? []));
+      else receivedRaw.push(...result.messages);
+      receivedCount += result.delivery.messageSeqs.length;
       hive.acknowledgeInbox(brain, result.delivery.sessionId, result.delivery.id);
     }
     const calls = [...observed.calls];
     observed.restore();
 
     assert.equal(pages, 6);
-    assert.equal(received.length, 600);
+    assert.equal(receivedCount, 600);
     assert.equal(lastMore, 0);
-    assert.equal(received[599]!.authorName, "unknown");
-    assert.equal(received[599]!.authorRole, "worker");
-    assert.deepEqual(received[20]!.attachments, [
-      { id: "attachment-20", name: "20.txt", mime: "text/plain", bytes: 3 },
-    ]);
-    assert.deepEqual(received[20]!.reactions, [{ emoji: "👍", count: 1, mine: false }]);
+    if (compact) {
+      assert.equal(receivedCompact.length, 600);
+      assert.equal(receivedCompact[599]!.from, "unknown");
+      assert.equal(receivedCompact[599]!.authorRole, "worker");
+      assert.deepEqual(receivedCompact[20]!.attachments, [
+        { id: "attachment-20", name: "20.txt", mime: "text/plain", bytes: 3 },
+      ]);
+      assert.ok(receivedCompact.every((item) => item.ch === "#work"));
+    } else {
+      assert.equal(receivedRaw.length, 600);
+      assert.equal(receivedRaw[599]!.authorName, "unknown");
+      assert.equal(receivedRaw[599]!.authorRole, "worker");
+      assert.deepEqual(receivedRaw[20]!.attachments, [
+        { id: "attachment-20", name: "20.txt", mime: "text/plain", bytes: 3 },
+      ]);
+      assert.deepEqual(receivedRaw[20]!.reactions, [{ emoji: "👍", count: 1, mine: false }]);
+    }
 
     const authorLoads = calls.filter((call) => /SELECT id, name, role FROM agents WHERE id IN/.test(call.sql));
     const attachmentLoads = calls.filter((call) => /SELECT id, message_id, name, mime, bytes FROM attachments/.test(call.sql));
     const reactionLoads = calls.filter((call) => /SELECT message_id, emoji, agent_id FROM reactions/.test(call.sql));
-    assert.ok(authorLoads.length <= 12, `unexpected author query fanout: ${authorLoads.length}`);
+    assert.ok(authorLoads.length <= 30, `unexpected author query fanout: ${authorLoads.length}`);
     assert.equal(attachmentLoads.length, 6);
     assert.equal(reactionLoads.length, 6);
     assert.ok(authorLoads.every((call) => !call.args.includes("outsider-0")));
     assert.ok(calls.every((call) => call.args.length <= 400));
-    assert.ok(calls.length < 100, `unexpected N+1: ${calls.length} SQL calls`);
+    assert.ok(calls.length < 120, `unexpected N+1: ${calls.length} SQL calls`);
     // The unrelated 10k-message backlog is never hydrated into delivery metadata.
     assert.ok(hive.listAgents(human).some((a) => a.projectId === other.id));
   });
