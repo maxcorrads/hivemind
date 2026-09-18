@@ -1,25 +1,21 @@
 {
   "repairs": [
     {
-      "pr": 58,
-      "branch": "fix/issue-16-telegram-delivery-progress",
-      "expectedHead": "39fce35246170392fb3b737290fc60593538807a",
-      "expectedTree": "352998722da0c2328430a7b754570e641f19e484",
+      "pr": 54,
+      "branch": "fix/issue-12-telegram-rate-limit-scheduling",
+      "expectedHead": "a0b5b615007c9f3e7254e9d035837eca189d5a40",
+      "expectedTree": "06dae6a21cf5d8cde5c1a5dad22ed2996b2dfee3",
       "contentBase": {
-        "pr": 55,
-        "expectedTree": "84a039464ec32f7375b0cbc9092d425f37302261"
+        "pr": 58,
+        "expectedTree": "352998722da0c2328430a7b754570e641f19e484"
       },
       "patchParts": [
-        "58/part-0.txt",
-        "58/part-1.txt",
-        "58/part-2.txt",
-        "58/part-3.txt",
-        "58/part-4.txt",
-        "58/part-5.txt",
-        "58/part-6.txt",
-        "58/part-7.txt"
+        "54/part-0.txt",
+        "54/part-1.txt",
+        "54/part-2.txt",
+        "54/part-3.txt"
       ],
-      "message": "Fence Telegram retry destinations, persist bounded diagnostics and resume confirmed parts after restart"
+      "message": "Honor Telegram retry deadlines across poll and outbound paths without repeating confirmed parts"
     }
   ]
 }
