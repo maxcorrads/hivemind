@@ -48,6 +48,11 @@ test("unacknowledged deliveries replay, session fencing blocks stale ack, and du
   const secondMessage = hive.postMessage(human, { channel: dm.id, body: "second" });
   const acknowledgedBefore = cursor(hive, worker.id);
 
+  const queuedState = hive.deliveryStates()[worker.id]!;
+  assert.equal(queuedState.queued, 2);
+  assert.equal(queuedState.inFlight, null);
+  assert.equal(queuedState.lastAcknowledged, null);
+
   const first = await hive.wait(worker, 60_000, undefined, { sessionId: "session-a" });
   assert.ok(first.deliveryId);
   assert.equal(first.deliverySessionId, "session-a");
@@ -56,6 +61,10 @@ test("unacknowledged deliveries replay, session fencing blocks stale ack, and du
     [firstMessage.id, secondMessage.id],
   );
   assert.equal(cursor(hive, worker.id), acknowledgedBefore, "delivery alone must not advance the durable cursor");
+  const inFlightState = hive.deliveryStates()[worker.id]!;
+  assert.equal(inFlightState.queued, 0);
+  assert.deepEqual(inFlightState.inFlight, { deliveryId: first.deliveryId, count: 2 });
+  assert.equal(inFlightState.lastAcknowledged, null);
 
   const retry = await hive.wait(worker, 60_000, undefined, { sessionId: "session-a" });
   assert.equal(retry.deliveryId, first.deliveryId);
@@ -76,6 +85,11 @@ test("unacknowledged deliveries replay, session fencing blocks stale ack, and du
     () => hive.ackDelivery(worker, first.deliveryId!, "session-a"),
     /superseded/,
   );
+  assert.throws(
+    () => hive.ackDelivery(worker, replacement.deliveryId!, "session-a"),
+    /another session/,
+    "obsolete session cannot acknowledge the replacement session's delivery",
+  );
   assert.equal(cursor(hive, worker.id), acknowledgedBefore);
 
   const ack = hive.ackDelivery(worker, replacement.deliveryId!, "session-b");
@@ -86,7 +100,9 @@ test("unacknowledged deliveries replay, session fencing blocks stale ack, and du
   assert.equal(duplicate.cursor, ack.cursor);
 
   const stateAfterAck = hive.deliveryStates()[worker.id]!;
+  assert.equal(stateAfterAck.queued, 0);
   assert.equal(stateAfterAck.inFlight, null);
+  assert.equal(stateAfterAck.acknowledgedCursor, ack.cursor);
   assert.equal(stateAfterAck.lastAcknowledged?.deliveryId, replacement.deliveryId);
 
   const thirdMessage = hive.postMessage(human, { channel: dm.id, body: "survives restart" });
