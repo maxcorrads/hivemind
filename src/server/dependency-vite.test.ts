@@ -29,14 +29,17 @@ test("Vite builds on the test runtime and serves React with real API and WS prox
     try {
       let backendClosed: Promise<unknown> = Promise.resolve();
       if (server) {
-        backendClosed = once(server.server, "close");
+        backendClosed = once(server.server, "close").then(() => t.diagnostic("backend closed"));
         server.shutdown();
         server.server.closeAllConnections();
       }
-      // Close both ends before awaiting either server. HTTP closeAllConnections
-      // does not destroy upgraded WebSocket connections.
+      // Start Vite's teardown before destroying sockets so its close listeners
+      // are installed. Force destruction remains failure-path cleanup, not a
+      // substitute for the successful WebSocket close handshake asserted below.
+      const viteClosed = vite?.close().then(() => t.diagnostic("Vite closed"));
       for (const connection of connections) connection.destroy();
-      await Promise.all([vite?.close(), backendClosed]);
+      await Promise.all([viteClosed, backendClosed]);
+      assert.equal(connections.size, 0, "server sockets survived teardown");
     } finally {
       hive?.db.close();
       if (previousUrl === undefined) delete process.env.HIVEMIND_URL;
@@ -90,4 +93,11 @@ test("Vite builds on the test runtime and serves React with real API and WS prox
   assert.equal(payload.created, true);
   const [event] = await notification;
   assert.ok(["message", "agent"].includes(JSON.parse(String(event)).type));
+
+  // Exercise the close frame through both proxy endpoints instead of tearing
+  // down three TCP endpoints in the same event-loop turn.
+  const closed = once(socket, "close", { signal: t.signal });
+  socket.close(1000);
+  const [code] = await closed;
+  assert.equal(code, 1000, "the proxy did not preserve a normal WebSocket close");
 });
