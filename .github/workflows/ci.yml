@@ -65,9 +65,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          npm pack --json --pack-destination artifacts > artifacts/npm-pack.json
-          cat artifacts/npm-pack.json
-          package_file="$(node -e 'const fs=require("fs"); const p=JSON.parse(fs.readFileSync("artifacts/npm-pack.json","utf8")); process.stdout.write(p[0].filename)')"
+          package_file="$(npm pack --silent --pack-destination artifacts | tail -n 1)"
+          echo "Packed artifacts/${package_file}"
+          tar -tzf "artifacts/${package_file}" | sort
           bash scripts/smoke-package.sh "artifacts/${package_file}"
 
       - name: Audit production dependencies
