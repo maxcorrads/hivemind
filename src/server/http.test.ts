@@ -181,7 +181,15 @@ test("HTTP protocol: join, isolate, wait, Human admin", async () => {
     const seen = await json(base, "POST", "/api/ui/mentions/seen");
     assert.equal(seen.status, 200);
     assert.equal(seen.data.messages.length, 0);
-    assert.equal(seen.data.unread.general ?? 0, 0);
+    const remaining = hive.listMessages(hive.getAgent("human"), "general", { limit: 200 }).messages
+      .filter((message) => message.authorId !== "human" && !message.mentions.includes("human"));
+    assert.equal(seen.data.unread.general ?? 0, remaining.length);
+    assert.ok(remaining.length > 0);
+    const read = await json(base, "POST", "/api/ui/read", {
+      channelId: "general", messageSeqs: remaining.map((message) => message.seq),
+    });
+    assert.equal(read.status, 200);
+    assert.equal(read.data.unread.general, 0);
   } finally {
     await started.shutdown();
     hive.db.close();
