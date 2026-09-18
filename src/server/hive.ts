@@ -1676,18 +1676,24 @@ export class Hive {
   }
 
   private pruneDeliveryHistory(agentId: string, keep = 128) {
-    this.db.prepare(
-      `DELETE FROM inbox_deliveries
-       WHERE agent_id = ?
-         AND status != 'in_flight'
-         AND delivery_id NOT IN (
-           SELECT delivery_id
-           FROM inbox_deliveries
-           WHERE agent_id = ? AND status != 'in_flight'
-           ORDER BY created_at DESC, delivery_id DESC
-           LIMIT ?
-         )`,
-    ).run(agentId, agentId, keep);
+    try {
+      this.db.prepare(
+        `DELETE FROM inbox_deliveries
+         WHERE agent_id = ?
+           AND status != 'in_flight'
+           AND delivery_id NOT IN (
+             SELECT delivery_id
+             FROM inbox_deliveries
+             WHERE agent_id = ? AND status != 'in_flight'
+             ORDER BY created_at DESC, delivery_id DESC
+             LIMIT ?
+           )`,
+      ).run(agentId, agentId, keep);
+    } catch (err) {
+      // Housekeeping must not turn an already-committed delivery/ACK into a
+      // transport failure. The next ACK/reconnect remains correct without it.
+      console.error("hivemind: delivery receipt pruning failed", err);
+    }
   }
 
   ackDelivery(
