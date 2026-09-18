@@ -141,19 +141,21 @@ export async function startMcp() {
 
   server.tool(
     "history",
-    "Read a channel or DM. Default 20 messages. Use since to page forward.",
+    "Read a channel or DM. Default is the latest 20 channel roots, or the first 20 messages of a thread. Use since to page forward or before to page backward without skipping messages.",
     {
       channel: z.string(),
       threadId: z.string().optional(),
       limit: z.number().optional(),
       since: z.number().optional(),
+      before: z.number().optional(),
       meta: z.boolean().optional(),
     },
-    async ({ channel, threadId, limit, since, meta }) => {
+    async ({ channel, threadId, limit, since, before, meta }) => {
       const q = new URLSearchParams();
       if (threadId) q.set("threadId", threadId);
       if (limit) q.set("limit", String(limit));
-      if (since) q.set("afterSeq", String(since));
+      if (since !== undefined) q.set("afterSeq", String(since));
+      if (before !== undefined) q.set("beforeSeq", String(before));
       if (meta === true) q.set("meta", "1");
       if (meta === false) q.set("meta", "0");
       const suffix = q.toString() ? `?${q}` : "";
@@ -200,15 +202,18 @@ export async function startMcp() {
     "wait",
     "Sleep until mail. Call once, no args. Stay silent while this tool is running. When it returns, you have mail: handle it now, then call wait again and stay silent after that call. If this tool errors or is cancelled, or the input prompt appears without mail, call wait immediately. Do not ask the person at this prompt.",
     {},
-    async () => {
-      const result = await waitUntilMail(() =>
-        agentRequest<WaitResult>(
-          "POST",
-          "/api/agent/wait",
-          { timeoutMs: MCP_WAIT_POLL_MS, compact: true },
-          token(),
-          MCP_WAIT_POLL_MS + 10_000,
-        ),
+    async (_args, extra) => {
+      const result = await waitUntilMail(
+        () =>
+          agentRequest<WaitResult>(
+            "POST",
+            "/api/agent/wait",
+            { timeoutMs: MCP_WAIT_POLL_MS, compact: true },
+            token(),
+            MCP_WAIT_POLL_MS + 10_000,
+            extra.signal,
+          ),
+        { signal: extra.signal },
       );
       return text({
         instruction: "Mail arrived. Handle it now. Then call wait again and stay silent after that wait.",

@@ -45,18 +45,54 @@ export function hiveUrl(): string {
   return process.env.HIVEMIND_URL ?? "http://127.0.0.1:7420";
 }
 
+export class HttpError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string,
+    public readonly code?: string,
+  ) {
+    super(message);
+    this.name = "HttpError";
+  }
+}
+
+function responseError(res: Response, data: unknown): HttpError {
+  const payload = data && typeof data === "object" ? (data as { error?: unknown; code?: unknown }) : {};
+  const message = typeof payload.error === "string" && payload.error ? payload.error : `HTTP ${res.status}`;
+  const code = typeof payload.code === "string" && payload.code ? payload.code : undefined;
+  return new HttpError(res.status, message, code);
+}
+
+async function errorFromResponse(res: Response): Promise<HttpError> {
+  // Status is authoritative. Bodies may be empty, malformed JSON, HTML, or plain text.
+  // Avoid reflecting arbitrary response bodies into logs/errors.
+  let payload: unknown;
+  try {
+    payload = await res.json();
+  } catch {
+    // Best-effort structured details only.
+  }
+  return responseError(res, payload);
+}
+
 export async function agentRequest<T>(
   method: string,
   pathname: string,
   body?: unknown,
   token?: string | null,
   timeoutMs?: number,
+  signal?: AbortSignal,
 ): Promise<T> {
   const headers: Record<string, string> = { "content-type": "application/json" };
   const t = token === null ? undefined : (token ?? currentToken());
   if (t) headers.authorization = `Bearer ${t}`;
   const ctrl = new AbortController();
-  const timer = timeoutMs ? setTimeout(() => ctrl.abort(), timeoutMs) : undefined;
+  const onAbort = () => ctrl.abort(signal?.reason);
+  if (signal?.aborted) onAbort();
+  else signal?.addEventListener("abort", onAbort, { once: true });
+  const timer = timeoutMs
+    ? setTimeout(() => ctrl.abort(new DOMException("Request timed out", "TimeoutError")), timeoutMs)
+    : undefined;
   try {
     const res = await fetch(`${hiveUrl()}${pathname}`, {
       method,
@@ -64,14 +100,10 @@ export async function agentRequest<T>(
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: ctrl.signal,
     });
-    const text = await res.text();
-    const data = text ? JSON.parse(text) : {};
-    if (!res.ok) {
-      throw new Error(data.error || `HTTP ${res.status}`);
-    }
-    return data as T;
+    return await parseJsonResponse<T>(res);
   } finally {
     if (timer) clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
   }
 }
 
@@ -121,10 +153,10 @@ export async function agentUploadFile<T>(
 }
 
 async function parseJsonResponse<T>(res: Response): Promise<T> {
+  if (!res.ok) throw await errorFromResponse(res);
   const text = await res.text();
-  const data = text ? JSON.parse(text) : {};
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-  return data as T;
+  // Malformed successful JSON is a protocol error, not an HTTP retry classification.
+  return (text ? JSON.parse(text) : {}) as T;
 }
 
 function fileNameFromDisposition(disp: string): string {
@@ -140,16 +172,7 @@ export async function agentDownloadToFile(
   const res = await fetch(`${hiveUrl()}${pathname}`, {
     headers: { authorization: `Bearer ${token}` },
   });
-  if (!res.ok) {
-    const text = await res.text();
-    let error = `HTTP ${res.status}`;
-    try {
-      error = JSON.parse(text).error || error;
-    } catch {
-      /* keep */
-    }
-    throw new Error(error);
-  }
+  if (!res.ok) throw await errorFromResponse(res);
   if (!res.body) throw new Error("Empty download");
   const name = fileNameFromDisposition(res.headers.get("content-disposition") ?? "");
   const dest = path.join(destDir, `${filePrefix}-${safeFileName(name)}`);
@@ -169,16 +192,7 @@ export async function agentDownload(
   const res = await fetch(`${hiveUrl()}${pathname}`, {
     headers: { authorization: `Bearer ${token}` },
   });
-  if (!res.ok) {
-    const text = await res.text();
-    let error = `HTTP ${res.status}`;
-    try {
-      error = JSON.parse(text).error || error;
-    } catch {
-      /* keep */
-    }
-    throw new Error(error);
-  }
+  if (!res.ok) throw await errorFromResponse(res);
   const bytes = Buffer.from(await res.arrayBuffer());
   const mime = res.headers.get("content-type") || "application/octet-stream";
   return { bytes, mime, name: fileNameFromDisposition(res.headers.get("content-disposition") ?? "") };

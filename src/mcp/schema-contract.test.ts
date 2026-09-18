@@ -61,9 +61,10 @@ test("production MCP schemas and calls retain their observable contracts", { tim
   } catch (error) {
     throw new Error(`MCP startup failed: ${diagnostic}`, { cause: error });
   }
-  const call = (name: string, args: Record<string, unknown> = {}) => connected.callTool(
-    { name, arguments: args }, CallToolResultSchema, { timeout: 5000, signal: t.signal },
-  );
+  const call = async (name: string, args: Record<string, unknown> = {}): Promise<CallToolResult> =>
+    CallToolResultSchema.parse(await connected.callTool(
+      { name, arguments: args }, CallToolResultSchema, { timeout: 5000, signal: t.signal },
+    ));
 
   await t.test("all advertised production inputs retain types, required fields and enums", async () => {
     const { tools } = await connected.listTools({}, { timeout: 5000, signal: t.signal });
@@ -72,7 +73,7 @@ test("production MCP schemas and calls retain their observable contracts", { tim
       whoami: [[], {}], standing_orders: [[], {}], agents: [[], {}], wait: [[], {}],
       channels: [[], { unread: "boolean" }],
       search: [["q"], { q: "string", channel: "string", limit: "number", before: "number" }],
-      history: [["channel"], { channel: "string", threadId: "string", limit: "number", since: "number", meta: "boolean" }],
+      history: [["channel"], { channel: "string", threadId: "string", limit: "number", since: "number", before: "number", meta: "boolean" }],
       send: [["body"], { body: "string", channel: "string", to: "string", threadId: "string", attachmentIds: "array" }],
       create_channel: [["name"], { name: "string", type: "string", topic: "string", members: "array" }],
       set_thread_status: [["threadId", "status"], { threadId: "string", status: "string" }],
@@ -143,7 +144,7 @@ test("production MCP schemas and calls retain their observable contracts", { tim
     ["channels", { unread: "true" }], ["channels", { unread: null }],
     ["search", {}], ["search", { q: "x", limit: "1" }], ["search", { q: "x", before: null }],
     ["history", { channel: null }], ["history", { channel: "general", meta: 0 }],
-    ["history", { channel: "general", threadId: null }],
+    ["history", { channel: "general", threadId: null }], ["history", { channel: "general", before: null }],
     ["send", { body: 17 }], ["send", { body: "x", attachmentIds: [7] }], ["send", { body: "x", channel: null }],
     ["create_channel", { name: "x", type: "brains" }], ["create_channel", { name: "x", topic: null }],
     ["create_channel", { name: "x", members: [42] }],
