@@ -203,7 +203,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const file = await hive.createFile(human, {
       name,
       mime: resolveUploadMime(c.req.header("x-file-mime"), name),
-      body: c.req.raw.body,
+      body: c.req.raw.body, signal: c.req.raw.signal,
     });
     return c.json({ file });
   });
@@ -374,7 +374,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const file = await hive.createFile(me, {
       name,
       mime: resolveUploadMime(c.req.header("x-file-mime"), name),
-      body: c.req.raw.body,
+      body: c.req.raw.body, signal: c.req.raw.signal,
     });
     return c.json({ file });
   });
