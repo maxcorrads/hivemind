@@ -1621,7 +1621,6 @@ export class Hive {
           now(),
         );
         this.db.exec("COMMIT");
-        this.pruneDeliveryHistory(actor.id);
       } catch (err) {
         try {
           this.db.exec("ROLLBACK");
@@ -1630,6 +1629,7 @@ export class Hive {
         }
         throw err;
       }
+      this.pruneDeliveryHistory(actor.id);
       const replacement = this.activeDelivery(actor.id);
       if (!replacement) throw new HiveError(500, "Failed to replace in-flight delivery");
       return this.deliveryBatch(actor, replacement);
