@@ -173,6 +173,7 @@ export class Hive {
       );
       CREATE INDEX IF NOT EXISTS idx_messages_channel_seq ON messages(channel_id, seq);
       CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
+      CREATE INDEX IF NOT EXISTS idx_messages_channel_thread_seq ON messages(channel_id, thread_id, seq);
       CREATE TABLE IF NOT EXISTS telegram_topics (
         channel_id TEXT PRIMARY KEY,
         telegram_thread_id INTEGER NOT NULL UNIQUE
@@ -1065,52 +1066,62 @@ export class Hive {
   ): { messages: Message[]; hasOlder: boolean; hasNewer: boolean; cursors: { before?: number; after?: number } } {
     const ch = this.getChannel(channelRef, actor.projectId);
     if (!this.canSeeChannel(actor, ch)) throw new HiveError(403, "Cannot read this channel");
-    const limit = Math.min(Math.max(1, Number.isFinite(opts.limit) ? Number(opts.limit) : 80), 200);
-    const after = opts.afterSeq ?? 0;
-    const before = opts.beforeSeq;
+    for (const [name, value] of [["afterSeq", opts.afterSeq], ["beforeSeq", opts.beforeSeq]] as const) {
+      if (value !== undefined && (!Number.isSafeInteger(value) || value < 0)) {
+        throw new HiveError(400, `${name} must be a nonnegative safe integer`);
+      }
+    }
+    if (opts.afterSeq !== undefined && opts.beforeSeq !== undefined) {
+      throw new HiveError(400, "Use either afterSeq or beforeSeq, not both");
+    }
+    if (opts.limit !== undefined && (!Number.isSafeInteger(opts.limit) || opts.limit < 1)) {
+      throw new HiveError(400, "limit must be a positive safe integer");
+    }
+    const limit = Math.min(opts.limit ?? 80, 200);
+    // Root-channel reads default to the newest page; thread reads retain their
+    // oldest-first default so opening a task starts with its original contract.
+    const ascending = opts.beforeSeq === undefined && (opts.afterSeq !== undefined || Boolean(opts.threadId));
+    const op = ascending ? ">" : "<";
+    const order = ascending ? "ASC" : "DESC";
+    const boundary = ascending ? (opts.afterSeq ?? 0) : (opts.beforeSeq ?? Number.MAX_SAFE_INTEGER);
     let rows: MessageRow[];
     if (opts.threadId) {
-      const sqlBefore = before
-        ? `SELECT * FROM messages WHERE channel_id = ? AND (id = ? OR thread_id = ?) AND seq < ? ORDER BY seq DESC LIMIT ?`
-        : `SELECT * FROM messages WHERE channel_id = ? AND (id = ? OR thread_id = ?) AND seq > ? ORDER BY seq ASC LIMIT ?`;
-      rows = before
-        ? (this.db.prepare(sqlBefore).all(ch.id, opts.threadId, opts.threadId, before, limit) as MessageRow[]).reverse()
-        : (this.db.prepare(sqlBefore).all(ch.id, opts.threadId, opts.threadId, after, limit) as MessageRow[]);
-    } else if (before) {
-      rows = this.db.prepare(
-        `SELECT * FROM messages
-         WHERE channel_id = ? AND thread_id IS NULL AND seq < ?
-         ORDER BY seq DESC LIMIT ?`,
-      ).all(ch.id, before, limit) as MessageRow[];
-      rows.reverse();
-    } else if (opts.afterSeq !== undefined) {
-      rows = this.db.prepare(
-        `SELECT * FROM messages
-         WHERE channel_id = ? AND thread_id IS NULL AND seq > ?
-         ORDER BY seq ASC LIMIT ?`,
-      ).all(ch.id, after, limit) as MessageRow[];
+      // Keep the PK root lookup separate from the indexed reply range; an OR
+      // across id/thread_id can otherwise traverse unrelated channel history.
+      const root = this.db.prepare(
+        `SELECT * FROM messages WHERE id = ? AND channel_id = ? AND seq ${op} ?`,
+      ).get(opts.threadId, ch.id, boundary) as MessageRow | undefined;
+      const replies = this.db.prepare(
+        `SELECT * FROM messages WHERE channel_id = ? AND thread_id = ? AND seq ${op} ?
+         ORDER BY seq ${order} LIMIT ?`,
+      ).all(ch.id, opts.threadId, boundary, limit) as MessageRow[];
+      rows = [...(root ? [root] : []), ...replies]
+        .sort((a, b) => ascending ? a.seq - b.seq : b.seq - a.seq)
+        .slice(0, limit);
     } else {
       rows = this.db.prepare(
-        `SELECT * FROM messages
-         WHERE channel_id = ? AND thread_id IS NULL
-         ORDER BY seq DESC LIMIT ?`,
-      ).all(ch.id, limit) as MessageRow[];
-      rows.reverse();
+        `SELECT * FROM messages WHERE channel_id = ? AND thread_id IS NULL AND seq ${op} ?
+         ORDER BY seq ${order} LIMIT ?`,
+      ).all(ch.id, boundary, limit) as MessageRow[];
     }
+    if (!ascending) rows.reverse();
     const messages = this.decorate(rows.map((r) => this.mapMessage(r)), actor.id);
-    const scope = opts.threadId
-      ? this.db.prepare(
-          `SELECT COALESCE(MIN(seq), 0) AS minSeq, COALESCE(MAX(seq), 0) AS maxSeq
-           FROM messages WHERE channel_id = ? AND (id = ? OR thread_id = ?)`,
-        ).get(ch.id, opts.threadId, opts.threadId) as { minSeq: number; maxSeq: number }
-      : this.db.prepare(
-          `SELECT COALESCE(MIN(seq), 0) AS minSeq, COALESCE(MAX(seq), 0) AS maxSeq
-           FROM messages WHERE channel_id = ? AND thread_id IS NULL`,
-        ).get(ch.id) as { minSeq: number; maxSeq: number };
-    const oldest = messages[0]?.seq ?? 0;
-    const newest = messages[messages.length - 1]?.seq ?? 0;
-    const hasOlder = Boolean(oldest && scope.minSeq && scope.minSeq < oldest);
-    const hasNewer = Boolean(newest && scope.maxSeq && scope.maxSeq > newest);
+    const existsBeyond = (operator: "<" | ">", seq: number): boolean => {
+      if (opts.threadId) {
+        return Boolean(this.db.prepare(
+          `SELECT 1 FROM messages WHERE id = ? AND channel_id = ? AND seq ${operator} ? LIMIT 1`,
+        ).get(opts.threadId, ch.id, seq)) || Boolean(this.db.prepare(
+          `SELECT 1 FROM messages WHERE channel_id = ? AND thread_id = ? AND seq ${operator} ? LIMIT 1`,
+        ).get(ch.id, opts.threadId, seq));
+      }
+      return Boolean(this.db.prepare(
+        `SELECT 1 FROM messages WHERE channel_id = ? AND thread_id IS NULL AND seq ${operator} ? LIMIT 1`,
+      ).get(ch.id, seq));
+    };
+    const oldest = messages[0]?.seq;
+    const newest = messages.at(-1)?.seq;
+    const hasOlder = oldest !== undefined && existsBeyond("<", oldest);
+    const hasNewer = newest !== undefined && existsBeyond(">", newest);
     return {
       messages,
       hasOlder,

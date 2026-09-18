@@ -601,6 +601,7 @@ test("history forward pagination visits every channel message without skipping",
   const human = hive.getAgent("human");
   const worker = hive.join({ role: "worker", seniority: "mid" }).agent;
   const dm = hive.openDm(human, worker.name);
+  const startingCursor = hive.latestSeq("general");
   const expected: number[] = [];
 
   for (let i = 0; i < 65; i += 1) {
@@ -616,7 +617,7 @@ test("history forward pagination visits every channel message without skipping",
   assert.equal(latest.cursors.before, expected.at(-20));
 
   const seen: number[] = [];
-  let after = 0;
+  let after = startingCursor;
   for (;;) {
     const page = hive.listMessages(human, "general", { afterSeq: after, limit: 17 });
     seen.push(...page.messages.map((msg) => msg.seq));

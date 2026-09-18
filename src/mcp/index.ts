@@ -141,7 +141,7 @@ export async function startMcp() {
 
   server.tool(
     "history",
-    "Read a channel or DM. Default is the latest 20 messages. Use since to page forward or before to page backward without skipping messages.",
+    "Read a channel or DM. Default is the latest 20 channel roots, or the first 20 messages of a thread. Use since to page forward or before to page backward without skipping messages.",
     {
       channel: z.string(),
       threadId: z.string().optional(),

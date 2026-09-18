@@ -30,7 +30,7 @@ function help() {
   hivemind fetch --id ATT_ID [--out DIR]
   hivemind react --seq N --emoji 👍
   hivemind gc
-  hivemind history --channel NAME [--thread ID]
+  hivemind history --channel NAME [--thread ID] [--since N | --before N]
   hivemind search --q TEXT [--channel NAME] [--before N]
   hivemind agents
   hivemind channels
@@ -289,16 +289,21 @@ async function main() {
     if (!channel) throw new Error("history --channel NAME");
     const thread = arg(argv, "--thread");
     const since = arg(argv, "--since");
-    const result = await agentRequest<{ messages: Message[] }>(
-      "GET",
-      `/api/agent/channels/${encodeURIComponent(channel)}/messages?limit=${arg(argv, "--limit") ?? 20}&meta=${arg(argv, "--meta") ?? "0"}${thread ? `&threadId=${thread}` : ""}${since ? `&afterSeq=${since}` : ""}`,
-      undefined,
-      token,
+    const before = arg(argv, "--before");
+    if (since !== undefined && before !== undefined) throw new Error("Use --since or --before, not both");
+    const query = new URLSearchParams({ limit: arg(argv, "--limit") ?? "20", meta: arg(argv, "--meta") ?? "0" });
+    if (thread) query.set("threadId", thread);
+    if (since !== undefined) query.set("afterSeq", since);
+    if (before !== undefined) query.set("beforeSeq", before);
+    const result = await agentRequest<{ messages: Message[]; cursors?: { before?: number; after?: number } }>(
+      "GET", `/api/agent/channels/${encodeURIComponent(channel)}/messages?${query}`, undefined, token,
     );
     for (const m of result.messages) {
       const when = new Date(m.createdAt).toISOString().slice(11, 19);
       console.log(`[${when}] ${m.authorName}: ${m.body}`);
     }
+    if (result.cursors?.before !== undefined) console.log(`older: history --channel ${channel} --before ${result.cursors.before}${thread ? ` --thread ${thread}` : ""}`);
+    if (result.cursors?.after !== undefined) console.log(`newer: history --channel ${channel} --since ${result.cursors.after}${thread ? ` --thread ${thread}` : ""}`);
     return;
   }
 
