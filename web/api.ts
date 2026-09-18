@@ -1,8 +1,9 @@
 import type { Agent, AttachmentMeta, Channel, Message, Project, SearchHit, Thread, ThreadStatus } from "../src/shared/types.ts";
 import { resolveUploadMime } from "../src/shared/mime.ts";
+import { humanSession, connectHumanWs } from "./human-session.ts";
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
+  const res = await humanSession.request(path, {
     ...init,
     headers: { "content-type": "application/json", ...init?.headers },
   });
@@ -95,7 +96,7 @@ export const api = {
       body: JSON.stringify({ body, threadId: threadId ?? null, attachmentIds }),
     }),
   upload: async (file: File): Promise<AttachmentMeta> => {
-    const res = await fetch("/api/ui/files", {
+    const res = await humanSession.request("/api/ui/files", {
       method: "POST",
       headers: {
         "x-file-name": file.name || "paste.png",
@@ -141,30 +142,5 @@ export function connectWs(
   onEvent: (ev: { type: string; payload: unknown }) => void,
   onLive?: (ok: boolean) => void,
 ): () => void {
-  let closed = false;
-  let socket: WebSocket | null = null;
-  let timer = 0;
-  const connect = () => {
-    if (closed) return;
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    socket = new WebSocket(`${proto}://${location.host}/ws`);
-    socket.onopen = () => onLive?.(true);
-    socket.onmessage = (e) => {
-      try {
-        onEvent(JSON.parse(String(e.data)));
-      } catch {
-        /* ignore */
-      }
-    };
-    socket.onclose = () => {
-      onLive?.(false);
-      if (!closed) timer = window.setTimeout(connect, 1500);
-    };
-  };
-  connect();
-  return () => {
-    closed = true;
-    window.clearTimeout(timer);
-    socket?.close();
-  };
+  return connectHumanWs(humanSession, onEvent, onLive);
 }
