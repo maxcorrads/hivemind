@@ -254,3 +254,74 @@ test("real MCP stdio treats invalid credentials as a fatal wait failure", async 
   const serialized = JSON.stringify(response);
   assert.match(serialized, /Invalid token|401/i);
 });
+
+
+test("real MCP stdio responses cannot observe or act on another project", async (t) => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "hive-mcp-project-isolation-"));
+  const hive = new Hive(path.join(dir, "hive.db"));
+  const human = hive.getAgent("human");
+  hive.createProject(human, { name: "Beta", slug: "beta" });
+
+  const alpha = hive.join({ role: "brain", project: "chapter", focus: "alpha-mcp" });
+  const beta = hive.join({ role: "brain", project: "beta", focus: "beta-mcp" });
+  const betaWorker = hive.join({ role: "worker", seniority: "mid", project: "beta" });
+  const betaGeneral = hive.getChannel("general", beta.agent.projectId);
+  const betaSecret = hive.postMessage(beta.agent, {
+    channel: betaGeneral.id,
+    body: "beta-mcp-secret-never-visible",
+  });
+  hive.postMessage(betaWorker.agent, {
+    channel: betaGeneral.id,
+    threadId: betaSecret.id,
+    body: "beta-thread-private-to-project",
+  });
+
+  const started = startServer({ port: 0, hive, telegram: false });
+  const port = await started.ready;
+  const child = new RpcChild({
+    ...process.env,
+    HIVEMIND_URL: `http://127.0.0.1:${port}`,
+    HIVEMIND_HOME: dir,
+    HIVEMIND_TOKEN: alpha.token,
+  });
+
+  t.after(async () => {
+    child.stop();
+    const closed = new Promise<void>((resolve) => started.server.once("close", () => resolve()));
+    started.shutdown();
+    await closed;
+    hive.db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  await child.initialize();
+  const channels = toolJson(await child.tool(2, "channels"));
+  assert.ok(
+    (channels.channels as Array<{ project: string }>).every((channel) => channel.project === "chapter"),
+  );
+  assert.equal(
+    JSON.stringify(channels).includes(betaGeneral.id),
+    false,
+    "MCP channel list must not contain project-B channel identifiers",
+  );
+
+  const search = toolJson(await child.tool(3, "search", { q: "beta-mcp-secret-never-visible" }));
+  assert.deepEqual(search.hits, []);
+
+  const history = await child.tool(4, "history", { channel: betaGeneral.id });
+  assert.ok(history.error || history.result?.isError);
+  assert.equal(JSON.stringify(history).includes("beta-mcp-secret-never-visible"), false);
+
+  const thread = await child.tool(5, "set_thread_status", {
+    threadId: betaSecret.id,
+    status: "done",
+  });
+  assert.ok(thread.error || thread.result?.isError);
+  assert.equal(hive.threadsInChannel(betaGeneral.id).find((item) => item.id === betaSecret.id)?.status, "open");
+
+  const dm = await child.tool(6, "send", {
+    to: betaWorker.agent.name,
+    body: "must not cross projects",
+  });
+  assert.ok(dm.error || dm.result?.isError);
+});
