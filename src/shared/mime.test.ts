@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { test } from "node:test";
 import { imagePreview } from "../server/files.ts";
 import { guessMime, resolveUploadMime } from "./mime.ts";
@@ -16,8 +19,11 @@ test("resolveUploadMime prefers a valid header then the filename", () => {
   assert.equal(resolveUploadMime(undefined, "paste.png"), "image/png");
 });
 
-test("imagePreview never returns a payload over the model cap", () => {
-  const huge = Buffer.alloc(2_000_000, 1);
-  const preview = imagePreview("/tmp/hivemind-missing-preview.png", "image/png", huge);
+test("imagePreview never returns a payload over the model cap", async (t) => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "hive-mime-preview-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, "large.png");
+  writeFileSync(file, Buffer.alloc(2_000_000, 1));
+  const preview = await imagePreview(file, "image/png");
   assert.equal(preview, null);
 });

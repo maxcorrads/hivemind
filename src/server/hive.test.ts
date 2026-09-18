@@ -127,11 +127,11 @@ test("public chatter does not wake a waiting worker", async () => {
   const { hive, dir } = tempHive();
   const worker = hive.join({ role: "worker", seniority: "senior" });
   const brain = hive.join({ role: "brain" });
+  const started = Date.now();
   const sleeping = hive.wait(worker.agent, 400);
   await new Promise((r) => setTimeout(r, 40));
   hive.postMessage(brain.agent, { channel: "general", body: "noise one" });
   hive.postMessage(brain.agent, { channel: "general", body: "noise two" });
-  const started = Date.now();
   const result = await sleeping;
   assert.equal(result.idle, true);
   assert.ok(Date.now() - started >= 300);
@@ -435,7 +435,6 @@ test("Human can see brain-worker DMs and invite to private rooms", () => {
 test("search stays in one project and only rooms the actor can see", async () => {
   const { hive, dir } = tempHive();
   const human = hive.getAgent("human");
-  const chapter = hive.listProjects()[0]!;
   const solace = hive.join({ role: "brain" });
   const dowel = hive.join({ role: "worker", seniority: "senior" });
   hive.createProject(human, { name: "Altro", slug: "altro" });
