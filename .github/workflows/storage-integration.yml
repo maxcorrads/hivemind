@@ -1,0 +1,47 @@
+name: Storage combined validation
+on:
+  push:
+    branches: [work/storage-validation-20260918]
+    paths: [.github/workflows/storage-integration.yml]
+permissions:
+  contents: read
+jobs:
+  combined:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22.13.0', '24']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Compose exact repaired PR trees without updating any branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --detach 4c405cdc9e0e313780fcf6f29ae56419bcd637ce
+          git merge --no-commit --no-ff cf7af8f8debe62996f21ab64a091c319ed654341
+          git diff --cached --check
+          printf 'base=738c1dd2cf3b89d7da35d6f8528c1a31bf83149f\npr56=4513e902f166bbb0b68d25a76cf23ca0fc87db28\npr62=4c405cdc9e0e313780fcf6f29ae56419bcd637ce\npr64=cf7af8f8debe62996f21ab64a091c319ed654341\ntree=%s\nnode=%s\n' "$(git write-tree)" "$(node --version)" | tee "$RUNNER_TEMP/combined-tree.txt"
+      - run: npm ci
+      - name: Full combined quality gate
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run check 2>&1 | tee "$RUNNER_TEMP/combined-check.log"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: combined-storage-${{ matrix.node }}
+          path: |
+            ${{ runner.temp }}/combined-tree.txt
+            ${{ runner.temp }}/combined-check.log
+          retention-days: 1
