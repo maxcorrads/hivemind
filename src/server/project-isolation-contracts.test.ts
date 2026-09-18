@@ -67,9 +67,12 @@ test("project isolation covers channels, history, search, DMs, waits, mentions, 
     () => hive.listMessages(alphaBrain.agent, betaGeneral.id, { limit: 20 }),
     /not found|Cannot read|project/i,
   );
-  assert.throws(
-    () => hive.listMessages(betaBrain.agent, alphaGeneral.id, { limit: 20 }),
-    /not found|Cannot read|project/i,
+  const betaViaLegacyGeneralRef = hive.listMessages(betaBrain.agent, alphaGeneral.id, { limit: 20 });
+  assert.ok(betaViaLegacyGeneralRef.messages.some((message) => message.id === betaRoot.id));
+  assert.equal(
+    betaViaLegacyGeneralRef.messages.some((message) => message.id === alphaMessage.id),
+    false,
+    "the legacy id/name alias 'general' must resolve inside the caller's project",
   );
 
   const alphaSearch = hive.searchMessages(alphaBrain.agent, {
