@@ -1,0 +1,43 @@
+name: Review fix workspace
+
+on:
+  push:
+    branches: [maintenance/review-fixes-20260918]
+    paths: [.github/workflows/review-fix-workspace.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  workspace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+          cache: npm
+      - name: Capture current PR refs and source objects
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p export
+          gh api --method GET "repos/$GITHUB_REPOSITORY/pulls" -f state=open -f per_page=100 --jq '[.[] | {number,title,state,base:.base.ref,base_sha:.base.sha,head:.head.ref,head_sha:.head.sha,head_repo:.head.repo.full_name,maintainer_can_modify}]' > export/pr-metadata.json
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*' '+refs/pull/*/head:refs/remotes/pull/*'
+          git bundle create export/workspace.bundle --all
+      - name: Install locked development dependencies
+        run: |
+          git worktree add --detach /tmp/hivemind-pr-dependencies refs/remotes/pull/44
+          cd /tmp/hivemind-pr-dependencies
+          npm ci
+          tar -czf "$GITHUB_WORKSPACE/export/dependencies.tgz" node_modules
+          node --version > "$GITHUB_WORKSPACE/export/runtime.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: isolated-review-workspace
+          path: export/
+          retention-days: 1
+          if-no-files-found: error
