@@ -62,12 +62,21 @@ for entry in manifest['repairs']:
             sha = dependency_head(dependency)
             if sha not in parents:
                 parents.append(sha)
-        patch = ROOT / 'repairs' / entry['patch']
-        assert patch.resolve().is_relative_to((ROOT / 'repairs').resolve())
-        if patch.name.endswith('.gz.b64'):
-            decoded = OUT / f'{number}-decoded.patch'
-            decoded.write_bytes(gzip.decompress(base64.b64decode(patch.read_text())))
-            patch = decoded
+        if entry.get('patchParts'):
+            encoded = ''
+            for name in entry['patchParts']:
+                part = ROOT / 'repairs' / name
+                assert part.resolve().is_relative_to((ROOT / 'repairs').resolve())
+                encoded += part.read_text()
+            patch = OUT / f'{number}-decoded.patch'
+            patch.write_bytes(gzip.decompress(base64.b64decode(encoded, validate=True)))
+        else:
+            patch = ROOT / 'repairs' / entry['patch']
+            assert patch.resolve().is_relative_to((ROOT / 'repairs').resolve())
+            if patch.name.endswith('.gz.b64'):
+                decoded = OUT / f'{number}-decoded.patch'
+                decoded.write_bytes(gzip.decompress(base64.b64decode(patch.read_text())))
+                patch = decoded
         run(['git', 'apply', '--index', '--whitespace=error', str(patch)], cwd=work)
         run(['git', 'diff', '--cached', '--check'], cwd=work)
         tree = run(['git', 'write-tree'], cwd=work)
@@ -102,7 +111,9 @@ for entry in manifest['repairs']:
         commit = run(args, cwd=work, env=author_env)
         # No force push. The first parent is the checked original PR head.
         run(['git', 'push', 'origin', f'{commit}:refs/heads/{branch}'], cwd=work, env=HEAD_ENV)
-        assert pr_info(number)['head']['sha'] == commit, 'Push could not be verified'
+        remote = run(['git', 'ls-remote', 'origin', f'refs/heads/{branch}'], cwd=work, env=HEAD_ENV)
+        assert remote.split()[0] == commit, 'Remote ref verification failed'
+        # PR REST metadata may lag a successful git update. Verify the actual ref above.
         report.update(status='pushed', commit=commit, tree=tree, branch=branch)
     except Exception as exc:
         report.update(status='failed', error=str(exc).replace(TOKEN, '[REDACTED]'))

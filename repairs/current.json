@@ -1,1 +1,25 @@
-{"repairs":[{"pr":55,"branch":"fix/issue-13-telegram-lifecycle","expectedHead":"43f010b63c184599ff3528c36c71659a1bc5bfe3","expectedTree":"84a039464ec32f7375b0cbc9092d425f37302261","patch":"55.patch.gz.b64","message":"Retain dispatcher wakeups and close admission before bounded shutdown"}]}
+{
+  "repairs": [
+    {
+      "pr": 58,
+      "branch": "fix/issue-16-telegram-delivery-progress",
+      "expectedHead": "39fce35246170392fb3b737290fc60593538807a",
+      "expectedTree": "352998722da0c2328430a7b754570e641f19e484",
+      "contentBase": {
+        "pr": 55,
+        "expectedTree": "84a039464ec32f7375b0cbc9092d425f37302261"
+      },
+      "patchParts": [
+        "58/part-0.txt",
+        "58/part-1.txt",
+        "58/part-2.txt",
+        "58/part-3.txt",
+        "58/part-4.txt",
+        "58/part-5.txt",
+        "58/part-6.txt",
+        "58/part-7.txt"
+      ],
+      "message": "Fence Telegram retry destinations, persist bounded diagnostics and resume confirmed parts after restart"
+    }
+  ]
+}
