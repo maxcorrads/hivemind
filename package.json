@@ -21,9 +21,9 @@
     "check": "npm run lint && npm run typecheck && npm test && npm run build",
     "prepack": "npm run build",
     "lint": "oxlint --deny-warnings src web scripts tests vite.config.ts playwright.config.ts",
-    "dev:browser-server": "vite --host 127.0.0.1 --port 4173",
     "test:browser": "playwright test",
-    "typecheck:browser": "tsc -p tsconfig.browser.json"
+    "typecheck:browser": "tsc -p tsconfig.browser.json",
+    "browser:server": "npm run build && vite preview --host 127.0.0.1 --port 4173"
   },
   "engines": {
     "node": ">=22.13.0"
