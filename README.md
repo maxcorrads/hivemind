@@ -200,3 +200,15 @@ npx tsx src/cli.ts doctor
 ## Data
 
 All runtime state is under `~/.hivemind/` (or `HIVEMIND_HOME`): `hive.db`, `identities/`, `files/`, optional `telegram.json`. Agent downloads go to `<cwd>/.hivemind-inbox/`. Nothing in those paths belongs in git.
+
+
+### Telegram delivery recovery
+
+Each queued mirror and confirmed part is bound to the original bot credential namespace (or verified bot ID when available) and chat. Changing credentials without a verified bot identity is deliberately conservative: old jobs require reconciliation. A retry never silently sends historical content to a different group. Legacy pending/part records without provable destination ownership are retained as failures instead of being redirected or blindly resent.
+
+Human can inspect `GET /api/ui/telegram/failures`, then explicitly `POST /api/ui/telegram/failures/:id/retry` or `POST /api/ui/telegram/failures/:id/discard`. Retry returns 409 if the current destination differs, is unknown, or the outbox is full. Successful retry queues and updates its audit record atomically and wakes an idle dispatcher. A destination change requires a new, deliberate send of the original Hive message rather than a retry. Known successful parts are not resent after a restart; a lost Telegram response remains an inherently ambiguous outcome.
+
+The failure diagnostic ledger retains at most 1,000 rows for at most 30 days, prioritizing unresolved failures. Older/overflow diagnostics are aggregated into the visible `diagnosticsPruned` counter; their original Hive messages remain. Discard/retry does not erase the audit record before retention. Message-part receipts follow retained Hive messages and are removed with their project. The UI receives live failure-health events; these events report transport health, not completion of an agent task.
+
+
+Telegram 429 handling respects the full advertised retry deadline for polling and inbound API calls as well as outbound jobs. Outbound chat-specific cooldowns do not occupy the dispatcher: other eligible chats can progress, and an owned timer wakes the queue at the earliest deadline even without new traffic. Confirmed multipart checkpoints from the outbox layer are preserved across 429 retries. Cooldown timers and waits are cancelled/drained on shutdown. A 429 does not by itself prove whether Telegram applied a bot-wide or chat-specific quota; polling and each affected chat keep their own observed deadline rather than assuming an unrestricted quota elsewhere.

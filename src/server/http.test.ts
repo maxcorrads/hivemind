@@ -172,7 +172,7 @@ test("HTTP protocol: join, isolate, wait, Human admin", async () => {
     assert.equal(seen.data.messages.length, 0);
     assert.equal(seen.data.unread.general ?? 0, 0);
   } finally {
-    started.shutdown();
+    await started.shutdown();
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -232,7 +232,7 @@ test("Human Telegram UI saves settings and never returns the bot token", async (
     assert.equal(tg.data.projects.altro, undefined);
     assert.equal(tg.data.projects.chapter, -1002);
   } finally {
-    started.shutdown();
+    await started.shutdown();
     rmSync(dir, { recursive: true, force: true });
   }
 });

@@ -1,3 +1,8 @@
+import { TelegramRateLimitError, telegramRetryAfterMs, selectTelegramPendingJob } from "./telegram-rate-limit.ts";
+export { TelegramRateLimitError, telegramRetryAfterMs, selectTelegramPendingJob } from "./telegram-rate-limit.ts";
+import { enqueueTelegramPending, failTelegramJob, telegramBotKey, telegramPartDelivered, sameTelegramDestination, type TelegramDestination, type TelegramJob } from "./telegram-outbox.ts";
+export { enqueueTelegramPending, recordTelegramFailure, telegramPartDelivered, TELEGRAM_PENDING_CAP } from "./telegram-outbox.ts";
+import { CoalescingPump } from "./coalescing-pump.ts";
 import { existsSync, mkdirSync, openAsBlob, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DEFAULT_PROJECT_SLUG, FILE_MAX_BYTES, HiveError, HUMAN_ID, REACTION_EMOJIS, type Channel, type Message } from "../shared/types.ts";
@@ -9,12 +14,14 @@ import { filePathForHash, safeFileName } from "./files.ts";
 
 export type TelegramConfig = {
   botToken: string;
+  botId?: number;
   allowUserIds: number[];
   groups: Record<string, number>;
 };
 
 export type TelegramFile = {
   botToken: string;
+  botId?: number;
   allowUserIds: number[];
   projects: Record<string, number>;
 };
@@ -171,6 +178,7 @@ export function inboundPostBody(firstName: string | undefined, text: string, has
 type ApiResult = {
   ok: boolean;
   description?: string;
+  error_code?: number;
   parameters?: { retry_after?: number };
   result?: unknown;
 };
@@ -250,66 +258,27 @@ export function telegramGeneralThreadId(ch: Channel | string): number | null {
   return ch.name === "general" && ch.type === "public" ? 1 : null;
 }
 
-export class TelegramRateLimitError extends Error {
-  constructor(public readonly retryAfterMs: number) {
-    super(`Telegram rate limited; retry after ${Math.ceil(retryAfterMs / 1000)}s`);
-    this.name = "TelegramRateLimitError";
-  }
-}
-
-export function telegramRetryAfterMs(
-  status: number,
-  data: { parameters?: { retry_after?: number } } | null | undefined,
-  fallbackMs = 2_000,
-): number | null {
-  if (status !== 429) return null;
-  const seconds = Number(data?.parameters?.retry_after);
-  return Number.isFinite(seconds) && seconds >= 0 ? Math.max(1, seconds * 1000) : fallbackMs;
-}
-
-export function selectTelegramPendingJob(
-  jobs: Array<{ seq: number; kind: "message" | "reaction" }>,
-  chatForSeq: (seq: number) => number | undefined,
-  cooldownUntil: (chatId: number) => number,
-  now: number,
-): { job?: { seq: number; kind: "message" | "reaction" }; wakeAt?: number } {
-  let wakeAt: number | undefined;
-  for (const job of jobs) {
-    const chat = chatForSeq(job.seq);
-    if (chat == null) return { job };
-    const until = cooldownUntil(chat);
-    if (until <= now) return { job };
-    wakeAt = wakeAt == null ? until : Math.min(wakeAt, until);
-  }
-  return { wakeAt };
-}
-
-export const TELEGRAM_PENDING_CAP = 200;
-
-export function enqueueTelegramPending(
-  db: Hive["db"],
-  seq: number,
-  kind: "message" | "reaction",
-  cap = TELEGRAM_PENDING_CAP,
-) {
-  db.prepare("INSERT OR IGNORE INTO telegram_pending (seq, kind) VALUES (?, ?)").run(seq, kind);
-  const n = (db.prepare("SELECT COUNT(*) AS n FROM telegram_pending").get() as { n: number }).n;
-  if (n <= cap) return;
-  db.prepare(
-    `DELETE FROM telegram_pending WHERE rowid IN (
-      SELECT rowid FROM telegram_pending ORDER BY seq ASC, kind ASC LIMIT ?
-    )`,
-  ).run(n - cap);
+export function telegramDestinationForSeq(hive: Hive, seq: number, cfg = loadTelegramConfig(hive.home)): TelegramDestination | undefined {
+  if (!cfg) return undefined;
+  try {
+    const msg = hive.getMessageBySeq(seq);
+    const channel = hive.getChannel(msg.channelId);
+    const chatId = cfg.groups[channel.project];
+    if (!Number.isSafeInteger(chatId) || chatId === 0) return undefined;
+    return { botKey: telegramBotKey(cfg.botToken, cfg.botId), chatId: chatId! };
+  } catch { return undefined; }
 }
 
 export type TelegramHandle = {
-  stop: () => void;
+  stop: () => Promise<void>;
   running: () => boolean;
-  reload: () => boolean;
+  reload: () => Promise<boolean>;
 };
 
 export function startTelegram(hive: Hive, enabled = true): TelegramHandle {
   let bridge: TelegramBridge | null = null;
+  let lifecycle: Promise<void> = Promise.resolve();
+
   const boot = () => {
     const cfg = loadTelegramConfig(hive.home);
     if (!cfg) return false;
@@ -317,37 +286,53 @@ export function startTelegram(hive: Hive, enabled = true): TelegramHandle {
     bridge.start();
     return true;
   };
+  const serial = <T>(op: () => Promise<T>): Promise<T> => {
+    const next = lifecycle.then(op, op);
+    lifecycle = next.then(() => undefined, () => undefined);
+    return next;
+  };
+
   if (enabled) boot();
   return {
-    stop() {
-      bridge?.stop();
-      bridge = null;
-    },
+    stop: () =>
+      serial(async () => {
+        const current = bridge;
+        bridge = null;
+        await current?.stop();
+      }),
     running: () => Boolean(bridge),
-    reload() {
-      bridge?.stop();
-      bridge = null;
-      if (!enabled) return false;
-      return boot();
-    },
+    reload: () =>
+      serial(async () => {
+        const current = bridge;
+        bridge = null;
+        await current?.stop();
+        if (!enabled) return false;
+        return boot();
+      }),
   };
 }
 
-class TelegramBridge {
+export class TelegramBridge {
   private stopped = false;
-  private pumping = false;
+  private abort = new AbortController();
   private pumpFails: { key: string; n: number } | null = null;
   private topicRightsHinted = false;
   private topicLocks = new Map<string, Promise<number | null>>();
   private poll: Promise<void> | null = null;
+  private readonly outbound: CoalescingPump;
   private ignoreReaction = new Map<string, number>();
   private skipChatUntil = new Map<number, number>();
-  private pumpTimer: ReturnType<typeof setTimeout> | null = null;
+  private cooldownTimer: ReturnType<typeof setTimeout> | undefined;
+  private cooldownWakeAt: number | undefined;
 
   constructor(
     private hive: Hive,
     private cfg: TelegramConfig,
-  ) {}
+  ) {
+    this.outbound = new CoalescingPump(() => this.pump(), error => {
+      if (!this.stopped) console.error("telegram pump", error instanceof Error ? error.message : error);
+    });
+  }
 
   private chatForChannel(ch: Channel): number | undefined {
     return chatIdForProject(this.cfg, ch.project);
@@ -356,18 +341,37 @@ class TelegramBridge {
   start() {
     this.hive.bus.on("message", this.onHiveMessage);
     this.hive.bus.on("reaction", this.onHiveReaction);
-    this.poll = this.pollLoop();
-    void this.pump();
+    this.hive.bus.on("telegram-outbox-wake", this.onOutboxWake);
+    this.poll = this.pollLoop().catch(error => {
+      if (!this.stopped) console.error("telegram poll stopped", error instanceof Error ? error.message : error);
+    });
+    this.kickPump();
     console.error("hivemind telegram bridge on");
   }
 
-  stop() {
+  async stop() {
     this.stopped = true;
-    if (this.pumpTimer) clearTimeout(this.pumpTimer);
-    this.pumpTimer = null;
+    clearTimeout(this.cooldownTimer);
+    this.cooldownTimer = undefined;
+    this.cooldownWakeAt = undefined;
+    this.abort.abort(new DOMException("Telegram bridge stopped", "AbortError"));
     this.hive.bus.off("message", this.onHiveMessage);
     this.hive.bus.off("reaction", this.onHiveReaction);
+    this.hive.bus.off("telegram-outbox-wake", this.onOutboxWake);
+    await Promise.allSettled([this.poll, this.outbound.stop(), ...this.topicLocks.values()]);
   }
+
+  private ensureActive() {
+    if (this.stopped || this.abort.signal.aborted) {
+      throw this.abort.signal.reason ?? new DOMException("Telegram bridge stopped", "AbortError");
+    }
+  }
+
+  private kickPump() {
+    this.outbound.wake();
+  }
+
+  private onOutboxWake = () => this.kickPump();
 
   private onHiveMessage = (payload: unknown) => {
     const msg = payload as Message;
@@ -426,6 +430,7 @@ class TelegramBridge {
     if (chatId == null) return null;
     const name = channelLabel(ch).slice(0, 128);
     const created = await this.api("createForumTopic", { chat_id: chatId, name });
+    this.ensureActive();
     const result = created.result as { message_thread_id?: number } | undefined;
     if (!created.ok || !result?.message_thread_id) {
       const description = created.description ?? "";
@@ -453,12 +458,14 @@ class TelegramBridge {
           timeout: 25,
           allowed_updates: ["message", "message_reaction"],
         });
+        this.ensureActive();
         const updates = (data.result as Array<{
           update_id: number;
           message?: TelegramMessage;
           message_reaction?: TelegramReaction;
         }>) ?? [];
         for (const update of updates) {
+          this.ensureActive();
           if (this.seen(update.update_id)) {
             this.setState("offset", String(update.update_id + 1));
             continue;
@@ -466,17 +473,20 @@ class TelegramBridge {
           try {
             if (update.message) await this.onTelegramMessage(update.message);
             if (update.message_reaction) await this.onTelegramReaction(update.message_reaction);
+            this.ensureActive();
             this.markSeen(update.update_id);
             this.setState("offset", String(update.update_id + 1));
           } catch (err) {
-            console.error("telegram update", err instanceof Error ? err.message : err);
+            console.error("telegram update", this.safeError(err));
+            if (err instanceof TelegramRateLimitError) await this.waitForRateLimit(err);
             break;
           }
         }
       } catch (err) {
         if (this.stopped) return;
-        console.error("telegram poll", err instanceof Error ? err.message : err);
-        await sleep(2000);
+        console.error("telegram poll", this.safeError(err));
+        if (err instanceof TelegramRateLimitError) await this.waitForRateLimit(err);
+        else await sleep(2000, this.abort.signal);
       }
     }
   }
@@ -498,6 +508,7 @@ class TelegramBridge {
     }
     if (!text && !telegramMessageHasFiles(message)) return;
     const channelId = await this.resolveInboundChannel(message);
+    this.ensureActive();
     if (!channelId) {
       const slug = projectSlugForChat(this.cfg, chatId);
       if (slug && !this.hive.findProjectBySlug(slug)) return;
@@ -505,6 +516,7 @@ class TelegramBridge {
       return;
     }
     const attachmentIds = await this.filesFromMessage(message);
+    this.ensureActive();
     if (!text && attachmentIds.length === 0) return;
     let threadId: string | null = null;
     const replyId = message.reply_to_message?.message_id;
@@ -514,6 +526,7 @@ class TelegramBridge {
       ).get(replyId, chatId) as { id: string | null } | undefined;
       threadId = mapped?.id ?? null;
     }
+    this.ensureActive();
     const posted = this.hive.postMessage(this.hive.getAgent(HUMAN_ID), {
       channel: channelId,
       body: inboundPostBody(message.from?.first_name, text, attachmentIds.length > 0),
@@ -632,6 +645,7 @@ class TelegramBridge {
       if (message.chat?.id != null && Number(message.chat.id) !== chatId) continue;
       await this.onTelegramMessage(message);
     }
+    this.ensureActive();
     this.hive.db.prepare(
       "DELETE FROM telegram_hold WHERE telegram_thread_id = ? AND (telegram_chat_id = ? OR telegram_chat_id IS NULL)",
     ).run(telegramThreadId, chatId);
@@ -687,8 +701,12 @@ class TelegramBridge {
   }
 
   private queuePending(seq: number, kind: "message" | "reaction") {
-    enqueueTelegramPending(this.hive.db, seq, kind);
-    void this.pump();
+    if (this.stopped) return;
+    const destination = telegramDestinationForSeq(this.hive, seq, this.cfg);
+    if (!destination) return;
+    enqueueTelegramPending(this.hive.db, seq, kind, undefined, destination);
+    this.hive.publishTelegramHealth();
+    this.kickPump();
   }
 
   private chatForSeq(seq: number): number | undefined {
@@ -701,90 +719,105 @@ class TelegramBridge {
 
   private pendingSelection() {
     const jobs = this.hive.db.prepare(
-      "SELECT seq, kind FROM telegram_pending ORDER BY seq ASC, kind ASC",
-    ).all() as { seq: number; kind: "message" | "reaction" }[];
-    return selectTelegramPendingJob(
-      jobs,
-      (seq) => this.chatForSeq(seq),
-      (chat) => this.skipChatUntil.get(chat) ?? 0,
-      Date.now(),
-    );
+      "SELECT seq, kind, bot_key AS botKey, telegram_chat_id AS chatId FROM telegram_pending ORDER BY seq ASC, kind ASC",
+    ).all() as TelegramJob[];
+    return selectTelegramPendingJob(jobs, seq => this.chatForSeq(seq), chat => this.skipChatUntil.get(chat) ?? 0, Date.now());
   }
 
-  private nextPending(): { seq: number; kind: "message" | "reaction" } | undefined {
-    return this.pendingSelection().job;
-  }
-
-  private schedulePump(at: number) {
+  private scheduleCooldown(at: number) {
     if (this.stopped) return;
-    if (this.pumpTimer) clearTimeout(this.pumpTimer);
-    const delay = Math.max(1, at - Date.now());
-    this.pumpTimer = setTimeout(() => {
-      this.pumpTimer = null;
-      void this.pump();
-    }, delay);
-    this.pumpTimer.unref?.();
+    if (this.cooldownTimer && this.cooldownWakeAt !== undefined && this.cooldownWakeAt <= at) return;
+    clearTimeout(this.cooldownTimer);
+    this.cooldownWakeAt = at;
+    this.cooldownTimer = setTimeout(() => {
+      this.cooldownTimer = undefined;
+      this.cooldownWakeAt = undefined;
+      if (Date.now() < at) this.scheduleCooldown(at);
+      else this.kickPump();
+    }, Math.min(2_147_483_647, Math.max(1, at - Date.now())));
+    this.cooldownTimer.unref();
   }
 
-  private coolDownChat(chatId: number, retryAfterMs: number) {
-    const until = Date.now() + Math.max(1, retryAfterMs);
-    this.skipChatUntil.set(chatId, Math.max(this.skipChatUntil.get(chatId) ?? 0, until));
+  private coolDown(chat: number, until: number) {
+    this.skipChatUntil.set(chat, Math.max(until, this.skipChatUntil.get(chat) ?? 0));
+  }
+
+  private async waitForRateLimit(error: TelegramRateLimitError) {
+    while (Date.now() < error.retryAt) {
+      await sleep(Math.min(2_147_483_647, error.retryAt - Date.now()), this.abort.signal);
+    }
+    this.ensureActive();
   }
 
   private clearPending(seq: number, kind: string) {
     this.hive.db.prepare("DELETE FROM telegram_pending WHERE seq = ? AND kind = ?").run(seq, kind);
   }
 
+  private safeError(error: unknown): string {
+    return (error instanceof Error ? error.message : String(error)).split(this.cfg.botToken).join("[redacted]").slice(0, 1000);
+  }
+
   private async pump() {
-    if (this.pumping) return;
-    this.pumping = true;
     while (!this.stopped) {
       const selection = this.pendingSelection();
       const job = selection.job;
       if (!job) {
-        if (selection.wakeAt != null) this.schedulePump(selection.wakeAt);
+        if (selection.wakeAt !== undefined) this.scheduleCooldown(selection.wakeAt);
         break;
       }
       try {
+        const destination = telegramDestinationForSeq(this.hive, job.seq, this.cfg);
+        if (!sameTelegramDestination(job, destination)) {
+          failTelegramJob(this.hive.db, job, "destination_changed_or_unknown", 0);
+          this.hive.publishTelegramHealth();
+          continue;
+        }
+        const legacyParts = this.hive.db.prepare("SELECT 1 FROM telegram_delivery_parts WHERE seq = ? AND bot_key = '' LIMIT 1").get(job.seq);
+        if (legacyParts) {
+          failTelegramJob(this.hive.db, job, "legacy_part_destination_unknown", 0);
+          this.hive.publishTelegramHealth();
+          continue;
+        }
         if (job.kind === "reaction") await this.sendPendingReaction(job.seq);
         else await this.sendPendingMessage(job.seq);
+        this.ensureActive();
         this.clearPending(job.seq, job.kind);
         this.pumpFails = null;
       } catch (err) {
-        console.error("telegram out", err instanceof Error ? err.message : err);
+        if (this.stopped || this.abort.signal.aborted) break;
+        console.error("telegram out", this.safeError(err));
         const chat = this.chatForSeq(job.seq);
         if (isTelegramPermanentOutError(err)) {
           console.error(`telegram out giving up seq=${job.seq} kind=${job.kind}`);
-          this.clearPending(job.seq, job.kind);
+          failTelegramJob(this.hive.db, job, this.safeError(err), this.pumpFails?.n ?? 1);
+          this.hive.publishTelegramHealth();
           this.pumpFails = null;
           continue;
         }
         if (isTelegramTopicRightsError(err)) {
           this.hintTopicRights();
-          if (chat != null) this.coolDownChat(chat, 15_000);
+          if (chat !== undefined) this.coolDown(chat, Date.now() + 15_000);
+          else await sleep(15_000, this.abort.signal);
           continue;
         }
         if (err instanceof TelegramRateLimitError) {
-          if (chat != null) {
-            this.coolDownChat(chat, err.retryAfterMs);
-            continue;
-          }
-          await sleep(err.retryAfterMs);
+          if (chat !== undefined) this.coolDown(chat, err.retryAt);
+          else await this.waitForRateLimit(err);
           continue;
         }
         this.pumpFails = nextTelegramFailure(this.pumpFails, job.seq, job.kind);
         if (shouldDropTelegramJob(this.pumpFails.n)) {
           console.error(`telegram out giving up seq=${job.seq} kind=${job.kind}`);
-          this.clearPending(job.seq, job.kind);
+          failTelegramJob(this.hive.db, job, this.safeError(err), this.pumpFails.n);
+          this.hive.publishTelegramHealth();
           this.pumpFails = null;
           continue;
         }
-        await sleep(2000);
+        await sleep(2000, this.abort.signal);
         continue;
       }
-      await sleep(1000);
+      await sleep(1000, this.abort.signal);
     }
-    this.pumping = false;
   }
 
   private async sendPendingMessage(seq: number) {
@@ -805,7 +838,10 @@ class TelegramBridge {
     const silent = !shouldNotify(msg, ch, muted);
     const atts = msg.attachments ?? [];
     const text = formatOutbound(msg);
+
     if (atts.length === 0) {
+      const partKey = "text";
+      if (telegramPartDelivered(this.hive.db, msg.seq, partKey, chatId, telegramBotKey(this.cfg.botToken, this.cfg.botId))) return;
       const sent = requireTelegramOk(
         await this.api("sendMessage", {
           chat_id: chatId,
@@ -815,10 +851,11 @@ class TelegramBridge {
         }),
         "sendMessage",
       );
-      this.recordOut(sent, msg, chatId);
+      this.recordOut(sent, msg, chatId, partKey);
       return;
     }
-    if (text.length > 1000) {
+
+    if (text.length > 1000 && !telegramPartDelivered(this.hive.db, msg.seq, "text", chatId, telegramBotKey(this.cfg.botToken, this.cfg.botId))) {
       const sent = requireTelegramOk(
         await this.api("sendMessage", {
           chat_id: chatId,
@@ -828,19 +865,22 @@ class TelegramBridge {
         }),
         "sendMessage",
       );
-      this.recordOut(sent, msg, chatId);
+      this.recordOut(sent, msg, chatId, "text");
     }
+
     const human = this.hive.getAgent(HUMAN_ID);
     for (let i = 0; i < atts.length; i += 1) {
       const att = atts[i]!;
+      const partKey = `attachment:${att.id}`;
+      if (telegramPartDelivered(this.hive.db, msg.seq, partKey, chatId, telegramBotKey(this.cfg.botToken, this.cfg.botId))) continue;
       const opened = this.hive.getAttachment(human, att.id);
       const disk = filePathForHash(opened.sha256, this.hive.home);
       const caption = text.length <= 1000 && i === 0 ? text : `${msg.authorName} · ${att.name}`;
       const sent = requireTelegramOk(
-        await this.sendFile(chatId, thread, att.mime, att.name, disk, caption, silent && i > 0 ? true : silent),
+        await this.sendFile(chatId, thread, att.mime, att.name, disk, caption, silent),
         "sendFile",
       );
-      this.recordOut(sent, msg, chatId);
+      this.recordOut(sent, msg, chatId, partKey);
     }
   }
 
@@ -875,12 +915,32 @@ class TelegramBridge {
     }
   }
 
-  private recordOut(sent: ApiResult, msg: Message, chatId: number) {
+  private recordOut(sent: ApiResult, msg: Message, chatId: number, partKey: string) {
+    this.ensureActive();
     const result = sent.result as { message_id?: number } | undefined;
-    if (!sent.ok || !result?.message_id) return;
-    this.hive.db.prepare(
-      `INSERT OR REPLACE INTO telegram_out (telegram_chat_id, telegram_message_id, seq, channel_id, thread_id) VALUES (?, ?, ?, ?, ?)`,
-    ).run(chatId, result.message_id, msg.seq, msg.channelId, msg.threadId);
+    if (!sent.ok || !Number.isSafeInteger(result?.message_id)) throw new Error("Telegram response has no message ID; delivery outcome is unknown");
+    const messageId = result!.message_id!;
+    try {
+      this.hive.db.exec("BEGIN IMMEDIATE");
+      this.hive.db.prepare(
+        `INSERT OR REPLACE INTO telegram_out
+          (telegram_chat_id, telegram_message_id, seq, channel_id, thread_id)
+         VALUES (?, ?, ?, ?, ?)`,
+      ).run(chatId, messageId, msg.seq, msg.channelId, msg.threadId);
+      this.hive.db.prepare(
+        `INSERT OR REPLACE INTO telegram_delivery_parts
+          (seq, part_key, telegram_chat_id, telegram_message_id, completed_at, bot_key)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run(msg.seq, partKey, chatId, messageId, Date.now(), telegramBotKey(this.cfg.botToken, this.cfg.botId));
+      this.hive.db.exec("COMMIT");
+    } catch (err) {
+      try {
+        this.hive.db.exec("ROLLBACK");
+      } catch {
+        /* no open transaction */
+      }
+      throw err;
+    }
   }
 
   private async sendFile(
@@ -901,10 +961,15 @@ class TelegramBridge {
     const field = mime.startsWith("image/") ? "photo" : "document";
     form.set(field, blob, safeFileName(name));
     const method = mime.startsWith("image/") ? "sendPhoto" : "sendDocument";
-    const res = await fetch(`https://api.telegram.org/bot${this.cfg.botToken}/${method}`, { method: "POST", body: form });
+    const res = await fetch(`https://api.telegram.org/bot${this.cfg.botToken}/${method}`, {
+      method: "POST",
+      body: form,
+      signal: this.abort.signal,
+    });
     const data = (await res.json().catch(() => ({}))) as ApiResult;
+    this.ensureActive();
     const retryAfterMs = telegramRetryAfterMs(res.status, data);
-    if (retryAfterMs != null) throw new TelegramRateLimitError(retryAfterMs);
+    if (retryAfterMs !== null) throw new TelegramRateLimitError(retryAfterMs);
     return data;
   }
 
@@ -932,14 +997,18 @@ class TelegramBridge {
     const file = meta.result as { file_path?: string; file_size?: number } | undefined;
     if (!meta.ok || !file?.file_path) return null;
     if (telegramFileTooLarge(file.file_size)) return null;
-    const res = await fetch(`https://api.telegram.org/file/bot${this.cfg.botToken}/${file.file_path}`);
+    const res = await fetch(`https://api.telegram.org/file/bot${this.cfg.botToken}/${file.file_path}`, {
+      signal: this.abort.signal,
+    });
     if (!res.ok || !res.body) return null;
+    this.ensureActive();
     try {
       const created = await this.hive.createFile(this.hive.getAgent(HUMAN_ID), {
         name,
         mime,
         body: res.body,
       });
+      this.ensureActive();
       return created.id;
     } catch (err) {
       console.error("telegram inbound file", err instanceof Error ? err.message : err);
@@ -948,14 +1017,17 @@ class TelegramBridge {
   }
 
   private async api(method: string, body: Record<string, unknown>): Promise<ApiResult> {
+    this.ensureActive();
     const res = await fetch(`https://api.telegram.org/bot${this.cfg.botToken}/${method}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
+      signal: this.abort.signal,
     });
     const data = (await res.json().catch(() => ({}))) as ApiResult;
+    this.ensureActive();
     const retryAfterMs = telegramRetryAfterMs(res.status, data);
-    if (retryAfterMs != null) throw new TelegramRateLimitError(retryAfterMs);
+    if (retryAfterMs !== null) throw new TelegramRateLimitError(retryAfterMs);
     return data;
   }
 }
@@ -991,6 +1063,20 @@ function hiveEmojisOf(list: Array<{ type?: string; emoji?: string }> | undefined
     .filter((e): e is string => Boolean(e) && REACTION_EMOJIS.includes(e as (typeof REACTION_EMOJIS)[number]));
 }
 
-function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
+function sleep(ms: number, signal?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason ?? new DOMException("Aborted", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }

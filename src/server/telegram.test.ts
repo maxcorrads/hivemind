@@ -29,9 +29,8 @@ import {
   telegramFileTooLarge,
   telegramGeneralThreadId,
   telegramMessageHasFiles,
-  TelegramRateLimitError,
-  telegramRetryAfterMs,
-  selectTelegramPendingJob,
+  recordTelegramFailure,
+  telegramPartDelivered,
 } from "./telegram.ts";
 import type { Channel, Message } from "../shared/types.ts";
 
@@ -93,7 +92,7 @@ test("telegram reaction ignore keys match across attachment message ids", () => 
   assert.notEqual(reactionIgnoreKey(11, emojis), reactionIgnoreKey(12, emojis));
 });
 
-test("telegram outbound pending drops oldest when the hive bursts", () => {
+test("telegram outbound pending drops reactions first, then oldest messages", () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-tg-"));
   const hive = new Hive(path.join(dir, "hive.db"));
   for (let seq = 1; seq <= TELEGRAM_PENDING_CAP + 50; seq++) {
@@ -105,10 +104,10 @@ test("telegram outbound pending drops oldest when the hive bursts", () => {
     kind: string;
   }>;
   assert.equal(rows.length, TELEGRAM_PENDING_CAP);
-  assert.equal(rows[0]?.seq, 52);
+  assert.equal(rows[0]?.seq, 51);
   assert.equal(rows[0]?.kind, "message");
   assert.equal(rows.at(-1)?.seq, TELEGRAM_PENDING_CAP + 50);
-  assert.equal(rows.at(-1)?.kind, "reaction");
+  assert.equal(rows.at(-1)?.kind, "message");
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -216,45 +215,44 @@ test("telegram text format stays under Telegram and hive caps", () => {
 });
 
 
-test("telegram rate limits preserve retry_after without recursive sleeping", () => {
-  assert.equal(telegramRetryAfterMs(429, { parameters: { retry_after: 30 } }), 30_000);
-  assert.equal(telegramRetryAfterMs(429, {}, 2_500), 2_500);
-  assert.equal(telegramRetryAfterMs(200, { parameters: { retry_after: 30 } }), null);
-  const err = new TelegramRateLimitError(30_000);
-  assert.equal(err.retryAfterMs, 30_000);
-  assert.match(err.message, /30s/);
+test("telegram queue overflow dead-letters reactions before messages", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "hive-tg-dead-"));
+  const hive = new Hive(path.join(dir, "hive.db"));
+  enqueueTelegramPending(hive.db, 1, "message", 2);
+  enqueueTelegramPending(hive.db, 1, "reaction", 2);
+  enqueueTelegramPending(hive.db, 2, "message", 2);
+  const pending = hive.db.prepare("SELECT seq, kind FROM telegram_pending ORDER BY seq, kind").all() as Array<{seq:number;kind:string}>;
+  assert.deepEqual(pending.map(row => ({ ...row })), [{ seq: 1, kind: "message" }, { seq: 2, kind: "message" }]);
+  const failure = hive.telegramFailures(10)[0];
+  assert.equal(failure?.seq, 1);
+  assert.equal(failure?.kind, "reaction");
+  assert.equal(failure?.reason, "queue_overflow");
+  rmSync(dir, { recursive: true, force: true });
 });
 
-test("telegram pending scheduler skips a cooling chat and exposes its wake deadline", () => {
-  const jobs = [
-    { seq: 1, kind: "message" as const },
-    { seq: 2, kind: "message" as const },
-  ];
-  const chats = new Map([[1, -1001], [2, -1002]]);
-  const until = new Map([[-1001, 30_000], [-1002, 0]]);
-
-  const selected = selectTelegramPendingJob(
-    jobs,
-    (seq) => chats.get(seq),
-    (chat) => until.get(chat) ?? 0,
-    1_000,
+test("telegram delivery checkpoints survive restart and dead letters are retryable without erasing audit", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "hive-tg-progress-"));
+  const dbPath = path.join(dir, "hive.db");
+  const hive = new Hive(dbPath);
+  hive.db.prepare(
+    `INSERT INTO telegram_delivery_parts
+      (seq, part_key, telegram_chat_id, telegram_message_id, completed_at, bot_key)
+     VALUES (?, ?, ?, ?, ?, 'fixture-key')`,
+  ).run(9, "attachment:a", -1001, 44, Date.now());
+  assert.equal(telegramPartDelivered(hive.db, 9, "attachment:a", -1001, "fixture-key"), true);
+  recordTelegramFailure(hive.db, 9, "message", "boom", 5, -1001, "fixture-key");
+  const failure = hive.telegramFailures(10)[0]!;
+  hive.retryTelegramFailure(failure.id, () => ({ botKey: "fixture-key", chatId: -1001 }));
+  assert.equal(hive.telegramFailureCount(), 0);
+  assert.ok(hive.db.prepare("SELECT 1 FROM telegram_pending WHERE seq = 9 AND kind = 'message'").get());
+  assert.equal(
+    (hive.db.prepare("SELECT resolution FROM telegram_failures WHERE id = ?").get(failure.id) as { resolution: string }).resolution,
+    "retried",
   );
-  assert.equal(selected.job?.seq, 2);
+  hive.db.close();
 
-  const onlyCooling = selectTelegramPendingJob(
-    [jobs[0]!],
-    (seq) => chats.get(seq),
-    (chat) => until.get(chat) ?? 0,
-    1_000,
-  );
-  assert.equal(onlyCooling.job, undefined);
-  assert.equal(onlyCooling.wakeAt, 30_000);
-
-  const resumed = selectTelegramPendingJob(
-    [jobs[0]!],
-    (seq) => chats.get(seq),
-    (chat) => until.get(chat) ?? 0,
-    30_000,
-  );
-  assert.equal(resumed.job?.seq, 1);
+  const reopened = new Hive(dbPath);
+  assert.equal(telegramPartDelivered(reopened.db, 9, "attachment:a", -1001, "fixture-key"), true);
+  reopened.db.close();
+  rmSync(dir, { recursive: true, force: true });
 });

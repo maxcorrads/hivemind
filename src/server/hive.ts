@@ -1,3 +1,4 @@
+import { initTelegramOutbox, retryTelegramOutboxFailure, pruneTelegramFailures, type TelegramDestination } from "./telegram-outbox.ts";
 import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
@@ -118,6 +119,8 @@ export class Hive {
     this.db.exec("PRAGMA foreign_keys = ON");
     this.migrate();
     this.migrateProjects();
+    initTelegramOutbox(this.db);
+    pruneTelegramFailures(this.db);
     this.bootstrap();
   }
 
@@ -214,6 +217,27 @@ export class Hive {
         kind TEXT NOT NULL,
         PRIMARY KEY (seq, kind)
       );
+      CREATE TABLE IF NOT EXISTS telegram_delivery_parts (
+        seq INTEGER NOT NULL,
+        part_key TEXT NOT NULL,
+        telegram_chat_id INTEGER NOT NULL,
+        telegram_message_id INTEGER NOT NULL,
+        completed_at INTEGER NOT NULL,
+        PRIMARY KEY (seq, part_key, telegram_chat_id)
+      );
+      CREATE TABLE IF NOT EXISTS telegram_failures (
+        id TEXT PRIMARY KEY,
+        seq INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        telegram_chat_id INTEGER,
+        reason TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        resolved_at INTEGER,
+        resolution TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_telegram_failures_open ON telegram_failures(resolved_at, created_at);
+
       CREATE TABLE IF NOT EXISTS telegram_hold (
         telegram_message_id INTEGER PRIMARY KEY,
         telegram_thread_id INTEGER NOT NULL,
@@ -498,6 +522,11 @@ export class Hive {
         this.db.prepare(`DELETE FROM threads WHERE channel_id IN (${ph})`).run(...channelIds);
         this.db.prepare(`DELETE FROM reads WHERE channel_id IN (${ph})`).run(...channelIds);
         this.db.prepare(`DELETE FROM channel_members WHERE channel_id IN (${ph})`).run(...channelIds);
+      for (const table of ["telegram_failures", "telegram_delivery_parts"]) {
+        this.db.prepare(`DELETE FROM ${table} WHERE seq IN (
+          SELECT seq FROM messages WHERE channel_id IN (SELECT id FROM channels WHERE project_id = ?)
+        )`).run(project.id);
+      }
         this.db.prepare(`DELETE FROM messages WHERE channel_id IN (${ph})`).run(...channelIds);
         this.db.prepare(`DELETE FROM channels WHERE id IN (${ph})`).run(...channelIds);
       }
@@ -535,6 +564,66 @@ export class Hive {
       /* sweep can drop leftover blobs later */
     }
     this.bus.emit("project", { deleted: project.slug });
+  }
+
+  private telegramHealthSignature = "";
+
+  telegramOutboxHealth() {
+    return {
+      failures: this.telegramFailureCount(),
+      diagnosticsPruned: Number((this.db.prepare("SELECT value FROM telegram_state WHERE key = 'outbox:diagnostics_pruned'").get() as { value: string } | undefined)?.value ?? 0),
+    };
+  }
+
+  publishTelegramHealth() {
+    const health = this.telegramOutboxHealth();
+    const signature = JSON.stringify(health);
+    if (signature === this.telegramHealthSignature) return;
+    this.telegramHealthSignature = signature;
+    this.bus.emit("telegram-health", health);
+  }
+
+  telegramFailureCount(): number {
+    return (this.db.prepare("SELECT COUNT(*) AS n FROM telegram_failures WHERE resolved_at IS NULL").get() as { n: number }).n;
+  }
+
+  telegramFailures(limit = 50): Array<{
+    id: string;
+    seq: number;
+    kind: string;
+    telegramChatId: number | null;
+    reason: string;
+    attempts: number;
+    createdAt: number;
+  }> {
+    const rows = this.db.prepare(
+      `SELECT id, seq, kind, telegram_chat_id AS telegramChatId, reason, attempts, created_at AS createdAt
+       FROM telegram_failures WHERE resolved_at IS NULL ORDER BY created_at DESC LIMIT ?`,
+    ).all(Number.isSafeInteger(limit) ? Math.min(Math.max(1, limit), 200) : 50) as Array<{
+      id: string;
+      seq: number;
+      kind: string;
+      telegramChatId: number | null;
+      reason: string;
+      attempts: number;
+      createdAt: number;
+    }>;
+    return rows;
+  }
+
+  retryTelegramFailure(id: string, destination: (seq: number) => TelegramDestination | undefined): void {
+    retryTelegramOutboxFailure(this.db, id, destination);
+    // Retry is durable before its dispatcher is woken.
+    this.bus.emit("telegram-outbox-wake");
+    this.publishTelegramHealth();
+  }
+
+  discardTelegramFailure(id: string): void {
+    const changed = this.db.prepare(
+      "UPDATE telegram_failures SET resolved_at = ?, resolution = 'discarded' WHERE id = ? AND resolved_at IS NULL",
+    ).run(now(), id).changes;
+    if (!changed) throw new HiveError(404, "Telegram failure not found");
+    this.publishTelegramHealth();
   }
 
   forgetTelegramChat(chatId: number) {
@@ -1563,6 +1652,11 @@ export class Hive {
       const first = this.takeUnseen(actor);
       if (first.messages.length > 0) deliver(first);
     });
+  }
+
+  cancelWaits() {
+    for (const waiter of [...this.waiters.values()]) waiter.supersede();
+    this.waiters.clear();
   }
 
   async createFile(
