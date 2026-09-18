@@ -51,12 +51,17 @@ test("real wait admits and counts overflow through restart without duplicate or 
   const first = await hive.wait(worker, 100);
   assert.equal(first.idle, false);
   assert.ok((first.more ?? 0) > 0);
+  assert.ok(first.delivery);
   const received = first.messages.map((m) => m.id);
+  hive.acknowledgeInbox(worker, first.delivery.sessionId, first.delivery.id);
   hive.db.close(); hive = new Hive(file);
   for (let page = 0; page < 5 && received.length < expected.length; page++) {
-    const batch = await hive.wait(hive.getAgent(worker.id), 100);
+    const current = hive.getAgent(worker.id);
+    const batch = await hive.wait(current, 100);
     assert.equal(batch.idle, false);
+    assert.ok(batch.delivery);
     received.push(...batch.messages.map((m) => m.id));
+    hive.acknowledgeInbox(current, batch.delivery.sessionId, batch.delivery.id);
   }
   assert.deepEqual(received, expected);
   assert.equal(hive.queuedCounts()[worker.id], 0);

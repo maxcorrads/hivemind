@@ -1760,7 +1760,13 @@ export class Hive {
     }
 
     if (delivered.length) {
-      return this.offeredBatch(actor, sessionId, delivered.map((message) => message.seq), newCursor);
+      const delivery = this.inbox.offer(actor.id, sessionId, delivered.map((message) => message.seq), newCursor);
+      this.emitQueued(actor.id);
+      return {
+        messages: this.decorate(delivered, actor.id),
+        more: this.countUnseen(actor),
+        delivery,
+      };
     }
     if (newCursor > cursor) this.inbox.skipUnaddressed(actor.id, sessionId, newCursor);
     this.emitQueued(actor.id);
