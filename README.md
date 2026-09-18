@@ -237,6 +237,12 @@ npx tsx src/cli.ts doctor
 
 All runtime state is under `~/.hivemind/` (or `HIVEMIND_HOME`): `hive.db`, `identities/`, `files/`, optional `telegram.json`. Agent downloads go to `<cwd>/.hivemind-inbox/`. Nothing in those paths belongs in git.
 
+### Backing up the local Hive database
+
+Hivemind uses SQLite in WAL mode. Do not copy only `hive.db` while the server is running: committed data may still be present in `hive.db-wal`.
+
+For a file-level backup, stop Hivemind cleanly first, then copy `hive.db` together with any `hive.db-wal` and `hive.db-shm` files that remain. Restore those files as a set while Hivemind is stopped. For an online backup, use SQLite's backup API/tooling rather than a plain filesystem copy of the main database file.
+
 ## License
 
 Hivemind is **source-available, not open source**.
