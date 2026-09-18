@@ -13,10 +13,17 @@
     "build": "vite build",
     "mcp": "tsx src/mcp/index.ts",
     "hivemind": "tsx src/cli.ts",
-    "test": "tsx --test src/server/hive.test.ts src/server/files.test.ts src/server/http.test.ts src/server/telegram.test.ts src/shared/join-args.test.ts src/shared/launch-models.test.ts src/shared/launch-prompt.test.ts src/shared/mime.test.ts src/shared/project.test.ts src/shared/search-query.test.ts src/mcp/mcp.test.ts src/mcp/wait-loop.test.ts"
+    "test": "node scripts/run-tests.mjs",
+    "test:coverage": "node scripts/run-tests.mjs --experimental-test-coverage --test-coverage-lines=80 --test-coverage-branches=75 --test-coverage-functions=75",
+    "typecheck:server": "tsc -p tsconfig.json",
+    "typecheck:web": "tsc -p tsconfig.web.json",
+    "typecheck": "npm run typecheck:server && npm run typecheck:web",
+    "check": "npm run lint && npm run typecheck && npm test && npm run build",
+    "prepack": "npm run build",
+    "lint": "oxlint --deny-warnings src web scripts vite.config.ts"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13.0"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.6",
@@ -36,6 +43,14 @@
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "typescript": "^5.9.2",
-    "vite": "^7.1.7"
-  }
+    "vite": "^7.1.7",
+    "oxlint": "1.83.0"
+  },
+  "files": [
+    "bin",
+    "src",
+    "dist/web",
+    "README.md"
+  ],
+  "license": "SEE LICENSE IN LICENSE"
 }

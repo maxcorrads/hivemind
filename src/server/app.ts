@@ -150,10 +150,12 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const human = hive.getAgent("human");
     const id = c.req.param("id");
     const threadId = c.req.query("threadId") || null;
-    const beforeSeq = c.req.query("beforeSeq") ? Number(c.req.query("beforeSeq")) : undefined;
+    const after = c.req.query("afterSeq");
+    const before = c.req.query("beforeSeq");
     const listed = hive.listMessages(human, id, {
       threadId,
-      beforeSeq,
+      afterSeq: after !== undefined ? Number(after) : undefined,
+      beforeSeq: before !== undefined ? Number(before) : undefined,
       limit: Number(c.req.query("limit") ?? 80),
     });
     const ch = hive.getChannel(id);
@@ -165,6 +167,8 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       channel: ch,
       messages: listed.messages,
       hasOlder: listed.hasOlder,
+      hasNewer: listed.hasNewer,
+      cursors: listed.cursors,
       threads: hive.threadsInChannel(ch.id),
       replyCounts: hive.replyCounts(ch.id),
     });
@@ -199,7 +203,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const file = await hive.createFile(human, {
       name,
       mime: resolveUploadMime(c.req.header("x-file-mime"), name),
-      body: c.req.raw.body,
+      body: c.req.raw.body, signal: c.req.raw.signal,
     });
     return c.json({ file });
   });
@@ -318,10 +322,12 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   agent.get("/channels/:id/messages", (c) => {
     const me = c.get("me");
     const limit = Number(c.req.query("limit") ?? 20);
+    const after = c.req.query("afterSeq");
+    const before = c.req.query("beforeSeq");
     const listed = hive.listMessages(me, c.req.param("id"), {
       threadId: c.req.query("threadId") || null,
-      afterSeq: c.req.query("afterSeq") ? Number(c.req.query("afterSeq")) : 0,
-      beforeSeq: c.req.query("beforeSeq") ? Number(c.req.query("beforeSeq")) : undefined,
+      afterSeq: after !== undefined ? Number(after) : undefined,
+      beforeSeq: before !== undefined ? Number(before) : undefined,
       limit,
     });
     const ch = hive.getChannel(c.req.param("id"), me.projectId);
@@ -330,6 +336,8 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       channel: { id: ch.id, name: ch.name, type: ch.type },
       messages: listed.messages,
       hasOlder: listed.hasOlder,
+      hasNewer: listed.hasNewer,
+      cursors: listed.cursors,
       threads: meta ? hive.threadsInChannel(ch.id) : undefined,
       replyCounts: meta ? hive.replyCounts(ch.id) : undefined,
     });
@@ -366,7 +374,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const file = await hive.createFile(me, {
       name,
       mime: resolveUploadMime(c.req.header("x-file-mime"), name),
-      body: c.req.raw.body,
+      body: c.req.raw.body, signal: c.req.raw.signal,
     });
     return c.json({ file });
   });

@@ -1,13 +1,13 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { mkdirSync, readFileSync, existsSync } from "node:fs";
+import { mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import { agentDownloadToFile, agentRequest, agentUploadFile, loadIdentityByName, saveIdentity } from "../client/http.ts";
 import { imagePreview } from "../server/files.ts";
 import { guessMime } from "../shared/mime.ts";
 import { waitUntilMail } from "./wait-loop.ts";
-import { IMAGE_PREVIEW_MAX_BYTES, MCP_HEARTBEAT_MS, MCP_WAIT_POLL_MS, type Agent, type Channel, type Identity, type WaitResult } from "../shared/types.ts";
+import { MCP_HEARTBEAT_MS, MCP_WAIT_POLL_MS, type Agent, type Channel, type Identity, type WaitResult } from "../shared/types.ts";
 
 let sessionToken = process.env.HIVEMIND_TOKEN;
 let heartbeat: ReturnType<typeof setInterval> | undefined;
@@ -141,19 +141,21 @@ export async function startMcp() {
 
   server.tool(
     "history",
-    "Read a channel or DM. Default 20 messages. Use since to page forward.",
+    "Read a channel or DM. Default is the latest 20 channel roots, or the first 20 messages of a thread. Use since to page forward or before to page backward without skipping messages.",
     {
       channel: z.string(),
       threadId: z.string().optional(),
       limit: z.number().optional(),
       since: z.number().optional(),
+      before: z.number().optional(),
       meta: z.boolean().optional(),
     },
-    async ({ channel, threadId, limit, since, meta }) => {
+    async ({ channel, threadId, limit, since, before, meta }) => {
       const q = new URLSearchParams();
       if (threadId) q.set("threadId", threadId);
       if (limit) q.set("limit", String(limit));
-      if (since) q.set("afterSeq", String(since));
+      if (since !== undefined) q.set("afterSeq", String(since));
+      if (before !== undefined) q.set("beforeSeq", String(before));
       if (meta === true) q.set("meta", "1");
       if (meta === false) q.set("meta", "0");
       const suffix = q.toString() ? `?${q}` : "";
@@ -200,15 +202,18 @@ export async function startMcp() {
     "wait",
     "Sleep until mail. Call once, no args. Stay silent while this tool is running. When it returns, you have mail: handle it now, then call wait again and stay silent after that call. If this tool errors or is cancelled, or the input prompt appears without mail, call wait immediately. Do not ask the person at this prompt.",
     {},
-    async () => {
-      const result = await waitUntilMail(() =>
-        agentRequest<WaitResult>(
-          "POST",
-          "/api/agent/wait",
-          { timeoutMs: MCP_WAIT_POLL_MS, compact: true },
-          token(),
-          MCP_WAIT_POLL_MS + 10_000,
-        ),
+    async (_args, extra) => {
+      const result = await waitUntilMail(
+        () =>
+          agentRequest<WaitResult>(
+            "POST",
+            "/api/agent/wait",
+            { timeoutMs: MCP_WAIT_POLL_MS, compact: true },
+            token(),
+            MCP_WAIT_POLL_MS + 10_000,
+            extra.signal,
+          ),
+        { signal: extra.signal },
       );
       return text({
         instruction: "Mail arrived. Handle it now. Then call wait again and stay silent after that wait.",
@@ -322,7 +327,7 @@ export async function startMcp() {
     "fetch_file",
     "Download an attachment into .hivemind-inbox in this workspace. Images also return a small preview.",
     { id: z.string().optional(), seq: z.number().optional(), index: z.number().optional() },
-    async ({ id, seq, index }) => {
+    async ({ id, seq, index }, extra) => {
       let fileId = id;
       if (!fileId) {
         if (seq == null) throw new Error("Provide id or seq");
@@ -331,6 +336,8 @@ export async function startMcp() {
           `/api/agent/messages/${seq}`,
           undefined,
           token(),
+          undefined,
+          extra.signal,
         );
         const att = listed.message.attachments?.[index ?? 0];
         if (!att) throw new Error("No attachment at that seq/index");
@@ -343,14 +350,13 @@ export async function startMcp() {
         token(),
         dir,
         fileId.slice(0, 8),
+        extra.signal,
       );
       const content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [
         { type: "text", text: JSON.stringify({ ok: true, path: file.path, mime: file.mime, bytes: file.bytes }) },
       ];
       if (file.mime.startsWith("image/")) {
-        const hint =
-          file.bytes <= IMAGE_PREVIEW_MAX_BYTES ? readFileSync(file.path) : Buffer.alloc(IMAGE_PREVIEW_MAX_BYTES + 1);
-        const preview = await imagePreview(file.path, file.mime, hint);
+        const preview = await imagePreview(file.path, file.mime, { signal: extra.signal });
         if (preview) content.push({ type: "image", data: preview.data.toString("base64"), mimeType: preview.mime });
       }
       return { content };

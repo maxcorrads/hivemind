@@ -30,6 +30,42 @@ npm run dev
 
 If you already ran `npm run build`, the UI is also on `7420`. Local production: `npm run build && npm start`.
 
+
+### Development checks
+
+Run the same core checks used by CI before opening a PR:
+
+```bash
+npm run check
+```
+
+That command lints the codebase, typechecks the server and web app, discovers and runs all TypeScript tests, and builds the production UI. CI additionally tests the real minimum runtime (Node 22.13.0) and the current Node 24 line on macOS, reviews dependency changes, audits production dependencies, collects coverage, and runs CodeQL.
+
+PR titles use Conventional Commit syntax because release versioning is derived from them. Examples: `fix: handle reconnect races`, `feat(mcp): add a new tool`, `feat!: change the wire contract`.
+
+### Releases
+
+Merges to `main` update an automated draft Release Please PR. When you want a stable release, mark that PR ready for review; CI and CodeQL then validate its current head. Merging the validated release PR creates the SemVer tag and GitHub Release. The release workflow reruns the full checks, builds an installable npm tarball, attaches a SHA-256 checksum, and records GitHub build provenance for the package.
+
+The generated `.tgz` can be installed directly:
+
+```bash
+npm install -g ./hivemind-X.Y.Z.tgz
+```
+
+A registry publish can be added later without changing the versioning flow.
+
+### Edge builds
+
+Every CI-green merge to `main` publishes a rolling GitHub prerelease tagged `edge`. It contains:
+
+- `hivemind-edge.tgz`
+- `SHA256SUMS.txt`
+- a CycloneDX SBOM
+- GitHub build provenance for the package
+
+The `edge` prerelease is continuously replaced by the latest tested `main` build. Stable SemVer releases remain separate.
+
 You stay Human in the browser. Agents never open themselves. You open one Codex / Claude / Cursor terminal per employee, pick the model, then they `join` and `wait`.
 
 ## Example: start a hive
@@ -200,3 +236,33 @@ npx tsx src/cli.ts doctor
 ## Data
 
 All runtime state is under `~/.hivemind/` (or `HIVEMIND_HOME`): `hive.db`, `identities/`, `files/`, optional `telegram.json`. Agent downloads go to `<cwd>/.hivemind-inbox/`. Nothing in those paths belongs in git.
+
+## License
+
+Hivemind is **source-available, not open source**.
+
+Copyright © 2026 Matteo Corradin. All rights reserved.
+
+The software is licensed under the [PolyForm Strict License 1.0.0](https://polyformproject.org/licenses/strict/1.0.0/). Non-commercial use is permitted only within the scope of that license; redistribution and derivative works are not licensed. Any commercial use requires a separate prior written license from Matteo Corradin.
+
+See [LICENSE](LICENSE) for the controlling notice and [CONTRIBUTING.md](CONTRIBUTING.md) before submitting copyrightable contributions.
+
+
+### Backing up and restoring local storage
+
+Stop **all** Hivemind servers and CLI operations that use the home directory before making a filesystem backup. Copy the complete `HIVEMIND_HOME` (normally `~/.hivemind`), including `files/`, identities/configuration, `hive.db`, and any remaining `hive.db-wal` / `hive.db-shm` files. Protect the backup as it contains credentials and private messages.
+
+Restore into an empty home directory while Hivemind is stopped. Restore the database and any WAL/SHM sidecars as the same set; never combine a restored database with sidecars from another database. Keep `files/` with the matching database so attachments retain their content. Start Hivemind only after the restore is complete.
+
+Do **not** copy only a running `hive.db`: committed data can still be in its WAL. An online SQLite backup API or `VACUUM INTO` can produce a consistent database snapshot, but backing up its attachment files additionally requires coordinating writes and garbage collection. The stopped-home procedure above is the tested full-storage backup procedure.
+
+The project schema supports unversioned shipped databases (`user_version=0`) and version 2. Startup validates the schema, migrates and bootstraps in one transaction, and advances the marker only before commit. Unknown versions and inconsistent keys/partial versioned schemas are rejected without repair-by-data-loss. Retain the original home and investigate the error rather than deleting tables or lowering `user_version`.
+
+
+### File resource and recovery policy
+
+Blob publication and attachment metadata insertion share the database writer transaction. GC acquires that same cross-process lock before reading the referenced hashes and holds it through deletion. Metadata expiration commits before any blob deletion, so a failed commit cannot restore references to removed files. Use one `hive.db` per `HIVEMIND_HOME`; do not share its `files/` directory between independent databases.
+
+Preview conversion is asynchronous, cancellation-aware and limited to two concurrent previews per MCP process, with a single five-second default deadline across fallback converters. Input is at most 32 MiB, 12,000 pixels per dimension and 40 million pixels; output is at most 1,600 pixels per dimension and 1,500,000 bytes. Actual bounded PNG/JPEG headers and a private snapshot are used instead of caller-supplied metadata. Unsupported, malformed, oversized, overloaded or unavailable previews return attachment metadata; originals remain downloadable. GIF/WebP files remain accepted as attachments but are not decoded for model previews. Decoder-specific limits supplement these budgets; this is not an operating-system-wide RSS or concurrency quota. `previewMetrics()` exposes process-local request/success/active/elapsed-time counters without file contents or credentials; filesystem disk usage can be inspected separately.
+
+Uploads, preview workspaces and downloads use unique temporary paths. Failure/cancellation removes owned partial files; downloads replace their final path only after completion. Cleanup preserves live or reused process IDs even when a temporary file is old. Known dead-owner leftovers become eligible after 24 hours; preview/download sweeps inspect at most 256 entries per invocation. Legacy temporary names without an owner must be cleaned only after stopping all Hivemind/MCP processes; age alone does not prove inactivity. Symlink entries are never followed by publication, blob reads or garbage collection.
