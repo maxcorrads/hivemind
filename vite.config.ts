@@ -17,7 +17,8 @@ export default defineConfig({
     proxy: {
       // Preserve the browser authority; never rewrite WS Origin to manufacture
       // trust. The backend uses its socket port (not Host) for cookie names.
-      "/api": { target: hive, changeOrigin: false },
+      // The separator is essential: /api.ts is a browser module, not an API.
+      "^/api(?:[/?]|$)": { target: hive, changeOrigin: false },
       "/ws": { target: hive.replace("http", "ws"), ws: true, changeOrigin: false },
     },
   },

@@ -78,14 +78,14 @@ function handshake(t: TestContext, base: string, headers: Record<string, string>
   });
 }
 
-function nextEvent(ws: WebSocket, type: string): Promise<Event> {
+function nextEvent(ws: WebSocket, type: string, accept: (event: Event) => boolean = () => true): Promise<Event> {
   return new Promise((resolve, reject) => {
     const deadline = setTimeout(() => { cleanup(); reject(new Error(`No ${type} event`)); }, 5000);
     const cleanup = () => { clearTimeout(deadline); ws.off("message", message); ws.off("error", error); };
     const error = (reason: Error) => { cleanup(); reject(reason); };
     const message = (data: RawData) => {
       const event = JSON.parse(String(data)) as Event;
-      if (event.type === type) { cleanup(); resolve(event); }
+      if (event.type === type && accept(event)) { cleanup(); resolve(event); }
     };
     ws.on("message", message);
     ws.on("error", error);
@@ -128,7 +128,7 @@ test("real WebSocket handshakes reject unauthorized combinations before any subs
 
   const brain = f.hive.join({ role: "brain", project: "chapter" }).agent;
   const dm = f.hive.openDm(f.hive.getAgent("human"), brain.name);
-  const dmEvent = nextEvent(live.ws, "message");
+  const dmEvent = nextEvent(live.ws, "message", (event) => (event.payload as { channelId: string }).channelId === dm.id);
   f.hive.postMessage(f.hive.getAgent("human"), { channel: dm.id, body: "private Human message" });
   assert.equal(((await dmEvent).payload as { body: string }).body, "private Human message");
 });
@@ -221,6 +221,9 @@ test("actual Vite proxy preserves the trusted HTTP/WS origin and backend cookie 
   const address = vite.httpServer?.address();
   assert.ok(address && typeof address !== "string");
   const base = `http://127.0.0.1:${address.port}`;
+  const apiModule = await fetch(`${base}/api.ts`);
+  assert.equal(apiModule.status, 200); // /api must not proxy the /api.ts module.
+  assert.match(await apiModule.text(), /human-session/);
   const cookie = await bootstrap(base);
   assert.equal(cookie, await bootstrap(f.base));
   assert.match(cookie, new RegExp(`^hivemind_human_${f.port}=`));
