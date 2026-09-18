@@ -36,6 +36,8 @@ import {
 import { canonicalWorktree, parseProjectSlug, resolveJoinProject } from "../shared/project.ts";
 import { clampSearchLimit, likeNeedle, parseSearchQuery, snippetAround } from "../shared/search-query.ts";
 import { pickName } from "./names.ts";
+import { ReadState } from "./read-state.ts";
+import type { MentionPage, ReadSnapshot } from "../shared/read-state.ts";
 import { hiveHome } from "./paths.ts";
 import { preparePrivateDatabase } from "./private-database.ts";
 import { packWait } from "./wait-format.ts";
@@ -121,6 +123,7 @@ export class Hive {
   readonly home: string;
   private waiters = new Map<string, Waiter>();
   private telegramOrigin = new Set<string>();
+  private readonly readState!: ReadState;
   private transactionDepth = 0;
   private committedEffects: Array<() => void> = [];
 
@@ -154,6 +157,7 @@ export class Hive {
       initTelegramOutbox(this.db);
       initTelegramInbox(this.db);
       pruneTelegramFailures(this.db);
+      this.readState = new ReadState(this.db);
     } catch (error) {
       try { this.db.close(); } catch { /* preserve the initialization failure */ }
       throw error;
@@ -1585,49 +1589,48 @@ export class Hive {
   }
 
   unreadCounts(actor: Agent): Record<string, number> {
-    const channels = this.listChannels(actor);
-    const reads = this.readsFor(actor);
-    const out: Record<string, number> = {};
-    for (const ch of channels) {
-      const last = reads[ch.id] ?? 0;
-      const row = this.db.prepare(
-        `SELECT COUNT(*) AS n FROM messages WHERE channel_id = ? AND seq > ? AND author_id != ?`,
-      ).get(ch.id, last, actor.id) as { n: number };
-      out[ch.id] = row.n;
+    return this.readState.counts(actor.id, this.listChannels(actor).map((channel) => channel.id));
+  }
+
+  /** Explicit receipts for the rendered channel/thread page, not a global cursor. */
+  markMessagesRead(actor: Agent, channelId: string, seqs: number[], threadId: string | null = null) {
+    this.getAgent(actor.id);
+    const channel = this.getChannel(channelId, actor.projectId);
+    if (!this.canSeeChannel(actor, channel)) throw new HiveError(403, "Cannot read this channel");
+    if (threadId !== null && (typeof threadId !== "string" || !threadId)) throw new HiveError(400, "Invalid thread ID");
+    if (threadId !== null) {
+      const root = this.db.prepare("SELECT channel_id, thread_id FROM messages WHERE id = ?").get(threadId) as
+        { channel_id: string; thread_id: string | null } | undefined;
+      if (!root || root.channel_id !== channel.id || root.thread_id !== null) throw new HiveError(400, "Thread must be a root in the selected channel");
     }
-    return out;
+    this.readState.markMessages(actor.id, channel.id, seqs, threadId);
   }
 
   markMentionsSeen(actor: Agent, projectId?: string) {
-    const inbox = this.mentionInbox(actor, 400, undefined, projectId);
-    for (const m of inbox.messages) this.markRead(actor, m.channelId, m.seq);
+    this.readState.markMentions(actor.id, this.listChannels(actor).map((channel) => channel.id), projectId);
   }
 
-  mentionInbox(
-    actor: Agent,
-    limit = 30,
-    beforeSeq?: number,
-    projectId?: string,
-  ): { messages: Message[]; hasMore: boolean } {
-    const reads = this.readsFor(actor);
-    const rows = this.db.prepare(
-      `SELECT * FROM messages WHERE mentions LIKE ? ORDER BY seq DESC LIMIT 400`,
-    ).all(`%${actor.id}%`) as MessageRow[];
-    const unseen = this.mapMessages(rows)
-      .filter((m) => m.mentions.includes(actor.id) && m.seq > (reads[m.channelId] ?? 0))
-      .filter((m) => beforeSeq == null || m.seq < beforeSeq)
-      .filter((m) => {
-        if (!projectId) return true;
-        try {
-          return this.getChannel(m.channelId).projectId === projectId;
-        } catch {
-          return false;
-        }
-      });
-    return {
-      messages: this.decorate(unseen.slice(0, limit), actor.id),
-      hasMore: unseen.length > limit,
-    };
+  mentionInbox(actor: Agent, limit = 30, beforeSeq?: number, projectId?: string): MentionPage {
+    return this.readState.atomic(() => {
+      const page = this.readState.page(actor.id, this.listChannels(actor).map((channel) => channel.id), limit, beforeSeq, projectId);
+      return { messages: this.loadMessagesByIds(page.ids, actor.id), hasMore: page.hasMore, ...this.readState.stamp() };
+    });
+  }
+
+  readSnapshot(actor: Agent): ReadSnapshot {
+    return this.readState.atomic(() => {
+      const channels = this.listChannels(actor);
+      const ids = channels.map((channel) => channel.id);
+      const page = this.readState.page(actor.id, ids);
+      const counts = this.readState.mentionCounts(actor.id, ids);
+      return {
+        ...this.readState.stamp(),
+        unread: this.readState.counts(actor.id, ids),
+        mentions: this.loadMessagesByIds(page.ids, actor.id),
+        mentionsHasMore: page.hasMore,
+        mentionCounts: Object.fromEntries(channels.map((channel) => [channel.project, counts[channel.projectId] ?? 0])),
+      };
+    });
   }
 
   clearContext(actor: Agent, targetName: string): Message {

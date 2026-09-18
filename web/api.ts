@@ -1,5 +1,6 @@
 import type { TelegramHealth } from "./telegram-health.ts";
 import type { Agent, BotCredentialView, AttachmentMeta, Channel, Message, Project, SearchHit, Thread, ThreadStatus } from "../src/shared/types.ts";
+import type { MentionPage, ReadSnapshot } from "../src/shared/read-state.ts";
 import { resolveUploadMime } from "../src/shared/mime.ts";
 import type { LaunchContext } from "../src/shared/launch-prompt.ts";
 import type { ProjectPluginView, SettingsValues } from "../src/shared/plugin-settings.ts";
@@ -15,14 +16,11 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   return data as T;
 }
 
-export type Snapshot = {
+export type Snapshot = ReadSnapshot & {
   you: Agent;
   projects: Project[];
   agents: Agent[];
   channels: Channel[];
-  unread: Record<string, number>;
-  mentions: Message[];
-  mentionsHasMore?: boolean;
   queued: Record<string, number>;
   telegram?: { running: boolean; configured: boolean } & TelegramHealth;
 };
@@ -39,8 +37,11 @@ export type TelegramSettings = TelegramHealth & {
 
 export type ChannelPayload = {
   channel: Channel;
+  threadId: string | null;
   messages: Message[];
   hasOlder?: boolean;
+  hasNewer?: boolean;
+  cursors?: { before?: number; after?: number };
   threads: Thread[];
   replyCounts: Record<string, number>;
 };
@@ -62,16 +63,21 @@ export const api = {
   createBot: (projectId: string, name: string) => req<{ bot: Agent; token: string }>(
     `/api/ui/projects/${encodeURIComponent(projectId)}/bots`, { method: "POST", body: JSON.stringify({ name }) },
   ),
-  snapshot: () => req<Snapshot>("/api/ui/snapshot"),
-  mentions: (beforeSeq?: number, project?: string) => {
+  snapshot: (signal?: AbortSignal) => req<Snapshot>("/api/ui/snapshot", { signal }),
+  readState: (signal?: AbortSignal) => req<ReadSnapshot>("/api/ui/read-state", { signal }),
+  markMessagesSeen: (channelId: string, threadId: string | null, messageSeqs: number[], signal?: AbortSignal) =>
+    req<ReadSnapshot>("/api/ui/read", {
+      method: "POST", body: JSON.stringify({ channelId, threadId, messageSeqs }), signal,
+    }),
+  mentions: (beforeSeq?: number, project?: string, signal?: AbortSignal) => {
     const q = new URLSearchParams();
     if (beforeSeq) q.set("beforeSeq", String(beforeSeq));
     if (project) q.set("project", project);
     const suffix = q.toString() ? `?${q}` : "";
-    return req<{ messages: Message[]; hasMore: boolean }>(`/api/ui/mentions${suffix}`);
+    return req<MentionPage>(`/api/ui/mentions${suffix}`, { signal });
   },
   markMentionsSeen: (project?: string) =>
-    req<{ messages: Message[]; hasMore: boolean; unread: Record<string, number> }>("/api/ui/mentions/seen", {
+    req<MentionPage & { unread: Record<string, number>; readState: ReadSnapshot }>("/api/ui/mentions/seen", {
       method: "POST",
       body: JSON.stringify({ project }),
     }),
@@ -103,12 +109,13 @@ export const api = {
     if (limit) params.set("limit", String(limit));
     return req<{ hits: SearchHit[]; hasMore: boolean }>(`/api/ui/search?${params}`, { signal });
   },
-  messages: (id: string, threadId?: string | null, beforeSeq?: number) => {
+  messages: (id: string, threadId?: string | null, beforeSeq?: number, signal?: AbortSignal, afterSeq?: number) => {
     const q = new URLSearchParams();
     if (threadId) q.set("threadId", threadId);
+    if (afterSeq !== undefined) q.set("afterSeq", String(afterSeq));
     if (beforeSeq) q.set("beforeSeq", String(beforeSeq));
     const suffix = q.toString() ? `?${q}` : "";
-    return req<ChannelPayload>(`/api/ui/channels/${encodeURIComponent(id)}/messages${suffix}`);
+    return req<ChannelPayload>(`/api/ui/channels/${encodeURIComponent(id)}/messages${suffix}`, { signal });
   },
   send: (id: string, body: string, threadId?: string | null, attachmentIds?: string[]) =>
     req<{ message: Message }>(`/api/ui/channels/${encodeURIComponent(id)}/messages`, {

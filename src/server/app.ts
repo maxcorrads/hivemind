@@ -78,15 +78,12 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   });
   ui.get("/snapshot", (c) => {
     const human = hive.getAgent("human");
-    const inbox = hive.mentionInbox(human, 30);
     return c.json({
       you: human,
       projects: hive.listProjects(),
       agents: hive.listAgents(),
       channels: hive.listChannels(human),
-      unread: hive.unreadCounts(human),
-      mentions: inbox.messages,
-      mentionsHasMore: inbox.hasMore,
+      ...hive.readSnapshot(human),
       queued: hive.queuedCounts(),
       telegram: {
         running: Boolean(hooks.telegramRunning?.()),
@@ -95,6 +92,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       },
     });
   });
+  ui.get("/read-state", (c) => c.json(hive.readSnapshot(hive.getAgent("human"))));
   ui.get("/telegram", (c) => {
     hive.getAgent("human");
     return c.json({
@@ -209,7 +207,8 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const project = body.project ? hive.getProjectBySlug(String(body.project)).id : undefined;
     hive.markMentionsSeen(human, project);
     const inbox = hive.mentionInbox(human, 30, undefined, project);
-    return c.json({ ...inbox, unread: hive.unreadCounts(human) });
+    const readState = hive.readSnapshot(human);
+    return c.json({ ...inbox, unread: readState.unread, readState });
   });
   ui.get("/search", (c) => {
     const human = hive.getAgent("human");
@@ -235,12 +234,9 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       limit: Number(c.req.query("limit") ?? 80),
     });
     const ch = hive.getChannel(id);
-    if (!threadId) {
-      const latest = hive.latestSeq(ch.id);
-      if (latest) hive.markRead(human, ch.id, latest);
-    }
     return c.json({
       channel: ch,
+      threadId,
       messages: listed.messages,
       hasOlder: listed.hasOlder,
       hasNewer: listed.hasNewer,
@@ -284,7 +280,6 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       threadId: body.threadId ?? null,
       attachmentIds: Array.isArray(body.attachmentIds) ? body.attachmentIds.map(String) : undefined,
     });
-    hive.markRead(human, message.channelId, message.seq);
     return c.json({ message });
   });
   ui.post("/files", async (c) => {
@@ -332,8 +327,18 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   ui.post("/read", async (c) => {
     const human = hive.getAgent("human");
     const body = await c.req.json();
-    hive.markRead(human, String(body.channelId), Number(body.seq));
-    return c.json({ ok: true });
+    if (body.messageSeqs !== undefined) {
+      hive.markMessagesRead(human, String(body.channelId), body.messageSeqs, body.threadId ?? null);
+    } else {
+      // Compatibility: this is an explicit legacy read-through command, never
+      // an implicit side effect of fetching a page or sending a message.
+      const seq = Number(body.seq);
+      if (!Number.isSafeInteger(seq) || seq < 1) throw new HiveError(400, "Invalid read-through sequence");
+      const channel = hive.getChannel(String(body.channelId));
+      if (seq > hive.latestSeq(channel.id)) throw new HiveError(400, "Read-through sequence is beyond the channel history");
+      hive.markRead(human, channel.id, seq);
+    }
+    return c.json({ ok: true, ...hive.readSnapshot(human) });
   });
 
   const agent = new Hono();
