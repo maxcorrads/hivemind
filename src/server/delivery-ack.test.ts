@@ -285,3 +285,63 @@ test("dropped HTTP response after server delivery preserves the batch for reconn
   assert.notEqual(replayed.deliveryId, inFlight.delivery_id);
   assert.equal(cursor(hive, joined.agent.id), cursorBefore);
 });
+
+
+test("delivery receipt history stays bounded after repeated acknowledgements", async (t) => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "hive-delivery-prune-"));
+  const hive = new Hive(path.join(dir, "hive.db"));
+  t.after(() => {
+    hive.db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const human = hive.getAgent("human");
+  const joined = hive.join({ role: "worker", seniority: "mid" });
+  const dm = hive.openDm(human, joined.agent.name);
+  const sessionId = "prune-session";
+
+  for (let i = 0; i < 140; i += 1) {
+    hive.postMessage(human, { channel: dm.id, body: `receipt ${i}` });
+    const batch = await hive.wait(joined.agent, 1_000, undefined, { sessionId });
+    assert.ok(batch.deliveryId);
+    hive.ackDelivery(joined.agent, batch.deliveryId!, sessionId);
+  }
+
+  const history = hive.db.prepare(
+    "SELECT COUNT(*) AS n FROM inbox_deliveries WHERE agent_id = ? AND status != 'in_flight'",
+  ).get(joined.agent.id) as { n: number };
+  assert.equal(history.n, 128);
+});
+
+test("deleting an idle project removes delivery receipts for its removed agents", async (t) => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "hive-delivery-delete-project-"));
+  const hive = new Hive(path.join(dir, "hive.db"));
+  t.after(() => {
+    hive.db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const human = hive.getAgent("human");
+  hive.createProject(human, { name: "Disposable", slug: "disposable" });
+  const brain = hive.join({ role: "brain", project: "disposable" });
+  const worker = hive.join({ role: "worker", seniority: "mid", project: "disposable" });
+  const dm = hive.openDm(brain.agent, worker.agent.name);
+  hive.postMessage(brain.agent, { channel: dm.id, body: "persist a receipt" });
+  const delivered = await hive.wait(worker.agent, 1_000, undefined, { sessionId: "delete-project" });
+  assert.ok(delivered.deliveryId);
+  hive.ackDelivery(worker.agent, delivered.deliveryId!, "delete-project");
+  hive.setOffline(brain.agent.id);
+  hive.setOffline(worker.agent.id);
+
+  const before = hive.db.prepare(
+    "SELECT COUNT(*) AS n FROM inbox_deliveries WHERE agent_id = ?",
+  ).get(worker.agent.id) as { n: number };
+  assert.equal(before.n, 1);
+
+  hive.deleteProject(human, "disposable");
+
+  const after = hive.db.prepare(
+    "SELECT COUNT(*) AS n FROM inbox_deliveries WHERE agent_id = ?",
+  ).get(worker.agent.id) as { n: number };
+  assert.equal(after.n, 0);
+});
