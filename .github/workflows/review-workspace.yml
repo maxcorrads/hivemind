@@ -1,0 +1,37 @@
+name: Review repair workspace
+on:
+  push:
+    branches: [maintenance/review-repair-workspace-20260918]
+    paths: [.github/workflows/review-workspace.yml]
+permissions:
+  contents: read
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Read PR heads and prepare a credential-free bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p review-workspace
+          gh api 'repos/maxcorrads/hivemind/pulls?state=open&per_page=100' > review-workspace/pulls.json
+          git -c http.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" fetch origin '+refs/pull/*/head:refs/remotes/review-pr/*'
+          git bundle create review-workspace/source.bundle --all
+          node --version > review-workspace/runtime.txt
+      - name: Install isolated test dependencies
+        run: |
+          npm ci
+          tar czf review-workspace/node_modules.tgz node_modules
+      - uses: actions/upload-artifact@v4
+        with:
+          name: review-workspace
+          path: review-workspace/
+          retention-days: 1
