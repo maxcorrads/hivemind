@@ -186,6 +186,18 @@ export function App() {
     controller: null,
   });
   const seenMessageIdsRef = useRef(new Set<string>());
+  const rememberMessageId = useCallback((id: string): boolean => {
+    const seen = seenMessageIdsRef.current;
+    const duplicate = seen.has(id);
+    if (!duplicate) {
+      seen.add(id);
+      if (seen.size > 2_048) {
+        const oldest = seen.values().next().value as string | undefined;
+        if (oldest) seen.delete(oldest);
+      }
+    }
+    return duplicate;
+  }, []);
 
   const refreshSnap = useCallback(async () => {
     const next = await api.snapshot();
@@ -202,7 +214,7 @@ export function App() {
     if (controller.signal.aborted || channelLoadRef.current.generation !== generation) return;
     const current = selRef.current;
     if (current.kind !== "channel" || current.id !== id) return;
-    for (const message of data.messages) seenMessageIdsRef.current.add(message.id);
+    for (const message of data.messages) rememberMessageId(message.id);
     setPane(data);
     setSnap((s) =>
       s
@@ -213,7 +225,7 @@ export function App() {
           }
         : s,
     );
-  }, []);
+  }, [rememberMessageId]);
 
   const loadThread = useCallback(async (channelId: string, rootId: string) => {
     threadLoadRef.current.controller?.abort();
@@ -224,9 +236,9 @@ export function App() {
     if (controller.signal.aborted || threadLoadRef.current.generation !== generation) return;
     const current = selRef.current;
     if (current.kind !== "channel" || current.id !== channelId || threadIdRef.current !== rootId) return;
-    for (const message of data.messages) seenMessageIdsRef.current.add(message.id);
+    for (const message of data.messages) rememberMessageId(message.id);
     setThreadPane(data);
-  }, []);
+  }, [rememberMessageId]);
 
   useEffect(() => {
     refreshSnap().catch((e) => setErr(String(e.message || e)));
@@ -249,8 +261,7 @@ export function App() {
       }
       if (ev.type === "message") {
         const msg = ev.payload as Message;
-        const duplicate = seenMessageIdsRef.current.has(msg.id);
-        seenMessageIdsRef.current.add(msg.id);
+        const duplicate = rememberMessageId(msg.id);
         setPane((p) => (duplicate ? replaceMessage(p, msg) : patchPane(p, msg, null)));
         setThreadPane((p) =>
           duplicate ? replaceMessage(p, msg) : patchPane(p, msg, threadIdRef.current),
@@ -312,7 +323,7 @@ export function App() {
       threadLoadRef.current.controller?.abort();
       window.removeEventListener("hashchange", onHash);
     };
-  }, [loadChannel, loadThread, refreshSnap]);
+  }, [loadChannel, loadThread, refreshSnap, rememberMessageId]);
 
   const missingChannel = Boolean(snap && sel.kind === "channel" && !snap.channels.some((c) => c.id === sel.id));
 
@@ -493,8 +504,7 @@ export function App() {
     }
     if (!body.trim() && attachmentIds.length === 0) return;
     const { message } = await api.send(channelId, body.trim(), tid, attachmentIds);
-    const alreadySeen = seenMessageIdsRef.current.has(message.id);
-    seenMessageIdsRef.current.add(message.id);
+    const alreadySeen = rememberMessageId(message.id);
     if (!alreadySeen) {
       setPane((p) => patchPane(p, message, null));
       if (tid) setThreadPane((p) => patchPane(p, message, tid));
