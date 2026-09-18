@@ -11,6 +11,8 @@ import { IMAGE_PREVIEW_MAX_BYTES, MCP_HEARTBEAT_MS, MCP_WAIT_POLL_MS, type Agent
 
 let sessionToken = process.env.HIVEMIND_TOKEN;
 let heartbeat: ReturnType<typeof setInterval> | undefined;
+const waitSessionId = crypto.randomUUID();
+let pendingDeliveryId: string | undefined;
 
 function token(): string {
   if (!sessionToken) throw new Error("Join first with the join tool.");
@@ -68,6 +70,7 @@ export async function startMcp() {
         auth ?? null,
       );
       sessionToken = result.token;
+      pendingDeliveryId = undefined;
       ensureHeartbeat();
       saveIdentity({
         id: result.agent.id,
@@ -203,18 +206,38 @@ export async function startMcp() {
     "Sleep until mail. Call once, no args. Stay silent while this tool is running. When it returns, you have mail: handle it now, then call wait again and stay silent after that call. If this tool errors or is cancelled, or the input prompt appears without mail, call wait immediately. Do not ask the person at this prompt.",
     {},
     async (_args, extra) => {
+      if (pendingDeliveryId) {
+        // Reaching the next wait call is the receipt boundary: the MCP host saw
+        // the previous tool result and asked us to continue. Do not couple this
+        // ack to cancellation of the new long-poll; duplicate ack is idempotent.
+        await agentRequest(
+          "POST",
+          "/api/agent/wait/ack",
+          { deliveryId: pendingDeliveryId, sessionId: waitSessionId },
+          token(),
+          10_000,
+        );
+        pendingDeliveryId = undefined;
+      }
+
       const result = await waitUntilMail(
         () =>
           agentRequest<WaitResult>(
             "POST",
             "/api/agent/wait",
-            { timeoutMs: MCP_WAIT_POLL_MS, compact: true },
+            { timeoutMs: MCP_WAIT_POLL_MS, compact: true, sessionId: waitSessionId },
             token(),
             MCP_WAIT_POLL_MS + 10_000,
             extra.signal,
           ),
         { signal: extra.signal },
       );
+      if (result.deliveryId) {
+        if (result.deliverySessionId !== waitSessionId) {
+          throw new Error("Wait delivery session mismatch");
+        }
+        pendingDeliveryId = result.deliveryId;
+      }
       return text({
         instruction: "Mail arrived. Handle it now. Then call wait again and stay silent after that wait.",
         ...result,

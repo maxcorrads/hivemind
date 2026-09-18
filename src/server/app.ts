@@ -12,6 +12,7 @@ import { parseProjectSlug } from "../shared/project.ts";
 export type AppHooks = {
   telegramRunning?: () => boolean;
   reloadTelegram?: () => boolean;
+  beforeWaitResponse?: () => void | Promise<void>;
 };
 
 function fileDownload(hive: Hive, actor: Agent, id: string) {
@@ -50,6 +51,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       mentions: inbox.messages,
       mentionsHasMore: inbox.hasMore,
       queued: hive.queuedCounts(),
+      deliveries: hive.deliveryStates(),
       telegram: {
         running: Boolean(hooks.telegramRunning?.()),
         configured: publicTelegramView(hive.home).configured,
@@ -414,8 +416,22 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const me = c.get("me");
     const body = await c.req.json().catch(() => ({}));
     const timeoutMs = Number(body.timeoutMs ?? DEFAULT_WAIT_MS);
-    const result = await hive.wait(me, timeoutMs, c.req.raw.signal, { compact: Boolean(body.compact) });
+    const sessionId = String(body.sessionId ?? `legacy:${me.id}`).trim();
+    if (!sessionId || sessionId.length > 160) throw new HiveError(400, "Invalid wait session");
+    const result = await hive.wait(me, timeoutMs, c.req.raw.signal, {
+      compact: Boolean(body.compact),
+      sessionId,
+    });
+    await hooks.beforeWaitResponse?.();
     return c.json(result);
+  });
+  agent.post("/wait/ack", async (c) => {
+    const me = c.get("me");
+    const body = await c.req.json().catch(() => ({}));
+    const deliveryId = String(body.deliveryId ?? "").trim();
+    const sessionId = String(body.sessionId ?? "").trim();
+    if (!deliveryId || !sessionId) throw new HiveError(400, "deliveryId and sessionId are required");
+    return c.json(hive.ackDelivery(me, deliveryId, sessionId));
   });
   agent.post("/ping", (c) => {
     const me = c.get("me");

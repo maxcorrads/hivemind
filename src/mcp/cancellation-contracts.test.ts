@@ -128,8 +128,10 @@ test("cancelled and superseded Hive waits do not consume queued mail or leak sig
     inbox_cursor: number;
   }).inbox_cursor;
   assert.equal(afterCursor, beforeCursor);
-  const afterCancelled = await hive.wait(worker, 60_000);
+  const afterCancelled = await hive.wait(worker, 60_000, undefined, { sessionId: "cancel-contract" });
   assert.equal(afterCancelled.messages.filter((message) => message.id === alreadyQueued.id).length, 1);
+  assert.ok(afterCancelled.deliveryId);
+  hive.ackDelivery(worker, afterCancelled.deliveryId!, "cancel-contract");
 
   const active = new AbortController();
   const cancelledWait = hive.wait(worker, 60_000, active.signal);
@@ -140,12 +142,14 @@ test("cancelled and superseded Hive waits do not consume queued mail or leak sig
   assert.equal(getEventListeners(active.signal, "abort").length, 0);
 
   const queued = hive.postMessage(human, { channel: dm.id, body: "survives cancellation" });
-  const next = await hive.wait(worker, 60_000);
+  const next = await hive.wait(worker, 60_000, undefined, { sessionId: "cancel-contract" });
   assert.equal(next.idle, false);
   assert.equal(next.messages.filter((message) => message.id === queued.id).length, 1);
+  assert.ok(next.deliveryId);
+  hive.ackDelivery(worker, next.deliveryId!, "cancel-contract");
 
-  const first = hive.wait(worker, 60_000);
-  const replacement = hive.wait(worker, 60_000);
+  const first = hive.wait(worker, 60_000, undefined, { sessionId: "cancel-contract" });
+  const replacement = hive.wait(worker, 60_000, undefined, { sessionId: "cancel-contract" });
   await assert.rejects(first, /superseded/);
   const replacementMail = hive.postMessage(human, { channel: dm.id, body: "replacement receives me" });
   const replacementResult = await replacement;
