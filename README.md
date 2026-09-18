@@ -247,3 +247,13 @@ The software is licensed under the [PolyForm Strict License 1.0.0](https://polyf
 
 See [LICENSE](LICENSE) for the controlling notice and [CONTRIBUTING.md](CONTRIBUTING.md) before submitting copyrightable contributions.
 
+
+### Backing up and restoring local storage
+
+Stop **all** Hivemind servers and CLI operations that use the home directory before making a filesystem backup. Copy the complete `HIVEMIND_HOME` (normally `~/.hivemind`), including `files/`, identities/configuration, `hive.db`, and any remaining `hive.db-wal` / `hive.db-shm` files. Protect the backup as it contains credentials and private messages.
+
+Restore into an empty home directory while Hivemind is stopped. Restore the database and any WAL/SHM sidecars as the same set; never combine a restored database with sidecars from another database. Keep `files/` with the matching database so attachments retain their content. Start Hivemind only after the restore is complete.
+
+Do **not** copy only a running `hive.db`: committed data can still be in its WAL. An online SQLite backup API or `VACUUM INTO` can produce a consistent database snapshot, but backing up its attachment files additionally requires coordinating writes and garbage collection. The stopped-home procedure above is the tested full-storage backup procedure.
+
+The project schema supports unversioned shipped databases (`user_version=0`) and version 2. Startup validates the schema, migrates and bootstraps in one transaction, and advances the marker only before commit. Unknown versions and inconsistent keys/partial versioned schemas are rejected without repair-by-data-loss. Retain the original home and investigate the error rather than deleting tables or lowering `user_version`.
