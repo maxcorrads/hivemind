@@ -50,12 +50,31 @@ export class InboxDeliveryStore {
       db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS inbox_one_pending
         ON inbox_deliveries(agent_id) WHERE acknowledged_at IS NULL AND superseded_by IS NULL;`);
     });
+    this.migrateReceiptTotals();
   }
 
   private transaction<T>(fn: () => T): T {
     this.db.exec("BEGIN IMMEDIATE");
     try { const result = fn(); this.db.exec("COMMIT"); return result; }
     catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+
+  private migrateReceiptTotals() {
+    this.transaction(() => {
+      // The table is also the migration marker. Create and backfill atomically, so
+      // a failed upgrade can retry and later restarts never scan the ledger again.
+      if (this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'inbox_receipt_totals'").get()) return;
+      this.db.exec(`
+        CREATE TABLE inbox_receipt_totals (
+          agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+          acknowledged_messages INTEGER NOT NULL,
+          last_acknowledged_at INTEGER NOT NULL
+        );
+        INSERT INTO inbox_receipt_totals(agent_id, acknowledged_messages, last_acknowledged_at)
+          SELECT agent_id, SUM(json_array_length(seqs)), MAX(acknowledged_at)
+          FROM inbox_deliveries WHERE acknowledged_at IS NOT NULL GROUP BY agent_id;
+      `);
+    });
   }
 
   currentSession(agentId: string): string | undefined {
@@ -142,16 +161,21 @@ export class InboxDeliveryStore {
       this.db.prepare("DELETE FROM inbox_early_receipts WHERE agent_id = ? AND seq <= (SELECT inbox_cursor FROM agents WHERE id = ?)")
         .run(agentId, agentId);
       this.db.prepare("UPDATE inbox_deliveries SET acknowledged_at = ? WHERE id = ?").run(t, row.id);
+      this.db.prepare(`INSERT INTO inbox_receipt_totals(agent_id, acknowledged_messages, last_acknowledged_at)
+        VALUES (?, ?, ?) ON CONFLICT(agent_id) DO UPDATE SET
+          acknowledged_messages = inbox_receipt_totals.acknowledged_messages + excluded.acknowledged_messages,
+          last_acknowledged_at = MAX(inbox_receipt_totals.last_acknowledged_at, excluded.last_acknowledged_at)`)
+        .run(agentId, (JSON.parse(row.seqs) as number[]).length, t);
       return { acknowledged: true, duplicate: false, deliveryId, acknowledgedAt: t };
     });
   }
 
   status(agentId: string): InboxStatus {
     const pending = this.pending(agentId);
-    const rows = this.db.prepare(`SELECT COUNT(*) AS batches, COALESCE(SUM(json_array_length(seqs)), 0) AS messages,
-      MAX(acknowledged_at) AS at FROM inbox_deliveries WHERE agent_id = ? AND acknowledged_at IS NOT NULL`)
-      .get(agentId) as { batches: number; messages: number; at: number | null };
+    const totals = this.db.prepare(`SELECT acknowledged_messages AS messages, last_acknowledged_at AS at
+      FROM inbox_receipt_totals WHERE agent_id = ?`)
+      .get(agentId) as { messages: number; at: number } | undefined;
     return { awaitingReceipt: pending ? JSON.parse(pending.seqs).length : 0,
-      acknowledgedMessages: rows.messages, lastAcknowledgedAt: rows.at };
+      acknowledgedMessages: totals?.messages ?? 0, lastAcknowledgedAt: totals?.at ?? null };
   }
 }

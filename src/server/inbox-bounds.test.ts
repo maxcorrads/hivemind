@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Hive } from "./hive.ts";
-import { INBOX_BATCH_MAX } from "./inbox-delivery.ts";
+import { INBOX_BATCH_MAX, InboxDeliveryStore } from "./inbox-delivery.ts";
 import { waitWireBytes } from "./wait-format.ts";
 import { waitUntilMail } from "../mcp/wait-loop.ts";
 import { BODY_MAX, WAIT_MAIL_CAP, WAIT_MAX_BYTES, WAIT_SCAN_MAX, WAIT_NEXT, type WaitResult } from "../shared/types.ts";
@@ -43,6 +43,19 @@ function bounded(result: WaitResult, messageCap = INBOX_BATCH_MAX) {
   const mcp = { content: [{ type: "text", text: JSON.stringify({ instruction: WAIT_NEXT, ...result }, null, 2) }] };
   assert.ok(Buffer.byteLength(JSON.stringify(mcp)) <= WAIT_MAX_BYTES);
   assert.ok(Buffer.byteLength(JSON.stringify({ ...result, sessionId: crypto.randomUUID() }, null, 2)) <= WAIT_MAX_BYTES);
+}
+
+// Grow only the retained acknowledged ledger, not the active message backlog.
+function agedReceipts(f: ReturnType<typeof fixture>, size = 10_000) {
+  f.hive.db.exec("DROP TABLE inbox_receipt_totals");
+  f.hive.db.prepare(`WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+    INSERT INTO inbox_deliveries(id, agent_id, session_id, through_seq, seqs, attempts, offered_at, lease_until, acknowledged_at)
+    SELECT 'aged-' || i, ?, ?, 0, '[0]', 1, 1, 2, 100 FROM n`)
+    .run(size, f.reader.agent.id, f.sessionId);
+  new InboxDeliveryStore(f.hive.db);
+  assert.equal(f.hive.inbox.status(f.reader.agent.id).acknowledgedMessages, size);
+  f.hive.db.function("json_array_length", () => { throw new Error("unexpected historical aggregation"); });
+  return size;
 }
 
 /** Count actual header rows returned by SQLite, independently of page telemetry. */
@@ -243,6 +256,7 @@ test("1103 full-size messages in one DM page without skipped mail in raw and com
 
 test("reserved mentions and control cannot skip ordinary mail; sparse receipts survive restart", async t => {
   const f = fixture(t, "worker");
+  const historical = agedReceipts(f);
   const normal = f.bulk(20);
   const urgent = [...f.bulk(1, "look here", f.dm.id, "chat", [f.reader.agent.id]),
     ...f.bulk(1, "clear context", f.dm.id, "control")];
@@ -252,10 +266,24 @@ test("reserved mentions and control cannot skip ordinary mail; sparse receipts s
   for (const seq of urgent) assert.ok(first.delivery!.messageSeqs.includes(seq));
   const replay = await f.wait(false); bounded(replay, WAIT_MAIL_CAP);
   assert.deepEqual(replay.delivery!.messageSeqs, first.delivery!.messageSeqs);
+  const cursor = () => f.hive.db.prepare("SELECT inbox_cursor FROM agents WHERE id = ?").get(f.reader.agent.id)!.inbox_cursor;
+  const before = cursor();
+  f.hive.db.exec(`CREATE TEMP TRIGGER reject_sparse_counter BEFORE UPDATE ON inbox_receipt_totals
+    BEGIN SELECT RAISE(ABORT, 'injected sparse counter failure'); END`);
+  assert.throws(() => f.ack(first), /injected sparse counter failure/);
+  assert.equal(cursor(), before);
+  assert.equal(f.hive.inbox.pending(f.reader.agent.id)!.id, first.delivery!.id);
+  assert.equal(f.hive.db.prepare("SELECT COUNT(*) AS n FROM inbox_early_receipts").get()!.n, 0);
+  assert.equal(f.hive.inbox.status(f.reader.agent.id).acknowledgedMessages, historical);
+  f.hive.db.exec("DROP TRIGGER reject_sparse_counter");
   f.ack(first);
+  assert.equal(f.ack(first).duplicate, true);
+  assert.equal(f.hive.inbox.status(f.reader.agent.id).acknowledgedMessages, historical + WAIT_MAIL_CAP);
   assert.equal(f.hive.db.prepare("SELECT COUNT(*) AS n FROM inbox_early_receipts").get()!.n, 2);
   f.hive.db.close();
   const restarted = new Hive(f.file); t.after(() => restarted.db.close());
+  restarted.db.function("json_array_length", () => { throw new Error("unexpected restart aggregation"); });
+  assert.equal(restarted.inbox.status(f.reader.agent.id).acknowledgedMessages, historical + WAIT_MAIL_CAP);
   const sessionId = restarted.openInboxSession(f.reader.agent, crypto.randomUUID());
   const seen = [...first.delivery!.messageSeqs];
   while (seen.length < normal.length + urgent.length) {
@@ -266,6 +294,7 @@ test("reserved mentions and control cannot skip ordinary mail; sparse receipts s
   }
   assert.deepEqual(seen.sort((a, b) => a - b), [...normal, ...urgent]);
   assert.equal(restarted.db.prepare("SELECT COUNT(*) AS n FROM inbox_early_receipts").get()!.n, 0);
+  assert.equal(restarted.inboxStatuses()[f.reader.agent.id].acknowledgedMessages, historical + normal.length + urgent.length);
 });
 
 test("public noise uses bounded empty continuations; the MCP loop only returns actual mail", async t => {
@@ -305,24 +334,30 @@ test("queue lower bound excludes pending and early-confirmed messages", async t 
 
 test("legacy oversize pending batch is atomically split; its old ACK cannot discard the tail", async t => {
   const f = fixture(t);
+  const historical = agedReceipts(f);
   const all = f.bulk(100, "界".repeat(BODY_MAX));
   const old = f.hive.inbox.offer(f.reader.agent.id, f.sessionId, all, all.at(-1)!);
   // Recreate the exact v3 schema/index, then exercise startup migration.
-  f.hive.db.exec(`DROP INDEX inbox_one_pending;
+  f.hive.db.exec(`DROP TABLE inbox_receipt_totals;
+    DROP INDEX inbox_one_pending;
     ALTER TABLE inbox_deliveries DROP COLUMN superseded_by;
     CREATE UNIQUE INDEX inbox_one_pending ON inbox_deliveries(agent_id) WHERE acknowledged_at IS NULL;`);
   f.hive.db.close();
   const upgraded = new Hive(f.file); t.after(() => upgraded.db.close());
+  upgraded.db.function("json_array_length", () => { throw new Error("unexpected split aggregation"); });
+  assert.equal(upgraded.inbox.status(f.reader.agent.id).acknowledgedMessages, historical);
   const seen: number[] = [];
   while (seen.length < all.length) {
     const result = await upgraded.wait(f.reader.agent, 1, undefined, { sessionId: f.sessionId }); bounded(result);
     assert.ok(result.delivery); assert.notEqual(result.delivery.id, old.id);
     assert.throws(() => upgraded.acknowledgeInbox(f.reader.agent, f.sessionId, old.id), /Delivery was split/);
+    assert.equal(upgraded.inbox.status(f.reader.agent.id).acknowledgedMessages, historical + seen.length);
     seen.push(...result.delivery.messageSeqs);
     upgraded.acknowledgeInbox(f.reader.agent, f.sessionId, result.delivery.id);
+    assert.equal(upgraded.acknowledgeInbox(f.reader.agent, f.sessionId, result.delivery.id).duplicate, true);
   }
   assert.deepEqual(seen, all);
-  assert.equal(upgraded.inbox.status(f.reader.agent.id).acknowledgedMessages, all.length);
+  assert.equal(upgraded.inbox.status(f.reader.agent.id).acknowledgedMessages, historical + all.length);
 });
 
 test("control bodies, UTF-8 and JSON escapes obey byte caps; truncated originals remain recoverable", async t => {
