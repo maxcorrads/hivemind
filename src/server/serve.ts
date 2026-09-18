@@ -8,6 +8,7 @@ import { DEFAULT_PORT } from "../shared/types.ts";
 import { Hive } from "./hive.ts";
 import { createApp } from "./app.ts";
 import { startTelegram } from "./telegram.ts";
+import { LocalHumanAuth } from "./local-auth.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(here, "../..");
@@ -21,8 +22,10 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
     reloadTelegram: () => telegram.reload(),
   });
 
+  const humanAuth = new LocalHumanAuth();
   const listener = getRequestListener(app.fetch);
   const server = createServer((req, res) => {
+    if (!humanAuth.handleHttp(req, res)) return;
     const url = req.url ?? "/";
     if (url.startsWith("/api") || url.startsWith("/ws")) {
       listener(req, res);
@@ -32,7 +35,14 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
     listener(req, res);
   });
 
-  const wss = new WebSocketServer({ server, path: "/ws" });
+  const wss = new WebSocketServer({
+    server,
+    path: "/ws",
+    verifyClient: ({ req }, done) => {
+      const allowed = humanAuth.allowsWebSocket(req);
+      done(allowed, allowed ? undefined : 403, allowed ? undefined : "Forbidden");
+    },
+  });
   const clients = new Set<WebSocket>();
   wss.on("connection", (ws) => {
     clients.add(ws);
@@ -77,7 +87,9 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
     });
   });
 
-  const shutdown = () => {
+  let stopped: Promise<void> | undefined;
+  const shutdown = (): Promise<void> => {
+    if (stopped) return stopped;
     clearInterval(sweep);
     telegram.stop();
     hive.bus.off("message", onMessage);
@@ -87,8 +99,19 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
     hive.bus.off("reaction", onReaction);
     hive.bus.off("queued", onQueued);
     hive.bus.off("project", onProject);
-    wss.close();
-    server.close();
+    // Revoked sessions must not retain a live subscription during shutdown.
+    for (const ws of clients) ws.terminate();
+    clients.clear();
+    stopped = Promise.all([
+      new Promise<void>((resolve) => wss.close(() => resolve())),
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        server.closeIdleConnections();
+      }),
+    ]).then(() => undefined);
+    // Hive ownership is unchanged: the caller closes its database after any
+    // non-HTTP integrations have drained. Do not close it under active work.
+    return stopped;
   };
   return { server, hive, port, shutdown, ready };
 }

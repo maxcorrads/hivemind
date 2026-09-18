@@ -61,17 +61,23 @@ test("thread creation/list/update/reset stays camelCase across Hive HTTP and Web
   const started = startServer({ port: 0, hive, telegram: false });
   const port = await started.ready;
   const base = `http://127.0.0.1:${port}`;
-  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+  let ws: WebSocket | undefined;
 
   t.after(async () => {
-    ws.terminate();
-    const closed = new Promise<void>((resolve) => started.server.once("close", () => resolve()));
-    started.shutdown();
-    await closed;
+    ws?.terminate();
+    await started.shutdown();
     hive.db.close();
     rmSync(dir, { recursive: true, force: true });
   });
 
+  const bootstrap = await fetch(`${base}/api/ui/session`, {
+    method: "POST", headers: { origin: base, "content-type": "application/json" },
+  });
+  assert.equal(bootstrap.status, 200);
+  const cookie = bootstrap.headers.get("set-cookie")?.split(";")[0];
+  await bootstrap.body?.cancel();
+  assert.ok(cookie);
+  ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { origin: base, cookie } });
   const hello = await nextEvent(ws, "hello");
   assert.equal(hello.type, "hello");
 

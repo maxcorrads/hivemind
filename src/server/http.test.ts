@@ -13,11 +13,22 @@ async function json(
   body?: unknown,
   token?: string,
 ) {
+  let cookie: string | undefined;
+  if (url.startsWith("/api/ui/")) {
+    const bootstrap = await fetch(`${base}/api/ui/session`, {
+      method: "POST", headers: { origin: base, "content-type": "application/json" },
+    });
+    assert.equal(bootstrap.status, 200);
+    cookie = bootstrap.headers.get("set-cookie")?.split(";")[0];
+    await bootstrap.body?.cancel();
+    assert.ok(cookie);
+  }
   const res = await fetch(`${base}${url}`, {
     method,
     headers: {
       "content-type": "application/json",
       ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...(cookie ? { cookie, origin: base } : {}),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
@@ -172,7 +183,8 @@ test("HTTP protocol: join, isolate, wait, Human admin", async () => {
     assert.equal(seen.data.messages.length, 0);
     assert.equal(seen.data.unread.general ?? 0, 0);
   } finally {
-    started.shutdown();
+    await started.shutdown();
+    hive.db.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -232,7 +244,8 @@ test("Human Telegram UI saves settings and never returns the bot token", async (
     assert.equal(tg.data.projects.altro, undefined);
     assert.equal(tg.data.projects.chapter, -1002);
   } finally {
-    started.shutdown();
+    await started.shutdown();
+    hive.db.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });
