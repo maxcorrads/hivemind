@@ -130,7 +130,8 @@ test("real MCP stdio covers join, at-least-once restart, acknowledgement, and ca
 
   const message1 = hive.postMessage(human, { channel: dm.id, body: "stdio survives process restart" });
   const delivered1 = toolJson(await first.tool(3, "wait"));
-  assert.equal(delivered1.messages?.[0]?.id ?? delivered1.mail?.[0]?.seq && message1.id, message1.id);
+  const delivered1Seq = delivered1.mail?.[0]?.seq ?? delivered1.messages?.[0]?.seq;
+  assert.equal(delivered1Seq, message1.seq);
   assert.equal(typeof delivered1.deliveryId, "string");
   const cursorBeforeRestart = (
     hive.db.prepare("SELECT inbox_cursor FROM agents WHERE id = ?").get(agent.id) as { inbox_cursor: number }
