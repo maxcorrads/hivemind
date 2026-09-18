@@ -129,11 +129,16 @@ export class Hive {
     this.bus.setMaxListeners(200);
     mkdirSync(path.dirname(dbPath), { recursive: true });
     this.db = new DatabaseSync(dbPath);
-    this.db.exec("PRAGMA journal_mode = WAL");
-    this.db.exec("PRAGMA foreign_keys = ON");
-    this.migrate();
-    this.migrateProjects();
-    this.bootstrap();
+    try {
+      this.db.exec("PRAGMA journal_mode = WAL");
+      this.db.exec("PRAGMA foreign_keys = ON");
+      this.migrate();
+      this.migrateProjects();
+      this.bootstrap();
+    } catch (err) {
+      this.db.close();
+      throw err;
+    }
   }
 
   private migrate() {
@@ -276,112 +281,132 @@ export class Hive {
   }
 
   private migrateProjects() {
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS projects (
-        id TEXT PRIMARY KEY,
-        slug TEXT NOT NULL UNIQUE,
-        name TEXT NOT NULL,
-        worktree TEXT,
-        created_at INTEGER NOT NULL
-      );
-    `);
-    if (!this.hasColumn("agents", "project_id")) {
-      this.db.exec("ALTER TABLE agents ADD COLUMN project_id TEXT");
-    }
-    if (!this.hasColumn("channels", "project_id")) {
-      this.db.exec("ALTER TABLE channels ADD COLUMN project_id TEXT");
-    }
-    const holdSql = this.tableSql("telegram_hold");
-    if (!this.hasColumn("telegram_hold", "telegram_chat_id") || /telegram_message_id INTEGER PRIMARY KEY/i.test(holdSql)) {
-      const holds = holdSql
-        ? (this.db.prepare("SELECT * FROM telegram_hold").all() as Array<{
-            telegram_message_id: number;
-            telegram_thread_id: number;
-            payload: string;
-            telegram_chat_id?: number | null;
-          }>)
-        : [];
+    const version = (this.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
+    try {
+      this.db.exec("BEGIN IMMEDIATE");
       this.db.exec(`
-        DROP TABLE IF EXISTS telegram_hold;
-        CREATE TABLE telegram_hold (
-          telegram_chat_id INTEGER NOT NULL,
-          telegram_message_id INTEGER NOT NULL,
-          telegram_thread_id INTEGER NOT NULL,
-          payload TEXT NOT NULL,
-          PRIMARY KEY (telegram_chat_id, telegram_message_id)
+        CREATE TABLE IF NOT EXISTS projects (
+          id TEXT PRIMARY KEY,
+          slug TEXT NOT NULL UNIQUE,
+          name TEXT NOT NULL,
+          worktree TEXT,
+          created_at INTEGER NOT NULL
         );
       `);
-      const insHold = this.db.prepare(
-        "INSERT INTO telegram_hold (telegram_chat_id, telegram_message_id, telegram_thread_id, payload) VALUES (?, ?, ?, ?)",
-      );
-      for (const row of holds) {
-        insHold.run(row.telegram_chat_id ?? 0, row.telegram_message_id, row.telegram_thread_id, row.payload);
+      if (!this.hasColumn("agents", "project_id")) {
+        this.db.exec("ALTER TABLE agents ADD COLUMN project_id TEXT");
       }
-    }
-    const topicSql = this.tableSql("telegram_topics");
-    if (!this.hasColumn("telegram_out", "telegram_chat_id") || /telegram_message_id INTEGER PRIMARY KEY/i.test(this.tableSql("telegram_out"))) {
-      const rows = this.db.prepare("SELECT * FROM telegram_out").all() as Array<{
-        telegram_message_id: number;
-        seq: number;
-        channel_id: string;
-        thread_id: string | null;
-        telegram_chat_id?: number | null;
-      }>;
-      this.db.exec(`
-        DROP TABLE telegram_out;
-        CREATE TABLE telegram_out (
-          telegram_chat_id INTEGER NOT NULL,
-          telegram_message_id INTEGER NOT NULL,
-          seq INTEGER NOT NULL,
-          channel_id TEXT NOT NULL,
-          thread_id TEXT,
-          PRIMARY KEY (telegram_chat_id, telegram_message_id)
-        );
-        CREATE INDEX IF NOT EXISTS idx_telegram_out_seq ON telegram_out(seq);
-      `);
-      const ins = this.db.prepare(
-        "INSERT INTO telegram_out (telegram_chat_id, telegram_message_id, seq, channel_id, thread_id) VALUES (?, ?, ?, ?, ?)",
-      );
-      for (const row of rows) {
-        ins.run(row.telegram_chat_id ?? 0, row.telegram_message_id, row.seq, row.channel_id, row.thread_id);
+      if (!this.hasColumn("channels", "project_id")) {
+        this.db.exec("ALTER TABLE channels ADD COLUMN project_id TEXT");
       }
-    }
 
-    if (
-      !this.hasColumn("telegram_topics", "telegram_chat_id") ||
-      /telegram_thread_id INTEGER NOT NULL UNIQUE/i.test(topicSql)
-    ) {
-      const rows = this.db.prepare("SELECT * FROM telegram_topics").all() as Array<{
-        channel_id: string;
-        telegram_thread_id: number;
-        telegram_chat_id?: number | null;
-      }>;
-      this.db.exec(`
-        DROP TABLE telegram_topics;
-        CREATE TABLE telegram_topics (
-          channel_id TEXT PRIMARY KEY,
-          telegram_thread_id INTEGER NOT NULL,
-          telegram_chat_id INTEGER
+      const holdSql = this.tableSql("telegram_hold");
+      if (
+        !this.hasColumn("telegram_hold", "telegram_chat_id") ||
+        /telegram_message_id INTEGER PRIMARY KEY/i.test(holdSql)
+      ) {
+        const holds = holdSql
+          ? (this.db.prepare("SELECT * FROM telegram_hold").all() as Array<{
+              telegram_message_id: number;
+              telegram_thread_id: number;
+              payload: string;
+              telegram_chat_id?: number | null;
+            }>)
+          : [];
+        this.db.exec(`
+          DROP TABLE IF EXISTS telegram_hold;
+          CREATE TABLE telegram_hold (
+            telegram_chat_id INTEGER NOT NULL,
+            telegram_message_id INTEGER NOT NULL,
+            telegram_thread_id INTEGER NOT NULL,
+            payload TEXT NOT NULL,
+            PRIMARY KEY (telegram_chat_id, telegram_message_id)
+          );
+        `);
+        const insertHold = this.db.prepare(
+          "INSERT INTO telegram_hold (telegram_chat_id, telegram_message_id, telegram_thread_id, payload) VALUES (?, ?, ?, ?)",
         );
-      `);
-      const ins = this.db.prepare(
-        "INSERT INTO telegram_topics (channel_id, telegram_thread_id, telegram_chat_id) VALUES (?, ?, ?)",
-      );
-      for (const row of rows) ins.run(row.channel_id, row.telegram_thread_id, row.telegram_chat_id ?? null);
-    }
+        for (const row of holds) {
+          insertHold.run(row.telegram_chat_id ?? 0, row.telegram_message_id, row.telegram_thread_id, row.payload);
+        }
+      }
 
-    const count = (this.db.prepare("SELECT COUNT(*) AS n FROM projects").get() as { n: number }).n;
-    if (count === 0) {
-      this.db.prepare("INSERT INTO projects (id, slug, name, worktree, created_at) VALUES (?, ?, ?, NULL, ?)").run(
-        crypto.randomUUID(),
-        DEFAULT_PROJECT_SLUG,
-        DEFAULT_PROJECT_NAME,
-        now(),
-      );
+      if (
+        !this.hasColumn("telegram_out", "telegram_chat_id") ||
+        /telegram_message_id INTEGER PRIMARY KEY/i.test(this.tableSql("telegram_out"))
+      ) {
+        const rows = this.db.prepare("SELECT * FROM telegram_out").all() as Array<{
+          telegram_message_id: number;
+          seq: number;
+          channel_id: string;
+          thread_id: string | null;
+          telegram_chat_id?: number | null;
+        }>;
+        this.db.exec(`
+          DROP TABLE telegram_out;
+          CREATE TABLE telegram_out (
+            telegram_chat_id INTEGER NOT NULL,
+            telegram_message_id INTEGER NOT NULL,
+            seq INTEGER NOT NULL,
+            channel_id TEXT NOT NULL,
+            thread_id TEXT,
+            PRIMARY KEY (telegram_chat_id, telegram_message_id)
+          );
+          CREATE INDEX IF NOT EXISTS idx_telegram_out_seq ON telegram_out(seq);
+        `);
+        const insertOut = this.db.prepare(
+          "INSERT INTO telegram_out (telegram_chat_id, telegram_message_id, seq, channel_id, thread_id) VALUES (?, ?, ?, ?, ?)",
+        );
+        for (const row of rows) {
+          insertOut.run(row.telegram_chat_id ?? 0, row.telegram_message_id, row.seq, row.channel_id, row.thread_id);
+        }
+      }
+
+      const topicSql = this.tableSql("telegram_topics");
+      if (
+        !this.hasColumn("telegram_topics", "telegram_chat_id") ||
+        /telegram_thread_id INTEGER NOT NULL UNIQUE/i.test(topicSql)
+      ) {
+        const rows = this.db.prepare("SELECT * FROM telegram_topics").all() as Array<{
+          channel_id: string;
+          telegram_thread_id: number;
+          telegram_chat_id?: number | null;
+        }>;
+        this.db.exec(`
+          DROP TABLE telegram_topics;
+          CREATE TABLE telegram_topics (
+            channel_id TEXT PRIMARY KEY,
+            telegram_thread_id INTEGER NOT NULL,
+            telegram_chat_id INTEGER
+          );
+        `);
+        const insertTopic = this.db.prepare(
+          "INSERT INTO telegram_topics (channel_id, telegram_thread_id, telegram_chat_id) VALUES (?, ?, ?)",
+        );
+        for (const row of rows) {
+          insertTopic.run(row.channel_id, row.telegram_thread_id, row.telegram_chat_id ?? null);
+        }
+      }
+
+      const count = (this.db.prepare("SELECT COUNT(*) AS n FROM projects").get() as { n: number }).n;
+      if (count === 0) {
+        this.db.prepare(
+          "INSERT INTO projects (id, slug, name, worktree, created_at) VALUES (?, ?, ?, NULL, ?)",
+        ).run(crypto.randomUUID(), DEFAULT_PROJECT_SLUG, DEFAULT_PROJECT_NAME, now());
+      }
+      const seed = this.db.prepare("SELECT * FROM projects ORDER BY created_at ASC LIMIT 1").get() as ProjectRow;
+      this.db.prepare("UPDATE agents SET project_id = ? WHERE project_id IS NULL AND id != ?").run(seed.id, HUMAN_ID);
+      this.db.prepare("UPDATE channels SET project_id = ? WHERE project_id IS NULL").run(seed.id);
+      if (version < 2) this.db.exec("PRAGMA user_version = 2");
+      this.db.exec("COMMIT");
+    } catch (err) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        // No open transaction.
+      }
+      throw err;
     }
-    const seed = this.db.prepare("SELECT * FROM projects ORDER BY created_at ASC LIMIT 1").get() as ProjectRow;
-    this.db.prepare("UPDATE agents SET project_id = ? WHERE project_id IS NULL AND id != ?").run(seed.id, HUMAN_ID);
-    this.db.prepare("UPDATE channels SET project_id = ? WHERE project_id IS NULL").run(seed.id);
   }
 
   listProjects(): Project[] {
@@ -448,17 +473,28 @@ export class Hive {
     const exists = this.db.prepare("SELECT id FROM projects WHERE slug = ?").get(slug);
     if (exists) throw new HiveError(409, `Project ${slug} already exists`);
     const id = crypto.randomUUID();
-    this.db.prepare("INSERT INTO projects (id, slug, name, worktree, created_at) VALUES (?, ?, ?, ?, ?)").run(
-      id,
-      slug,
-      name.slice(0, 80),
-      canonicalWorktree(input.worktree),
-      now(),
-    );
-    const project = this.getProject(id);
-    this.ensureBuiltinChannel(project, "general", "public", "Town square");
-    this.ensureBuiltinChannel(project, "brains", "brains", "Human and brains only");
-    this.addHumanToAllChannels();
+    try {
+      this.db.exec("BEGIN IMMEDIATE");
+      this.db.prepare("INSERT INTO projects (id, slug, name, worktree, created_at) VALUES (?, ?, ?, ?, ?)").run(
+        id,
+        slug,
+        name.slice(0, 80),
+        canonicalWorktree(input.worktree),
+        now(),
+      );
+      const project = this.getProject(id);
+      this.ensureBuiltinChannel(project, "general", "public", "Town square");
+      this.ensureBuiltinChannel(project, "brains", "brains", "Human and brains only");
+      this.addHumanToAllChannels();
+      this.db.exec("COMMIT");
+    } catch (err) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        // No open transaction.
+      }
+      throw err;
+    }
     return this.getProject(id);
   }
 
