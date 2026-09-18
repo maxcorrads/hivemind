@@ -310,10 +310,20 @@ test("reconnect converges open channel and thread after missed message reaction 
   let snap = snapshot([alpha], [a]);
   let channelData = payload(a, [root], [{ id: root.id, channelId: "a", status: "open" }], { [root.id]: 1 });
   let threadData = payload(a, [root, reply1], [{ id: root.id, channelId: "a", status: "open" }]);
+  let delayReconnectChannel = false;
+  const reconnectChannelRequested = deferred();
+  const releaseReconnectChannel = deferred();
 
   await installSnapshot(page, () => snap);
   await installMessages(page, async (route, channelId, threadId) => {
     expect(channelId).toBe("a");
+    if (!threadId && delayReconnectChannel) {
+      const stale = channelData;
+      reconnectChannelRequested.resolve();
+      await releaseReconnectChannel.promise;
+      await fulfillJson(route, stale);
+      return;
+    }
     await fulfillJson(route, threadId ? threadData : channelData);
   });
   const sockets = await installSocketHarness(page, (socket, index) => {
@@ -347,11 +357,28 @@ test("reconnect converges open channel and thread after missed message reaction 
     [{ id: root.id, channelId: "a", status: "done" }],
   );
 
+  delayReconnectChannel = true;
   await sockets[0]!.close({ code: 1001, reason: "controlled disconnect" });
   await page.clock.runFor(1_600);
   await expect.poll(() => sockets.length).toBe(2);
+  await reconnectChannelRequested.promise;
+
+  // Interleave a live event after reconnect but before the stale channel
+  // reconciliation response is released. The late snapshot must replay it
+  // instead of overwriting the event.
+  const liveDuringRefresh = message("live-during-refresh", 5, "a", "live during reconnect refresh");
+  channelData = payload(
+    a,
+    [updatedRoot, missed, liveDuringRefresh],
+    [{ id: root.id, channelId: "a", status: "done" }],
+    { [root.id]: 2 },
+  );
+  sockets[1]!.send(JSON.stringify({ type: "message", payload: liveDuringRefresh }));
+  await expect(page.getByText("live during reconnect refresh", { exact: true })).toBeVisible();
+  releaseReconnectChannel.resolve();
 
   await expect(page.getByText("missed while websocket was down", { exact: true })).toBeVisible();
+  await expect(page.getByText("live during reconnect refresh", { exact: true })).toBeVisible();
   await expect(page.getByText("thread reply missed while disconnected", { exact: true })).toBeVisible();
   await expect(page.locator("aside.thread select")).toHaveValue("done");
   await expect(page.locator("aside.thread .react").filter({ hasText: "✅" })).toHaveCount(1);
