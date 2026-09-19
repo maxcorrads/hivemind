@@ -43,6 +43,7 @@ export type TelegramSettings = TelegramHealth & {
 };
 
 export type ChannelPayload = {
+  snapshotSeq?: number;
   /** Client-only reading window. Live arrivals must not evict selected/older text. */
   historyThrough?: number;
   deferredLive?: boolean;

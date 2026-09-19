@@ -436,3 +436,40 @@ for (const threaded of [false, true]) {
     if (!threaded) assert.ok(refreshed.textContent!.includes(incoming.body));
   });
 }
+
+test("App reconnect snapshots cannot roll back live messages, reactions, reply counts or thread status", async t => {
+  const f = await fixture(t);
+  const rootMessage = f.hive.postMessage(f.human, { channel: f.channel.id, body: "Reconnect root" });
+  const before = f.hive.postMessage(f.human, { channel: f.channel.id, threadId: rootMessage.id, body: "Existing reply" });
+  window.happyDOM.setURL(`http://localhost/#/c/${f.channel.id}/t/${rootMessage.id}`);
+  await act(async () => f.root.render(createElement(App)));
+  const socket = SocketFixture.instances[0]!;
+  const read = api.messages.bind(api);
+  const captures: Array<() => void> = [];
+  t.mock.method(api, "messages", async (...args: Parameters<typeof read>) => {
+    const stale = await read(...args);
+    await new Promise<void>(resolve => captures.push(resolve));
+    return stale;
+  });
+  await act(async () => socket.emit("hello", undefined));
+  assert.equal(captures.length, 2, "reconnect must refresh both visible panes");
+  const live = f.hive.postMessage(f.human, { channel: f.channel.id, body: "Root during snapshot" });
+  const reply = f.hive.postMessage(f.human, { channel: f.channel.id, threadId: rootMessage.id, body: "Reply during snapshot" });
+  const changedRoot = f.hive.toggleReaction(f.human, rootMessage.seq, "✅").message;
+  const changedReply = f.hive.toggleReaction(f.human, before.seq, "✅").message;
+  const thread = f.hive.setThreadStatus(f.human, rootMessage.id, "done");
+  await act(async () => {
+    socket.emit("message", live); socket.emit("message", reply); socket.emit("message", reply);
+    socket.emit("reaction", { message: changedRoot }); socket.emit("reaction", { message: changedReply });
+    socket.emit("thread", thread);
+  });
+  await act(async () => { for (const release of captures) release(); });
+  assert.ok(f.host.querySelector("main.desk")!.textContent!.includes(live.body));
+  const aside = f.host.querySelector("aside.thread")!;
+  assert.ok(aside.textContent!.includes(reply.body));
+  assert.equal(aside.querySelector<HTMLSelectElement>("select")!.value, "done");
+  assert.equal(aside.querySelectorAll(".react").length, 2);
+  const roots = f.host.querySelector("main.desk")!;
+  const rootRow = Array.from(roots.querySelectorAll(".msg")).find(row => row.textContent!.includes(rootMessage.body))!;
+  assert.ok(rootRow.textContent!.includes("2 replies"), rootRow.textContent!);
+});
