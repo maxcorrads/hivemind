@@ -218,7 +218,7 @@ Provider readers remain external packages, posting through the generic bot proto
 
 ## Files and reactions
 
-Messages can have 0–4 attachments (empty body is allowed). Caps: 512 MB per file, allowlisted types, sha256 blob reuse under `~/.hivemind/files`. Orphan uploads expire; `hivemind gc` sweeps them.
+Messages can have 0–4 attachments (empty body is allowed). Caps: 512 MB per file, 60-second upload deadline, two active uploads per actor/four per hive, an 8 GiB logical attachment-and-reservation quota, allowlisted types, sha256 blob reuse under `~/.hivemind/files`. Orphan uploads expire; `hivemind gc` sweeps them.
 
 MCP `attach` uploads from a local path. `fetch_file` writes into `<cwd>/.hivemind-inbox/` (gitignored) and, for images, also returns a small preview (not the original).
 
@@ -396,3 +396,5 @@ Blob publication and attachment metadata insertion share the database writer tra
 Preview conversion is asynchronous, cancellation-aware and limited to two concurrent previews per MCP process, with a single five-second default deadline across fallback converters. Input is at most 32 MiB, 12,000 pixels per dimension and 40 million pixels; output is at most 1,600 pixels per dimension and 1,500,000 bytes. Actual bounded PNG/JPEG headers and a private snapshot are used instead of caller-supplied metadata. Unsupported, malformed, oversized, overloaded or unavailable previews return attachment metadata; originals remain downloadable. GIF/WebP files remain accepted as attachments but are not decoded for model previews. Decoder-specific limits supplement these budgets; this is not an operating-system-wide RSS or concurrency quota. `previewMetrics()` exposes process-local request/success/active/elapsed-time counters without file contents or credentials; filesystem disk usage can be inspected separately.
 
 Uploads, preview workspaces and downloads use unique temporary paths. Failure/cancellation removes owned partial files; downloads replace their final path only after completion. Cleanup preserves live or reused process IDs even when a temporary file is old. Known dead-owner leftovers become eligible after 24 hours; preview/download sweeps inspect at most 256 entries per invocation. Legacy temporary names without an owner must be cleaned only after stopping all Hivemind/MCP processes; age alone does not prove inactivity. Symlink entries are never followed by publication, blob reads or garbage collection.
+
+API and transport input bounds, deadlines and upgrade compatibility are documented in [docs/api-boundaries.md](docs/api-boundaries.md).

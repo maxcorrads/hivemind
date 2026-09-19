@@ -166,7 +166,7 @@ test("HTTP dropped response and received-but-unacknowledged response both replay
   assert.equal((await request("/api/agent/wait", { timeoutMs: 1 })).status, 409);
   assert.equal((await request("/api/agent/wait", { sessionId: 123 })).status, 400);
   for (const endpoint of ["/wait", "/inbox/session", "/inbox/ack"]) {
-    assert.equal((await request("/api/agent" + endpoint, null)).status, endpoint === "/wait" ? 409 : 400);
+    assert.equal((await request("/api/agent" + endpoint, null)).status, 400);
   }
   dropAck = true;
   await assert.rejects(request("/api/agent/inbox/ack", { sessionId: f.sessionId, deliveryId: pending.id }));

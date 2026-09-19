@@ -26,6 +26,7 @@ export function parseJoinArgs(argv: string[]): {
   if (as !== "worker" && as !== "brain") {
     throw new Error("join --as worker|brain  or  --as worker junior|mid|senior");
   }
+  if (seniority !== null && !SENIORITY.has(seniority as Seniority)) throw new Error("Invalid seniority");
   if (as === "worker" && (!seniority || !SENIORITY.has(seniority as Seniority))) {
     throw new Error("Workers need seniority junior|mid|senior");
   }

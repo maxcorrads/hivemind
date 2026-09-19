@@ -57,8 +57,8 @@ test("failed attachment sends are atomic and emit no recipient-visible side effe
   hive.bus.on("queued", (event) => queuedEvents.push(event));
 
   const rejected = [
-    { name: "missing attachment first", ids: ["missing-fixture", reusable.id], pattern: /Attachment not found/ },
-    { name: "missing attachment after valid", ids: [reusable.id, "missing-fixture"], pattern: /Attachment not found/ },
+    { name: "missing attachment first", ids: ["00000000-0000-4000-8000-000000000001", reusable.id], pattern: /Attachment not found/ },
+    { name: "missing attachment after valid", ids: [reusable.id, "00000000-0000-4000-8000-000000000001"], pattern: /Attachment not found/ },
     { name: "foreign-owned attachment", ids: [foreign.id], pattern: /not yours/ },
     { name: "already-bound attachment", ids: [bound.id], pattern: /already sent/ },
     { name: "duplicate attachment id", ids: [reusable.id, reusable.id], pattern: /Duplicate attachment/ },

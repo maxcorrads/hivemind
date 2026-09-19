@@ -80,9 +80,13 @@ function observeScans(hive: Hive) {
 
 for (const role of ["brain", "worker"] as const) test(`${role} compact mail preserves channel identity across label clipping and replay`, async t => {
   const f = fixture(t, role);
-  const channels = [199, 200, 201, 210, 1_000].map(length => f.hive.createChannel(f.writer.agent, {
-    name: "a".repeat(length), type: "private", memberNames: [f.reader.agent.name],
-  }));
+  const channels = [199, 200, 201, 210, 1_000].map(length => {
+    const ch = f.hive.createChannel(f.writer.agent, { name: `legacy-${length}`, type: "private", memberNames: [f.reader.agent.name] });
+    // Admission now rejects oversized NEW names; existing persisted names must
+    // still be represented/recoverable without losing canonical channel IDs.
+    f.hive.db.prepare("UPDATE channels SET name = ? WHERE id = ?").run("a".repeat(length), ch.id);
+    return f.hive.getChannel(ch.id);
+  });
   f.hive.db.prepare("UPDATE agents SET inbox_cursor = (SELECT MAX(seq) FROM messages) WHERE id = ?").run(f.reader.agent.id);
   for (const channel of channels) {
     const sent = f.hive.postMessage(f.writer.agent, { channel: channel.id, body: "Reply in this channel." });
@@ -109,9 +113,11 @@ test("compact digests retain distinct channel IDs when abbreviated labels coinci
   const f = fixture(t);
   const worker = f.hive.join({ role: "worker", seniority: "mid" });
   const prefix = "a".repeat(200);
-  const channels = [prefix, `${prefix}-one`, `${prefix}-two`].map(name => f.hive.createChannel(f.writer.agent, {
-    name, type: "private", memberNames: [f.reader.agent.name, worker.agent.name],
-  }));
+  const channels = [prefix, `${prefix}-one`, `${prefix}-two`].map((name, index) => {
+    const ch = f.hive.createChannel(f.writer.agent, { name: `legacy-digest-${index}`, type: "private", memberNames: [f.reader.agent.name, worker.agent.name] });
+    f.hive.db.prepare("UPDATE channels SET name = ? WHERE id = ?").run(name, ch.id);
+    return f.hive.getChannel(ch.id);
+  });
   f.hive.db.prepare("UPDATE agents SET inbox_cursor = (SELECT MAX(seq) FROM messages) WHERE id = ?").run(f.reader.agent.id);
   const expected = new Map<string, number[]>();
   for (const channel of channels) {

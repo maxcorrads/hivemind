@@ -14,7 +14,9 @@ for (const outcome of ["success", "interrupted", "length-mismatch", "cancelled",
     writeFileSync(dest, "previous");
     const controller = new AbortController();
     t.mock.method(globalThis, "fetch", async (_url: unknown, opts: RequestInit) => {
-      assert.equal(opts.signal, controller.signal);
+      assert.ok(opts.signal);
+      assert.equal(opts.signal.aborted, controller.signal.aborted);
+      controller.signal.addEventListener("abort", () => assert.equal(opts.signal!.aborted, true), { once: true });
       if (outcome === "http-error") return new Response("<html>denied</html>", { status: 403 });
       let count = 0;
       return new Response(new ReadableStream({

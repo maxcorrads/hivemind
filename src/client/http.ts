@@ -1,9 +1,10 @@
-import { createReadStream, createWriteStream, statSync } from "node:fs";
+import { Readable } from "node:stream";
+import { MAX_WAIT_MS, ORDINARY_REQUEST_MS, REQUEST_BODY_MS, safeInteger, validated } from "../shared/api-contract.ts";
+import { createReadStream, statSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { lstat, opendir, rename, unlink } from "node:fs/promises";
 import { FILE_MAX_BYTES } from "../shared/types.ts";
-import { Readable, Transform } from "node:stream";
-import { pipeline } from "node:stream/promises";
+import { streamToTemporaryFile } from "../shared/stream-file.ts";
 import path from "node:path";
 import { safeFileName } from "../server/files.ts";
 
@@ -37,7 +38,7 @@ async function errorFromResponse(res: Response): Promise<HttpError> {
   // Avoid reflecting arbitrary response bodies into logs/errors.
   let payload: unknown;
   try {
-    payload = await res.json();
+    payload = JSON.parse(await boundedText(res, 8192));
   } catch {
     // Best-effort structured details only.
   }
@@ -52,6 +53,7 @@ export async function agentRequest<T>(
   timeoutMs?: number,
   signal?: AbortSignal,
 ): Promise<T> {
+  const duration = validated(safeInteger.min(1).max(MAX_WAIT_MS + 10_000), timeoutMs ?? ORDINARY_REQUEST_MS);
   const headers: Record<string, string> = { "content-type": "application/json" };
   const t = token === null ? undefined : (token ?? currentToken());
   if (t) headers.authorization = `Bearer ${t}`;
@@ -59,9 +61,7 @@ export async function agentRequest<T>(
   const onAbort = () => ctrl.abort(signal?.reason);
   if (signal?.aborted) onAbort();
   else signal?.addEventListener("abort", onAbort, { once: true });
-  const timer = timeoutMs
-    ? setTimeout(() => ctrl.abort(new DOMException("Request timed out", "TimeoutError")), timeoutMs)
-    : undefined;
+  const timer = setTimeout(() => ctrl.abort(new DOMException("Request timed out", "TimeoutError")), duration);
   try {
     const res = await fetch(`${hiveUrl()}${pathname}`, {
       method,
@@ -93,6 +93,7 @@ export async function agentUpload<T>(
         "x-file-mime": mime,
       },
       body: new Uint8Array(bytes),
+      signal: AbortSignal.timeout(REQUEST_BODY_MS),
     }),
   );
 }
@@ -105,6 +106,7 @@ export async function agentUploadFile<T>(
   mime: string,
 ): Promise<T> {
   const { size } = statSync(filePath);
+  if (!Number.isSafeInteger(size) || size < 1 || size > FILE_MAX_BYTES) throw new Error("Invalid upload size");
   return parseJsonResponse(
     await fetch(`${hiveUrl()}${pathname}`, {
       method: "POST",
@@ -117,13 +119,31 @@ export async function agentUploadFile<T>(
       },
       body: Readable.toWeb(createReadStream(filePath)),
       duplex: "half",
+      signal: AbortSignal.timeout(REQUEST_BODY_MS),
     } as unknown as RequestInit),
   );
 }
 
+export async function boundedText(res: Response, maxBytes: number): Promise<string> {
+  if (!res.body) return "";
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let bytes = 0, text = "";
+  try {
+    for (;;) {
+      const item = await reader.read(); if (item.done) break;
+      bytes += item.value.byteLength;
+      if (bytes > maxBytes) throw new Error("Response exceeds client byte budget");
+      text += decoder.decode(item.value, { stream: true });
+    }
+    return text + decoder.decode();
+  } catch (error) { void reader.cancel().catch(() => {}); throw error; }
+  finally { reader.releaseLock(); }
+}
+
 async function parseJsonResponse<T>(res: Response): Promise<T> {
   if (!res.ok) throw await errorFromResponse(res);
-  const text = await res.text();
+  const text = await boundedText(res, 8 * 1024 * 1024);
   // Malformed successful JSON is a protocol error, not an HTTP retry classification.
   return (text ? JSON.parse(text) : {}) as T;
 }
@@ -159,7 +179,8 @@ export async function agentDownloadToFile(
   filePrefix: string,
   signal?: AbortSignal,
 ): Promise<{ path: string; mime: string; name: string; bytes: number }> {
-  signal?.throwIfAborted();
+  signal = signal ? AbortSignal.any([signal, AbortSignal.timeout(REQUEST_BODY_MS)]) : AbortSignal.timeout(REQUEST_BODY_MS);
+  signal.throwIfAborted();
   await cleanupDownloadTemps(destDir);
   const res = await fetch(`${hiveUrl()}${pathname}`, {
     headers: { authorization: `Bearer ${token}` }, signal,
@@ -169,20 +190,10 @@ export async function agentDownloadToFile(
   const name = fileNameFromDisposition(res.headers.get("content-disposition") ?? "");
   const dest = path.join(destDir, `${safeFileName(filePrefix)}-${safeFileName(name)}`);
   const tmp = path.join(destDir, `.download-${process.pid}-${randomUUID()}`);
-  let bytes = 0;
-  const meter = new Transform({
-    transform(chunk: Buffer, _encoding, callback) {
-      bytes += chunk.length;
-      callback(bytes > FILE_MAX_BYTES ? new Error("Download exceeds file limit") : null, chunk);
-    },
-  });
-  const input = Readable.fromWeb(res.body as import("node:stream/web").ReadableStream);
   let ownsTemp = false;
-  const output = createWriteStream(tmp, { flags: "wx", mode: 0o600 });
-  output.once("open", () => { ownsTemp = true; });
   try {
-    await pipeline(input, meter,
-      output, { signal });
+    const bytes = await streamToTemporaryFile(res.body, tmp, FILE_MAX_BYTES, signal);
+    ownsTemp = true;
     // Fetch may transparently decompress content; compare length only for identity encoding.
     const declared = res.headers.get("content-length");
     const encoding = res.headers.get("content-encoding");
@@ -199,10 +210,22 @@ export async function agentDownload(
   token: string,
 ): Promise<{ bytes: Buffer; mime: string; name: string }> {
   const res = await fetch(`${hiveUrl()}${pathname}`, {
-    headers: { authorization: `Bearer ${token}` },
+    headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(REQUEST_BODY_MS),
   });
   if (!res.ok) throw await errorFromResponse(res);
-  const bytes = Buffer.from(await res.arrayBuffer());
+  const chunks: Uint8Array[] = []; let total = 0;
+  if (res.body) {
+    const reader = res.body.getReader();
+    try {
+      for (;;) { const chunk = await reader.read(); if (chunk.done) break;
+        total += chunk.value.byteLength;
+        if (total > 8 * 1024 * 1024) throw new Error("Use streaming download for files larger than 8 MiB");
+        chunks.push(chunk.value);
+      }
+    } catch (error) { void reader.cancel().catch(() => {}); throw error; }
+    finally { reader.releaseLock(); }
+  }
+  const bytes = Buffer.concat(chunks, total);
   const mime = res.headers.get("content-type") || "application/octet-stream";
   return { bytes, mime, name: fileNameFromDisposition(res.headers.get("content-disposition") ?? "") };
 }

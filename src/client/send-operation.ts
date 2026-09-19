@@ -1,3 +1,4 @@
+import { sendInputSchema, validated } from "../shared/api-contract.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, statSync } from "node:fs";
 import path from "node:path";
@@ -21,6 +22,8 @@ async function fileFingerprint(file: NonNullable<Input["file"]>) {
 }
 /** A stable caller key resumes the immutable send, including uploaded attachment IDs. */
 export async function sendOperation(input: Input, token: string, key: string = randomUUID()) {
+  validated(sendInputSchema, { body: input.body, threadId: input.threadId, attachmentIds: input.attachmentIds,
+    eventType: input.eventType, recipients: input.recipients, requestId: key });
   requestIdSchema.parse(key);
   const scope = createHash("sha256").update(hiveUrl()).update("\0").update(token).digest("hex");
   let journal: SendJournal | undefined, nonce: string | undefined;

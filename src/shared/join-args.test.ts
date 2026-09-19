@@ -11,3 +11,8 @@ test("join accepts the worker seniority shortcuts", () => {
   assert.throws(() => parseJoinArgs(["--as", "worker"]), /seniority/);
   assert.equal(parseJoinArgs(["--as", "brain", "--project", "chapter"]).project, "chapter");
 });
+
+
+test("brain flags reject invalid explicitly supplied seniority instead of discarding it", () => {
+  assert.throws(() => parseJoinArgs(["--as", "brain", "--seniority", "administrator"]), /Invalid seniority/);
+});

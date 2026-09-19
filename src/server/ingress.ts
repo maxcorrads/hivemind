@@ -5,13 +5,13 @@ export const PLUGIN_REQUEST_BYTES = 128 * 1024;
 export const CREDENTIAL_JSON_BYTES = 4 * 1024;
 
 /** Bound actual streamed bytes, not just a caller-supplied Content-Length. */
-export async function readLimitedJson(request: Request, maxBytes: number, timeoutMs = 10_000): Promise<unknown> {
+export async function readLimitedJson(request: Request, maxBytes: number, timeoutMs = 10_000, allowEmpty = false): Promise<unknown> {
   const declared = request.headers.get("content-length");
   if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > maxBytes)) {
     void request.body?.cancel().catch(() => {});
     throw new HiveError(/^\d+$/.test(declared) ? 413 : 400, "Invalid or oversized JSON body");
   }
-  if (!request.body) throw new HiveError(400, "Expected JSON");
+  if (!request.body) { if (allowEmpty) return {}; throw new HiveError(400, "Expected JSON"); }
   const reader = request.body.getReader();
   let rejectStopped!: (error: HiveError) => void;
   const stopped = new Promise<never>((_resolve, reject) => { rejectStopped = reject; });
@@ -35,7 +35,7 @@ export async function readLimitedJson(request: Request, maxBytes: number, timeou
       text += decoder.decode(part.value, { stream: true });
     }
     text += decoder.decode();
-    return JSON.parse(text) as unknown;
+    return allowEmpty && text.length === 0 ? {} : JSON.parse(text) as unknown;
   } catch (error) {
     void reader.cancel().catch(() => {});
     if (error instanceof HiveError) throw error;

@@ -1,7 +1,9 @@
 import { Readable } from "node:stream";
 import { Hono } from "hono";
+import { requestJson, validateRequest } from "./api-input.ts";
+import { threadResponseSchema, uploadLength } from "../shared/api-contract.ts";
 import { cors } from "hono/cors";
-import { DEFAULT_WAIT_MS, HiveError, type Agent, type Seniority } from "../shared/types.ts";
+import { DEFAULT_WAIT_MS, HiveError, type Agent } from "../shared/types.ts";
 import { resolveUploadMime } from "../shared/mime.ts";
 import { standingOrders } from "../shared/standing-orders.ts";
 import { Hive, describeAgent } from "./hive.ts";
@@ -47,6 +49,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   ui.use("*", async (c, next) => {
     c.header("Cache-Control", "no-store");
     assertLocalHumanRequest(c.req.raw);
+    await validateRequest(c.req.raw);
     await next();
   });
   ui.get("/launch-context", (c) => {
@@ -137,7 +140,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   });
   ui.put("/telegram", async (c) => {
     hive.getAgent("human");
-    const body = await c.req.json();
+    const body = await requestJson(c.req.raw);
     const known = new Set(hive.listProjects().map((p) => p.slug));
     const projects: Record<string, { groupChatId: number }> = {};
     for (const [rawSlug, raw] of Object.entries(body.projects ?? {})) {
@@ -162,7 +165,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   });
   ui.post("/projects", async (c) => {
     const human = hive.getAgent("human");
-    const body = await c.req.json();
+    const body = await requestJson(c.req.raw);
     const project = hive.createProject(human, {
       name: String(body.name ?? ""),
       slug: body.slug,
@@ -172,7 +175,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   });
   ui.patch("/projects/:slug", async (c) => {
     const human = hive.getAgent("human");
-    const body = await c.req.json();
+    const body = await requestJson(c.req.raw);
     const project = hive.updateProject(human, c.req.param("slug"), {
       name: body.name,
       worktree: body.worktree,
@@ -206,7 +209,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   });
   ui.post("/mentions/seen", async (c) => {
     const human = hive.getAgent("human");
-    const body = await c.req.json().catch(() => ({}));
+    const body = await requestJson(c.req.raw);
     const project = body.project ? hive.getProjectBySlug(String(body.project)).id : undefined;
     hive.markMentionsSeen(human, project);
     const inbox = hive.mentionInbox(human, 30, undefined, project);
@@ -244,7 +247,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       hasOlder: listed.hasOlder,
       hasNewer: listed.hasNewer,
       cursors: listed.cursors,
-      threads: hive.threadsInChannel(ch.id),
+      threads: hive.threadsInChannel(ch.id).map(thread => threadResponseSchema.parse(thread)),
       replyCounts: hive.replyCounts(ch.id),
       // This synchronous snapshot includes replies, not just visible root rows.
       snapshotSeq: hive.latestSeq(ch.id),
@@ -253,7 +256,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   });
   ui.post("/channels", async (c) => {
     const human = hive.getAgent("human");
-    const body = await c.req.json();
+    const body = await requestJson(c.req.raw);
     const channel = hive.createChannel(human, {
       name: String(body.name ?? ""),
       type: body.type ?? "public",
@@ -266,7 +269,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   ui.get('/channels/:id/room', c => c.json(hive.rooms.view(hive.getAgent('human'), c.req.param('id'))));
   ui.get('/channels/:id/room/history', c => c.json({ history: hive.rooms.history(hive.getAgent('human'), c.req.param('id'), Number(c.req.query('before') ?? Number.MAX_SAFE_INTEGER)) }));
   ui.post('/channels/:id/room', async c => c.json(hive.rooms.event(hive.getAgent('human'), c.req.param('id'),
-    await c.req.json().catch(() => { throw new HiveError(400, 'Expected JSON'); }))));
+    await requestJson(c.req.raw))));
   ui.post("/projects/:id/bots", async (c) => {
     c.header('Cache-Control', 'no-store');
     const body = await readLimitedJson(c.req.raw, CREDENTIAL_JSON_BYTES);
@@ -283,7 +286,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   });
   ui.post("/channels/:id/messages", async (c) => {
     const human = hive.getAgent("human");
-    const body = await c.req.json();
+    const body = await requestJson(c.req.raw);
     const message = hive.postMessage(human, {
       channel: c.req.param("id"),
       body: String(body.body ?? ""),
@@ -301,45 +304,45 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const file = await hive.createFile(human, {
       name,
       mime: resolveUploadMime(c.req.header("x-file-mime"), name),
-      body: c.req.raw.body, signal: c.req.raw.signal,
+      body: c.req.raw.body, signal: c.req.raw.signal, declaredBytes: uploadLength(c.req.header("content-length") ?? null),
     });
     return c.json({ file });
   });
   ui.get("/files/:id", (c) => fileDownload(hive, hive.getAgent("human"), c.req.param("id")));
   ui.post("/messages/:seq/reactions", async (c) => {
     const human = hive.getAgent("human");
-    const body = await c.req.json();
+    const body = await requestJson(c.req.raw);
     const result = hive.setReaction(human, Number(c.req.param("seq")), String(body.emoji ?? ""), body.present);
     return c.json(result);
   });
   ui.post("/dms", async (c) => {
     const human = hive.getAgent("human");
-    const body = await c.req.json();
+    const body = await requestJson(c.req.raw);
     const channel = hive.openDm(human, String(body.name ?? ""));
     return c.json({ channel });
   });
   ui.post("/threads/:id/status", async (c) => {
     const human = hive.getAgent("human");
-    const body = await c.req.json();
+    const body = await requestJson(c.req.raw);
     const thread = hive.setThreadStatus(human, c.req.param("id"), body.status ?? null);
-    return c.json({ thread });
+    return c.json({ thread: threadResponseSchema.parse(thread) });
   });
   ui.post("/clear-context", async (c) => {
     const human = hive.getAgent("human");
-    const body = await c.req.json();
+    const body = await requestJson(c.req.raw);
     const message = hive.clearContext(human, String(body.name ?? ""));
     return c.json({ message });
   });
   ui.post("/channels/:id/invite", async (c) => {
     const human = hive.getAgent("human");
-    const body = await c.req.json();
+    const body = await requestJson(c.req.raw);
     const names = Array.isArray(body.names) ? body.names.map(String) : [String(body.name ?? "")];
     const channel = hive.invite(human, c.req.param("id"), names.filter(Boolean));
     return c.json({ channel });
   });
   ui.post("/read", async (c) => {
     const human = hive.getAgent("human");
-    const body = await c.req.json();
+    const body = await requestJson(c.req.raw);
     if (body.messageSeqs !== undefined) {
       hive.markMessagesRead(human, String(body.channelId), body.messageSeqs, body.threadId ?? null);
     } else {
@@ -356,12 +359,17 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
 
   const agent = new Hono();
   agent.use("*", async (c, next) => {
-    if (c.req.path.endsWith("/join") && c.req.method === "POST") return next();
+    if (c.req.path === "/api/agent/join" && c.req.method === "POST") { await validateRequest(c.req.raw); return next(); }
     const header = c.req.header("authorization") ?? "";
     const token = header.replace(/^Bearer\s+/i, "").trim();
     if (!token) throw new HiveError(401, "Missing token. Join first.");
-    const me = hive.agentByToken(token);
+    let me = hive.agentByToken(token);
     if (me.role !== "brain" && me.role !== "worker") throw new HiveError(403, "Only brains and workers use the agent API");
+    if (me.role !== "brain" && c.req.method === "POST" &&
+      (c.req.path === "/api/agent/tasks" || c.req.path === "/api/agent/channels" ||
+       c.req.path.endsWith("/invite") || c.req.path.endsWith("/clear-context"))) throw new HiveError(403, "This mutation requires a brain");
+    await validateRequest(c.req.raw);
+    me = hive.agentByToken(token); // Credentials may rotate while a JSON body is being read.
     hive.touch(me.id, true);
     c.set("me", me);
     c.set("token", token);
@@ -369,12 +377,12 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   });
 
   agent.post("/join", async (c) => {
-    const body = await c.req.json();
+    const body = await requestJson(c.req.raw);
     const header = c.req.header("authorization") ?? "";
     const bearer = header.replace(/^Bearer\s+/i, "").trim();
     const result = hive.join({
       role: body.role,
-      seniority: (body.seniority ?? null) as Seniority | null,
+      seniority: body.seniority ?? null,
       focus: body.focus ?? null,
       token: bearer || body.token || null,
       resumeName: body.resume || body.resumeName || null,
@@ -423,8 +431,8 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     return c.json(found);
   });
   agent.get('/subscriptions', c => c.json({ subscriptions: hive.notifications.list(c.get('me')) }));
-  agent.post('/subscriptions', async c => c.json({ subscriptions: hive.notifications.set(c.get('me'), await c.req.json()) }));
-  agent.post('/subscriptions/reset', async c => c.json({ subscriptions: hive.notifications.reset(c.get('me'), await c.req.json()) }));
+  agent.post('/subscriptions', async c => c.json({ subscriptions: hive.notifications.set(c.get('me'), await requestJson(c.req.raw)) }));
+  agent.post('/subscriptions/reset', async c => c.json({ subscriptions: hive.notifications.reset(c.get('me'), await requestJson(c.req.raw)) }));
   agent.get("/channels", (c) => {
     const me = c.get("me");
     const unread = c.req.query("unread") === "1" ? hive.unreadCounts(me) : undefined;
@@ -449,13 +457,13 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       hasOlder: listed.hasOlder,
       hasNewer: listed.hasNewer,
       cursors: listed.cursors,
-      threads: meta ? hive.threadsInChannel(ch.id) : undefined,
+      threads: meta ? hive.threadsInChannel(ch.id).map(thread => threadResponseSchema.parse(thread)) : undefined,
       replyCounts: meta ? hive.replyCounts(ch.id) : undefined,
     });
   });
   agent.post("/channels", async (c) => {
     const me = c.get("me");
-    const body = await c.req.json();
+    const body = await requestJson(c.req.raw);
     const channel = hive.createChannel(me, {
       name: String(body.name ?? ""),
       type: body.type ?? "public",
@@ -466,7 +474,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   });
   agent.post("/channels/:id/messages", async (c) => {
     const me = c.get("me");
-    const body = await c.req.json();
+    const body = await requestJson(c.req.raw);
     const message = hive.postMessage(me, {
       channel: c.req.param("id"),
       body: String(body.body ?? ""),
@@ -483,67 +491,68 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     return c.json({ message: hive.getVisibleMessage(me, Number(c.req.param("seq"))) });
   });
   agent.post("/messages/expand", async (c) => {
-    const body = await c.req.json().catch(() => { throw new HiveError(400, "Expected JSON"); });
+    const body = await requestJson(c.req.raw);
     return c.json(hive.expandDigest(c.get("me"), body));
   });
   agent.post('/tasks', async c => {
-    const body = await c.req.json().catch(() => { throw new HiveError(400, 'Expected JSON'); });
+    const body = await requestJson(c.req.raw);
     return c.json(hive.tasks.assign(c.get('me'), body));
   });
   agent.get('/channels/:id/room', c => c.json(hive.rooms.view(c.get('me'), c.req.param('id'), c.req.query('beforeTask'))));
   agent.get('/channels/:id/room/history', c => c.json({ history: hive.rooms.history(c.get('me'), c.req.param('id'), Number(c.req.query('before') ?? Number.MAX_SAFE_INTEGER)) }));
   agent.post('/channels/:id/room', async c => c.json(hive.rooms.event(c.get('me'), c.req.param('id'),
-    await c.req.json().catch(() => { throw new HiveError(400, 'Expected JSON'); }))));
+    await requestJson(c.req.raw))));
   agent.get('/tasks/:id', c => c.json({ task: hive.tasks.get(c.get('me'), c.req.param('id')) }));
   agent.post('/tasks/:id/events', async c => {
-    const body = await c.req.json().catch(() => { throw new HiveError(400, 'Expected JSON'); });
+    const body = await requestJson(c.req.raw);
     return c.json(hive.tasks.event(c.get('me'), c.req.param('id'), body));
   });
   agent.post("/files", async (c) => {
     const me = c.get("me");
     const name = c.req.header("x-file-name") || "file";
     const file = await hive.createFile(me, {
+      authorize: () => hive.agentByToken(c.get("token")),
       name,
       mime: resolveUploadMime(c.req.header("x-file-mime"), name),
-      body: c.req.raw.body, signal: c.req.raw.signal,
+      body: c.req.raw.body, signal: c.req.raw.signal, declaredBytes: uploadLength(c.req.header("content-length") ?? null),
     });
     return c.json({ file });
   });
   agent.get("/files/:id", (c) => fileDownload(hive, c.get("me"), c.req.param("id")));
   agent.post("/messages/:seq/reactions", async (c) => {
     const me = c.get("me");
-    const body = await c.req.json();
+    const body = await requestJson(c.req.raw);
     const result = hive.setReaction(me, Number(c.req.param("seq")), String(body.emoji ?? ""), body.present);
     return c.json({ ok: true, added: result.added, seq: result.message.seq });
   });
   agent.post("/dms", async (c) => {
     const me = c.get("me");
-    const body = await c.req.json();
+    const body = await requestJson(c.req.raw);
     const channel = hive.openDm(me, String(body.name ?? body.to ?? ""));
     return c.json({ channel });
   });
   agent.post("/threads/:id/status", async (c) => {
     const me = c.get("me");
-    const body = await c.req.json();
+    const body = await requestJson(c.req.raw);
     const thread = hive.setThreadStatus(me, c.req.param("id"), body.status ?? null);
-    return c.json({ thread });
+    return c.json({ thread: threadResponseSchema.parse(thread) });
   });
   agent.post("/channels/:id/invite", async (c) => {
     const me = c.get("me");
-    const body = await c.req.json();
+    const body = await requestJson(c.req.raw);
     const names = Array.isArray(body.names) ? body.names.map(String) : [String(body.name ?? body.member ?? "")];
     const channel = hive.invite(me, c.req.param("id"), names.filter(Boolean));
     return c.json({ channel });
   });
   agent.post("/clear-context", async (c) => {
     const me = c.get("me");
-    const body = await c.req.json();
+    const body = await requestJson(c.req.raw);
     const message = hive.clearContext(me, String(body.name ?? body.agent ?? ""));
     return c.json({ message });
   });
   agent.post("/wait", async (c) => {
     const me = c.get("me");
-    const body = await c.req.json().catch(() => ({}));
+    const body = await requestJson(c.req.raw);
     if (body?.sessionId == null) throw new HiveError(409,
       "HTTP 409: Inbox delivery protocol changed. Restart the Hivemind MCP client and rejoin. HTTP/CLI clients must open an inbox session and include sessionId in wait. Do not retry this wait unchanged.");
     if (typeof body.sessionId !== "string") throw new HiveError(400, "Expected sessionId");
@@ -555,12 +564,12 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     return c.json(result);
   });
   agent.post("/inbox/session", async (c) => {
-    const body = await c.req.json().catch(() => null);
+    const body = await requestJson(c.req.raw);
     if (typeof body?.sessionId !== "string") throw new HiveError(400, "Expected sessionId");
     return c.json({ sessionId: hive.openInboxSession(c.get("me"), body.sessionId) });
   });
   agent.post("/inbox/ack", async (c) => {
-    const body = await c.req.json().catch(() => null);
+    const body = await requestJson(c.req.raw);
     if (typeof body?.sessionId !== "string" || typeof body?.deliveryId !== "string") {
       throw new HiveError(400, "Expected sessionId and deliveryId");
     }
@@ -602,15 +611,16 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   });
   bot.get('/channels/:id/links', c => c.json({ links: hive.rooms.botLinks(c.get('me'), c.req.param('id')) }));
   bot.post('/channels/:id/links', async c => c.json({ link: hive.rooms.registerLink(c.get('me'), c.req.param('id'),
-    await c.req.json().catch(() => { throw new HiveError(400, 'Expected JSON'); })) }));
+    await requestJson(c.req.raw)) }));
   bot.post('/channels/:id/links/:link/status', async c => c.json({ link: hive.rooms.reportLink(c.get('me'), c.req.param('id'), c.req.param('link'),
-    await c.req.json().catch(() => { throw new HiveError(400, 'Expected JSON'); })) }));
+    await requestJson(c.req.raw)) }));
   bot.post("/files", async (c) => {
     const name = c.req.header("x-file-name") || "attachment";
     const file = await hive.createFile(c.get("me"), {
+      authorize: () => hive.agentByToken(c.get("token")),
       name,
       mime: resolveUploadMime(c.req.header("x-file-mime"), name),
-      body: c.req.raw.body,
+      body: c.req.raw.body, signal: c.req.raw.signal, declaredBytes: uploadLength(c.req.header("content-length") ?? null),
     });
     return c.json({ file }, 201);
   });
