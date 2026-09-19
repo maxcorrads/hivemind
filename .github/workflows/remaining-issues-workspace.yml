@@ -1,0 +1,33 @@
+name: Remaining issues workspace
+
+# Temporary read-only support; never merge into main.
+on:
+  push:
+    branches: [maintenance/remaining-issues-workspace-20260920]
+    paths: [.github/workflows/remaining-issues-workspace.yml]
+permissions:
+  contents: read
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Export committed objects only
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/workspace-export"
+          git bundle create "$RUNNER_TEMP/workspace-export/hivemind.bundle" --all
+          git bundle verify "$RUNNER_TEMP/workspace-export/hivemind.bundle"
+          cd "$RUNNER_TEMP/workspace-export"
+          sha256sum hivemind.bundle > SHA256SUMS
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: remaining-issues-workspace
+          path: ${{ runner.temp }}/workspace-export/
+          retention-days: 1
+          if-no-files-found: error
