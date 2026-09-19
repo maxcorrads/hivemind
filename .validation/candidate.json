@@ -1,8 +1,8 @@
 {
-  "base": "673aaf6c5b9396d462ddf2ffc86e5c0bd5d15cd9",
-  "tree": "132441d855078d16475e32abe192af02427472dc",
-  "branch": "validation/candidate-pr63-20260919-r2",
-  "patch": "pr630.patch.gz.b64",
-  "patch_sha256": "0c86c75114eb74e88ce8c7e65437c3f7d96631a18293493590e40d0ca7eea7bb",
-  "message": "fix(realtime): preserve historical reading windows and selected text"
+  "base": "e4d9deff4212155ccd7f391f7cc78dafacb0add9",
+  "tree": "d0857ba83470607162f85bb8f1583cb5e9879cb8",
+  "branch": "validation/candidate-pr63-20260919-r3",
+  "patch": "pr631.patch.gz.b64",
+  "patch_sha256": "65cdf1f369486e672cdf49222e450ae70b1da43fbc2feec87e321a82b7b42326",
+  "message": "fix(realtime): reconcile in-flight snapshots with live updates"
 }
