@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +16,7 @@ async function httpJson(
 ) {
   const response = await fetch(`${base}${url}`, {
     method,
+    signal: AbortSignal.timeout(5000),
     headers: {
       authorization: `Bearer ${token}`,
       "content-type": "application/json",
@@ -27,9 +29,14 @@ async function httpJson(
   };
 }
 
-test("project isolation covers channels, history, search, DMs, waits, mentions, threads, and HTTP", async (t) => {
+test("project isolation covers channels, history, search, DMs, waits, mentions, threads, and HTTP", { timeout: 15_000 }, async (t) => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-project-isolation-contract-"));
   const hive = new Hive(path.join(dir, "hive.db"));
+  let started: ReturnType<typeof startServer> | undefined;
+  t.after(async () => {
+    try { await started?.shutdown(); }
+    finally { hive.db.close(); rmSync(dir, { recursive: true, force: true }); }
+  });
   const human = hive.getAgent("human");
   hive.createProject(human, { name: "Beta", slug: "beta" });
 
@@ -101,17 +108,19 @@ test("project isolation covers channels, history, search, DMs, waits, mentions, 
     channel: betaGeneral.id,
     body: `literal @${alphaWorker.agent.name} must not cross projects`,
   });
-  const alphaIdle = await hive.wait(alphaWorker.agent, 30, undefined, { sessionId: "alpha-isolation" });
+  const alphaSession = hive.openInboxSession(alphaWorker.agent, randomUUID());
+  const betaSession = hive.openInboxSession(betaWorker.agent, randomUUID());
+  const alphaIdle = await hive.wait(alphaWorker.agent, 30, t.signal, { sessionId: alphaSession });
   assert.equal(alphaIdle.idle, true);
 
   const betaMention = hive.postMessage(betaBrain.agent, {
     channel: betaGeneral.id,
     body: `please handle @${betaWorker.agent.name}`,
   });
-  const betaMail = await hive.wait(betaWorker.agent, 300, undefined, { sessionId: "beta-isolation" });
-  assert.ok(betaMail.deliveryId);
+  const betaMail = await hive.wait(betaWorker.agent, 300, t.signal, { sessionId: betaSession });
+  assert.ok(betaMail.delivery);
   assert.ok(betaMail.mentions.some((message) => message.id === betaMention.id));
-  hive.ackDelivery(betaWorker.agent, betaMail.deliveryId!, "beta-isolation");
+  hive.acknowledgeInbox(betaWorker.agent, betaSession, betaMail.delivery.id);
 
   const betaThread = hive.threadsInChannel(betaGeneral.id).find((thread) => thread.id === betaRoot.id);
   assert.ok(betaThread);
@@ -122,17 +131,9 @@ test("project isolation covers channels, history, search, DMs, waits, mentions, 
   const unchanged = hive.threadsInChannel(betaGeneral.id).find((thread) => thread.id === betaRoot.id);
   assert.equal(unchanged?.status, "open");
 
-  const started = startServer({ port: 0, hive, telegram: false });
+  started = startServer({ port: 0, hive, telegram: false });
   const port = await started.ready;
   const base = `http://127.0.0.1:${port}`;
-
-  t.after(async () => {
-    const closed = new Promise<void>((resolve) => started.server.once("close", () => resolve()));
-    started.shutdown();
-    await closed;
-    hive.db.close();
-    rmSync(dir, { recursive: true, force: true });
-  });
 
   const channelsHttp = await httpJson(base, "GET", "/api/agent/channels", alphaBrain.token);
   assert.equal(channelsHttp.status, 200);

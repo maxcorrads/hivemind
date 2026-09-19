@@ -10,12 +10,21 @@ export default defineConfig({
     host: "127.0.0.1",
     port: 7421,
     strictPort: true,
+    headers: {
+      "X-Frame-Options": "DENY",
+      "Content-Security-Policy": "frame-ancestors 'none'",
+    },
     proxy: {
-      "/api": hive,
-      "/ws": { target: hive.replace("http", "ws"), ws: true },
+      // Preserve the browser authority; never rewrite WS Origin to manufacture
+      // trust. The backend uses its socket port (not Host) for cookie names.
+      // The separator is essential: /api.ts is a browser module, not an API.
+      "^/api(?:[/?]|$)": { target: hive, changeOrigin: false },
+      "/ws": { target: hive.replace("http", "ws"), ws: true, changeOrigin: false },
     },
   },
   build: {
+    // Preserve Vite 7's baseline rather than silently dropping older browsers.
+    target: ["chrome107", "edge107", "firefox104", "safari16"],
     outDir: "../dist/web",
     emptyOutDir: true,
   },

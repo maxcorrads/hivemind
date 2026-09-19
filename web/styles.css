@@ -19,6 +19,28 @@
   --mono: "IBM Plex Mono", ui-monospace, monospace;
 }
 
+.bot-setup p { margin: 8px 0; }
+.bot-setup input { display: block; width: 100%; }
+.bot-setup small, .bot-origin { color: var(--mute); font-size: 0.8em; }
+.bot-setup button, .bot-origin button { color: var(--moss); padding: 4px 0; }
+.bot-origin { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 6px 0; }
+.bot-origin a { color: var(--moss); }
+.avatar.role-bot { background: var(--dusk); }
+.bot-h { display: flex; align-items: center; gap: 0.25rem; }
+.bot-h > span { margin-right: auto; }
+
+.plugin-card { margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); }
+.plugin-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.plugin-card p { margin: 8px 0; font-size: 0.9em; }
+.plugin-card small { color: var(--mute); font-size: 0.8em; }
+.plugin-card code { overflow-wrap: anywhere; }
+.plugin-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin: 16px 0; }
+.plugin-fields label { display: flex; flex-direction: column; gap: 5px; }
+.plugin-fields label.check { flex-direction: row; align-items: center; }
+.plugin-fields input, .plugin-fields select, .plugin-fields textarea { width: 100%; padding: 8px; }
+.plugin-card input[type=checkbox] { width: auto; }
+.plugin-fields textarea { resize: vertical; min-height: 75px; border: 1px solid var(--line); border-radius: 6px; background: var(--desk); }
+
 html.dark {
   --pollen: #3f3c14;
   --dusk: #0d1520;
@@ -520,6 +542,9 @@ html.dark .send { background: var(--wax); color: #1b2017; }
 .person-main:hover { background: rgba(255, 255, 255, 0.28); }
 html.dark .person-main:hover { background: rgba(255, 255, 255, 0.08); }
 .person-main:disabled { cursor: default; }
+.person-details { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.person-label { display: flex; align-items: center; gap: 0.4rem; }
+.person-details .focus { white-space: nowrap; }
 .dot {
   width: 0.42rem;
   height: 0.42rem;
@@ -599,11 +624,12 @@ html.dark .queue-badge { color: #1b2017; }
   background: rgba(184, 146, 42, 0.16);
   border-color: transparent;
 }
-.inbox-item {
+.inbox-item, .search-hit-open {
   display: block;
   width: 100%;
   text-align: left;
 }
+.inbox-item > .bot-origin { padding: 0 1.2rem 0.7rem 3.7rem; }
 .inbox-item:hover { background: rgba(27, 32, 23, 0.03); }
 html.dark .inbox-item:hover { background: rgba(255, 255, 255, 0.03); }
 .inbox-item .msg { padding-bottom: 0.2rem; }
@@ -810,3 +836,19 @@ html.dark .primary { background: var(--wax); color: #1b2017; }
     animation: none !important;
   }
 }
+.inbox-receipt { display: flex; flex-wrap: wrap; gap: 2px 8px; font-size: 10px; opacity: .8; }
+/* Versioned task facts are separate from ordinary thread status and message prose. */
+.task-card { margin: 12px; padding: 14px; border: 1px solid var(--line, #55615e); border-radius: 10px; overflow-wrap: anywhere; font-size: 13px; }
+.task-card header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
+.task-card p { margin: 9px 0; white-space: pre-wrap; }
+.task-card summary { cursor: pointer; }
+.task-card small { opacity: .75; }
+.room-panel { border: 1px solid var(--border, #7775); border-radius: 10px; padding: 16px; margin-bottom: 18px; overflow-wrap: anywhere; }
+.room-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.room-panel p { white-space: pre-wrap; }
+.room-panel form { display: grid; gap: 10px; margin-top: 12px; }
+.room-panel form label { display: grid; gap: 5px; }
+.room-panel textarea { min-height: 70px; width: 100%; }
+.room-panel input[type=checkbox] { width: auto; }
+.room-panel button { margin-top: 8px; }
+.room-panel [role=alert] { color: #d85b4b; }

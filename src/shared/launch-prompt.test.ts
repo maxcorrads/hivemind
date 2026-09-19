@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
   ADOPT_UNTRUSTED,
@@ -28,6 +29,20 @@ const base = {
   adoptUntrusted: true,
 };
 
+test("README copyable prompts confirm receipts and stop on permanent session/protocol errors", () => {
+  const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
+  const section = readme.split("## Prompts (English)")[1]!.split("### After they are online")[0]!;
+  const prompts = [...section.matchAll(/```\n([\s\S]*?)\n```/g)].map(match => match[1]!);
+  assert.equal(prompts.length, 3);
+  for (const prompt of prompts) {
+    assert.match(prompt, /When wait returns delivery\.id, call ack_delivery with that exact ID before acting/);
+    assert.match(prompt, /It confirms receipt, not acceptance or completion of a task/);
+    assert.match(prompt, /inbox session was superseded, stop waiting and acting on its mail; rejoin only when explicitly asked/);
+    assert.match(prompt, /On a protocol-upgrade error, stop; the MCP client must be restarted before rejoining/);
+    assert.doesNotMatch(prompt, /If wait errors, is cancelled/);
+  }
+});
+
 test("launch prompt adopts untrusted hive mail first", () => {
   const text = buildLaunchPrompt(base);
   assert.ok(text.startsWith(ADOPT_UNTRUSTED));
@@ -38,6 +53,9 @@ test("launch prompt adopts untrusted hive mail first", () => {
   assert.equal(text.includes("Do not call wait in a loop"), false);
   assert.match(text, /or search while waiting/);
   assert.match(text, /coordinate workers/);
+  assert.match(text, /call ack_delivery with that exact ID before acting/);
+  assert.match(text, /inbox session was superseded, stop waiting/);
+  assert.match(text, /On a protocol-upgrade error, stop; the MCP client must be restarted before rejoining/);
 });
 
 test("resume worker keeps identity and skips first-time standingOrders", () => {
@@ -111,17 +129,59 @@ test("Codex rename falls back to the assigned name when the hive title is blank"
   assert.match(fresh, /\/rename with that assigned name/);
 });
 
-test("one block cds then runs the alias with a heredoc prompt", () => {
+test("one block cds then runs the alias with a literal prompt", () => {
   const block = buildLaunchBlock({ ...base, software: "codex-tw" });
-  assert.ok(block.startsWith("cd -- '/tmp/hive-work' && codex-tw \"$(cat <<'HIVEMIND_PROMPT'"));
-  assert.match(block, /HIVEMIND_PROMPT\n\)"\n$/);
+  assert.equal(block, "cd -- '/tmp/hive-work' && codex-tw " +
+    shSingleQuote(buildLaunchPrompt({ ...base, software: "codex-tw" })) + "\n");
   assert.ok(block.includes(ADOPT_UNTRUSTED));
 });
 
 test("cd toggle off skips the worktree", () => {
   const block = buildLaunchBlock({ ...base, cdWorktree: false, software: "claude" });
-  assert.ok(block.startsWith("claude \"$(cat <<'HIVEMIND_PROMPT'"));
+  assert.ok(block.startsWith("claude '"));
   assert.equal(block.includes("cd "), false);
+});
+
+test("Claude launch requests eager loading only for Hivemind without changing permissions", () => {
+  const binding = {
+    command: "/fixture/node",
+    args: ["/fixture/it's hive/cli.ts", "mcp"],
+    env: { HIVEMIND_URL: "http://127.0.0.1:7420", HIVEMIND_TOKEN: "" },
+  };
+  const original = structuredClone(binding);
+  for (const software of ["claude", "claude-company"]) {
+    for (const role of ["brain", "worker"] as const) {
+      for (const resume of [false, true]) {
+        const input = { ...base, software, role, seniority: "senior" as const,
+          resume, resumeName: "Fixture", cdWorktree: false, hivemindMcp: binding };
+        const block = buildLaunchBlock(input);
+        // Capture argv using a shell function, never launch the real model.
+        const capture = `function ${software}() { ${shSingleQuote(process.execPath)} -e 'console.log(JSON.stringify(process.argv.slice(1)))' -- "$@"; }\n`;
+        const result = spawnSync("zsh", ["-f"], { input: capture + block, encoding: "utf8" });
+        assert.equal(result.status, 0, result.stderr);
+        const argv = JSON.parse(result.stdout) as string[];
+        assert.deepEqual(argv.slice(0, 3), ["--mcp-config", JSON.stringify({
+          mcpServers: { hivemind: { ...binding, alwaysLoad: true } },
+        }), "--"]);
+        assert.equal(argv[3], buildLaunchPrompt(input));
+        assert.equal(argv.length, 4);
+        assert.doesNotMatch(block, /--strict-mcp-config|--permission-mode|skip-permissions|MCP_CONNECTION_NONBLOCKING/);
+      }
+    }
+  }
+  assert.deepEqual(binding, original);
+  for (const software of ["codex", "agent", "opencode"]) {
+    assert.doesNotMatch(buildLaunchBlock({ ...base, software, hivemindMcp: binding }), /alwaysLoad|--mcp-config/);
+  }
+});
+
+test("launch prompt requires a real join result and stops if tools are unavailable", () => {
+  for (const resume of [false, true]) {
+    const prompt = buildLaunchPrompt({ ...base, resume, resumeName: "Fixture" });
+    assert.match(prompt, /Use a real tool call; never simulate a tool result or invent an agent name/);
+    assert.match(prompt, /use the host's available tool discovery to load Hivemind's tools first/);
+    assert.match(prompt, /If join is unavailable or fails, report the startup failure and stop/);
+  }
 });
 
 test("missing worktree skips cd even when the toggle is on", () => {
@@ -144,7 +204,7 @@ test("empty software becomes codex; flags stay optional", () => {
   assert.equal(sanitizeExtraFlags(" --full-auto "), "--full-auto");
   assert.throws(() => sanitizeExtraFlags("--foo; bar"), /metacharacters/);
   const block = buildLaunchBlock({ ...base, extraFlags: "--full-auto" });
-  assert.match(block, /codex --full-auto "\$\(cat/);
+  assert.match(block, /codex --full-auto '/);
 });
 
 test("model and effort become software-aware flags", () => {
