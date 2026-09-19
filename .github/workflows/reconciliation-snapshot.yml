@@ -1,36 +1,42 @@
 name: Reconciliation snapshot
 
 on:
-  pull_request:
-    branches: [main]
-    types: [opened, synchronize, reopened]
+  push:
+    branches: [chore/pr-reconciliation-snapshot-20260919]
 
 permissions:
   contents: read
 
 jobs:
-  snapshot:
-    if: github.head_ref == 'chore/pr-reconciliation-snapshot-20260919'
-    runs-on: macos-latest
-    timeout-minutes: 5
+  dependencies:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Checkout committed repository history
+      - name: Checkout the reviewed main baseline
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          fetch-depth: 0
+          ref: 6bee1172c99a78acd7de9f1aa4ab0808f25b7dc0
           persist-credentials: false
-      - name: Export committed objects only
-        shell: bash
+      - name: Minimum supported Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22.13.0'
+      - name: Install validation tools without changing repository files
         run: |
           set -euo pipefail
-          mkdir -p snapshot
-          git bundle create snapshot/hivemind.bundle --all
-          git bundle verify snapshot/hivemind.bundle
-          shasum -a 256 snapshot/hivemind.bundle > snapshot/SHA256SUMS
-      - name: Retain temporary review snapshot
+          npm ci
+          npm install --no-save --package-lock=false @playwright/test@1.63.0
+          mkdir -p validation-runtime
+          cp "$(command -v node)" validation-runtime/node
+          cp package-lock.json validation-runtime/baseline-package-lock.json
+          npm ls --all --json > validation-runtime/installed.json || test "$?" = 1
+          tar -czf validation-runtime/dependencies.tar.gz node_modules
+          cd validation-runtime
+          sha256sum node dependencies.tar.gz > SHA256SUMS
+      - name: Export temporary runtime for local tests
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: reconciliation-snapshot
-          path: snapshot/
+          name: reconciliation-validation-runtime
+          path: validation-runtime/
           retention-days: 1
           if-no-files-found: error
