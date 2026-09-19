@@ -3,7 +3,7 @@ import { test } from "node:test";
 import type { Message } from "../src/shared/types.ts";
 import { LIVE_MESSAGE_WINDOW, retainNewest } from "../src/shared/realtime.ts";
 import type { ChannelPayload } from "./api.ts";
-import { boundLivePane } from "./pane-window.ts";
+import { boundLivePane, holdLivePane } from "./pane-window.ts";
 import { beginThreadLoad, receiveThreadMessage, receiveThreadSnapshot } from "./thread-state.ts";
 
 function message(seq: number, threadId: string | null = "root"): Message {
@@ -59,13 +59,33 @@ test("10,000 thread events during a blocked HTTP load have bounded pending/live 
   assert.equal(view.pane?.messages.at(-1)?.seq, 11_000);
 });
 
-test("explicit earlier history is not discarded on a no-op page and next live event bounds growth", () => {
+test("explicit history keeps its reading anchor while live arrivals stay on the server", () => {
   let view = beginThreadLoad(null, "channel", "root", 1);
   view = receiveThreadSnapshot(view, "root", pane([message(1), message(2)]), 1)!;
   const original = view.pane!;
   assert.equal(boundLivePane(original), original);
-  view = { ...view, pane: pane(Array.from({ length: 600 }, (_, i) => message(i + 1))) };
-  view = receiveThreadMessage(view, message(601));
-  assert.equal(view.pane?.messages.length, LIVE_MESSAGE_WINDOW);
-  assert.equal(view.pane?.hasOlder, true);
+  view = { ...view, pane: holdLivePane(pane(Array.from({ length: 600 }, (_, i) => message(i + 1)))) };
+  const anchor = view.pane!.messages[39];
+  for (let seq = 601; seq <= 10_600; seq++) view = receiveThreadMessage(view, message(seq));
+  assert.equal(view.pane?.messages.length, 600);
+  assert.equal(view.pane?.messages[39], anchor);
+  assert.equal(view.pane?.deferredLive, true);
+  assert.equal(view.pendingMessages.length, 0);
+  view = beginThreadLoad(view, "channel", "root", 2);
+  view = receiveThreadSnapshot(view, "root", pane([message(1), message(10_600)]), 2)!;
+  assert.equal(view.pane?.messages.length, 600);
+  assert.equal(view.pane?.messages[39], anchor);
+  assert.equal(view.pane?.historyThrough, 600);
 });
+
+for (const threadId of [null, "root"]) {
+  test(`reading 1..580 preserves seq 40 when 581 arrives (thread=${threadId})`, () => {
+    const history = holdLivePane(pane(Array.from({ length: 580 }, (_, i) => message(i + 1, threadId)), threadId));
+    const anchor = history.messages[39];
+    const updated = boundLivePane({ ...history, messages: [...history.messages, message(581, threadId)] });
+    assert.equal(updated.messages.length, 580);
+    assert.equal(updated.messages[39], anchor);
+    assert.equal(updated.deferredLive, true);
+    assert.equal(updated.cursors?.after, history.cursors?.after);
+  });
+}
