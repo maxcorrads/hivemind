@@ -17,7 +17,7 @@ import { holdLivePane, isReadingHistory } from "./pane-window.ts";
 import { TaskCard } from './TaskCard.tsx';
 import { RoomPanel } from './RoomPanel.tsx';
 import type { TaskSnapshot } from '../src/shared/tasks.ts';
-import { selectThread, beginThreadLoad, failThreadLoad, receiveThreadMessage, receiveThreadTask, receiveThreadSnapshot, type ThreadView } from './thread-state.ts';
+import { selectThread, beginThreadLoad, failThreadLoad, receiveThreadMessage, receiveThreadTask, receiveThreadSnapshot, receiveThreadStatus, type ThreadView } from './thread-state.ts';
 
 type InboxBox = "unread" | "all";
 
@@ -373,6 +373,8 @@ export function App() {
       if (ev.type === "thread") {
         const thread = ev.payload as Thread;
         recordChannelThread(channelJournal.current, thread);
+        if (viewingThread(thread.channelId, thread.id))
+          setThreadView(view => receiveThreadStatus(selectThread(view, thread.channelId, thread.id), thread));
         setPane((p) => {
           if (!p || p.channel.id !== thread.channelId || !p.messages.some((message) => message.id === thread.id)) return p;
           return { ...p, threads: upsertById(p.threads, thread) };
