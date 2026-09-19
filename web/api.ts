@@ -43,6 +43,10 @@ export type TelegramSettings = TelegramHealth & {
 };
 
 export type ChannelPayload = {
+  /** Server sequence fence, including replies omitted from this page. */
+  snapshotSeq?: number;
+  /** Client-only per-root live reply deduplication, pruned with visible roots. */
+  replySeqs?: Record<string, number>;
   /** Client-only reading window. Live arrivals must not evict selected/older text. */
   historyThrough?: number;
   deferredLive?: boolean;

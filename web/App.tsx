@@ -1,3 +1,4 @@
+import { beginChannelJournal, recordChannelMessage, recordChannelThread, applyChannelMessage, reconcileChannelSnapshot, type ChannelJournal } from "./channel-state.ts";
 import { newerTelegramHealth, telegramDegraded, type TelegramHealth } from "./telegram-health.ts";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import type { Agent, Channel, Message, SearchHit, Thread, ThreadStatus, InboxStatus } from "../src/shared/types.ts";
@@ -12,7 +13,7 @@ import { loadMailLog, mergeMailLog, saveMailLog } from "./mail-log.ts";
 import type { MentionPage, ReadSnapshot } from "../src/shared/read-state.ts";
 import { createReadFence, createReadRefresh, createReceiptQueue, createRequestGate, readFields } from "../src/shared/read-client.ts";
 import { renderBody } from "./markdown.tsx";
-import { boundLivePane, holdLivePane, isReadingHistory } from "./pane-window.ts";
+import { holdLivePane, isReadingHistory } from "./pane-window.ts";
 import { TaskCard } from './TaskCard.tsx';
 import { RoomPanel } from './RoomPanel.tsx';
 import type { TaskSnapshot } from '../src/shared/tasks.ts';
@@ -41,31 +42,6 @@ function parseHash(): Sel {
     return { kind: "channel", id: decodeURIComponent(parts[1]), thread };
   }
   return { kind: "channel", id: "general" };
-}
-
-function patchPane(pane: ChannelPayload | null, msg: Message, viewingThread: string | null = null): ChannelPayload | null {
-  if (!pane || pane.channel.id !== msg.channelId || pane.threadId !== viewingThread) return pane;
-  if (pane.messages.some((m) => m.id === msg.id)) return pane;
-  if (viewingThread) {
-    if (msg.threadId === viewingThread || msg.id === viewingThread) {
-      return boundLivePane({ ...pane, messages: [...pane.messages, msg] });
-    }
-    return pane;
-  }
-  if (msg.threadId) {
-    if (!pane.messages.some((root) => root.id === msg.threadId)) return pane;
-    return {
-      ...pane,
-      replyCounts: { ...pane.replyCounts, [msg.threadId]: (pane.replyCounts[msg.threadId] ?? 0) + 1 },
-    };
-  }
-  return boundLivePane({ ...pane, messages: [...pane.messages, msg] });
-}
-
-function replaceMessage(pane: ChannelPayload | null, msg: Message): ChannelPayload | null {
-  if (!pane) return pane;
-  if (!pane.messages.some((m) => m.id === msg.id)) return pane;
-  return { ...pane, messages: pane.messages.map((m) => (m.id === msg.id ? msg : m)) };
 }
 
 function upsertById<T extends { id: string }>(list: T[], item: T): T[] {
@@ -222,6 +198,7 @@ export function App() {
 
   const readFence = useRef(createReadFence());
   const channelLoad = useRef(createRequestGate());
+  const channelJournal = useRef<ChannelJournal | null>(null);
   const threadLoad = useRef(createRequestGate());
   const snapshotLoad = useRef(createRequestGate());
   const inboxLoad = useRef(createRequestGate());
@@ -241,6 +218,7 @@ export function App() {
     const nextThread = next.kind === "channel" ? next.thread ?? null : null;
     if (priorChannel !== nextChannel) {
       channelLoad.current.cancel();
+      channelJournal.current = null;
       channelReads.current?.reset();
     }
     if (priorChannel !== nextChannel || threadIdRef.current !== nextThread) {
@@ -310,21 +288,33 @@ export function App() {
     return next;
   }, [acceptRead]);
 
-  const loadChannel = useCallback(async (id: string) => {
+  const loadChannel = useCallback(async (id: string, before?: number) => {
     const load = channelLoad.current.begin();
-    const data = await api.messages(id, null, undefined, load.signal);
-    if (!load.valid() || selRef.current.kind !== "channel" || selRef.current.id !== id) return;
-    setPane((current) => {
-      if (current?.channel.id !== id || current.historyThrough === undefined) return data;
-      const refreshed = new Map(data.messages.map((message) => [message.id, message]));
-      return { ...current, deferredLive: current.deferredLive || data.messages.some((message) => message.seq > current.historyThrough!),
-        messages: current.messages.map((message) => refreshed.get(message.id) ?? message) };
-    });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const journal = beginChannelJournal(id);
+      channelJournal.current = journal;
+      try {
+        const data = await api.messages(id, null, before, load.signal);
+        if (!load.valid() || selRef.current.kind !== "channel" || selRef.current.id !== id) return;
+        if (journal.overflow) {
+          if (attempt < 2) continue;
+          throw new Error("Live traffic overtook the channel refresh. Reload the page to retry.");
+        }
+        setPane((current) => reconcileChannelSnapshot(current, data, journal, before !== undefined));
+        return;
+      } catch (error) {
+        if (!load.valid() || selRef.current.kind !== "channel" || selRef.current.id !== id) return;
+        throw error;
+      } finally {
+        if (channelJournal.current === journal) channelJournal.current = null;
+      }
+    }
   }, []);
 
   const resetReadConnection = useCallback(() => {
     readFence.current.reset();
     channelLoad.current.cancel();
+    channelJournal.current = null;
     threadLoad.current.cancel();
     inboxLoad.current.cancel();
     channelReads.current?.reset();
@@ -349,7 +339,8 @@ export function App() {
       }
       if (ev.type === "message") {
         const msg = ev.payload as Message;
-        setPane((p) => patchPane(p && isReadingHistory(channelStream.current) ? holdLivePane(p) : p, msg, null));
+        recordChannelMessage(channelJournal.current, msg);
+        setPane((p) => applyChannelMessage(p && isReadingHistory(channelStream.current) ? holdLivePane(p) : p, msg));
         onThreadMessage(msg);
         readFence.current.observe(msg.seq);
         readRefresh.current?.request();
@@ -363,7 +354,8 @@ export function App() {
       if (ev.type === "reaction") {
         const payload = ev.payload as { message?: Message };
         if (payload.message) {
-          setPane((p) => replaceMessage(p, payload.message!));
+          recordChannelMessage(channelJournal.current, payload.message, false);
+          setPane((p) => applyChannelMessage(p, payload.message!, false));
           onThreadMessage(payload.message);
         }
         return;
@@ -380,6 +372,7 @@ export function App() {
       }
       if (ev.type === "thread") {
         const thread = ev.payload as Thread;
+        recordChannelThread(channelJournal.current, thread);
         setPane((p) => {
           if (!p || p.channel.id !== thread.channelId || !p.messages.some((message) => message.id === thread.id)) return p;
           return { ...p, threads: upsertById(p.threads, thread) };
@@ -430,6 +423,7 @@ export function App() {
     return () => {
       off();
       channelLoad.current.cancel();
+      channelJournal.current = null;
       threadLoad.current.cancel();
       snapshotLoad.current.cancel();
       inboxLoad.current.cancel();
@@ -461,6 +455,7 @@ export function App() {
   useEffect(() => {
     if (!selectedChannelId || missingChannel) {
       channelLoad.current.cancel();
+      channelJournal.current = null;
       setPane(null);
       return;
     }
@@ -636,8 +631,9 @@ export function App() {
     if (selRef.current.kind !== "channel" || selRef.current.id !== channelId || (root && threadIdRef.current !== root)) return;
     if (root) setThreadDraft((current) => current === body ? "" : current);
     else setDraft((current) => current === body ? "" : current);
-    if (root) setThreadPane((current) => patchPane(current, message, root));
-    else setPane((current) => patchPane(current, message));
+    recordChannelMessage(channelJournal.current, message);
+    setPane((current) => applyChannelMessage(current, message));
+    if (root) onThreadMessage(message);
   };
 
   const onCreate = async () => {
@@ -1012,15 +1008,9 @@ export function App() {
                     stickBottom.current = false;
                     setPane((current) => current ? holdLivePane(current) : current);
                     const channelId = sel.id;
-                    const load = channelLoad.current.begin();
-                    api.messages(channelId, null, oldest, load.signal).then((older) => {
-                      if (!load.valid() || selRef.current.kind !== "channel" || selRef.current.id !== channelId) return;
-                      setPane((current) => current?.channel.id === channelId ? {
-                        ...current,
-                        messages: [...older.messages, ...current.messages.filter((m) => !older.messages.some((x) => x.id === m.id))],
-                        hasOlder: older.hasOlder,
-                      } : current);
-                    }).catch((error) => { if (load.valid() && error?.name !== "AbortError") setErr(String(error)); });
+                    loadChannel(channelId, oldest).catch((error) => {
+                      if (error?.name !== "AbortError") setErr(String(error));
+                    });
                   }}
                 >
                   Load older
@@ -1036,7 +1026,10 @@ export function App() {
                     if (sel.kind !== "channel") return;
                     go({ kind: "channel", id: sel.id, thread: m.id });
                   }}
-                  onReact={(emoji) => api.react(m.seq, emoji).then((r) => setPane((p) => replaceMessage(p, r.message)))}
+                  onReact={(emoji) => api.react(m.seq, emoji).then((r) => {
+                    recordChannelMessage(channelJournal.current, r.message, false);
+                    setPane((p) => applyChannelMessage(p, r.message, false));
+                  })}
                 />
               ))}
               <div ref={bottomRef} />

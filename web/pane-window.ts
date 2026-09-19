@@ -35,5 +35,6 @@ export function boundLivePane(pane: ChannelPayload): ChannelPayload {
     cursors: { ...pane.cursors, before: retained.items[0]!.seq },
     threads: pane.threads.filter((thread) => roots.has(thread.id)),
     replyCounts: Object.fromEntries(Object.entries(pane.replyCounts).filter(([id]) => roots.has(id))),
+    replySeqs: Object.fromEntries(Object.entries(pane.replySeqs ?? {}).filter(([id]) => roots.has(id))),
   };
 }
