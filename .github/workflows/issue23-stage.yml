@@ -1,0 +1,47 @@
+name: Verify identity candidate
+on:
+  push:
+    branches: [maintenance/issue23-review-inputs]
+    paths: [.github/workflows/issue23-stage.yml]
+permissions:
+  contents: read
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: aeeac277ddf78cc24c3357162d3f0e42e0d714d9
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify fixed review input and exact tree
+        id: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch="$RUNNER_TEMP/issue23.patch"
+          cat .review/identity.{1,2,3,4}.b64 | base64 --decode | gzip -dc > "$patch"
+          echo "9327b6fbc545712f41046080b1791ef71f85e2518ca17287074453a0a9a3546a  $patch" | sha256sum --check
+          base=04b767be64643f18ce3970be6bd76b64e901f758
+          git checkout --detach "$base"
+          git apply --index --check "$patch"
+          git apply --index "$patch"
+          tree=$(git write-tree)
+          test "$tree" = 299af8c71a05e955d2c59006bff4b575034e6d0d
+          git diff --cached --stat
+          git diff --exit-code "$base" "$tree" -- .github/workflows
+          commit=$(printf '%s\n' 'fix(identity): scope credentials and require explicit Human recovery' | git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit-tree "$tree" -p "$base")
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+      - name: Export source-only objects to a non-product review ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ steps.candidate.outputs.commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w 0)
+          echo "::add-mask::$auth"
+          git -c core.hooksPath=/dev/null -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin "$COMMIT:refs/heads/review/issue23-candidate-20260919"
