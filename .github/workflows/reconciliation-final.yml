@@ -1,7 +1,7 @@
 name: Stage final reviewed PR trees
 
-# Temporary tooling, never merged. Repository branches are updated separately
-# through the GitHub connector after verifying both complete output trees.
+# Temporary tooling, never merged. Workflow changes are applied separately by
+# the GitHub connector, not by this contents-only Actions credential.
 on:
   push:
     branches: [chore/reconciliation-object-staging-20260919]
@@ -25,7 +25,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Verify patches and exact output trees
-        id: objects
         shell: bash
         run: |
           set -euo pipefail
@@ -36,8 +35,6 @@ jobs:
           echo "160665e0be056c61f589d56f95a043bd4a63ac2fc6a5e3bdbf50264b27e96112  $result/thread-status.patch" | sha256sum --check
           echo "f9e5e536524e95c09fade5e6175d2b77ce91b12233f943af4420aea6d229cb17  $result/browser.patch" | sha256sum --check
           base=2f72542a6a95006609a4f201cd0d69be3204d3c0
-          previous82=a62fdf4f2f4b4e59ee64c881864d0e23b16c1515
-          git cat-file -e "$previous82^{commit}"
           git checkout --detach "$base"
           git apply --index --check "$result/thread-status.patch"
           git apply --index "$result/thread-status.patch"
@@ -48,13 +45,20 @@ jobs:
           git apply --index "$result/browser.patch"
           tree82=$(git write-tree)
           test "$tree82" = 186d8cfc0cc088579d16e7135997d23c883e8c21
-          commit82=$(printf '%s\n' 'test(browser): reconcile deterministic races on authenticated realtime' '' 'Preserve the reviewed dependency, delivery, room, task and security stack. Exercise nine real Chromium scenarios with typed fixtures, request barriers, authenticated bootstrap, sequenced sockets, genuine 1013 reconnects, historical scroll/selection and unseen-receipt assertions. Retain macOS CI and all existing gates. No product code or staging workflow is included in this browser diff.' | git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit-tree "$tree82" -p "$previous82" -p "$commit63")
+          cp .github/workflows/ci.yml "$result/final-ci.yml"
+          # The Actions token does not have workflows permission. Export only
+          # source objects with CI unchanged; the connector supplies CI later.
+          git checkout "$base" -- .github/workflows/ci.yml
+          source82tree=$(git write-tree)
+          test "$source82tree" = 083064b41ee425140035d99289848670510e527e
+          git diff --exit-code "$base" "$source82tree" -- .github/workflows
+          source82=$(printf '%s\n' 'test(browser): stage reviewed source objects without CI changes' | git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit-tree "$source82tree" -p "$commit63")
           git update-ref refs/heads/reconciliation/pr-63-final-objects-20260919 "$commit63"
-          git update-ref refs/heads/reconciliation/pr-82-final-objects-20260919 "$commit82"
-          git bundle create "$result/objects.bundle" refs/heads/reconciliation/pr-63-final-objects-20260919 refs/heads/reconciliation/pr-82-final-objects-20260919
-          printf '{"commit63":"%s","tree63":"%s","commit82":"%s","tree82":"%s"}\n' "$commit63" "$tree63" "$commit82" "$tree82" > "$result/result.json"
-          git diff "$tree63" "$tree82" --stat
-      - name: Export only the two new non-product staging refs
+          git update-ref refs/heads/reconciliation/pr-82-source-objects-20260919 "$source82"
+          git bundle create "$result/objects.bundle" refs/heads/reconciliation/pr-63-final-objects-20260919 refs/heads/reconciliation/pr-82-source-objects-20260919
+          printf '{"commit63":"%s","tree63":"%s","source82":"%s","source82tree":"%s","final82tree":"%s"}\n' "$commit63" "$tree63" "$source82" "$source82tree" "$tree82" > "$result/result.json"
+          git diff "$tree63" "$source82tree" --stat
+      - name: Export only the two new non-product source staging refs
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -62,8 +66,9 @@ jobs:
           set -euo pipefail
           auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w 0)
           echo "::add-mask::$auth"
-          git -c core.hooksPath=/dev/null -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push --atomic origin refs/heads/reconciliation/pr-63-final-objects-20260919 refs/heads/reconciliation/pr-82-final-objects-20260919
+          git -c core.hooksPath=/dev/null -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push --atomic origin refs/heads/reconciliation/pr-63-final-objects-20260919 refs/heads/reconciliation/pr-82-source-objects-20260919
       - name: Retain verification receipt
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: reconciliation-final-objects
