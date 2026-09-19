@@ -94,12 +94,11 @@ test("role is sticky and offline work waits", async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("stale token plus resume name remints that identity", () => {
+test("stale token plus resume name requires Human recovery", () => {
   const { hive, dir } = tempHive();
   const first = hive.join({ role: "brain" });
-  const again = hive.join({ role: "brain", token: "dead-token", resumeName: first.agent.name });
-  assert.equal(again.agent.id, first.agent.id);
-  assert.notEqual(again.token, first.token);
+  assert.throws(() => hive.join({ role: "brain", token: "dead-token", resumeName: first.agent.name }), /Human-authorized recovery/);
+  assert.equal(hive.agentByToken(first.token).id, first.agent.id);
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -536,10 +535,10 @@ test("projects are isolated: roster, DM, mentions, wait, join cwd", async () => 
   assert.throws(() => hive.openDm(atlas.agent, dowel.agent.name), /not in your project/);
   assert.throws(() => hive.join({ role: "worker", seniority: "junior", cwd: path.join(dir, "unknown") }), /Pass project=slug/);
   assert.throws(
-    () => hive.join({ role: "brain", resumeName: solace.agent.name, project: "altro" }),
+    () => hive.join({ role: "brain", token: solace.token, resumeName: solace.agent.name, project: "altro" }),
     /project cannot change/,
   );
-  const back = hive.join({ role: "brain", resumeName: solace.agent.name });
+  const back = hive.join({ role: "brain", token: solace.token, resumeName: solace.agent.name });
   assert.equal(back.agent.project, "chapter");
   hive.postMessage(atlas.agent, { channel: "general", body: `take this @${rivet.agent.name}` });
   const idle = await hive.wait(dowel.agent, 200);
