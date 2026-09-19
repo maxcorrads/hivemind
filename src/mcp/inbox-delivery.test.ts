@@ -30,9 +30,10 @@ test("real stdio MCP never auto-ACKs; replacement sessions replay and reject sta
     return JSON.parse((result.content as Array<{ type: string; text: string }>).find(x => x.type === "text")!.text) as T;
   };
   try {
-    const first = await connect();
+    const registered = hive.join({ role: "brain", project: "chapter" });
+    const first = await connect(registered.token);
     assert.ok((await first.listTools()).tools.some(t => t.name === "ack_delivery"));
-    const joined = await call<{ token: string; name: string }>(first, "join", { role: "brain", project: "chapter" });
+    const joined = await call<{ name: string }>(first, "join", { role: "brain", project: "chapter" });
     const brain = hive.getAgentByName(joined.name)!;
     const human = hive.getAgent("human"); const dm = hive.openDm(human, brain.name);
     const message = hive.postMessage(human, { channel: dm.id, body: "An invented assignment; no external effects" });
@@ -46,7 +47,7 @@ test("real stdio MCP never auto-ACKs; replacement sessions replay and reject sta
     assert.equal(sameSessionReplay.delivery?.id, one.delivery.id);
     assert.equal(sameSessionReplay.delivery?.redelivered, true);
     assert.equal(hive.inbox.status(brain.id).acknowledgedMessages, 0);
-    const replacement = await connect(joined.token);
+    const replacement = await connect(registered.token);
     const replay = await call<WaitResult>(replacement, "wait");
     assert.equal(replay.delivery!.id, one.delivery.id);
     assert.equal(replay.delivery!.redelivered, true);
@@ -61,7 +62,7 @@ test("real stdio MCP never auto-ACKs; replacement sessions replay and reject sta
     hive.postMessage(human, { channel: dm.id, body: "Lost between receipt at MCP and confirmation by the host" });
     const unconfirmed = await call<WaitResult>(replacement, "wait");
     await replacement.close();
-    const afterCrash = await connect(joined.token);
+    const afterCrash = await connect(registered.token);
     const recovered = await call<WaitResult>(afterCrash, "wait");
     assert.equal(recovered.delivery!.id, unconfirmed.delivery!.id);
     await call(afterCrash, "ack_delivery", { deliveryId: recovered.delivery!.id });

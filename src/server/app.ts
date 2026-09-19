@@ -76,6 +76,8 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       throw new HiveError(400, pluginErrorMessage(error));
     }
   });
+  ui.get("/projects/:project/agents/:id/credential", (c) => c.json(hive.agentCredential(hive.getAgent("human"), c.req.param("project"), c.req.param("id"))));
+  ui.post("/projects/:project/agents/:id/credential", async (c) => c.json(hive.changeAgentCredential(hive.getAgent("human"), c.req.param("project"), c.req.param("id"), await readLimitedJson(c.req.raw, CREDENTIAL_JSON_BYTES))));
   ui.get("/snapshot", (c) => {
     const human = hive.getAgent("human");
     return c.json({

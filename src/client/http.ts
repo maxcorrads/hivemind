@@ -1,51 +1,17 @@
-import { mkdirSync, readFileSync, writeFileSync, existsSync, createReadStream, createWriteStream, statSync } from "node:fs";
+import { createReadStream, createWriteStream, statSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { lstat, opendir, rename, unlink } from "node:fs/promises";
 import { FILE_MAX_BYTES } from "../shared/types.ts";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import path from "node:path";
-import { hiveHome } from "../server/hive.ts";
 import { safeFileName } from "../server/files.ts";
-import type { Identity } from "../shared/types.ts";
 
-export function identitiesDir(): string {
-  return path.join(hiveHome(), "identities");
-}
-
-export function identityPath(name: string): string {
-  return path.join(identitiesDir(), `${name}.json`);
-}
-
-export function saveIdentity(id: Identity) {
-  mkdirSync(identitiesDir(), { recursive: true });
-  writeFileSync(identityPath(id.name), JSON.stringify(id, null, 2));
-  writeFileSync(path.join(hiveHome(), "last-join.json"), JSON.stringify(id, null, 2));
-}
-
-export function loadIdentityFile(file: string): Identity {
-  return JSON.parse(readFileSync(file, "utf8")) as Identity;
-}
-
-export function loadIdentityByName(name: string): Identity | null {
-  const file = identityPath(name);
-  if (!existsSync(file)) return null;
-  return loadIdentityFile(file);
-}
-
-export function currentToken(cliToken?: string): string | undefined {
-  if (cliToken) return cliToken;
-  if (process.env.HIVEMIND_TOKEN) return process.env.HIVEMIND_TOKEN;
-  const last = path.join(hiveHome(), "last-join.json");
-  if (existsSync(last)) {
-    const id = loadIdentityFile(last);
-    return id.token;
-  }
-  return undefined;
-}
+import { currentToken, identityOrigin } from "./identity.ts";
+export { identitiesDir, identityPath, saveIdentity, loadIdentityFile, loadIdentityByName, currentToken } from "./identity.ts";
 
 export function hiveUrl(): string {
-  return process.env.HIVEMIND_URL ?? "http://127.0.0.1:7420";
+  return identityOrigin();
 }
 
 export class HttpError extends Error {

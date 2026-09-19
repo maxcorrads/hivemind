@@ -17,29 +17,34 @@ import { subscriptionSchema, subscriptionScopeSchema } from '../shared/notificat
 import { MESSAGE_EVENT_TYPES } from "../shared/types.ts";
 import { DELIVERY_INSTRUCTIONS, MCP_HEARTBEAT_MS, MCP_WAIT_POLL_MS, WAIT_NEXT, type Agent, type Channel, type Identity, type WaitResult } from "../shared/types.ts";
 
-let sessionToken = process.env.HIVEMIND_TOKEN;
-let heartbeat: ReturnType<typeof setInterval> | undefined;
-
-function token(): string {
-  if (!sessionToken) throw new Error("Join first with the join tool.");
-  return sessionToken;
-}
-
-function ensureHeartbeat() {
-  if (heartbeat) return;
-  heartbeat = setInterval(() => {
-    if (!sessionToken) return;
-    agentRequest("POST", "/api/agent/ping", {}, sessionToken).catch(() => undefined);
-  }, MCP_HEARTBEAT_MS);
-  heartbeat.unref();
-}
-
 function text(data: unknown) {
   return { content: [{ type: "text" as const, text: typeof data === "string" ? data : JSON.stringify(data, null, 2) }] };
 }
 
 export async function startMcp() {
+  let sessionToken = process.env.HIVEMIND_TOKEN;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  
+  function token(): string {
+    if (!sessionToken) throw new Error("Join first with the join tool.");
+    return sessionToken;
+  }
+  
+  function ensureHeartbeat() {
+    if (heartbeat) return;
+    heartbeat = setInterval(() => {
+      if (!sessionToken) return;
+      agentRequest("POST", "/api/agent/ping", {}, sessionToken).catch(() => undefined);
+    }, MCP_HEARTBEAT_MS);
+    heartbeat.unref();
+  }
   const server = new McpServer({ name: "hivemind", version: "0.1.0" });
+  // Serialize joins to prevent two concurrent first calls creating two identities.
+  let joins: Promise<unknown> = Promise.resolve();
+  const joinSerial = <T>(work: () => Promise<T>): Promise<T> => {
+    const next = joins.catch(() => undefined).then(work); joins = next; return next;
+  };
+  let joinedName: string | undefined;
   let inboxId = randomUUID();
   let inboxReady: Promise<{ sessionId: string }> | undefined;
   const inboxSession = (signal?: AbortSignal) => {
@@ -56,7 +61,7 @@ export async function startMcp() {
 
   server.tool(
     "join",
-    "Register this terminal as a Hivemind employee. Call once per session. Role cannot change later. Workers must pick seniority junior, mid, or senior. Use resume with your assigned name to come back to work. Join from the project worktree, or pass project. You cannot see other projects.",
+    "Register this terminal as a Hivemind employee. Repeated join resumes this same process identity. To explicitly replace it, start a new MCP process. Lost credentials require Human recovery in the UI. Role cannot change later. Workers must pick seniority junior, mid, or senior. Use resume with your assigned name to come back to work. Join from the project worktree, or pass project. You cannot see other projects.",
     {
       role: z.enum(["brain", "worker"]),
       seniority: z.enum(["junior", "mid", "senior"]).optional(),
@@ -64,10 +69,10 @@ export async function startMcp() {
       resume: z.string().optional(),
       project: z.string().optional(),
     },
-    async ({ role, seniority, focus, resume, project }) => {
-      const auth = resume
-        ? (loadIdentityByName(resume)?.token ?? sessionToken)
-        : process.env.HIVEMIND_TOKEN;
+    async ({ role, seniority, focus, resume, project }) => joinSerial(async () => {
+      if (joinedName && resume && resume.toLowerCase() !== joinedName.toLowerCase())
+        throw new Error("This process already has an identity; start a new MCP process to replace it");
+      const auth = sessionToken || (resume ? loadIdentityByName(resume, project)?.token : undefined);
       const result = await agentRequest<{
         agent: Agent;
         token: string;
@@ -88,9 +93,9 @@ export async function startMcp() {
         },
         auth ?? null,
       );
+      if (sessionToken !== result.token) { inboxId = randomUUID(); inboxReady = undefined; }
       sessionToken = result.token;
-      inboxId = randomUUID();
-      inboxReady = undefined;
+      joinedName = result.agent.name;
       ensureHeartbeat();
       saveIdentity({
         id: result.agent.id,
@@ -99,19 +104,20 @@ export async function startMcp() {
         seniority: result.agent.seniority,
         focus: result.agent.focus,
         token: result.token,
-      } satisfies Identity);
+        project: result.agent.project,
+      } satisfies Identity & { project: string | null });
       return text({
         name: result.agent.name,
         describe: result.describe,
         created: result.created,
-        token: result.token,
+        credentials: "Retained privately by this MCP process; not returned to the model",
         standingOrders: result.standingOrders,
         ordersRef: result.ordersRef,
         next: result.created
           ? "Call wait once with no arguments. Stay silent while wait is in flight. When wait returns, handle the mail."
           : "Orders unchanged. Call wait once with no arguments. Stay silent while wait is in flight. When wait returns, handle the mail.",
       });
-    },
+    }),
   );
 
   server.tool("whoami", "Your name, role, and online flag. Use standing_orders for the full rule block.", async () => {
@@ -435,6 +441,8 @@ export async function startMcp() {
   );
 
   if (sessionToken) ensureHeartbeat();
+  const previousClose = server.server.onclose;
+  server.server.onclose = () => { if (heartbeat) clearInterval(heartbeat); previousClose?.(); };
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

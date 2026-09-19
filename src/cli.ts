@@ -137,7 +137,7 @@ async function main() {
     const resume = parsed.resume;
     const token =
       parsed.token ??
-      (resume ? loadIdentityByName(resume)?.token : undefined) ??
+      (resume ? loadIdentityByName(resume, parsed.project)?.token : undefined) ??
       (resume ? undefined : process.env.HIVEMIND_TOKEN);
     const result = await agentRequest<{
       agent: Agent;
@@ -160,6 +160,7 @@ async function main() {
       seniority: result.agent.seniority,
       focus: result.agent.focus,
       token: result.token,
+      project: result.agent.project,
     });
     console.log(`${result.created ? "Joined" : "Back"} as ${result.agent.name} · ${result.describe}`);
     console.log(`export HIVEMIND_TOKEN=${result.token}`);

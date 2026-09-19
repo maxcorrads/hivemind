@@ -62,6 +62,14 @@ export type ChannelPayload = {
 };
 
 export const api = {
+  agentCredential: async (project: string, agent: string): Promise<BotCredentialView> => {
+    const result = await req<{ agent: Agent; credential: BotCredentialView['credential'] }>(`/api/ui/projects/${encodeURIComponent(project)}/agents/${encodeURIComponent(agent)}/credential`);
+    return { bot: result.agent, credential: result.credential };
+  },
+  changeAgentCredential: async (project: string, agent: string, action: 'rotate' | 'revoke', expectedRevision: number): Promise<BotCredentialView & { token?: string }> => {
+    const result = await req<{ agent: Agent; credential: BotCredentialView['credential']; token?: string }>(`/api/ui/projects/${encodeURIComponent(project)}/agents/${encodeURIComponent(agent)}/credential`, { method: 'POST', body: JSON.stringify({ action, expectedRevision }) });
+    return { bot: result.agent, credential: result.credential, token: result.token };
+  },
   botCredential: (project: string, bot: string) => req<BotCredentialView>(
     `/api/ui/projects/${encodeURIComponent(project)}/bots/${encodeURIComponent(bot)}/credential`),
   changeBotCredential: (project: string, bot: string, action: 'rotate' | 'revoke', expectedRevision: number) =>

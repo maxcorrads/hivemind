@@ -106,3 +106,23 @@ test('a stale Human panel cannot revoke a newer credential', async t => {
   await f.click('Reload credential state'); await f.click('Revoke token'); await f.click('Confirm revocation');
   assert.throws(() => f.hive.agentByToken(newer.token!), /Invalid token/);
 });
+
+
+test('Human can recover a worker credential in the mounted panel without disclosing it in history', async t => {
+  const f = await fixture(t);
+  const worker = f.hive.join({ role: 'worker', seniority: 'mid', project: f.project.slug });
+  await f.manage(worker.agent);
+  assert.ok(f.host.querySelector('[aria-label="Agent credentials"]'));
+  await f.click('Rotate token'); await f.click('Confirm rotation');
+  const field = f.host.querySelector<HTMLInputElement>('input[aria-label="New agent token"]')!;
+  assert.equal(field.type, 'password');
+  const token = field.value;
+  assert.equal(f.hive.agentByToken(token).id, worker.agent.id);
+  assert.throws(() => f.hive.agentByToken(worker.token), /Invalid token/);
+  assert.ok(!JSON.stringify(f.hive.listMessages(f.human, 'general').messages).includes(token));
+  await f.click('Hide token');
+  await f.manage(worker.agent, 'reopened-worker');
+  assert.equal(f.host.querySelector('input'), null);
+  await f.click('Revoke token'); await f.click('Confirm revocation');
+  assert.throws(() => f.hive.agentByToken(token), /Invalid token/);
+});

@@ -62,17 +62,17 @@ export function BotCredentials({ bot, onBusy }: { bot: Agent; onBusy: (busy: boo
     const id = ++request.current;
     setBusy(true); onBusy(true); setToken(''); setCurrent(null); setConfirm(null); setNotice('');
     try {
-      const result = await api.botCredential(bot.projectId!, bot.id);
+      const result = await (bot.role === "bot" ? api.botCredential : api.agentCredential)(bot.projectId!, bot.id);
       if (mounted.current && id === request.current) setCurrent(result);
     } catch (e) { if (mounted.current && id === request.current) setNotice(String((e as Error).message)); }
     finally { if (mounted.current && id === request.current) { setBusy(false); onBusy(false); } }
-  }, [bot.id, bot.projectId, onBusy]);
+  }, [bot.id, bot.projectId, bot.role, onBusy]);
   useEffect(() => { mounted.current = true; void load(); return () => { mounted.current = false; ++request.current; }; }, [load]);
   const change = async () => {
     if (!current || !confirm || mutating.current) return;
     mutating.current = true; setBusy(true); onBusy(true); setToken(''); setNotice('');
     try {
-      const result = await api.changeBotCredential(bot.projectId!, bot.id, confirm, current.credential.revision);
+      const result = await (bot.role === "bot" ? api.changeBotCredential : api.changeAgentCredential)(bot.projectId!, bot.id, confirm, current.credential.revision);
       if (!mounted.current) return;
       setCurrent({ bot: result.bot, credential: result.credential }); setToken(result.token ?? '');
       setNotice(result.credential.revoked ? 'Credential revoked. Existing history and channel invitations are unchanged.' : 'New token created. Update your integration configuration privately.');
@@ -83,7 +83,7 @@ export function BotCredentials({ bot, onBusy }: { bot: Agent; onBusy: (busy: boo
       }
     } finally { mutating.current = false; if (mounted.current) { setConfirm(null); setBusy(false); onBusy(false); } }
   };
-  return <section aria-label="Bot credentials">
+  return <section aria-label={bot.role === "bot" ? "Bot credentials" : "Agent credentials"}>
     <p>Manage <strong>{bot.name}</strong> in {bot.project}. Identity, channel invitations and observation history are preserved.</p>
     <p>This does not stop an external process or update its configuration. Previously authorized requests may already be in flight.</p>
     {current && <p>Credential: {current.credential.revoked ? 'revoked' : 'active'} · revision {current.credential.revision}</p>}
@@ -96,7 +96,7 @@ export function BotCredentials({ bot, onBusy }: { bot: Agent; onBusy: (busy: boo
       <button type="button" disabled={busy} onClick={() => setConfirm(null)}>Cancel</button>
     </div>}
     {token && <>
-      <label>New bot token — shown only now<input aria-label="New bot token" type="password" readOnly autoComplete="off" value={token} /></label>
+      <label>New credential — shown only now<input aria-label={bot.role === "bot" ? "New bot token" : "New agent token"} type="password" readOnly autoComplete="off" value={token} /></label>
       <button type="button" onClick={() => navigator.clipboard.writeText(token).then(() => setNotice('Token copied')).catch(() => setNotice('Copy failed; select the field to copy manually'))}>Copy token</button>
       <button type="button" onClick={() => setToken('')}>Hide token</button>
       <p>Store it privately in the integration, never in chat. Closing or reloading this panel hides it.</p>
