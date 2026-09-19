@@ -1,0 +1,47 @@
+name: Verify send retry candidate
+on:
+  push:
+    branches: [maintenance/issue24-review-inputs]
+    paths: [.github/workflows/issue24-stage.yml]
+permissions:
+  contents: read
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 8a636bde1c48bcf9128f5f29ab91d7b4c39528e9
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify immutable patch and full product tree
+        id: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch="$RUNNER_TEMP/issue24.patch"
+          cat .review/issue24.patch.gz.b64.{1,2,3} | base64 --decode | gzip -dc > "$patch"
+          echo "36a68cf24504e4598ff8ff89e425edd9beb72102782b6dea5a96bc138aa2dd89  $patch" | sha256sum --check
+          base=131e4401b2e62f6f5f84973ef2bef3ff6caa8f3d
+          git checkout --detach "$base"
+          git apply --index --check "$patch"
+          git apply --index "$patch"
+          tree=$(git write-tree)
+          test "$tree" = 8f4a3151dde4c49e6a48bb91dceebfe847dca750
+          git diff --cached --stat
+          git diff --exit-code "$base" "$tree" -- .github/workflows
+          commit=$(printf '%s\n' 'fix(messaging): persist idempotent sends and desired-state reactions' | git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit-tree "$tree" -p "$base")
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+      - name: Export source-only objects to a new review ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ steps.candidate.outputs.commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w 0)
+          echo "::add-mask::$auth"
+          git -c core.hooksPath=/dev/null -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin "$COMMIT:refs/heads/review/issue24-candidate-20260919"
