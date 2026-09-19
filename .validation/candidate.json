@@ -1,0 +1,8 @@
+{
+  "base": "030bc4af0477b623fd26c28b9939561bc54b9d55",
+  "tree": "b1c4e393fcef74a929e1389686b3fd4ed6655c92",
+  "branch": "validation/candidate-pr63-20260919-r1",
+  "patch": "pr63.patch.gz.b64",
+  "patch_sha256": "4bf59aa0ad0f8b24b67e939c88cf539de89033b17f8750852f985c7794a2cb41",
+  "message": "fix(realtime): bound slow sockets and live conversation windows"
+}
