@@ -40,6 +40,12 @@ test("real stdio MCP never auto-ACKs; replacement sessions replay and reject sta
     assert.ok(one.delivery); assert.ok(one.delivery.messageSeqs.includes(message.seq));
     assert.match(one.next, /ack_delivery/);
     assert.equal(hive.inbox.status(brain.id).acknowledgedMessages, 0);
+    // A second wait in the same live session is not a receipt confirmation.
+    // This specifically rejects the superseded implicit-ACK-on-next-wait model.
+    const sameSessionReplay = await call<WaitResult>(first, "wait");
+    assert.equal(sameSessionReplay.delivery?.id, one.delivery.id);
+    assert.equal(sameSessionReplay.delivery?.redelivered, true);
+    assert.equal(hive.inbox.status(brain.id).acknowledgedMessages, 0);
     const replacement = await connect(joined.token);
     const replay = await call<WaitResult>(replacement, "wait");
     assert.equal(replay.delivery!.id, one.delivery.id);
@@ -62,7 +68,7 @@ test("real stdio MCP never auto-ACKs; replacement sessions replay and reject sta
     assert.equal(hive.inbox.status(brain.id).acknowledgedMessages, 2);
   } finally {
     for (const { client, transport } of clients) { await client.close(); await transport.close(); }
-    started.shutdown(); started.server.closeAllConnections(); hive.db.close();
+    await started.shutdown(); hive.db.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });

@@ -436,3 +436,78 @@ for (const threaded of [false, true]) {
     if (!threaded) assert.ok(refreshed.textContent!.includes(incoming.body));
   });
 }
+
+for (const reconnect of [false, true]) {
+  test(`mounted App preserves channel live events delivered during a delayed ${reconnect ? "reconnect" : "initial"} snapshot`, async t => {
+    const f = await fixture(t);
+    f.hive.invite(f.human, f.channel.id, [f.brainA.name]);
+    const rootMessage = f.hive.postMessage(f.brainA, { channel: f.channel.id, body: "Race root fixture" });
+    const initialReply = f.hive.postMessage(f.brainA, { channel: f.channel.id, threadId: rootMessage.id, body: "Reply present in snapshot" });
+    let release!: () => void, captured!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    const ready = new Promise<void>(resolve => { captured = resolve; });
+    let delay = !reconnect;
+    const original = api.messages;
+    t.mock.method(api, "messages", async (...args: Parameters<typeof api.messages>) => {
+      const data = await original(...args);
+      if (delay && args[0] === f.channel.id && args[1] === null) {
+        delay = false;
+        assert.ok(data.snapshotSeq! >= initialReply.seq, "snapshot fence must include non-root replies");
+        captured(); await pending;
+      }
+      return data;
+    });
+    t.after(() => release());
+    await act(async () => f.root.render(createElement(App)));
+    const socket = SocketFixture.instances[0]!;
+    if (reconnect) {
+      delay = true;
+      await act(async () => socket.emit("hello", undefined));
+    }
+    await ready;
+    const newRoot = f.hive.postMessage(f.brainA, { channel: f.channel.id, body: "Root delivered during pending snapshot" });
+    const reply = f.hive.postMessage(f.brainA, { channel: f.channel.id, threadId: rootMessage.id, body: "Reply delivered during pending snapshot" });
+    const reacted = f.hive.toggleReaction(f.human, rootMessage.seq, "✅").message;
+    const blocked = f.hive.setThreadStatus(f.brainA, rootMessage.id, "blocked");
+    await act(async () => {
+      socket.emit("message", newRoot); socket.emit("message", reply);
+      socket.emit("reaction", { message: reacted }); socket.emit("thread", blocked);
+      release();
+    });
+    await act(async () => { socket.emit("message", reply); socket.emit("message", newRoot); });
+    const rootRow = Array.from(f.host.querySelectorAll(".msg")).find(row => row.querySelector(".msg-b")?.textContent?.includes(rootMessage.body));
+    assert.ok(rootRow, "original root must remain visible");
+    assert.match(rootRow.querySelector(".replies")!.textContent!, /2 replies/);
+    assert.ok(rootRow.querySelector(".st-blocked"));
+    assert.match(rootRow.querySelector(".reacts")!.textContent!, /✅/);
+    assert.equal(Array.from(f.host.querySelectorAll(".msg-b")).filter(body => body.textContent?.includes(newRoot.body)).length, 1);
+  });
+}
+
+for (const alwaysOverflow of [false, true]) {
+  test(`mounted channel refresh ${alwaysOverflow ? "fails visibly after three bounded attempts" : "retries a bounded live journal overflow"}`, async t => {
+    const f = await fixture(t);
+    const stable = f.hive.postBotMessage(f.botA.bot, f.channel.id, { eventId: "stable", body: "Stable reading anchor" }).message;
+    await act(async () => f.root.render(createElement(App)));
+    const original = api.messages;
+    let attempts = 0;
+    t.mock.method(api, "messages", async (...args: Parameters<typeof api.messages>) => {
+      const data = await original(...args);
+      if (args[0] === f.channel.id && args[1] === null) {
+        attempts++;
+        if (alwaysOverflow || attempts === 1) {
+          // Repeated status events avoid unrelated inbox-refresh work. Each
+          // distinct root consumes one slot in this request's bounded journal.
+          for (let i = 0; i < 501; i++) SocketFixture.instances[0]!.emit("thread", {
+            id: `overflow-${i}`, channelId: f.channel.id, status: "blocked",
+          });
+        }
+      }
+      return data;
+    });
+    await act(async () => SocketFixture.instances[0]!.emit("hello", undefined));
+    assert.equal(attempts, alwaysOverflow ? 3 : 2);
+    assert.ok(f.host.textContent?.includes(stable.body));
+    assert.equal(f.host.textContent?.includes("Live traffic overtook the channel refresh"), alwaysOverflow);
+  });
+}

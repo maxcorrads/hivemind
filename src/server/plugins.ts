@@ -408,7 +408,7 @@ export function saveProjectPlugin(
         const change = z
           .object({
             enabled: z.boolean(),
-            values: z.record(z.unknown()),
+            values: z.record(z.string(), z.unknown()),
             expectedRevision: z.number().int().nonnegative().safe(),
           })
           .strict()
