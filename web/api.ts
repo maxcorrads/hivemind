@@ -135,10 +135,10 @@ export const api = {
     const suffix = q.toString() ? `?${q}` : "";
     return req<ChannelPayload>(`/api/ui/channels/${encodeURIComponent(id)}/messages${suffix}`, { signal });
   },
-  send: (id: string, body: string, threadId?: string | null, attachmentIds?: string[]) =>
+  send: (id: string, body: string, threadId?: string | null, attachmentIds?: string[], requestId?: string) =>
     req<{ message: Message }>(`/api/ui/channels/${encodeURIComponent(id)}/messages`, {
       method: "POST",
-      body: JSON.stringify({ body, threadId: threadId ?? null, attachmentIds }),
+      body: JSON.stringify({ body, threadId: threadId ?? null, attachmentIds, requestId }),
     }),
   upload: async (file: File): Promise<AttachmentMeta> => {
     const res = await humanSession.request("/api/ui/files", {
@@ -153,10 +153,10 @@ export const api = {
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     return data.file as AttachmentMeta;
   },
-  react: (seq: number, emoji: string) =>
+  react: (seq: number, emoji: string, present: boolean) =>
     req<{ message: Message; added: boolean }>(`/api/ui/messages/${seq}/reactions`, {
       method: "POST",
-      body: JSON.stringify({ emoji }),
+      body: JSON.stringify({ emoji, present }),
     }),
   fileUrl: (id: string) => `/api/ui/files/${encodeURIComponent(id)}`,
   createChannel: (name: string, type: "public" | "private", topic?: string, memberNames?: string[], project?: string) =>

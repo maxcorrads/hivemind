@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { sendOperation } from "./client/send-operation.ts";
 import { resolve, dirname, basename, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -7,7 +8,6 @@ import { guessMime } from "./shared/mime.ts";
 import {
   agentDownloadToFile,
   agentRequest,
-  agentUploadFile,
   currentToken,
   hiveUrl,
   identitiesDir,
@@ -28,9 +28,9 @@ function help() {
   hivemind wait [--timeout ${Math.round(DEFAULT_WAIT_MS / 1000)}] [--session UUID]
   hivemind ack DELIVERY_ID --session UUID
   hivemind send --channel NAME --body TEXT [--thread ID] [--file PATH] [--event-type progress|blocker|question|action_required]
-  hivemind send --to NAME --body TEXT [--file PATH]
+  hivemind send --to NAME --body TEXT [--file PATH] [--request-id KEY]
   hivemind fetch --id ATT_ID [--out DIR]
-  hivemind react --seq N --emoji 👍
+  hivemind react --seq N --emoji 👍 [--remove]
   hivemind gc
   hivemind history --channel NAME [--thread ID] [--since N | --before N]
   hivemind expand --channel ID --ids MESSAGE_ID,MESSAGE_ID [--after SEQ]
@@ -287,25 +287,12 @@ async function main() {
       channel = dm.channel.id;
     }
     if (!channel) throw new Error("send --channel NAME  or  --to NAME");
-    const attachmentIds: string[] = [];
-    if (file) {
-      const mime = guessMime(file);
-      if (mime === "application/octet-stream") throw new Error("unsupported file type");
-      const uploaded = await agentUploadFile<{ file: { id: string } }>(
-        "/api/agent/files",
-        resolvePath(file),
-        token,
-        basename(file),
-        mime,
-      );
-      attachmentIds.push(uploaded.file.id);
-    }
-    const result = await agentRequest<{ ok: boolean; seq: number; id: string }>(
-      "POST",
-      `/api/agent/channels/${encodeURIComponent(channel)}/messages`,
-      { body, threadId: thread ?? null, attachmentIds, eventType, recipients },
-      token,
-    );
+    const requestId = arg(argv, "--request-id") ?? randomUUID();
+    const mime = file ? guessMime(file) : undefined;
+    if (mime === "application/octet-stream") throw new Error("unsupported file type");
+    console.error(`Send requestId: ${requestId}`);
+    const result = await sendOperation({ channel, body, threadId: thread, eventType, recipients,
+      ...(file ? { file: { path: resolvePath(file), name: basename(file), mime: mime! } } : {}) }, token, requestId);
     console.log(`sent ${result.id} seq ${result.seq}`);
     return;
   }
@@ -334,7 +321,7 @@ async function main() {
     const seq = Number(arg(argv, "--seq"));
     const emoji = arg(argv, "--emoji");
     if (!seq || !emoji) throw new Error("react --seq N --emoji 👍");
-    await agentRequest("POST", `/api/agent/messages/${seq}/reactions`, { emoji }, token);
+    await agentRequest("POST", `/api/agent/messages/${seq}/reactions`, { emoji, present: !argv.includes("--remove") }, token);
     console.log(`reacted ${emoji} on ${seq}`);
     return;
   }

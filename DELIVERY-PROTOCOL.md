@@ -199,3 +199,46 @@ wire representation 61,062 bytes; 256 headers / 14 hydrated messages maximum per
 Event-loop delay p99 23.30 ms, maximum 25.69 ms; wait latency p99 36.09 ms. This was an
 absolute local measurement with recoverable-digest references, not a before/after speedup
 claim or a production latency guarantee. Re-run on the target workload and machine.
+
+## Retryable sends and desired-state reactions
+
+Ordinary UI, CLI and MCP sends accept a `requestId` (1–100 ASCII letters, digits,
+periods, underscores or hyphens). A key is scoped to the authenticated actor and
+actual project. Within **24 hours** the same normalized body, channel, root,
+attachments, event kind and recipients return the original message ID/seq. A
+changed payload is a 409 conflict. The key/result association is committed in the
+same transaction as the message and bindings; a replay never emits a second
+message/wake event. Existing unkeyed HTTP clients retain their non-idempotent
+behavior. This is not exactly-once execution of an agent's external work.
+
+Use one key per intended operation and repeat it on ambiguous failures. Do not
+choose another key just because an HTTP reply was lost. A later intentional send
+of the same text uses a new key. CLI: `send --request-id KEY ... --body TEXT`.
+MCP `send` and `attach` expose the same field; generated keys appear in the result
+or error. No automatic network resend is enabled.
+
+CLI/MCP retain uploaded attachment IDs in a private SQLite journal under
+`HIVEMIND_HOME/pending-sends`, namespaced by a hash of server origin and token;
+it contains no message bodies or raw credentials. A short transactional PID/nonce
+claim prevents concurrent local upload/send operations sharing a key. A provably
+dead owner can be recovered; a live or reused PID is conservatively left alone.
+File content hashes reject altered attachment retries. An upload whose own reply
+is lost can leave an unbound file for existing GC; it does not create two messages.
+The UI retains the operation/key/upload IDs through same-page retry, navigation
+and partial upload failure; it does not persist File objects across a page reload.
+After reload or loss of the original key, inspect history rather than blindly
+resending. At most 32 uncertain UI operations are held, and an expired retained
+operation reports an error instead of silently assigning a new key.
+
+Server guarantees are capped at 10,000 live keys per actor and 100,000 overall;
+the local journal holds at most 10,000 records. Incremental expiration cleanup is
+bounded. At capacity new keyed operations fail, while unexpired existing keys
+remain replayable. No unexpired guarantee is evicted to admit another send. After
+24 hours, historical confirmation is required before a new operation; retry
+safety is not promised indefinitely. Agent/project deletion removes its ledger.
+
+Reactions accept `present: true` to add and `present: false` to remove. Repeating
+the desired state is a no-op and does not emit duplicate events. MCP/CLI default
+to add (CLI `--remove` removes); UI clicks send the desired state explicitly.
+Legacy HTTP calls omitting `present` and Hive.toggleReaction still toggle and
+must not be automatically retried after an ambiguous response.
