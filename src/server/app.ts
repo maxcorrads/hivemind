@@ -244,6 +244,8 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       cursors: listed.cursors,
       threads: hive.threadsInChannel(ch.id),
       replyCounts: hive.replyCounts(ch.id),
+      // This synchronous handler captures messages and reply counts in one event-loop turn.
+      snapshotSeq: Number(hive.db.prepare("SELECT COALESCE(MAX(seq), 0) AS seq FROM messages").get()!.seq),
       task: threadId && hive.tasks.has(threadId) ? hive.tasks.get(human, threadId) : undefined,
     });
   });
