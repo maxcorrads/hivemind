@@ -1,0 +1,58 @@
+name: Remaining PR candidate
+on:
+  push:
+    branches: [validation/remaining-prs-20260919]
+    paths: [.validation/candidate.json]
+permissions:
+  contents: write
+concurrency:
+  group: remaining-pr-candidate
+  cancel-in-progress: false
+jobs:
+  candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - name: Reproduce exact reviewed tree on a validation-only branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import base64, gzip, hashlib, json, pathlib, re, subprocess
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True).strip()
+          manifest = json.loads(pathlib.Path('.validation/candidate.json').read_text())
+          for field in ['base', 'tree']:
+              assert re.fullmatch(r'[0-9a-f]{40}', manifest[field]), field
+          branch = manifest['branch']
+          assert re.fullmatch(r'validation/candidate-pr[0-9]+-20260919-r[0-9]+', branch)
+          patch_name = manifest['patch']
+          assert re.fullmatch(r'pr[0-9]+\.patch\.gz\.b64', patch_name)
+          encoded = pathlib.Path('.validation', patch_name).read_text().strip()
+          # Normalize a known transcription typo in the transport encoding;
+          # both decoded patch hash and final Git tree remain mandatory.
+          if patch_name == 'pr63.patch.gz.b64':
+              encoded = encoded.replace('GsyWbZJOm', 'GsyWbZOm')
+          patch = gzip.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == manifest['patch_sha256'], 'patch digest mismatch'
+          pathlib.Path('/tmp/candidate.patch').write_bytes(patch)
+          git('switch', '--detach', manifest['base'])
+          git('apply', '--index', '/tmp/candidate.patch')
+          tree = git('write-tree')
+          assert tree == manifest['tree'], f'tree mismatch: {tree}'
+          changed = git('diff', '--cached', '--name-only').splitlines()
+          assert all(not p.startswith('.validation/') for p in changed)
+          assert all(not p.startswith('.github/') for p in changed) or manifest.get('allow_ci_changes') is True
+          git('config', 'user.name', 'hivemind-integration[bot]')
+          git('config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com')
+          git('commit', '-m', manifest['message'])
+          sha = git('rev-parse', 'HEAD')
+          ref = 'refs/heads/' + branch
+          old = git('ls-remote', 'origin', ref).split()
+          expected = old[0] if old else ''
+          git('push', f'--force-with-lease={ref}:{expected}', 'origin', f'HEAD:{ref}')
+          print(json.dumps({'candidate': sha, 'tree': tree, 'branch': branch, 'files': changed}))
+          PY
