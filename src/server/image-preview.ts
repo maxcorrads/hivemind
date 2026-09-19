@@ -79,13 +79,14 @@ function validJpeg(data: Buffer): boolean {
     within(imageDimensions(data.subarray(0, HEADER_BYTES), "image/jpeg"), 1600, 1600 * 1600);
 }
 
-function run(bin: string, args: string[], remaining: number, signal?: AbortSignal): Promise<boolean> {
-  if (remaining <= 0 || signal?.aborted) return Promise.resolve(false);
+function run(bin: string, args: string[], remaining: number, signal?: AbortSignal): Promise<"ok" | "failed" | "timed-out"> {
+  if (remaining <= 0) return Promise.resolve("timed-out");
+  if (signal?.aborted) return Promise.resolve("failed");
   return new Promise((resolve) => {
     // Isolate the process group so cancellation also terminates decoder helpers.
     const grouped = process.platform !== "win32";
     const child = spawn(bin, args, { stdio: "ignore", windowsHide: true, detached: grouped });
-    let killed = false;
+    let killed = false, timedOut = false;
     const stop = () => {
       killed = true;
       try {
@@ -93,7 +94,7 @@ function run(bin: string, args: string[], remaining: number, signal?: AbortSigna
         else child.kill("SIGKILL");
       } catch { /* process already exited */ }
     };
-    const timer = setTimeout(stop, remaining);
+    const timer = setTimeout(() => { timedOut = true; stop(); }, remaining);
     signal?.addEventListener("abort", stop, { once: true });
     if (signal?.aborted) stop();
     child.on("error", () => { killed = true; });
@@ -101,7 +102,7 @@ function run(bin: string, args: string[], remaining: number, signal?: AbortSigna
     child.once("close", (code) => {
       clearTimeout(timer);
       signal?.removeEventListener("abort", stop);
-      resolve(code === 0 && !killed);
+      resolve(timedOut ? "timed-out" : code === 0 && !killed ? "ok" : "failed");
     });
   });
 }
@@ -185,7 +186,12 @@ export async function imagePreview(
       if (signal.aborted || performance.now() >= deadline) break;
       const output = path.join(temp, `preview-${attempt++}.jpg`);
       try {
-        if (!await run(bin, makeArgs(input, output), deadline - performance.now(), signal)) continue;
+        const outcome = await run(bin, makeArgs(input, output), deadline - performance.now(), signal);
+        // Timer delays are rounded by the runtime. A decoder killed by its
+        // budget has exhausted this preview even if now() is fractionally
+        // before deadline; never start a second encoder in that gap.
+        if (outcome === "timed-out") break;
+        if (outcome !== "ok") continue;
         const data = await boundedRead(output, IMAGE_PREVIEW_MAX_BYTES, signal);
         if (!signal.aborted && performance.now() < deadline && validJpeg(data)) {
           previews += 1;
