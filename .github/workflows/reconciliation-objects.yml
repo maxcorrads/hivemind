@@ -1,0 +1,70 @@
+name: Stage reviewed reconciliation objects
+
+# Temporary integration tooling. Never merge this workflow or its inputs.
+# It can create one staging ref only; the PR ref is updated separately after
+# checking the resulting tree through the GitHub connector. No tests or
+# repository-provided scripts execute while a write token is in scope.
+on:
+  push:
+    branches: [chore/reconciliation-object-staging-20260919]
+    paths: [.github/workflows/reconciliation-objects.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  stage:
+    if: github.repository == 'maxcorrads/hivemind'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Read exact review inputs without retaining credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 438800451b5df07271f8b6cf453b0693c9a70242
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify patch, base and complete output tree
+        id: objects
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch="$RUNNER_TEMP/realtime.patch"
+          cat .github/reconciliation/realtime.patch.gz.b64.1 .github/reconciliation/realtime.patch.gz.b64.2 | base64 --decode | gzip -dc > "$patch"
+          echo "f6050247990682fa0a9b4f7bcfffd5f22fc3620fa0dacd5db830da08a592da38  $patch" | sha256sum --check
+          base=0d8f65cd276011a1f0c86b4747aa3cd172325ae5
+          previous=e4d9deff4212155ccd7f391f7cc78dafacb0add9
+          git cat-file -e "$base^{commit}"
+          git cat-file -e "$previous^{commit}"
+          git checkout --detach "$base"
+          git apply --index --check "$patch"
+          git apply --index "$patch"
+          tree=$(git write-tree)
+          test "$tree" = 35f7901ec251348eb1bed60c2abe5a92825c9594
+          # This complete-tree comparison also guarantees no dependency,
+          # workflow, release, package metadata or unrelated source regression.
+          git diff --cached --stat
+          commit=$(printf '%s\n' 'fix(realtime): reconcile bounded channel snapshots and preserve active history' '' 'Preserve reviewed main, explicit ACK and all dependency upgrades. Reconcile per-request live roots, reactions, thread status and reply counts with an authoritative sequence fence; bounded overflow retries never install partial state. Includes negative-control regressions and mounted history/selection coverage.' | git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit-tree "$tree" -p "$previous" -p "$base")
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/reconciliation-result"
+          printf '{"commit":"%s","tree":"%s","base":"%s","previous":"%s"}\n' "$commit" "$tree" "$base" "$previous" > "$RUNNER_TEMP/reconciliation-result/result.json"
+          cp "$patch" "$RUNNER_TEMP/reconciliation-result/reviewed.patch"
+      - name: Export objects to a new non-product staging ref only
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ steps.objects.outputs.commit }}
+        run: |
+          set -euo pipefail
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w 0)
+          echo "::add-mask::$auth"
+          git -c core.hooksPath=/dev/null -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin "$COMMIT:refs/heads/reconciliation/pr-63-objects-20260919"
+      - name: Retain verification receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: reconciliation-pr-63-objects
+          path: ${{ runner.temp }}/reconciliation-result/
+          retention-days: 1
+          if-no-files-found: error
