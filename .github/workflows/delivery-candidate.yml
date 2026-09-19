@@ -1,0 +1,66 @@
+name: Delivery candidate validation
+on:
+  push:
+    branches: [validation/delivery-integration-20260919]
+    paths:
+      - validation/apply_delivery_candidate.py
+      - .github/workflows/delivery-candidate.yml
+permissions:
+  contents: read
+jobs:
+  candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: control
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: candidate
+          ref: 1ea03e67d345607a0f8fef7d038fa71f142e6705
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22.13.0
+      - name: Reproduce reviewed candidate and verify exact tree
+        working-directory: candidate
+        run: |
+          git config user.name 'Hivemind integration'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          python ../control/validation/apply_delivery_candidate.py
+      - name: Validate source without publishing
+        working-directory: candidate
+        run: |
+          npm ci
+          npm run lint
+          npm run typecheck
+          node --import tsx --test src/server/inbox-digests.test.ts src/mcp/digests.test.ts src/server/inbox-bounds.test.ts src/server/query-contracts.test.ts src/server/bots.test.ts src/server/hive.test.ts src/mcp/wait-retry-budget.test.ts src/mcp/wait-loop.test.ts src/mcp/cancellation-contracts.test.ts
+          npm run build
+          test "$(git write-tree)" = 1b2c15c5e7d05392b01b21cf0f69e4781929f61f
+      - name: Retain candidate on an isolated branch, not main or a PR branch
+        working-directory: candidate
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git commit -m 'fix(delivery): integrate recoverable digests and bounded retries'
+          test "$(git rev-parse HEAD^)" = 1ea03e67d345607a0f8fef7d038fa71f142e6705
+          test "$(git rev-parse HEAD^{tree})" = 1b2c15c5e7d05392b01b21cf0f69e4781929f61f
+          askpass=$(mktemp)
+          trap 'rm -f "$askpass"' EXIT
+          cat > "$askpass" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' x-access-token ;;
+            *Password*) printf '%s\n' "$GITHUB_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$askpass"
+          GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0 git push origin HEAD:refs/heads/validation/delivery-candidate-1b2c15c
+          git rev-parse HEAD
