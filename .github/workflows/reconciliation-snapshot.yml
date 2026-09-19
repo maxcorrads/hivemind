@@ -11,32 +11,45 @@ jobs:
   dependencies:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: /tmp/hivemind-validation-browsers
     steps:
-      - name: Checkout the reviewed main baseline
+      - name: Checkout the reviewed main baseline and preserved PR objects
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: 6bee1172c99a78acd7de9f1aa4ab0808f25b7dc0
+          fetch-depth: 0
           persist-credentials: false
       - name: Minimum supported Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: '22.13.0'
-      - name: Install validation tools without changing repository files
+      - name: Prepare the combined dependency cohort for read-only validation
+        shell: bash
         run: |
           set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          Object.assign(p.dependencies, { hono: '^4.13.8', zod: '^4.6.5' });
+          Object.assign(p.devDependencies, { vite: '^8.3.0', concurrently: '^10.0.5', '@playwright/test': '1.63.0' });
+          fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
+          NODE
+          npm install --package-lock-only --ignore-scripts
           npm ci
-          npm install --no-save --package-lock=false @playwright/test@1.63.0
+          npx playwright install --only-shell chromium
           mkdir -p validation-runtime
-          cp "$(command -v node)" validation-runtime/node
-          cp package-lock.json validation-runtime/baseline-package-lock.json
-          npm ls --all --json > validation-runtime/installed.json || test "$?" = 1
+          cp package.json package-lock.json validation-runtime/
+          npm ls --all --json > validation-runtime/installed.json
+          git bundle create validation-runtime/hivemind.bundle --all
           tar -czf validation-runtime/dependencies.tar.gz node_modules
+          tar -czf validation-runtime/browsers.tar.gz -C "$PLAYWRIGHT_BROWSERS_PATH" .
           cd validation-runtime
-          sha256sum node dependencies.tar.gz > SHA256SUMS
-      - name: Export temporary runtime for local tests
+          sha256sum *.tar.gz hivemind.bundle > SHA256SUMS
+      - name: Export temporary integration validation runtime
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: reconciliation-validation-runtime
+          name: reconciliation-integration-runtime
           path: validation-runtime/
           retention-days: 1
           if-no-files-found: error
