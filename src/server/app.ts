@@ -285,6 +285,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const message = hive.postMessage(human, {
       channel: c.req.param("id"),
       body: String(body.body ?? ""),
+      requestId: body.requestId,
       threadId: body.threadId ?? null,
       eventType: body.eventType,
       recipients: body.recipients,
@@ -306,7 +307,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   ui.post("/messages/:seq/reactions", async (c) => {
     const human = hive.getAgent("human");
     const body = await c.req.json();
-    const result = hive.toggleReaction(human, Number(c.req.param("seq")), String(body.emoji ?? ""));
+    const result = hive.setReaction(human, Number(c.req.param("seq")), String(body.emoji ?? ""), body.present);
     return c.json(result);
   });
   ui.post("/dms", async (c) => {
@@ -467,6 +468,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const message = hive.postMessage(me, {
       channel: c.req.param("id"),
       body: String(body.body ?? ""),
+      requestId: body.requestId,
       threadId: body.threadId ?? null,
       eventType: body.eventType,
       recipients: body.recipients,
@@ -509,7 +511,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   agent.post("/messages/:seq/reactions", async (c) => {
     const me = c.get("me");
     const body = await c.req.json();
-    const result = hive.toggleReaction(me, Number(c.req.param("seq")), String(body.emoji ?? ""));
+    const result = hive.setReaction(me, Number(c.req.param("seq")), String(body.emoji ?? ""), body.present);
     return c.json({ ok: true, added: result.added, seq: result.message.seq });
   });
   agent.post("/dms", async (c) => {

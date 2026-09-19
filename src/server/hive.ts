@@ -1,3 +1,4 @@
+import { SendRequests } from "./send-requests.ts";
 import { initTelegramInbox, telegramQuarantine, retryTelegramUpdate, discardTelegramUpdate, type TelegramUpdateScope } from "./telegram-inbox.ts";
 import { initTelegramOutbox, retryTelegramOutboxFailure, pruneTelegramFailures, type TelegramDestination } from "./telegram-outbox.ts";
 import { immediateTransaction } from './transaction.ts';
@@ -139,6 +140,7 @@ export class Hive {
   readonly home: string;
   readonly inbox!: InboxDeliveryStore;
   private readonly inboxReader!: InboxReader;
+  private readonly sendRequests!: SendRequests;
   readonly tasks!: TaskStore;
   readonly rooms!: RoomStore;
   readonly notifications!: NotificationStore;
@@ -179,6 +181,7 @@ export class Hive {
       initTelegramInbox(this.db);
       pruneTelegramFailures(this.db);
       this.readState = new ReadState(this.db);
+      this.sendRequests = new SendRequests(this.db);
       this.tasks = new TaskStore(this);
       this.rooms = new RoomStore(this);
       this.notifications = new NotificationStore(this);
@@ -1218,6 +1221,7 @@ export class Hive {
     input: {
       channel: string;
       body: string;
+      requestId?: string;
       threadId?: string | null;
       kind?: Message["kind"];
       eventType?: Message["eventType"];
@@ -1245,6 +1249,7 @@ export class Hive {
         (actor.role === 'worker' && target.role === 'human')) throw new HiveError(403, 'Recipient must be an accessible permitted person');
       return target.id;
     }))];
+    if (typeof input.body !== "string") throw new HiveError(400, "Expected a string body");
     const body = input.body.trim();
     const attachmentIds = input.attachmentIds ?? [];
     if (attachmentIds.length > FILES_PER_MESSAGE) {
@@ -1282,6 +1287,10 @@ export class Hive {
     // Validate the complete attachment set before any mutation. The transaction
     // below then owns every remaining database write caused by the send.
     return this.transaction(() => {
+      if (input.requestId !== undefined) return this.sendRequests.run(actor.id, ch.projectId, input.requestId,
+        [ch.id, body, input.threadId ?? null, kind, input.control ?? null, input.source ?? "hive",
+          input.eventType ?? null, attachmentIds, [...recipients].sort()],
+        () => this.postMessage(actor, { ...input, requestId: undefined }, persistReceipt), id => this.getMessageById(id));
       if (attachmentIds.length) this.validateAttachments(actor, attachmentIds);
       if (actor.role === "human" && !ch.memberIds.includes(actor.id)) {
         this.addMember(ch.id, actor.id);
@@ -2058,38 +2067,26 @@ export class Hive {
   }
 
   toggleReaction(actor: Agent, seq: number, emoji: string): { message: Message; added: boolean } {
-    if (!REACTION_EMOJIS.includes(emoji as (typeof REACTION_EMOJIS)[number])) {
-      throw new HiveError(400, "Unsupported reaction");
-    }
-    const row = this.db.prepare("SELECT *, CAST(body AS BLOB) AS body FROM messages WHERE seq = ?").get(seq) as MessageRow | undefined;
-    if (!row) throw new HiveError(404, "Message not found");
-    const msg = this.mapMessage(row);
-    const ch = this.getChannel(msg.channelId);
-    if (!this.canSeeChannel(actor, ch) || !this.canPost(actor, ch)) {
-      throw new HiveError(403, "Cannot react here");
-    }
-    const existing = this.db.prepare(
-      "SELECT emoji FROM reactions WHERE message_id = ? AND agent_id = ? AND emoji = ?",
-    ).get(msg.id, actor.id, emoji);
-    if (existing) {
-      this.db.prepare("DELETE FROM reactions WHERE message_id = ? AND agent_id = ? AND emoji = ?").run(
-        msg.id,
-        actor.id,
-        emoji,
-      );
-      const forUi = this.decorate([msg], HUMAN_ID)[0]!;
-      this.bus.emit("reaction", { seq: msg.seq, message: forUi });
-      return { message: this.decorate([msg], actor.id)[0]!, added: false };
-    }
-    this.db.prepare("INSERT INTO reactions (message_id, agent_id, emoji, created_at) VALUES (?, ?, ?, ?)").run(
-      msg.id,
-      actor.id,
-      emoji,
-      now(),
-    );
-    const forUi = this.decorate([msg], HUMAN_ID)[0]!;
-    this.bus.emit("reaction", { seq: msg.seq, message: forUi });
-    return { message: this.decorate([msg], actor.id)[0]!, added: true };
+    return this.setReaction(actor, seq, emoji);
+  }
+
+  /** Omitted present retains legacy toggle; retryable clients use explicit state. */
+  setReaction(actor: Agent, seq: number, emoji: string, present?: boolean): { message: Message; added: boolean } {
+    if (!Number.isSafeInteger(seq) || seq < 1 || !REACTION_EMOJIS.includes(emoji as (typeof REACTION_EMOJIS)[number]) ||
+      (present !== undefined && typeof present !== "boolean")) throw new HiveError(400, "Invalid reaction");
+    return this.transaction(() => {
+      const msg = this.getMessageBySeq(seq), ch = this.getChannel(msg.channelId);
+      if (!this.canSeeChannel(actor, ch) || !this.canPost(actor, ch)) throw new HiveError(403, "Cannot react here");
+      const had = Boolean(this.db.prepare('SELECT 1 FROM reactions WHERE message_id=? AND agent_id=? AND emoji=?').get(msg.id, actor.id, emoji));
+      const wanted = present ?? !had;
+      if (had !== wanted) {
+        if (wanted) this.db.prepare('INSERT INTO reactions(message_id,agent_id,emoji,created_at) VALUES(?,?,?,?)').run(msg.id, actor.id, emoji, now());
+        else this.db.prepare('DELETE FROM reactions WHERE message_id=? AND agent_id=? AND emoji=?').run(msg.id, actor.id, emoji);
+        const forUi = this.decorate([msg], HUMAN_ID)[0]!;
+        this.afterCommit(() => this.bus.emit("reaction", { seq: msg.seq, message: forUi }));
+      }
+      return { message: this.decorate([msg], actor.id)[0]!, added: wanted };
+    });
   }
 
   private decorate(messages: Message[], actorId?: string): Message[] {

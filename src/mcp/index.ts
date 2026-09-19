@@ -1,10 +1,12 @@
+import { sendOperation } from "../client/send-operation.ts";
+import { requestIdSchema } from "../shared/mutation.ts";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { agentDownloadToFile, agentRequest, agentUploadFile, loadIdentityByName, saveIdentity } from "../client/http.ts";
+import { agentDownloadToFile, agentRequest, loadIdentityByName, saveIdentity } from "../client/http.ts";
 import { imagePreview } from "../server/files.ts";
 import { guessMime } from "../shared/mime.ts";
 import { waitUntilMail } from "./wait-loop.ts";
@@ -200,9 +202,10 @@ export async function startMcp() {
 
   server.tool(
     "send",
-    "Post to channel or to (DM by name). For mail from wait, copy channelId as channel and rootId as threadId; ch is only an abbreviated display label. Never reconstruct IDs. A validation rejection did not commit; a timeout, disconnect or server error has an unknown outcome and may follow a committed send. Inspect current history/state before retrying ordinary chat, which has no request-ID deduplication. For task/room retries, reuse exact IDs and payloads. Do not automatically resend on transport failure. Workers cannot @Human or open a new Human DM. They may reply in a Human DM that Human already opened.",
+    "Use requestId to retry an unchanged send within 24 hours without duplication. If omitted, a generated key is returned or included in the error. Post to channel or to (DM by name). For mail from wait, copy channelId as channel and rootId as threadId; ch is only an abbreviated display label. Never reconstruct IDs. A validation rejection did not commit; a timeout, disconnect or server error has an unknown outcome and may follow a committed send. Retry with the same requestId and identical payload; outside 24 hours inspect history first. For task/room retries, reuse exact IDs and payloads. Do not automatically resend on transport failure. Workers cannot @Human or open a new Human DM. They may reply in a Human DM that Human already opened.",
     {
       body: z.string(),
+      requestId: requestIdSchema.optional(),
       channel: z.string().optional(),
       to: z.string().optional(),
       threadId: z.string().optional(),
@@ -210,21 +213,14 @@ export async function startMcp() {
       recipients: z.array(z.string()).min(1).max(32).optional().describe('Intended recipient names already able to access the channel. Other peers only wake if explicitly subscribed or mentioned. This does not invite or grant access.'),
       eventType: z.enum(MESSAGE_EVENT_TYPES).optional().describe("Declare assignment/decision/blocker/question/action_required when applicable. Non-actionable progress is batched/summarized. acknowledgement is history-only for agents unless it carries task evidence/files. Omit when unsure. No type grants authority or changes task state."),
     },
-    async ({ body, channel, to, threadId, attachmentIds, eventType, recipients }) => {
+    async ({ body, channel, to, threadId, attachmentIds, eventType, recipients, requestId }) => {
       let channelId = channel;
       if (to) {
         const dm = await agentRequest<{ channel: Channel }>("POST", "/api/agent/dms", { name: to }, token());
         channelId = dm.channel.id;
       }
       if (!channelId) throw new Error("Provide channel or to");
-      return text(
-        await agentRequest<{ ok: boolean; seq: number; id: string }>(
-          "POST",
-          `/api/agent/channels/${encodeURIComponent(channelId)}/messages`,
-          { body, threadId: threadId ?? null, attachmentIds, eventType, recipients },
-          token(),
-        ),
-      );
+      return text(await sendOperation({ channel: channelId, body, threadId, attachmentIds, eventType, recipients }, token(), requestId));
     },
   );
 
@@ -364,6 +360,7 @@ export async function startMcp() {
     "Upload a local file and post it. Same channel/to/thread as send.",
     {
       path: z.string(),
+      requestId: requestIdSchema.optional(),
       body: z.string().optional(),
       channel: z.string().optional(),
       to: z.string().optional(),
@@ -372,32 +369,19 @@ export async function startMcp() {
       eventType: z.enum(MESSAGE_EVENT_TYPES).optional(),
       recipients: z.array(z.string()).min(1).max(32).optional(),
     },
-    async ({ path: filePath, body, channel, to, threadId, mime, eventType, recipients }) => {
+    async ({ path: filePath, body, channel, to, threadId, mime, eventType, recipients, requestId }) => {
       const resolved = path.resolve(filePath);
       if (!existsSync(resolved)) throw new Error(`File not found: ${filePath}`);
       const name = path.basename(resolved);
       const guessed = mime ?? guessMime(name);
-      const uploaded = await agentUploadFile<{ file: { id: string; name: string; mime: string; bytes: number } }>(
-        "/api/agent/files",
-        resolved,
-        token(),
-        name,
-        guessed,
-      );
       let channelId = channel;
       if (to) {
         const dm = await agentRequest<{ channel: Channel }>("POST", "/api/agent/dms", { name: to }, token());
         channelId = dm.channel.id;
       }
       if (!channelId) throw new Error("Provide channel or to");
-      return text(
-        await agentRequest(
-          "POST",
-          `/api/agent/channels/${encodeURIComponent(channelId)}/messages`,
-          { body: body ?? "", threadId: threadId ?? null, attachmentIds: [uploaded.file.id], eventType, recipients },
-          token(),
-        ),
-      );
+      return text(await sendOperation({ channel: channelId, body: body ?? "", threadId, eventType, recipients,
+        file: { path: resolved, name, mime: guessed } }, token(), requestId));
     },
   );
 
@@ -443,10 +427,10 @@ export async function startMcp() {
 
   server.tool(
     "react",
-    "Toggle a reaction on a message seq: 👍 👎 👀 🚩 ✅ ❓",
-    { seq: z.number(), emoji: z.string() },
-    async ({ seq, emoji }) => {
-      return text(await agentRequest("POST", `/api/agent/messages/${seq}/reactions`, { emoji }, token()));
+    "Set a reaction on a message seq: 👍 👎 👀 🚩 ✅ ❓. present defaults to true; false removes. Repeating the same desired state is safe.",
+    { seq: z.number(), emoji: z.string(), present: z.boolean().optional() },
+    async ({ seq, emoji, present }) => {
+      return text(await agentRequest("POST", `/api/agent/messages/${seq}/reactions`, { emoji, present: present ?? true }, token()));
     },
   );
 

@@ -1,3 +1,4 @@
+import { createSendOperations } from "./send-operation.ts";
 import { beginChannelJournal, recordChannelMessage, recordChannelThread, applyChannelMessage, reconcileChannelSnapshot, type ChannelJournal } from "./channel-state.ts";
 import { newerTelegramHealth, telegramDegraded, type TelegramHealth } from "./telegram-health.ts";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
@@ -620,16 +621,13 @@ export function App() {
     return () => { window.clearTimeout(timer); inboxLoad.current.cancel(); };
   }, [inboxSelected, readTick, reconnectTick]);
 
+  const sendOperations = useRef(createSendOperations(api.upload, api.send));
   const send = async (body: string, tid?: string | null, files?: File[]) => {
     if (sel.kind !== "channel") return;
     const channelId = sel.id;
     const root = tid ?? null;
-    const attachmentIds: string[] = [];
-    for (const file of files ?? []) {
-      attachmentIds.push((await api.upload(file)).id);
-    }
-    if (!body.trim() && attachmentIds.length === 0) return;
-    const { message } = await api.send(channelId, body.trim(), root, attachmentIds);
+    if (!body.trim() && !files?.length) return;
+    const { message } = await sendOperations.current(channelId, body.trim(), root, files);
     if (selRef.current.kind !== "channel" || selRef.current.id !== channelId || (root && threadIdRef.current !== root)) return;
     if (root) setThreadDraft((current) => current === body ? "" : current);
     else setDraft((current) => current === body ? "" : current);
@@ -1028,7 +1026,7 @@ export function App() {
                     if (sel.kind !== "channel") return;
                     go({ kind: "channel", id: sel.id, thread: m.id });
                   }}
-                  onReact={(emoji) => api.react(m.seq, emoji).then((r) => {
+                  onReact={(emoji) => api.react(m.seq, emoji, !m.reactions?.some(reaction => reaction.emoji === emoji && reaction.mine)).then((r) => {
                     recordChannelMessage(channelJournal.current, r.message, false);
                     setPane((p) => applyChannelMessage(p, r.message, false));
                   })}
@@ -1135,7 +1133,7 @@ export function App() {
                 m={m}
                 replies={0}
                 status={null}
-                onReact={(emoji) => api.react(m.seq, emoji).then((r) => onThreadMessage(r.message))}
+                onReact={(emoji) => api.react(m.seq, emoji, !m.reactions?.some(reaction => reaction.emoji === emoji && reaction.mine)).then((r) => onThreadMessage(r.message))}
               />
             ))}
             {threadPane.hasNewer && (
