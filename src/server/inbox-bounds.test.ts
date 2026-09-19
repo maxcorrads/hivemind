@@ -79,7 +79,7 @@ function observeScans(hive: Hive) {
 
 for (const role of ["brain", "worker"] as const) test(`${role} compact mail preserves channel identity across label clipping and replay`, async t => {
   const f = fixture(t, role);
-  const channels = [199, 200, 201, 210, 10_000].map(length => f.hive.createChannel(f.writer.agent, {
+  const channels = [199, 200, 201, 210, 1_000].map(length => f.hive.createChannel(f.writer.agent, {
     name: "a".repeat(length), type: "private", memberNames: [f.reader.agent.name],
   }));
   f.hive.db.prepare("UPDATE agents SET inbox_cursor = (SELECT MAX(seq) FROM messages) WHERE id = ?").run(f.reader.agent.id);

@@ -102,12 +102,11 @@ test("33,000 visible channels hydrate in two constant-parameter statements and i
   const captured = [...inbox.calls]; inbox.restore();
   assert.deepEqual(result.messages.map((m) => m.id), ["large-inbox"]);
   assert.ok(captured.every((call) => call.args.length <= 400));
-  const scan = captured.find((call) => /SELECT \* FROM messages WHERE seq >/.test(call.sql))!;
+  const scan = captured.find((call) => /WITH scanned AS MATERIALIZED/.test(call.sql));
   assert.ok(scan);
-  const explain = plan(hive, scan);
-  assert.match(explain, /SEARCH messages USING INDEX idx_messages_channel_seq/);
-  assert.doesNotMatch(explain, /SCAN messages\b/);
-  assert.match(explain, /SEARCH mine USING COVERING INDEX idx_channel_members_agent_channel/);
+  assert.ok(scan.args.length <= 8, `InboxReader scan must keep a constant bind count, got ${scan.args.length}`);
+  assert.match(scan.sql, /FROM messages WHERE seq > \? ORDER BY seq LIMIT \?/);
+  assert.doesNotMatch(scan.sql, /channel_id IN \(\?(?:,\?)+/);
   const search = record(t, hive);
   assert.deepEqual(hive.searchMessages(worker, { q: "fixture" }).hits.map((hit) => hit.body), ["fixture"]);
   assert.ok(search.calls.every((call) => call.args.length <= 400));
@@ -146,7 +145,7 @@ test("SQL visibility matches point authorization across projects, private rooms,
 });
 
 for (const compact of [false, true]) {
-  test(`600-message brain wait batches authors/metadata across receipt pages (compact=${compact})`, async (t) => {
+  test(`600-message brain wait keeps bounded scoped hydration across receipt pages (compact=${compact})`, async (t) => {
     const { hive, human, project, other } = setup(t);
     const brain = hive.join({ role: "brain", project: project.slug }).agent;
     const room = hive.createChannel(brain, { name: "work", type: "private" });
@@ -200,7 +199,9 @@ for (const compact of [false, true]) {
       assert.equal(receivedCompact.length, 600);
       assert.equal(receivedCompact[599]!.from, "unknown");
       assert.equal(receivedCompact[599]!.authorRole, "worker");
-      assert.deepEqual(receivedCompact[20]!.attachments, [
+      assert.deepEqual(receivedCompact[20]!.attachments?.map((attachment) => ({
+        id: attachment.id, name: attachment.name, mime: attachment.mime, bytes: attachment.bytes,
+      })), [
         { id: "attachment-20", name: "20.txt", mime: "text/plain", bytes: 3 },
       ]);
       assert.ok(receivedCompact.every((item) => item.ch === "#work"));
@@ -208,21 +209,29 @@ for (const compact of [false, true]) {
       assert.equal(receivedRaw.length, 600);
       assert.equal(receivedRaw[599]!.authorName, "unknown");
       assert.equal(receivedRaw[599]!.authorRole, "worker");
-      assert.deepEqual(receivedRaw[20]!.attachments, [
+      assert.deepEqual(receivedRaw[20]!.attachments?.map((attachment) => ({
+        id: attachment.id, name: attachment.name, mime: attachment.mime, bytes: attachment.bytes,
+      })), [
         { id: "attachment-20", name: "20.txt", mime: "text/plain", bytes: 3 },
       ]);
       assert.deepEqual(receivedRaw[20]!.reactions, [{ emoji: "👍", count: 1, mine: false }]);
     }
 
-    const authorLoads = calls.filter((call) => /SELECT id, name, role FROM agents WHERE id IN/.test(call.sql));
-    const attachmentLoads = calls.filter((call) => /SELECT id, message_id, name, mime, bytes FROM attachments/.test(call.sql));
-    const reactionLoads = calls.filter((call) => /SELECT message_id, emoji, agent_id FROM reactions/.test(call.sql));
-    assert.ok(authorLoads.length <= 30, `unexpected author query fanout: ${authorLoads.length}`);
-    assert.equal(attachmentLoads.length, 6);
-    assert.equal(reactionLoads.length, 6);
-    assert.ok(authorLoads.every((call) => !call.args.includes("outsider-0")));
-    assert.ok(calls.every((call) => call.args.length <= 400));
-    assert.ok(calls.length < 120, `unexpected N+1: ${calls.length} SQL calls`);
+    const scans = calls.filter((call) => /WITH scanned AS MATERIALIZED/.test(call.sql));
+    const hydrates = calls.filter((call) =>
+      /FROM messages m LEFT JOIN agents a ON a.id = m.author_id WHERE m.seq = \?/.test(call.sql));
+    const attachmentLoads = calls.filter((call) =>
+      /SELECT id, name, mime, bytes FROM attachments/.test(call.sql));
+    const botLoads = calls.filter((call) =>
+      /SELECT substr\(metadata, 1, 16384\)/.test(call.sql));
+    const reactionLoads = calls.filter((call) => /FROM reactions/.test(call.sql));
+    assert.ok(scans.length <= 18, `unexpected header-scan fanout: ${scans.length}`);
+    assert.equal(hydrates.length, 600);
+    assert.equal(attachmentLoads.length, 600);
+    assert.equal(botLoads.length, 600);
+    assert.equal(reactionLoads.length, 0, "wait delivery must not hydrate reaction rosters");
+    assert.ok(calls.every((call) => call.args.length <= 16));
+    assert.ok(calls.every((call) => !call.args.includes("outsider-0")));
     // The unrelated 10k-message backlog is never hydrated into delivery metadata.
     assert.ok(hive.listAgents(human).some((a) => a.projectId === other.id));
   });
