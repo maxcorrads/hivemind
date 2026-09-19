@@ -1,56 +1,94 @@
-import type { Agent, AttachmentMeta, Channel, Message, Project, SearchHit, Thread, ThreadStatus } from "../src/shared/types.ts";
+import type { TelegramHealth } from "./telegram-health.ts";
+import type { Agent, BotCredentialView, AttachmentMeta, Channel, Message, Project, SearchHit, Thread, ThreadStatus, InboxStatus } from "../src/shared/types.ts";
+import type { MentionPage, ReadSnapshot } from "../src/shared/read-state.ts";
 import { resolveUploadMime } from "../src/shared/mime.ts";
+import type { LaunchContext } from "../src/shared/launch-prompt.ts";
+import type { ProjectPluginView, SettingsValues } from "../src/shared/plugin-settings.ts";
+import { humanSession, connectHumanWs } from "./human-session.ts";
+import type { TaskSnapshot } from '../src/shared/tasks.ts';
+import type { RoomView, Room } from '../src/shared/rooms.ts';
+
+export class ApiError extends Error {
+  constructor(readonly status: number, message: string) { super(message); }
+}
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
+  const res = await humanSession.request(path, {
     ...init,
     headers: { "content-type": "application/json", ...init?.headers },
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  if (!res.ok) throw new ApiError(res.status, data.error || `HTTP ${res.status}`);
   return data as T;
 }
 
-export type Snapshot = {
+export type Snapshot = ReadSnapshot & {
   you: Agent;
   projects: Project[];
   agents: Agent[];
   channels: Channel[];
-  unread: Record<string, number>;
-  mentions: Message[];
-  mentionsHasMore?: boolean;
   queued: Record<string, number>;
-  telegram?: { running: boolean; configured: boolean };
+  inbox?: Record<string, InboxStatus>;
+  telegram?: { running: boolean; configured: boolean } & TelegramHealth;
 };
 
-export type TelegramSettings = {
+export type TelegramSettings = TelegramHealth & {
   running: boolean;
   configured: boolean;
   tokenSet: boolean;
   tokenHint: string | null;
   allowUserIds: number[];
   projects: Record<string, number>;
+  diagnosticsPruned?: number; failures?: number;
 };
 
 export type ChannelPayload = {
+  task?: TaskSnapshot;
   channel: Channel;
+  threadId: string | null;
   messages: Message[];
   hasOlder?: boolean;
+  hasNewer?: boolean;
+  cursors?: { before?: number; after?: number };
   threads: Thread[];
   replyCounts: Record<string, number>;
 };
 
 export const api = {
-  snapshot: () => req<Snapshot>("/api/ui/snapshot"),
-  mentions: (beforeSeq?: number, project?: string) => {
+  botCredential: (project: string, bot: string) => req<BotCredentialView>(
+    `/api/ui/projects/${encodeURIComponent(project)}/bots/${encodeURIComponent(bot)}/credential`),
+  changeBotCredential: (project: string, bot: string, action: 'rotate' | 'revoke', expectedRevision: number) =>
+    req<BotCredentialView & { token?: string }>(`/api/ui/projects/${encodeURIComponent(project)}/bots/${encodeURIComponent(bot)}/credential`,
+      { method: 'POST', body: JSON.stringify({ action, expectedRevision }) }),
+  room: (channel: string) => req<RoomView>(`/api/ui/channels/${encodeURIComponent(channel)}/room`),
+  roomHistory: (channel: string, before?: number) => req<{ history: Room[] }>(`/api/ui/channels/${encodeURIComponent(channel)}/room/history?before=${before ?? Number.MAX_SAFE_INTEGER}`),
+  roomEvent: (channel: string, body: unknown) => req<RoomView>(`/api/ui/channels/${encodeURIComponent(channel)}/room`, { method: 'POST', body: JSON.stringify(body) }),
+  launchContext: (project: string) => req<LaunchContext>(`/api/ui/launch-context?project=${encodeURIComponent(project)}`),
+  projectPlugins: (slug: string) => req<{ plugins: ProjectPluginView[] }>(`/api/ui/projects/${encodeURIComponent(slug)}/plugins`),
+  setPluginAvailability: (slug: string, id: string, body: { enabled: boolean; expectedRevision: number }) =>
+    req<{ plugin: ProjectPluginView }>(`/api/ui/projects/${encodeURIComponent(slug)}/plugins/${encodeURIComponent(id)}`,
+      { method: "PATCH", body: JSON.stringify(body) }),
+  saveProjectPlugin: (slug: string, id: string, body: { enabled: boolean; values: SettingsValues; expectedRevision: number }) =>
+    req<{ plugin: ProjectPluginView }>(`/api/ui/projects/${encodeURIComponent(slug)}/plugins/${encodeURIComponent(id)}`,
+      { method: "PUT", body: JSON.stringify(body) }),
+  createBot: (projectId: string, name: string) => req<{ bot: Agent; token: string }>(
+    `/api/ui/projects/${encodeURIComponent(projectId)}/bots`, { method: "POST", body: JSON.stringify({ name }) },
+  ),
+  snapshot: (signal?: AbortSignal) => req<Snapshot>("/api/ui/snapshot", { signal }),
+  readState: (signal?: AbortSignal) => req<ReadSnapshot>("/api/ui/read-state", { signal }),
+  markMessagesSeen: (channelId: string, threadId: string | null, messageSeqs: number[], signal?: AbortSignal) =>
+    req<ReadSnapshot>("/api/ui/read", {
+      method: "POST", body: JSON.stringify({ channelId, threadId, messageSeqs }), signal,
+    }),
+  mentions: (beforeSeq?: number, project?: string, signal?: AbortSignal) => {
     const q = new URLSearchParams();
     if (beforeSeq) q.set("beforeSeq", String(beforeSeq));
     if (project) q.set("project", project);
     const suffix = q.toString() ? `?${q}` : "";
-    return req<{ messages: Message[]; hasMore: boolean }>(`/api/ui/mentions${suffix}`);
+    return req<MentionPage>(`/api/ui/mentions${suffix}`, { signal });
   },
   markMentionsSeen: (project?: string) =>
-    req<{ messages: Message[]; hasMore: boolean; unread: Record<string, number> }>("/api/ui/mentions/seen", {
+    req<MentionPage & { unread: Record<string, number>; readState: ReadSnapshot }>("/api/ui/mentions/seen", {
       method: "POST",
       body: JSON.stringify({ project }),
     }),
@@ -82,12 +120,13 @@ export const api = {
     if (limit) params.set("limit", String(limit));
     return req<{ hits: SearchHit[]; hasMore: boolean }>(`/api/ui/search?${params}`, { signal });
   },
-  messages: (id: string, threadId?: string | null, beforeSeq?: number) => {
+  messages: (id: string, threadId?: string | null, beforeSeq?: number, signal?: AbortSignal, afterSeq?: number) => {
     const q = new URLSearchParams();
     if (threadId) q.set("threadId", threadId);
+    if (afterSeq !== undefined) q.set("afterSeq", String(afterSeq));
     if (beforeSeq) q.set("beforeSeq", String(beforeSeq));
     const suffix = q.toString() ? `?${q}` : "";
-    return req<ChannelPayload>(`/api/ui/channels/${encodeURIComponent(id)}/messages${suffix}`);
+    return req<ChannelPayload>(`/api/ui/channels/${encodeURIComponent(id)}/messages${suffix}`, { signal });
   },
   send: (id: string, body: string, threadId?: string | null, attachmentIds?: string[]) =>
     req<{ message: Message }>(`/api/ui/channels/${encodeURIComponent(id)}/messages`, {
@@ -95,7 +134,7 @@ export const api = {
       body: JSON.stringify({ body, threadId: threadId ?? null, attachmentIds }),
     }),
   upload: async (file: File): Promise<AttachmentMeta> => {
-    const res = await fetch("/api/ui/files", {
+    const res = await humanSession.request("/api/ui/files", {
       method: "POST",
       headers: {
         "x-file-name": file.name || "paste.png",
@@ -141,30 +180,5 @@ export function connectWs(
   onEvent: (ev: { type: string; payload: unknown }) => void,
   onLive?: (ok: boolean) => void,
 ): () => void {
-  let closed = false;
-  let socket: WebSocket | null = null;
-  let timer = 0;
-  const connect = () => {
-    if (closed) return;
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    socket = new WebSocket(`${proto}://${location.host}/ws`);
-    socket.onopen = () => onLive?.(true);
-    socket.onmessage = (e) => {
-      try {
-        onEvent(JSON.parse(String(e.data)));
-      } catch {
-        /* ignore */
-      }
-    };
-    socket.onclose = () => {
-      onLive?.(false);
-      if (!closed) timer = window.setTimeout(connect, 1500);
-    };
-  };
-  connect();
-  return () => {
-    closed = true;
-    window.clearTimeout(timer);
-    socket?.close();
-  };
+  return connectHumanWs(humanSession, onEvent, onLive);
 }

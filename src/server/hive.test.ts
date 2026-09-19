@@ -220,14 +220,14 @@ test("compact wait: worker gets body, brain digest on many DMs, cursor keeps the
   const workers = [0, 1, 2].map(() => hive.join({ role: "worker", seniority: "mid" }));
   for (const w of workers) {
     const dm = hive.openDm(brain.agent, w.agent.name);
-    hive.postMessage(w.agent, { channel: dm.id, body: `report from ${w.agent.name} with enough text` });
+    hive.postMessage(w.agent, { channel: dm.id, body: `report from ${w.agent.name} with enough text`, eventType: "progress" });
   }
   const compact = await hive.wait(brain.agent, 300, undefined, { compact: true });
   assert.equal(compact.idle, false);
   assert.match(compact.next, /wait again/);
   assert.equal(compact.messages.length, 0);
   assert.ok((compact.mail?.length ?? 0) >= 1);
-  assert.ok(compact.mail?.every((m) => m.excerpt || m.body));
+  assert.ok(compact.mail?.every((m) => m.excerpt && m.expand));
 
   const worker = workers[0]!;
   const dm = hive.findDm(brain.agent.id, worker.agent.id)!;
@@ -244,12 +244,15 @@ test("brain wait caps conversations not a single flooded DM", async () => {
   const other = hive.join({ role: "worker", seniority: "mid" });
   const floodDm = hive.openDm(brain.agent, flooded.agent.name);
   const otherDm = hive.openDm(brain.agent, other.agent.name);
+  let root: string | undefined;
   for (let i = 0; i < 8; i += 1) {
-    hive.postMessage(flooded.agent, { channel: floodDm.id, body: `flood ${i}` });
+    const message = hive.postMessage(flooded.agent, { channel: floodDm.id, body: `flood ${i}`, threadId: root, eventType: "progress" });
+    root ??= message.id;
   }
-  hive.postMessage(other.agent, { channel: otherDm.id, body: "second conversation" });
-  const first = await hive.wait(brain.agent, 200, undefined, { compact: true });
+  hive.postMessage(other.agent, { channel: otherDm.id, body: "second conversation", eventType: "progress" });
+  const first = await hive.wait(brain.agent, 500, undefined, { compact: true });
   assert.equal(first.mail?.length, 2);
+  assert.equal(first.mail?.find(m => m.rootId === root)?.count, 8);
   assert.ok(first.mail?.some((m) => /second conversation/.test(m.excerpt ?? m.body ?? "")));
   rmSync(dir, { recursive: true, force: true });
 });
@@ -262,18 +265,11 @@ test("inbox cursor does not skip capped mail", async () => {
     const dm = hive.openDm(brain.agent, w.agent.name);
     hive.postMessage(w.agent, { channel: dm.id, body: `ping ${w.agent.name}` });
   }
-  const first = await hive.wait(brain.agent, 200, undefined, {
-    compact: true,
-    sessionId: "cursor-contract",
-  });
+  const first = await hive.wait(brain.agent, 200, undefined, { compact: true });
   assert.equal(first.idle, false);
   assert.ok((first.more ?? 0) > 0);
-  assert.ok(first.deliveryId);
-  hive.ackDelivery(brain.agent, first.deliveryId!, "cursor-contract");
-  const second = await hive.wait(brain.agent, 200, undefined, {
-    compact: true,
-    sessionId: "cursor-contract",
-  });
+  hive.acknowledgeInbox(brain.agent, first.delivery!.sessionId, first.delivery!.id);
+  const second = await hive.wait(brain.agent, 200, undefined, { compact: true });
   assert.equal(second.idle, false);
   rmSync(dir, { recursive: true, force: true });
 });
@@ -367,10 +363,7 @@ test("queued counts pending isFor mail and drops after wait", async () => {
   hive.postMessage(brain.agent, { channel: dm.id, body: "do the settings" });
   assert.equal(hive.queuedCounts()[worker.agent.id], 1);
   assert.equal(hive.queuedCounts()[brain.agent.id] ?? 0, 0);
-  const delivered = await hive.wait(worker.agent, 200, undefined, { sessionId: "queue-contract" });
-  assert.equal(hive.queuedCounts()[worker.agent.id], 1, "in-flight mail remains unacknowledged");
-  assert.ok(delivered.deliveryId);
-  hive.ackDelivery(worker.agent, delivered.deliveryId!, "queue-contract");
+  await hive.wait(worker.agent, 200);
   assert.equal(hive.queuedCounts()[worker.agent.id], 0);
   rmSync(dir, { recursive: true, force: true });
 });

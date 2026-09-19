@@ -20,7 +20,9 @@
     "typecheck": "npm run typecheck:server && npm run typecheck:web",
     "check": "npm run lint && npm run typecheck && npm test && npm run build",
     "prepack": "npm run build",
-    "lint": "oxlint --deny-warnings src web scripts vite.config.ts"
+    "lint": "oxlint --deny-warnings src web scripts vite.config.ts",
+    "test:inbox-bounds": "tsx --test src/server/inbox-bounds.test.ts",
+    "benchmark:inbox": "tsx scripts/benchmark-inbox.ts"
   },
   "engines": {
     "node": ">=22.13.0"
@@ -28,29 +30,39 @@
   "dependencies": {
     "@hono/node-server": "^1.19.6",
     "@modelcontextprotocol/sdk": "^1.20.2",
-    "hono": "^4.10.3",
+    "hono": "^4.13.8",
     "tsx": "^4.20.5",
     "ws": "^8.18.3",
-    "zod": "^3.25.76"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@types/node": "^24.5.2",
+    "@types/node": "^26.6.1",
     "@types/react": "^19.1.13",
     "@types/react-dom": "^19.1.9",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^5.0.4",
-    "concurrently": "^9.2.1",
+    "concurrently": "^10.0.5",
+    "happy-dom": "20.14.5",
+    "oxlint": "1.83.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "typescript": "^5.9.2",
-    "vite": "^7.1.7",
-    "oxlint": "1.83.0"
+    "vite": "^8.3.0"
   },
   "files": [
     "bin",
     "src",
     "dist/web",
-    "README.md"
+    "README.md",
+    "BOT-PROTOCOL.md",
+    "PLUGINS.md",
+    "EXTENSIBILITY-SECURITY.md",
+    "docs/local-human-security.md",
+    "COORDINATION.md",
+    "NOTIFICATIONS.md",
+    "ROOMS.md",
+    "TASK-PROTOCOL.md",
+    "DELIVERY-PROTOCOL.md"
   ],
   "license": "SEE LICENSE IN LICENSE"
 }

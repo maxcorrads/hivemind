@@ -13,11 +13,22 @@ async function json(
   body?: unknown,
   token?: string,
 ) {
+  let cookie: string | undefined;
+  if (url.startsWith("/api/ui/")) {
+    const bootstrap = await fetch(`${base}/api/ui/session`, {
+      method: "POST", headers: { origin: base, "content-type": "application/json" },
+    });
+    assert.equal(bootstrap.status, 200);
+    cookie = bootstrap.headers.get("set-cookie")?.split(";")[0];
+    await bootstrap.body?.cancel();
+    assert.ok(cookie);
+  }
   const res = await fetch(`${base}${url}`, {
     method,
     headers: {
       "content-type": "application/json",
       ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...(cookie ? { cookie, origin: base } : {}),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
@@ -50,6 +61,8 @@ test("HTTP protocol: join, isolate, wait, Human admin", async () => {
     assert.equal(worker.status, 200);
     const brainTok = brain.data.token as string;
     const workerTok = worker.data.token as string;
+    const sessionId = crypto.randomUUID();
+    assert.equal((await json(base, "POST", "/api/agent/inbox/session", { sessionId }, workerTok)).status, 200);
     const workerName = worker.data.agent.name as string;
     const brainName = brain.data.agent.name as string;
 
@@ -68,7 +81,7 @@ test("HTTP protocol: join, isolate, wait, Human admin", async () => {
     await json(base, "POST", "/api/ui/channels/general/messages", {
       body: "public chatter only",
     });
-    const idle = await json(base, "POST", "/api/agent/wait", { timeoutMs: 400 }, workerTok);
+    const idle = await json(base, "POST", "/api/agent/wait", { timeoutMs: 400, sessionId }, workerTok);
     assert.equal(idle.data.idle, true);
 
     await json(base, "POST", "/api/agent/dms", { name: workerName }, brainTok);
@@ -87,25 +100,10 @@ test("HTTP protocol: join, isolate, wait, Human admin", async () => {
       { body: "build the login form" },
       brainTok,
     );
-    const mail = await json(
-      base,
-      "POST",
-      "/api/agent/wait",
-      { timeoutMs: 800, sessionId: "http-protocol-test" },
-      workerTok,
-    );
+    const mail = await json(base, "POST", "/api/agent/wait", { timeoutMs: 800, sessionId }, workerTok);
     assert.equal(mail.data.idle, false);
     const bodies = [...mail.data.messages, ...mail.data.mentions].map((m: { body: string }) => m.body);
     assert.ok(bodies.some((b: string) => /login/.test(b)));
-    assert.ok(mail.data.deliveryId);
-    const ack = await json(
-      base,
-      "POST",
-      "/api/agent/wait/ack",
-      { deliveryId: mail.data.deliveryId, sessionId: "http-protocol-test" },
-      workerTok,
-    );
-    assert.equal(ack.status, 200);
 
     const after = await json(base, "GET", "/api/ui/snapshot");
     assert.ok(after.data.channels.some((c: { type: string }) => c.type === "dm"));
@@ -185,14 +183,28 @@ test("HTTP protocol: join, isolate, wait, Human admin", async () => {
     const seen = await json(base, "POST", "/api/ui/mentions/seen");
     assert.equal(seen.status, 200);
     assert.equal(seen.data.messages.length, 0);
-    assert.equal(seen.data.unread.general ?? 0, 0);
+    const remaining = hive.listMessages(hive.getAgent("human"), "general", { limit: 200 }).messages
+      .filter((message) => message.authorId !== "human" && !message.mentions.includes("human"));
+    assert.equal(seen.data.unread.general ?? 0, remaining.length);
+    assert.ok(remaining.length > 0);
+    const read = await json(base, "POST", "/api/ui/read", {
+      channelId: "general", messageSeqs: remaining.map((message) => message.seq),
+    });
+    assert.equal(read.status, 200);
+    assert.equal(read.data.unread.general, 0);
   } finally {
-    started.shutdown();
+    await started.shutdown();
+    hive.db.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("Human Telegram UI saves settings and never returns the bot token", async () => {
+test("Human Telegram UI saves settings and never returns the bot token", async t => {
+  const originalFetch = globalThis.fetch;
+  t.mock.method(globalThis, "fetch", (url: string | URL | Request, init?: RequestInit) => {
+    if (String(url).startsWith("https://api.telegram.org/")) return Promise.resolve(Response.json({ ok: true, result: { id: 42, is_bot: true } }));
+    return originalFetch(url, init);
+  });
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-http-tg-"));
   const hive = new Hive(path.join(dir, "hive.db"));
   const started = startServer({ port: 0, hive, telegram: false });
@@ -247,7 +259,8 @@ test("Human Telegram UI saves settings and never returns the bot token", async (
     assert.equal(tg.data.projects.altro, undefined);
     assert.equal(tg.data.projects.chapter, -1002);
   } finally {
-    started.shutdown();
+    await started.shutdown();
+    hive.db.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });
