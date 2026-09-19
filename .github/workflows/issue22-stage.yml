@@ -1,0 +1,48 @@
+name: Verify API budget candidate
+on:
+  push:
+    branches: [maintenance/issue22-review-inputs]
+    paths: [.github/workflows/issue22-stage.yml]
+permissions:
+  contents: read
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: dfeb0df7f0e62c93e0688495d5064a4b732daf77
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check immutable input and complete output tree
+        id: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch="$RUNNER_TEMP/issue22.patch"
+          cat .review/boundary.{1,2,3,4,5,6,7,8}.b64 | base64 --decode | gzip -dc > "$patch"
+          echo "9c205f1fd932b90a96316f2d4d47d54bffaf2f862cd89dd78e975f0fd263acfc  $patch" | sha256sum --check
+          base=2ac2158c137df52a2d7d5b0fc9f123ae03debc1d
+          test "$(git rev-parse "$base^{tree}")" = 4d16edd90f9bb504dd340015938854f0c26f6798
+          git checkout --detach "$base"
+          git apply --index --check "$patch"
+          git apply --index "$patch"
+          tree=$(git write-tree)
+          test "$tree" = bbbae10c2364ff369ddfacc03cba193276f8a303
+          git diff --cached --stat
+          git diff --exit-code "$base" "$tree" -- .github/workflows
+          commit=$(printf '%s\n' 'fix(api): validate boundaries and bound JSON upload and client resources' | git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit-tree "$tree" -p "$base")
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+      - name: Export source-only objects to a new review ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ steps.candidate.outputs.commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w 0)
+          echo "::add-mask::$auth"
+          git -c core.hooksPath=/dev/null -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin "$COMMIT:refs/heads/review/issue22-candidate-20260919"
