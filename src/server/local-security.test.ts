@@ -210,7 +210,11 @@ test("actual Vite proxy preserves the trusted HTTP/WS origin and backend cookie 
   process.env.HIVEMIND_URL = f.base;
   const vite = await (async () => {
     try {
-      return await createViteServer({ server: { port: 0, strictPort: false }, logLevel: "silent" });
+      return await createViteServer({
+        // Concurrent Node test processes must not share optimizer cache state.
+        cacheDir: path.join(f.hive.home, "vite-cache"),
+        server: { port: 0, strictPort: false }, logLevel: "silent",
+      });
     } finally {
       if (previous === undefined) delete process.env.HIVEMIND_URL;
       else process.env.HIVEMIND_URL = previous;
@@ -228,9 +232,14 @@ test("actual Vite proxy preserves the trusted HTTP/WS origin and backend cookie 
   assert.equal(cookie, await bootstrap(f.base));
   assert.match(cookie, new RegExp(`^hivemind_human_${f.port}=`));
   assert.equal((await json(base, "/api/ui/snapshot", { headers: { cookie, origin: base } })).status, 200);
-  assert.equal((await handshake(t, base, { cookie, origin: base })).status, 101);
+  const connected = await handshake(t, base, { cookie, origin: base });
+  assert.equal(connected.status, 101);
+  const closed = once(connected.ws, "close");
+  connected.ws.close(1000);
+  assert.equal((await closed)[0], 1000);
   assert.equal((await handshake(t, base, { cookie, origin: f.base })).status, 403);
   const root = await fetch(base);
-  await root.body?.cancel();
+  await root.text();
   assert.equal(root.headers.get("x-frame-options"), "DENY");
+  await vite.environments.client.waitForRequestsIdle();
 });
