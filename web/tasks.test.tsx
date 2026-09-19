@@ -210,3 +210,20 @@ test('failed loads release their buffer without discarding live data or cancelli
   assert.equal(failThreadLoad(view, 2), view);
   assert.equal(view.pendingLoad!.id, 3);
 });
+
+test('latest checkpoint renders next action, age and stale-contract warnings without implying completion', () => {
+  const checkpoint = { version: 2, taskRevision: 5, contractVersion: 1, workerId: 'w',
+    objective: task.contract.objective, savedAt: Date.now(), state: 'accepted' as const,
+    messageId: 'checkpoint-message', messageSeq: 20,
+    data: { completedSteps: ['Reproduction'], unresolvedQuestions: ['Which format?'], nextAction: '<script>inspect</script>',
+      artifacts: ['tests/parser.ts'], checks: [{ name: 'regression', outcome: 'failed' as const, evidenceSeqs: [] }], evidenceSeqs: [10] } };
+  const current = { ...task, revision: 5, state: 'accepted' as const, checkpoint };
+  const html = renderToStaticMarkup(<TaskCard task={current} />);
+  assert.match(html, /Latest checkpoint/); assert.match(html, /Matches current task revision/);
+  assert.match(html, /Later unsaved work may exist/); assert.match(html, /Age at render/);
+  assert.ok(!html.includes('<script>inspect</script>'));
+  const changed = { ...current, revision: 6, contractVersion: 2 };
+  assert.match(renderToStaticMarkup(<TaskCard task={changed} />), /Outdated report/);
+  assert.equal(reconcileTask(changed, current)?.revision, 6);
+  assert.equal(reconcileTask(current, changed)?.revision, 6);
+});

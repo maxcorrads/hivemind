@@ -35,7 +35,24 @@ export const taskResultSchema = z.object({
   gaps: lines,
   evidenceSeqs: seqs,
 }).strict();
+/** A checkpoint is a report about work, not a new contract or a completion. */
+export const taskCheckpointInputSchema = z.object({
+  completedSteps: lines,
+  unresolvedQuestions: lines,
+  nextAction: z.string().trim().min(1).max(400),
+  artifacts: taskResultSchema.shape.artifacts,
+  checks: taskResultSchema.shape.checks,
+  evidenceSeqs: seqs,
+}).strict();
+export type TaskCheckpointInput = z.infer<typeof taskCheckpointInputSchema>;
+export type TaskCheckpoint = {
+  version: number; taskRevision: number; contractVersion: number;
+  workerId: string; objective: string; worktree?: string; branch?: string;
+  savedAt: number; state: TaskState; messageId: string; messageSeq: number;
+  data: TaskCheckpointInput;
+};
 export const taskActionSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('checkpoint'), checkpoint: taskCheckpointInputSchema }).strict(),
   z.object({ type: z.literal('accept') }).strict(),
   z.object({ type: z.literal('reject'), reason: text }).strict(),
   z.object({ type: z.literal('block'), needed: text }).strict(),
@@ -56,10 +73,12 @@ export type TaskEnvelope = {
   taskId: string; channelId: string; revision: number; contractVersion: number;
   actorId: string; actorRole: 'brain' | 'worker'; assignerId: string; workerId: string;
   previousWorkerId?: string;
+  checkpointVersion?: number;
   action: TaskAction | { type: 'assign'; contract: TaskContract };
 };
 export type TaskSnapshot = {
   room?: RoomTask;
+  checkpoint?: TaskCheckpoint;
   id: string; channelId: string; assignerId: string; assignerName: string; workerId: string; workerName: string;
   revision: number; contractVersion: number; state: TaskState; contract: TaskContract;
   dispatchSeq: number; receivedAt: number | null; lastEventSeq: number; updatedAt: number;
@@ -77,6 +96,16 @@ export function taskBody(envelope: TaskEnvelope): string {
       `Acceptance: ${c.acceptanceCriteria.join('; ')}`, `Dependencies: ${c.dependencies.join(', ') || 'none'}`,
       `Worktree: ${c.worktree ?? 'not specified'}; branch: ${c.branch ?? 'not specified'}`,
       `Evidence seqs: ${c.evidenceSeqs.join(', ') || 'none'}`].filter(Boolean).join('\n');
+  }
+  if (a.type === 'checkpoint') {
+    const c = a.checkpoint;
+    return [header, `Checkpoint version ${envelope.checkpointVersion}; later checkpoints supersede this report.`,
+      `Completed: ${c.completedSteps.join('; ') || 'none reported'}`,
+      `Open questions: ${c.unresolvedQuestions.join('; ') || 'none reported'}`,
+      `Next action: ${c.nextAction}`, `Artifacts: ${c.artifacts.join('; ') || 'none'}`,
+      `Reported checks (not independently verified): ${c.checks.map(check => `${check.name}: ${check.outcome} [${check.evidenceSeqs.join(', ')}]`).join('; ') || 'none run/reported'}`,
+      `Evidence seqs: ${c.evidenceSeqs.join(', ') || 'none'}`,
+      'Checkpoint only: not completion or a host context reset. Later unsaved work may exist.'].join('\n');
   }
   if (a.type === 'accept') return `${header}\nWorker explicitly accepted the current contract.`;
   if (a.type === 'reject') return `${header}\nReason: ${a.reason}`;

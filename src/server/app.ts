@@ -394,6 +394,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       describe: describeAgent(result.agent),
       standingOrders: result.created ? standingOrders(result.agent) : undefined,
       ordersRef: result.created ? undefined : "unchanged",
+      handoffs: hive.tasks.handoffs(result.agent),
     });
   });
 
@@ -502,6 +503,8 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   agent.get('/channels/:id/room/history', c => c.json({ history: hive.rooms.history(c.get('me'), c.req.param('id'), Number(c.req.query('before') ?? Number.MAX_SAFE_INTEGER)) }));
   agent.post('/channels/:id/room', async c => c.json(hive.rooms.event(c.get('me'), c.req.param('id'),
     await requestJson(c.req.raw))));
+  agent.get('/handoffs', c => c.json(hive.tasks.handoffs(c.get('me'), c.req.query('beforeTask'))));
+  agent.get('/tasks/:id/handoff', c => c.json(hive.tasks.handoff(c.get('me'), c.req.param('id'))));
   agent.get('/tasks/:id', c => c.json({ task: hive.tasks.get(c.get('me'), c.req.param('id')) }));
   agent.post('/tasks/:id/events', async c => {
     const body = await requestJson(c.req.raw);

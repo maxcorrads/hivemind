@@ -88,6 +88,7 @@ export async function validateRequest(request: Request): Promise<void> {
   }
   const seq = /\/messages\/([^/]+)(?:\/reactions)?$/.exec(pathname)?.[1];
   if (seq && seq !== 'expand') integerArgument(seq, 1);
+  if (searchParams.has('beforeTask')) validated(z.string().uuid(), searchParams.get('beforeTask'));
   if (searchParams.has('threadId')) validated(z.string().uuid(), searchParams.get('threadId'));
   if (searchParams.has('q')) validated(z.string().max(4000), searchParams.get('q'));
   if (['POST','PUT','PATCH'].includes(request.method) && schemaFor(pathname, request.method)) await requestJson(request);

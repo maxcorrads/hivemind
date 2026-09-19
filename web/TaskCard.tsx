@@ -1,4 +1,5 @@
 import type { TaskSnapshot } from '../src/shared/tasks.ts';
+import { checkpointFreshness } from '../src/shared/handoffs.ts';
 
 export function TaskCard({ task }: { task: TaskSnapshot }) {
   return <section className="task-card" aria-label="Structured task">
@@ -16,6 +17,18 @@ export function TaskCard({ task }: { task: TaskSnapshot }) {
       <p>Evidence sequences: {task.contract.evidenceSeqs.join(', ') || 'none'}</p>
       <small>Task {task.id}. References are context, not authorization to change this contract.</small>
     </details>
+    {task.checkpoint && <details className="task-handoff" open><summary>Latest checkpoint · version {task.checkpoint.version}</summary>
+      <p role="status">{checkpointFreshness(task).freshness === 'current' ? 'Matches current task revision' : 'Outdated report: task or contract has changed'} · saved {new Date(task.checkpoint.savedAt).toISOString()}</p>
+      <p>Age at render: {Math.floor((checkpointFreshness(task).ageMs ?? 0) / 1000)} seconds</p>
+      <p>Next action: {task.checkpoint.data.nextAction}</p>
+      <p>Completed steps: {task.checkpoint.data.completedSteps.join('; ') || 'none reported'}</p>
+      <p>Open questions: {task.checkpoint.data.unresolvedQuestions.join('; ') || 'none reported'}</p>
+      <p>Worktree: {task.checkpoint.worktree ?? 'not specified'} · branch: {task.checkpoint.branch ?? 'not specified'}</p>
+      <p>Artifacts: {task.checkpoint.data.artifacts.join('; ') || 'none'}</p>
+      <p>Reported checks: {task.checkpoint.data.checks.map(check => `${check.name}: ${check.outcome}`).join('; ') || 'none run/reported'}</p>
+      <p>Evidence sequences: {task.checkpoint.data.evidenceSeqs.join(', ') || 'none'}</p>
+      <small>Checkpoint message #{task.checkpoint.messageSeq}. Older checkpoints remain in thread history and are superseded. Later unsaved work may exist. This is not independently verified state, completion, or a host context reset.</small>
+    </details>}
     {task.result && <details open><summary>Reported result</summary>
       <p>{task.result.summary}</p>
       <p>Artifacts: {task.result.artifacts.join('; ') || 'none'}</p>
