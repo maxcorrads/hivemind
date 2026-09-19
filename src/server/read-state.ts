@@ -85,8 +85,8 @@ export class ReadState {
     }
     const cap = Number.isFinite(limit) ? Math.min(200, Math.max(1, Math.trunc(limit))) : 30;
     const q = this.scope(actorId, channelIds, projectId);
-    let where = `${q.where} AND EXISTS (SELECT 1 FROM json_each(m.mentions) WHERE value = ?)`;
-    q.params.push(actorId);
+    let where = `${q.where} AND (EXISTS (SELECT 1 FROM json_each(m.mentions) WHERE value = ?) OR EXISTS (SELECT 1 FROM json_each(m.recipients) WHERE value = ?))`;
+    q.params.push(actorId, actorId);
     if (beforeSeq !== undefined) {
       where += " AND m.seq < ?";
       q.params.push(beforeSeq);
@@ -106,8 +106,8 @@ export class ReadState {
   mentionCounts(actorId: string, channelIds: string[]) {
     const q = this.scope(actorId, channelIds);
     const rows = this.db.prepare(`SELECT c.project_id AS id, COUNT(*) AS n ${q.from}
-      WHERE ${q.where} AND EXISTS (SELECT 1 FROM json_each(m.mentions) WHERE value = ?)
-      GROUP BY c.project_id`).all(...q.params, actorId) as { id: string; n: number }[];
+      WHERE ${q.where} AND (EXISTS (SELECT 1 FROM json_each(m.mentions) WHERE value = ?) OR EXISTS (SELECT 1 FROM json_each(m.recipients) WHERE value = ?))
+      GROUP BY c.project_id`).all(...q.params, actorId, actorId) as { id: string; n: number }[];
     return Object.fromEntries(rows.map((r) => [r.id, r.n]));
   }
 
@@ -115,8 +115,8 @@ export class ReadState {
     const q = this.scope(actorId, channelIds, projectId);
     this.db.prepare(`INSERT OR IGNORE INTO message_reads (agent_id, message_id)
       SELECT ?, m.id ${q.from} WHERE ${q.where}
-      AND EXISTS (SELECT 1 FROM json_each(m.mentions) WHERE value = ?)`)
-      .run(actorId, ...q.params, actorId);
+      AND (EXISTS (SELECT 1 FROM json_each(m.mentions) WHERE value = ?) OR EXISTS (SELECT 1 FROM json_each(m.recipients) WHERE value = ?))`)
+      .run(actorId, ...q.params, actorId, actorId);
   }
 
   markMessages(actorId: string, channelId: string, seqs: number[], threadId: string | null) {

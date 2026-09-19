@@ -13,6 +13,7 @@ import { existsSync, mkdirSync, openAsBlob, readFileSync, writeFileSync, renameS
 import path from "node:path";
 import { DEFAULT_PROJECT_SLUG, FILE_MAX_BYTES, HiveError, HUMAN_ID, REACTION_EMOJIS, type Channel, type Message } from "../shared/types.ts";
 import { parseProjectSlug } from "../shared/project.ts";
+import { isDirectRecipient } from '../shared/message-target.ts';
 import { resolveUploadMime } from "../shared/mime.ts";
 import { Hive, channelLabel } from "./hive.ts";
 import { hiveHome } from "./paths.ts";
@@ -203,7 +204,7 @@ export function projectSlugForChat(cfg: TelegramConfig, chatId: number): string 
 export function shouldNotify(msg: Message, ch: Channel, muted: boolean): boolean {
   if (muted) return false;
   if (msg.kind !== "chat") return false;
-  if (msg.mentions.includes(HUMAN_ID)) return true;
+  if (isDirectRecipient(msg, HUMAN_ID)) return true;
   if (ch.type === "brains") return true;
   if (ch.type === "dm" && ch.memberIds.includes(HUMAN_ID) && msg.authorRole === "brain") return true;
   return false;

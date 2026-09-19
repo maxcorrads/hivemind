@@ -1,3 +1,4 @@
+import { immediateTransaction } from "./transaction.ts";
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { HiveError, type InboxDelivery, type InboxStatus } from "../shared/types.ts";
@@ -54,9 +55,7 @@ export class InboxDeliveryStore {
   }
 
   private transaction<T>(fn: () => T): T {
-    this.db.exec("BEGIN IMMEDIATE");
-    try { const result = fn(); this.db.exec("COMMIT"); return result; }
-    catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    return immediateTransaction(this.db, fn);
   }
 
   private migrateReceiptTotals() {
@@ -143,7 +142,7 @@ export class InboxDeliveryStore {
     });
   }
 
-  acknowledge(agentId: string, sessionId: string, deliveryId: string) {
+  acknowledge(agentId: string, sessionId: string, deliveryId: string, onReceipt?: (seqs: number[], at: number) => void) {
     return this.transaction(() => {
       this.requireSession(agentId, sessionId);
       const row = this.db.prepare("SELECT * FROM inbox_deliveries WHERE agent_id = ? AND id = ?")
@@ -166,6 +165,7 @@ export class InboxDeliveryStore {
           acknowledged_messages = inbox_receipt_totals.acknowledged_messages + excluded.acknowledged_messages,
           last_acknowledged_at = MAX(inbox_receipt_totals.last_acknowledged_at, excluded.last_acknowledged_at)`)
         .run(agentId, (JSON.parse(row.seqs) as number[]).length, t);
+      onReceipt?.(JSON.parse(row.seqs) as number[], t);
       return { acknowledged: true, duplicate: false, deliveryId, acknowledgedAt: t };
     });
   }

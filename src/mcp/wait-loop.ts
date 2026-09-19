@@ -87,6 +87,11 @@ export async function waitUntilMail(
       serverErrors = 0;
       transientErrors = 0;
       if (waitHasMail(result)) return result;
+      // A successful short poll may ask us to wait for a fixed routine-progress window.
+      // Keep this inside the tool; successful idle polls never consume retry budget.
+      if (Number.isFinite(result.retryAfterMs) && result.retryAfterMs! > 0) {
+        await delay(Math.min(result.retryAfterMs!, 1000), opts.signal);
+      }
     } catch (err) {
       if (opts.signal?.aborted) throw abortReason(opts.signal);
       if (!isTransientWaitError(err)) throw err;

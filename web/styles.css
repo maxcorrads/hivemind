@@ -837,3 +837,18 @@ html.dark .primary { background: var(--wax); color: #1b2017; }
   }
 }
 .inbox-receipt { display: flex; flex-wrap: wrap; gap: 2px 8px; font-size: 10px; opacity: .8; }
+/* Versioned task facts are separate from ordinary thread status and message prose. */
+.task-card { margin: 12px; padding: 14px; border: 1px solid var(--line, #55615e); border-radius: 10px; overflow-wrap: anywhere; font-size: 13px; }
+.task-card header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
+.task-card p { margin: 9px 0; white-space: pre-wrap; }
+.task-card summary { cursor: pointer; }
+.task-card small { opacity: .75; }
+.room-panel { border: 1px solid var(--border, #7775); border-radius: 10px; padding: 16px; margin-bottom: 18px; overflow-wrap: anywhere; }
+.room-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.room-panel p { white-space: pre-wrap; }
+.room-panel form { display: grid; gap: 10px; margin-top: 12px; }
+.room-panel form label { display: grid; gap: 5px; }
+.room-panel textarea { min-height: 70px; width: 100%; }
+.room-panel input[type=checkbox] { width: auto; }
+.room-panel button { margin-top: 8px; }
+.room-panel [role=alert] { color: #d85b4b; }

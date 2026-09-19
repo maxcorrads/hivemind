@@ -12,6 +12,10 @@ import { loadMailLog, mergeMailLog, saveMailLog } from "./mail-log.ts";
 import type { MentionPage, ReadSnapshot } from "../src/shared/read-state.ts";
 import { createReadFence, createReadRefresh, createReceiptQueue, createRequestGate, readFields } from "../src/shared/read-client.ts";
 import { renderBody } from "./markdown.tsx";
+import { TaskCard } from './TaskCard.tsx';
+import { RoomPanel } from './RoomPanel.tsx';
+import type { TaskSnapshot } from '../src/shared/tasks.ts';
+import { selectThread, beginThreadLoad, failThreadLoad, receiveThreadMessage, receiveThreadTask, receiveThreadSnapshot, type ThreadView } from './thread-state.ts';
 
 type InboxBox = "unread" | "all";
 
@@ -114,11 +118,21 @@ export function App() {
     const start = parseHash();
     return start.kind === "channel" ? start.thread ?? null : null;
   });
-  const [threadPane, setThreadPane] = useState<ChannelPayload | null>(null);
+  const [threadView, setThreadView] = useState<ThreadView | null>(null);
+  const threadPane = sel.kind === 'channel' && threadView?.channelId === sel.id && threadView.threadId === threadId ? threadView.pane : null;
+  const setThreadPane = useCallback((update: ChannelPayload | null | ((pane: ChannelPayload | null) => ChannelPayload | null)) => {
+    setThreadView(view => {
+      const next = typeof update === "function" ? update(view?.pane ?? null) : update;
+      if (!next) return null;
+      if (!view) return null;
+      return { ...view, pane: next };
+    });
+  }, []);
   const [draft, setDraft] = useState("");
   const [threadDraft, setThreadDraft] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [live, setLive] = useState(false);
+  const [roomTick, setRoomTick] = useState(0);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [newTopic, setNewTopic] = useState("");
@@ -170,6 +184,32 @@ export function App() {
   const threadIdRef = useRef(threadId);
   threadIdRef.current = threadId;
   const channelsRef = useRef<Channel[]>([]);
+  const threadLoadIdRef = useRef(0);
+
+  const viewingThread = useCallback((channelId: string, root: string) =>
+    selRef.current.kind === 'channel' && selRef.current.id === channelId && threadIdRef.current === root, []);
+
+  const loadThread = useCallback(async (channelId: string, root: string) => {
+    if (!viewingThread(channelId, root)) return;
+    const requestId = ++threadLoadIdRef.current;
+    const load = threadLoad.current.begin();
+    setThreadView(view => beginThreadLoad(view, channelId, root, requestId));
+    try {
+      const data = await api.messages(channelId, root, undefined, load.signal);
+      if (load.valid() && viewingThread(channelId, root)) setThreadView(view => receiveThreadSnapshot(view, root, data, requestId));
+    } catch (error) {
+      if (load.valid() && viewingThread(channelId, root) && requestId === threadLoadIdRef.current) {
+        setThreadView(view => failThreadLoad(view, requestId));
+        throw error;
+      }
+    }
+  }, [viewingThread]);
+
+  const onThreadMessage = useCallback((message: Message) => {
+    const root = threadIdRef.current;
+    if (root && viewingThread(message.channelId, root))
+      setThreadView(view => receiveThreadMessage(selectThread(view, message.channelId, root), message));
+  }, [viewingThread]);
 
   const readFence = useRef(createReadFence());
   const channelLoad = useRef(createRequestGate());
@@ -268,13 +308,6 @@ export function App() {
     setPane(data);
   }, []);
 
-  const loadThread = useCallback(async (id: string, root: string) => {
-    const load = threadLoad.current.begin();
-    const data = await api.messages(id, root, undefined, load.signal);
-    if (!load.valid() || selRef.current.kind !== "channel" || selRef.current.id !== id || threadIdRef.current !== root) return;
-    setThreadPane(data);
-  }, []);
-
   const resetReadConnection = useCallback(() => {
     readFence.current.reset();
     channelLoad.current.cancel();
@@ -291,6 +324,7 @@ export function App() {
     const off = connectWs((ev) => {
       if (ev.type === "hello") {
         resetReadConnection();
+        setRoomTick(t => t + 1);
         return;
       }
       if (ev.type === "telegram-health") {
@@ -302,7 +336,7 @@ export function App() {
       if (ev.type === "message") {
         const msg = ev.payload as Message;
         setPane((p) => patchPane(p, msg, null));
-        setThreadPane((p) => patchPane(p, msg, threadIdRef.current));
+        onThreadMessage(msg);
         readFence.current.observe(msg.seq);
         readRefresh.current?.request();
         setMailLog((prev) => {
@@ -316,7 +350,7 @@ export function App() {
         const payload = ev.payload as { message?: Message };
         if (payload.message) {
           setPane((p) => replaceMessage(p, payload.message!));
-          setThreadPane((p) => replaceMessage(p, payload.message!));
+          onThreadMessage(payload.message);
         }
         return;
       }
@@ -357,6 +391,21 @@ export function App() {
         });
         return;
       }
+      if (ev.type === 'task') {
+        const task = ev.payload as TaskSnapshot;
+        if (selRef.current.kind === 'channel' && selRef.current.id === task.channelId) setRoomTick(t => t + 1);
+        if (viewingThread(task.channelId, task.id))
+          setThreadView(view => receiveThreadTask(selectThread(view, task.channelId, task.id), task));
+        return;
+      }
+      if (ev.type === 'room') {
+        const payload = ev.payload as { channelId: string };
+        if (selRef.current.kind === 'channel' && selRef.current.id === payload.channelId) {
+          setRoomTick(t => t + 1);
+          if (threadIdRef.current) loadThread(payload.channelId, threadIdRef.current).catch(() => undefined);
+        }
+        return;
+      }
       if (ev.type === "project") {
         resetReadConnection();
         return;
@@ -372,7 +421,7 @@ export function App() {
       inboxLoad.current.cancel();
       window.removeEventListener("hashchange", onHash);
     };
-  }, [loadChannel, refreshSnap, resetReadConnection, changeSelection]);
+  }, [loadChannel, refreshSnap, resetReadConnection, changeSelection, onThreadMessage, viewingThread, loadThread, setThreadPane]);
 
   const missingChannel = Boolean(snap && sel.kind === "channel" && !snap.channels.some((c) => c.id === sel.id));
 
@@ -927,6 +976,7 @@ export function App() {
               )}
             </header>
             <div className="stream">
+              {activeChannel && ['private', 'public'].includes(activeChannel.type) && <RoomPanel key={activeChannel.id} channel={activeChannel} agents={snap.agents} tick={roomTick} />}
               {pane?.hasOlder && (
                 <button
                   type="button"
@@ -993,7 +1043,7 @@ export function App() {
               <p>replies on this message</p>
             </div>
             <div className="thread-tools">
-              <select
+              {threadPane.task ? <span className="st">{threadPane.task.state.replaceAll('_', ' ')}</span> : <select
                 value={threadPane.threads.find((t) => t.id === threadId)?.status ?? "open"}
                 onChange={(e) => {
                   const status = e.target.value as ThreadStatus;
@@ -1010,7 +1060,7 @@ export function App() {
                     {s.replace("_", " ")}
                   </option>
                 ))}
-              </select>
+              </select>}
               <button
                 type="button"
                 className="plus"
@@ -1024,13 +1074,14 @@ export function App() {
             </div>
           </header>
           <div className="stream">
+            {threadPane.task && <TaskCard task={threadPane.task} />}
             {threadPane.messages.map((m) => (
               <Msg
                 key={m.id}
                 m={m}
                 replies={0}
                 status={null}
-                onReact={(emoji) => api.react(m.seq, emoji).then((r) => setThreadPane((p) => replaceMessage(p, r.message)))}
+                onReact={(emoji) => api.react(m.seq, emoji).then((r) => onThreadMessage(r.message))}
               />
             ))}
             {threadPane.hasNewer && (
@@ -1705,6 +1756,7 @@ function Msg({
           <strong>{m.authorName}</strong>
           <span className="role">{m.authorRole}</span>
           <time>{time}</time>
+          {m.taskEvent && <span className="st">Task {m.taskEvent.action.type} · v{m.taskEvent.revision}</span>}
           {status && <span className={`st st-${status}`}>{status.replace("_", " ")}</span>}
         </div>
         {m.body && <div className="msg-b">{renderBody(m.body)}</div>}

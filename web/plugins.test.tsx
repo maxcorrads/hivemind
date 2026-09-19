@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Children, isValidElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { Window } from "happy-dom";
 import {
   PluginEditor,
   PluginFields,
@@ -220,20 +221,31 @@ test("project plugin settings explain local configuration and independent monito
   assert.match(html, /Loading…/);
 });
 
-test("field-free plugins remain configurable, without injecting package markup", () => {
-  const html = renderToStaticMarkup(
-    <PluginEditor
-      plugin={{ ...plugin, name: "<script>Example</script>" }}
-      project={project}
-      busy={false}
-      onBusy={() => {}}
-      onSaved={() => {}}
-    />,
-  );
-  assert.match(html, /&lt;script&gt;Example&lt;\/script&gt;/);
-  assert.match(html, /Not configured/);
-  assert.match(html, /<button type="button">Configure<\/button>/);
-  assert.doesNotMatch(html, /<script\b/i);
+test("field-free plugins remain configurable, without injecting package markup", t => {
+  const window = new Window({ settings: {
+    enableJavaScriptEvaluation: false,
+    disableJavaScriptFileLoading: true,
+    disableCSSFileLoading: true,
+  } });
+  t.after(() => window.happyDOM.close());
+  for (const name of ["<script>Example</script>", "<SCRIPT>Example</SCRIPT>", '<ScRiPt src="https://example.invalid/injected.js">Example</ScRiPt>']) {
+    const html = renderToStaticMarkup(
+      <PluginEditor
+        plugin={{ ...plugin, name }}
+        project={project}
+        busy={false}
+        onBusy={() => {}}
+        onSaved={() => {}}
+      />,
+    );
+    // Inspect parsed HTML, not a case-sensitive approximation of HTML tags.
+    window.document.body.innerHTML = html;
+    assert.equal(window.document.querySelector("script"), null);
+    assert.ok(window.document.body.textContent.includes(name));
+    assert.ok(window.document.body.textContent.includes("Not configured"));
+    assert.ok(Array.from(window.document.querySelectorAll("button"))
+      .some(button => button.type === "button" && button.textContent === "Configure"));
+  }
 });
 
 test("a broken enabled plugin can be disabled without configuring it", () => {
