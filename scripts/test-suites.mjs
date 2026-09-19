@@ -6,13 +6,13 @@ import path from "node:path";
 const pure = new Set([
   "src/server/names.test.ts", "src/server/telegram-rate-limit.test.ts",
   "src/mcp/wait-loop.test.ts", "src/mcp/wait-retry-budget.test.ts",
-  "web/channel-state.test.ts", "web/thread-state.test.ts", "web/pane-window.test.ts",
-  "web/mail-log.test.ts", "web/markdown.test.tsx",
+  "src/shared/join-args.test.ts", "src/shared/launch-models.test.ts",
+  "src/shared/mime.test.ts", "src/shared/project.test.ts", "src/shared/read-client.test.ts",
+  "src/shared/realtime-client.test.ts", "src/shared/search-query.test.ts",
+  "web/channel-state.test.ts", "web/pane-window.test.ts",
 ]);
 export function suiteOf(file) {
-  if (file === "src/shared/launch-prompt.test.ts") return "integration";
-  return file.startsWith("src/shared/") || file.startsWith("scripts/") ||
-    file.endsWith(".unit.test.ts") || pure.has(file) ? "unit" : "integration";
+  return /\.unit\.test\.(?:tsx?|mjs)$/.test(file) || pure.has(file) ? "unit" : "integration";
 }
 export async function discoverTests(root) {
   async function collect(relative) {
