@@ -25,7 +25,10 @@
     "benchmark:inbox": "tsx scripts/benchmark-inbox.ts",
     "test:browser": "playwright test",
     "typecheck:browser": "tsc -p tsconfig.browser.json",
-    "browser:server": "npm run build && vite preview --config tests/browser/preview.config.ts"
+    "browser:server": "npm run build && vite preview --config tests/browser/preview.config.ts",
+    "test:unit": "node scripts/run-tests.mjs --suite=unit",
+    "test:integration": "node scripts/run-tests.mjs --suite=integration",
+    "check:all": "node scripts/check-all.mjs"
   },
   "engines": {
     "node": ">=22.13.0"
