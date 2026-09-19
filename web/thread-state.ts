@@ -83,7 +83,8 @@ export function receiveThreadSnapshot(view: ThreadView | null, threadId: string,
   return {
     ...view, pendingMessages: [], pendingTask: undefined, pendingLoad: undefined,
     historyTruncated: undefined,
-    pane: boundLivePane({ ...data, messages: messages.filter(message => belongs(view, message)),
+    pane: boundLivePane({ ...data, historyThrough: view.pane?.historyThrough,
+      deferredLive: view.pane?.deferredLive, messages: messages.filter(message => belongs(view, message)),
       hasOlder: data.hasOlder || view.historyTruncated || view.pendingLoad.truncated,
       task: reconcileTask(view.pane?.task ?? view.pendingTask, data.task) }),
   };

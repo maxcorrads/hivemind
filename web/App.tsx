@@ -12,7 +12,7 @@ import { loadMailLog, mergeMailLog, saveMailLog } from "./mail-log.ts";
 import type { MentionPage, ReadSnapshot } from "../src/shared/read-state.ts";
 import { createReadFence, createReadRefresh, createReceiptQueue, createRequestGate, readFields } from "../src/shared/read-client.ts";
 import { renderBody } from "./markdown.tsx";
-import { boundLivePane } from "./pane-window.ts";
+import { boundLivePane, holdLivePane, isReadingHistory } from "./pane-window.ts";
 import { TaskCard } from './TaskCard.tsx';
 import { RoomPanel } from './RoomPanel.tsx';
 import type { TaskSnapshot } from '../src/shared/tasks.ts';
@@ -53,6 +53,7 @@ function patchPane(pane: ChannelPayload | null, msg: Message, viewingThread: str
     return pane;
   }
   if (msg.threadId) {
+    if (!pane.messages.some((root) => root.id === msg.threadId)) return pane;
     return {
       ...pane,
       replyCounts: { ...pane.replyCounts, [msg.threadId]: (pane.replyCounts[msg.threadId] ?? 0) + 1 },
@@ -178,6 +179,8 @@ export function App() {
   const [mailLog, setMailLog] = useState<Message[]>(loadMailLog);
   const stickBottom = useRef(true);
   const themePainted = useRef(false);
+  const channelStream = useRef<HTMLDivElement>(null);
+  const threadStream = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const threadBottomRef = useRef<HTMLDivElement>(null);
   const selRef = useRef(sel);
@@ -209,7 +212,12 @@ export function App() {
   const onThreadMessage = useCallback((message: Message) => {
     const root = threadIdRef.current;
     if (root && viewingThread(message.channelId, root))
-      setThreadView(view => receiveThreadMessage(selectThread(view, message.channelId, root), message));
+      setThreadView(view => {
+        const current = selectThread(view, message.channelId, root);
+        const held = current.pane && isReadingHistory(threadStream.current)
+          ? { ...current, pane: holdLivePane(current.pane) } : current;
+        return receiveThreadMessage(held, message);
+      });
   }, [viewingThread]);
 
   const readFence = useRef(createReadFence());
@@ -306,7 +314,12 @@ export function App() {
     const load = channelLoad.current.begin();
     const data = await api.messages(id, null, undefined, load.signal);
     if (!load.valid() || selRef.current.kind !== "channel" || selRef.current.id !== id) return;
-    setPane(data);
+    setPane((current) => {
+      if (current?.channel.id !== id || current.historyThrough === undefined) return data;
+      const refreshed = new Map(data.messages.map((message) => [message.id, message]));
+      return { ...current, deferredLive: current.deferredLive || data.messages.some((message) => message.seq > current.historyThrough!),
+        messages: current.messages.map((message) => refreshed.get(message.id) ?? message) };
+    });
   }, []);
 
   const resetReadConnection = useCallback(() => {
@@ -336,7 +349,7 @@ export function App() {
       }
       if (ev.type === "message") {
         const msg = ev.payload as Message;
-        setPane((p) => patchPane(p, msg, null));
+        setPane((p) => patchPane(p && isReadingHistory(channelStream.current) ? holdLivePane(p) : p, msg, null));
         onThreadMessage(msg);
         readFence.current.observe(msg.seq);
         readRefresh.current?.request();
@@ -368,7 +381,7 @@ export function App() {
       if (ev.type === "thread") {
         const thread = ev.payload as Thread;
         setPane((p) => {
-          if (!p || p.channel.id !== thread.channelId) return p;
+          if (!p || p.channel.id !== thread.channelId || !p.messages.some((message) => message.id === thread.id)) return p;
           return { ...p, threads: upsertById(p.threads, thread) };
         });
         return;
@@ -493,12 +506,12 @@ export function App() {
   }, [theme]);
 
   useEffect(() => {
-    if (stickBottom.current) bottomRef.current?.scrollIntoView({ block: "end" });
+    if (stickBottom.current && pane?.historyThrough === undefined) bottomRef.current?.scrollIntoView({ block: "end" });
     stickBottom.current = true;
-  }, [pane?.messages.length]);
+  }, [pane?.messages.length, pane?.historyThrough]);
   useEffect(() => {
-    threadBottomRef.current?.scrollIntoView({ block: "end" });
-  }, [threadPane?.messages.length]);
+    if (threadPane?.historyThrough === undefined) threadBottomRef.current?.scrollIntoView({ block: "end" });
+  }, [threadPane?.messages.length, threadPane?.historyThrough]);
 
   useEffect(() => {
     if (!snap) return;
@@ -976,7 +989,18 @@ export function App() {
                 </button>
               )}
             </header>
-            <div className="stream">
+            {pane?.historyThrough !== undefined && (
+              <button type="button" className="older" onClick={() => {
+                const id = sel.id;
+                setPane(null);
+                loadChannel(id).catch((error) => { if (error?.name !== "AbortError") setErr(String(error)); });
+              }}>
+                {pane.deferredLive ? "New messages — return to live" : "Return to live"}
+              </button>
+            )}
+            <div className="stream" ref={channelStream} onScroll={() => {
+              if (isReadingHistory(channelStream.current)) setPane((current) => current ? holdLivePane(current) : current);
+            }}>
               {activeChannel && ['private', 'public'].includes(activeChannel.type) && <RoomPanel key={activeChannel.id} channel={activeChannel} agents={snap.agents} tick={roomTick} />}
               {pane?.hasOlder && (
                 <button
@@ -986,6 +1010,7 @@ export function App() {
                     const oldest = pane.messages[0]?.seq;
                     if (!oldest || sel.kind !== "channel") return;
                     stickBottom.current = false;
+                    setPane((current) => current ? holdLivePane(current) : current);
                     const channelId = sel.id;
                     const load = channelLoad.current.begin();
                     api.messages(channelId, null, oldest, load.signal).then((older) => {
@@ -1074,7 +1099,19 @@ export function App() {
               </button>
             </div>
           </header>
-          <div className="stream">
+          {threadPane.historyThrough !== undefined && (
+            <button type="button" className="older" onClick={() => {
+              const channelId = sel.id;
+              const root = threadId;
+              setThreadView(null);
+              loadThread(channelId, root).catch((error) => { if (error?.name !== "AbortError") setErr(String(error)); });
+            }}>
+              {threadPane.deferredLive ? "New replies — refresh thread" : "Refresh thread"}
+            </button>
+          )}
+          <div className="stream" ref={threadStream} onScroll={() => {
+            if (isReadingHistory(threadStream.current)) setThreadPane((current) => current ? holdLivePane(current) : current);
+          }}>
             {threadPane.task && <TaskCard task={threadPane.task} />}
             {threadPane.hasOlder && (
               <button type="button" className="older" onClick={() => {
@@ -1082,6 +1119,7 @@ export function App() {
                 const root = threadId;
                 const before = threadPane.messages[0]?.seq;
                 if (!before) return;
+                setThreadPane((current) => current ? holdLivePane(current) : current);
                 const load = threadLoad.current.begin();
                 api.messages(channelId, root, before, load.signal).then((page) => {
                   if (!load.valid() || !viewingThread(channelId, root)) return;
@@ -1116,6 +1154,8 @@ export function App() {
                   if (!load.valid() || selRef.current.kind !== "channel" || selRef.current.id !== channelId || threadIdRef.current !== root) return;
                   setThreadPane((current) => current?.channel.id === channelId && current.threadId === root ? {
                     ...current, hasNewer: page.hasNewer, cursors: page.cursors,
+                    historyThrough: Math.max(current.historyThrough ?? 0, ...current.messages.map((message) => message.seq), ...page.messages.map((message) => message.seq)),
+                    deferredLive: page.hasNewer ? current.deferredLive : false,
                     messages: [...current.messages, ...page.messages.filter((m) => !current.messages.some((x) => x.id === m.id))]
                       .sort((a, b) => a.seq - b.seq),
                   } : current);
