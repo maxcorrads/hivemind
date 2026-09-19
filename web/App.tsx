@@ -339,8 +339,22 @@ export function App() {
         return;
       }
       if (ev.type === "queued") {
-        const q = ev.payload as { agentId: string; n: number };
-        setSnap((s) => (s ? { ...s, queued: { ...s.queued, [q.agentId]: q.n } } : s));
+        const q = ev.payload as { agentId: string; n: number; inbox?: InboxStatus };
+        setSnap((current) => {
+          if (!current) return current;
+          const previous = current.inbox?.[q.agentId];
+          const inbox: InboxStatus = q.inbox ?? {
+            awaitingReceipt: previous?.awaitingReceipt ?? 0,
+            acknowledgedMessages: previous?.acknowledgedMessages ?? 0,
+            lastAcknowledgedAt: previous?.lastAcknowledgedAt ?? null,
+            queued: { atLeast: q.n, exact: true },
+          };
+          return {
+            ...current,
+            queued: { ...current.queued, [q.agentId]: q.n },
+            inbox: { ...(current.inbox ?? {}), [q.agentId]: inbox },
+          };
+        });
         return;
       }
       if (ev.type === "project") {
