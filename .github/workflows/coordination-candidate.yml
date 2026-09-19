@@ -1,0 +1,77 @@
+name: Coordination candidate validation
+on:
+  push:
+    branches: [validation/delivery-integration-20260919]
+    paths:
+      - validation/merge_coordination.py
+      - validation/resolve_coordination.py
+      - validation/fix_coordination_integration.py
+      - validation/coordination-integration.test.ts
+      - .github/workflows/coordination-candidate.yml
+permissions:
+  contents: read
+jobs:
+  candidate:
+    runs-on: macos-26
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: control
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: candidate
+          ref: 5383e3d071712b74f0233fcce56ec2d0c66586c5
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22.13.0
+      - name: Reproduce and verify the exact reviewed source tree
+        working-directory: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Hivemind integration'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          python3 ../control/validation/merge_coordination.py
+          python3 ../control/validation/resolve_coordination.py
+          python3 ../control/validation/fix_coordination_integration.py
+          cp ../control/validation/coordination-integration.test.ts src/server/coordination-integration.test.ts
+          git add -A
+          git diff --cached --check
+          test "$(git write-tree)" = dbb6c49b39f4a3c266da9e3c25a37a01b6624e84
+          test -z "$(git diff --cached --name-only -- .github LICENSE .oxlintrc.json package-lock.json scripts/run-tests.mjs)"
+      - name: Validate the minimum runtime without publishing
+        working-directory: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run check
+          test "$(git write-tree)" = dbb6c49b39f4a3c266da9e3c25a37a01b6624e84
+      - name: Retain verified candidate on an isolated branch only
+        working-directory: candidate
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git commit -m 'feat(coordination): reconcile tasks rooms and notifications with current main'
+          test "$(git rev-parse HEAD^)" = 5383e3d071712b74f0233fcce56ec2d0c66586c5
+          test "$(git rev-parse HEAD^{tree})" = dbb6c49b39f4a3c266da9e3c25a37a01b6624e84
+          askpass=$(mktemp)
+          trap 'rm -f "$askpass"' EXIT
+          cat > "$askpass" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' x-access-token ;;
+            *Password*) printf '%s\n' "$GITHUB_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$askpass"
+          GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0 git push origin HEAD:refs/heads/validation/coordination-candidate-dbb6c49
+          git rev-parse HEAD
