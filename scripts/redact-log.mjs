@@ -17,7 +17,12 @@ export function redactText(text, secrets = []) {
 // discarded, never partially flushed. Private-key blocks may span lines.
 export function createRedactor(secrets = []) {
   const decoder = new StringDecoder("utf8");
-  let pending = "", dropping = false, key = false;
+  let pending = "", dropping = false, key = false, markerTail = "";
+  const trackDroppedKey = value => {
+    const text = markerTail + value;
+    for (const match of text.matchAll(/-----(BEGIN|END) [A-Z ]*PRIVATE KEY-----/g)) key = match[1] === "BEGIN";
+    markerTail = text.slice(-128);
+  };
   const line = (stream, value) => {
     if (/-----BEGIN .*PRIVATE KEY-----/.test(value)) key = true;
     if (key) {
@@ -29,10 +34,12 @@ export function createRedactor(secrets = []) {
     for (const part of input.split(/(\n)/)) {
       if (part === "\n") {
         if (!dropping) line(stream, pending);
-        pending = ""; dropping = false;
-      } else if (!dropping) {
+        pending = ""; dropping = false; markerTail = "";
+      } else if (dropping) trackDroppedKey(part);
+      else {
         pending += part;
         if (pending.length > MAX_LOG_LINE) {
+          trackDroppedKey(pending);
           pending = ""; dropping = true;
           stream.push("[OVERSIZED LOG LINE OMITTED]\n");
         }

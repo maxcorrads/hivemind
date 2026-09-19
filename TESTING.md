@@ -21,8 +21,8 @@ command for backwards compatibility; use `check:all` for complete acceptance.
 ## Discovery and classifications
 
 `npm test` automatically discovers every `.test.ts`, `.test.tsx` and `.test.mjs`
-under src, web and scripts. `test:unit` selects shared pure utilities (excluding the mixed launch/shell fixture) and the
-explicit pure legacy files in scripts/test-suites.mjs. Everything else, including
+under src, web and scripts. `test:unit` selects explicitly named `.unit.test.*` files and the reviewed
+pure legacy files in scripts/test-suites.mjs. Everything else, including
 mixed tests, defaults to integration. New tests cannot disappear for lacking a
 manifest entry. Browser `.spec.ts` files are discovered separately by Playwright.
 

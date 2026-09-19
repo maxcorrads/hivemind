@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
 import { mkdir } from "node:fs/promises";
+import { once } from "node:events";
 import { finished } from "node:stream/promises";
 import path from "node:path";
 import { createRedactor } from "./redact-log.mjs";
@@ -9,24 +10,40 @@ const [file, command, ...args] = process.argv.slice(2);
 if (!file || !command) throw new Error("Usage: run-logged.mjs OUTPUT COMMAND [ARG...]");
 await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
 const output = createWriteStream(file, { flags: "w", mode: 0o600 });
-const saved = finished(output);
+await once(output, "open");
 const secrets = Object.entries(process.env).filter(([name]) => /TOKEN|SECRET|PASSWORD|API_KEY/.test(name)).map(([, value]) => value);
 const child = spawn(command, args, { stdio: ["inherit", "pipe", "pipe"] });
-let bytes = 0, truncated = false;
-const streams = [child.stdout, child.stderr].map(source => {
-  const safe = source.pipe(createRedactor(secrets));
-  safe.on("data", chunk => {
-    // Only sanitized bytes ever reach console or retained logs.
-    process.stdout.write(chunk);
-    if (bytes + chunk.length <= 4 * 1024 * 1024) { output.write(chunk); bytes += chunk.length; }
-    else if (!truncated) { truncated = true; output.write("[LOG SIZE LIMIT REACHED]\n"); }
-  });
-  return finished(safe);
+const forwards = ["SIGINT", "SIGTERM"].map(signal => {
+  const forward = () => child.kill(signal);
+  process.on(signal, forward);
+  return () => process.off(signal, forward);
 });
-const code = await new Promise(resolve => {
+let bytes = 0, truncated = false;
+async function retain(chunk) {
+  // Both output streams have at most one chunk waiting for downstream drain.
+  // Only sanitized bytes ever reach console or retained logs.
+  if (!process.stdout.write(chunk)) await once(process.stdout, "drain");
+  if (!truncated && bytes + chunk.length <= 4 * 1024 * 1024) {
+    bytes += chunk.length;
+    if (!output.write(chunk)) await once(output, "drain");
+  } else if (!truncated) {
+    truncated = true;
+    if (!output.write("[LOG SIZE LIMIT REACHED]\n")) await once(output, "drain");
+  }
+}
+const outputError = new Promise((_, reject) => output.once("error", reject));
+outputError.catch(() => undefined);
+const streams = [child.stdout, child.stderr].map(async source => {
+  for await (const chunk of source.pipe(createRedactor(secrets))) await retain(chunk);
+});
+const code = new Promise(resolve => {
   child.on("error", () => resolve(1));
   child.on("close", status => resolve(status ?? 1));
 });
-await Promise.all(streams);
-output.end(); await saved;
-process.exitCode = code;
+try {
+  const [status] = await Promise.race([Promise.all([code, ...streams]), outputError]);
+  output.end(); await finished(output);
+  process.exitCode = status;
+} catch (error) {
+  child.kill("SIGTERM"); output.destroy(); throw error;
+} finally { for (const off of forwards) off(); }
