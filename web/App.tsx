@@ -1,3 +1,4 @@
+import { beginChannelJournal, recordChannelMessage, recordChannelThread, applyChannelMessage, reconcileChannelSnapshot, type ChannelJournal } from "./channel-state.ts";
 import { newerTelegramHealth, telegramDegraded, type TelegramHealth } from "./telegram-health.ts";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import type { Agent, Channel, Message, SearchHit, Thread, ThreadStatus, InboxStatus } from "../src/shared/types.ts";
@@ -12,10 +13,11 @@ import { loadMailLog, mergeMailLog, saveMailLog } from "./mail-log.ts";
 import type { MentionPage, ReadSnapshot } from "../src/shared/read-state.ts";
 import { createReadFence, createReadRefresh, createReceiptQueue, createRequestGate, readFields } from "../src/shared/read-client.ts";
 import { renderBody } from "./markdown.tsx";
+import { holdLivePane, isReadingHistory } from "./pane-window.ts";
 import { TaskCard } from './TaskCard.tsx';
 import { RoomPanel } from './RoomPanel.tsx';
 import type { TaskSnapshot } from '../src/shared/tasks.ts';
-import { selectThread, beginThreadLoad, failThreadLoad, receiveThreadMessage, receiveThreadTask, receiveThreadSnapshot, type ThreadView } from './thread-state.ts';
+import { selectThread, beginThreadLoad, failThreadLoad, receiveThreadMessage, receiveThreadTask, receiveThreadSnapshot, receiveThreadStatus, type ThreadView } from './thread-state.ts';
 
 type InboxBox = "unread" | "all";
 
@@ -40,30 +42,6 @@ function parseHash(): Sel {
     return { kind: "channel", id: decodeURIComponent(parts[1]), thread };
   }
   return { kind: "channel", id: "general" };
-}
-
-function patchPane(pane: ChannelPayload | null, msg: Message, viewingThread: string | null = null): ChannelPayload | null {
-  if (!pane || pane.channel.id !== msg.channelId || pane.threadId !== viewingThread) return pane;
-  if (pane.messages.some((m) => m.id === msg.id)) return pane;
-  if (viewingThread) {
-    if (msg.threadId === viewingThread || msg.id === viewingThread) {
-      return { ...pane, messages: [...pane.messages, msg] };
-    }
-    return pane;
-  }
-  if (msg.threadId) {
-    return {
-      ...pane,
-      replyCounts: { ...pane.replyCounts, [msg.threadId]: (pane.replyCounts[msg.threadId] ?? 0) + 1 },
-    };
-  }
-  return { ...pane, messages: [...pane.messages, msg] };
-}
-
-function replaceMessage(pane: ChannelPayload | null, msg: Message): ChannelPayload | null {
-  if (!pane) return pane;
-  if (!pane.messages.some((m) => m.id === msg.id)) return pane;
-  return { ...pane, messages: pane.messages.map((m) => (m.id === msg.id ? msg : m)) };
 }
 
 function upsertById<T extends { id: string }>(list: T[], item: T): T[] {
@@ -177,6 +155,8 @@ export function App() {
   const [mailLog, setMailLog] = useState<Message[]>(loadMailLog);
   const stickBottom = useRef(true);
   const themePainted = useRef(false);
+  const channelStream = useRef<HTMLDivElement>(null);
+  const threadStream = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const threadBottomRef = useRef<HTMLDivElement>(null);
   const selRef = useRef(sel);
@@ -208,11 +188,17 @@ export function App() {
   const onThreadMessage = useCallback((message: Message) => {
     const root = threadIdRef.current;
     if (root && viewingThread(message.channelId, root))
-      setThreadView(view => receiveThreadMessage(selectThread(view, message.channelId, root), message));
+      setThreadView(view => {
+        const current = selectThread(view, message.channelId, root);
+        const held = current.pane && isReadingHistory(threadStream.current)
+          ? { ...current, pane: holdLivePane(current.pane) } : current;
+        return receiveThreadMessage(held, message);
+      });
   }, [viewingThread]);
 
   const readFence = useRef(createReadFence());
   const channelLoad = useRef(createRequestGate());
+  const channelJournal = useRef<ChannelJournal | null>(null);
   const threadLoad = useRef(createRequestGate());
   const snapshotLoad = useRef(createRequestGate());
   const inboxLoad = useRef(createRequestGate());
@@ -232,6 +218,7 @@ export function App() {
     const nextThread = next.kind === "channel" ? next.thread ?? null : null;
     if (priorChannel !== nextChannel) {
       channelLoad.current.cancel();
+      channelJournal.current = null;
       channelReads.current?.reset();
     }
     if (priorChannel !== nextChannel || threadIdRef.current !== nextThread) {
@@ -301,16 +288,33 @@ export function App() {
     return next;
   }, [acceptRead]);
 
-  const loadChannel = useCallback(async (id: string) => {
+  const loadChannel = useCallback(async (id: string, before?: number) => {
     const load = channelLoad.current.begin();
-    const data = await api.messages(id, null, undefined, load.signal);
-    if (!load.valid() || selRef.current.kind !== "channel" || selRef.current.id !== id) return;
-    setPane(data);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const journal = beginChannelJournal(id);
+      channelJournal.current = journal;
+      try {
+        const data = await api.messages(id, null, before, load.signal);
+        if (!load.valid() || selRef.current.kind !== "channel" || selRef.current.id !== id) return;
+        if (journal.overflow) {
+          if (attempt < 2) continue;
+          throw new Error("Live traffic overtook the channel refresh. Reload the page to retry.");
+        }
+        setPane((current) => reconcileChannelSnapshot(current, data, journal, before !== undefined));
+        return;
+      } catch (error) {
+        if (!load.valid() || selRef.current.kind !== "channel" || selRef.current.id !== id) return;
+        throw error;
+      } finally {
+        if (channelJournal.current === journal) channelJournal.current = null;
+      }
+    }
   }, []);
 
   const resetReadConnection = useCallback(() => {
     readFence.current.reset();
     channelLoad.current.cancel();
+    channelJournal.current = null;
     threadLoad.current.cancel();
     inboxLoad.current.cancel();
     channelReads.current?.reset();
@@ -335,7 +339,8 @@ export function App() {
       }
       if (ev.type === "message") {
         const msg = ev.payload as Message;
-        setPane((p) => patchPane(p, msg, null));
+        recordChannelMessage(channelJournal.current, msg);
+        setPane((p) => applyChannelMessage(p && isReadingHistory(channelStream.current) ? holdLivePane(p) : p, msg));
         onThreadMessage(msg);
         readFence.current.observe(msg.seq);
         readRefresh.current?.request();
@@ -349,7 +354,8 @@ export function App() {
       if (ev.type === "reaction") {
         const payload = ev.payload as { message?: Message };
         if (payload.message) {
-          setPane((p) => replaceMessage(p, payload.message!));
+          recordChannelMessage(channelJournal.current, payload.message, false);
+          setPane((p) => applyChannelMessage(p, payload.message!, false));
           onThreadMessage(payload.message);
         }
         return;
@@ -366,8 +372,11 @@ export function App() {
       }
       if (ev.type === "thread") {
         const thread = ev.payload as Thread;
+        recordChannelThread(channelJournal.current, thread);
+        if (viewingThread(thread.channelId, thread.id))
+          setThreadView(view => receiveThreadStatus(selectThread(view, thread.channelId, thread.id), thread));
         setPane((p) => {
-          if (!p || p.channel.id !== thread.channelId) return p;
+          if (!p || p.channel.id !== thread.channelId || !p.messages.some((message) => message.id === thread.id)) return p;
           return { ...p, threads: upsertById(p.threads, thread) };
         });
         return;
@@ -416,6 +425,7 @@ export function App() {
     return () => {
       off();
       channelLoad.current.cancel();
+      channelJournal.current = null;
       threadLoad.current.cancel();
       snapshotLoad.current.cancel();
       inboxLoad.current.cancel();
@@ -447,6 +457,7 @@ export function App() {
   useEffect(() => {
     if (!selectedChannelId || missingChannel) {
       channelLoad.current.cancel();
+      channelJournal.current = null;
       setPane(null);
       return;
     }
@@ -492,12 +503,12 @@ export function App() {
   }, [theme]);
 
   useEffect(() => {
-    if (stickBottom.current) bottomRef.current?.scrollIntoView({ block: "end" });
+    if (stickBottom.current && pane?.historyThrough === undefined) bottomRef.current?.scrollIntoView({ block: "end" });
     stickBottom.current = true;
-  }, [pane?.messages.length]);
+  }, [pane?.messages.length, pane?.historyThrough]);
   useEffect(() => {
-    threadBottomRef.current?.scrollIntoView({ block: "end" });
-  }, [threadPane?.messages.length]);
+    if (threadPane?.historyThrough === undefined) threadBottomRef.current?.scrollIntoView({ block: "end" });
+  }, [threadPane?.messages.length, threadPane?.historyThrough]);
 
   useEffect(() => {
     if (!snap) return;
@@ -622,8 +633,9 @@ export function App() {
     if (selRef.current.kind !== "channel" || selRef.current.id !== channelId || (root && threadIdRef.current !== root)) return;
     if (root) setThreadDraft((current) => current === body ? "" : current);
     else setDraft((current) => current === body ? "" : current);
-    if (root) setThreadPane((current) => patchPane(current, message, root));
-    else setPane((current) => patchPane(current, message));
+    recordChannelMessage(channelJournal.current, message);
+    setPane((current) => applyChannelMessage(current, message));
+    if (root) onThreadMessage(message);
   };
 
   const onCreate = async () => {
@@ -975,7 +987,18 @@ export function App() {
                 </button>
               )}
             </header>
-            <div className="stream">
+            {pane?.historyThrough !== undefined && (
+              <button type="button" className="older" onClick={() => {
+                const id = sel.id;
+                setPane(null);
+                loadChannel(id).catch((error) => { if (error?.name !== "AbortError") setErr(String(error)); });
+              }}>
+                {pane.deferredLive ? "New messages — return to live" : "Return to live"}
+              </button>
+            )}
+            <div className="stream" ref={channelStream} onScroll={() => {
+              if (isReadingHistory(channelStream.current)) setPane((current) => current ? holdLivePane(current) : current);
+            }}>
               {activeChannel && ['private', 'public'].includes(activeChannel.type) && <RoomPanel key={activeChannel.id} channel={activeChannel} agents={snap.agents} tick={roomTick} />}
               {pane?.hasOlder && (
                 <button
@@ -985,16 +1008,11 @@ export function App() {
                     const oldest = pane.messages[0]?.seq;
                     if (!oldest || sel.kind !== "channel") return;
                     stickBottom.current = false;
+                    setPane((current) => current ? holdLivePane(current) : current);
                     const channelId = sel.id;
-                    const load = channelLoad.current.begin();
-                    api.messages(channelId, null, oldest, load.signal).then((older) => {
-                      if (!load.valid() || selRef.current.kind !== "channel" || selRef.current.id !== channelId) return;
-                      setPane((current) => current?.channel.id === channelId ? {
-                        ...current,
-                        messages: [...older.messages, ...current.messages.filter((m) => !older.messages.some((x) => x.id === m.id))],
-                        hasOlder: older.hasOlder,
-                      } : current);
-                    }).catch((error) => { if (load.valid() && error?.name !== "AbortError") setErr(String(error)); });
+                    loadChannel(channelId, oldest).catch((error) => {
+                      if (error?.name !== "AbortError") setErr(String(error));
+                    });
                   }}
                 >
                   Load older
@@ -1010,7 +1028,10 @@ export function App() {
                     if (sel.kind !== "channel") return;
                     go({ kind: "channel", id: sel.id, thread: m.id });
                   }}
-                  onReact={(emoji) => api.react(m.seq, emoji).then((r) => setPane((p) => replaceMessage(p, r.message)))}
+                  onReact={(emoji) => api.react(m.seq, emoji).then((r) => {
+                    recordChannelMessage(channelJournal.current, r.message, false);
+                    setPane((p) => applyChannelMessage(p, r.message, false));
+                  })}
                 />
               ))}
               <div ref={bottomRef} />
@@ -1073,8 +1094,41 @@ export function App() {
               </button>
             </div>
           </header>
-          <div className="stream">
+          {threadPane.historyThrough !== undefined && (
+            <button type="button" className="older" onClick={() => {
+              const channelId = sel.id;
+              const root = threadId;
+              setThreadView(null);
+              loadThread(channelId, root).catch((error) => { if (error?.name !== "AbortError") setErr(String(error)); });
+            }}>
+              {threadPane.deferredLive ? "New replies — refresh thread" : "Refresh thread"}
+            </button>
+          )}
+          <div className="stream" ref={threadStream} onScroll={() => {
+            if (isReadingHistory(threadStream.current)) setThreadPane((current) => current ? holdLivePane(current) : current);
+          }}>
             {threadPane.task && <TaskCard task={threadPane.task} />}
+            {threadPane.hasOlder && (
+              <button type="button" className="older" onClick={() => {
+                const channelId = sel.id;
+                const root = threadId;
+                const before = threadPane.messages[0]?.seq;
+                if (!before) return;
+                setThreadPane((current) => current ? holdLivePane(current) : current);
+                const load = threadLoad.current.begin();
+                api.messages(channelId, root, before, load.signal).then((page) => {
+                  if (!load.valid() || !viewingThread(channelId, root)) return;
+                  setThreadPane((current) => current?.channel.id === channelId && current.threadId === root ? {
+                    ...current, hasOlder: page.hasOlder,
+                    cursors: { ...current.cursors, before: page.cursors?.before },
+                    messages: [...page.messages, ...current.messages.filter((message) => !page.messages.some((old) => old.id === message.id))]
+                      .sort((a, b) => a.seq - b.seq),
+                  } : current);
+                }).catch((error) => { if (load.valid() && error?.name !== "AbortError") setErr(String(error)); });
+              }}>
+                Load earlier replies
+              </button>
+            )}
             {threadPane.messages.map((m) => (
               <Msg
                 key={m.id}
@@ -1095,6 +1149,8 @@ export function App() {
                   if (!load.valid() || selRef.current.kind !== "channel" || selRef.current.id !== channelId || threadIdRef.current !== root) return;
                   setThreadPane((current) => current?.channel.id === channelId && current.threadId === root ? {
                     ...current, hasNewer: page.hasNewer, cursors: page.cursors,
+                    historyThrough: Math.max(current.historyThrough ?? 0, ...current.messages.map((message) => message.seq), ...page.messages.map((message) => message.seq)),
+                    deferredLive: page.hasNewer ? current.deferredLive : false,
                     messages: [...current.messages, ...page.messages.filter((m) => !current.messages.some((x) => x.id === m.id))]
                       .sort((a, b) => a.seq - b.seq),
                   } : current);

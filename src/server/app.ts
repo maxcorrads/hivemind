@@ -244,6 +244,8 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       cursors: listed.cursors,
       threads: hive.threadsInChannel(ch.id),
       replyCounts: hive.replyCounts(ch.id),
+      // This synchronous snapshot includes replies, not just visible root rows.
+      snapshotSeq: hive.latestSeq(ch.id),
       task: threadId && hive.tasks.has(threadId) ? hive.tasks.get(human, threadId) : undefined,
     });
   });
