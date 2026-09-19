@@ -67,6 +67,7 @@
     "docs/local-human-security.md",
     "docs/identity-lifecycle.md",
     "docs/api-boundaries.md",
+    "docs/task-handoffs.md",
     "COORDINATION.md",
     "NOTIFICATIONS.md",
     "ROOMS.md",

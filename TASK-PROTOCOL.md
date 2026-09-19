@@ -88,7 +88,7 @@ recovery instead of silent truncation. File references are not file contents.
 
 ## Interfaces and compact examples
 
-MCP: `assign_task`, `get_task`, `task_event`. Restart MCP clients after upgrading.
+MCP: `assign_task`, `get_task`, `task_event`, `get_handoffs`, `get_handoff`. Worker `checkpoint` events preserve task state while publishing a versioned handoff; see [task handoffs](docs/task-handoffs.md). Restart MCP clients after upgrading.
 HTTP: `POST /api/agent/tasks`, `GET /api/agent/tasks/:id`,
 `POST /api/agent/tasks/:id/events`. Events appear as normal thread messages.
 The thread UI shows the current contract, transport receipt, lifecycle and review,

@@ -216,6 +216,8 @@ Then open **Project settings → Plugins…** to configure and enable a separate
 Enabled plugin instructions are included in new/resumed brain launch prompts; registration and launch preparation do not start monitors.
 Provider readers remain external packages, posting through the generic bot protocol. See [Plugins and project profiles](PLUGINS.md) for the manifest, settings schema, configuration contract, lifecycle and trust boundaries.
 
+Task checkpoints and bounded resume discovery: see [docs/task-handoffs.md](docs/task-handoffs.md).
+
 ## Files and reactions
 
 Messages can have 0–4 attachments (empty body is allowed). Caps: 512 MB per file, 60-second upload deadline, two active uploads per actor/four per hive, an 8 GiB logical attachment-and-reservation quota, allowlisted types, sha256 blob reuse under `~/.hivemind/files`. Orphan uploads expire; `hivemind gc` sweeps them.

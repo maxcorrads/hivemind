@@ -1785,7 +1785,7 @@ export class Hive {
     const dm = this.openDm(actor, target.name);
     return this.postMessage(actor, {
       channel: dm.id,
-      body: `CONTROL clear_context: discard all prior task memory. Keep only your Hivemind identity (${target.name}) and standing orders. Then wait.`,
+      body: `CONTROL clear_context: before following this request, use get_handoffs and save a checkpoint for relevant active tasks where possible (task_event checkpoint with the current revision). Then discard prior task memory, keeping your Hivemind identity (${target.name}) and standing orders, and wait. This is an instruction only: Hivemind has not erased host context or stopped execution. Do not clear automatically after every result.`,
       kind: "control",
       control: "clear_context",
     });

@@ -36,6 +36,8 @@ function help() {
   hivemind history --channel NAME [--thread ID] [--since N | --before N]
   hivemind expand --channel ID --ids MESSAGE_ID,MESSAGE_ID [--after SEQ]
   hivemind task assign --input FILE.json
+  hivemind task handoffs [--before TASK_ID]
+  hivemind task handoff --id TASK_ID
   hivemind task get --id TASK_ID
   hivemind task event --id TASK_ID --input FILE.json
   hivemind room get --channel NAME
@@ -236,6 +238,15 @@ async function main() {
   if (cmd === 'task') {
     const operation = argv[1];
     const id = arg(argv, '--id');
+    if (operation === 'handoffs') {
+      const before = arg(argv, '--before');
+      console.log(JSON.stringify(await agentRequest('GET', `/api/agent/handoffs${before ? `?beforeTask=${encodeURIComponent(before)}` : ''}`, undefined, token), null, 2));
+      return;
+    }
+    if (operation === 'handoff' && id) {
+      console.log(JSON.stringify(await agentRequest('GET', `/api/agent/tasks/${encodeURIComponent(id)}/handoff`, undefined, token), null, 2));
+      return;
+    }
     if (operation === 'get' && id) {
       console.log(JSON.stringify(await agentRequest('GET', `/api/agent/tasks/${encodeURIComponent(id)}`, undefined, token), null, 2));
       return;

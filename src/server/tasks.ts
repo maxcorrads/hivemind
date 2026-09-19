@@ -1,3 +1,6 @@
+import { z } from 'zod';
+import { validated } from '../shared/api-contract.ts';
+import { checkpointFreshness, type HandoffSummary } from '../shared/handoffs.ts';
 import { immediateTransaction } from './transaction.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import type { Hive } from './hive.ts';
@@ -14,6 +17,8 @@ export class TaskStore {
       dispatch_seq INTEGER NOT NULL, received_at INTEGER, snapshot TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS task_dispatch ON task_records(worker_id, dispatch_seq);
       CREATE INDEX IF NOT EXISTS task_channel ON task_records(channel_id);
+      CREATE INDEX IF NOT EXISTS task_worker_handoff ON task_records(worker_id, id) WHERE json_extract(snapshot, '$.state') != 'accepted_complete';
+      CREATE INDEX IF NOT EXISTS task_assigner_handoff ON task_records(json_extract(snapshot, '$.assignerId'), id) WHERE json_extract(snapshot, '$.state') != 'accepted_complete';
       CREATE TABLE IF NOT EXISTS task_events (
         message_id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES task_records(id) ON DELETE CASCADE,
         actor_id TEXT NOT NULL, request_id TEXT NOT NULL, request_hash TEXT NOT NULL, envelope TEXT NOT NULL,
@@ -37,6 +42,46 @@ export class TaskStore {
     const task = JSON.parse(row.snapshot) as TaskSnapshot;
     return { ...task, room: this.hive.rooms.taskInfo(task), receivedAt: row.received_at,
       state: task.state === 'sent' && row.received_at !== null ? 'delivered' : task.state };
+  }
+  handoff(actor: Agent, id: string) {
+    validated(z.string().uuid(), id);
+    const task = this.get(actor, id);
+    const checkpoint = task.checkpoint ?? null;
+    const newerMessages = checkpoint ? Boolean(this.db.prepare(
+      'SELECT 1 FROM messages WHERE channel_id = ? AND thread_id = ? AND seq > ? LIMIT 1',
+    ).get(task.channelId, task.id, checkpoint.messageSeq)) : false;
+    const handoff = { taskId: task.id, channelId: task.channelId, workerId: task.workerId,
+      objective: task.contract.objective, revision: task.revision, contractVersion: task.contractVersion,
+      state: task.state, checkpoint, ...checkpointFreshness(task), newerMessages,
+      warning: 'A saved report is not verified repository state. Later unsaved work may exist; inspect referenced evidence before acting.',
+      expand: { tool: 'history', channel: task.channelId, threadId: task.id } };
+    if (Buffer.byteLength(JSON.stringify(handoff)) > 32 * 1024) throw new HiveError(413, 'Legacy handoff exceeds budget; recover explicit messages from thread history');
+    return handoff;
+  }
+  /** Participant-only, indexed, bounded discovery; never a global task roster. */
+  handoffs(actor: Agent, before?: string) {
+    if (actor.role !== 'brain' && actor.role !== 'worker') throw new HiveError(403, 'Only task participants have a resume inbox');
+    if (before !== undefined) validated(z.string().uuid(), before);
+    const participant = actor.role === 'worker' ? 'r.worker_id' : "json_extract(r.snapshot, '$.assignerId')";
+    const rows = this.db.prepare(`SELECT r.id FROM task_records r
+      JOIN channels c ON c.id = r.channel_id
+      WHERE ${participant} = ? AND c.project_id = ?
+        AND EXISTS (SELECT 1 FROM channel_members cm WHERE cm.channel_id = r.channel_id AND cm.agent_id = ?)
+        AND (? = 'brain' OR c.type != 'brains')
+        AND json_extract(r.snapshot, '$.state') != 'accepted_complete'
+        ${before ? 'AND r.id < ?' : ''}
+      ORDER BY r.id DESC LIMIT 6`).all(actor.id, actor.projectId, actor.id, actor.role, ...(before ? [before] : [])) as { id: string }[];
+    const page = rows.slice(0, 5);
+    const items: HandoffSummary[] = page.map(row => {
+      const task = this.get(actor, row.id);
+      return { taskId: task.id, channelId: task.channelId, workerId: task.workerId,
+        objective: task.contract.objective, revision: task.revision, contractVersion: task.contractVersion,
+        checkpointVersion: task.checkpoint?.version ?? null,
+        nextAction: task.checkpoint?.data.nextAction ?? null, state: task.state,
+        ...checkpointFreshness(task) };
+    });
+    return { items, hasMore: rows.length > 5, nextCursor: rows.length > 5 ? page.at(-1)!.id : null,
+      next: 'Read get_handoff for the current task before acting. An identity resume does not restore model memory or verify saved work.' };
   }
   private worker(actor: Agent, name: string) {
     const worker = this.hive.getAgentByName(name);
@@ -86,10 +131,15 @@ export class TaskStore {
         envelope.action.type === 'block' || envelope.action.type === 'reject' ? 'blocker' :
           envelope.action.type === 'assign' || envelope.action.type === 'revise' ? 'assignment' :
             envelope.action.type === 'review' ? 'decision' :
-              envelope.action.type === 'accept' ? 'acknowledgement' : 'action_required',
+              envelope.action.type === 'accept' ? 'acknowledgement' :
+                envelope.action.type === 'checkpoint' ? 'progress' : 'action_required',
         recipients, now, recipients);
     const seq = Number(this.db.prepare('SELECT seq FROM messages WHERE id = ?').get(id)!.seq);
     task.lastEventSeq = seq; task.updatedAt = now;
+    if (envelope.action.type === 'checkpoint' && task.checkpoint) {
+      task.checkpoint.messageId = id;
+      task.checkpoint.messageSeq = seq;
+    }
     if (initial || envelope.action.type === 'revise') { task.dispatchSeq = seq; task.receivedAt = null; }
     this.db.prepare(`INSERT INTO task_records(id, channel_id, worker_id, dispatch_seq, received_at, snapshot) VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET worker_id=excluded.worker_id, dispatch_seq=excluded.dispatch_seq,
@@ -190,7 +240,15 @@ export class TaskStore {
       } else {
         if (!['accepted', 'blocked', 'changes_requested'].includes(task.state)) throw new HiveError(409, 'Accept the current contract before submitting work');
         if (action.type === 'block') task.state = 'blocked';
-        else {
+        else if (action.type === 'checkpoint') {
+          const references = [...action.checkpoint.evidenceSeqs, ...action.checkpoint.checks.flatMap(check => check.evidenceSeqs)];
+          this.evidence(actor, references);
+          this.evidence(this.hive.getAgent(task.assignerId), references);
+          task.checkpoint = { version: (task.checkpoint?.version ?? 0) + 1,
+            taskRevision: task.revision + 1, contractVersion: task.contractVersion, workerId: task.workerId,
+            objective: task.contract.objective, worktree: task.contract.worktree, branch: task.contract.branch,
+            savedAt: Date.now(), state: task.state, messageId: '', messageSeq: 0, data: action.checkpoint };
+        } else {
           this.evidence(actor, [...action.result.evidenceSeqs, ...action.result.checks.flatMap(c => c.evidenceSeqs)]);
           this.evidence(this.hive.getAgent(task.assignerId), [...action.result.evidenceSeqs, ...action.result.checks.flatMap(c => c.evidenceSeqs)]);
           task.result = action.result; task.review = null; task.state = 'result_submitted';
@@ -200,7 +258,8 @@ export class TaskStore {
       messageId = this.write(actor, task, { taskId, channelId: task.channelId, revision: task.revision,
         contractVersion: task.contractVersion, actorId: actor.id, actorRole: actor.role as 'brain' | 'worker',
         assignerId: task.assignerId, workerId: task.workerId,
-        ...(previousWorkerId !== task.workerId ? { previousWorkerId } : {}), action }, input.requestId, hash, false);
+        ...(previousWorkerId !== task.workerId ? { previousWorkerId } : {}),
+        ...(action.type === 'checkpoint' ? { checkpointVersion: task.checkpoint!.version } : {}), action }, input.requestId, hash, false);
     });
     return duplicate! ?? this.published(actor, taskId, messageId);
   }
