@@ -1,0 +1,69 @@
+name: Verify task handoff objects
+
+# Temporary review tooling; never merge. Does not update main, tags or release PR.
+on:
+  push:
+    branches: [maintenance/remaining-issues-workspace-20260920]
+    paths: [.github/workflows/task-handoff-objects.yml]
+permissions:
+  contents: read
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Read immutable review input without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 04562708960b40be480441250f9145a7c9945d2e
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify input checksum and complete product tree
+        id: result
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATCH_FILE="$RUNNER_TEMP/handoff.patch"
+          python3 - <<'PY'
+          import base64, gzip, hashlib, os, pathlib
+          root = pathlib.Path('.github/review-inputs')
+          a = (root / 'handoff.patch.gz.b64.1').read_text().strip()
+          # Restore the two base64 characters lost while transcribing part 1.
+          # Both the decoded checksum and complete Git tree are checked below.
+          a = a.replace('jEZpPykYVu', 'jEZpPykmgYVu')
+          b = (root / 'handoff.patch.gz.b64.2').read_text().strip()
+          patch = gzip.decompress(base64.b64decode(a + b, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == 'a4744aed71069b2a65698f61677aa19adb47e6934c8ad6088d75caecebaa6a6c'
+          pathlib.Path(os.environ['PATCH_FILE']).write_bytes(patch)
+          PY
+          base=d92277d8f2277a569b444677a0ebaddf5226a75c
+          git checkout --detach "$base"
+          git apply --index --check "$PATCH_FILE"
+          git apply --index "$PATCH_FILE"
+          tree=$(git write-tree)
+          test "$tree" = fa8b06ff8a6c935b5b1b8d5541c449a40083bf14
+          git diff --cached --stat
+          git diff --exit-code "$base" "$tree" -- .github/workflows package-lock.json
+          commit=$(printf '%s\n' 'feat(tasks): persist versioned checkpoints and bounded resume handoffs' | git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit-tree "$tree" -p "$base")
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/handoff-receipt"
+          printf '{"commit":"%s","tree":"%s"}\n' "$commit" "$tree" > "$RUNNER_TEMP/handoff-receipt/result.json"
+      - name: Export only a new non-product review ref
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ steps.result.outputs.commit }}
+        run: |
+          set -euo pipefail
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w 0)
+          echo "::add-mask::$auth"
+          git -c core.hooksPath=/dev/null -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin "$COMMIT:refs/heads/review/issue28-candidate-20260920"
+      - name: Retain verification receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: issue28-review-receipt
+          path: ${{ runner.temp }}/handoff-receipt/
+          retention-days: 1
+          if-no-files-found: error
