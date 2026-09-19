@@ -98,19 +98,25 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
-      - name: Run tests
-        shell: bash
-        run: |
-          set -o pipefail
-          mkdir -p artifacts
-          npm test 2>&1 | tee "artifacts/tests-node-${{ matrix.node-version }}.log"
+      - name: Verify required shell
+        run: zsh --version
 
-      - name: Retain failing test log
+      - name: Unit contracts
+        id: unit
+        run: node scripts/run-logged.mjs artifacts/unit.log npm run test:unit
+
+      - name: Integration contracts
+        if: ${{ !cancelled() && (steps.unit.outcome == 'success' || steps.unit.outcome == 'failure') }}
+        run: node scripts/run-logged.mjs artifacts/integration.log npm run test:integration
+
+      - name: Retain redacted failing suite logs
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: tests-node-${{ matrix.node-version }}
-          path: artifacts/tests-node-${{ matrix.node-version }}.log
+          path: |
+            artifacts/unit.log
+            artifacts/integration.log
           retention-days: 7
 
   browser:
@@ -133,14 +139,14 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Run deterministic browser contracts
-        run: npm run test:browser
+        run: node scripts/run-logged.mjs artifacts/browser.log npm run test:browser
 
       - name: Retain browser failure artifacts
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: browser-chromium-failures
-          path: artifacts/playwright
+          path: artifacts/browser.log
           retention-days: 7
           if-no-files-found: ignore
 
@@ -161,11 +167,7 @@ jobs:
         run: npm ci
 
       - name: Collect coverage
-        shell: bash
-        run: |
-          set -o pipefail
-          mkdir -p artifacts
-          npm run test:coverage 2>&1 | tee artifacts/coverage.log
+        run: node scripts/run-logged.mjs artifacts/coverage.log npm run test:coverage
 
       - name: Upload coverage report
         if: always()
