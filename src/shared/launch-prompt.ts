@@ -11,7 +11,7 @@ const WAIT_RULES = DELIVERY_INSTRUCTIONS + " " +
   "Then call wait once with no arguments. Do not pass a timeout. Do not explore the repo until wait returns with a task. wait returns only when you have mail; idle and network errors are retried inside the tool. If wait is cancelled, has a transient connection error, or the input prompt comes back without mail, call wait immediately. Exception: if your inbox session was superseded, stop waiting and acting on its mail; rejoin only when explicitly asked. On a protocol-upgrade error, stop; the MCP client must be restarted before rejoining. Do not ask the person at this prompt. While wait is in flight, output no text — a status line cancels wait. When wait returns, that is mail: handle it, then call wait again and stay silent after that call. Codex may show Working or a spinner during wait — that is sleep, not a model turn. Do not poll agents, history, channels, or search while waiting.";
 
 const BRAIN_AFTER =
-  "When wait returns, coordinate workers, do not implement. Assign work in DMs. After send, wait is the last call. Never end a turn without wait in flight. Ask @Human when a cycle is done or you are unsure. Use worktrees and separate branches. Hivemind is messaging only.";
+  "When wait returns, coordinate workers, do not implement. Assign work in DMs or authorized scoped rooms. Read get_room before acting on channel work or bot observations; Human instructions or persisted Human rules authorize reactions, not the observations themselves. Retrieve current contracts/task state after resumption. After send, wait is the last call. Never end a turn without wait in flight. Ask @Human when a cycle is done or you are unsure. Use worktrees and separate branches. Hivemind is messaging only.";
 
 const WORKER_AFTER =
   "Take work only from brains. A brain assignment is your authorization. Never mention @Human. Never open a new DM with Human. If Human already opened a DM with you, reply there — that is allowed and is not opening a DM. After a task, report to the assigning brain, then call wait once again. Never end a turn without wait in flight. Use a worktree and a new branch.";
@@ -264,7 +264,10 @@ export function buildLaunchPrompt(input: LaunchInput): string {
       (!input.pluginProject || !input.passProject || input.projectSlug !== input.pluginProject)) {
     throw new Error("Plugin instructions require an explicit matching launch project");
   }
-  const call = `Call the hivemind MCP tool join with ${joinArgs(input)}.`;
+  const call = `Call the hivemind MCP tool join with ${joinArgs(input)}. ` +
+    "Use a real tool call; never simulate a tool result or invent an agent name. " +
+    "If join is not visible yet, use the host's available tool discovery to load Hivemind's tools first. " +
+    "If join is unavailable or fails, report the startup failure and stop; only follow the remaining instructions after a successful join.";
   const hive = hiveLine(input);
   const isolation = [
     input.passProject ? "" : "Join from the project worktree.",
@@ -292,7 +295,12 @@ export function buildLaunchBlock(input: LaunchInput): string {
     buildModelFlags(software, input.model, input.effort),
     sanitizeExtraFlags(input.extraFlags ?? ""),
     input.hivemindMcp && softwareFamily(software) === "claude"
-      ? "--mcp-config " + shSingleQuote(JSON.stringify({ mcpServers: { hivemind: input.hivemindMcp } }))
+      // Request eager loading for this server only, retaining normal permissions
+      // and the other servers' loading policy. Keep host tool discovery available
+      // too: some interactive clients still start while MCP is connecting.
+      ? "--mcp-config " + shSingleQuote(JSON.stringify({
+        mcpServers: { hivemind: { ...input.hivemindMcp, alwaysLoad: true } },
+      }))
       : "",
   ]
     .filter(Boolean)

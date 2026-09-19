@@ -57,7 +57,12 @@
     "BOT-PROTOCOL.md",
     "PLUGINS.md",
     "EXTENSIBILITY-SECURITY.md",
-    "docs/local-human-security.md"
+    "docs/local-human-security.md",
+    "COORDINATION.md",
+    "NOTIFICATIONS.md",
+    "ROOMS.md",
+    "TASK-PROTOCOL.md",
+    "DELIVERY-PROTOCOL.md"
   ],
   "license": "SEE LICENSE IN LICENSE"
 }

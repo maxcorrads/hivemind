@@ -61,6 +61,8 @@ export function packWait(
     authorRole: m.authorRole,
     kind: m.kind,
     eventType: m.eventType,
+    taskEvent: m.taskEvent,
+    recipientIds: m.recipientIds,
     source: m.source,
     botEvent: m.botEvent,
     body: m.body.length > BODY_MAX ? m.body.slice(0, BODY_MAX) : m.body,
@@ -97,14 +99,14 @@ export function packWait(
   };
 
   let mail: WaitMailItem[];
-  const conversations = new Set([...mentions, ...other].map((m) => m.channelId));
-  if (actor.role === "brain" && conversations.size > 1) {
+  const multiChannelBrain = actor.role === 'brain' && new Set([...mentions, ...other].map(m => m.channelId)).size > 1;
+  {
     const byScope = new Map<string, Message[]>();
     const instructions: Message[] = [];
     for (const m of other) {
       // Only explicitly non-actionable progress can be summarized. Untyped legacy
       // messages may contain a blocker/question anywhere in the body: keep them full.
-      if (m.eventType !== "progress" || m.authorRole === "human" || m.authorRole === "brain" || m.attachments?.length || m.recovery) {
+      if (m.taskEvent || m.recipientIds?.length || m.eventType !== "progress" || m.authorRole === "human" || m.authorRole === "brain" || m.attachments?.length || m.recovery) {
         instructions.push(m);
         continue;
       }
@@ -114,10 +116,8 @@ export function packWait(
       list.push(m);
       byScope.set(scope, list);
     }
-    mail = [...mentions.map(full), ...instructions.map(full), ...[...byScope.values()].map(digestLine)]
+    mail = [...mentions.map(full), ...instructions.map(full), ...[...byScope.values()].map(items => items.length > 1 || multiChannelBrain ? digestLine(items) : full(items[0]!))]
       .sort((a, b) => a.seq - b.seq);
-  } else {
-    mail = [...mentions, ...other].map(full);
   }
 
   return {

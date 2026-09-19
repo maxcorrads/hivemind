@@ -1,5 +1,6 @@
 import { initTelegramInbox, telegramQuarantine, retryTelegramUpdate, discardTelegramUpdate, type TelegramUpdateScope } from "./telegram-inbox.ts";
 import { initTelegramOutbox, retryTelegramOutboxFailure, pruneTelegramFailures, type TelegramDestination } from "./telegram-outbox.ts";
+import { immediateTransaction } from './transaction.ts';
 import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
@@ -52,6 +53,11 @@ import { digestExpansionSchema } from "../shared/digest.ts";
 import { botMessageSchema, createBotSchema, botCredentialSchema } from "../shared/bot-message.ts";
 import { STORAGE_VERSION, storageVersion, validateCurrentStorage, migrateProjectStorage } from "./storage-migrations.ts";
 import { assertAllowedMime, commitUpload, openBlob, removeOrphanBlobs, removeUploadTemp, streamUpload } from "./files.ts";
+import { TaskStore } from './tasks.ts';
+import { NotificationStore } from './notifications.ts';
+import { RoomStore } from './rooms.ts';
+import { ROUTINE_BATCH_MS } from '../shared/notifications.ts';
+import type { TaskEnvelope } from '../shared/tasks.ts';
 
 export { hiveHome } from "./paths.ts";
 
@@ -98,6 +104,7 @@ type MessageRow = {
   control: ControlAction | null;
   event_type?: Message["eventType"] | null;
   mentions: string;
+  recipients?: string;
   created_at: number;
 };
 
@@ -132,13 +139,16 @@ export class Hive {
   readonly home: string;
   readonly inbox!: InboxDeliveryStore;
   private readonly inboxReader!: InboxReader;
+  readonly tasks!: TaskStore;
+  readonly rooms!: RoomStore;
+  readonly notifications!: NotificationStore;
   private waiters = new Map<string, Waiter>();
   private telegramOrigin = new Set<string>();
   private readonly readState!: ReadState;
   private transactionDepth = 0;
   private committedEffects: Array<() => void> = [];
 
-  constructor(dbPath = path.join(hiveHome(), "hive.db")) {
+  constructor(dbPath = path.join(hiveHome(), "hive.db"), options: { routineBatchMs?: number } = {}) {
     this.home = path.dirname(dbPath);
     this.bus.setMaxListeners(200);
     mkdirSync(path.dirname(dbPath), { recursive: true, mode: 0o700 });
@@ -169,8 +179,11 @@ export class Hive {
       initTelegramInbox(this.db);
       pruneTelegramFailures(this.db);
       this.readState = new ReadState(this.db);
+      this.tasks = new TaskStore(this);
+      this.rooms = new RoomStore(this);
+      this.notifications = new NotificationStore(this);
       this.inbox = new InboxDeliveryStore(this.db);
-      this.inboxReader = new InboxReader(this.db, this.inbox);
+      this.inboxReader = new InboxReader(this.db, this.inbox, this.notifications, options.routineBatchMs ?? ROUTINE_BATCH_MS);
     } catch (error) {
       try { this.db.close(); } catch { /* preserve the initialization failure */ }
       throw error;
@@ -357,6 +370,9 @@ export class Hive {
       bot_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
       revision INTEGER NOT NULL, revoked INTEGER NOT NULL
     )`);
+    if (!this.db.prepare('PRAGMA table_info(messages)').all().some(column => column.name === 'recipients')) {
+      this.db.exec("ALTER TABLE messages ADD COLUMN recipients TEXT NOT NULL DEFAULT '[]'");
+    }
   }
 
   private mapProject(row: ProjectRow): Project {
@@ -515,6 +531,8 @@ export class Hive {
         ).run(...channelIds);
         this.db.prepare(`DELETE FROM telegram_out WHERE channel_id IN (${ph})`).run(...channelIds);
         this.db.prepare(`DELETE FROM telegram_topics WHERE channel_id IN (${ph})`).run(...channelIds);
+        this.db.prepare(`DELETE FROM task_records WHERE channel_id IN (${ph})`).run(...channelIds);
+        this.db.prepare(`DELETE FROM notification_subscriptions WHERE channel_id IN (${ph})`).run(...channelIds);
         this.db.prepare(`DELETE FROM threads WHERE channel_id IN (${ph})`).run(...channelIds);
         this.db.prepare(`DELETE FROM bot_events WHERE channel_id IN (${ph})`).run(...channelIds);
         this.db.prepare(`DELETE FROM reads WHERE channel_id IN (${ph})`).run(...channelIds);
@@ -1052,7 +1070,7 @@ export class Hive {
     });
   }
 
-  openDm(actor: Agent, otherName: string): Channel {
+  openDm(actor: Agent, otherName: string, silent = false): Channel {
     const other = this.getAgentByName(otherName);
     if (!other) throw new HiveError(404, `No agent named ${otherName}`);
     if (actor.role === "bot" || other.role === "bot") throw new HiveError(403, "Bots publish observations to explicitly linked channels, not DMs");
@@ -1068,7 +1086,7 @@ export class Hive {
     if (actor.role === "worker" && other.role === "worker") {
       throw new HiveError(403, "Workers cannot DM other workers. Talk to a brain.");
     }
-    return this.transaction(() => {
+    const create = () => {
       const found = this.findDm(actor.id, other.id);
       if (found) return found;
       const projectId = actor.role === "human" ? other.projectId : actor.projectId;
@@ -1081,9 +1099,11 @@ export class Hive {
       this.addMember(id, actor.id);
       this.addMember(id, other.id);
       const ch = this.getChannel(id);
-      this.afterCommit(() => this.bus.emit("channel", ch));
+      if (!silent) this.afterCommit(() => this.bus.emit("channel", ch));
       return ch;
-    });
+    };
+    // TaskStore owns the surrounding transaction when silent is requested.
+    return silent ? create() : this.transaction(create);
   }
 
   findDm(a: string, b: string): Channel | null {
@@ -1163,19 +1183,17 @@ export class Hive {
     const event: BotEvent = { eventId: input.eventId, ...(input.origin ? { origin: input.origin } : {}) };
     const payloadHash = hashToken(JSON.stringify({ body: input.body, attachmentIds: input.attachmentIds, ...event,
       ...(input.eventType ? { eventType: input.eventType } : {}) }));
-    let messageId: string;
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
+    const { messageId, duplicate } = immediateTransaction(this.db, () => {
       const previous = this.db.prepare(`SELECT message_id, payload_hash FROM bot_events
         WHERE bot_id = ? AND channel_id = ? AND thread_id = ? AND event_id = ?`)
         .get(actor.id, ch.id, input.threadId ?? "", input.eventId) as { message_id: string; payload_hash: string } | undefined;
       if (previous) {
         if (previous.payload_hash !== payloadHash) throw new HiveError(409, "Event ID already used with different content; use a new revision/event ID");
-        this.db.exec("COMMIT");
-        return { message: this.getMessageById(previous.message_id), duplicate: true };
+        return { messageId: previous.message_id, duplicate: true };
       }
+      if (this.rooms.peek(ch.id)?.state === 'archived') throw new HiveError(409, 'Channel is archived; suspend this source link. Do not discard undelivered source events.');
       this.validateAttachments(actor, input.attachmentIds);
-      messageId = crypto.randomUUID();
+      const messageId = crypto.randomUUID();
       this.db.prepare(`INSERT INTO messages (id, channel_id, thread_id, author_id, body, kind, mentions, created_at, event_type)
         VALUES (?, ?, ?, ?, ?, 'chat', '[]', ?, ?)`)
         .run(messageId, ch.id, input.threadId ?? null, actor.id, input.body, now(), input.eventType ?? null);
@@ -1185,15 +1203,14 @@ export class Hive {
       this.bindAttachments(messageId, input.attachmentIds);
       if (input.threadId) this.db.prepare("INSERT OR IGNORE INTO threads (id, channel_id, status) VALUES (?, ?, 'open')")
         .run(input.threadId, ch.id);
-      this.db.exec("COMMIT");
-    } catch (error) {
-      try { this.db.exec("ROLLBACK"); } catch { /* already rolled back */ }
-      throw error;
-    }
+      return { messageId, duplicate: false };
+    });
     const message = this.getMessageById(messageId);
-    this.bus.emit("message", message);
-    this.wakeMembers(ch, message);
-    return { message, duplicate: false };
+    if (!duplicate) {
+      this.bus.emit("message", message);
+      this.wakeMembers(ch, message);
+    }
+    return { message, duplicate };
   }
 
   postMessage(
@@ -1207,6 +1224,7 @@ export class Hive {
       control?: ControlAction | null;
       source?: "hive" | "telegram";
       attachmentIds?: string[];
+      recipients?: string[];
     },
     persistReceipt?: (message: Message) => void,
   ): Message {
@@ -1216,6 +1234,17 @@ export class Hive {
     if (!this.canSeeChannel(actor, ch) || !this.canPost(actor, ch)) {
       throw new HiveError(403, `You cannot post to ${channelLabel(ch)}`);
     }
+    if (actor.role !== 'human' && this.rooms.peek(ch.id)?.state === 'archived' &&
+      (!input.threadId || !this.tasks.has(input.threadId)))
+      throw new HiveError(409, 'Archived room: no new work or root messages; use an existing task thread for closure');
+    if (input.recipients !== undefined && (!Array.isArray(input.recipients) || !input.recipients.length || input.recipients.length > 32 ||
+      input.recipients.some(name => typeof name !== 'string'))) throw new HiveError(400, 'Provide 1–32 recipient names');
+    const recipients = [...new Set((input.recipients ?? []).map(name => {
+      const target = this.getAgentByName(name);
+      if (!target || target.role === 'bot' || !this.canSeeChannel(target, ch) ||
+        (actor.role === 'worker' && target.role === 'human')) throw new HiveError(403, 'Recipient must be an accessible permitted person');
+      return target.id;
+    }))];
     const body = input.body.trim();
     const attachmentIds = input.attachmentIds ?? [];
     if (attachmentIds.length > FILES_PER_MESSAGE) {
@@ -1252,28 +1281,17 @@ export class Hive {
 
     // Validate the complete attachment set before any mutation. The transaction
     // below then owns every remaining database write caused by the send.
-    if (attachmentIds.length) this.validateAttachments(actor, attachmentIds);
-
     return this.transaction(() => {
+      if (attachmentIds.length) this.validateAttachments(actor, attachmentIds);
       if (actor.role === "human" && !ch.memberIds.includes(actor.id)) {
         this.addMember(ch.id, actor.id);
         ch.memberIds.push(actor.id);
       }
       this.db.prepare(
-        `INSERT INTO messages (id, channel_id, thread_id, author_id, body, kind, control, mentions, created_at, event_type)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
-        id,
-        ch.id,
-        input.threadId ?? null,
-        actor.id,
-        body,
-        kind,
-        input.control ?? null,
-        JSON.stringify(mentions),
-        t,
-        input.eventType ?? null,
-      );
+        `INSERT INTO messages (id, channel_id, thread_id, author_id, body, kind, control, mentions, created_at, event_type, recipients)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(id, ch.id, input.threadId ?? null, actor.id, body, kind,
+        input.control ?? null, JSON.stringify(mentions), t, input.eventType ?? null, JSON.stringify(recipients));
       if (input.threadId) {
         this.db.prepare(
           `INSERT OR IGNORE INTO threads (id, channel_id, status) VALUES (?, ?, 'open')`,
@@ -1329,6 +1347,12 @@ export class Hive {
     type Author = { id: string; name: string; role: Role };
     const authors = new Map<string, Author>();
     const botEvents = new Map<string, BotEvent>();
+    const taskEvents = new Map<string, TaskEnvelope>();
+    for (const ids of batches(rows.map(row => row.id))) {
+      const found = this.db.prepare(`SELECT message_id, envelope FROM task_events WHERE message_id IN (${ids.map(() => "?").join(",")})`)
+        .all(...ids) as Array<{ message_id: string; envelope: string }>;
+      for (const event of found) taskEvents.set(event.message_id, JSON.parse(event.envelope) as TaskEnvelope);
+    }
     for (const ids of batches([...new Set(rows.map((row) => row.author_id))])) {
       const found = this.db.prepare(
         `SELECT id, name, role FROM agents WHERE id IN (${ids.map(() => "?").join(",")})`,
@@ -1355,6 +1379,8 @@ export class Hive {
       kind: row.kind, control: row.control,
       ...(row.event_type ? { eventType: row.event_type } : {}),
       mentions: JSON.parse(row.mentions) as string[], createdAt: row.created_at,
+      ...(row.recipients && row.recipients !== '[]' ? { recipientIds: JSON.parse(row.recipients) as string[] } : {}),
+      ...(taskEvents.has(row.id) ? { taskEvent: taskEvents.get(row.id)! } : {}),
       ...(botEvents.has(row.id) ? { source: "bot" as const, botEvent: botEvents.get(row.id)! } : {}),
     }));
   }
@@ -1372,7 +1398,8 @@ export class Hive {
     const ch = this.getChannel(channel, actor.projectId);
     if (!this.canSeeChannel(actor, ch)) throw new HiveError(403, "Cannot read this channel");
     const headers = this.db.prepare(`SELECT id, seq, channel_id, length(CAST(body AS BLOB)) AS body_bytes,
-      COALESCE((SELECT length(CAST(metadata AS BLOB)) FROM bot_events WHERE message_id = messages.id), 0) AS metadata_bytes FROM messages
+      COALESCE((SELECT length(CAST(metadata AS BLOB)) FROM bot_events WHERE message_id = messages.id), 0) +
+      COALESCE((SELECT length(CAST(envelope AS BLOB)) FROM task_events WHERE message_id = messages.id), 0) AS metadata_bytes FROM messages
       WHERE id IN (SELECT value FROM json_each(?)) ORDER BY seq`).all(JSON.stringify(messageIds)) as
         { id: string; seq: number; channel_id: string; body_bytes: number; metadata_bytes: number }[];
     // Validate the entire selection before emitting any content, including past pages.
@@ -1626,6 +1653,7 @@ export class Hive {
   }
 
   setThreadStatus(actor: Agent, threadId: string, status: ThreadStatus | null): Thread {
+    if (this.tasks.has(threadId)) throw new HiveError(409, 'Use structured task events; generic thread status cannot change a task');
     if (actor.role === "bot") throw new HiveError(403, "Bots cannot change thread status");
     const row = this.db.prepare(
       `SELECT m.id, m.channel_id FROM messages m WHERE m.id = ?`,
@@ -1731,9 +1759,18 @@ export class Hive {
 
   acknowledgeInbox(actor: Agent, sessionId: string, deliveryId: string) {
     if (actor.role !== "brain" && actor.role !== "worker") throw new HiveError(403, "Only agents acknowledge inbox mail");
-    const result = this.inbox.acknowledge(actor.id, sessionId, deliveryId);
+    let changed: string[] = [];
+    const result = this.inbox.acknowledge(actor.id, sessionId, deliveryId,
+      (seqs, at) => { changed = this.tasks.recordReceipt(actor.id, seqs, at); });
+    for (const id of changed) this.bus.emit('task', this.tasks.get(this.getAgent(HUMAN_ID), id));
     this.emitQueued(actor.id);
     return result;
+  }
+
+  /** Publish only after the structured event and its message commit atomically. */
+  publishTaskMessage(message: Message) {
+    this.bus.emit('message', message);
+    this.wakeMembers(this.getChannel(message.channelId), message);
   }
 
   inboxStatuses(): Record<string, InboxStatus> {
@@ -1779,17 +1816,8 @@ export class Hive {
   }
 
   /** Wait wakes agents only for mail addressed to them, not public chatter. */
-  isFor(actor: Agent, msg: Message, knownChannel?: Channel): boolean {
-    if (actor.role === "bot") return false;
-    if (msg.mentions.includes(actor.id)) return true;
-    if (msg.kind === "control") {
-      const ch = knownChannel ?? this.getChannel(msg.channelId);
-      return this.canSeeChannel(actor, ch);
-    }
-    const ch = knownChannel ?? this.getChannel(msg.channelId);
-    if (ch.type === "dm" || ch.type === "private") return true;
-    if (ch.type === "brains" && actor.role === "brain") return true;
-    return false;
+  isFor(actor: Agent, msg: Message): boolean {
+    return (actor.role === 'brain' || actor.role === 'worker') && this.inboxReader.isFor(actor, msg.seq);
   }
 
   invite(actor: Agent, channelRef: string, memberNames: string[]): Channel {
@@ -1822,8 +1850,8 @@ export class Hive {
     for (const id of new Set([...ch.memberIds, HUMAN_ID])) {
       if (id === msg.authorId) continue;
       const agent = this.getAgent(id);
-      const channel = this.getChannel(ch.id);
-      if (!this.canSeeChannel(agent, channel)) continue;
+      // The notification classifier rechecks current project, channel membership,
+      // role and routing in SQL. Do not hydrate the entire roster for every member.
       if (!this.isFor(agent, msg)) continue;
       this.waiters.get(id)?.wake();
       this.emitQueued(id);
@@ -1836,9 +1864,12 @@ export class Hive {
     signal?: AbortSignal,
     opts: { compact?: boolean; sessionId?: string } = {},
   ): Promise<WaitResult> {
-    if (actor.role === "bot") throw new HiveError(403, "Bots publish observations; they do not wait for work");
     const compact = Boolean(opts.compact);
     const empty = () => packWait(this.getAgent(actor.id), [], 0, compact, () => "");
+
+    // A cancelled request is observational only: it must not touch presence,
+    // install a waiter, advance inbox state, or consume already-queued mail.
+    if (actor.role === "bot") throw new HiveError(403, "Bots publish observations; they do not wait for work");
 
     // No session/presence/cursor side effects for work cancelled before admission.
     if (signal?.aborted) return empty();
@@ -1855,6 +1886,8 @@ export class Hive {
       let scannedRows = 0;
       let hydratedMessages = 0;
       let acknowledgedThroughSeq: number | undefined;
+      let routineTimer: ReturnType<typeof setTimeout> | undefined;
+      const deadline = Date.now() + (Number.isFinite(timeoutMs) ? Math.max(1, timeoutMs) : DEFAULT_WAIT_MS);
       const take = () => {
         const batch = this.takeUnseen(actor, sessionId, compact, WAIT_SCAN_MAX - scannedRows);
         const page = batch.page!;
@@ -1870,6 +1903,7 @@ export class Hive {
         if (this.waiters.get(actor.id) === waiter) this.waiters.delete(actor.id);
         signal?.removeEventListener("abort", onAbort);
         if (timer) clearTimeout(timer);
+        if (routineTimer) clearTimeout(routineTimer);
       };
       const deliver = (batch: WaitResult) => {
         if (done) return;
@@ -1884,7 +1918,13 @@ export class Hive {
           deliver(empty());
           return;
         }
-        try { deliver(take()); }
+        try {
+          clearTimeout(routineTimer);
+          const batch = take();
+          if (batch.idle && batch.retryAfterMs && Date.now() < deadline && scannedRows < WAIT_SCAN_MAX) {
+            routineTimer = setTimeout(() => finish(true), Math.min(batch.retryAfterMs, deadline - Date.now()));
+          } else deliver(batch);
+        }
         catch (error) { done = true; cleanup(); reject(error); }
       };
       waiter = {
@@ -1910,11 +1950,8 @@ export class Hive {
       try {
         const first = take();
         if (!first.idle || first.page!.continuation || scannedRows === WAIT_SCAN_MAX) deliver(first);
-      } catch (error) {
-        done = true;
-        cleanup();
-        reject(error);
-      }
+        else if (first.retryAfterMs) routineTimer = setTimeout(() => finish(true), Math.min(first.retryAfterMs, ms));
+      } catch (error) { done = true; cleanup(); reject(error); }
     });
   }
 

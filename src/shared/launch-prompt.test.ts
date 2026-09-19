@@ -142,6 +142,48 @@ test("cd toggle off skips the worktree", () => {
   assert.equal(block.includes("cd "), false);
 });
 
+test("Claude launch requests eager loading only for Hivemind without changing permissions", () => {
+  const binding = {
+    command: "/fixture/node",
+    args: ["/fixture/it's hive/cli.ts", "mcp"],
+    env: { HIVEMIND_URL: "http://127.0.0.1:7420", HIVEMIND_TOKEN: "" },
+  };
+  const original = structuredClone(binding);
+  for (const software of ["claude", "claude-company"]) {
+    for (const role of ["brain", "worker"] as const) {
+      for (const resume of [false, true]) {
+        const input = { ...base, software, role, seniority: "senior" as const,
+          resume, resumeName: "Fixture", cdWorktree: false, hivemindMcp: binding };
+        const block = buildLaunchBlock(input);
+        // Capture argv using a shell function, never launch the real model.
+        const capture = `function ${software}() { ${shSingleQuote(process.execPath)} -e 'console.log(JSON.stringify(process.argv.slice(1)))' -- "$@"; }\n`;
+        const result = spawnSync("zsh", ["-f"], { input: capture + block, encoding: "utf8" });
+        assert.equal(result.status, 0, result.stderr);
+        const argv = JSON.parse(result.stdout) as string[];
+        assert.deepEqual(argv.slice(0, 3), ["--mcp-config", JSON.stringify({
+          mcpServers: { hivemind: { ...binding, alwaysLoad: true } },
+        }), "--"]);
+        assert.equal(argv[3], buildLaunchPrompt(input));
+        assert.equal(argv.length, 4);
+        assert.doesNotMatch(block, /--strict-mcp-config|--permission-mode|skip-permissions|MCP_CONNECTION_NONBLOCKING/);
+      }
+    }
+  }
+  assert.deepEqual(binding, original);
+  for (const software of ["codex", "agent", "opencode"]) {
+    assert.doesNotMatch(buildLaunchBlock({ ...base, software, hivemindMcp: binding }), /alwaysLoad|--mcp-config/);
+  }
+});
+
+test("launch prompt requires a real join result and stops if tools are unavailable", () => {
+  for (const resume of [false, true]) {
+    const prompt = buildLaunchPrompt({ ...base, resume, resumeName: "Fixture" });
+    assert.match(prompt, /Use a real tool call; never simulate a tool result or invent an agent name/);
+    assert.match(prompt, /use the host's available tool discovery to load Hivemind's tools first/);
+    assert.match(prompt, /If join is unavailable or fails, report the startup failure and stop/);
+  }
+});
+
 test("missing worktree skips cd even when the toggle is on", () => {
   const block = buildLaunchBlock({ ...base, workspacePath: null, software: "codex2" });
   assert.ok(block.startsWith("codex2 "));

@@ -228,7 +228,9 @@ test("failed receipt backfill rolls back its marker and totals so a restart can 
   historicalReceipt(db, f.brain.agent.id, crypto.randomUUID(), [3], 200);
   let parsed = 0;
   db.function("json_array_length", value => {
-    if (++parsed === 2) throw new Error("injected backfill failure");
+    // Return an invalid aggregate value to provoke a real SQL constraint error.
+    // Node 22.13 does not reliably rethrow JS exceptions from SQLite functions.
+    if (++parsed === 2) return null;
     return (JSON.parse(String(value)) as unknown[]).length;
   });
   assert.throws(() => new InboxDeliveryStore(db));
