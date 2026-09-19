@@ -1,79 +1,29 @@
 import { expect, test, type Page, type Route, type WebSocketRoute } from "@playwright/test";
 
-type Project = {
-  id: string;
-  slug: string;
-  name: string;
-  worktree: string | null;
-  createdAt: number;
-};
+import type { Agent, Channel, Message, Project, Thread } from "../../src/shared/types.ts";
+import type { ChannelPayload, Snapshot } from "../../web/api.ts";
+import type { RoomView } from "../../src/shared/rooms.ts";
 
-type Agent = {
-  id: string;
-  name: string;
-  role: "human" | "brain" | "worker";
-  seniority: "junior" | "mid" | "senior" | null;
-  focus: string | null;
-  online: boolean;
-  lastSeenAt: number;
-  createdAt: number;
-  projectId: string | null;
-  project: string | null;
-};
+type Harness = { seq: number; revision: number; receipts: number[][]; unexpected: string[]; errors: string[] };
+const harnesses = new WeakMap<Page, Harness>();
 
-type Channel = {
-  id: string;
-  name: string;
-  type: "public" | "brains" | "private" | "dm";
-  topic: string | null;
-  createdBy: string;
-  createdAt: number;
-  memberIds: string[];
-  projectId: string;
-  project: string;
-};
+test.beforeEach(async ({ page }) => {
+  const harness: Harness = { seq: 0, revision: 0, receipts: [], unexpected: [], errors: [] };
+  harnesses.set(page, harness);
+  page.on("pageerror", error => harness.errors.push(error.message));
+  // Unexpected UI requests must fail the test, not accidentally reach a live hive.
+  await page.route("**/api/**", async route => {
+    harness.unexpected.push(`${route.request().method()} ${new URL(route.request().url()).pathname}`);
+    await fulfillJson(route, { error: "Unmocked browser fixture request" }, 501);
+  });
+});
 
-type Message = {
-  id: string;
-  seq: number;
-  channelId: string;
-  threadId: string | null;
-  authorId: string;
-  authorName: string;
-  authorRole: "human" | "brain" | "worker";
-  body: string;
-  kind: "chat" | "system" | "control";
-  control: null;
-  mentions: string[];
-  createdAt: number;
-  reactions?: Array<{ emoji: string; count: number; mine?: boolean }>;
-};
-
-type Thread = {
-  id: string;
-  channelId: string;
-  status: "open" | "in_progress" | "blocked" | "done" | null;
-};
-
-type ChannelPayload = {
-  channel: Channel;
-  messages: Message[];
-  hasOlder: boolean;
-  threads: Thread[];
-  replyCounts: Record<string, number>;
-};
-
-type Snapshot = {
-  you: Agent;
-  projects: Project[];
-  agents: Agent[];
-  channels: Channel[];
-  unread: Record<string, number>;
-  mentions: Message[];
-  mentionsHasMore: boolean;
-  queued: Record<string, number>;
-  telegram: { running: boolean; configured: boolean };
-};
+test.afterEach(async ({ page }) => {
+  const harness = harnesses.get(page)!;
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+  expect(harness.unexpected, "Unexpected API requests").toEqual([]);
+  expect(harness.errors, "Uncaught browser errors").toEqual([]);
+});
 
 function deferred() {
   let resolve!: () => void;
@@ -140,11 +90,15 @@ function message(
 }
 
 function payload(ch: Channel, messages: Message[], threads: Thread[] = [], replyCounts: Record<string, number> = {}): ChannelPayload {
-  return { channel: ch, messages, hasOlder: false, threads, replyCounts };
+  return { channel: ch, threadId: messages.find(message => message.threadId)?.threadId ?? null,
+    messages, hasOlder: false, hasNewer: false, threads, replyCounts,
+    snapshotSeq: Math.max(0, ...messages.map(message => message.seq)),
+    cursors: { before: messages[0]?.seq, after: messages.at(-1)?.seq } };
 }
 
 function snapshot(projects: Project[], channels: Channel[]): Snapshot {
   return {
+    readInstance: "browser-fixture", readRevision: 0, readSeq: 0, mentionCounts: {},
     you: human,
     projects,
     agents: [human],
@@ -158,6 +112,12 @@ function snapshot(projects: Project[], channels: Channel[]): Snapshot {
 }
 
 async function fulfillJson(route: Route, body: unknown, status = 200) {
+  const harness = harnesses.get(route.request().frame().page());
+  if (harness && body && typeof body === "object") {
+    const data = body as { messages?: Message[]; message?: Message };
+    for (const message of [...(data.messages ?? []), ...(data.message ? [data.message] : [])])
+      harness.seq = Math.max(harness.seq, message.seq);
+  }
   await route.fulfill({
     status,
     contentType: "application/json",
@@ -166,7 +126,28 @@ async function fulfillJson(route: Route, body: unknown, status = 200) {
 }
 
 async function installSnapshot(page: Page, current: () => Snapshot) {
-  await page.route("**/api/ui/snapshot", async (route) => fulfillJson(route, current()));
+  const harness = harnesses.get(page)!;
+  const reads = () => ({ ...current(), readSeq: harness.seq, readRevision: harness.revision });
+  await page.route("**/api/ui/session", async route => {
+    expect(route.request().method()).toBe("POST");
+    expect(route.request().headers()["x-hivemind-ui"]).toBe("1");
+    await fulfillJson(route, { ok: true });
+  });
+  await page.route("**/api/ui/snapshot", async route => fulfillJson(route, reads()));
+  await page.route("**/api/ui/read-state", async route => fulfillJson(route, reads()));
+  await page.route("**/api/ui/read", async route => {
+    const receipt = route.request().postDataJSON() as { messageSeqs: number[] };
+    harness.receipts.push(receipt.messageSeqs);
+    harness.revision++;
+    await fulfillJson(route, reads());
+  });
+  await page.route("**/api/ui/mentions?*", async route => fulfillJson(route, {
+    readInstance: "browser-fixture", readRevision: harness.revision, readSeq: harness.seq,
+    messages: [], hasMore: false,
+  }));
+  const room: RoomView = { room: null, tasks: [], activeTaskCount: 0, tasksHasMore: false,
+    nextTaskCursor: null, links: [], unmanagedBots: [] };
+  await page.route("**/api/ui/channels/*/room", async route => fulfillJson(route, room));
 }
 
 async function installMessages(
@@ -181,14 +162,25 @@ async function installMessages(
   });
 }
 
-async function installSocketHarness(
-  page: Page,
-  onConnect?: (socket: WebSocketRoute, index: number) => void,
-) {
-  const sockets: WebSocketRoute[] = [];
-  await page.routeWebSocket("**/ws", (socket) => {
-    sockets.push(socket);
-    onConnect?.(socket, sockets.length - 1);
+type FixtureSocket = Pick<WebSocketRoute, "close"> & { send: (data: string) => void };
+
+async function installSocketHarness(page: Page) {
+  const sockets: FixtureSocket[] = [];
+  const harness = harnesses.get(page)!;
+  let sequence = 0;
+  await page.routeWebSocket("**/ws", socket => {
+    const wrapped: FixtureSocket = {
+      close: options => socket.close(options),
+      send: data => {
+        const event = JSON.parse(data) as { type: string; payload?: Message | { message?: Message } };
+        if (event.payload && "seq" in event.payload) harness.seq = Math.max(harness.seq, event.payload.seq);
+        if (event.payload && "message" in event.payload && event.payload.message)
+          harness.seq = Math.max(harness.seq, event.payload.message.seq);
+        socket.send(JSON.stringify({ ...event, streamId: "browser-stream", sequence: ++sequence }));
+      },
+    };
+    sockets.push(wrapped);
+    wrapped.send(JSON.stringify({ type: "hello", payload: null }));
   });
   return sockets;
 }
@@ -326,9 +318,7 @@ test("reconnect converges open channel and thread after missed message reaction 
     }
     await fulfillJson(route, threadId ? threadData : channelData);
   });
-  const sockets = await installSocketHarness(page, (socket, index) => {
-    if (index > 0) socket.send(JSON.stringify({ type: "hello", at: Date.now() }));
-  });
+  const sockets = await installSocketHarness(page);
 
   await page.goto("/#/c/a/t/root");
   await expect(page.getByText("reply before disconnect", { exact: true })).toBeVisible();
@@ -358,7 +348,7 @@ test("reconnect converges open channel and thread after missed message reaction 
   );
 
   delayReconnectChannel = true;
-  await sockets[0]!.close({ code: 1001, reason: "controlled disconnect" });
+  await sockets[0]!.close({ code: 1013, reason: "client too slow; reconnect to resync" });
   await page.clock.runFor(1_600);
   await expect.poll(() => sockets.length).toBe(2);
   await reconnectChannelRequested.promise;
@@ -403,9 +393,7 @@ test("HTTP-confirmed send appears without WebSocket echo and stays single after 
     await fulfillJson(route, payload(a, messages));
   });
 
-  const sockets = await installSocketHarness(page, (socket, index) => {
-    if (index > 0) socket.send(JSON.stringify({ type: "hello", at: Date.now() }));
-  });
+  const sockets = await installSocketHarness(page);
 
   await page.goto("/#/c/a");
   await expect.poll(() => sockets.length).toBe(1);
@@ -469,6 +457,7 @@ test("selected channel is discarded when its project disappears during an in-fli
 
 
 test("selected channel removal repairs to a valid state without stale content", async ({ page }) => {
+  await page.clock.install();
   const alpha = project("alpha", "Alpha Hive");
   const a = channel("a", "Alpha", alpha);
   const b = channel("b", "Beta", alpha);
@@ -493,7 +482,9 @@ test("selected channel removal repairs to a valid state without stale content", 
   await expect.poll(() => sockets.length).toBe(1);
 
   snap = snapshot([alpha], [b]);
-  sockets[0]!.send(JSON.stringify({ type: "hello", at: Date.now() }));
+  await sockets[0]!.close({ code: 1013, reason: "controlled resync" });
+  await page.clock.runFor(1_600);
+  await expect.poll(() => sockets.length).toBe(2);
 
   await expect(page.getByRole("heading", { name: "For you" })).toBeVisible();
   await expect(page).toHaveURL(/#\/inbox\/alpha$/);
@@ -501,3 +492,84 @@ test("selected channel removal repairs to a valid state without stale content", 
   await expect(page.getByPlaceholder("Message #Alpha")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "# Beta" })).toBeVisible();
 });
+
+test("live status survives a delayed first thread snapshot and ignores another thread", async ({ page }) => {
+  const alpha = project("alpha", "Alpha Hive"), a = channel("a", "Alpha", alpha);
+  const root = message("root", 1, "a", "thread root");
+  const reply = message("reply", 2, "a", "loaded thread reply", root.id);
+  const threads: Thread[] = [{ id: root.id, channelId: a.id, status: "open" }];
+  await installSnapshot(page, () => snapshot([alpha], [a]));
+  const requested = deferred(), release = deferred();
+  await installMessages(page, async (route, _channelId, threadId) => {
+    if (!threadId) return fulfillJson(route, payload(a, [root], threads));
+    requested.resolve();
+    await release.promise;
+    await fulfillJson(route, payload(a, [root, reply], threads));
+  });
+  const sockets = await installSocketHarness(page);
+  await page.goto("/#/c/a/t/root");
+  await requested.promise;
+  await expect.poll(() => sockets.length).toBe(1);
+  await expect(page.locator("main .st")).toHaveText("open");
+  sockets[0]!.send(JSON.stringify({ type: "thread", payload: { ...threads[0], status: "blocked" } }));
+  sockets[0]!.send(JSON.stringify({ type: "thread", payload: { id: "other", channelId: "a", status: "done" } }));
+  // A visible root badge acknowledges processing before the delayed HTTP result.
+  await expect(page.locator("main .st")).toHaveText("blocked");
+  release.resolve();
+  await expect(page.getByText("loaded thread reply", { exact: true })).toBeVisible();
+  await expect(page.locator("aside.thread select")).toHaveValue("blocked");
+});
+
+for (const inThread of [false, true]) {
+  test(`older history preserves a real scroll anchor and text selection under live arrivals (thread=${inThread})`, async ({ page }) => {
+    await page.clock.install();
+    const alpha = project("alpha", "Alpha Hive"), a = channel("a", "Alpha", alpha);
+    const root = message("root", 1, "a", "history root");
+    const threadId = inThread ? root.id : null;
+    const row = (seq: number) => message(`history-${seq}`, seq, a.id, `reading-anchor-${seq}`, threadId, {
+      authorId: "reader-agent", authorName: "Reader", authorRole: "brain",
+    });
+    let through = 580;
+    const full = () => Array.from({ length: through }, (_, i) => row(i + 1));
+    const threads: Thread[] = [{ id: root.id, channelId: a.id, status: "open" }];
+    await installSnapshot(page, () => snapshot([alpha], [a]));
+    await installMessages(page, async (route, _channelId, requestedThread) => {
+      if (inThread && !requestedThread) return fulfillJson(route, payload(a, [root], threads));
+      const before = Number(new URL(route.request().url()).searchParams.get("beforeSeq"));
+      const messages = before ? full().filter(m => m.seq < before) : full().slice(-500);
+      await fulfillJson(route, { ...payload(a, messages, threads), threadId,
+        hasOlder: !before, snapshotSeq: through, cursors: { before: messages[0]?.seq, after: through } });
+    });
+    const sockets = await installSocketHarness(page);
+    await page.goto(inThread ? "/#/c/a/t/root" : "/#/c/a");
+    const scope = page.locator(inThread ? "aside.thread" : "main");
+    await expect(scope.locator(".msg-b")).toHaveCount(500);
+    await scope.getByRole("button", { name: inThread ? "Load earlier replies" : "Load older", exact: true }).click();
+    await expect(scope.locator(".msg-b")).toHaveCount(580);
+    const anchor = scope.getByText("reading-anchor-40", { exact: true });
+    await anchor.scrollIntoViewIfNeeded();
+    const handle = await anchor.elementHandle();
+    expect(handle).not.toBeNull();
+    await anchor.evaluate(element => {
+      const range = document.createRange(); range.selectNodeContents(element);
+      const selection = window.getSelection()!;
+      selection.removeAllRanges(); selection.addRange(range);
+    });
+    const before = await anchor.evaluate(el => el.getBoundingClientRect().top);
+    await page.clock.runFor(20);
+    through = 582;
+    for (const seq of [581, 581, 582]) sockets[0]!.send(JSON.stringify({ type: "message", payload: row(seq) }));
+    const refresh = scope.getByRole("button", { name: inThread ? "New replies — refresh thread" : "New messages — return to live", exact: true });
+    await expect(refresh).toBeVisible();
+    await expect(scope.locator(".msg-b")).toHaveCount(580);
+    expect(await handle!.evaluate(el => el.isConnected && window.getSelection()?.toString() === el.textContent)).toBe(true);
+    expect(Math.abs(await anchor.evaluate(el => el.getBoundingClientRect().top) - before)).toBeLessThanOrEqual(1);
+    await page.clock.runFor(20);
+    const seen = harnesses.get(page)!.receipts.flat();
+    expect(seen).not.toContain(581); expect(seen).not.toContain(582);
+    await page.evaluate(() => window.getSelection()?.removeAllRanges());
+    await refresh.click();
+    await expect(scope.getByText("reading-anchor-582", { exact: true })).toBeVisible();
+    await expect(scope.locator(".msg-b")).toHaveCount(500);
+  });
+}

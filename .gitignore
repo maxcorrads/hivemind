@@ -8,3 +8,8 @@ web/dist
 *.db
 .hivemind-inbox
 telegram.json
+
+# Local browser diagnostics and CI reports
+artifacts/
+test-results/
+playwright-report/

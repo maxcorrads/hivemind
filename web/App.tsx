@@ -1,11 +1,23 @@
+import { beginChannelJournal, recordChannelMessage, recordChannelThread, applyChannelMessage, reconcileChannelSnapshot, type ChannelJournal } from "./channel-state.ts";
+import { newerTelegramHealth, telegramDegraded, type TelegramHealth } from "./telegram-health.ts";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
-import type { Agent, Channel, Message, SearchHit, Thread, ThreadStatus } from "../src/shared/types.ts";
+import type { Agent, Channel, Message, SearchHit, Thread, ThreadStatus, InboxStatus } from "../src/shared/types.ts";
 import { REACTION_EMOJIS } from "../src/shared/types.ts";
 import { isLiveSearchQuery, parseSearchQuery } from "../src/shared/search-query.ts";
 import { api, connectWs, type ChannelPayload, type Snapshot, type TelegramSettings } from "./api.ts";
 import { LaunchSheet } from "./LaunchSheet.tsx";
+import { BotOrigin, BotSetup, BotCredentials } from "./Bots.tsx";
+import { ProjectPlugins } from "./ProjectPlugins.tsx";
+import { InboxReceipt, QueueBadge } from "./InboxReceipt.tsx";
 import { loadMailLog, mergeMailLog, saveMailLog } from "./mail-log.ts";
+import type { MentionPage, ReadSnapshot } from "../src/shared/read-state.ts";
+import { createReadFence, createReadRefresh, createReceiptQueue, createRequestGate, readFields } from "../src/shared/read-client.ts";
 import { renderBody } from "./markdown.tsx";
+import { holdLivePane, isReadingHistory } from "./pane-window.ts";
+import { TaskCard } from './TaskCard.tsx';
+import { RoomPanel } from './RoomPanel.tsx';
+import type { TaskSnapshot } from '../src/shared/tasks.ts';
+import { selectThread, beginThreadLoad, failThreadLoad, receiveThreadMessage, receiveThreadTask, receiveThreadSnapshot, receiveThreadStatus, type ThreadView } from './thread-state.ts';
 
 type InboxBox = "unread" | "all";
 
@@ -32,83 +44,9 @@ function parseHash(): Sel {
   return { kind: "channel", id: "general" };
 }
 
-function patchPane(pane: ChannelPayload | null, msg: Message, viewingThread: string | null = null): ChannelPayload | null {
-  if (!pane || pane.channel.id !== msg.channelId) return pane;
-  if (pane.messages.some((m) => m.id === msg.id)) return pane;
-  if (viewingThread) {
-    if (msg.threadId === viewingThread || msg.id === viewingThread) {
-      return { ...pane, messages: [...pane.messages, msg] };
-    }
-    return pane;
-  }
-  if (msg.threadId) {
-    return {
-      ...pane,
-      replyCounts: { ...pane.replyCounts, [msg.threadId]: (pane.replyCounts[msg.threadId] ?? 0) + 1 },
-    };
-  }
-  return { ...pane, messages: [...pane.messages, msg] };
-}
-
-type ConversationEventPayload =
-  | { kind: "message"; message: Message }
-  | { kind: "reaction"; message: Message }
-  | { kind: "thread"; thread: Thread };
-
-type ConversationEvent = ConversationEventPayload & { revision: number };
-
-function replayConversationEvents(
-  pane: ChannelPayload,
-  events: ConversationEvent[],
-  afterRevision: number,
-  viewingThread: string | null,
-): ChannelPayload {
-  let current: ChannelPayload = pane;
-  for (const event of events) {
-    if (event.revision <= afterRevision) continue;
-    if (event.kind === "message") {
-      current = patchPane(current, event.message, viewingThread) ?? current;
-      continue;
-    }
-    if (event.kind === "reaction") {
-      current = replaceMessage(current, event.message) ?? current;
-      continue;
-    }
-    if (current.channel.id === event.thread.channelId) {
-      current = { ...current, threads: upsertById(current.threads, event.thread) };
-    }
-  }
-  return current;
-}
-
-function replaceMessage(pane: ChannelPayload | null, msg: Message): ChannelPayload | null {
-  if (!pane) return pane;
-  if (!pane.messages.some((m) => m.id === msg.id)) return pane;
-  return { ...pane, messages: pane.messages.map((m) => (m.id === msg.id ? msg : m)) };
-}
-
 function upsertById<T extends { id: string }>(list: T[], item: T): T[] {
   if (list.some((x) => x.id === item.id)) return list.map((x) => (x.id === item.id ? item : x));
   return [...list, item];
-}
-
-function applyMessageToSnap(
-  snap: Snapshot,
-  msg: Message,
-  viewingId: string | null,
-  viewingThread: string | null = null,
-): Snapshot {
-  const unread = { ...snap.unread };
-  const viewingThis =
-    msg.channelId === viewingId && (!msg.threadId || msg.threadId === viewingThread);
-  if (msg.authorId !== snap.you.id && !viewingThis) {
-    unread[msg.channelId] = (unread[msg.channelId] ?? 0) + 1;
-  }
-  let mentions = snap.mentions;
-  if (msg.mentions.includes("human") && !viewingThis) {
-    mentions = [msg, ...mentions.filter((m) => m.id !== msg.id)].slice(0, 30);
-  }
-  return { ...snap, unread, mentions };
 }
 
 function setHash(sel: Sel) {
@@ -151,17 +89,28 @@ function memberNames(ch: Channel, agents: Agent[]): string {
 
 export function App() {
   const [snap, setSnap] = useState<Snapshot | null>(null);
+  const latestTelegramHealth = useRef<TelegramHealth | null>(null);
   const [sel, setSel] = useState<Sel>(parseHash);
   const [pane, setPane] = useState<ChannelPayload | null>(null);
   const [threadId, setThreadId] = useState<string | null>(() => {
     const start = parseHash();
     return start.kind === "channel" ? start.thread ?? null : null;
   });
-  const [threadPane, setThreadPane] = useState<ChannelPayload | null>(null);
+  const [threadView, setThreadView] = useState<ThreadView | null>(null);
+  const threadPane = sel.kind === 'channel' && threadView?.channelId === sel.id && threadView.threadId === threadId ? threadView.pane : null;
+  const setThreadPane = useCallback((update: ChannelPayload | null | ((pane: ChannelPayload | null) => ChannelPayload | null)) => {
+    setThreadView(view => {
+      const next = typeof update === "function" ? update(view?.pane ?? null) : update;
+      if (!next) return null;
+      if (!view) return null;
+      return { ...view, pane: next };
+    });
+  }, []);
   const [draft, setDraft] = useState("");
   const [threadDraft, setThreadDraft] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [live, setLive] = useState(false);
+  const [roomTick, setRoomTick] = useState(0);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [newTopic, setNewTopic] = useState("");
@@ -169,6 +118,11 @@ export function App() {
   const [newMembers, setNewMembers] = useState<string[]>([]);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteNames, setInviteNames] = useState<string[]>([]);
+  const [botProject, setBotProject] = useState<string | null>(null);
+  const [pluginsProject, setPluginsProject] = useState<string | null>(null);
+  const [botBusy, setBotBusy] = useState(false);
+  const [credentialBot, setCredentialBot] = useState<Agent | null>(null);
+  const [credentialBusy, setCredentialBusy] = useState(false);
   const [confirmClear, setConfirmClear] = useState<string | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [launchOpen, setLaunchOpen] = useState(false);
@@ -201,6 +155,8 @@ export function App() {
   const [mailLog, setMailLog] = useState<Message[]>(loadMailLog);
   const stickBottom = useRef(true);
   const themePainted = useRef(false);
+  const channelStream = useRef<HTMLDivElement>(null);
+  const threadStream = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const threadBottomRef = useRef<HTMLDivElement>(null);
   const selRef = useRef(sel);
@@ -208,120 +164,186 @@ export function App() {
   const threadIdRef = useRef(threadId);
   threadIdRef.current = threadId;
   const channelsRef = useRef<Channel[]>([]);
-  const channelLoadRef = useRef<{ generation: number; controller: AbortController | null }>({
-    generation: 0,
-    controller: null,
-  });
-  const threadLoadRef = useRef<{ generation: number; controller: AbortController | null }>({
-    generation: 0,
-    controller: null,
-  });
-  const seenMessageIdsRef = useRef(new Set<string>());
-  const rememberMessageId = useCallback((id: string): boolean => {
-    const seen = seenMessageIdsRef.current;
-    const duplicate = seen.has(id);
-    if (!duplicate) {
-      seen.add(id);
-      if (seen.size > 2_048) {
-        const oldest = seen.values().next().value as string | undefined;
-        if (oldest) seen.delete(oldest);
+  const threadLoadIdRef = useRef(0);
+
+  const viewingThread = useCallback((channelId: string, root: string) =>
+    selRef.current.kind === 'channel' && selRef.current.id === channelId && threadIdRef.current === root, []);
+
+  const loadThread = useCallback(async (channelId: string, root: string) => {
+    if (!viewingThread(channelId, root)) return;
+    const requestId = ++threadLoadIdRef.current;
+    const load = threadLoad.current.begin();
+    setThreadView(view => beginThreadLoad(view, channelId, root, requestId));
+    try {
+      const data = await api.messages(channelId, root, undefined, load.signal);
+      if (load.valid() && viewingThread(channelId, root)) setThreadView(view => receiveThreadSnapshot(view, root, data, requestId));
+    } catch (error) {
+      if (load.valid() && viewingThread(channelId, root) && requestId === threadLoadIdRef.current) {
+        setThreadView(view => failThreadLoad(view, requestId));
+        throw error;
       }
     }
-    return duplicate;
-  }, []);
-  const conversationRevisionRef = useRef(0);
-  const conversationEventsRef = useRef<ConversationEvent[]>([]);
-  const recordConversationEvent = useCallback((event: ConversationEventPayload) => {
-    const recorded = { ...event, revision: ++conversationRevisionRef.current } as ConversationEvent;
-    const events = conversationEventsRef.current;
-    events.push(recorded);
-    if (events.length > 4_096) events.splice(0, events.length - 4_096);
+  }, [viewingThread]);
+
+  const onThreadMessage = useCallback((message: Message) => {
+    const root = threadIdRef.current;
+    if (root && viewingThread(message.channelId, root))
+      setThreadView(view => {
+        const current = selectThread(view, message.channelId, root);
+        const held = current.pane && isReadingHistory(threadStream.current)
+          ? { ...current, pane: holdLivePane(current.pane) } : current;
+        return receiveThreadMessage(held, message);
+      });
+  }, [viewingThread]);
+
+  const readFence = useRef(createReadFence());
+  const channelLoad = useRef(createRequestGate());
+  const channelJournal = useRef<ChannelJournal | null>(null);
+  const threadLoad = useRef(createRequestGate());
+  const snapshotLoad = useRef(createRequestGate());
+  const inboxLoad = useRef(createRequestGate());
+  const readRefresh = useRef<ReturnType<typeof createReadRefresh> | null>(null);
+  const channelReads = useRef<ReturnType<typeof createReceiptQueue> | null>(null);
+  const threadReads = useRef<ReturnType<typeof createReceiptQueue> | null>(null);
+  const [readTick, setReadTick] = useState(0);
+  const [reconnectTick, setReconnectTick] = useState(0);
+  const readVersion = useRef("");
+  const [inboxPage, setInboxPage] = useState<(MentionPage & { project: string }) | null>(null);
+  const [inboxBusy, setInboxBusy] = useState(false);
+
+  const changeSelection = useCallback((next: Sel) => {
+    const previous = selRef.current;
+    const priorChannel = previous.kind === "channel" ? previous.id : null;
+    const nextChannel = next.kind === "channel" ? next.id : null;
+    const nextThread = next.kind === "channel" ? next.thread ?? null : null;
+    if (priorChannel !== nextChannel) {
+      channelLoad.current.cancel();
+      channelJournal.current = null;
+      channelReads.current?.reset();
+    }
+    if (priorChannel !== nextChannel || threadIdRef.current !== nextThread) {
+      threadLoad.current.cancel();
+      threadReads.current?.reset();
+    }
+    const previousKey = previous.kind === "inbox" ? `${previous.project}/${previous.box ?? "unread"}` : null;
+    const nextKey = next.kind === "inbox" ? `${next.project}/${next.box ?? "unread"}` : null;
+    if (previousKey !== nextKey) inboxLoad.current.cancel();
+    selRef.current = next;
+    threadIdRef.current = nextThread;
+    setSel(next);
+    setThreadId(nextThread);
   }, []);
 
-  const refreshSnap = useCallback(async () => {
-    const next = await api.snapshot();
-    setSnap(next);
-    return next;
+  const acceptRead = useCallback((next: ReadSnapshot, ticket: number) => {
+    if (!readFence.current.accept(next, ticket)) return false;
+    setSnap((previous) => previous ? { ...previous, ...readFields(next) } : previous);
+    const version = JSON.stringify([ticket, next.readInstance, next.readRevision, next.readSeq]);
+    if (readVersion.current !== version) {
+      readVersion.current = version;
+      setReadTick((value) => value + 1);
+    }
+    return true;
   }, []);
-
-  const loadChannel = useCallback(async (id: string) => {
-    channelLoadRef.current.controller?.abort();
-    const controller = new AbortController();
-    const generation = channelLoadRef.current.generation + 1;
-    channelLoadRef.current = { generation, controller };
-    const eventRevision = conversationRevisionRef.current;
-    const data = await api.messages(id, null, undefined, controller.signal);
-    if (controller.signal.aborted || channelLoadRef.current.generation !== generation) return;
-    const current = selRef.current;
-    if (current.kind !== "channel" || current.id !== id) return;
-    const reconciled = replayConversationEvents(
-      data,
-      conversationEventsRef.current,
-      eventRevision,
-      null,
-    );
-    for (const message of reconciled.messages) rememberMessageId(message.id);
-    setPane(reconciled);
-    setSnap((s) =>
-      s
-        ? {
-            ...s,
-            unread: { ...s.unread, [id]: 0 },
-            mentions: s.mentions.filter((m) => m.channelId !== id),
-          }
-        : s,
-    );
-  }, [rememberMessageId]);
-
-  const loadThread = useCallback(async (channelId: string, rootId: string) => {
-    threadLoadRef.current.controller?.abort();
-    const controller = new AbortController();
-    const generation = threadLoadRef.current.generation + 1;
-    threadLoadRef.current = { generation, controller };
-    const eventRevision = conversationRevisionRef.current;
-    const data = await api.messages(channelId, rootId, undefined, controller.signal);
-    if (controller.signal.aborted || threadLoadRef.current.generation !== generation) return;
-    const current = selRef.current;
-    if (current.kind !== "channel" || current.id !== channelId || threadIdRef.current !== rootId) return;
-    const reconciled = replayConversationEvents(
-      data,
-      conversationEventsRef.current,
-      eventRevision,
-      rootId,
-    );
-    for (const message of reconciled.messages) rememberMessageId(message.id);
-    setThreadPane(reconciled);
-  }, [rememberMessageId]);
 
   useEffect(() => {
-    refreshSnap().catch((e) => setErr(String(e.message || e)));
+    const later = (run: () => void) => {
+      const timer = window.setTimeout(run, 16);
+      return () => window.clearTimeout(timer);
+    };
+    const onError = (error: unknown) => setErr(String(error));
+    const refresh = createReadRefresh(async (signal) => {
+      const ticket = readFence.current.ticket();
+      const next = await api.readState(signal);
+      if (!signal.aborted && !acceptRead(next, ticket) && readFence.current.current(ticket)) refresh.request();
+    }, later, onError);
+    const makeQueue = () => createReceiptQueue(async (scope, seqs, signal) => {
+      const ticket = readFence.current.ticket();
+      const next = await api.markMessagesSeen(scope.channelId, scope.threadId, seqs, signal);
+      if (!signal.aborted && !acceptRead(next, ticket)) refresh.request();
+    }, later, onError);
+    readRefresh.current = refresh;
+    channelReads.current = makeQueue();
+    threadReads.current = makeQueue();
+    return () => {
+      readFence.current.reset();
+      refresh.dispose();
+      channelReads.current?.dispose();
+      threadReads.current?.dispose();
+      readRefresh.current = null;
+      channelReads.current = null;
+      threadReads.current = null;
+    };
+  }, [acceptRead]);
+
+  const refreshSnap = useCallback(async () => {
+    const load = snapshotLoad.current.begin();
+    const ticket = readFence.current.ticket();
+    const raw = await api.snapshot(load.signal);
+    latestTelegramHealth.current = newerTelegramHealth(latestTelegramHealth.current, raw.telegram);
+    const next = { ...raw, telegram: { running: false, configured: false, ...raw.telegram, ...latestTelegramHealth.current } };
+    if (!load.valid() || !readFence.current.current(ticket)) return next;
+    const accepted = acceptRead(next, ticket);
+    setSnap((previous) => ({ ...next, ...(!accepted && previous ? readFields(previous) : {}) }));
+    if (!accepted) readRefresh.current?.request();
+    return next;
+  }, [acceptRead]);
+
+  const loadChannel = useCallback(async (id: string, before?: number) => {
+    const load = channelLoad.current.begin();
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const journal = beginChannelJournal(id);
+      channelJournal.current = journal;
+      try {
+        const data = await api.messages(id, null, before, load.signal);
+        if (!load.valid() || selRef.current.kind !== "channel" || selRef.current.id !== id) return;
+        if (journal.overflow) {
+          if (attempt < 2) continue;
+          throw new Error("Live traffic overtook the channel refresh. Reload the page to retry.");
+        }
+        setPane((current) => reconcileChannelSnapshot(current, data, journal, before !== undefined));
+        return;
+      } catch (error) {
+        if (!load.valid() || selRef.current.kind !== "channel" || selRef.current.id !== id) return;
+        throw error;
+      } finally {
+        if (channelJournal.current === journal) channelJournal.current = null;
+      }
+    }
+  }, []);
+
+  const resetReadConnection = useCallback(() => {
+    readFence.current.reset();
+    channelLoad.current.cancel();
+    channelJournal.current = null;
+    threadLoad.current.cancel();
+    inboxLoad.current.cancel();
+    channelReads.current?.reset();
+    threadReads.current?.reset();
+    setReconnectTick((value) => value + 1);
+    refreshSnap().catch((error) => { if (error?.name !== "AbortError") setErr(String(error)); });
+  }, [refreshSnap]);
+
+  useEffect(() => {
+    refreshSnap().catch((e) => { if (e?.name !== "AbortError") setErr(String(e.message || e)); });
     const off = connectWs((ev) => {
       if (ev.type === "hello") {
-        refreshSnap().catch(() => undefined);
-        const current = selRef.current;
-        if (current.kind === "channel") {
-          loadChannel(current.id).catch((e) => {
-            if (e?.name !== "AbortError") setErr(String(e?.message || e));
-          });
-          const root = threadIdRef.current;
-          if (root) {
-            loadThread(current.id, root).catch((e) => {
-              if (e?.name !== "AbortError") setErr(String(e?.message || e));
-            });
-          }
-        }
+        resetReadConnection();
+        setRoomTick(t => t + 1);
+        return;
+      }
+      if (ev.type === "telegram-health") {
+        const health = newerTelegramHealth(latestTelegramHealth.current, ev.payload as TelegramHealth);
+        latestTelegramHealth.current = health;
+        setSnap((current) => current ? { ...current, telegram: { running: false, configured: false, ...current.telegram, ...health } } : current);
         return;
       }
       if (ev.type === "message") {
         const msg = ev.payload as Message;
-        recordConversationEvent({ kind: "message", message: msg });
-        const duplicate = rememberMessageId(msg.id);
-        setPane((p) => (duplicate ? replaceMessage(p, msg) : patchPane(p, msg, null)));
-        setThreadPane((p) =>
-          duplicate ? replaceMessage(p, msg) : patchPane(p, msg, threadIdRef.current),
-        );
-        const viewing = selRef.current.kind === "channel" ? selRef.current.id : null;
-        setSnap((s) => (s ? applyMessageToSnap(s, msg, viewing, threadIdRef.current) : s));
+        recordChannelMessage(channelJournal.current, msg);
+        setPane((p) => applyChannelMessage(p && isReadingHistory(channelStream.current) ? holdLivePane(p) : p, msg));
+        onThreadMessage(msg);
+        readFence.current.observe(msg.seq);
+        readRefresh.current?.request();
         setMailLog((prev) => {
           const next = mergeMailLog(prev, [msg], channelsRef.current);
           if (next !== prev) saveMailLog(next);
@@ -332,9 +354,9 @@ export function App() {
       if (ev.type === "reaction") {
         const payload = ev.payload as { message?: Message };
         if (payload.message) {
-          recordConversationEvent({ kind: "reaction", message: payload.message });
-          setPane((p) => replaceMessage(p, payload.message!));
-          setThreadPane((p) => replaceMessage(p, payload.message!));
+          recordChannelMessage(channelJournal.current, payload.message, false);
+          setPane((p) => applyChannelMessage(p, payload.message!, false));
+          onThreadMessage(payload.message);
         }
         return;
       }
@@ -350,38 +372,66 @@ export function App() {
       }
       if (ev.type === "thread") {
         const thread = ev.payload as Thread;
-        recordConversationEvent({ kind: "thread", thread });
-        const applyThread = (current: ChannelPayload | null): ChannelPayload | null => {
-          if (!current || current.channel.id !== thread.channelId) return current;
-          return { ...current, threads: upsertById(current.threads, thread) };
-        };
-        setPane(applyThread);
-        setThreadPane(applyThread);
+        recordChannelThread(channelJournal.current, thread);
+        if (viewingThread(thread.channelId, thread.id))
+          setThreadView(view => receiveThreadStatus(selectThread(view, thread.channelId, thread.id), thread));
+        setPane((p) => {
+          if (!p || p.channel.id !== thread.channelId || !p.messages.some((message) => message.id === thread.id)) return p;
+          return { ...p, threads: upsertById(p.threads, thread) };
+        });
         return;
       }
       if (ev.type === "queued") {
-        const q = ev.payload as { agentId: string; n: number };
-        setSnap((s) => (s ? { ...s, queued: { ...s.queued, [q.agentId]: q.n } } : s));
+        const q = ev.payload as { agentId: string; n: number; inbox?: InboxStatus };
+        setSnap((current) => {
+          if (!current) return current;
+          const previous = current.inbox?.[q.agentId];
+          const inbox: InboxStatus = q.inbox ?? {
+            awaitingReceipt: previous?.awaitingReceipt ?? 0,
+            acknowledgedMessages: previous?.acknowledgedMessages ?? 0,
+            lastAcknowledgedAt: previous?.lastAcknowledgedAt ?? null,
+            queued: { atLeast: q.n, exact: true },
+          };
+          return {
+            ...current,
+            queued: { ...current.queued, [q.agentId]: q.n },
+            inbox: { ...current.inbox, [q.agentId]: inbox },
+          };
+        });
+        return;
+      }
+      if (ev.type === 'task') {
+        const task = ev.payload as TaskSnapshot;
+        if (selRef.current.kind === 'channel' && selRef.current.id === task.channelId) setRoomTick(t => t + 1);
+        if (viewingThread(task.channelId, task.id))
+          setThreadView(view => receiveThreadTask(selectThread(view, task.channelId, task.id), task));
+        return;
+      }
+      if (ev.type === 'room') {
+        const payload = ev.payload as { channelId: string };
+        if (selRef.current.kind === 'channel' && selRef.current.id === payload.channelId) {
+          setRoomTick(t => t + 1);
+          if (threadIdRef.current) loadThread(payload.channelId, threadIdRef.current).catch(() => undefined);
+        }
         return;
       }
       if (ev.type === "project") {
-        refreshSnap().catch(() => undefined);
+        resetReadConnection();
         return;
       }
     }, setLive);
-    const onHash = () => {
-      const next = parseHash();
-      setSel(next);
-      setThreadId(next.kind === "channel" ? next.thread ?? null : null);
-    };
+    const onHash = () => changeSelection(parseHash());
     window.addEventListener("hashchange", onHash);
     return () => {
       off();
-      channelLoadRef.current.controller?.abort();
-      threadLoadRef.current.controller?.abort();
+      channelLoad.current.cancel();
+      channelJournal.current = null;
+      threadLoad.current.cancel();
+      snapshotLoad.current.cancel();
+      inboxLoad.current.cancel();
       window.removeEventListener("hashchange", onHash);
     };
-  }, [loadChannel, loadThread, refreshSnap, rememberMessageId, recordConversationEvent]);
+  }, [loadChannel, refreshSnap, resetReadConnection, changeSelection, onThreadMessage, viewingThread, loadThread, setThreadPane]);
 
   const missingChannel = Boolean(snap && sel.kind === "channel" && !snap.channels.some((c) => c.id === sel.id));
 
@@ -389,10 +439,9 @@ export function App() {
     if (!snap) return;
     const next = repairSel(sel, snap);
     if (!next) return;
-    setThreadId(null);
-    setSel(next);
+    changeSelection(next);
     setHash(next);
-  }, [snap, sel]);
+  }, [snap, sel, changeSelection]);
 
   useEffect(() => {
     if (!snap) return;
@@ -404,32 +453,38 @@ export function App() {
     if (createIn && !snap.projects.some((p) => p.slug === createIn)) setCreateIn(null);
   }, [snap, editingProject, createIn]);
 
+  const selectedChannelId = sel.kind === "channel" ? sel.id : null;
   useEffect(() => {
-    if (sel.kind !== "channel") {
-      channelLoadRef.current.controller?.abort();
+    if (!selectedChannelId || missingChannel) {
+      channelLoad.current.cancel();
+      channelJournal.current = null;
       setPane(null);
       return;
     }
-    if (missingChannel) {
-      channelLoadRef.current.controller?.abort();
-      setPane(null);
-      return;
-    }
-    loadChannel(sel.id).catch((e) => {
-      if (e?.name !== "AbortError") setErr(String(e?.message || e));
-    });
-  }, [sel, loadChannel, missingChannel]);
+    loadChannel(selectedChannelId).catch((e) => { if (e?.name !== "AbortError") setErr(String(e)); });
+  }, [selectedChannelId, loadChannel, missingChannel, reconnectTick]);
 
   useEffect(() => {
-    if (!threadId || sel.kind !== "channel" || missingChannel) {
-      threadLoadRef.current.controller?.abort();
+    if (!threadId || !selectedChannelId || missingChannel) {
+      threadLoad.current.cancel();
       setThreadPane(null);
       return;
     }
-    loadThread(sel.id, threadId).catch((e) => {
-      if (e?.name !== "AbortError") setErr(String(e?.message || e));
-    });
-  }, [threadId, sel, missingChannel, loadThread]);
+    loadThread(selectedChannelId, threadId).catch((e) => { if (e?.name !== "AbortError") setErr(String(e)); });
+  }, [threadId, selectedChannelId, missingChannel, loadThread, reconnectTick]);
+
+  // A read receipt is sent only after React committed a pane belonging to the
+  // current selection. HTTP GETs and obsolete panes cannot acknowledge content.
+  useEffect(() => {
+    const valid = !isLiveSearchQuery(query) && !missingChannel && selectedChannelId && pane?.channel.id === selectedChannelId && pane.threadId === null;
+    channelReads.current?.update(valid ? { channelId: selectedChannelId, threadId: null } : null,
+      valid ? pane.messages.filter((m) => m.authorId !== "human").map((m) => m.seq) : []);
+  }, [pane, selectedChannelId, missingChannel, query, reconnectTick]);
+  useEffect(() => {
+    const valid = !missingChannel && selectedChannelId && threadId && threadPane?.channel.id === selectedChannelId && threadPane.threadId === threadId;
+    threadReads.current?.update(valid ? { channelId: selectedChannelId, threadId } : null,
+      valid ? threadPane.messages.filter((m) => m.authorId !== "human").map((m) => m.seq) : []);
+  }, [threadPane, selectedChannelId, threadId, missingChannel, reconnectTick]);
 
   useEffect(() => {
     const apply = () => {
@@ -448,12 +503,12 @@ export function App() {
   }, [theme]);
 
   useEffect(() => {
-    if (stickBottom.current) bottomRef.current?.scrollIntoView({ block: "end" });
+    if (stickBottom.current && pane?.historyThrough === undefined) bottomRef.current?.scrollIntoView({ block: "end" });
     stickBottom.current = true;
-  }, [pane?.messages.length]);
+  }, [pane?.messages.length, pane?.historyThrough]);
   useEffect(() => {
-    threadBottomRef.current?.scrollIntoView({ block: "end" });
-  }, [threadPane?.messages.length]);
+    if (threadPane?.historyThrough === undefined) threadBottomRef.current?.scrollIntoView({ block: "end" });
+  }, [threadPane?.messages.length, threadPane?.historyThrough]);
 
   useEffect(() => {
     if (!snap) return;
@@ -465,18 +520,17 @@ export function App() {
   }, [snap]);
 
   useEffect(() => {
-    const incoming = [...(pane?.messages ?? []), ...(threadPane?.messages ?? [])];
+    const incoming = [...(pane?.messages ?? []), ...(threadPane?.messages ?? []), ...(inboxPage?.messages ?? [])];
     if (incoming.length === 0) return;
     setMailLog((prev) => {
       const next = mergeMailLog(prev, incoming, channelsRef.current);
       if (next !== prev) saveMailLog(next);
       return next;
     });
-  }, [pane, threadPane]);
+  }, [pane, threadPane, inboxPage]);
 
   const go = (next: Sel) => {
-    setSel(next);
-    setThreadId(next.kind === "channel" ? next.thread ?? null : null);
+    changeSelection(next);
     setHash(next);
   };
 
@@ -501,11 +555,8 @@ export function App() {
     if (!q) return true;
     return match(a.name) || match(a.focus ?? "") || match(a.role);
   });
-  const mentionTotal = (slug: string) =>
-    (snap?.mentions ?? []).filter((m) => channels.find((c) => c.id === m.channelId)?.project === slug).length;
-  const inboxMentions = (snap?.mentions ?? []).filter(
-    (m) => channels.find((c) => c.id === m.channelId)?.project === (sel.kind === "inbox" ? sel.project : selectedProject),
-  );
+  const mentionTotal = (slug: string) => snap?.mentionCounts[slug] ?? 0;
+  const inboxMentions = sel.kind === "inbox" && inboxPage?.project === sel.project ? inboxPage.messages : [];
   const inboxProject = sel.kind === "inbox" ? sel.project : selectedProject;
   const allForYou = mailLog.filter((m) => channels.find((c) => c.id === m.channelId)?.project === inboxProject);
   const inboxBox: InboxBox = sel.kind === "inbox" && sel.box === "all" ? "all" : "unread";
@@ -553,36 +604,38 @@ export function App() {
     };
   }, [searching, query, selectedProject, searchProjectOk, searchTick]);
 
+  const inboxSelected = sel.kind === "inbox" && inboxBox === "unread" && projects.some((p) => p.slug === sel.project) ? sel.project : null;
+  useEffect(() => {
+    const load = inboxLoad.current.begin();
+    if (!inboxSelected) { setInboxPage(null); setInboxBusy(false); return; }
+    const ticket = readFence.current.ticket();
+    setInboxBusy(true);
+    const timer = window.setTimeout(() => {
+      api.mentions(undefined, inboxSelected, load.signal).then((page) => {
+        if (!load.valid() || !readFence.current.matches(page, ticket)) return;
+        setInboxPage({ ...page, project: inboxSelected });
+      }).catch((error) => { if (load.valid() && error?.name !== "AbortError") setErr(String(error)); })
+        .finally(() => { if (load.valid()) setInboxBusy(false); });
+    }, 16);
+    return () => { window.clearTimeout(timer); inboxLoad.current.cancel(); };
+  }, [inboxSelected, readTick, reconnectTick]);
+
   const send = async (body: string, tid?: string | null, files?: File[]) => {
     if (sel.kind !== "channel") return;
     const channelId = sel.id;
+    const root = tid ?? null;
     const attachmentIds: string[] = [];
     for (const file of files ?? []) {
       attachmentIds.push((await api.upload(file)).id);
     }
     if (!body.trim() && attachmentIds.length === 0) return;
-    const { message } = await api.send(channelId, body.trim(), tid, attachmentIds);
-    recordConversationEvent({ kind: "message", message });
-    const alreadySeen = rememberMessageId(message.id);
-    if (!alreadySeen) {
-      setPane((p) => patchPane(p, message, null));
-      if (tid) setThreadPane((p) => patchPane(p, message, tid));
-    } else {
-      setPane((p) => replaceMessage(p, message));
-      if (tid) setThreadPane((p) => replaceMessage(p, message));
-    }
-    setSnap((current) =>
-      current
-        ? applyMessageToSnap(
-            current,
-            message,
-            selRef.current.kind === "channel" ? selRef.current.id : null,
-            threadIdRef.current,
-          )
-        : current,
-    );
-    if (tid) setThreadDraft("");
-    else setDraft("");
+    const { message } = await api.send(channelId, body.trim(), root, attachmentIds);
+    if (selRef.current.kind !== "channel" || selRef.current.id !== channelId || (root && threadIdRef.current !== root)) return;
+    if (root) setThreadDraft((current) => current === body ? "" : current);
+    else setDraft((current) => current === body ? "" : current);
+    recordChannelMessage(channelJournal.current, message);
+    setPane((current) => applyChannelMessage(current, message));
+    if (root) onThreadMessage(message);
   };
 
   const onCreate = async () => {
@@ -656,7 +709,7 @@ export function App() {
             <button
               type="button"
               className="icon-btn"
-              title="Telegram"
+              title={telegramDegraded(snap.telegram) ? `Telegram · ${snap.telegram?.failures ?? 0} outbound failures · ${snap.telegram?.quarantined ?? 0} quarantined · ${snap.telegram?.retrying ?? 0} retrying${snap.telegram?.lastError ? ` · ${snap.telegram.lastError}` : ""}` : "Telegram"}
               onClick={() => {
                 api
                   .telegram()
@@ -677,7 +730,7 @@ export function App() {
                   .catch((e) => setErr(String(e.message || e)));
               }}
             >
-              {snap.telegram?.running ? "✈" : "⌬"}
+              {telegramDegraded(snap.telegram) ? "⚠" : snap.telegram?.running ? "✈" : "⌬"}
             </button>
             <button type="button" className="icon-btn" title="Launch agent" onClick={() => setLaunchOpen(true)}>
               ▶
@@ -827,7 +880,11 @@ export function App() {
                     </div>
                     <AgentList
                       agents={hiveAgents}
+                      projectName={project.name}
+                      onCreateBot={() => setBotProject(project.id)}
+                      onManageBot={setCredentialBot}
                       queued={snap.queued ?? {}}
+                      inbox={snap.inbox}
                       onOpen={onAgent}
                       confirmClear={confirmClear}
                       setConfirmClear={setConfirmClear}
@@ -880,7 +937,7 @@ export function App() {
           <Inbox
             box={inboxBox}
             mentions={inboxBox === "all" ? allForYou : inboxMentions}
-            hasMore={inboxBox === "unread" && Boolean(snap.mentionsHasMore)}
+            hasMore={inboxBox === "unread" && !inboxBusy && inboxPage?.project === sel.project && Boolean(inboxPage.hasMore)}
             channels={channels}
             agents={snap.agents.filter((a) => a.role === "human" || a.project === sel.project)}
             onBox={(box) => go({ kind: "inbox", project: sel.project, box })}
@@ -888,37 +945,28 @@ export function App() {
               go({ kind: "channel", id: m.channelId, thread: m.threadId ?? undefined })
             }
             onOlder={() => {
-              const oldest = inboxMentions[inboxMentions.length - 1]?.seq;
-              if (!oldest || !projects.some((p) => p.slug === sel.project)) return;
-              api.mentions(oldest, sel.project).then((page) => {
-                setSnap((s) =>
-                  s
-                    ? {
-                        ...s,
-                        mentions: [...s.mentions, ...page.messages.filter((m) => !s.mentions.some((x) => x.id === m.id))],
-                        mentionsHasMore: page.hasMore,
-                      }
-                    : s,
-                );
-              }).catch((e) => setErr(String(e.message || e)));
+              const oldest = inboxMentions.at(-1)?.seq;
+              if (!oldest || inboxBusy || !projects.some((p) => p.slug === sel.project)) return;
+              const project = sel.project;
+              const load = inboxLoad.current.begin();
+              const ticket = readFence.current.ticket();
+              setInboxBusy(true);
+              api.mentions(oldest, project, load.signal).then((page) => {
+                if (!load.valid() || !readFence.current.matches(page, ticket)) return;
+                if (selRef.current.kind !== "inbox" || selRef.current.project !== project) return;
+                setInboxPage((previous) => previous?.project === project ? {
+                  ...page, project,
+                  messages: [...previous.messages, ...page.messages.filter((m) => !previous.messages.some((x) => x.id === m.id))],
+                } : previous);
+              }).catch((error) => { if (load.valid() && error?.name !== "AbortError") setErr(String(error)); })
+                .finally(() => { if (load.valid()) setInboxBusy(false); });
             }}
             onMarkSeen={() => {
               if (!projects.some((p) => p.slug === sel.project)) return;
+              const ticket = readFence.current.ticket();
               api.markMentionsSeen(sel.project).then((page) => {
-                setSnap((s) =>
-                  s
-                    ? {
-                        ...s,
-                        mentions: [
-                          ...s.mentions.filter((m) => channels.find((c) => c.id === m.channelId)?.project !== sel.project),
-                          ...page.messages,
-                        ],
-                        mentionsHasMore: page.hasMore,
-                        unread: page.unread,
-                      }
-                    : s,
-                );
-              }).catch((e) => setErr(String(e.message || e)));
+                if (!acceptRead(page.readState, ticket)) readRefresh.current?.request();
+              }).catch((error) => setErr(String(error)));
             }}
           />
         ) : (
@@ -933,13 +981,25 @@ export function App() {
                   </p>
                 )}
               </div>
-              {activeChannel?.type === "private" && (
+              {(activeChannel?.type === "private" || activeChannel?.type === "public") && (
                 <button type="button" className="text-btn" onClick={() => setInviteOpen(true)}>
                   Invite
                 </button>
               )}
             </header>
-            <div className="stream">
+            {pane?.historyThrough !== undefined && (
+              <button type="button" className="older" onClick={() => {
+                const id = sel.id;
+                setPane(null);
+                loadChannel(id).catch((error) => { if (error?.name !== "AbortError") setErr(String(error)); });
+              }}>
+                {pane.deferredLive ? "New messages — return to live" : "Return to live"}
+              </button>
+            )}
+            <div className="stream" ref={channelStream} onScroll={() => {
+              if (isReadingHistory(channelStream.current)) setPane((current) => current ? holdLivePane(current) : current);
+            }}>
+              {activeChannel && ['private', 'public'].includes(activeChannel.type) && <RoomPanel key={activeChannel.id} channel={activeChannel} agents={snap.agents} tick={roomTick} />}
               {pane?.hasOlder && (
                 <button
                   type="button"
@@ -948,19 +1008,17 @@ export function App() {
                     const oldest = pane.messages[0]?.seq;
                     if (!oldest || sel.kind !== "channel") return;
                     stickBottom.current = false;
-                    api.messages(sel.id, null, oldest).then((older) => {
-                      setPane({
-                        ...older,
-                        messages: [...older.messages, ...pane.messages],
-                        hasOlder: older.hasOlder,
-                      });
+                    setPane((current) => current ? holdLivePane(current) : current);
+                    const channelId = sel.id;
+                    loadChannel(channelId, oldest).catch((error) => {
+                      if (error?.name !== "AbortError") setErr(String(error));
                     });
                   }}
                 >
                   Load older
                 </button>
               )}
-              {(pane?.messages ?? []).map((m) => (
+              {(pane?.channel.id === selectedChannelId ? pane.messages : []).map((m) => (
                 <Msg
                   key={m.id}
                   m={m}
@@ -970,7 +1028,10 @@ export function App() {
                     if (sel.kind !== "channel") return;
                     go({ kind: "channel", id: sel.id, thread: m.id });
                   }}
-                  onReact={(emoji) => api.react(m.seq, emoji).then((r) => setPane((p) => replaceMessage(p, r.message)))}
+                  onReact={(emoji) => api.react(m.seq, emoji).then((r) => {
+                    recordChannelMessage(channelJournal.current, r.message, false);
+                    setPane((p) => applyChannelMessage(p, r.message, false));
+                  })}
                 />
               ))}
               <div ref={bottomRef} />
@@ -995,7 +1056,7 @@ export function App() {
         )}
       </main>
 
-      {threadId && threadPane && sel.kind === "channel" && (
+      {threadId && threadPane && sel.kind === "channel" && threadPane.channel.id === sel.id && threadPane.threadId === threadId && (
         <aside className="thread">
           <header className="desk-h">
             <div>
@@ -1003,13 +1064,16 @@ export function App() {
               <p>replies on this message</p>
             </div>
             <div className="thread-tools">
-              <select
+              {threadPane.task ? <span className="st">{threadPane.task.state.replaceAll('_', ' ')}</span> : <select
                 value={threadPane.threads.find((t) => t.id === threadId)?.status ?? "open"}
                 onChange={(e) => {
                   const status = e.target.value as ThreadStatus;
-                  api.setStatus(threadId, status).then(() =>
-                    api.messages(sel.id, threadId).then(setThreadPane),
-                  );
+                  const channelId = sel.id;
+                  const root = threadId;
+                  api.setStatus(root, status).then(({ thread }) => {
+                    if (selRef.current.kind !== "channel" || selRef.current.id !== channelId || threadIdRef.current !== root) return;
+                    setThreadPane((current) => current?.threadId === root ? { ...current, threads: upsertById(current.threads, thread) } : current);
+                  }).catch((error) => { if (error?.name !== "AbortError") setErr(String(error)); });
                 }}
               >
                 {STATUSES.map((s) => (
@@ -1017,7 +1081,7 @@ export function App() {
                     {s.replace("_", " ")}
                   </option>
                 ))}
-              </select>
+              </select>}
               <button
                 type="button"
                 className="plus"
@@ -1030,16 +1094,71 @@ export function App() {
               </button>
             </div>
           </header>
-          <div className="stream">
+          {threadPane.historyThrough !== undefined && (
+            <button type="button" className="older" onClick={() => {
+              const channelId = sel.id;
+              const root = threadId;
+              setThreadView(null);
+              loadThread(channelId, root).catch((error) => { if (error?.name !== "AbortError") setErr(String(error)); });
+            }}>
+              {threadPane.deferredLive ? "New replies — refresh thread" : "Refresh thread"}
+            </button>
+          )}
+          <div className="stream" ref={threadStream} onScroll={() => {
+            if (isReadingHistory(threadStream.current)) setThreadPane((current) => current ? holdLivePane(current) : current);
+          }}>
+            {threadPane.task && <TaskCard task={threadPane.task} />}
+            {threadPane.hasOlder && (
+              <button type="button" className="older" onClick={() => {
+                const channelId = sel.id;
+                const root = threadId;
+                const before = threadPane.messages[0]?.seq;
+                if (!before) return;
+                setThreadPane((current) => current ? holdLivePane(current) : current);
+                const load = threadLoad.current.begin();
+                api.messages(channelId, root, before, load.signal).then((page) => {
+                  if (!load.valid() || !viewingThread(channelId, root)) return;
+                  setThreadPane((current) => current?.channel.id === channelId && current.threadId === root ? {
+                    ...current, hasOlder: page.hasOlder,
+                    cursors: { ...current.cursors, before: page.cursors?.before },
+                    messages: [...page.messages, ...current.messages.filter((message) => !page.messages.some((old) => old.id === message.id))]
+                      .sort((a, b) => a.seq - b.seq),
+                  } : current);
+                }).catch((error) => { if (load.valid() && error?.name !== "AbortError") setErr(String(error)); });
+              }}>
+                Load earlier replies
+              </button>
+            )}
             {threadPane.messages.map((m) => (
               <Msg
                 key={m.id}
                 m={m}
                 replies={0}
                 status={null}
-                onReact={(emoji) => api.react(m.seq, emoji).then((r) => setThreadPane((p) => replaceMessage(p, r.message)))}
+                onReact={(emoji) => api.react(m.seq, emoji).then((r) => onThreadMessage(r.message))}
               />
             ))}
+            {threadPane.hasNewer && (
+              <button type="button" className="older" onClick={() => {
+                const channelId = sel.id;
+                const root = threadId;
+                const after = threadPane.cursors?.after ?? threadPane.messages.at(-1)?.seq;
+                if (!after) return;
+                const load = threadLoad.current.begin();
+                api.messages(channelId, root, undefined, load.signal, after).then((page) => {
+                  if (!load.valid() || selRef.current.kind !== "channel" || selRef.current.id !== channelId || threadIdRef.current !== root) return;
+                  setThreadPane((current) => current?.channel.id === channelId && current.threadId === root ? {
+                    ...current, hasNewer: page.hasNewer, cursors: page.cursors,
+                    historyThrough: Math.max(current.historyThrough ?? 0, ...current.messages.map((message) => message.seq), ...page.messages.map((message) => message.seq)),
+                    deferredLive: page.hasNewer ? current.deferredLive : false,
+                    messages: [...current.messages, ...page.messages.filter((m) => !current.messages.some((x) => x.id === m.id))]
+                      .sort((a, b) => a.seq - b.seq),
+                  } : current);
+                }).catch((error) => { if (load.valid() && error?.name !== "AbortError") setErr(String(error)); });
+              }}>
+                Load more replies
+              </button>
+            )}
             <div ref={threadBottomRef} />
           </div>
           <Composer
@@ -1111,6 +1230,25 @@ export function App() {
         </div>
       )}
 
+      {botProject && projects.some((p) => p.id === botProject) && (
+        <div className="modal">
+          <div className="sheet" role="dialog" aria-modal="true" aria-label="Create project bot">
+            <h2>Create bot</h2>
+            <BotSetup key={botProject} project={projects.find((p) => p.id === botProject)!}
+              onBusy={setBotBusy} onCreated={() => { void refreshSnap().catch((e) => setErr(String(e.message || e))); }} />
+            <div className="row"><button type="button" disabled={botBusy} onClick={() => setBotProject(null)}>Close</button></div>
+          </div>
+        </div>
+      )}
+
+      {credentialBot && snap.agents.some(a => a.id === credentialBot.id) && <div className="modal">
+        <div className="sheet" role="dialog" aria-modal="true" aria-label="Manage bot credentials">
+          <h2>Bot credentials</h2>
+          <BotCredentials key={credentialBot.id} bot={credentialBot} onBusy={setCredentialBusy} />
+          <div className="row"><button type="button" disabled={credentialBusy} onClick={() => setCredentialBot(null)}>Close</button></div>
+        </div>
+      </div>}
+
       {inviteOpen && activeChannel && (
         <div className="modal" onClick={() => setInviteOpen(false)}>
           <form
@@ -1131,7 +1269,7 @@ export function App() {
           >
             <h2>Invite to #{activeChannel.name}</h2>
             <fieldset className="checks">
-              <legend>Agents</legend>
+              <legend>Agents and bots</legend>
               {snap.agents
                 .filter(
                   (a) =>
@@ -1193,6 +1331,7 @@ export function App() {
             }}
           >
             <h2>Project {editingProject}</h2>
+            <button type="button" className="text-btn" onClick={() => setPluginsProject(editingProject)}>Plugins…</button>
             <label>
               Name
               <input value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)} autoFocus />
@@ -1263,6 +1402,11 @@ export function App() {
         </div>
       )}
 
+      {pluginsProject && projects.some((p) => p.slug === pluginsProject) && (
+        <ProjectPlugins key={pluginsProject} project={projects.find((p) => p.slug === pluginsProject)!}
+          onClose={() => setPluginsProject(null)} />
+      )}
+
       {creatingProject && (
         <div className="modal" onClick={() => setCreatingProject(false)}>
           <form
@@ -1330,7 +1474,8 @@ export function App() {
                 .then((t) => {
                   setTelegram(t);
                   setTgToken("");
-                  setSnap((s) => (s ? { ...s, telegram: { running: t.running, configured: t.configured } } : s));
+                  latestTelegramHealth.current = newerTelegramHealth(latestTelegramHealth.current, t);
+                  setSnap((s) => (s ? { ...s, telegram: { running: t.running, configured: t.configured, ...latestTelegramHealth.current } } : s));
                 })
                 .catch((ex) => setErr(String(ex.message || ex)));
             }}
@@ -1501,7 +1646,7 @@ function SearchHitMsg({ hit, q }: { hit: SearchHit; q: string }) {
   );
 }
 
-function SearchDesk({
+export function SearchDesk({
   hiveName,
   q,
   hits,
@@ -1540,13 +1685,16 @@ function SearchDesk({
         {hits.map((hit) => {
           const where = hit.channelType === "dm" ? hit.channelName : `#${hit.channelName}`;
           return (
-            <button key={hit.seq} type="button" className="inbox-item" onClick={() => onOpen(hit)}>
-              <SearchHitMsg hit={hit} q={q} />
-              <span className="open-link">
-                {where}
-                {hit.threadId ? " · open thread" : " · open conversation"}
-              </span>
-            </button>
+            <div key={hit.seq} className="inbox-item">
+              <button type="button" className="search-hit-open" onClick={() => onOpen(hit)}>
+                <SearchHitMsg hit={hit} q={q} />
+                <span className="open-link">
+                  {where}
+                  {hit.threadId ? " · open thread" : " · open conversation"}
+                </span>
+              </button>
+              <BotOrigin event={hit.botEvent} />
+            </div>
           );
         })}
         {hasMore && (
@@ -1664,9 +1812,11 @@ function Msg({
           <strong>{m.authorName}</strong>
           <span className="role">{m.authorRole}</span>
           <time>{time}</time>
+          {m.taskEvent && <span className="st">Task {m.taskEvent.action.type} · v{m.taskEvent.revision}</span>}
           {status && <span className={`st st-${status}`}>{status.replace("_", " ")}</span>}
         </div>
         {m.body && <div className="msg-b">{renderBody(m.body)}</div>}
+        <BotOrigin event={m.botEvent} />
         {(m.attachments?.length ?? 0) > 0 && (
           <div className="atts">
             {m.attachments!.map((a) =>
@@ -1742,7 +1892,7 @@ function Composer({
 }) {
   const [hint, setHint] = useState<Agent[]>([]);
   const [files, setFiles] = useState<File[]>([]);
-  const names = useMemo(() => agents, [agents]);
+  const names = useMemo(() => agents.filter((a) => a.role !== "bot"), [agents]);
   const pick = useRef<HTMLInputElement>(null);
 
   const addFiles = (list: FileList | File[]) => {
@@ -1867,16 +2017,24 @@ function Avatar({ name, role, online, small }: { name: string; role?: string; on
   );
 }
 
-function AgentList({
+export function AgentList({
   agents,
+  projectName,
+  onCreateBot,
+  onManageBot,
   queued,
+  inbox = {},
   onOpen,
   confirmClear,
   setConfirmClear,
   onClear,
 }: {
   agents: Agent[];
+  projectName: string;
+  onCreateBot: () => void;
+  onManageBot?: (a: Agent) => void;
   queued: Record<string, number>;
+  inbox?: Record<string, InboxStatus>;
   onOpen: (a: Agent) => void;
   confirmClear: string | null;
   setConfirmClear: (n: string | null) => void;
@@ -1885,6 +2043,7 @@ function AgentList({
   const human = agents.find((a) => a.role === "human");
   const brains = agents.filter((a) => a.role === "brain");
   const workers = agents.filter((a) => a.role === "worker");
+  const bots = agents.filter((a) => a.role === "bot");
   const rank = { senior: 0, mid: 1, junior: 2 } as const;
   workers.sort((a, b) => (rank[a.seniority ?? "mid"] ?? 3) - (rank[b.seniority ?? "mid"] ?? 3) || a.name.localeCompare(b.name));
 
@@ -1893,7 +2052,7 @@ function AgentList({
       {human && <PersonRow agent={human} onOpen={() => undefined} self />}
       {brains.length > 0 && <div className="subh">brain</div>}
       {brains.map((a) => (
-        <PersonRow key={a.id} agent={a} queued={queued[a.id] ?? 0} onOpen={() => onOpen(a)} />
+        <PersonRow key={a.id} agent={a} queued={queued[a.id] ?? 0} inbox={inbox[a.id]} onOpen={() => onOpen(a)} />
       ))}
       {workers.length > 0 && <div className="subh">worker</div>}
       {workers.map((a) => (
@@ -1901,12 +2060,22 @@ function AgentList({
           key={a.id}
           agent={a}
           queued={queued[a.id] ?? 0}
+          inbox={inbox[a.id]}
           onOpen={() => onOpen(a)}
           confirmClear={confirmClear}
           setConfirmClear={setConfirmClear}
           onClear={onClear}
         />
       ))}
+      <div className="subh bot-h">
+        <span>bot · context only</span>
+        <button type="button" className="plus" title={`Create bot in ${projectName}`}
+          aria-label={`Create bot in ${projectName}`} onClick={onCreateBot}>+</button>
+      </div>
+      {bots.map((a) => <div key={a.id}>
+        <PersonRow agent={a} onOpen={() => undefined} self />
+        {onManageBot && <button type="button" aria-label={`Manage credentials for ${a.name}`} onClick={() => onManageBot(a)}>Credentials</button>}
+      </div>)}
       {brains.length + workers.length === 0 && (
         <p className="empty-mini">
           Open Codex, Claude, or Cursor, then <code>hivemind join --as brain</code> or{" "}
@@ -1920,6 +2089,7 @@ function AgentList({
 function PersonRow({
   agent,
   queued,
+  inbox,
   onOpen,
   self,
   confirmClear,
@@ -1928,6 +2098,7 @@ function PersonRow({
 }: {
   agent: Agent;
   queued?: number;
+  inbox?: InboxStatus;
   onOpen: () => void;
   self?: boolean;
   confirmClear?: string | null;
@@ -1949,11 +2120,8 @@ function PersonRow({
         )}
         {agent.seniority && <span className="sen">{agent.seniority}</span>}
         {agent.focus && <span className="focus">{agent.focus}</span>}
-        {queued ? (
-          <em className="queue-badge" title={`${queued} waiting`}>
-            {queued > 99 ? "99+" : queued}
-          </em>
-        ) : null}
+        <InboxReceipt status={inbox} />
+        <QueueBadge count={queued} estimate={inbox?.queued} />
       </button>
       {agent.role === "worker" && setConfirmClear && onClear && (
         confirmClear === agent.name ? (

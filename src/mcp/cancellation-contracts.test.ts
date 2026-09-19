@@ -130,6 +130,8 @@ test("cancelled and superseded Hive waits do not consume queued mail or leak sig
   assert.equal(afterCursor, beforeCursor);
   const afterCancelled = await hive.wait(worker, 60_000);
   assert.equal(afterCancelled.messages.filter((message) => message.id === alreadyQueued.id).length, 1);
+  assert.ok(afterCancelled.delivery);
+  hive.acknowledgeInbox(worker, afterCancelled.delivery.sessionId, afterCancelled.delivery.id);
 
   const active = new AbortController();
   const cancelledWait = hive.wait(worker, 60_000, active.signal);
@@ -143,6 +145,8 @@ test("cancelled and superseded Hive waits do not consume queued mail or leak sig
   const next = await hive.wait(worker, 60_000);
   assert.equal(next.idle, false);
   assert.equal(next.messages.filter((message) => message.id === queued.id).length, 1);
+  assert.ok(next.delivery);
+  hive.acknowledgeInbox(worker, next.delivery.sessionId, next.delivery.id);
 
   const first = hive.wait(worker, 60_000);
   const replacement = hive.wait(worker, 60_000);

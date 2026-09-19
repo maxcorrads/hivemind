@@ -6,12 +6,15 @@ import { resolveUploadMime } from "../shared/mime.ts";
 import { standingOrders } from "../shared/standing-orders.ts";
 import { Hive, describeAgent } from "./hive.ts";
 import { safeFileName } from "./files.ts";
-import { publicTelegramView, readTelegramFile, removeTelegramProjectSlug, writeTelegramFile } from "./telegram.ts";
+import { telegramDestinationForSeq, loadTelegramConfig, telegramConfigKey, publicTelegramView, readTelegramFile, removeTelegramProjectSlug, writeTelegramFile, type TelegramFileInput } from "./telegram.ts";
 import { parseProjectSlug } from "../shared/project.ts";
+import { launchContext, projectPlugins, saveProjectPlugin, setProjectPluginAvailability, pluginErrorMessage } from "./plugins.ts";
+import { BotIngressBudget, readLimitedJson, assertLocalHumanRequest, BOT_JSON_BYTES, PLUGIN_REQUEST_BYTES, CREDENTIAL_JSON_BYTES } from "./ingress.ts";
 
 export type AppHooks = {
   telegramRunning?: () => boolean;
-  reloadTelegram?: () => boolean;
+  reloadTelegram?: () => boolean | Promise<boolean>;
+  configureTelegram?: (input: TelegramFileInput) => Promise<boolean>;
 };
 
 function fileDownload(hive: Hive, actor: Agent, id: string) {
@@ -30,35 +33,105 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   app.use("*", cors({ origin: ["http://127.0.0.1:7421", "http://localhost:7421", "http://127.0.0.1:7420"] }));
 
   app.onError((err, c) => {
-    if (err instanceof HiveError) return c.json({ error: err.message }, err.status as 400);
-    console.error(err);
-    return c.json({ error: err.message || "internal error" }, 500);
+    if (err instanceof HiveError) {
+      if (err.status === 429) c.header("Retry-After", "1");
+      return c.json({ error: err.message }, err.status as 400);
+    }
+    console.error("Unexpected Hivemind request failure");
+    return c.json({ error: "Internal server error" }, 500);
   });
 
   app.get("/api/health", (c) => c.json({ ok: true, name: "hivemind" }));
 
   const ui = new Hono();
+  ui.use("*", async (c, next) => {
+    c.header("Cache-Control", "no-store");
+    assertLocalHumanRequest(c.req.raw);
+    await next();
+  });
+  ui.get("/launch-context", (c) => {
+    const slug = c.req.query("project");
+    const project = slug ? hive.getProjectBySlug(slug) : undefined;
+    return c.json(launchContext(hive.home, c.req.url, project));
+  });
+  ui.get("/projects/:slug/plugins", (c) =>
+    c.json({ plugins: projectPlugins(hive.home, hive.getProjectBySlug(c.req.param("slug"))) }));
+  ui.patch("/projects/:slug/plugins/:id", async (c) => {
+    const project = hive.getProjectBySlug(c.req.param("slug"));
+    try {
+      return c.json({ plugin: await setProjectPluginAvailability(hive.home, project,
+        c.req.param("id"), await readLimitedJson(c.req.raw, PLUGIN_REQUEST_BYTES)) });
+    } catch (error) {
+      if (error instanceof HiveError) throw error;
+      throw new HiveError(400, pluginErrorMessage(error));
+    }
+  });
+  ui.put("/projects/:slug/plugins/:id", async (c) => {
+    const project = hive.getProjectBySlug(c.req.param("slug"));
+    try {
+      return c.json({ plugin: await saveProjectPlugin(hive.home, project, c.req.url,
+        c.req.param("id"), await readLimitedJson(c.req.raw, PLUGIN_REQUEST_BYTES)) });
+    } catch (error) {
+      if (error instanceof HiveError) throw error;
+      throw new HiveError(400, pluginErrorMessage(error));
+    }
+  });
   ui.get("/snapshot", (c) => {
     const human = hive.getAgent("human");
-    const inbox = hive.mentionInbox(human, 30);
     return c.json({
       you: human,
       projects: hive.listProjects(),
       agents: hive.listAgents(),
       channels: hive.listChannels(human),
-      unread: hive.unreadCounts(human),
-      mentions: inbox.messages,
-      mentionsHasMore: inbox.hasMore,
+      ...hive.readSnapshot(human),
       queued: hive.queuedCounts(),
+      inbox: hive.inboxStatuses(),
       telegram: {
         running: Boolean(hooks.telegramRunning?.()),
         configured: publicTelegramView(hive.home).configured,
+        ...hive.telegramHealth(),
       },
     });
   });
+  ui.get("/read-state", (c) => c.json(hive.readSnapshot(hive.getAgent("human"))));
   ui.get("/telegram", (c) => {
     hive.getAgent("human");
-    return c.json(publicTelegramView(hive.home, Boolean(hooks.telegramRunning?.())));
+    return c.json({
+      ...publicTelegramView(hive.home, Boolean(hooks.telegramRunning?.())),
+      ...hive.telegramHealth(),
+    });
+  });
+  ui.get("/telegram/failures", (c) => {
+    hive.getAgent("human");
+    return c.json({ failures: hive.telegramFailures(Number(c.req.query("limit") ?? 50)) });
+  });
+  ui.post("/telegram/failures/:id/retry", (c) => {
+    hive.getAgent("human");
+    hive.retryTelegramFailure(c.req.param("id"), seq => telegramDestinationForSeq(hive, seq));
+    return c.json({ ok: true, failures: hive.telegramFailureCount() });
+  });
+  ui.post("/telegram/failures/:id/discard", (c) => {
+    hive.getAgent("human");
+    hive.discardTelegramFailure(c.req.param("id"));
+    return c.json({ ok: true, failures: hive.telegramFailureCount() });
+  });
+  ui.get("/telegram/quarantine", c => {
+    hive.getAgent("human");
+    return c.json({ updates: hive.telegramQuarantine(Number(c.req.query("limit") ?? 50)) });
+  });
+  ui.post("/telegram/quarantine/:id/retry", c => {
+    hive.getAgent("human");
+    const cfg = loadTelegramConfig(hive.home);
+    hive.retryTelegramUpdate(c.req.param("id"), scope => {
+      const project = hive.listProjects().find(project => project.id === scope.projectId);
+      return Boolean(cfg && project && scope.botKey === telegramConfigKey(cfg) && cfg.groups[project.slug] === scope.chatId);
+    });
+    return c.json({ ok: true });
+  });
+  ui.post("/telegram/quarantine/:id/discard", c => {
+    hive.getAgent("human");
+    hive.discardTelegramUpdate(c.req.param("id"));
+    return c.json({ ok: true });
   });
   ui.put("/telegram", async (c) => {
     hive.getAgent("human");
@@ -68,20 +141,22 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     for (const [rawSlug, raw] of Object.entries(body.projects ?? {})) {
       const slug = parseProjectSlug(rawSlug);
       if (!known.has(slug)) throw new HiveError(404, `No project named ${slug}`);
-      const id = raw && typeof raw === "object" ? Number((raw as { groupChatId?: unknown }).groupChatId) : Number(raw);
-      if (!Number.isFinite(id)) continue;
+      const value = raw && typeof raw === "object" ? (raw as { groupChatId?: unknown }).groupChatId : raw;
+      const id = typeof value === "number" || typeof value === "string" ? Number(value) : NaN;
+      if (!Number.isSafeInteger(id) || id === 0) throw new HiveError(400, `Invalid Telegram group id for ${slug}`);
       projects[slug] = { groupChatId: id };
     }
-    writeTelegramFile(
-      {
-        botToken: body.botToken,
-        allowUserIds: Array.isArray(body.allowUserIds) ? body.allowUserIds : String(body.allowUserIds ?? "").split(/[,\s]+/),
-        projects,
-      },
-      hive.home,
-    );
-    const running = Boolean(hooks.reloadTelegram?.());
-    return c.json(publicTelegramView(hive.home, running));
+    const input: TelegramFileInput = {
+      botToken: body.botToken,
+      allowUserIds: Array.isArray(body.allowUserIds) ? body.allowUserIds : String(body.allowUserIds ?? "").split(/[,\s]+/).filter(Boolean),
+      projects,
+    };
+    if (hooks.telegramRunning?.() && !hooks.configureTelegram) throw new HiveError(503, "Telegram configuration lifecycle unavailable");
+    const running = hooks.configureTelegram
+      ? await hooks.configureTelegram(input)
+      : (writeTelegramFile(input, hive.home), false);
+
+    return c.json({ ...publicTelegramView(hive.home, running), ...hive.telegramHealth() });
   });
   ui.post("/projects", async (c) => {
     const human = hive.getAgent("human");
@@ -102,7 +177,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     });
     return c.json({ project });
   });
-  ui.delete("/projects/:slug", (c) => {
+  ui.delete("/projects/:slug", async (c) => {
     const human = hive.getAgent("human");
     const slug = parseProjectSlug(c.req.param("slug"));
     const chatId = readTelegramFile(hive.home)?.projects[slug];
@@ -113,7 +188,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       /* hive row is already gone */
     }
     try {
-      hooks.reloadTelegram?.();
+      await hooks.reloadTelegram?.();
     } catch {
       /* next serve still rereads telegram.json */
     }
@@ -133,7 +208,8 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const project = body.project ? hive.getProjectBySlug(String(body.project)).id : undefined;
     hive.markMentionsSeen(human, project);
     const inbox = hive.mentionInbox(human, 30, undefined, project);
-    return c.json({ ...inbox, unread: hive.unreadCounts(human) });
+    const readState = hive.readSnapshot(human);
+    return c.json({ ...inbox, unread: readState.unread, readState });
   });
   ui.get("/search", (c) => {
     const human = hive.getAgent("human");
@@ -159,18 +235,18 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       limit: Number(c.req.query("limit") ?? 80),
     });
     const ch = hive.getChannel(id);
-    if (!threadId) {
-      const latest = hive.latestSeq(ch.id);
-      if (latest) hive.markRead(human, ch.id, latest);
-    }
     return c.json({
       channel: ch,
+      threadId,
       messages: listed.messages,
       hasOlder: listed.hasOlder,
       hasNewer: listed.hasNewer,
       cursors: listed.cursors,
       threads: hive.threadsInChannel(ch.id),
       replyCounts: hive.replyCounts(ch.id),
+      // This synchronous snapshot includes replies, not just visible root rows.
+      snapshotSeq: hive.latestSeq(ch.id),
+      task: threadId && hive.tasks.has(threadId) ? hive.tasks.get(human, threadId) : undefined,
     });
   });
   ui.post("/channels", async (c) => {
@@ -185,6 +261,24 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     });
     return c.json({ channel });
   });
+  ui.get('/channels/:id/room', c => c.json(hive.rooms.view(hive.getAgent('human'), c.req.param('id'))));
+  ui.get('/channels/:id/room/history', c => c.json({ history: hive.rooms.history(hive.getAgent('human'), c.req.param('id'), Number(c.req.query('before') ?? Number.MAX_SAFE_INTEGER)) }));
+  ui.post('/channels/:id/room', async c => c.json(hive.rooms.event(hive.getAgent('human'), c.req.param('id'),
+    await c.req.json().catch(() => { throw new HiveError(400, 'Expected JSON'); }))));
+  ui.post("/projects/:id/bots", async (c) => {
+    c.header('Cache-Control', 'no-store');
+    const body = await readLimitedJson(c.req.raw, CREDENTIAL_JSON_BYTES);
+    return c.json(hive.createBot(hive.getAgent("human"), c.req.param("id"), body), 201);
+  });
+  ui.get('/projects/:id/bots/:botId/credential', c => {
+    c.header('Cache-Control', 'no-store');
+    return c.json(hive.botCredential(hive.getAgent('human'), c.req.param('id'), c.req.param('botId')));
+  });
+  ui.post('/projects/:id/bots/:botId/credential', async c => {
+    c.header('Cache-Control', 'no-store');
+    const body = await readLimitedJson(c.req.raw, CREDENTIAL_JSON_BYTES);
+    return c.json(hive.changeBotCredential(hive.getAgent('human'), c.req.param('id'), c.req.param('botId'), body));
+  });
   ui.post("/channels/:id/messages", async (c) => {
     const human = hive.getAgent("human");
     const body = await c.req.json();
@@ -192,9 +286,10 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       channel: c.req.param("id"),
       body: String(body.body ?? ""),
       threadId: body.threadId ?? null,
+      eventType: body.eventType,
+      recipients: body.recipients,
       attachmentIds: Array.isArray(body.attachmentIds) ? body.attachmentIds.map(String) : undefined,
     });
-    hive.markRead(human, message.channelId, message.seq);
     return c.json({ message });
   });
   ui.post("/files", async (c) => {
@@ -203,7 +298,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const file = await hive.createFile(human, {
       name,
       mime: resolveUploadMime(c.req.header("x-file-mime"), name),
-      body: c.req.raw.body,
+      body: c.req.raw.body, signal: c.req.raw.signal,
     });
     return c.json({ file });
   });
@@ -242,8 +337,18 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   ui.post("/read", async (c) => {
     const human = hive.getAgent("human");
     const body = await c.req.json();
-    hive.markRead(human, String(body.channelId), Number(body.seq));
-    return c.json({ ok: true });
+    if (body.messageSeqs !== undefined) {
+      hive.markMessagesRead(human, String(body.channelId), body.messageSeqs, body.threadId ?? null);
+    } else {
+      // Compatibility: this is an explicit legacy read-through command, never
+      // an implicit side effect of fetching a page or sending a message.
+      const seq = Number(body.seq);
+      if (!Number.isSafeInteger(seq) || seq < 1) throw new HiveError(400, "Invalid read-through sequence");
+      const channel = hive.getChannel(String(body.channelId));
+      if (seq > hive.latestSeq(channel.id)) throw new HiveError(400, "Read-through sequence is beyond the channel history");
+      hive.markRead(human, channel.id, seq);
+    }
+    return c.json({ ok: true, ...hive.readSnapshot(human) });
   });
 
   const agent = new Hono();
@@ -253,7 +358,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const token = header.replace(/^Bearer\s+/i, "").trim();
     if (!token) throw new HiveError(401, "Missing token. Join first.");
     const me = hive.agentByToken(token);
-    if (me.role === "human") throw new HiveError(403, "Human uses the web UI, not the agent API");
+    if (me.role !== "brain" && me.role !== "worker") throw new HiveError(403, "Only brains and workers use the agent API");
     hive.touch(me.id, true);
     c.set("me", me);
     c.set("token", token);
@@ -314,6 +419,9 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     });
     return c.json(found);
   });
+  agent.get('/subscriptions', c => c.json({ subscriptions: hive.notifications.list(c.get('me')) }));
+  agent.post('/subscriptions', async c => c.json({ subscriptions: hive.notifications.set(c.get('me'), await c.req.json()) }));
+  agent.post('/subscriptions/reset', async c => c.json({ subscriptions: hive.notifications.reset(c.get('me'), await c.req.json()) }));
   agent.get("/channels", (c) => {
     const me = c.get("me");
     const unread = c.req.query("unread") === "1" ? hive.unreadCounts(me) : undefined;
@@ -360,6 +468,8 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       channel: c.req.param("id"),
       body: String(body.body ?? ""),
       threadId: body.threadId ?? null,
+      eventType: body.eventType,
+      recipients: body.recipients,
       attachmentIds: Array.isArray(body.attachmentIds) ? body.attachmentIds.map(String) : undefined,
     });
     return c.json({ ok: true, seq: message.seq, id: message.id });
@@ -368,13 +478,30 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const me = c.get("me");
     return c.json({ message: hive.getVisibleMessage(me, Number(c.req.param("seq"))) });
   });
+  agent.post("/messages/expand", async (c) => {
+    const body = await c.req.json().catch(() => { throw new HiveError(400, "Expected JSON"); });
+    return c.json(hive.expandDigest(c.get("me"), body));
+  });
+  agent.post('/tasks', async c => {
+    const body = await c.req.json().catch(() => { throw new HiveError(400, 'Expected JSON'); });
+    return c.json(hive.tasks.assign(c.get('me'), body));
+  });
+  agent.get('/channels/:id/room', c => c.json(hive.rooms.view(c.get('me'), c.req.param('id'), c.req.query('beforeTask'))));
+  agent.get('/channels/:id/room/history', c => c.json({ history: hive.rooms.history(c.get('me'), c.req.param('id'), Number(c.req.query('before') ?? Number.MAX_SAFE_INTEGER)) }));
+  agent.post('/channels/:id/room', async c => c.json(hive.rooms.event(c.get('me'), c.req.param('id'),
+    await c.req.json().catch(() => { throw new HiveError(400, 'Expected JSON'); }))));
+  agent.get('/tasks/:id', c => c.json({ task: hive.tasks.get(c.get('me'), c.req.param('id')) }));
+  agent.post('/tasks/:id/events', async c => {
+    const body = await c.req.json().catch(() => { throw new HiveError(400, 'Expected JSON'); });
+    return c.json(hive.tasks.event(c.get('me'), c.req.param('id'), body));
+  });
   agent.post("/files", async (c) => {
     const me = c.get("me");
     const name = c.req.header("x-file-name") || "file";
     const file = await hive.createFile(me, {
       name,
       mime: resolveUploadMime(c.req.header("x-file-mime"), name),
-      body: c.req.raw.body,
+      body: c.req.raw.body, signal: c.req.raw.signal,
     });
     return c.json({ file });
   });
@@ -413,9 +540,27 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   agent.post("/wait", async (c) => {
     const me = c.get("me");
     const body = await c.req.json().catch(() => ({}));
+    if (body?.sessionId == null) throw new HiveError(409,
+      "HTTP 409: Inbox delivery protocol changed. Restart the Hivemind MCP client and rejoin. HTTP/CLI clients must open an inbox session and include sessionId in wait. Do not retry this wait unchanged.");
+    if (typeof body.sessionId !== "string") throw new HiveError(400, "Expected sessionId");
     const timeoutMs = Number(body.timeoutMs ?? DEFAULT_WAIT_MS);
-    const result = await hive.wait(me, timeoutMs, c.req.raw.signal, { compact: Boolean(body.compact) });
+    const result = await hive.wait(me, timeoutMs, c.req.raw.signal, {
+      compact: Boolean(body.compact),
+      sessionId: body.sessionId,
+    });
     return c.json(result);
+  });
+  agent.post("/inbox/session", async (c) => {
+    const body = await c.req.json().catch(() => null);
+    if (typeof body?.sessionId !== "string") throw new HiveError(400, "Expected sessionId");
+    return c.json({ sessionId: hive.openInboxSession(c.get("me"), body.sessionId) });
+  });
+  agent.post("/inbox/ack", async (c) => {
+    const body = await c.req.json().catch(() => null);
+    if (typeof body?.sessionId !== "string" || typeof body?.deliveryId !== "string") {
+      throw new HiveError(400, "Expected sessionId and deliveryId");
+    }
+    return c.json(hive.acknowledgeInbox(c.get("me"), body.sessionId, body.deliveryId));
   });
   agent.post("/ping", (c) => {
     const me = c.get("me");
@@ -427,6 +572,45 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     return c.json({ ok: true });
   });
 
+  // Provider-neutral ingress. The credential determines identity, never the payload.
+  const botBudget = new BotIngressBudget();
+  const bot = new Hono<{ Variables: { me: Agent; token: string } }>();
+  bot.use("*", async (c, next) => {
+    const match = /^Bearer\s+(\S+)$/i.exec(c.req.header("authorization") ?? "");
+    if (!match) throw new HiveError(401, "A Bearer bot token is required");
+    const me = hive.agentByToken(match[1]!);
+    if (me.role !== "bot") throw new HiveError(403, "A bot identity is required");
+    const release = botBudget.acquire(me.id);
+    if (!release) {
+      c.header("Retry-After", "1");
+      throw new HiveError(429, "Bot ingress is busy; retry with the same event ID");
+    }
+    c.set("me", me);
+    c.set("token", match[1]!);
+    try { await next(); } finally { release(); }
+  });
+  bot.post("/channels/:id/messages", async (c) => {
+    const body = await readLimitedJson(c.req.raw, BOT_JSON_BYTES);
+    // Parsing can yield while Human rotates/revokes. Authorize again at commit.
+    const actor = hive.agentByToken(c.get("token"));
+    const result = hive.postBotMessage(actor, c.req.param("id"), body);
+    return c.json(result, result.duplicate ? 200 : 201);
+  });
+  bot.get('/channels/:id/links', c => c.json({ links: hive.rooms.botLinks(c.get('me'), c.req.param('id')) }));
+  bot.post('/channels/:id/links', async c => c.json({ link: hive.rooms.registerLink(c.get('me'), c.req.param('id'),
+    await c.req.json().catch(() => { throw new HiveError(400, 'Expected JSON'); })) }));
+  bot.post('/channels/:id/links/:link/status', async c => c.json({ link: hive.rooms.reportLink(c.get('me'), c.req.param('id'), c.req.param('link'),
+    await c.req.json().catch(() => { throw new HiveError(400, 'Expected JSON'); })) }));
+  bot.post("/files", async (c) => {
+    const name = c.req.header("x-file-name") || "attachment";
+    const file = await hive.createFile(c.get("me"), {
+      name,
+      mime: resolveUploadMime(c.req.header("x-file-mime"), name),
+      body: c.req.raw.body,
+    });
+    return c.json({ file }, 201);
+  });
+  app.route("/api/bot", bot);
   app.route("/api/ui", ui);
   app.route("/api/agent", agent);
   return app;
