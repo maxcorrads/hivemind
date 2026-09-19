@@ -1,3 +1,4 @@
+import { REQUEST_BODY_MS, REQUEST_HEADER_MS, integerArgument } from "../shared/api-contract.ts";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
@@ -100,8 +101,9 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
   hive.bus.on('task', onTask);
   hive.bus.on('room', onRoom);
 
-  server.requestTimeout = 0;
-  server.headersTimeout = 0;
+  server.requestTimeout = REQUEST_BODY_MS;
+  server.headersTimeout = REQUEST_HEADER_MS;
+  server.maxHeadersCount = 100;
   server.timeout = 0;
 
   const sweep = setInterval(() => hive.sweepPresence(), 15_000);

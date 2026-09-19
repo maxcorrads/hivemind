@@ -206,7 +206,8 @@ test("quarantine API rejects a different bot/project/chat, rolls back a failed r
     assert.equal((await app.request(`/api/ui/telegram/quarantine/${id}/retry`, { method: "POST" })).status, 409);
   }
   writeTelegramFile({ botToken: config.botToken, allowUserIds: [1], projects: config.groups }, f.dir);
-  const list = await app.request("/api/ui/telegram/quarantine?limit=NaN");
+  assert.equal((await app.request("/api/ui/telegram/quarantine?limit=NaN")).status, 400);
+  const list = await app.request("/api/ui/telegram/quarantine");
   assert.equal(list.status, 200); assert.equal(JSON.stringify(await list.json()).includes('"payload"'), false);
   f.hive.db.exec("CREATE TEMP TRIGGER retry_fail BEFORE UPDATE ON telegram_update_failures BEGIN SELECT RAISE(ABORT, 'retry failed'); END");
   let wakes = 0;

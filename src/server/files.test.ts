@@ -16,9 +16,9 @@ function temp(t: TestContext) {
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }
-function store(t: TestContext) {
+function store(t: TestContext, uploadLimits = {}) {
   const dir = temp(t);
-  const hive = new Hive(path.join(dir, "hive.db"));
+  const hive = new Hive(path.join(dir, "hive.db"), { uploadLimits });
   t.after(() => hive.db.close());
   return { dir, hive, human: hive.getAgent("human") };
 }
@@ -137,7 +137,8 @@ test("uploads reject empty, interrupted and cancelled streams and remove partial
 });
 
 test("identical concurrent uploads retain every attachment and survive garbage collection", async (t) => {
-  const { hive, human, dir } = store(t);
+  // This fixture targets publication/GC races, not production admission limits.
+  const { hive, human, dir } = store(t, { active: 8, perActor: 8 });
   const atts = await Promise.all(Array.from({ length: 8 }, () => hive.createFileFromBytes(human, { name: "same", mime: "text/plain", bytes: Buffer.from("same") })));
   assert.equal(new Set(atts.map((a) => a.id)).size, 8);
   assert.equal(readdirSync(filesDir(dir)).length, 1);

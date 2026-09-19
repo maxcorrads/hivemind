@@ -1,11 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
-  constants, createWriteStream, createReadStream, closeSync, fstatSync, linkSync,
+  constants, createReadStream, closeSync, fstatSync, linkSync,
   lstatSync, mkdirSync, openSync, readdirSync, unlinkSync,
 } from "node:fs";
 import path from "node:path";
-import { Readable, Transform } from "node:stream";
-import { pipeline } from "node:stream/promises";
+import { streamToTemporaryFile } from "../shared/stream-file.ts";
 import { ALLOWED_MIMES, FILE_MAX_BYTES, HiveError } from "../shared/types.ts";
 import { hiveHome } from "./paths.ts";
 
@@ -53,34 +52,19 @@ export async function streamUpload(
   mime: string,
   home = hiveHome(),
   signal?: AbortSignal,
+  maxBytes = FILE_MAX_BYTES,
 ): Promise<{ tmp: string; bytes: number; sha256: string }> {
   if (!body) throw new HiveError(400, "Empty upload");
   assertAllowedMime(mime);
   signal?.throwIfAborted();
   const tmp = path.join(ensureFilesDir(home), uploadTempName());
   const hash = createHash("sha256");
-  let bytes = 0;
-  const meter = new Transform({
-    transform(chunk: Buffer, _encoding, callback) {
-      bytes += chunk.length;
-      if (bytes > FILE_MAX_BYTES) return callback(new HiveError(413, "File too large (512 MB max)"));
-      hash.update(chunk);
-      callback(null, chunk);
-    },
-  });
-  const input = Readable.fromWeb(body as import("node:stream/web").ReadableStream);
-  let ownsTemp = false;
-  const output = createWriteStream(tmp, { flags: "wx", mode: 0o600 });
-  output.once("open", () => { ownsTemp = true; });
   try {
-    await pipeline(
-      input, meter,
-      output, { signal },
-    );
-    if (bytes === 0) throw new HiveError(400, "Empty upload");
+    const bytes = await streamToTemporaryFile(body, tmp, Math.min(FILE_MAX_BYTES, maxBytes), signal, chunk => { hash.update(chunk); });
     return { tmp, bytes, sha256: hash.digest("hex") };
   } catch (error) {
-    if (ownsTemp) removeUploadTemp(tmp);
+    if (error instanceof Error && error.message === 'Stream exceeds its byte budget') throw new HiveError(413, 'File too large for its upload reservation');
+    if (error instanceof Error && error.message === 'Empty stream') throw new HiveError(400, 'Empty upload');
     throw error;
   }
 }

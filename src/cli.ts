@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { integerArgument, MAX_WAIT_MS, sendInputSchema, validated } from "./shared/api-contract.ts";
 import { sendOperation } from "./client/send-operation.ts";
 import { resolve, dirname, basename, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -92,7 +93,7 @@ async function main() {
 
   if (cmd === "serve") {
     const { startServer } = await import("./server/serve.ts");
-    startServer({ port: Number(arg(argv, "--port") ?? process.env.HIVEMIND_PORT ?? DEFAULT_PORT) });
+    startServer({ port: integerArgument(String(arg(argv, "--port") ?? process.env.HIVEMIND_PORT ?? DEFAULT_PORT), 0, 65535) });
     return;
   }
 
@@ -199,8 +200,8 @@ async function main() {
 
   if (cmd === "wait") {
     const sessionId = arg(argv, "--session") ?? randomUUID();
+    const timeout = integerArgument(String(arg(argv, "--timeout") ?? Math.round(DEFAULT_WAIT_MS / 1000)), 1, MAX_WAIT_MS / 1000) * 1000;
     await agentRequest("POST", "/api/agent/inbox/session", { sessionId }, token);
-    const timeout = Number(arg(argv, "--timeout") ?? Math.round(DEFAULT_WAIT_MS / 1000)) * 1000;
     const beat = setInterval(() => {
       agentRequest("POST", "/api/agent/ping", {}, token).catch(() => undefined);
     }, MCP_HEARTBEAT_MS);
@@ -283,6 +284,7 @@ async function main() {
     const thread = arg(argv, "--thread");
     const to = arg(argv, "--to");
     let channel = arg(argv, "--channel");
+    validated(sendInputSchema, { body, threadId: thread, eventType, recipients, requestId: arg(argv, "--request-id") });
     if (to) {
       const dm = await agentRequest<{ channel: Channel }>("POST", "/api/agent/dms", { name: to }, token);
       channel = dm.channel.id;
@@ -304,7 +306,7 @@ async function main() {
     if (!channel || !ids) throw new Error("expand --channel ID --ids MESSAGE_ID,MESSAGE_ID [--after SEQ]");
     const after = arg(argv, "--after");
     console.log(JSON.stringify(await agentRequest("POST", "/api/agent/messages/expand",
-      { channel, messageIds: ids.split(","), ...(after === undefined ? {} : { afterSeq: Number(after) }) }, token), null, 2));
+      { channel, messageIds: ids.split(","), ...(after === undefined ? {} : { afterSeq: integerArgument(after) }) }, token), null, 2));
     return;
   }
 
@@ -319,7 +321,7 @@ async function main() {
   }
 
   if (cmd === "react") {
-    const seq = Number(arg(argv, "--seq"));
+    const seq = integerArgument(arg(argv, "--seq") ?? "", 1);
     const emoji = arg(argv, "--emoji");
     if (!seq || !emoji) throw new Error("react --seq N --emoji 👍");
     await agentRequest("POST", `/api/agent/messages/${seq}/reactions`, { emoji, present: !argv.includes("--remove") }, token);

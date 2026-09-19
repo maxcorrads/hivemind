@@ -66,6 +66,7 @@
     "EXTENSIBILITY-SECURITY.md",
     "docs/local-human-security.md",
     "docs/identity-lifecycle.md",
+    "docs/api-boundaries.md",
     "COORDINATION.md",
     "NOTIFICATIONS.md",
     "ROOMS.md",

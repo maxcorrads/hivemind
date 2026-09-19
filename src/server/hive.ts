@@ -1,3 +1,5 @@
+import { UploadBudget, type UploadLimits } from "./upload-budget.ts";
+import { joinInputSchema, validated, waitDurationSchema, cursorSchema, limitSchema, channelInputSchema, attachmentIdsSchema, memberNamesSchema } from "../shared/api-contract.ts";
 import { SendRequests } from "./send-requests.ts";
 import { initTelegramInbox, telegramQuarantine, retryTelegramUpdate, discardTelegramUpdate, type TelegramUpdateScope } from "./telegram-inbox.ts";
 import { initTelegramOutbox, retryTelegramOutboxFailure, pruneTelegramFailures, type TelegramDestination } from "./telegram-outbox.ts";
@@ -146,11 +148,12 @@ export class Hive {
   readonly notifications!: NotificationStore;
   private waiters = new Map<string, Waiter>();
   private telegramOrigin = new Set<string>();
+  readonly uploads!: UploadBudget;
   private readonly readState!: ReadState;
   private transactionDepth = 0;
   private committedEffects: Array<() => void> = [];
 
-  constructor(dbPath = path.join(hiveHome(), "hive.db"), options: { routineBatchMs?: number } = {}) {
+  constructor(dbPath = path.join(hiveHome(), "hive.db"), options: { routineBatchMs?: number; uploadLimits?: Partial<UploadLimits> } = {}) {
     this.home = path.dirname(dbPath);
     this.bus.setMaxListeners(200);
     mkdirSync(path.dirname(dbPath), { recursive: true, mode: 0o700 });
@@ -182,6 +185,7 @@ export class Hive {
       pruneTelegramFailures(this.db);
       this.readState = new ReadState(this.db);
       this.sendRequests = new SendRequests(this.db);
+      this.uploads = new UploadBudget({ db: this.db, transaction: work => this.transaction(work) }, options.uploadLimits);
       this.db.exec(`CREATE TABLE IF NOT EXISTS agent_credentials (
         agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
         revision INTEGER NOT NULL, revoked INTEGER NOT NULL);`);
@@ -837,6 +841,7 @@ export class Hive {
     project?: string | null;
     cwd?: string | null;
   }): { agent: Agent; token: string; created: boolean } {
+    validated(joinInputSchema, input);
     if (input.role !== "brain" && input.role !== "worker") {
       throw new HiveError(400, "role must be brain or worker");
     }
@@ -1053,6 +1058,7 @@ export class Hive {
       project?: string | null;
     },
   ): Channel {
+    validated(channelInputSchema, input);
     if (actor.role === "worker" || actor.role === "bot") throw new HiveError(403, "Workers and bots cannot create channels");
     if (input.type !== "public" && input.type !== "private" && input.type !== "brains") {
       throw new HiveError(400, "Channel type must be public, private, or brains");
@@ -1255,6 +1261,8 @@ export class Hive {
     },
     persistReceipt?: (message: Message) => void,
   ): Message {
+    if (input.attachmentIds !== undefined) validated(attachmentIdsSchema, input.attachmentIds);
+    if (input.recipients !== undefined) validated(memberNamesSchema.min(1), input.recipients);
     if (input.eventType !== undefined && !MESSAGE_EVENT_TYPES.includes(input.eventType))
       throw new HiveError(400, "Unknown message eventType");
     const ch = this.getChannel(input.channel, actor.projectId);
@@ -1551,6 +1559,8 @@ export class Hive {
     actor: Agent,
     input: { q: string; project?: string | null; channel?: string | null; beforeSeq?: number; limit?: number },
   ): { hits: SearchHit[]; hasMore: boolean } {
+    if (input.beforeSeq !== undefined) validated(cursorSchema, input.beforeSeq);
+    if (input.limit !== undefined) validated(limitSchema, input.limit);
     const tokens = parseSearchQuery(input.q ?? "");
     if (tokens.length === 0) throw new HiveError(400, "Search needs a query");
     const project = this.searchProject(actor, input.project);
@@ -1896,6 +1906,7 @@ export class Hive {
     signal?: AbortSignal,
     opts: { compact?: boolean; sessionId?: string } = {},
   ): Promise<WaitResult> {
+    validated(waitDurationSchema, timeoutMs);
     const compact = Boolean(opts.compact);
     const empty = () => packWait(this.getAgent(actor.id), [], 0, compact, () => "");
 
@@ -1994,22 +2005,37 @@ export class Hive {
 
   async createFile(
     actor: Agent,
-    input: { name: string; mime: string; body: ReadableStream<Uint8Array> | null; signal?: AbortSignal },
+    input: { name: string; mime: string; body: ReadableStream<Uint8Array> | null; signal?: AbortSignal; declaredBytes?: number; authorize?: () => Agent },
   ): Promise<AttachmentMeta> {
     assertAllowedMime(input.mime);
-    const uploaded = await streamUpload(input.body, input.mime, this.home, input.signal);
+    if (typeof input.name !== "string" || !input.name.length || input.name.length > 180) throw new HiveError(400, "Invalid file name");
+    input.signal?.throwIfAborted();
+    const lease = this.uploads.acquire(actor.id, input.declaredBytes);
+    const deadline = new AbortController();
+    const timer = setTimeout(() => deadline.abort(new HiveError(408, "Upload deadline exceeded")), this.uploads.limits.deadlineMs);
+    const signal = input.signal ? AbortSignal.any([input.signal, deadline.signal]) : deadline.signal;
     try {
-      input.signal?.throwIfAborted();
-      return this.transaction(() => {
-        commitUpload(uploaded.tmp, uploaded.sha256, this.home);
-        const id = crypto.randomUUID();
-        this.db.prepare(
-          `INSERT INTO attachments (id, message_id, name, mime, bytes, sha256, created_by, created_at)
-           VALUES (?, NULL, ?, ?, ?, ?, ?, ?)`,
-        ).run(id, input.name.slice(0, 180), input.mime, uploaded.bytes, uploaded.sha256, actor.id, now());
-        return { id, name: input.name.slice(0, 180), mime: input.mime, bytes: uploaded.bytes };
-      });
-    } finally { removeUploadTemp(uploaded.tmp); }
+      const uploaded = await streamUpload(input.body, input.mime, this.home, signal, input.declaredBytes);
+      try {
+        signal.throwIfAborted();
+        return this.transaction(() => {
+          lease.require(uploaded.bytes);
+          if (input.authorize && input.authorize().id !== actor.id) throw new HiveError(403, "Upload actor changed");
+          if (input.declaredBytes !== undefined && uploaded.bytes !== input.declaredBytes) throw new HiveError(400, "Upload length mismatch");
+          commitUpload(uploaded.tmp, uploaded.sha256, this.home);
+          const id = crypto.randomUUID();
+          this.db.prepare(
+            `INSERT INTO attachments (id, message_id, name, mime, bytes, sha256, created_by, created_at)
+             VALUES (?, NULL, ?, ?, ?, ?, ?, ?)`,
+          ).run(id, input.name, input.mime, uploaded.bytes, uploaded.sha256, actor.id, now());
+          return { id, name: input.name, mime: input.mime, bytes: uploaded.bytes };
+        });
+      } finally { removeUploadTemp(uploaded.tmp); }
+    } catch (error) {
+      if (deadline.signal.aborted) throw deadline.signal.reason;
+      if ((error as NodeJS.ErrnoException).code === 'ENOSPC') throw new HiveError(507, "Upload disk is full");
+      throw error;
+    } finally { clearTimeout(timer); lease.release(); }
   }
 
   async createFileFromBytes(
@@ -2018,7 +2044,7 @@ export class Hive {
   ): Promise<AttachmentMeta> {
     const { Readable } = await import("node:stream");
     const stream = Readable.toWeb(Readable.from(Buffer.from(input.bytes)));
-    return this.createFile(actor, { name: input.name, mime: input.mime, body: stream as ReadableStream<Uint8Array> });
+    return this.createFile(actor, { name: input.name, mime: input.mime, body: stream as ReadableStream<Uint8Array>, declaredBytes: input.bytes.byteLength });
   }
 
   private validateAttachments(actor: Agent, ids: string[]) {
