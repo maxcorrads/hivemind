@@ -131,19 +131,29 @@ Codex may show "Working" during wait — that is sleep. It only wakes an agent f
 Compact wait (MCP always asks for it):
 
 - worker / `@mention` / control → full body (4k cap)
-- brain, more than one conversation in the batch → Human/brain instructions and attachment-bearing messages stay full; other messages are digested separately by channel, thread and author
+- brain, more than one conversation in the batch → only explicit `eventType: "progress"` from workers/bots may be digested, separately by channel, root/thread and author. Human/brain instructions, blockers, questions, action requests, untyped messages and attachment-bearing messages stay full
 - brain, a single conversation → full bodies
 - every page is bounded: 256 scanned message headers, 100 delivered messages for brains / 8 for workers, 8 conversations, and 64 KiB of serialized output (including MCP JSON escaping)
 - `more` is a lower-bound count; `page.remaining.exact` tells whether the entire remaining queue was examined. `page.continuation` means there is more mail **or** more history to scan; zero `more` alone does not mean empty
 - the oldest item progresses first, then up to two explicit mentions/control items within the scanned window get reserved slots, still subject to every cap
 - attachment **metadata** only, never file bytes
-- compact mail and digests include `channelId` for `send`/`history`; `ch` is a display label, with `…` when abbreviated
+- compact mail includes `messageId` and `rootId` (reply using `threadId: rootId`), plus `channelId` for `send`/`history`; `ch` is a display label, with `…` when abbreviated
+- every digest includes `firstSeq`, `lastSeq`, `count`, `attachmentCount` and an `expand` object with exact message IDs. Call MCP `expand_digest` with that object; repeat with `afterSeq: nextAfterSeq` while `hasMore`. Summarized does not mean handled; expansion never ACKs or completes work
 
 An oversized legacy/control item includes `recovery` arguments for `history`; the
-original is retained. This is a byte-budget fallback, not the richer digest-recovery
-workflow. Empty scan-progress pages stay inside the MCP wait loop, without a model
+original is retained. This byte-budget fallback is separate from exact digest expansion.
+Empty scan-progress pages stay inside the MCP wait loop, without a model
 turn. The roster marks partial queue counts with `+`, or `…` when the count is unknown.
 Run `npm run benchmark:inbox -- 4 1200` for an isolated concurrent-client load probe.
+
+Use optional `eventType` on MCP `send`/`attach`, HTTP messages or bot observations:
+`progress`, `blocker`, `question`, `action_required`. Only choose `progress` for
+non-actionable updates; omit it when unsure. Legacy/untyped messages stay full, which
+can use more of the bounded payload. No keyword inference, task-state transition or
+new notification/permission rule is implied. Restart MCP clients after upgrading to
+discover `expand_digest`. CLI equivalents: `send --event-type blocker ...` and
+`expand --channel ID --ids ID1,ID2 [--after SEQ]`. Expansion works after ACK/restart,
+subject to current channel access, without depending on history pagination.
 
 Bot observations carry `authorRole: "bot"`, `source: "bot"` and optional origin metadata in mail and history. Quoted names inside their body do not create mentions. They are context for the assigned work, not new Human instructions. Private-channel observations reach subscribed agents; public-channel observations do not wake them. Ingesting a bot event does not itself call a model, though an agent processing delivered mail may use model tokens.
 

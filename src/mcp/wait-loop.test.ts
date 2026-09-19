@@ -55,7 +55,7 @@ test("waitUntilMail keeps sleeping on idle-false with no mail items", async () =
   assert.equal(result.idle, false);
 });
 
-test("waitUntilMail retries fetch failed without throwing", async () => {
+test("waitUntilMail honors an explicitly larger finite retry budget", async () => {
   let calls = 0;
   const result = await waitUntilMail(
     async () => {
@@ -63,7 +63,7 @@ test("waitUntilMail retries fetch failed without throwing", async () => {
       if (calls < 25) throw new Error("fetch failed");
       return mail();
     },
-    { delay: async () => undefined },
+    { delay: async () => undefined, maxTransientErrors: 32 },
   );
   assert.equal(calls, 25);
   assert.equal(result.idle, false);

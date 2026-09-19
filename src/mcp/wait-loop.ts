@@ -56,6 +56,8 @@ export async function waitUntilMail(
   opts: {
     delay?: (ms: number, signal?: AbortSignal) => Promise<void>;
     retryDelayMs?: number;
+    maxRetryDelayMs?: number;
+    random?: () => number;
     maxServerErrors?: number;
     maxTransientErrors?: number;
     signal?: AbortSignal;
@@ -63,8 +65,17 @@ export async function waitUntilMail(
 ): Promise<WaitResult> {
   const delay = opts.delay ?? abortableDelay;
   const retryDelayMs = opts.retryDelayMs ?? 1500;
-  const maxServerErrors = opts.maxServerErrors ?? Number.POSITIVE_INFINITY;
-  const maxTransientErrors = opts.maxTransientErrors ?? Number.POSITIVE_INFINITY;
+  const maxRetryDelayMs = opts.maxRetryDelayMs ?? 30_000;
+  const random = opts.random ?? Math.random;
+  // Bound failed attempts, never successful idle long polls.
+  const maxServerErrors = opts.maxServerErrors ?? 8;
+  const maxTransientErrors = opts.maxTransientErrors ?? 8;
+  for (const [name, limit] of [["maxServerErrors", maxServerErrors], ["maxTransientErrors", maxTransientErrors]] as const) {
+    if (!Number.isSafeInteger(limit) || limit < 1) throw new RangeError(`${name} must be a positive finite integer`);
+  }
+  for (const [name, ms] of [["retryDelayMs", retryDelayMs], ["maxRetryDelayMs", maxRetryDelayMs]] as const) {
+    if (!Number.isFinite(ms) || ms < 0) throw new RangeError(`${name} must be a nonnegative finite duration`);
+  }
   let serverErrors = 0;
   let transientErrors = 0;
 
@@ -87,7 +98,10 @@ export async function waitUntilMail(
         if (serverErrors >= maxServerErrors) throw err;
       }
       if (transientErrors >= maxTransientErrors) throw err;
-      await delay(retryDelayMs, opts.signal);
+      const ceiling = Math.min(maxRetryDelayMs, retryDelayMs * 2 ** Math.min(transientErrors - 1, 20));
+      const sample = random();
+      const fraction = Number.isFinite(sample) ? Math.max(0, Math.min(1, sample)) : 0.5;
+      await delay(Math.round(ceiling / 2 + (ceiling / 2) * fraction), opts.signal);
     }
   }
 }

@@ -41,6 +41,9 @@ export function packWait(
   }
 
   const control: WaitControlItem[] = controlMsgs.map((m) => ({
+    messageId: m.id,
+    rootId: m.threadId ?? m.id,
+    channelId: m.channelId,
     seq: m.seq,
     from: m.authorName,
     action: m.control ?? "clear_context",
@@ -49,17 +52,21 @@ export function packWait(
   }));
 
   const full = (m: Message): WaitMailItem => ({
+    messageId: m.id,
+    rootId: m.threadId ?? m.id,
     seq: m.seq,
     channelId: m.channelId,
     ch: label(m.channelId),
     from: m.authorName,
     authorRole: m.authorRole,
     kind: m.kind,
+    eventType: m.eventType,
     source: m.source,
     botEvent: m.botEvent,
     body: m.body.length > BODY_MAX ? m.body.slice(0, BODY_MAX) : m.body,
     threadId: m.threadId,
     attachments: m.attachments,
+    attachmentCount: m.attachments?.length ?? 0,
     ...(m.recovery ? { recovery: m.recovery } : {}),
   });
 
@@ -67,16 +74,23 @@ export function packWait(
     const last = items[items.length - 1]!;
     const excerpt = last.body.replace(/\s+/g, " ").slice(0, 80);
     return {
+      messageId: last.id,
+      rootId: last.threadId ?? last.id,
       seq: last.seq,
       channelId: last.channelId,
       ch: label(last.channelId),
       from: last.authorName,
       authorRole: last.authorRole,
       kind: last.kind,
+      eventType: last.eventType,
       source: last.source,
       botEvent: last.botEvent,
       excerpt,
       count: items.length,
+      firstSeq: items[0]!.seq,
+      lastSeq: last.seq,
+      attachmentCount: items.reduce((n, m) => n + (m.attachments?.length ?? 0), 0),
+      expand: { channel: last.channelId, messageIds: items.map(m => m.id) },
       threadId: last.threadId,
       attachments: last.attachments,
     };
@@ -88,12 +102,14 @@ export function packWait(
     const byScope = new Map<string, Message[]>();
     const instructions: Message[] = [];
     for (const m of other) {
-      // Do not hide Human instructions or attachment metadata among bot observations.
-      if (m.authorRole === "human" || m.authorRole === "brain" || m.attachments?.length || m.recovery) {
+      // Only explicitly non-actionable progress can be summarized. Untyped legacy
+      // messages may contain a blocker/question anywhere in the body: keep them full.
+      if (m.eventType !== "progress" || m.authorRole === "human" || m.authorRole === "brain" || m.attachments?.length || m.recovery) {
         instructions.push(m);
         continue;
       }
-      const scope = JSON.stringify([m.channelId, m.threadId, m.authorId, m.kind]);
+      // Unthreaded roots are distinct conversations, not an implicit shared task.
+      const scope = JSON.stringify([m.channelId, m.threadId ?? m.id, m.authorId, m.kind]);
       const list = byScope.get(scope) ?? [];
       list.push(m);
       byScope.set(scope, list);

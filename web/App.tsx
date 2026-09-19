@@ -352,7 +352,7 @@ export function App() {
           return {
             ...current,
             queued: { ...current.queued, [q.agentId]: q.n },
-            inbox: { ...(current.inbox ?? {}), [q.agentId]: inbox },
+            inbox: { ...current.inbox, [q.agentId]: inbox },
           };
         });
         return;
