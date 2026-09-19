@@ -12,6 +12,8 @@ import { Hive } from "./hive.ts";
 import { createApp } from "./app.ts";
 import { startTelegram } from "./telegram.ts";
 import { LocalHumanAuth } from "./local-auth.ts";
+import { WS_HEARTBEAT_MS } from "../shared/realtime.ts";
+import { heartbeatClients, sendRealtime } from "./websocket-policy.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(here, "../..");
@@ -60,19 +62,22 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
     },
   });
   const clients = new Set<WebSocket>();
+  const responsive = new WeakSet<WebSocket>();
   const stream = createRealtimeStream(randomUUID());
   wss.on("connection", (ws) => {
     if (closing) { ws.terminate(); return; }
     clients.add(ws);
-    ws.send(JSON.stringify({ ...stream.hello(), at: Date.now() }));
+    responsive.add(ws);
+    ws.on("pong", () => responsive.add(ws));
+    ws.on("error", () => ws.terminate());
+    sendRealtime(ws, JSON.stringify({ ...stream.hello(), at: Date.now() }));
     ws.on("close", () => clients.delete(ws));
   });
 
   const emit = (type: string, payload: unknown) => {
     const data = JSON.stringify(stream.event(type, payload));
-    for (const ws of clients) {
-      if (ws.readyState === ws.OPEN) ws.send(data);
-    }
+    const bytes = Buffer.byteLength(data);
+    for (const ws of clients) sendRealtime(ws, data, bytes);
   };
   const onMessage = (payload: unknown) => emit("message", payload);
   const onAgent = (payload: unknown) => emit("agent", payload);
@@ -101,6 +106,8 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
 
   const sweep = setInterval(() => hive.sweepPresence(), 15_000);
   sweep.unref();
+  const heartbeat = setInterval(() => heartbeatClients(clients, responsive), WS_HEARTBEAT_MS);
+  heartbeat.unref();
   const ready = new Promise<number>((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, "127.0.0.1", () => {
@@ -125,6 +132,7 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
     });
     const httpClosed = server.listening ? closeHttp() : ready.then(closeHttp, () => undefined);
     clearInterval(sweep);
+    clearInterval(heartbeat);
     hive.bus.off("message", onMessage);
     hive.bus.off("agent", onAgent);
     hive.bus.off("channel", onChannel);
