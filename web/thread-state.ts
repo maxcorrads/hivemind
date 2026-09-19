@@ -1,6 +1,8 @@
 import type { Message } from '../src/shared/types.ts';
 import type { TaskSnapshot } from '../src/shared/tasks.ts';
 import type { ChannelPayload } from './api.ts';
+import { retainNewest } from '../src/shared/realtime.ts';
+import { boundLivePane } from './pane-window.ts';
 
 /** Only the selected thread is retained; live events can precede its first HTTP response. */
 export type ThreadView = {
@@ -9,7 +11,8 @@ export type ThreadView = {
   pane: ChannelPayload | null;
   pendingMessages: Message[];
   pendingTask?: TaskSnapshot;
-  pendingLoad?: { id: number; liveMessages: Message[] };
+  historyTruncated?: boolean;
+  pendingLoad?: { id: number; liveMessages: Message[]; truncated?: boolean };
 };
 
 export function selectThread(view: ThreadView | null, channelId: string, threadId: string): ThreadView {
@@ -54,9 +57,15 @@ function mergeMessages(earlier: Message[], later: Message[]): Message[] {
 
 export function receiveThreadMessage(view: ThreadView, message: Message): ThreadView {
   if (!belongs(view, message)) return view;
-  const pendingLoad = view.pendingLoad && { ...view.pendingLoad, liveMessages: mergeMessages(view.pendingLoad.liveMessages, [message]) };
-  if (!view.pane) return { ...view, pendingLoad, pendingMessages: mergeMessages(view.pendingMessages, [message]) };
-  return { ...view, pendingLoad, pane: { ...view.pane, messages: mergeMessages(view.pane.messages, [message]) } };
+  const live = view.pendingLoad && retainNewest(mergeMessages(view.pendingLoad.liveMessages, [message]));
+  const pendingLoad = view.pendingLoad && live && {
+    ...view.pendingLoad, liveMessages: live.items, truncated: view.pendingLoad.truncated || live.truncated,
+  };
+  if (!view.pane) {
+    const pending = retainNewest(mergeMessages(view.pendingMessages, [message]));
+    return { ...view, pendingLoad, pendingMessages: pending.items, historyTruncated: view.historyTruncated || pending.truncated };
+  }
+  return { ...view, pendingLoad, pane: boundLivePane({ ...view.pane, messages: mergeMessages(view.pane.messages, [message]) }) };
 }
 
 export function receiveThreadTask(view: ThreadView, task: TaskSnapshot): ThreadView {
@@ -73,7 +82,9 @@ export function receiveThreadSnapshot(view: ThreadView | null, threadId: string,
   const messages = mergeMessages(mergeMessages(currentMessages, data.messages), view.pendingLoad.liveMessages);
   return {
     ...view, pendingMessages: [], pendingTask: undefined, pendingLoad: undefined,
-    pane: { ...data, messages: messages.filter(message => belongs(view, message)),
-      task: reconcileTask(view.pane?.task ?? view.pendingTask, data.task) },
+    historyTruncated: undefined,
+    pane: boundLivePane({ ...data, messages: messages.filter(message => belongs(view, message)),
+      hasOlder: data.hasOlder || view.historyTruncated || view.pendingLoad.truncated,
+      task: reconcileTask(view.pane?.task ?? view.pendingTask, data.task) }),
   };
 }

@@ -12,6 +12,7 @@ import { loadMailLog, mergeMailLog, saveMailLog } from "./mail-log.ts";
 import type { MentionPage, ReadSnapshot } from "../src/shared/read-state.ts";
 import { createReadFence, createReadRefresh, createReceiptQueue, createRequestGate, readFields } from "../src/shared/read-client.ts";
 import { renderBody } from "./markdown.tsx";
+import { boundLivePane } from "./pane-window.ts";
 import { TaskCard } from './TaskCard.tsx';
 import { RoomPanel } from './RoomPanel.tsx';
 import type { TaskSnapshot } from '../src/shared/tasks.ts';
@@ -47,7 +48,7 @@ function patchPane(pane: ChannelPayload | null, msg: Message, viewingThread: str
   if (pane.messages.some((m) => m.id === msg.id)) return pane;
   if (viewingThread) {
     if (msg.threadId === viewingThread || msg.id === viewingThread) {
-      return { ...pane, messages: [...pane.messages, msg] };
+      return boundLivePane({ ...pane, messages: [...pane.messages, msg] });
     }
     return pane;
   }
@@ -57,7 +58,7 @@ function patchPane(pane: ChannelPayload | null, msg: Message, viewingThread: str
       replyCounts: { ...pane.replyCounts, [msg.threadId]: (pane.replyCounts[msg.threadId] ?? 0) + 1 },
     };
   }
-  return { ...pane, messages: [...pane.messages, msg] };
+  return boundLivePane({ ...pane, messages: [...pane.messages, msg] });
 }
 
 function replaceMessage(pane: ChannelPayload | null, msg: Message): ChannelPayload | null {
@@ -1075,6 +1076,26 @@ export function App() {
           </header>
           <div className="stream">
             {threadPane.task && <TaskCard task={threadPane.task} />}
+            {threadPane.hasOlder && (
+              <button type="button" className="older" onClick={() => {
+                const channelId = sel.id;
+                const root = threadId;
+                const before = threadPane.messages[0]?.seq;
+                if (!before) return;
+                const load = threadLoad.current.begin();
+                api.messages(channelId, root, before, load.signal).then((page) => {
+                  if (!load.valid() || !viewingThread(channelId, root)) return;
+                  setThreadPane((current) => current?.channel.id === channelId && current.threadId === root ? {
+                    ...current, hasOlder: page.hasOlder,
+                    cursors: { ...current.cursors, before: page.cursors?.before },
+                    messages: [...page.messages, ...current.messages.filter((message) => !page.messages.some((old) => old.id === message.id))]
+                      .sort((a, b) => a.seq - b.seq),
+                  } : current);
+                }).catch((error) => { if (load.valid() && error?.name !== "AbortError") setErr(String(error)); });
+              }}>
+                Load earlier replies
+              </button>
+            )}
             {threadPane.messages.map((m) => (
               <Msg
                 key={m.id}
