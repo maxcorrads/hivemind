@@ -214,7 +214,9 @@ for (const compact of [false, true]) {
       })), [
         { id: "attachment-20", name: "20.txt", mime: "text/plain", bytes: 3 },
       ]);
-      assert.deepEqual(receivedRaw[20]!.reactions, [{ emoji: "👍", count: 1, mine: false }]);
+      assert.equal(receivedRaw[20]!.reactions, undefined, "wait omits reaction rosters by design");
+      assert.deepEqual(hive.getVisibleMessage(brain, receivedRaw[20]!.seq).reactions,
+        [{ emoji: "👍", count: 1, mine: false }], "history preserves the complete reaction state");
     }
 
     const scans = calls.filter((call) => /WITH scanned AS MATERIALIZED/.test(call.sql));

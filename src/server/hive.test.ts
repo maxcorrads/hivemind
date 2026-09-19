@@ -220,14 +220,14 @@ test("compact wait: worker gets body, brain digest on many DMs, cursor keeps the
   const workers = [0, 1, 2].map(() => hive.join({ role: "worker", seniority: "mid" }));
   for (const w of workers) {
     const dm = hive.openDm(brain.agent, w.agent.name);
-    hive.postMessage(w.agent, { channel: dm.id, body: `report from ${w.agent.name} with enough text` });
+    hive.postMessage(w.agent, { channel: dm.id, body: `report from ${w.agent.name} with enough text`, eventType: "progress" });
   }
   const compact = await hive.wait(brain.agent, 300, undefined, { compact: true });
   assert.equal(compact.idle, false);
   assert.match(compact.next, /wait again/);
   assert.equal(compact.messages.length, 0);
   assert.ok((compact.mail?.length ?? 0) >= 1);
-  assert.ok(compact.mail?.every((m) => m.excerpt || m.body));
+  assert.ok(compact.mail?.every((m) => m.excerpt && m.expand));
 
   const worker = workers[0]!;
   const dm = hive.findDm(brain.agent.id, worker.agent.id)!;
@@ -244,12 +244,15 @@ test("brain wait caps conversations not a single flooded DM", async () => {
   const other = hive.join({ role: "worker", seniority: "mid" });
   const floodDm = hive.openDm(brain.agent, flooded.agent.name);
   const otherDm = hive.openDm(brain.agent, other.agent.name);
+  let root: string | undefined;
   for (let i = 0; i < 8; i += 1) {
-    hive.postMessage(flooded.agent, { channel: floodDm.id, body: `flood ${i}` });
+    const message = hive.postMessage(flooded.agent, { channel: floodDm.id, body: `flood ${i}`, threadId: root, eventType: "progress" });
+    root ??= message.id;
   }
-  hive.postMessage(other.agent, { channel: otherDm.id, body: "second conversation" });
+  hive.postMessage(other.agent, { channel: otherDm.id, body: "second conversation", eventType: "progress" });
   const first = await hive.wait(brain.agent, 200, undefined, { compact: true });
   assert.equal(first.mail?.length, 2);
+  assert.equal(first.mail?.find(m => m.rootId === root)?.count, 8);
   assert.ok(first.mail?.some((m) => /second conversation/.test(m.excerpt ?? m.body ?? "")));
   rmSync(dir, { recursive: true, force: true });
 });
