@@ -1,0 +1,36 @@
+name: Reconciliation snapshot
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    if: github.head_ref == 'chore/pr-reconciliation-snapshot-20260919'
+    runs-on: macos-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout committed repository history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Export committed objects only
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p snapshot
+          git bundle create snapshot/hivemind.bundle --all
+          git bundle verify snapshot/hivemind.bundle
+          shasum -a 256 snapshot/hivemind.bundle > snapshot/SHA256SUMS
+      - name: Retain temporary review snapshot
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: reconciliation-snapshot
+          path: snapshot/
+          retention-days: 1
+          if-no-files-found: error
