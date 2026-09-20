@@ -1,0 +1,30 @@
+name: Backlog validation snapshot
+on:
+  push:
+    branches: [maintenance/issue-backlog-snapshot-20260920]
+    paths: [.github/workflows/issue-backlog-snapshot.yml]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Export committed history only
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/backlog-snapshot"
+          git bundle create "$RUNNER_TEMP/backlog-snapshot/hivemind.bundle" --all
+          git bundle verify "$RUNNER_TEMP/backlog-snapshot/hivemind.bundle"
+          cd "$RUNNER_TEMP/backlog-snapshot"
+          sha256sum hivemind.bundle > SHA256SUMS
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: backlog-validation-snapshot
+          path: ${{ runner.temp }}/backlog-snapshot/
+          retention-days: 1
+          if-no-files-found: error
