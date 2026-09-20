@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { Hive } from './hive.ts';
-import { HiveError, type Agent } from '../shared/types.ts';
+import { HiveError } from '../shared/types.ts';
 
 function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-decisions-')), file = path.join(dir, 'hive.db');
