@@ -1,4 +1,5 @@
 import { RoutingStore } from './routing.ts';
+import { DecisionStore } from './decisions.ts';
 import { UploadBudget, type UploadLimits } from "./upload-budget.ts";
 import { joinInputSchema, validated, waitDurationSchema, cursorSchema, limitSchema, channelInputSchema, attachmentIdsSchema, memberNamesSchema } from "../shared/api-contract.ts";
 import { SendRequests } from "./send-requests.ts";
@@ -148,6 +149,7 @@ export class Hive {
   readonly routing!: RoutingStore;
   readonly rooms!: RoomStore;
   readonly notifications!: NotificationStore;
+  readonly decisions!: DecisionStore;
   private waiters = new Map<string, Waiter>();
   private telegramOrigin = new Set<string>();
   readonly uploads!: UploadBudget;
@@ -195,6 +197,7 @@ export class Hive {
       this.rooms = new RoomStore(this);
       this.notifications = new NotificationStore(this);
       this.routing = new RoutingStore(this);
+      this.decisions = new DecisionStore(this, work => this.transaction(work));
       this.inbox = new InboxDeliveryStore(this.db);
       this.inboxReader = new InboxReader(this.db, this.inbox, this.notifications, options.routineBatchMs ?? ROUTINE_BATCH_MS);
     } catch (error) {
@@ -1265,7 +1268,9 @@ export class Hive {
     persistReceipt?: (message: Message) => void,
   ): Message {
     if (input.attachmentIds !== undefined) validated(attachmentIdsSchema, input.attachmentIds);
-    if (input.recipients !== undefined) validated(memberNamesSchema.min(1), input.recipients);
+    const decisionRecipients = actor.role === 'human' ? this.decisions?.replyRecipientNames(input.threadId ?? null) ?? [] : [];
+    const recipientNames = [...new Set([...(input.recipients ?? []), ...decisionRecipients])];
+    if (recipientNames.length) validated(memberNamesSchema.min(1), recipientNames);
     if (input.eventType !== undefined && !MESSAGE_EVENT_TYPES.includes(input.eventType))
       throw new HiveError(400, "Unknown message eventType");
     const ch = this.getChannel(input.channel, actor.projectId);
@@ -1275,9 +1280,8 @@ export class Hive {
     if (actor.role !== 'human' && this.rooms.peek(ch.id)?.state === 'archived' &&
       (!input.threadId || !this.tasks.has(input.threadId)))
       throw new HiveError(409, 'Archived room: no new work or root messages; use an existing task thread for closure');
-    if (input.recipients !== undefined && (!Array.isArray(input.recipients) || !input.recipients.length || input.recipients.length > 32 ||
-      input.recipients.some(name => typeof name !== 'string'))) throw new HiveError(400, 'Provide 1–32 recipient names');
-    const recipients = [...new Set((input.recipients ?? []).map(name => {
+    if (recipientNames.length > 32 || recipientNames.some(name => typeof name !== 'string')) throw new HiveError(400, 'Provide 1–32 recipient names');
+    const recipients = [...new Set(recipientNames.map(name => {
       const target = this.getAgentByName(name);
       if (!target || target.role === 'bot' || !this.canSeeChannel(target, ch) ||
         (actor.role === 'worker' && target.role === 'human')) throw new HiveError(403, 'Recipient must be an accessible permitted person');
@@ -1345,10 +1349,12 @@ export class Hive {
       persistReceipt?.(this.getMessageById(id));
       this.touch(actor.id, true);
       const msg = this.getMessageById(id);
+      const decision = actor.role === 'human' ? this.decisions?.captureHumanReply(actor, msg) ?? null : null;
       this.afterCommit(() => {
         if (input.source === "telegram") this.telegramOrigin.add(msg.id);
         this.bus.emit("message", msg);
         this.wakeMembers(ch, msg);
+        if (decision) this.bus.emit('decision', decision);
       });
       return msg;
     });
