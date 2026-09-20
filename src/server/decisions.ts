@@ -103,6 +103,15 @@ export class DecisionStore {
     const rows = this.hive.db.prepare('SELECT id, snapshot FROM decision_requests WHERE project_id = ? ORDER BY created_at DESC LIMIT 100')
       .all(projectId) as DecisionRow[];
     const all = rows.map(row => this.view(actor, JSON.parse(row.snapshot) as DecisionSnapshot));
+    all.sort((a, b) => {
+      const open = Number(b.state === 'awaiting_input') - Number(a.state === 'awaiting_input');
+      if (open) return open;
+      if (a.state === 'awaiting_input' && b.state === 'awaiting_input') {
+        const aDeadline = a.requestedByAt ?? Number.MAX_SAFE_INTEGER, bDeadline = b.requestedByAt ?? Number.MAX_SAFE_INTEGER;
+        if (aDeadline !== bDeadline) return aDeadline - bDeadline;
+      }
+      return b.updatedAt - a.updatedAt;
+    });
     const items = includeClosed ? all : all.filter(item => item.state === 'awaiting_input');
     return { items, awaiting: all.filter(item => item.state === 'awaiting_input').length,
       warning: 'Decision queue is a projection of explicit requests. Recommendations are not authority and expired/stale requests never auto-apply.' };
