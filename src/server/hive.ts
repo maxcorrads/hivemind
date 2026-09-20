@@ -1,3 +1,4 @@
+import { RoutingStore } from './routing.ts';
 import { UploadBudget, type UploadLimits } from "./upload-budget.ts";
 import { joinInputSchema, validated, waitDurationSchema, cursorSchema, limitSchema, channelInputSchema, attachmentIdsSchema, memberNamesSchema } from "../shared/api-contract.ts";
 import { SendRequests } from "./send-requests.ts";
@@ -144,6 +145,7 @@ export class Hive {
   private readonly inboxReader!: InboxReader;
   private readonly sendRequests!: SendRequests;
   readonly tasks!: TaskStore;
+  readonly routing!: RoutingStore;
   readonly rooms!: RoomStore;
   readonly notifications!: NotificationStore;
   private waiters = new Map<string, Waiter>();
@@ -192,6 +194,7 @@ export class Hive {
       this.tasks = new TaskStore(this);
       this.rooms = new RoomStore(this);
       this.notifications = new NotificationStore(this);
+      this.routing = new RoutingStore(this);
       this.inbox = new InboxDeliveryStore(this.db);
       this.inboxReader = new InboxReader(this.db, this.inbox, this.notifications, options.routineBatchMs ?? ROUTINE_BATCH_MS);
     } catch (error) {

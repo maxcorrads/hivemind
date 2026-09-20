@@ -36,6 +36,8 @@ function help() {
   hivemind history --channel NAME [--thread ID] [--since N | --before N]
   hivemind expand --channel ID --ids MESSAGE_ID,MESSAGE_ID [--after SEQ]
   hivemind task assign --input FILE.json
+  hivemind capabilities get --worker UUID | set --input FILE.json
+  hivemind task suggest|routing-outcome|routing-override --id TASK_ID --input FILE.json
   hivemind task claim-preview --id TASK_ID --input FILE.json
   hivemind task handoffs [--before TASK_ID]
   hivemind task handoff --id TASK_ID
@@ -236,6 +238,13 @@ async function main() {
     return;
   }
 
+  if (cmd === 'capabilities') {
+    const file = arg(argv, '--input'), worker = arg(argv, '--worker');
+    if (argv[1] === 'get' && worker) console.log(JSON.stringify(await agentRequest('GET', `/api/agent/workers/${encodeURIComponent(worker)}/capabilities`, undefined, token), null, 2));
+    else if (argv[1] === 'set' && file) console.log(JSON.stringify(await agentRequest('POST', '/api/agent/capabilities', JSON.parse(readFileSync(file, 'utf8')), token), null, 2));
+    else throw new Error('capabilities get --worker UUID | capabilities set --input FILE.json');
+    return;
+  }
   if (cmd === 'task') {
     const operation = argv[1];
     const id = arg(argv, '--id');
@@ -253,11 +262,11 @@ async function main() {
       return;
     }
     const file = arg(argv, '--input');
-    if (!file || !['assign', 'event', 'claim-preview'].includes(operation) || (operation !== 'assign' && !id))
+    if (!file || !['assign', 'event', 'claim-preview', 'suggest', 'routing-outcome', 'routing-override'].includes(operation) || (operation !== 'assign' && !id))
       throw new Error('task assign --input FILE.json | task get --id ID | task event --id ID --input FILE.json | task claim-preview --id ID --input FILE.json');
     const input = JSON.parse(readFileSync(file, 'utf8'));
     console.log(JSON.stringify(await agentRequest('POST', operation === 'assign' ? '/api/agent/tasks' :
-      `/api/agent/tasks/${encodeURIComponent(id!)}/${operation === 'claim-preview' ? 'claim-preview' : 'events'}`, input, token), null, 2));
+      `/api/agent/tasks/${encodeURIComponent(id!)}/${operation === 'claim-preview' ? 'claim-preview' : operation === 'suggest' ? 'routing' : operation.startsWith('routing-') ? operation : 'events'}`, input, token), null, 2));
     return;
   }
 

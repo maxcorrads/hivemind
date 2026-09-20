@@ -1,3 +1,4 @@
+import { setCapabilitiesSchema, suggestWorkersSchema, routingOutcomeSchema, routingOverrideSchema } from '../shared/routing.ts';
 import { z } from "zod";
 import { readLimitedJson } from "./ingress.ts";
 import { API_JSON_BYTES, channelInputSchema, cursorSchema, integerArgument,
@@ -50,6 +51,10 @@ function schemaFor(path: string, method: string): z.ZodType | undefined {
   if (path.endsWith('/subscriptions')) return subscriptionSchema;
   if (path.endsWith('/subscriptions/reset')) return subscriptionScopeSchema;
   if (/\/tasks\/[^/]+\/claim-preview$/.test(path)) return claimPreviewSchema;
+  if (path.endsWith('/capabilities')) return setCapabilitiesSchema;
+  if (/\/tasks\/[^/]+\/routing$/.test(path)) return suggestWorkersSchema;
+  if (/\/tasks\/[^/]+\/routing-outcome$/.test(path)) return routingOutcomeSchema;
+  if (/\/tasks\/[^/]+\/routing-override$/.test(path)) return routingOverrideSchema;
   if (path.endsWith('/tasks')) return assignTaskSchema;
   if (/\/tasks\/[^/]+\/events$/.test(path)) return taskEventSchema;
   if (/\/channels\/[^/]+\/room$/.test(path)) return roomEventSchema;

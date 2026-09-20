@@ -1,3 +1,4 @@
+import type { RoutingRequest, RoutingSuggestions } from '../src/shared/routing.ts';
 import type { TelegramHealth } from "./telegram-health.ts";
 import type { Agent, BotCredentialView, AttachmentMeta, Channel, Message, Project, SearchHit, Thread, ThreadStatus, InboxStatus } from "../src/shared/types.ts";
 import type { MentionPage, ReadSnapshot } from "../src/shared/read-state.ts";
@@ -62,6 +63,8 @@ export type ChannelPayload = {
 };
 
 export const api = {
+  suggestWorkers: (id: string, body: RoutingRequest, signal?: AbortSignal) => req<RoutingSuggestions>(`/api/ui/tasks/${encodeURIComponent(id)}/routing`, { method: 'POST', body: JSON.stringify(body), signal }),
+  recordRoutingChoice: (id: string, body: { expectedRevision: number; workerId: string; reason: string; requestId: string }, signal?: AbortSignal) => req<{ assigned: false }>(`/api/ui/tasks/${encodeURIComponent(id)}/routing-override`, { method: 'POST', body: JSON.stringify(body), signal }),
   agentCredential: async (project: string, agent: string): Promise<BotCredentialView> => {
     const result = await req<{ agent: Agent; credential: BotCredentialView['credential'] }>(`/api/ui/projects/${encodeURIComponent(project)}/agents/${encodeURIComponent(agent)}/credential`);
     return { bot: result.agent, credential: result.credential };
