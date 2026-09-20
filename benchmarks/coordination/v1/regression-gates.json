@@ -1,0 +1,133 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Deterministic regression baselines and thresholds for the #20/#21/#27 optimizations referenced by #29.",
+  "policy": {
+    "ciHard": "Use only deterministic operation counts, protocol counts, or explicit bounded constants.",
+    "investigateOnly": "Timing thresholds trigger investigation after controlled repetition; they are not cross-runner CI pass/fail gates."
+  },
+  "gates": [
+    {
+      "id": "issue20-roster-query-count",
+      "issue": 20,
+      "metric": "projectRoster.statementExecutions",
+      "fixture": "foreign-agents-50000",
+      "baseline": 1,
+      "threshold": {"operator": "<=", "value": 1},
+      "enforcement": "ci_hard",
+      "evidence": ["benchmarks/results/storage-scoping-v1.json", "src/server/query-contracts.test.ts"]
+    },
+    {
+      "id": "issue20-channel-query-count",
+      "issue": 20,
+      "metric": "projectChannels.statementExecutions",
+      "fixture": "foreign-channels-2000",
+      "baseline": 2,
+      "threshold": {"operator": "<=", "value": 2},
+      "enforcement": "ci_hard",
+      "evidence": ["benchmarks/results/storage-scoping-v1.json", "src/server/query-contracts.test.ts"]
+    },
+    {
+      "id": "issue20-p95-investigate",
+      "issue": 20,
+      "metric": "same-machine p95",
+      "fixture": "stored storage matrix cohort",
+      "baseline": "checked-in p95 per fixture/metric",
+      "threshold": {"operator": ">", "factor": 2},
+      "enforcement": "investigate_only",
+      "evidence": ["docs/storage-benchmark.md"]
+    },
+    {
+      "id": "issue21-redundant-touch-writes",
+      "issue": 21,
+      "metric": "extra SQLite writes after 10000 same-agent touches inside heartbeat window",
+      "fixture": "presence-10000-touches",
+      "baseline": 0,
+      "threshold": {"operator": "<=", "value": 0},
+      "enforcement": "ci_hard",
+      "evidence": ["src/server/presence.test.ts"]
+    },
+    {
+      "id": "issue21-heartbeat-boundary-write",
+      "issue": 21,
+      "metric": "extra SQLite writes at 15000ms heartbeat boundary",
+      "fixture": "presence-10000-touches",
+      "baseline": 1,
+      "threshold": {"operator": "<=", "value": 1},
+      "enforcement": "ci_hard",
+      "evidence": ["src/server/presence.test.ts"]
+    },
+    {
+      "id": "issue21-websocket-buffer-cap",
+      "issue": 21,
+      "metric": "WS_MAX_BUFFERED_BYTES",
+      "fixture": "realtime-slow-client",
+      "baseline": 1048576,
+      "threshold": {"operator": "<=", "value": 1048576},
+      "enforcement": "ci_hard",
+      "evidence": ["src/shared/realtime.ts", "src/server/websocket-policy.test.ts"]
+    },
+    {
+      "id": "issue21-live-message-window",
+      "issue": 21,
+      "metric": "LIVE_MESSAGE_WINDOW",
+      "fixture": "long-running-channel",
+      "baseline": 500,
+      "threshold": {"operator": "<=", "value": 500},
+      "enforcement": "ci_hard",
+      "evidence": ["src/shared/realtime.ts", "web/pane-window.test.ts"]
+    },
+    {
+      "id": "issue27-ack-only-model-wakes",
+      "issue": 27,
+      "metric": "model-returning deliveries for 20 acknowledgement-only messages",
+      "fixture": "acknowledgement-only-loop",
+      "baseline": 0,
+      "threshold": {"operator": "<=", "value": 0},
+      "enforcement": "ci_hard",
+      "evidence": ["src/server/notifications.test.ts"]
+    },
+    {
+      "id": "issue27-routine-batch-delay",
+      "issue": 27,
+      "metric": "ROUTINE_BATCH_MS",
+      "fixture": "routine-progress",
+      "baseline": 250,
+      "threshold": {"operator": "<=", "value": 250},
+      "enforcement": "ci_hard",
+      "evidence": ["src/shared/notifications.ts", "src/server/notifications.test.ts"]
+    },
+    {
+      "id": "issue27-controlled-task-model-waits",
+      "issue": 27,
+      "metric": "modelReturningWaits",
+      "fixture": "controlled-one-task-replay",
+      "baseline": 3,
+      "threshold": {"operator": "<=", "value": 3},
+      "referenceBaseline": 18,
+      "enforcement": "ci_hard",
+      "evidence": ["src/server/notifications.test.ts", "NOTIFICATIONS.md"]
+    },
+    {
+      "id": "issue27-controlled-task-addressed-signals",
+      "issue": 27,
+      "metric": "addressedWakeSignals",
+      "fixture": "controlled-one-task-replay",
+      "baseline": 10,
+      "threshold": {"operator": "<=", "value": 10},
+      "referenceBaseline": 18,
+      "enforcement": "ci_hard",
+      "evidence": ["src/server/notifications.test.ts", "NOTIFICATIONS.md"]
+    },
+    {
+      "id": "issue27-critical-intentional-delay",
+      "issue": 27,
+      "metric": "fake-clock intentional batching delay for blockers/Human decisions",
+      "fixture": "priority-delivery",
+      "baseline": 0,
+      "threshold": {"operator": "<=", "value": 0},
+      "enforcement": "ci_hard",
+      "evidence": ["src/server/notifications.test.ts", "NOTIFICATIONS.md"],
+      "operationalTarget": "<1000ms for an active idle waiter with capacity; not an end-to-end SLA"
+    }
+  ]
+}
