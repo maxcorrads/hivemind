@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, watch } from "node:fs";
+import { setTimeout as yieldForIO } from "node:timers/promises";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -82,12 +83,12 @@ test("real MCP cancellation aborts its HTTP download and cleans the partial file
   const rejected = assert.rejects(call);
   await requested;
   const inbox = path.join(dir, ".hivemind-inbox");
-  // Watch an actual file lifecycle rather than waiting a guessed amount of time.
-  const waitFor = (predicate: () => boolean) => new Promise<void>((resolve) => {
-    const watcher = watch(inbox, () => { if (predicate()) { watcher.close(); resolve(); } });
-    t.after(() => watcher.close());
-    if (predicate()) { watcher.close(); resolve(); }
-  });
+  // Directory-watch notifications can be coalesced or omitted on macOS. Poll
+  // the actual lifecycle predicate instead; no elapsed sleep implies success.
+  // The original test deadline and cancellation assertions remain unchanged.
+  const waitFor = async (predicate: () => boolean) => {
+    while (!predicate()) await yieldForIO(10, undefined, { signal: t.signal });
+  };
   await waitFor(() => readdirSync(inbox).some((name) => name.startsWith(".download-")));
   const cleaned = waitFor(() => readdirSync(inbox).length === 0);
   controller.abort();
