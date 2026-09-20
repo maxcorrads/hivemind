@@ -14,6 +14,16 @@ export const REQUIRED_EXERCISES = Object.freeze([
   'worker_routing',
   'collaboration_rooms',
 ]);
+export const REQUIRED_FIXTURE_IDS = Object.freeze([
+  'independent-implementation',
+  'shared-interface-coupled',
+  'reviewer-disagreement',
+  'blocked-worker-recovery',
+  'offline-dropped-delivery',
+  'noisy-room',
+  'room-peer-clarification',
+  'worktree-conflict',
+]);
 export const WORKFLOWS = Object.freeze([
   'single_worker',
   'brain_one_worker',
@@ -47,6 +57,7 @@ export function validateFixture(fixture) {
   assert.match(fixture.id, /^[a-z0-9][a-z0-9-]+$/);
   assert.ok(['parallelizable', 'coupled', 'recovery', 'communication'].includes(fixture.kind), 'unknown fixture kind');
   assert.ok(typeof fixture.description === 'string' && fixture.description.length > 0);
+  if (fixture.instructions !== undefined) ensureStringArray(fixture.instructions, 'instructions');
   ensureStringArray(fixture.exercises, 'exercises');
   assert.ok(fixture.exercises.every(item => REQUIRED_EXERCISES.includes(item) || ['delivery_recovery'].includes(item)), 'unknown exercise');
   assert.ok(Array.isArray(fixture.tasks) && fixture.tasks.length >= 1 && fixture.tasks.length <= 12);
@@ -340,6 +351,9 @@ export function main(argv = process.argv.slice(2)) {
   assert.ok(fixtures.length >= 3 && fixtures.length <= 8, 'keep the deterministic phase-1 suite intentionally small');
   const missing = Object.entries(coverage(fixtures)).filter(([, present]) => !present).map(([feature]) => feature);
   assert.deepEqual(missing, [], `fixture suite is missing feature coverage: ${missing.join(', ')}`);
+  const fixtureIds = new Set(fixtures.map(fixture => fixture.id));
+  const missingFixtures = REQUIRED_FIXTURE_IDS.filter(id => !fixtureIds.has(id));
+  assert.deepEqual(missingFixtures, [], `fixture suite is missing required scenarios: ${missingFixtures.join(', ')}`);
   let report;
   if (options.all || (!options.fixture && !options.workflow)) report = runMatrix(fixtures, options);
   else {

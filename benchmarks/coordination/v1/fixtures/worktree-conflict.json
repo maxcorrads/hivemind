@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "worktree-conflict",
+  "kind": "coupled",
+  "description": "Two implementation tasks intentionally edit the same logical file set from one shared worktree before explicit reconciliation.",
+  "instructions": [
+    "worker-a and worker-b must use the same benchmark worktree rather than isolated worktrees.",
+    "Both implementation tasks must edit src/shared/conflict.ts before either sees the other's final patch.",
+    "Do not discard either edit silently; record the conflict/rework needed to reconcile into a valid final artifact."
+  ],
+  "exercises": ["structured_tasks", "claims_dependencies", "checkpoint_handoff"],
+  "promptVersion": "coordination-fixture-v1",
+  "modelVersion": "fake-agent-v1",
+  "workers": [
+    {"id": "worker-a", "capabilities": ["api", "tests"]},
+    {"id": "worker-b", "capabilities": ["storage", "tests"]},
+    {"id": "worker-c", "capabilities": ["review", "tests"]}
+  ],
+  "tasks": [
+    {"id": "change-a", "effort": 7, "scope": ["src/shared/conflict.ts", "src/api"], "dependsOn": [], "clarifications": 1, "requiredCapability": "api"},
+    {"id": "change-b", "effort": 7, "scope": ["src/shared/conflict.ts", "src/storage"], "dependsOn": [], "clarifications": 1, "requiredCapability": "storage"},
+    {"id": "reconcile", "effort": 6, "scope": ["src/shared/conflict.ts", "tests/conflict"], "dependsOn": ["change-a", "change-b"], "clarifications": 1, "requiredCapability": "tests"}
+  ],
+  "faults": [],
+  "budgets": {"maxVirtualTicks": 75, "maxCommunicationBytes": 18000}
+}

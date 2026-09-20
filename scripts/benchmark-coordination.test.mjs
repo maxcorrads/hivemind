@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { REQUIRED_EXERCISES, WORKFLOWS, coverage, loadFixtures, main, runMatrix, runSyntheticTrial, seededShuffle } from './benchmark-coordination.mjs';
+import { REQUIRED_EXERCISES, REQUIRED_FIXTURE_IDS, WORKFLOWS, coverage, loadFixtures, main, runMatrix, runSyntheticTrial, seededShuffle } from './benchmark-coordination.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -13,6 +13,7 @@ test('coordination fixtures are versioned, bounded and cover the phase-1 coordin
   assert.ok(fixtures.length >= 3 && fixtures.length <= 8);
   assert.deepEqual(coverage(fixtures), Object.fromEntries(REQUIRED_EXERCISES.map(feature => [feature, true])));
   assert.equal(new Set(fixtures.map(fixture => fixture.id)).size, fixtures.length);
+  assert.deepEqual(new Set(fixtures.map(fixture => fixture.id)), new Set(REQUIRED_FIXTURE_IDS));
 });
 
 test('synthetic trials are deterministic, keep provider usage unknown and never emit a single score', () => {

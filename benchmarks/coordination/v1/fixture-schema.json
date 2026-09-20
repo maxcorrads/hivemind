@@ -3,26 +3,100 @@
   "$id": "https://github.com/maxcorrads/hivemind/benchmarks/coordination/v1/fixture-schema.json",
   "title": "Hivemind coordination fixture v1",
   "type": "object",
-  "required": ["schemaVersion", "id", "kind", "description", "exercises", "promptVersion", "modelVersion", "workers", "tasks", "faults", "budgets"],
+  "required": [
+    "schemaVersion",
+    "id",
+    "kind",
+    "description",
+    "exercises",
+    "promptVersion",
+    "modelVersion",
+    "workers",
+    "tasks",
+    "faults",
+    "budgets"
+  ],
   "properties": {
-    "schemaVersion": {"const": 1},
-    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]+$"},
-    "kind": {"enum": ["parallelizable", "coupled", "recovery", "communication"]},
-    "description": {"type": "string", "minLength": 1},
-    "exercises": {"type": "array", "items": {"enum": ["structured_tasks", "checkpoint_handoff", "claims_dependencies", "worker_routing", "collaboration_rooms", "delivery_recovery"]}, "uniqueItems": true},
-    "promptVersion": {"type": "string", "minLength": 1},
-    "modelVersion": {"type": "string", "minLength": 1},
-    "workers": {"type": "array", "minItems": 1, "maxItems": 8},
-    "tasks": {"type": "array", "minItems": 1, "maxItems": 12},
-    "faults": {"type": "array"},
+    "schemaVersion": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]+$"
+    },
+    "kind": {
+      "enum": [
+        "parallelizable",
+        "coupled",
+        "recovery",
+        "communication"
+      ]
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "exercises": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "structured_tasks",
+          "checkpoint_handoff",
+          "claims_dependencies",
+          "worker_routing",
+          "collaboration_rooms",
+          "delivery_recovery"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "promptVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "modelVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "workers": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 12
+    },
+    "faults": {
+      "type": "array"
+    },
     "budgets": {
       "type": "object",
-      "required": ["maxVirtualTicks", "maxCommunicationBytes"],
+      "required": [
+        "maxVirtualTicks",
+        "maxCommunicationBytes"
+      ],
       "properties": {
-        "maxVirtualTicks": {"type": "integer", "minimum": 1},
-        "maxCommunicationBytes": {"type": "integer", "minimum": 1}
+        "maxVirtualTicks": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxCommunicationBytes": {
+          "type": "integer",
+          "minimum": 1
+        }
       },
       "additionalProperties": false
+    },
+    "instructions": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500
+      }
     }
   },
   "additionalProperties": false

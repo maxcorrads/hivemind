@@ -18,9 +18,9 @@ The default matrix compares `single_worker`, `brain_one_worker`, `brain_multi_dm
 
 ## Phase-1 fixtures
 
-The v1 suite is intentionally small: independent parallel work, a strongly coupled shared-interface change, blocked-worker checkpoint/handoff recovery, offline plus dropped-delivery recovery, and peer clarification in a collaboration room. Together they cover structured tasks, checkpoint/handoff, advisory claims/dependencies, worker routing and collaboration rooms.
+The v1 suite contains the eight scenario families required by #29: independent implementation, a strongly coupled shared-interface change, reviewer disagreement, blocked-worker checkpoint/handoff recovery, offline plus dropped-delivery recovery, a deliberately noisy room, peer clarification in a collaboration room, and a shared-worktree conflict. Together they cover structured tasks, checkpoint/handoff, advisory claims/dependencies, worker routing and collaboration rooms.
 
-Fixtures live under `benchmarks/coordination/v1/fixtures`. Each records a schema version, fixture ID, task/prompt/model versions, task graph, fake worker capabilities, deterministic faults and explicit virtual-tick/communication budgets. Additions should stay bounded and should represent a materially different coordination shape rather than another copy of the same task.
+Fixtures live under `benchmarks/coordination/v1/fixtures`. Each records a schema version, fixture ID, task/prompt/model versions, task graph, fake worker capabilities, optional scenario instructions, deterministic faults and explicit virtual-tick/communication budgets. Additions should stay bounded and should represent a materially different coordination shape rather than another copy of the same task.
 
 ## Metrics and interpretation
 
