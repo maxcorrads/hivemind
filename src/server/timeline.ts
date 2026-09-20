@@ -148,7 +148,7 @@ export class TimelineStore {
   trace(actor: Agent, traceId: string, taskId: string | null = null): TimelineView {
     if (taskId) this.hive.tasks.get(actor, taskId);
     const rows = this.hive.db.prepare(`SELECT m.id,m.seq,m.channel_id,m.author_id,m.body,m.event_type,m.created_at,
-      a.role AS author_role,p.trace_id,p.parent_message_id,p.cause_message_id,p.source,
+      a.name AS author_name,a.role AS author_role,p.trace_id,p.parent_message_id,p.cause_message_id,p.source,
       te.envelope FROM messages m
       LEFT JOIN message_provenance p ON p.message_id=m.id
       LEFT JOIN agents a ON a.id=m.author_id LEFT JOIN task_events te ON te.message_id=m.id
@@ -164,6 +164,7 @@ export class TimelineStore {
       const cause = provenance?.cause_message_id ?? null, parent = provenance?.parent_message_id ?? null;
       const messageEvent: TimelineMessageEvent = {
         kind:'message', id:'message:'+row.id, at:Number(row.created_at), traceId, messageId:String(row.id), seq:Number(row.seq),
+        authorId:String(row.author_id), authorName:String(row.author_name ?? 'unknown'),
         authorRole:String(row.author_role ?? 'unknown'), source:(provenance?.source ?? (this.hive.db.prepare('SELECT 1 FROM bot_events WHERE message_id=?').get(row.id) ? 'bot' : 'hive')) as any,
         eventType:row.event_type ? String(row.event_type) : null, taskAction:this.taskAction(envelope),
         relation:cause ? { kind:'explicit', messageId:cause } : parent ? { kind:'inferred', messageId:parent } : null,
@@ -193,7 +194,7 @@ export class TimelineStore {
       const n=(counts.get(role)??0)+1; counts.set(role,n); const value=role+'-'+n; aliases.set(id,value); return value;
     };
     const events: RedactedTimelineEvent[] = view.events.map(event => event.kind==='message'
-      ? { ...event, actor:alias(event.authorRole,event.messageId), authorRole:undefined } as unknown as RedactedTimelineEvent
+      ? { ...event, actor:alias(event.authorRole,event.authorId), authorId:undefined, authorName:undefined, authorRole:undefined } as unknown as RedactedTimelineEvent
       : { ...event, actor:alias(event.agentRole,event.agentId), agentId:undefined, agentName:undefined, agentRole:undefined } as unknown as RedactedTimelineEvent);
     return { schemaVersion:1, mode:'fake-only', traceId:view.traceId, taskId:view.taskId, exportedAt:Date.now(), events,
       truncated:view.truncated, redaction:{ messageBodies:'sha256+byte-length-only', actorNames:'stable-role-aliases',
