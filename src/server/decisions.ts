@@ -100,21 +100,24 @@ export class DecisionStore {
 
   listHuman(actor: Agent, projectId: string, includeClosed = true): DecisionPage {
     if (actor.role !== 'human') throw new HiveError(403, 'Only Human has the decision queue');
-    const rows = this.hive.db.prepare('SELECT id, snapshot FROM decision_requests WHERE project_id = ? ORDER BY created_at DESC LIMIT 100')
-      .all(projectId) as DecisionRow[];
-    const all = rows.map(row => this.view(actor, JSON.parse(row.snapshot) as DecisionSnapshot));
-    all.sort((a, b) => {
-      const open = Number(b.state === 'awaiting_input') - Number(a.state === 'awaiting_input');
-      if (open) return open;
-      if (a.state === 'awaiting_input' && b.state === 'awaiting_input') {
-        const aDeadline = a.requestedByAt ?? Number.MAX_SAFE_INTEGER, bDeadline = b.requestedByAt ?? Number.MAX_SAFE_INTEGER;
-        if (aDeadline !== bDeadline) return aDeadline - bDeadline;
-      }
-      return b.updatedAt - a.updatedAt;
-    });
-    const items = includeClosed ? all : all.filter(item => item.state === 'awaiting_input');
-    return { items, awaiting: all.filter(item => item.state === 'awaiting_input').length,
-      warning: 'Decision queue is a projection of explicit requests. Recommendations are not authority and expired/stale requests never auto-apply.' };
+    const now = Date.now();
+    const open = `json_extract(d.snapshot, '$.storedState') = 'awaiting_input'
+      AND CAST(json_extract(d.snapshot, '$.taskRevision') AS INTEGER) = CAST(json_extract(t.snapshot, '$.revision') AS INTEGER)
+      AND (json_extract(d.snapshot, '$.requestedByAt') IS NULL OR CAST(json_extract(d.snapshot, '$.requestedByAt') AS INTEGER) > ?)`;
+    const awaiting = Number(this.hive.db.prepare(`SELECT COUNT(*) AS n FROM decision_requests d
+      JOIN task_records t ON t.id = d.task_id WHERE d.project_id = ? AND ${open}`).get(projectId, now)!.n);
+    const openRows = this.hive.db.prepare(`SELECT d.id, d.snapshot FROM decision_requests d
+      JOIN task_records t ON t.id = d.task_id WHERE d.project_id = ? AND ${open}
+      ORDER BY COALESCE(CAST(json_extract(d.snapshot, '$.requestedByAt') AS INTEGER), 9223372036854775807),
+        d.created_at ASC LIMIT 100`).all(projectId, now) as DecisionRow[];
+    const remaining = includeClosed ? Math.max(0, 100 - openRows.length) : 0;
+    const closedRows = remaining ? this.hive.db.prepare(`SELECT d.id, d.snapshot FROM decision_requests d
+      JOIN task_records t ON t.id = d.task_id WHERE d.project_id = ? AND NOT (${open})
+      ORDER BY CAST(json_extract(d.snapshot, '$.updatedAt') AS INTEGER) DESC, d.created_at DESC LIMIT ?`)
+      .all(projectId, now, remaining) as DecisionRow[] : [];
+    const items = [...openRows, ...closedRows].map(row => this.view(actor, JSON.parse(row.snapshot) as DecisionSnapshot));
+    return { items, awaiting,
+      warning: 'Shows up to 100 requests, always prioritizing currently applicable awaiting decisions. Recommendations are not authority and expired/stale requests never auto-apply.' };
   }
 
   private linked(actor: Agent, id: string) {
