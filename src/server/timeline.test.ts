@@ -37,11 +37,11 @@ test('task timeline traces assignment through delivery acknowledgement result an
   const actions=timeline.events.filter(event=>event.kind==='message').map(event=>event.taskAction).filter(Boolean);
   assert.deepEqual(actions,['assign','accept','result','review:accepted']);
   assert.ok(timeline.events.some(event=>event.kind==='delivery'&&event.stage==='acknowledged'));
-  const fixture=f.hive.timeline.exportTask(f.brain.agent,f.task.id);
-  const serialized=JSON.stringify(fixture);
+  const exported=f.hive.timeline.exportTask(f.brain.agent,f.task.id);
+  const serialized=JSON.stringify(exported);
   assert.doesNotMatch(serialized,/Parser checked|dist\/report\.txt|Reviewed|Brain|Worker/);
   assert.match(serialized,/"bodySha256"/); assert.match(serialized,/"actor":"brain-1"/);
-  const replay=replayTimeline(fixture);
+  const replay=replayTimeline(exported);
   assert.equal(replay.finalTaskState,'accepted_complete');
   assert.equal(replay.orphanAcknowledgements.length,0);
   assert.deepEqual(replay.transitions,['assign','accept','result','review:accepted']);
