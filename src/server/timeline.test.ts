@@ -27,7 +27,7 @@ test('task timeline traces assignment through delivery acknowledgement result an
   const mail=await f.hive.wait(f.worker.agent,5,undefined,{sessionId:session,compact:true});
   assert.ok(mail.delivery); assert.ok(mail.delivery.messageSeqs.includes(f.task.dispatchSeq));
   let timeline=f.hive.timeline.traceForTask(f.brain.agent,f.task.id);
-  assert.ok(timeline.events.some(event=>event.kind==='delivery'&&event.stage==='offered'&&event.wakeReason==='task'));
+  assert.ok(timeline.events.some(event=>event.kind==='delivery'&&event.stage==='offered'&&event.wakeReason==='targeted'));
   f.hive.acknowledgeInbox(f.worker.agent,session,mail.delivery.id);
   f.hive.tasks.event(f.worker.agent,f.task.id,{requestId:'accept',expectedRevision:1,action:{type:'accept'}});
   f.hive.tasks.event(f.worker.agent,f.task.id,{requestId:'result',expectedRevision:2,action:{type:'result',result:{
