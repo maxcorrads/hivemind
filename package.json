@@ -23,6 +23,7 @@
     "lint": "oxlint --deny-warnings src web scripts tests vite.config.ts playwright.config.ts",
     "test:inbox-bounds": "tsx --test src/server/inbox-bounds.test.ts",
     "benchmark:inbox": "tsx scripts/benchmark-inbox.ts",
+    "benchmark:coordination": "node scripts/benchmark-coordination.mjs --all",
     "test:browser": "playwright test",
     "typecheck:browser": "tsc -p tsconfig.browser.json",
     "browser:server": "npm run build && vite preview --config tests/browser/preview.config.ts",

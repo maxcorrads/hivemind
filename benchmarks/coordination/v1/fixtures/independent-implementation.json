@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "independent-implementation",
+  "kind": "parallelizable",
+  "description": "Four independent implementation slices with distinct scopes and capability hints.",
+  "exercises": ["structured_tasks", "worker_routing"],
+  "promptVersion": "coordination-fixture-v1",
+  "modelVersion": "fake-agent-v1",
+  "workers": [
+    {"id": "worker-a", "capabilities": ["api", "tests"]},
+    {"id": "worker-b", "capabilities": ["ui", "tests"]},
+    {"id": "worker-c", "capabilities": ["storage", "tests"]}
+  ],
+  "tasks": [
+    {"id": "api", "effort": 8, "scope": ["src/api"], "dependsOn": [], "clarifications": 0, "requiredCapability": "api"},
+    {"id": "ui", "effort": 7, "scope": ["web/ui"], "dependsOn": [], "clarifications": 1, "requiredCapability": "ui"},
+    {"id": "storage", "effort": 9, "scope": ["src/storage"], "dependsOn": [], "clarifications": 0, "requiredCapability": "storage"},
+    {"id": "tests", "effort": 6, "scope": ["tests/acceptance"], "dependsOn": [], "clarifications": 1, "requiredCapability": "tests"}
+  ],
+  "faults": [],
+  "budgets": {"maxVirtualTicks": 50, "maxCommunicationBytes": 12000}
+}

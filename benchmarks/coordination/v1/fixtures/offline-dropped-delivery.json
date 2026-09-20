@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "offline-dropped-delivery",
+  "kind": "recovery",
+  "description": "One worker goes offline and one delivery is retried before work continues from a saved handoff.",
+  "exercises": ["checkpoint_handoff", "delivery_recovery"],
+  "promptVersion": "coordination-fixture-v1",
+  "modelVersion": "fake-agent-v1",
+  "workers": [
+    {"id": "worker-a", "capabilities": ["api", "tests"]},
+    {"id": "worker-b", "capabilities": ["api", "tests"]}
+  ],
+  "tasks": [
+    {"id": "inspect", "effort": 4, "scope": ["src/api"], "dependsOn": [], "clarifications": 0, "requiredCapability": "api"},
+    {"id": "implement", "effort": 7, "scope": ["src/api"], "dependsOn": ["inspect"], "clarifications": 0, "requiredCapability": "api"},
+    {"id": "verify", "effort": 5, "scope": ["tests/api"], "dependsOn": ["implement"], "clarifications": 0, "requiredCapability": "tests"}
+  ],
+  "faults": [
+    {"type": "offline", "taskId": "implement", "penaltyTicks": 5},
+    {"type": "dropped_delivery", "taskId": "verify", "penaltyTicks": 2}
+  ],
+  "budgets": {"maxVirtualTicks": 70, "maxCommunicationBytes": 14000}
+}
