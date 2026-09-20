@@ -75,7 +75,7 @@ export class TimelineStore {
       .run(messageId, traceId, row.thread_id, input.causeMessageId ?? null, input.source ?? 'hive', row.created_at);
   }
 
-  private header(seq: number, actor: Agent) {
+  private header(seq: number) {
     return this.hive.db.prepare(`SELECT m.id, m.seq, m.channel_id, COALESCE(m.thread_id,m.id) AS root_id,
       m.author_id, m.kind, m.event_type, m.created_at, m.mentions, m.recipients,
       c.type, c.project_id, a.role AS author_role,
@@ -86,7 +86,7 @@ export class TimelineStore {
   }
 
   private wakeReason(actor: Agent, seq: number): string {
-    const row = this.header(seq, actor); if (!row) return 'missing';
+    const row = this.header(seq); if (!row) return 'missing';
     const mentions = JSON.parse(String(row.mentions)) as string[], recipients = JSON.parse(String(row.recipients)) as string[];
     if (row.kind === 'control') return 'control';
     if (recipients.includes(actor.id)) return 'targeted';
