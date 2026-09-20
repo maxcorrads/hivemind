@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "blocked-worker-recovery",
+  "kind": "recovery",
+  "description": "A worker reaches a decision boundary, checkpoints, and resumes after coordinator input.",
+  "exercises": ["structured_tasks", "checkpoint_handoff"],
+  "promptVersion": "coordination-fixture-v1",
+  "modelVersion": "fake-agent-v1",
+  "workers": [
+    {"id": "worker-a", "capabilities": ["parser", "tests"]},
+    {"id": "worker-b", "capabilities": ["parser", "tests"]}
+  ],
+  "tasks": [
+    {"id": "reproduce", "effort": 5, "scope": ["src/parser"], "dependsOn": [], "clarifications": 0, "requiredCapability": "parser"},
+    {"id": "repair", "effort": 8, "scope": ["src/parser"], "dependsOn": ["reproduce"], "clarifications": 1, "requiredCapability": "parser"},
+    {"id": "verify", "effort": 4, "scope": ["tests/parser"], "dependsOn": ["repair"], "clarifications": 0, "requiredCapability": "tests"}
+  ],
+  "faults": [
+    {"type": "block", "taskId": "repair", "penaltyTicks": 4}
+  ],
+  "budgets": {"maxVirtualTicks": 60, "maxCommunicationBytes": 12000}
+}

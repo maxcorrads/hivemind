@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/maxcorrads/hivemind/benchmarks/coordination/v1/result-schema.json",
+  "title": "Hivemind coordination benchmark result v1",
+  "type": "object",
+  "required": ["schemaVersion", "evidenceClass", "fixture", "trial", "quality", "coordination", "efficiency", "infrastructure", "budget"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "evidenceClass": {"enum": ["synthetic_contract", "real_agent"]},
+    "warning": {"type": "string"},
+    "fixture": {"type": "object"},
+    "trial": {"type": "object"},
+    "quality": {"type": "object"},
+    "coordination": {"type": "object"},
+    "efficiency": {
+      "type": "object",
+      "properties": {
+        "providerTokens": {"type": ["number", "null"]},
+        "providerCost": {"type": ["number", "null"]}
+      }
+    },
+    "infrastructure": {"type": "object"},
+    "budget": {"type": "object"}
+  },
+  "additionalProperties": true
+}

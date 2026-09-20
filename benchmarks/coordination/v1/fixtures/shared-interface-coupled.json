@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "shared-interface-coupled",
+  "kind": "coupled",
+  "description": "Changes share an interface and migration surface; explicit dependencies and advisory intent should matter.",
+  "exercises": ["structured_tasks", "claims_dependencies"],
+  "promptVersion": "coordination-fixture-v1",
+  "modelVersion": "fake-agent-v1",
+  "workers": [
+    {"id": "worker-a", "capabilities": ["api", "storage"]},
+    {"id": "worker-b", "capabilities": ["api", "tests"]},
+    {"id": "worker-c", "capabilities": ["storage", "tests"]}
+  ],
+  "tasks": [
+    {"id": "contract", "effort": 5, "scope": ["src/shared/task-contract"], "dependsOn": [], "clarifications": 1, "requiredCapability": "api"},
+    {"id": "server", "effort": 8, "scope": ["src/shared/task-contract", "src/server/tasks"], "dependsOn": ["contract"], "clarifications": 1, "requiredCapability": "api"},
+    {"id": "migration", "effort": 7, "scope": ["src/server/tasks", "src/storage/migrations"], "dependsOn": ["contract"], "clarifications": 1, "requiredCapability": "storage"},
+    {"id": "regression", "effort": 5, "scope": ["tests/task-contract"], "dependsOn": ["server", "migration"], "clarifications": 0, "requiredCapability": "tests"}
+  ],
+  "faults": [],
+  "budgets": {"maxVirtualTicks": 70, "maxCommunicationBytes": 14000}
+}

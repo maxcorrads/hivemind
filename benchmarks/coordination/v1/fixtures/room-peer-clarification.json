@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "room-peer-clarification",
+  "kind": "communication",
+  "description": "Three parallel slices need repeated cross-worker clarification around a shared contract.",
+  "exercises": ["structured_tasks", "worker_routing", "collaboration_rooms"],
+  "promptVersion": "coordination-fixture-v1",
+  "modelVersion": "fake-agent-v1",
+  "workers": [
+    {"id": "worker-a", "capabilities": ["api", "tests"]},
+    {"id": "worker-b", "capabilities": ["ui", "tests"]},
+    {"id": "worker-c", "capabilities": ["storage", "tests"]}
+  ],
+  "tasks": [
+    {"id": "api", "effort": 7, "scope": ["src/contracts/api"], "dependsOn": [], "clarifications": 2, "requiredCapability": "api"},
+    {"id": "ui", "effort": 7, "scope": ["web/contracts/ui"], "dependsOn": [], "clarifications": 3, "requiredCapability": "ui"},
+    {"id": "storage", "effort": 7, "scope": ["src/contracts/storage"], "dependsOn": [], "clarifications": 2, "requiredCapability": "storage"}
+  ],
+  "faults": [
+    {"type": "unsupported_completion", "taskId": "ui", "penaltyTicks": 2}
+  ],
+  "budgets": {"maxVirtualTicks": 55, "maxCommunicationBytes": 16000}
+}
