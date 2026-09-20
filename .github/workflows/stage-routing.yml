@@ -1,0 +1,60 @@
+name: Stage reviewed routing sources
+# Temporary tooling only; never merge. PR creation and merge remain connector operations.
+on:
+  push:
+    branches: [maintenance/issue31-routing-inputs-20260920]
+    paths: [.github/workflows/stage-routing.yml]
+permissions:
+  contents: read
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 3620cc5387068aafd1a82dc0fae07313d057f9be
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify immutable input and full source tree
+        id: objects
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, lzma, os, pathlib
+          root=pathlib.Path('.github/review')
+          data=''.join((root / ('routing.patch.xz.b64.'+str(n))).read_text().strip() for n in (1,2))
+          patch=lzma.decompress(base64.b64decode(data,validate=True))
+          assert hashlib.sha256(patch).hexdigest()=='7f43106e1ef3ffc934664fbe802db8c1691b73967775da1785cd188f93e54df0'
+          pathlib.Path(os.environ['RUNNER_TEMP'],'routing.patch').write_bytes(patch)
+          PY
+          base=37344ddc3139ebf8e43d656b01c450f2c28df316
+          git checkout --detach "$base"
+          git apply --index --unidiff-zero --check "$RUNNER_TEMP/routing.patch"
+          git apply --index --unidiff-zero "$RUNNER_TEMP/routing.patch"
+          tree=$(git write-tree)
+          test "$tree" = a7000a13352af3544f54e06d580fbbbcf5f6000a
+          git diff --exit-code "$base" "$tree" -- .github/workflows package-lock.json
+          git diff --cached --stat
+          commit=$(printf '%s\n' 'feat(routing): add opt-in capability cards and explainable advisory suggestions' | git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit-tree "$tree" -p "$base")
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/routing-receipt"
+          printf '{"commit":"%s","tree":"%s","base":"%s"}\n' "$commit" "$tree" "$base" > "$RUNNER_TEMP/routing-receipt/result.json"
+      - name: Export only a new non-product staging ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ steps.objects.outputs.commit }}
+        run: |
+          set -euo pipefail
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w 0)
+          echo "::add-mask::$auth"
+          git -c core.hooksPath=/dev/null -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin "$COMMIT:refs/heads/review/issue31-routing-candidate-20260920"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: routing-review-receipt
+          path: ${{ runner.temp }}/routing-receipt/
+          retention-days: 1
+          if-no-files-found: error
