@@ -8,6 +8,7 @@ import type { ProjectPluginView, SettingsValues } from "../src/shared/plugin-set
 import { humanSession, connectHumanWs } from "./human-session.ts";
 import type { TaskSnapshot } from '../src/shared/tasks.ts';
 import type { RoomView, Room } from '../src/shared/rooms.ts';
+import type { DecisionPage, DecisionView } from '../src/shared/decisions.ts';
 
 export class ApiError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
@@ -52,6 +53,8 @@ export type ChannelPayload = {
   historyThrough?: number;
   deferredLive?: boolean;
   task?: TaskSnapshot;
+  decision?: DecisionView;
+  decisions?: DecisionView[];
   channel: Channel;
   threadId: string | null;
   messages: Message[];
@@ -63,6 +66,11 @@ export type ChannelPayload = {
 };
 
 export const api = {
+  decisions: (project: string, includeClosed = true, signal?: AbortSignal) =>
+    req<DecisionPage>('/api/ui/decisions?project=' + encodeURIComponent(project) + '&includeClosed=' + (includeClosed ? '1' : '0'), { signal }),
+  answerDecision: (id: string, body: { requestId: string; expectedRevision: number; body: string }, signal?: AbortSignal) =>
+    req<{ decision: DecisionView; message: Message; duplicate: boolean }>('/api/ui/decisions/' + encodeURIComponent(id) + '/answer',
+      { method: 'POST', body: JSON.stringify(body), signal }),
   suggestWorkers: (id: string, body: RoutingRequest, signal?: AbortSignal) => req<RoutingSuggestions>(`/api/ui/tasks/${encodeURIComponent(id)}/routing`, { method: 'POST', body: JSON.stringify(body), signal }),
   recordRoutingChoice: (id: string, body: { expectedRevision: number; workerId: string; reason: string; requestId: string }, signal?: AbortSignal) => req<{ assigned: false }>(`/api/ui/tasks/${encodeURIComponent(id)}/routing-override`, { method: 'POST', body: JSON.stringify(body), signal }),
   agentCredential: async (project: string, agent: string): Promise<BotCredentialView> => {
