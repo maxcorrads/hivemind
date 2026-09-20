@@ -114,3 +114,22 @@ test('withdrawal, explicit supersession, related links and restart preserve dist
   assert.ok(page.items.some(item => item.id === one.id && item.state === 'superseded'));
   assert.equal(page.awaiting, 1);
 });
+
+
+test('old awaiting decisions stay visible ahead of more than 100 newer closed requests', t => {
+  const f = fixture(t);
+  const oldest = f.hive.decisions.create(f.brain.agent, f.input({ requestId: 'oldest-open' })).decision;
+  for (let index = 0; index < 105; index++) {
+    const made = f.hive.decisions.create(f.brain.agent, f.input({ requestId: `closed-${index}` })).decision;
+    f.hive.decisions.answer(f.human, made.id, {
+      requestId: `answer-${index}`, expectedRevision: made.revision, body: `Closed answer ${index}`,
+    });
+  }
+  const page = f.hive.decisions.listHuman(f.human, f.room.projectId);
+  assert.equal(page.awaiting, 1);
+  assert.equal(page.items.length, 100);
+  assert.equal(page.items[0]?.id, oldest.id);
+  assert.equal(page.items[0]?.state, 'awaiting_input');
+  const openOnly = f.hive.decisions.listHuman(f.human, f.room.projectId, false);
+  assert.deepEqual(openOnly.items.map(item => item.id), [oldest.id]);
+});
