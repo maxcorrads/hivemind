@@ -504,3 +504,16 @@ test('room metadata stays a derived projection, including tasks written by the o
   assert.equal(Object.hasOwn(stored(), 'room'), false);
   assert.equal(f.hive.tasks.get(f.a.agent, assigned.id).room!.acknowledged, true);
 });
+
+test('advisory release and checkpoints remain reports during a room stop, not permission to execute', t => {
+  const f = fixture(t); f.configure(); const task = f.assign().task; f.ack();
+  f.taskEvent(task.id, { type: 'claim', leaseSeconds: 60, paths: ['src/fixture'], overlapAcknowledgements: [] }, f.brain.agent);
+  f.taskEvent(task.id, { type: 'accept' });
+  f.event({ type: 'archive', running: 'stop', reason: 'Stop fixture' }, f.brain.agent, { humanInstructionSeq: f.command('Stop and archive') });
+  f.taskEvent(task.id, { type: 'checkpoint', checkpoint: { completedSteps: [], unresolvedQuestions: ['Pending stop'], nextAction: 'Confirm host stopped', artifacts: [], checks: [], evidenceSeqs: [] } });
+  f.taskEvent(task.id, { type: 'release_claim', reason: 'Releasing advisory intent only' }, f.brain.agent);
+  assert.equal(f.hive.tasks.get(f.a.agent, task.id).room!.status, 'stop_requested');
+  assert.equal(f.hive.tasks.get(f.a.agent, task.id).state, 'accepted');
+  assert.throws(() => f.taskEvent(task.id, { type: 'claim', leaseSeconds: 60, paths: [], overlapAcknowledgements: [] }, f.brain.agent), /stop_requested/);
+  assert.throws(() => f.taskEvent(task.id, { type: 'result', result: { summary: 'Still running', artifacts: [], checks: [], gaps: [], evidenceSeqs: [] } }), /stop_requested/);
+});

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { roomTaskSchema, type RoomTask } from './rooms.ts';
+import { claimActions, isClaimAction, type TaskClaim, type TaskCoordinationView } from './task-claims.ts';
 
 const text = z.string().trim().min(1).max(700);
 const lines = z.array(z.string().trim().min(1).max(240)).max(8);
@@ -52,6 +53,7 @@ export type TaskCheckpoint = {
   data: TaskCheckpointInput;
 };
 export const taskActionSchema = z.discriminatedUnion('type', [
+  ...claimActions,
   z.object({ type: z.literal('checkpoint'), checkpoint: taskCheckpointInputSchema }).strict(),
   z.object({ type: z.literal('accept') }).strict(),
   z.object({ type: z.literal('reject'), reason: text }).strict(),
@@ -74,11 +76,14 @@ export type TaskEnvelope = {
   actorId: string; actorRole: 'brain' | 'worker'; assignerId: string; workerId: string;
   previousWorkerId?: string;
   checkpointVersion?: number;
+  claimVersion?: number;
   action: TaskAction | { type: 'assign'; contract: TaskContract };
 };
 export type TaskSnapshot = {
   room?: RoomTask;
   checkpoint?: TaskCheckpoint;
+  claim?: TaskClaim;
+  coordination?: TaskCoordinationView;
   id: string; channelId: string; assignerId: string; assignerName: string; workerId: string; workerName: string;
   revision: number; contractVersion: number; state: TaskState; contract: TaskContract;
   dispatchSeq: number; receivedAt: number | null; lastEventSeq: number; updatedAt: number;
@@ -97,6 +102,13 @@ export function taskBody(envelope: TaskEnvelope): string {
       `Worktree: ${c.worktree ?? 'not specified'}; branch: ${c.branch ?? 'not specified'}`,
       `Evidence seqs: ${c.evidenceSeqs.join(', ') || 'none'}`].filter(Boolean).join('\n');
   }
+  if (isClaimAction(a.type)) {
+    return [header, `Advisory claim version ${envelope.claimVersion}`,
+      'reason' in a ? `Reason: ${a.reason}` : '',
+      'paths' in a ? `Declared intent: ${a.paths.join('; ') || 'no paths declared'}` : '',
+      'leaseSeconds' in a ? `Lease requested: ${a.leaseSeconds} seconds` : '',
+      'Advisory coordination only: no filesystem lock, code execution, reassignment or change of task authority. Expiry requires explicit reconciliation.'].filter(Boolean).join('\n');
+  }
   if (a.type === 'checkpoint') {
     const c = a.checkpoint;
     return [header, `Checkpoint version ${envelope.checkpointVersion}; later checkpoints supersede this report.`,
@@ -111,6 +123,7 @@ export function taskBody(envelope: TaskEnvelope): string {
   if (a.type === 'reject') return `${header}\nReason: ${a.reason}`;
   if (a.type === 'block') return `${header}\nDecision/input needed: ${a.needed}`;
   if (a.type === 'review') return `${header}\nReview: ${a.decision}\n${a.summary}\nEvidence seqs: ${a.evidenceSeqs.join(', ') || 'none'}`;
+  if (a.type !== 'result') throw new Error('Unknown task action');
   const r = a.result;
   return [header, r.summary, `Artifacts: ${r.artifacts.join('; ') || 'none'}`,
     `Reported checks (not independently verified): ${r.checks.map(c => `${c.name}: ${c.outcome} [seqs ${c.evidenceSeqs.join(', ')}]`).join('; ') || 'none run/reported'}`,

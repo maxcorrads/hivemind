@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { TaskCoordination } from './task-coordination.ts';
+import { claimActionSchema, claimPreviewSchema, isClaimAction } from '../shared/task-claims.ts';
 import { validated } from '../shared/api-contract.ts';
 import { checkpointFreshness, type HandoffSummary } from '../shared/handoffs.ts';
 import { immediateTransaction } from './transaction.ts';
@@ -11,6 +13,7 @@ type Row = { id: string; channel_id: string; worker_id: string; dispatch_seq: nu
 type StoredEvent = { message_id: string; task_id: string; request_hash: string };
 
 export class TaskStore {
+  private coordination: TaskCoordination;
   constructor(private hive: Hive) {
     this.db.exec(`CREATE TABLE IF NOT EXISTS task_records (
       id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, worker_id TEXT NOT NULL,
@@ -27,6 +30,7 @@ export class TaskStore {
       CREATE TABLE IF NOT EXISTS task_request_aliases (actor_id TEXT NOT NULL, request_id TEXT NOT NULL,
         request_hash TEXT NOT NULL, task_id TEXT NOT NULL REFERENCES task_records(id) ON DELETE CASCADE,
         PRIMARY KEY(actor_id, request_id));`);
+    this.coordination = new TaskCoordination(hive);
   }
   private get db() { return this.hive.db; }
   private row(id: string): Row {
@@ -40,8 +44,14 @@ export class TaskStore {
     if (actor.role === 'bot' || !this.hive.canSeeChannel(actor, this.hive.getChannel(row.channel_id)))
       throw new HiveError(403, 'Cannot read this task');
     const task = JSON.parse(row.snapshot) as TaskSnapshot;
-    return { ...task, room: this.hive.rooms.taskInfo(task), receivedAt: row.received_at,
+    return { ...task, room: this.hive.rooms.taskInfo(task), coordination: this.coordination.view(actor, task), receivedAt: row.received_at,
       state: task.state === 'sent' && row.received_at !== null ? 'delivered' : task.state };
+  }
+  previewClaim(actor: Agent, id: string, raw: unknown) {
+    validated(z.string().uuid(), id);
+    const task = this.get(actor, id);
+    const { paths } = validated(claimPreviewSchema, raw);
+    return this.coordination.preview(actor, task, paths);
   }
   handoff(actor: Agent, id: string) {
     validated(z.string().uuid(), id);
@@ -52,7 +62,7 @@ export class TaskStore {
     ).get(task.channelId, task.id, checkpoint.messageSeq)) : false;
     const handoff = { taskId: task.id, channelId: task.channelId, workerId: task.workerId,
       objective: task.contract.objective, revision: task.revision, contractVersion: task.contractVersion,
-      state: task.state, checkpoint, ...checkpointFreshness(task), newerMessages,
+      state: task.state, checkpoint, ...(task.claim ? { claim: task.claim, coordination: task.coordination } : {}), ...checkpointFreshness(task), newerMessages,
       warning: 'A saved report is not verified repository state. Later unsaved work may exist; inspect referenced evidence before acting.',
       expand: { tool: 'history', channel: task.channelId, threadId: task.id } };
     if (Buffer.byteLength(JSON.stringify(handoff)) > 32 * 1024) throw new HiveError(413, 'Legacy handoff exceeds budget; recover explicit messages from thread history');
@@ -94,10 +104,7 @@ export class TaskStore {
   }
   private contract(actor: Agent, contract: TaskContract, taskId?: string) {
     this.evidence(actor, contract.evidenceSeqs);
-    for (const id of contract.dependencies) {
-      if (id === taskId) throw new HiveError(400, 'A task cannot depend on itself');
-      this.get(actor, id);
-    }
+    this.coordination.validateDependencies(actor, contract, taskId);
   }
   private writable(actor: Agent, worker: Agent, channel: Channel) {
     if (!this.hive.canSeeChannel(actor, channel) || !this.hive.canPost(actor, channel) ||
@@ -124,7 +131,8 @@ export class TaskStore {
     const id = initial ? task.id : randomUUID();
     const target = ['assign', 'revise', 'review'].includes(envelope.action.type) ? task.workerId : task.assignerId;
     const now = Date.now();
-    const recipients = JSON.stringify([...new Set([target, ...(envelope.previousWorkerId ? [envelope.previousWorkerId] : [])])]);
+    const recipients = JSON.stringify([...new Set([target, ...(envelope.previousWorkerId ? [envelope.previousWorkerId] : []),
+      ...(isClaimAction(envelope.action.type) ? [task.assignerId, task.workerId] : [])])]);
     this.db.prepare(`INSERT INTO messages(id, channel_id, thread_id, author_id, body, kind, event_type, mentions, created_at, recipients)
       VALUES (?, ?, ?, ?, ?, 'chat', ?, ?, ?, ?)`)
       .run(id, task.channelId, initial ? null : task.id, actor.id, body,
@@ -153,7 +161,7 @@ export class TaskStore {
   private record(task: TaskSnapshot) {
     // Room metadata is a projection of the channel contract and current worker ACK,
     // not another task-owned state machine. Never persist that derived snapshot.
-    const { room: _room, ...record } = task;
+    const { room: _room, coordination: _coordination, ...record } = task;
     return record;
   }
   private published(actor: Agent, taskId: string, messageId: string) {
@@ -205,13 +213,17 @@ export class TaskStore {
       const task = this.get(actor, taskId);
       duplicate = this.retry(actor, input.requestId, hash); if (duplicate) return;
       const brainAction = action.type === 'revise' || action.type === 'review';
-      if (brainAction ? actor.role !== 'brain' || actor.id !== task.assignerId : actor.role !== 'worker' || actor.id !== task.workerId)
+      if (!isClaimAction(action.type) && (brainAction ? actor.role !== 'brain' || actor.id !== task.assignerId : actor.role !== 'worker' || actor.id !== task.workerId))
         throw new HiveError(403, 'This event belongs to the assigning brain or the assigned worker');
       if (!this.hive.canPost(actor, this.hive.getChannel(task.channelId))) throw new HiveError(403, 'Cannot post in this task channel');
       if (input.expectedRevision !== task.revision) throw new HiveError(409, 'Task changed; get_task and use its current revision');
       this.hive.rooms.checkTask(actor, task, action.type);
       const previousWorkerId = task.workerId;
-      if (action.type === 'revise') {
+      if (action.type === 'accept' || action.type === 'result' || (action.type === 'review' && action.decision === 'accepted'))
+        this.coordination.assertReady(task);
+      if (isClaimAction(action.type)) {
+        this.coordination.apply(actor, task, claimActionSchema.parse(action));
+      } else if (action.type === 'revise') {
         const worker = this.worker(actor, action.worker);
         const room = this.hive.rooms.peek(task.channelId);
         if (room && !room.participantIds.includes(worker.id)) throw new HiveError(403, 'Replacement worker must be a declared room participant');
@@ -233,6 +245,8 @@ export class TaskStore {
         }
         task.review = { reviewerId: actor.id, decision: action.decision, summary: action.summary };
         task.state = action.decision === 'accepted' ? 'accepted_complete' : 'changes_requested';
+        if (action.decision === 'accepted' && task.claim?.state === 'held')
+          task.claim = { ...task.claim, state: 'released', version: task.claim.version + 1, updatedAt: Date.now() };
       } else if (action.type === 'accept' || action.type === 'reject') {
         if (!(action.type === 'accept' ? ['sent', 'delivered', 'blocked', 'changes_requested'] : ['sent', 'delivered']).includes(task.state))
           throw new HiveError(409, 'Task cannot be accepted/rejected in its current state');
@@ -249,6 +263,7 @@ export class TaskStore {
             objective: task.contract.objective, worktree: task.contract.worktree, branch: task.contract.branch,
             savedAt: Date.now(), state: task.state, messageId: '', messageSeq: 0, data: action.checkpoint };
         } else {
+          if (action.type !== 'result') throw new HiveError(400, 'Unknown task action');
           this.evidence(actor, [...action.result.evidenceSeqs, ...action.result.checks.flatMap(c => c.evidenceSeqs)]);
           this.evidence(this.hive.getAgent(task.assignerId), [...action.result.evidenceSeqs, ...action.result.checks.flatMap(c => c.evidenceSeqs)]);
           task.result = action.result; task.review = null; task.state = 'result_submitted';
@@ -259,7 +274,8 @@ export class TaskStore {
         contractVersion: task.contractVersion, actorId: actor.id, actorRole: actor.role as 'brain' | 'worker',
         assignerId: task.assignerId, workerId: task.workerId,
         ...(previousWorkerId !== task.workerId ? { previousWorkerId } : {}),
-        ...(action.type === 'checkpoint' ? { checkpointVersion: task.checkpoint!.version } : {}), action }, input.requestId, hash, false);
+        ...(action.type === 'checkpoint' ? { checkpointVersion: task.checkpoint!.version } : {}),
+        ...(task.claim ? { claimVersion: task.claim.version } : {}), action }, input.requestId, hash, false);
     });
     return duplicate! ?? this.published(actor, taskId, messageId);
   }

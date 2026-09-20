@@ -89,6 +89,7 @@ test("production MCP schemas and calls retain their observable contracts", { tim
       get_task: [["taskId"], { taskId: "string" }],
       get_handoff: [["taskId"], { taskId: "string" }],
       get_handoffs: [[], { beforeTask: "string" }],
+      preview_task_claim: [["taskId", "paths"], { taskId: "string", paths: "array" }],
       task_event: [["taskId", "requestId", "expectedRevision", "action"], { taskId: "string", requestId: "string", expectedRevision: "integer", action: "union" }],
     };
     assert.deepEqual(tools.map((tool) => tool.name).sort(), Object.keys(expected).sort());

@@ -144,3 +144,11 @@ counts per task and their sample size, including failures, along with time/token
 Use the versioned thread history as evidence; manually annotate free-form baseline
 messages rather than guessing intent from keywords. No such live-agent productivity
 measurement has been performed here, and no improvement is claimed from fixtures.
+
+## Advisory claims and dependencies
+
+Optional `claim`, `renew_claim`, `release_claim` and `reconcile_claim` task events
+record bounded intentions without launching work or locking files. Declared
+prerequisites must be accepted-complete before acceptance/result/review. See
+[advisory claims](docs/advisory-claims.md) for authority, uncertainty, overlap
+acknowledgements and compatibility limits.
