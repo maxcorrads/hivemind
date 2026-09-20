@@ -869,3 +869,11 @@ html.dark .primary { background: var(--wax); color: #1b2017; }
 .decision-reply textarea { min-height: 72px; width: 100%; box-sizing: border-box; background: var(--paper); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; padding: 8px; }
 .decision-warning { opacity: .78; font-size: 12px; }
 .task-decisions { margin: 10px 0; }
+
+.task-timeline { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+.task-timeline > summary { cursor: pointer; font-weight: 700; }
+.timeline-tools { display: flex; gap: 8px; margin: 8px 0; }
+.timeline-list { display: grid; gap: 8px; padding-left: 22px; }
+.timeline-list li { display: grid; grid-template-columns: 5rem 1fr; gap: 4px 8px; }
+.timeline-list time { opacity: .7; font-size: 11px; }
+.timeline-list small { grid-column: 2; opacity: .72; overflow-wrap: anywhere; }
