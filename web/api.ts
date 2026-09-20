@@ -9,6 +9,7 @@ import { humanSession, connectHumanWs } from "./human-session.ts";
 import type { TaskSnapshot } from '../src/shared/tasks.ts';
 import type { RoomView, Room } from '../src/shared/rooms.ts';
 import type { DecisionPage, DecisionView } from '../src/shared/decisions.ts';
+import type { TimelineExport, TimelineView } from '../src/shared/timeline.ts';
 
 export class ApiError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
@@ -66,6 +67,10 @@ export type ChannelPayload = {
 };
 
 export const api = {
+  taskTimeline: (id: string, signal?: AbortSignal) =>
+    req<{ timeline: TimelineView }>(`/api/ui/tasks/${encodeURIComponent(id)}/timeline`, { signal }),
+  exportTaskTimeline: (id: string, signal?: AbortSignal) =>
+    req<{ fixture: TimelineExport }>(`/api/ui/tasks/${encodeURIComponent(id)}/timeline/export`, { signal }),
   decisions: (project: string, includeClosed = true, signal?: AbortSignal) =>
     req<DecisionPage>('/api/ui/decisions?project=' + encodeURIComponent(project) + '&includeClosed=' + (includeClosed ? '1' : '0'), { signal }),
   answerDecision: (id: string, body: { requestId: string; expectedRevision: number; body: string }, signal?: AbortSignal) =>

@@ -3,6 +3,7 @@ import type { TaskSnapshot } from '../src/shared/tasks.ts';
 import { checkpointFreshness } from '../src/shared/handoffs.ts';
 import { claimState } from '../src/shared/task-claims.ts';
 import type { DecisionView } from '../src/shared/decisions.ts';
+import { TimelinePanel } from './TimelinePanel.tsx';
 
 export function TaskCard({ task, decisions = [] }: { task: TaskSnapshot; decisions?: DecisionView[] }) {
   return <section className="task-card" aria-label="Structured task">
@@ -61,5 +62,6 @@ export function TaskCard({ task, decisions = [] }: { task: TaskSnapshot; decisio
     </details>}
     {task.review ? <p>Assigning brain review: {task.review.decision.replaceAll('_', ' ')} — {task.review.summary}</p> :
       <p>No review decision. A submitted result is not accepted-complete.</p>}
+    <TimelinePanel taskId={task.id} />
   </section>;
 }
