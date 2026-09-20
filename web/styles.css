@@ -852,3 +852,20 @@ html.dark .primary { background: var(--wax); color: #1b2017; }
 .room-panel input[type=checkbox] { width: auto; }
 .room-panel button { margin-top: 8px; }
 .room-panel [role=alert] { color: #d85b4b; }
+
+.decision-queue { padding: 12px; gap: 12px; }
+.decision-card { margin: 0 0 12px; padding: 14px; border: 1px solid var(--line, #55615e); border-radius: 12px; overflow-wrap: anywhere; }
+.decision-card header { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.decision-card header div { display: grid; gap: 4px; }
+.decision-card p { white-space: pre-wrap; margin: 8px 0; }
+.decision-state { border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; font-size: 11px; white-space: nowrap; }
+.decision-awaiting_input { font-weight: 700; }
+.decision-superseded, .decision-expired, .decision-withdrawn { opacity: .7; }
+.decision-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; margin: 10px 0; }
+.decision-options button { display: grid; gap: 4px; text-align: left; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); color: var(--ink); }
+.decision-options small, .decision-card small { opacity: .75; }
+.decision-answer { border-left: 3px solid var(--line); padding-left: 10px; margin: 10px 0; }
+.decision-reply { display: grid; gap: 8px; margin-top: 12px; }
+.decision-reply textarea { min-height: 72px; width: 100%; box-sizing: border-box; background: var(--paper); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; padding: 8px; }
+.decision-warning { opacity: .78; font-size: 12px; }
+.task-decisions { margin: 10px 0; }
