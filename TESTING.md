@@ -49,3 +49,13 @@ are deliberately **not uploaded**: binary visual data cannot be reliably redacte
 by a text filter. Developers may inspect the failure-only local synthetic trace
 under artifacts/playwright after reviewing its contents. No raw environments,
 credentials, provider reasoning or user workspace files are fixture inputs.
+
+## Synthetic storage performance evidence
+
+`node --import tsx scripts/benchmark-storage-matrix.mjs` runs nine independent
+fixture shapes (12 samples by default) in temporary databases. Read
+[storage-benchmark.md](docs/storage-benchmark.md) for the exact #64 before/after
+commands, retained raw results, counter limitations and current HTTP receipt
+probe. The heavy matrix is opt-in; a bounded smoke/metadata test is discovered in
+CI. SQL rows returned are not rows examined, and synthetic latency is not model
+quality or cost evidence.

@@ -78,7 +78,7 @@ try {
     runtime: process.version, platform: `${os.platform()} ${os.arch()}`, cpu: os.cpus()[0]?.model,
     agents: agentCount, messagesPerAgent, bodyCharacters: body.length, responses,
     elapsedMs: round(elapsedMs), maxHttpBytes, maxWireBytes, maxScannedRows, maxHydratedMessages,
-    waitLatencyMs: { p50: round(latencies[Math.floor(latencies.length * .5)]), p99: round(latencies[Math.floor(latencies.length * .99)]) },
+    waitLatencyMs: { p50: round(latencies[Math.floor(latencies.length * .5)]), p95: round(latencies[Math.min(latencies.length - 1, Math.ceil(latencies.length * .95) - 1)]), p99: round(latencies[Math.floor(latencies.length * .99)]) },
     eventLoopDelayMs: { mean: round(delay.mean / 1e6), p99: round(delay.percentile(99) / 1e6), max: round(delay.max / 1e6) },
     verification: "All fixture sequences received once and in order. Absolute measurements; no speedup claim.",
   }, null, 2));
