@@ -391,6 +391,7 @@ export function App() {
       }
       if (ev.type === "queued") {
         const q = ev.payload as { agentId: string; n: number; inbox?: InboxStatus };
+        if (selRef.current.kind === 'decisions') setDecisionTick(t => t + 1);
         setSnap((current) => {
           if (!current) return current;
           const previous = current.inbox?.[q.agentId];
@@ -412,8 +413,10 @@ export function App() {
         const task = ev.payload as TaskSnapshot;
         setDecisionTick(t => t + 1);
         if (selRef.current.kind === 'channel' && selRef.current.id === task.channelId) setRoomTick(t => t + 1);
-        if (viewingThread(task.channelId, task.id))
+        if (viewingThread(task.channelId, task.id)) {
           setThreadView(view => receiveThreadTask(selectThread(view, task.channelId, task.id), task));
+          loadThread(task.channelId, task.id).catch(() => undefined);
+        }
         return;
       }
       if (ev.type === 'decision') {
