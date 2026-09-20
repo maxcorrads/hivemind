@@ -17,6 +17,8 @@ import { renderBody } from "./markdown.tsx";
 import { holdLivePane, isReadingHistory } from "./pane-window.ts";
 import { TaskCard } from './TaskCard.tsx';
 import { RoomPanel } from './RoomPanel.tsx';
+import { DecisionCard, DecisionQueue } from './DecisionQueue.tsx';
+import type { DecisionView } from '../src/shared/decisions.ts';
 import type { TaskSnapshot } from '../src/shared/tasks.ts';
 import { selectThread, beginThreadLoad, failThreadLoad, receiveThreadMessage, receiveThreadTask, receiveThreadSnapshot, receiveThreadStatus, type ThreadView } from './thread-state.ts';
 
@@ -24,6 +26,7 @@ type InboxBox = "unread" | "all";
 
 type Sel =
   | { kind: "inbox"; project: string; box?: InboxBox }
+  | { kind: "decisions"; project: string }
   | { kind: "channel"; id: string; thread?: string | null };
 
 const STATUSES: ThreadStatus[] = ["open", "in_progress", "blocked", "done"];
@@ -38,6 +41,7 @@ function parseHash(): Sel {
       box: parts[2] === "all" ? "all" : "unread",
     };
   }
+  if (parts[0] === "decisions") return { kind: "decisions", project: parts[1] ? decodeURIComponent(parts[1]) : "" };
   if (parts[1]) {
     const thread = parts[2] === "t" && parts[3] ? decodeURIComponent(parts[3]) : undefined;
     return { kind: "channel", id: decodeURIComponent(parts[1]), thread };
@@ -54,15 +58,17 @@ function setHash(sel: Sel) {
   location.hash =
     sel.kind === "inbox"
       ? `${sel.project ? `/inbox/${encodeURIComponent(sel.project)}` : "/inbox"}${sel.box === "all" ? "/all" : ""}`
-      : `/c/${encodeURIComponent(sel.id)}${sel.thread ? `/t/${encodeURIComponent(sel.thread)}` : ""}`;
+      : sel.kind === "decisions"
+        ? `${sel.project ? `/decisions/${encodeURIComponent(sel.project)}` : "/decisions"}`
+        : `/c/${encodeURIComponent(sel.id)}${sel.thread ? `/t/${encodeURIComponent(sel.thread)}` : ""}`;
 }
 
 function repairSel(sel: Sel, snap: Snapshot): Sel | null {
-  if (sel.kind === "inbox") {
-    if (!sel.project) return snap.projects[0] ? { kind: "inbox", project: snap.projects[0].slug, box: sel.box } : null;
+  if (sel.kind === "inbox" || sel.kind === "decisions") {
+    if (!sel.project) return snap.projects[0] ? { ...sel, project: snap.projects[0].slug } : null;
     if (snap.projects.some((p) => p.slug === sel.project)) return null;
     const fallback = snap.projects[0];
-    return fallback ? { kind: "inbox", project: fallback.slug, box: sel.box } : { kind: "inbox", project: "", box: sel.box };
+    return fallback ? { ...sel, project: fallback.slug } : { ...sel, project: "" };
   }
   if (snap.channels.some((c) => c.id === sel.id)) return null;
   const fallback = snap.projects[0];
@@ -112,6 +118,7 @@ export function App() {
   const [err, setErr] = useState<string | null>(null);
   const [live, setLive] = useState(false);
   const [roomTick, setRoomTick] = useState(0);
+  const [decisionTick, setDecisionTick] = useState(0);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [newTopic, setNewTopic] = useState("");
@@ -403,9 +410,20 @@ export function App() {
       }
       if (ev.type === 'task') {
         const task = ev.payload as TaskSnapshot;
+        setDecisionTick(t => t + 1);
         if (selRef.current.kind === 'channel' && selRef.current.id === task.channelId) setRoomTick(t => t + 1);
         if (viewingThread(task.channelId, task.id))
           setThreadView(view => receiveThreadTask(selectThread(view, task.channelId, task.id), task));
+        return;
+      }
+      if (ev.type === 'decision') {
+        const decision = ev.payload as DecisionView;
+        setDecisionTick(t => t + 1);
+        if (selRef.current.kind === 'channel' && selRef.current.id === decision.channelId) {
+          const root = threadIdRef.current;
+          if (root === decision.id || root === decision.taskId)
+            loadThread(decision.channelId, root).catch(() => undefined);
+        }
         return;
       }
       if (ev.type === 'room') {
@@ -542,7 +560,7 @@ export function App() {
   const match = (name: string) => !q || name.toLowerCase().includes(q);
   const activeChannel = sel.kind === "channel" ? channels.find((c) => c.id === sel.id) : undefined;
   const selectedProject =
-    sel.kind === "inbox" ? sel.project : (activeChannel?.project ?? projects[0]?.slug ?? "chapter");
+    sel.kind === "inbox" || sel.kind === "decisions" ? sel.project : (activeChannel?.project ?? projects[0]?.slug ?? "chapter");
   const editingBusy = editingProject
     ? (snap?.agents ?? []).filter((a) => a.role !== "human" && a.project === editingProject && a.online)
     : [];
@@ -816,6 +834,12 @@ export function App() {
                     <span>For you</span>
                     {n > 0 && <em>{n}</em>}
                   </button>
+                  <button
+                    className={`nav ${sel.kind === "decisions" && sel.project === project.slug ? "active" : ""}`}
+                    onClick={() => go({ kind: "decisions", project: project.slug })}
+                  >
+                    <span>Decisions</span>
+                  </button>
                   <div className="group">
                     <div className="group-h">
                       <span>Channels</span>
@@ -931,6 +955,9 @@ export function App() {
             }}
             onClear={() => setQuery("")}
           />
+        ) : sel.kind === "decisions" ? (
+          <DecisionQueue project={sel.project} tick={decisionTick}
+            onOpen={decision => go({ kind: "channel", id: decision.channelId, thread: decision.id })} />
         ) : sel.kind === "inbox" ? (
           <Inbox
             box={inboxBox}
@@ -1105,7 +1132,12 @@ export function App() {
           <div className="stream" ref={threadStream} onScroll={() => {
             if (isReadingHistory(threadStream.current)) setThreadPane((current) => current ? holdLivePane(current) : current);
           }}>
-            {threadPane.task && <TaskCard task={threadPane.task} />}
+            {threadPane.task && <TaskCard task={threadPane.task} decisions={threadPane.decisions} />}
+            {threadPane.decision && <DecisionCard decision={threadPane.decision}
+              onAnswered={() => {
+                setDecisionTick(t => t + 1);
+                loadThread(threadPane.decision!.channelId, threadPane.decision!.id).catch(() => undefined);
+              }} />}
             {threadPane.hasOlder && (
               <button type="button" className="older" onClick={() => {
                 const channelId = sel.id;
