@@ -357,6 +357,9 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     return c.json({ ok: true, ...hive.readSnapshot(human) });
   });
 
+  ui.post('/tasks/:id/routing', async c => c.json(hive.routing.suggest(hive.getAgent('human'), c.req.param('id'), await requestJson(c.req.raw))));
+  ui.post('/tasks/:id/routing-override', async c => c.json(hive.routing.override(hive.getAgent('human'), c.req.param('id'), await requestJson(c.req.raw))));
+
   const agent = new Hono();
   agent.use("*", async (c, next) => {
     if (c.req.path === "/api/agent/join" && c.req.method === "POST") { await validateRequest(c.req.raw); return next(); }
@@ -503,6 +506,11 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   agent.get('/channels/:id/room/history', c => c.json({ history: hive.rooms.history(c.get('me'), c.req.param('id'), Number(c.req.query('before') ?? Number.MAX_SAFE_INTEGER)) }));
   agent.post('/channels/:id/room', async c => c.json(hive.rooms.event(c.get('me'), c.req.param('id'),
     await requestJson(c.req.raw))));
+  agent.get('/workers/:id/capabilities', c => c.json({ capability: hive.routing.get(c.get('me'), c.req.param('id')) }));
+  agent.post('/capabilities', async c => c.json({ capability: hive.routing.set(c.get('me'), await requestJson(c.req.raw)) }));
+  agent.post('/tasks/:id/routing', async c => c.json(hive.routing.suggest(c.get('me'), c.req.param('id'), await requestJson(c.req.raw))));
+  agent.post('/tasks/:id/routing-outcome', async c => c.json(hive.routing.recordOutcome(c.get('me'), c.req.param('id'), await requestJson(c.req.raw))));
+  agent.post('/tasks/:id/routing-override', async c => c.json(hive.routing.override(c.get('me'), c.req.param('id'), await requestJson(c.req.raw))));
   agent.get('/handoffs', c => c.json(hive.tasks.handoffs(c.get('me'), c.req.query('beforeTask'))));
   agent.post('/tasks/:id/claim-preview', async c => c.json(hive.tasks.previewClaim(c.get('me'), c.req.param('id'), await requestJson(c.req.raw))));
   agent.get('/tasks/:id/handoff', c => c.json(hive.tasks.handoff(c.get('me'), c.req.param('id'))));

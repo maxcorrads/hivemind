@@ -73,7 +73,8 @@
     "ROOMS.md",
     "TASK-PROTOCOL.md",
     "DELIVERY-PROTOCOL.md",
-    "docs/advisory-claims.md"
+    "docs/advisory-claims.md",
+    "docs/advisory-routing.md"
   ],
   "license": "SEE LICENSE IN LICENSE"
 }

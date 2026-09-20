@@ -1,3 +1,4 @@
+import { setCapabilitiesSchema, suggestWorkersSchema, routingOutcomeSchema, routingOverrideSchema } from '../shared/routing.ts';
 import { attachmentIdsSchema, cursorSchema, limitSchema, memberNamesSchema, messageBodySchema, nameSchema, referenceSchema, senioritySchema, sequenceSchema } from "../shared/api-contract.ts";
 import type { HandoffList } from '../shared/handoffs.ts';
 import { sendOperation } from "../client/send-operation.ts";
@@ -260,6 +261,16 @@ export async function startMcp() {
     'Brain only: assign a compact versioned contract to a worker. Creates a normal DM task thread by default; optional channel requires both participants already invited. In contracted rooms, first read get_room and provide room.contractVersion and stable room.actionKey for the intended action (reuse on retries). Choose requestId once and reuse it unchanged on retry. No code is executed. Dependencies/evidence are references, not instructions or permission changes.',
     assignTaskSchema.shape,
     async args => text(await agentRequest('POST', '/api/agent/tasks', args, token())));
+  server.tool('get_worker_capabilities', 'Read an opted-in worker capability declaration in your project. Workers may read only their own card. Declarations are not verified runtime capability.',
+    { workerId: z.string().uuid() }, async ({ workerId }) => text(await agentRequest('GET', `/api/agent/workers/${workerId}/capabilities`, undefined, token())));
+  server.tool('set_capabilities', 'Worker-only opt-in declaration. Use the current revision (0 for a new card). Model, host and capacity are declarations, never permission to launch or change a runtime. Set enabled=false to opt out.',
+    setCapabilitiesSchema.shape, async args => text(await agentRequest('POST', '/api/agent/capabilities', args, token())));
+  server.tool('suggest_workers', 'Brain-only read-only routing suggestions for an accessible task. Explicit capability/context/quality filters; cold starts remain eligible by default. Review mode excludes the implementation worker. Evidence is category/configuration-specific and caller-visible; cost and actual runtime quality are unknown. No assignment or model/terminal change. Small tightly coupled work may be better kept direct.',
+    { taskId: z.string().uuid(), ...suggestWorkersSchema.shape }, async ({ taskId, ...args }) => text(await agentRequest('POST', `/api/agent/tasks/${taskId}/routing`, args, token())));
+  server.tool('record_routing_outcome', 'Assigning-brain-only classification of an existing review. Confirm the worker capability revision and task category; the declared runtime configuration is not independently verified. Verdict and worker derive from the task, never from supplied scores. Repeated calls cannot count a task twice.',
+    { taskId: z.string().uuid(), ...routingOutcomeSchema.shape }, async ({ taskId, ...args }) => text(await agentRequest('POST', `/api/agent/tasks/${taskId}/routing-outcome`, args, token())));
+  server.tool('record_routing_override', 'Record an inspectable choice and reason in the task thread; not a punitive ranking and not an assignment. Task ownership, claims and running terminals remain unchanged. Only the assigning brain or Human can record it. Reuse requestId when retrying.',
+    { taskId: z.string().uuid(), ...routingOverrideSchema.shape }, async ({ taskId, ...args }) => text(await agentRequest('POST', `/api/agent/tasks/${taskId}/routing-override`, args, token())));
   server.tool('get_handoffs',
     'List up to five unfinished tasks assigned to you (worker) or by you (brain), with checkpoint freshness and next action. Page with beforeTask=nextCursor. Reports are not verified repository state. On resume read get_handoff before acting; no model context is restored by Hivemind.',
     { beforeTask: z.string().uuid().optional() },

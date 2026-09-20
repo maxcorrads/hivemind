@@ -1,3 +1,4 @@
+import { WorkerRouting } from './WorkerRouting.tsx';
 import type { TaskSnapshot } from '../src/shared/tasks.ts';
 import { checkpointFreshness } from '../src/shared/handoffs.ts';
 import { claimState } from '../src/shared/task-claims.ts';
@@ -42,6 +43,7 @@ export function TaskCard({ task }: { task: TaskSnapshot }) {
       <p>Evidence sequences: {task.checkpoint.data.evidenceSeqs.join(', ') || 'none'}</p>
       <small>Checkpoint message #{task.checkpoint.messageSeq}. Older checkpoints remain in thread history and are superseded. Later unsaved work may exist. This is not independently verified state, completion, or a host context reset.</small>
     </details>}
+    <WorkerRouting task={task} />
     {task.result && <details open><summary>Reported result</summary>
       <p>{task.result.summary}</p>
       <p>Artifacts: {task.result.artifacts.join('; ') || 'none'}</p>
