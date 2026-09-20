@@ -57,13 +57,14 @@ test('Human UI answer is applied once, routes to requester and affected workers,
   const answer = f.hive.decisions.answer(f.human, made.decision.id,
     { requestId: 'answer-once', expectedRevision: made.decision.revision, body: 'Choose compatible mode; preserve the legacy payload for this revision.' });
   assert.equal(answer.decision.state, 'answered'); assert.equal(answer.decision.answer?.source, 'hive');
-  assert.deepEqual(new Set(answer.message.recipientIds), new Set([f.brain.agent.id, f.a.agent.id, f.b.agent.id]));
+  assert.ok(answer.message); const answerMessage = answer.message;
+  assert.deepEqual(new Set(answerMessage.recipientIds), new Set([f.brain.agent.id, f.a.agent.id, f.b.agent.id]));
   assert.deepEqual(f.hive.decisions.answer(f.human, made.decision.id,
-    { requestId: 'answer-once', expectedRevision: made.decision.revision, body: 'Choose compatible mode; preserve the legacy payload for this revision.' }).message?.id, answer.message.id);
+    { requestId: 'answer-once', expectedRevision: made.decision.revision, body: 'Choose compatible mode; preserve the legacy payload for this revision.' }).message?.id, answerMessage.id);
   assert.ok(answer.decision.delivery.every(item => item.state === 'pending'));
   const session = f.hive.openInboxSession(f.a.agent, crypto.randomUUID());
   const offered = await f.hive.wait(f.a.agent, 1, undefined, { sessionId: session, compact: true });
-  assert.ok(offered.delivery?.messageSeqs.includes(answer.message.seq));
+  assert.ok(offered.delivery?.messageSeqs.includes(answerMessage.seq));
   assert.equal(f.hive.decisions.get(f.human, made.decision.id).delivery.find(item => item.agentId === f.a.agent.id)?.state, 'offered');
   f.hive.acknowledgeInbox(f.a.agent, session, offered.delivery!.id);
   assert.equal(f.hive.decisions.get(f.human, made.decision.id).delivery.find(item => item.agentId === f.a.agent.id)?.state, 'acknowledged');
