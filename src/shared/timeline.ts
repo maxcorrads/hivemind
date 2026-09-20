@@ -17,6 +17,8 @@ export type TimelineMessageEvent = {
   traceId: string;
   messageId: string;
   seq: number;
+  authorId: string;
+  authorName: string;
   authorRole: string;
   source: 'hive' | 'telegram' | 'bot';
   eventType: string | null;
@@ -54,7 +56,7 @@ export type TimelineView = {
 };
 
 export type RedactedTimelineEvent =
-  | Omit<TimelineMessageEvent, 'authorRole'> & { actor: string }
+  | Omit<TimelineMessageEvent, 'authorId' | 'authorName' | 'authorRole'> & { actor: string }
   | Omit<TimelineDeliveryEvent, 'agentId' | 'agentName' | 'agentRole'> & { actor: string };
 
 export type TimelineExport = {
