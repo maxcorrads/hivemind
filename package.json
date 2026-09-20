@@ -75,7 +75,8 @@
     "TASK-PROTOCOL.md",
     "DELIVERY-PROTOCOL.md",
     "docs/advisory-claims.md",
-    "docs/advisory-routing.md"
+    "docs/advisory-routing.md",
+    "docs/human-decisions.md"
   ],
   "license": "SEE LICENSE IN LICENSE"
 }
