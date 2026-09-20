@@ -35,6 +35,7 @@ function workflowInstructions(workflow, workerCount) {
 function promptFor(fixture, workflow) {
   const tasks = fixture.tasks.map(task => `- ${task.id}: effort=${task.effort}; scope=${task.scope.join(', ')}; dependsOn=${task.dependsOn.join(', ') || 'none'}; clarifications=${task.clarifications ?? 0}; capability=${task.requiredCapability ?? 'none'}`).join('\n');
   const faults = fixture.faults.length ? fixture.faults.map(fault => `- ${fault.type} on ${fault.taskId}`).join('\n') : '- none';
+  const instructions = fixture.instructions?.length ? fixture.instructions.map(line => `- ${line}`).join('\n') : '- none';
   return [
     `Coordination benchmark fixture: ${fixture.id}`,
     fixture.description,
@@ -43,7 +44,7 @@ function promptFor(fixture, workflow) {
     'Preserve the fixture task/dependency shape. Use Hivemind coordination primitives when the workflow calls for them.',
     'Do the task normally with the configured real model/provider. Do not optimize for benchmark counters.',
     'Stop when the acceptance artifact is ready for independent review.',
-    '', 'Tasks:', tasks, '', 'Injected/recovery conditions:', faults,
+    '', 'Tasks:', tasks, '', 'Scenario instructions:', instructions, '', 'Injected/recovery conditions:', faults,
   ].join('\n');
 }
 

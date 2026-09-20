@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "reviewer-disagreement",
+  "kind": "coupled",
+  "description": "Two independent reviewers inspect the same implementation before a reconciliation step must resolve conflicting findings.",
+  "instructions": [
+    "Keep reviewer-a and reviewer-b isolated from each other's findings until both reviews are submitted.",
+    "Seed one deterministic disputed finding: reviewer-a treats the boundary case as a defect while reviewer-b initially accepts it; reconciliation must resolve the evidence rather than majority-vote."
+  ],
+  "exercises": ["structured_tasks", "worker_routing", "claims_dependencies"],
+  "promptVersion": "coordination-fixture-v1",
+  "modelVersion": "fake-agent-v1",
+  "workers": [
+    {"id": "worker-a", "capabilities": ["implementation", "review"]},
+    {"id": "worker-b", "capabilities": ["review", "tests"]},
+    {"id": "worker-c", "capabilities": ["review", "tests"]}
+  ],
+  "tasks": [
+    {"id": "implement", "effort": 7, "scope": ["src/review-target"], "dependsOn": [], "clarifications": 0, "requiredCapability": "implementation"},
+    {"id": "review-a", "effort": 4, "scope": ["reviews/reviewer-a"], "dependsOn": ["implement"], "clarifications": 1, "requiredCapability": "review"},
+    {"id": "review-b", "effort": 4, "scope": ["reviews/reviewer-b"], "dependsOn": ["implement"], "clarifications": 1, "requiredCapability": "review"},
+    {"id": "reconcile", "effort": 5, "scope": ["src/review-target", "tests/review-target"], "dependsOn": ["review-a", "review-b"], "clarifications": 2, "requiredCapability": "tests"}
+  ],
+  "faults": [
+    {"type": "unsupported_completion", "taskId": "review-b", "penaltyTicks": 2}
+  ],
+  "budgets": {"maxVirtualTicks": 80, "maxCommunicationBytes": 18000}
+}

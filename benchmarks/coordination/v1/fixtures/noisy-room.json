@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "noisy-room",
+  "kind": "communication",
+  "description": "A shared coordination room carries relevant peer questions mixed with deterministic unrelated observations.",
+  "instructions": [
+    "Before the first peer clarification, inject 12 unrelated room observations labelled noise-01 through noise-12.",
+    "Noise must stay in the shared room and must not be converted into direct task assignments or DMs.",
+    "Agents should ignore unrelated observations while preserving the relevant task/clarification sequence."
+  ],
+  "exercises": ["structured_tasks", "collaboration_rooms", "worker_routing"],
+  "promptVersion": "coordination-fixture-v1",
+  "modelVersion": "fake-agent-v1",
+  "workers": [
+    {"id": "worker-a", "capabilities": ["api", "review"]},
+    {"id": "worker-b", "capabilities": ["ui", "review"]},
+    {"id": "worker-c", "capabilities": ["tests", "review"]}
+  ],
+  "tasks": [
+    {"id": "api", "effort": 6, "scope": ["src/noisy/api"], "dependsOn": [], "clarifications": 3, "requiredCapability": "api"},
+    {"id": "ui", "effort": 6, "scope": ["web/noisy/ui"], "dependsOn": [], "clarifications": 3, "requiredCapability": "ui"},
+    {"id": "verify", "effort": 5, "scope": ["tests/noisy"], "dependsOn": ["api", "ui"], "clarifications": 2, "requiredCapability": "tests"}
+  ],
+  "faults": [],
+  "budgets": {"maxVirtualTicks": 70, "maxCommunicationBytes": 22000}
+}
