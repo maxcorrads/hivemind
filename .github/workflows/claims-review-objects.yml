@@ -1,0 +1,70 @@
+name: Verify advisory claim review objects
+
+# Temporary tooling only; never merge. No main, release or tag updates.
+on:
+  push:
+    branches: [maintenance/remaining-issues-workspace-20260920]
+    paths: [.github/workflows/claims-review-objects.yml]
+permissions:
+  contents: read
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Read immutable review input without stored credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: f56f912663ba63a336eb6722d97afcfc9d1468ca
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify input checksum and complete product tree
+        id: result
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATCH_FILE="$RUNNER_TEMP/claims.patch"
+          mkdir -p "$RUNNER_TEMP/claim-receipt"
+          cp .github/review-inputs/claims-final.* "$RUNNER_TEMP/claim-receipt/"
+          python3 - <<'PY'
+          import base64, gzip, hashlib, os, pathlib
+          root = pathlib.Path('.github/review-inputs')
+          s = ''.join((root / ('claims-final.' + str(i))).read_text().strip() for i in range(1, 10))
+          # Restore transport transcription errors; the expected checksum and
+          # complete Git tree below remain the authority, not these edits.
+          s = s.replace('lyXuiLL+zu', 'lyXuiL+zu').replace('wbuGJJc', 'wbuGJc').replace('cvrr/dBoFr', 'cvrr/dAFr')
+          patch = gzip.decompress(base64.b64decode(s, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == '6052785ebdd304693e445326f6b25fae472f3ea4dbdace0c9ca2ae117ad22b5d'
+          pathlib.Path(os.environ['PATCH_FILE']).write_bytes(patch)
+          PY
+          base=30b8998300e794bb62c09ad15a03db2e6f2f0d4f
+          git checkout --detach "$base"
+          git apply --index --check "$PATCH_FILE"
+          git apply --index "$PATCH_FILE"
+          tree=$(git write-tree)
+          test "$tree" = 5dcd5682aad36fbf81a3b081eb2b118442518dba
+          git diff --cached --stat
+          git diff --exit-code "$base" "$tree" -- .github/workflows package-lock.json
+          commit=$(printf '%s\n' 'feat(tasks): add advisory claims and accepted prerequisite gates' | git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit-tree "$tree" -p "$base")
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          printf '{"commit":"%s","tree":"%s"}\n' "$commit" "$tree" > "$RUNNER_TEMP/claim-receipt/result.json"
+      - name: Export only a new non-product review ref
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ steps.result.outputs.commit }}
+        run: |
+          set -euo pipefail
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w 0)
+          echo "::add-mask::$auth"
+          git -c core.hooksPath=/dev/null -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin "$COMMIT:refs/heads/review/issue30-candidate-20260920"
+      - name: Retain exact input and verification receipt
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: issue30-review-receipt
+          path: ${{ runner.temp }}/claim-receipt/
+          retention-days: 1
+          if-no-files-found: error
