@@ -29,7 +29,9 @@
     "browser:server": "npm run build && vite preview --config tests/browser/preview.config.ts",
     "test:unit": "node scripts/run-tests.mjs --suite=unit",
     "test:integration": "node scripts/run-tests.mjs --suite=integration",
-    "check:all": "node scripts/check-all.mjs"
+    "check:all": "node scripts/check-all.mjs",
+    "replay:timeline": "node --import tsx scripts/replay-timeline.mjs",
+    "benchmark:timeline": "node --import tsx scripts/benchmark-timeline.mjs"
   },
   "engines": {
     "node": ">=22.13.0"
@@ -76,7 +78,8 @@
     "DELIVERY-PROTOCOL.md",
     "docs/advisory-claims.md",
     "docs/advisory-routing.md",
-    "docs/human-decisions.md"
+    "docs/human-decisions.md",
+    "docs/coordination-timeline.md"
   ],
   "license": "SEE LICENSE IN LICENSE"
 }
