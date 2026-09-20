@@ -1,0 +1,29 @@
+{
+  "runtime": "v22.13.0",
+  "platform": "linux x64",
+  "cpu": "AMD EPYC 9V74 80-Core Processor",
+  "agents": 4,
+  "messagesPerAgent": 1200,
+  "bodyCharacters": 4000,
+  "responses": 372,
+  "elapsedMs": 8103.12,
+  "maxHttpBytes": 57779,
+  "maxWireBytes": 61048,
+  "maxScannedRows": 256,
+  "maxHydratedMessages": 14,
+  "waitLatencyMs": {
+    "p50": 56.03,
+    "p95": 67.18,
+    "p99": 75.91
+  },
+  "eventLoopDelayMs": {
+    "mean": 26.57,
+    "p99": 41.91,
+    "max": 51.09
+  },
+  "verification": "All fixture sequences received once and in order. Absolute measurements; no speedup claim.",
+  "productTree": "fa8b06ff8a6c935b5b1b8d5541c449a40083bf14",
+  "sourceBaseCommit": "0812c6d8555063585190c18acf6fc098a88fec90",
+  "scriptChange": "Adds p95 reporting only",
+  "timingScope": "Local HTTP on one CPU/container, 4 concurrent brain clients, synthetic 4000-character messages; includes server, HTTP and client scheduling, not provider latency or CPU-isolated capacity"
+}
