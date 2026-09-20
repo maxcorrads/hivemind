@@ -1,5 +1,6 @@
 import { RoutingStore } from './routing.ts';
 import { DecisionStore } from './decisions.ts';
+import { TimelineStore } from './timeline.ts';
 import { UploadBudget, type UploadLimits } from "./upload-budget.ts";
 import { joinInputSchema, validated, waitDurationSchema, cursorSchema, limitSchema, channelInputSchema, attachmentIdsSchema, memberNamesSchema } from "../shared/api-contract.ts";
 import { SendRequests } from "./send-requests.ts";
@@ -150,6 +151,7 @@ export class Hive {
   readonly rooms!: RoomStore;
   readonly notifications!: NotificationStore;
   readonly decisions!: DecisionStore;
+  readonly timeline!: TimelineStore;
   private waiters = new Map<string, Waiter>();
   private telegramOrigin = new Set<string>();
   readonly uploads!: UploadBudget;
@@ -197,6 +199,7 @@ export class Hive {
       this.rooms = new RoomStore(this);
       this.notifications = new NotificationStore(this);
       this.routing = new RoutingStore(this);
+      this.timeline = new TimelineStore(this);
       this.decisions = new DecisionStore(this, work => this.transaction(work));
       this.inbox = new InboxDeliveryStore(this.db);
       this.inboxReader = new InboxReader(this.db, this.inbox, this.notifications, options.routineBatchMs ?? ROUTINE_BATCH_MS);
@@ -1238,6 +1241,7 @@ export class Hive {
       this.db.prepare(`INSERT INTO bot_events (message_id, bot_id, channel_id, thread_id, event_id, metadata, payload_hash)
         VALUES (?, ?, ?, ?, ?, ?, ?)`)
         .run(messageId, actor.id, ch.id, input.threadId ?? "", input.eventId, JSON.stringify(event), payloadHash);
+      this.timeline.recordMessage(messageId, { source: 'bot' });
       this.bindAttachments(messageId, input.attachmentIds);
       if (input.threadId) this.db.prepare("INSERT OR IGNORE INTO threads (id, channel_id, status) VALUES (?, ?, 'open')")
         .run(input.threadId, ch.id);
@@ -1262,6 +1266,8 @@ export class Hive {
       eventType?: Message["eventType"];
       control?: ControlAction | null;
       source?: "hive" | "telegram";
+      traceId?: string;
+      causeMessageId?: string;
       attachmentIds?: string[];
       recipients?: string[];
     },
@@ -1309,6 +1315,7 @@ export class Hive {
         | undefined;
       if (!root || root.channel_id !== ch.id) throw new HiveError(400, "Thread not in this channel");
     }
+    const trace = this.timeline.prepare(actor, ch, { traceId: input.traceId, causeMessageId: input.causeMessageId }, input.threadId ?? null);
     const id = crypto.randomUUID();
     const t = now();
     const kind = input.kind ?? "chat";
@@ -1327,7 +1334,7 @@ export class Hive {
     return this.transaction(() => {
       if (input.requestId !== undefined) return this.sendRequests.run(actor.id, ch.projectId, input.requestId,
         [ch.id, body, input.threadId ?? null, kind, input.control ?? null, input.source ?? "hive",
-          input.eventType ?? null, attachmentIds, [...recipients].sort()],
+          input.eventType ?? null, attachmentIds, [...recipients].sort(), trace.traceId, trace.causeMessageId],
         () => this.postMessage(actor, { ...input, requestId: undefined }, persistReceipt), id => this.getMessageById(id));
       if (attachmentIds.length) this.validateAttachments(actor, attachmentIds);
       if (actor.role === "human" && !ch.memberIds.includes(actor.id)) {
@@ -1339,6 +1346,7 @@ export class Hive {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(id, ch.id, input.threadId ?? null, actor.id, body, kind,
         input.control ?? null, JSON.stringify(mentions), t, input.eventType ?? null, JSON.stringify(recipients));
+      this.timeline.recordMessage(id, { source: input.source ?? 'hive', traceId: trace.traceId, causeMessageId: trace.causeMessageId });
       if (input.threadId) {
         this.db.prepare(
           `INSERT OR IGNORE INTO threads (id, channel_id, status) VALUES (?, ?, 'open')`,
@@ -1361,7 +1369,7 @@ export class Hive {
   }
 
   fromTelegram(messageId: string): boolean {
-    return this.telegramOrigin.has(messageId);
+    return this.telegramOrigin.has(messageId) || this.timeline.source(messageId) === 'telegram';
   }
 
   postSystem(channelId: string, body: string) {
@@ -1397,10 +1405,16 @@ export class Hive {
     const authors = new Map<string, Author>();
     const botEvents = new Map<string, BotEvent>();
     const taskEvents = new Map<string, TaskEnvelope>();
+    const sources = new Map<string, Message["source"]>();
     for (const ids of batches(rows.map(row => row.id))) {
       const found = this.db.prepare(`SELECT message_id, envelope FROM task_events WHERE message_id IN (${ids.map(() => "?").join(",")})`)
         .all(...ids) as Array<{ message_id: string; envelope: string }>;
       for (const event of found) taskEvents.set(event.message_id, JSON.parse(event.envelope) as TaskEnvelope);
+    }
+    for (const ids of batches(rows.map(row => row.id))) {
+      const found = this.db.prepare(`SELECT message_id, source FROM message_provenance WHERE message_id IN (${ids.map(() => "?").join(",")})`)
+        .all(...ids) as Array<{ message_id: string; source: "hive" | "telegram" | "bot" }>;
+      for (const item of found) if (item.source !== "hive") sources.set(item.message_id, item.source);
     }
     for (const ids of batches([...new Set(rows.map((row) => row.author_id))])) {
       const found = this.db.prepare(
@@ -1430,6 +1444,7 @@ export class Hive {
       mentions: JSON.parse(row.mentions) as string[], createdAt: row.created_at,
       ...(row.recipients && row.recipients !== '[]' ? { recipientIds: JSON.parse(row.recipients) as string[] } : {}),
       ...(taskEvents.has(row.id) ? { taskEvent: taskEvents.get(row.id)! } : {}),
+      ...(sources.has(row.id) ? { source: sources.get(row.id)! } : {}),
       ...(botEvents.has(row.id) ? { source: "bot" as const, botEvent: botEvents.get(row.id)! } : {}),
     }));
   }
@@ -1813,6 +1828,7 @@ export class Hive {
     let changed: string[] = [];
     const result = this.inbox.acknowledge(actor.id, sessionId, deliveryId,
       (seqs, at) => { changed = this.tasks.recordReceipt(actor.id, seqs, at); });
+    this.timeline.recordAcknowledgement(actor, deliveryId, result.acknowledgedAt);
     for (const id of changed) this.bus.emit('task', this.tasks.get(this.getAgent(HUMAN_ID), id));
     this.emitQueued(actor.id);
     return result;
@@ -1833,7 +1849,9 @@ export class Hive {
   }
 
   private takeUnseen(actor: Agent, sessionId: string, compact: boolean, scanLimit: number): WaitResult {
-    const result = this.inboxReader.take(this.getAgent(actor.id), sessionId, compact, scanLimit);
+    const current = this.getAgent(actor.id);
+    const result = this.inboxReader.take(current, sessionId, compact, scanLimit);
+    if (result.delivery) this.timeline.recordOffer(current, result.delivery);
     this.emitQueued(actor.id, result.page!.remaining);
     return result;
   }
