@@ -2,8 +2,9 @@ import { WorkerRouting } from './WorkerRouting.tsx';
 import type { TaskSnapshot } from '../src/shared/tasks.ts';
 import { checkpointFreshness } from '../src/shared/handoffs.ts';
 import { claimState } from '../src/shared/task-claims.ts';
+import type { DecisionView } from '../src/shared/decisions.ts';
 
-export function TaskCard({ task }: { task: TaskSnapshot }) {
+export function TaskCard({ task, decisions = [] }: { task: TaskSnapshot; decisions?: DecisionView[] }) {
   return <section className="task-card" aria-label="Structured task">
     <header><strong>{task.state.replaceAll('_', ' ')}</strong><small>Revision {task.revision} · contract {task.contractVersion}</small></header>
     <p>{task.contract.objective}</p>
@@ -42,6 +43,13 @@ export function TaskCard({ task }: { task: TaskSnapshot }) {
       <p>Reported checks: {task.checkpoint.data.checks.map(check => `${check.name}: ${check.outcome}`).join('; ') || 'none run/reported'}</p>
       <p>Evidence sequences: {task.checkpoint.data.evidenceSeqs.join(', ') || 'none'}</p>
       <small>Checkpoint message #{task.checkpoint.messageSeq}. Older checkpoints remain in thread history and are superseded. Later unsaved work may exist. This is not independently verified state, completion, or a host context reset.</small>
+    </details>}
+    {decisions.length > 0 && <details open className="task-decisions"><summary>Human decisions · {decisions.length}</summary>
+      {decisions.map(decision => <p key={decision.id}>
+        <strong>{decision.state.replaceAll('_', ' ')}</strong> · {decision.question}
+        {decision.answer ? ' — Human: ' + decision.answer.body : ''}
+      </p>)}
+      <small>Decision requests are revision-fenced. Expired or superseded recommendations never auto-apply.</small>
     </details>}
     <WorkerRouting task={task} />
     {task.result && <details open><summary>Reported result</summary>
