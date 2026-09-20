@@ -187,7 +187,7 @@ export class DecisionStore {
     return [...new Set([snapshot.requesterName, ...snapshot.affectedWorkers.map(worker => worker.name)])];
   }
 
-  captureHumanReply(actor: Agent, message: Message): DecisionView | null {
+  captureHumanReply(actor: Agent, message: Message, source: 'hive' | 'telegram' = 'hive'): DecisionView | null {
     if (actor.role !== 'human' || !message.threadId || !this.has(message.threadId)) return null;
     const snapshot = this.snapshot(message.threadId);
     if (snapshot.channelId !== message.channelId) return null;
@@ -195,7 +195,7 @@ export class DecisionStore {
     if (projection.state !== 'awaiting_input') return this.view(actor, snapshot);
     snapshot.storedState = 'answered'; snapshot.revision += 1; snapshot.updatedAt = message.createdAt;
     snapshot.answer = { messageId: message.id, seq: message.seq, body: message.body, at: message.createdAt,
-      source: message.source === 'telegram' ? 'telegram' : 'hive' };
+      source };
     this.save(snapshot);
     return this.view(actor, snapshot);
   }
