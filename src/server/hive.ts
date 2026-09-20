@@ -1349,7 +1349,7 @@ export class Hive {
       persistReceipt?.(this.getMessageById(id));
       this.touch(actor.id, true);
       const msg = this.getMessageById(id);
-      const decision = actor.role === 'human' ? this.decisions?.captureHumanReply(actor, msg) ?? null : null;
+      const decision = actor.role === 'human' ? this.decisions?.captureHumanReply(actor, msg, input.source ?? 'hive') ?? null : null;
       this.afterCommit(() => {
         if (input.source === "telegram") this.telegramOrigin.add(msg.id);
         this.bus.emit("message", msg);
