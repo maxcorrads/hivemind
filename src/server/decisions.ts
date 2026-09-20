@@ -164,6 +164,7 @@ export class DecisionStore {
       }
       const root = this.hive.postMessage(actor, {
         channel: task.channelId, body: decisionBody(input, actor.name), eventType: 'question', recipients: ['Human'],
+        traceId: task.id, causeMessageId: task.id,
       });
       const now = Date.now();
       created = {

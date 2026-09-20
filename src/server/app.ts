@@ -295,6 +295,8 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       requestId: body.requestId,
       threadId: body.threadId ?? null,
       eventType: body.eventType,
+      traceId: body.traceId,
+      causeMessageId: body.causeMessageId,
       recipients: body.recipients,
       attachmentIds: Array.isArray(body.attachmentIds) ? body.attachmentIds.map(String) : undefined,
     });
@@ -494,6 +496,8 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       requestId: body.requestId,
       threadId: body.threadId ?? null,
       eventType: body.eventType,
+      traceId: body.traceId,
+      causeMessageId: body.causeMessageId,
       recipients: body.recipients,
       attachmentIds: Array.isArray(body.attachmentIds) ? body.attachmentIds.map(String) : undefined,
     });
