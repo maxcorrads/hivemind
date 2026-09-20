@@ -1,0 +1,30 @@
+name: Issue completion snapshot
+on:
+  push:
+    branches: [maintenance/issue-completion-snapshot-20260920]
+    paths: [.github/workflows/issue-completion-snapshot.yml]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 37344ddc3139ebf8e43d656b01c450f2c28df316
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Archive committed sources only
+        run: |
+          mkdir -p /tmp/issue-completion
+          git bundle create /tmp/issue-completion/repository.bundle --all
+          git archive --format=tar.gz HEAD > /tmp/issue-completion/source.tar.gz
+          git rev-parse HEAD HEAD^{tree} > /tmp/issue-completion/revision.txt
+          cd /tmp/issue-completion && sha256sum repository.bundle source.tar.gz > SHA256SUMS
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: issue-completion-baseline
+          path: /tmp/issue-completion/
+          retention-days: 1
+          if-no-files-found: error
