@@ -363,6 +363,8 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
 
   ui.post('/tasks/:id/routing', async c => c.json(hive.routing.suggest(hive.getAgent('human'), c.req.param('id'), await requestJson(c.req.raw))));
   ui.post('/tasks/:id/routing-override', async c => c.json(hive.routing.override(hive.getAgent('human'), c.req.param('id'), await requestJson(c.req.raw))));
+  ui.get('/tasks/:id/timeline', c => c.json({ timeline: hive.timeline.traceForTask(hive.getAgent('human'), c.req.param('id')) }));
+  ui.get('/tasks/:id/timeline/export', c => c.json({ fixture: hive.timeline.exportTask(hive.getAgent('human'), c.req.param('id')) }));
   ui.get('/decisions', c => {
     const human = hive.getAgent('human');
     const project = hive.getProjectBySlug(String(c.req.query('project') ?? ''));
@@ -531,6 +533,8 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   agent.get('/handoffs', c => c.json(hive.tasks.handoffs(c.get('me'), c.req.query('beforeTask'))));
   agent.post('/tasks/:id/claim-preview', async c => c.json(hive.tasks.previewClaim(c.get('me'), c.req.param('id'), await requestJson(c.req.raw))));
   agent.get('/tasks/:id/handoff', c => c.json(hive.tasks.handoff(c.get('me'), c.req.param('id'))));
+  agent.get('/tasks/:id/timeline', c => c.json({ timeline: hive.timeline.traceForTask(c.get('me'), c.req.param('id')) }));
+  agent.get('/tasks/:id/timeline/export', c => c.json({ fixture: hive.timeline.exportTask(c.get('me'), c.req.param('id')) }));
   agent.get('/tasks/:id', c => c.json({ task: hive.tasks.get(c.get('me'), c.req.param('id')) }));
   agent.post('/tasks/:id/events', async c => {
     const body = await requestJson(c.req.raw);
