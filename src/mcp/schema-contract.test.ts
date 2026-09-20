@@ -91,6 +91,16 @@ test("production MCP schemas and calls retain their observable contracts", { tim
         channel: "string", requestId: "string", expectedRevision: "integer", humanInstructionSeq: "integer", action: "union",
       }],
       assign_task: [["requestId", "worker", "contract"], { requestId: "string", worker: "string", channel: "string", contract: "object", room: "object" }],
+      request_human_decision: [["requestId", "taskId", "expectedTaskRevision", "question", "options", "recommendation", "evidenceSeqs", "artifacts", "affectedWorkers", "relatedDecisionIds"], {
+        requestId: "string", taskId: "string", expectedTaskRevision: "integer", question: "string",
+        options: "array-object", recommendation: "union", evidenceSeqs: "array-integer", artifacts: "array",
+        affectedWorkers: "array", requestedByAt: "integer", relatedDecisionIds: "array", supersedesDecisionId: "string",
+      }],
+      get_decision: [["decisionId"], { decisionId: "string" }],
+      get_task_decisions: [["taskId"], { taskId: "string" }],
+      decision_event: [["decisionId", "requestId", "expectedRevision", "action"], {
+        decisionId: "string", requestId: "string", expectedRevision: "integer", action: "object",
+      }],
       get_task: [["taskId"], { taskId: "string" }],
       get_handoff: [["taskId"], { taskId: "string" }],
       get_handoffs: [[], { beforeTask: "string" }],
@@ -107,7 +117,10 @@ test("production MCP schemas and calls retain their observable contracts", { tim
       for (const [name, type] of Object.entries(fields)) {
         const property = properties[name] as Record<string, unknown>;
         if (type === "union") {
-          assert.ok(Array.isArray(property.anyOf) || Array.isArray(property.oneOf), `${tool.name}.${name} lost its action variants`);
+          assert.ok(Array.isArray(property.anyOf) || Array.isArray(property.oneOf), `${tool.name}.${name} lost its variants`);
+        } else if (type.startsWith("array-")) {
+          assert.equal(property.type, "array", `${tool.name}.${name}`);
+          assert.equal((property.items as Record<string, unknown>).type, type.slice("array-".length), `${tool.name}.${name} items`);
         } else {
           assert.equal(property.type, type, `${tool.name}.${name}`);
         }
@@ -185,6 +198,10 @@ test("production MCP schemas and calls retain their observable contracts", { tim
     ["get_room", { channel: "general", beforeRevision: 0 }],
     ["room_event", { channel: "general", requestId: "r", expectedRevision: 0, action: { type: "configure" } }],
     ["assign_task", { requestId: "r", worker: "Nobody", contract: {} }],
+    ["request_human_decision", {}],
+    ["get_decision", { decisionId: "invalid" }],
+    ["get_task_decisions", { taskId: "invalid" }],
+    ["decision_event", { decisionId: "invalid", requestId: "r", expectedRevision: 0, action: { type: "withdraw", reason: "x" } }],
     ["get_task", { taskId: "invalid" }],
     ["task_event", { taskId: "00000000-0000-4000-8000-000000000001", requestId: "r", expectedRevision: 0, action: { type: "accept" } }],
     ["send", { channel: "general", body: "x", recipients: [] }],
