@@ -34,7 +34,7 @@ test('mounted decision queue exposes impact, uncertainty and sends an explicit H
   const initial = decision(), page: DecisionPage = { items: [initial], awaiting: 1, warning: 'Explicit requests only' };
   t.mock.method(api, 'decisions', async () => page);
   const answers: Parameters<typeof api.answerDecision>[1][] = [];
-  t.mock.method(api, 'answerDecision', async (_id, body) => {
+  t.mock.method(api, 'answerDecision', async (_id: string, body: Parameters<typeof api.answerDecision>[1]) => {
     answers.push(body);
     return { decision: { ...initial, state: 'answered', storedState: 'answered', revision: 2,
       answer: { messageId: 'message', seq: 44, body: body.body, at: 2, source: 'hive' },
