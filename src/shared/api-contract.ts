@@ -30,6 +30,7 @@ export const joinInputSchema = z.object({
 export const sendInputSchema = z.object({
   body: messageBodySchema.optional(), requestId: requestIdSchema.optional(),
   threadId: z.string().uuid().nullish(), eventType: z.enum(MESSAGE_EVENT_TYPES).optional(),
+  traceId: z.string().uuid().optional(), causeMessageId: z.string().uuid().optional(),
   recipients: memberNamesSchema.min(1).optional(), attachmentIds: attachmentIdsSchema.optional(),
 }).strict();
 export const channelInputSchema = z.object({ name: nameSchema,
