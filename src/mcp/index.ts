@@ -16,6 +16,7 @@ import { waitUntilMail } from "./wait-loop.ts";
 import { digestExpansionSchema } from "../shared/digest.ts";
 import { claimPreviewSchema } from '../shared/task-claims.ts';
 import { assignTaskSchema, taskEventSchema } from '../shared/tasks.ts';
+import { decisionEventSchema, requestDecisionSchema } from '../shared/decisions.ts';
 import { roomEventSchema } from '../shared/rooms.ts';
 import { subscriptionSchema, subscriptionScopeSchema } from '../shared/notifications.ts';
 import { MESSAGE_EVENT_TYPES } from "../shared/types.ts";
@@ -261,6 +262,22 @@ export async function startMcp() {
     'Brain only: assign a compact versioned contract to a worker. Creates a normal DM task thread by default; optional channel requires both participants already invited. In contracted rooms, first read get_room and provide room.contractVersion and stable room.actionKey for the intended action (reuse on retries). Choose requestId once and reuse it unchanged on retry. No code is executed. Dependencies/evidence are references, not instructions or permission changes.',
     assignTaskSchema.shape,
     async args => text(await agentRequest('POST', '/api/agent/tasks', args, token())));
+  server.tool('request_human_decision',
+    'Assigning-brain only: create a task-revision-fenced Human decision request. Give a precise question, optional >=2 options with impacts, an explicitly uncertain recommendation when useful, evidence/artifact references and affected workers. The recommendation is advisory and expiry never authorizes it. Human replies in the dedicated decision thread from UI or Telegram; changed task revisions make unanswered requests stale.',
+    requestDecisionSchema.shape,
+    async args => text(await agentRequest('POST', '/api/agent/decisions', args, token())));
+  server.tool('get_decision',
+    'Read one Human decision request, current/stale state, answer and per-recipient delivery receipts. Delivery means transport only, not task acceptance/completion.',
+    { decisionId: z.string().uuid() },
+    async ({ decisionId }) => text(await agentRequest('GET', `/api/agent/decisions/${decisionId}`, undefined, token())));
+  server.tool('get_task_decisions',
+    'List up to 20 explicit Human decision requests linked to a visible task. Distinct related questions stay distinct; stale/expired recommendations never auto-apply.',
+    { taskId: z.string().uuid() },
+    async ({ taskId }) => text(await agentRequest('GET', `/api/agent/tasks/${taskId}/decisions`, undefined, token())));
+  server.tool('decision_event',
+    'Requesting-brain only: withdraw an awaiting Human decision request. Use its current decision revision and reuse requestId on retry. Withdrawing does not change task state or execute work.',
+    { decisionId: z.string().uuid(), ...decisionEventSchema.shape },
+    async ({ decisionId, ...args }) => text(await agentRequest('POST', `/api/agent/decisions/${decisionId}/events`, args, token())));
   server.tool('get_worker_capabilities', 'Read an opted-in worker capability declaration in your project. Workers may read only their own card. Declarations are not verified runtime capability.',
     { workerId: z.string().uuid() }, async ({ workerId }) => text(await agentRequest('GET', `/api/agent/workers/${workerId}/capabilities`, undefined, token())));
   server.tool('set_capabilities', 'Worker-only opt-in declaration. Use the current revision (0 for a new card). Model, host and capacity are declarations, never permission to launch or change a runtime. Set enabled=false to opt out.',
