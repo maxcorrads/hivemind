@@ -252,6 +252,8 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       // This synchronous snapshot includes replies, not just visible root rows.
       snapshotSeq: hive.latestSeq(ch.id),
       task: threadId && hive.tasks.has(threadId) ? hive.tasks.get(human, threadId) : undefined,
+      decision: threadId && hive.decisions.has(threadId) ? hive.decisions.get(human, threadId) : undefined,
+      decisions: threadId && hive.tasks.has(threadId) ? hive.decisions.forTask(human, threadId) : undefined,
     });
   });
   ui.post("/channels", async (c) => {
@@ -359,6 +361,13 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
 
   ui.post('/tasks/:id/routing', async c => c.json(hive.routing.suggest(hive.getAgent('human'), c.req.param('id'), await requestJson(c.req.raw))));
   ui.post('/tasks/:id/routing-override', async c => c.json(hive.routing.override(hive.getAgent('human'), c.req.param('id'), await requestJson(c.req.raw))));
+  ui.get('/decisions', c => {
+    const human = hive.getAgent('human');
+    const project = hive.getProjectBySlug(String(c.req.query('project') ?? ''));
+    return c.json(hive.decisions.listHuman(human, project.id, c.req.query('includeClosed') !== '0'));
+  });
+  ui.get('/decisions/:id', c => c.json({ decision: hive.decisions.get(hive.getAgent('human'), c.req.param('id')) }));
+  ui.post('/decisions/:id/answer', async c => c.json(hive.decisions.answer(hive.getAgent('human'), c.req.param('id'), await requestJson(c.req.raw))));
 
   const agent = new Hono();
   agent.use("*", async (c, next) => {
@@ -502,6 +511,10 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const body = await requestJson(c.req.raw);
     return c.json(hive.tasks.assign(c.get('me'), body));
   });
+  agent.post('/decisions', async c => c.json(hive.decisions.create(c.get('me'), await requestJson(c.req.raw))));
+  agent.get('/decisions/:id', c => c.json({ decision: hive.decisions.get(c.get('me'), c.req.param('id')) }));
+  agent.get('/tasks/:id/decisions', c => c.json({ decisions: hive.decisions.forTask(c.get('me'), c.req.param('id')) }));
+  agent.post('/decisions/:id/events', async c => c.json(hive.decisions.event(c.get('me'), c.req.param('id'), await requestJson(c.req.raw))));
   agent.get('/channels/:id/room', c => c.json(hive.rooms.view(c.get('me'), c.req.param('id'), c.req.query('beforeTask'))));
   agent.get('/channels/:id/room/history', c => c.json({ history: hive.rooms.history(c.get('me'), c.req.param('id'), Number(c.req.query('before') ?? Number.MAX_SAFE_INTEGER)) }));
   agent.post('/channels/:id/room', async c => c.json(hive.rooms.event(c.get('me'), c.req.param('id'),
