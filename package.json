@@ -72,7 +72,8 @@
     "NOTIFICATIONS.md",
     "ROOMS.md",
     "TASK-PROTOCOL.md",
-    "DELIVERY-PROTOCOL.md"
+    "DELIVERY-PROTOCOL.md",
+    "docs/advisory-claims.md"
   ],
   "license": "SEE LICENSE IN LICENSE"
 }

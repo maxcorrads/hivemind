@@ -4,6 +4,7 @@ import { API_JSON_BYTES, channelInputSchema, cursorSchema, integerArgument,
   joinInputSchema, memberNamesSchema, nameSchema, reactionInputSchema, referenceSchema, sendInputSchema,
   sequenceSchema, validated, waitDurationSchema } from "../shared/api-contract.ts";
 import { subscriptionSchema, subscriptionScopeSchema } from "../shared/notifications.ts";
+import { claimPreviewSchema } from '../shared/task-claims.ts';
 import { assignTaskSchema, taskEventSchema } from "../shared/tasks.ts";
 import { roomEventSchema, sourceLinkSchema, sourceReportSchema } from "../shared/rooms.ts";
 import { HiveError } from "../shared/types.ts";
@@ -48,6 +49,7 @@ function schemaFor(path: string, method: string): z.ZodType | undefined {
   if (path.endsWith('/messages/expand')) return expand;
   if (path.endsWith('/subscriptions')) return subscriptionSchema;
   if (path.endsWith('/subscriptions/reset')) return subscriptionScopeSchema;
+  if (/\/tasks\/[^/]+\/claim-preview$/.test(path)) return claimPreviewSchema;
   if (path.endsWith('/tasks')) return assignTaskSchema;
   if (/\/tasks\/[^/]+\/events$/.test(path)) return taskEventSchema;
   if (/\/channels\/[^/]+\/room$/.test(path)) return roomEventSchema;

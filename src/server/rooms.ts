@@ -245,7 +245,7 @@ export class RoomStore {
     // Installing a contract requires all earlier work to be finished. It must
     // remain historical instead of being revived outside the room's task gates.
     if (!info) throw new HiveError(409, 'Tasks predating this room contract stay historical; assign a new room task with a new actionKey');
-    if (['block', 'reject', 'checkpoint'].includes(action)) return;
+    if (['block', 'reject', 'checkpoint', 'release_claim'].includes(action)) return;
     if (info.status !== 'active') throw new HiveError(409, `Room task is ${info.status}; read get_room and reconcile or confirm stopped`);
     if (actor.role === 'worker' && !info.acknowledged) throw new HiveError(409, 'Acknowledge the current room contract before continuing the task');
     if (action === 'revise' && room.state === 'archived') throw new HiveError(409, 'Cannot revise work in an archived room');

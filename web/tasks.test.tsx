@@ -227,3 +227,14 @@ test('latest checkpoint renders next action, age and stale-contract warnings wit
   assert.equal(reconcileTask(changed, current)?.revision, 6);
   assert.equal(reconcileTask(current, changed)?.revision, 6);
 });
+
+
+test('advisory task UI labels expiry and inaccessible prerequisites without granting execution', () => {
+  const html = renderToStaticMarkup(<TaskCard task={{ ...task, claim: {
+    version: 1, coordinatorId: 'b', coordinatorName: '<script>claim</script>', workerId: 'w', contractVersion: 1,
+    state: 'held', paths: ['src/parser'], overlapAcknowledgements: [], expiresAt: 1, updatedAt: 0,
+  }, coordination: { claim: 'uncertain', dependencies: [{ taskId: 'unavailable-task', status: 'unavailable' }], overlaps: [], truncated: false } }} />);
+  assert.ok(html.includes('uncertain')); assert.ok(html.includes('unavailable'));
+  assert.ok(html.includes('not a filesystem lock')); assert.ok(html.includes('No execution or reassignment'));
+  assert.ok(html.includes('&lt;script&gt;')); assert.ok(!html.includes('<script>'));
+});

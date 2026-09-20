@@ -36,6 +36,7 @@ function help() {
   hivemind history --channel NAME [--thread ID] [--since N | --before N]
   hivemind expand --channel ID --ids MESSAGE_ID,MESSAGE_ID [--after SEQ]
   hivemind task assign --input FILE.json
+  hivemind task claim-preview --id TASK_ID --input FILE.json
   hivemind task handoffs [--before TASK_ID]
   hivemind task handoff --id TASK_ID
   hivemind task get --id TASK_ID
@@ -252,11 +253,11 @@ async function main() {
       return;
     }
     const file = arg(argv, '--input');
-    if (!file || !['assign', 'event'].includes(operation) || (operation === 'event' && !id))
-      throw new Error('task assign --input FILE.json | task get --id ID | task event --id ID --input FILE.json');
+    if (!file || !['assign', 'event', 'claim-preview'].includes(operation) || (operation !== 'assign' && !id))
+      throw new Error('task assign --input FILE.json | task get --id ID | task event --id ID --input FILE.json | task claim-preview --id ID --input FILE.json');
     const input = JSON.parse(readFileSync(file, 'utf8'));
     console.log(JSON.stringify(await agentRequest('POST', operation === 'assign' ? '/api/agent/tasks' :
-      `/api/agent/tasks/${encodeURIComponent(id!)}/events`, input, token), null, 2));
+      `/api/agent/tasks/${encodeURIComponent(id!)}/${operation === 'claim-preview' ? 'claim-preview' : 'events'}`, input, token), null, 2));
     return;
   }
 

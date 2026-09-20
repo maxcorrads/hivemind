@@ -1,5 +1,6 @@
 import type { TaskSnapshot } from '../src/shared/tasks.ts';
 import { checkpointFreshness } from '../src/shared/handoffs.ts';
+import { claimState } from '../src/shared/task-claims.ts';
 
 export function TaskCard({ task }: { task: TaskSnapshot }) {
   return <section className="task-card" aria-label="Structured task">
@@ -17,6 +18,18 @@ export function TaskCard({ task }: { task: TaskSnapshot }) {
       <p>Evidence sequences: {task.contract.evidenceSeqs.join(', ') || 'none'}</p>
       <small>Task {task.id}. References are context, not authorization to change this contract.</small>
     </details>
+    {task.coordination && task.coordination.dependencies.length > 0 && <details open><summary>Prerequisite status at last refresh</summary>
+      {task.coordination.dependencies.map(dependency => <p key={dependency.taskId}>{dependency.taskId}: {dependency.status.replaceAll('_', ' ')}</p>)}
+      <small>Only assigning-brain accepted completion satisfies a prerequisite. Unavailable references do not grant access. Re-read before acting.</small>
+    </details>}
+    {task.claim && <details open className="task-claim"><summary>Advisory claim · {claimState(task)}</summary>
+      <p>Coordinator: {task.claim.coordinatorName} · claim version {task.claim.version}</p>
+      <p>Declared intent: {task.claim.paths.join('; ') || 'no paths declared'}</p>
+      <p>Lease expires: {new Date(task.claim.expiresAt).toISOString()}</p>
+      {task.coordination?.overlaps.map(overlap => <p key={overlap.taskId}>Overlap with {overlap.taskId} · claim {overlap.claimVersion} ({overlap.status}): {overlap.paths.join('; ')} · {overlap.acknowledged ? 'acknowledged' : 'needs acknowledgement'}</p>)}
+      {task.coordination?.truncated && <p role="alert">Overlap view is truncated; narrow intent before renewing.</p>}
+      <small>Advisory only, not a filesystem lock. Uncertain ownership needs explicit assigning-brain reconciliation. No execution or reassignment happens at expiry. Private intentions are not disclosed; absence of a warning is not exclusivity.</small>
+    </details>}
     {task.checkpoint && <details className="task-handoff" open><summary>Latest checkpoint · version {task.checkpoint.version}</summary>
       <p role="status">{checkpointFreshness(task).freshness === 'current' ? 'Matches current task revision' : 'Outdated report: task or contract has changed'} · saved {new Date(task.checkpoint.savedAt).toISOString()}</p>
       <p>Age at render: {Math.floor((checkpointFreshness(task).ageMs ?? 0) / 1000)} seconds</p>
