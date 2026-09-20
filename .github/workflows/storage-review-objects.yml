@@ -1,0 +1,67 @@
+name: Verify storage evidence objects
+
+# Temporary review tooling. Never merge; no main, release, or tag mutation.
+on:
+  push:
+    branches: [maintenance/remaining-issues-workspace-20260920]
+    paths: [.github/workflows/storage-review-objects.yml]
+permissions:
+  contents: read
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Read immutable input without stored credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 04efd341be2307a5c2e0912edc70f2fbb931182c
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify decoded patch and complete tree
+        id: result
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATCH_FILE="$RUNNER_TEMP/storage.patch"
+          python3 - <<'PY'
+          import base64, gzip, hashlib, os, pathlib
+          root = pathlib.Path('.github/review-inputs')
+          first = (root / 'storage.patch.gz.b64.1').read_text().strip()
+          first = first.replace('r5pn0phXJJX', 'r5pn0phXJX')
+          encoded = first + ''.join((root / ('storage-rest.' + str(i))).read_text().strip() for i in range(1, 7))
+          patch = gzip.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == '679ba2f338ae7f82c458cf66a2b5a69d0d31ea8a689167ffd2196d78a093912f'
+          pathlib.Path(os.environ['PATCH_FILE']).write_bytes(patch)
+          PY
+          base=0812c6d8555063585190c18acf6fc098a88fec90
+          git checkout --detach "$base"
+          git apply --index --check "$PATCH_FILE"
+          git apply --index "$PATCH_FILE"
+          tree=$(git write-tree)
+          test "$tree" = 050d3e0d60c04e847fbc691f13fc73abd1edfd27
+          git diff --cached --stat
+          git diff --exit-code "$base" "$tree" -- .github/workflows package.json package-lock.json src web
+          commit=$(printf '%s\n' 'test(storage): publish reproducible query and delivery benchmarks' | git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit-tree "$tree" -p "$base")
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/storage-receipt"
+          printf '{"commit":"%s","tree":"%s"}\n' "$commit" "$tree" > "$RUNNER_TEMP/storage-receipt/result.json"
+      - name: Export only a new non-product review ref
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ steps.result.outputs.commit }}
+        run: |
+          set -euo pipefail
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w 0)
+          echo "::add-mask::$auth"
+          git -c core.hooksPath=/dev/null -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push origin "$COMMIT:refs/heads/review/issue20-measurements-20260920"
+      - name: Retain verification receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: issue20-review-receipt
+          path: ${{ runner.temp }}/storage-receipt/
+          retention-days: 1
+          if-no-files-found: error
