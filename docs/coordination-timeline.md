@@ -65,14 +65,59 @@ Startup pruning and explicit pruning protect provenance for unfinished structure
 
 Old databases remain readable: when a provenance row is absent, task/thread structure is inferred from the authoritative message/task tables. Pre-feature Telegram origin cannot be reconstructed retroactively.
 
+## Diagnosis evaluation bridge to #29
+
+The functional timeline is not evidence that diagnosis is faster. The repository therefore has a separate paired protocol for the remaining #32 evaluation question.
+
+Three versioned cases reuse representative scenario families already defined by #29:
+
+- `offline-dropped-delivery`: lost first delivery / redelivery recovery;
+- `noisy-room`: a routine room event wakes a worker and creates avoidable clarification;
+- `reviewer-disagreement`: a result is explicitly caused by a superseded assignment after revision.
+
+Each underlying redacted trace is presented in two conditions:
+
+- **baseline**: message/task order, IDs, role aliases and inferred thread structure only;
+- **timeline**: the same trace plus durable transport, delivery/ACK attempts, wake reason and explicit/inferred causality.
+
+The default protocol is 3 cases × 2 conditions × 2 repeats = **12 paired trials**. Trial packets omit fixture IDs, condition labels and the answer key. The manifest keeps those fields for later analysis. The condition cannot be perfectly blinded because the treatment is the presence of timeline metadata; independent review can still be blinded to the manifest where practical.
+
+Prepare a cohort using the same provider/model/host configuration as a #29 real-agent cohort:
+
+```sh
+npm run benchmark:timeline:diagnosis -- prepare \
+  --provider openai \
+  --model gpt-5.6-luna \
+  --host codex \
+  --configuration reasoning=max \
+  --hivemind-revision <exact-sha> \
+  --output /tmp/hivemind-timeline-diagnosis
+```
+
+Run the generated trial packets externally. For every trial retain failures and fill measured start/end/wall time, the diagnosis and evidence references, clarification rounds, provider-reported usage when available, and an independent correctness/evidence review. Unknown provider usage remains `null`.
+
+Then validate and summarize:
+
+```sh
+npm run benchmark:timeline:diagnosis -- validate \
+  --input /tmp/hivemind-timeline-diagnosis
+
+npm run benchmark:timeline:diagnosis -- summarize \
+  --input /tmp/hivemind-timeline-diagnosis \
+  --output /tmp/hivemind-timeline-diagnosis-summary.json
+```
+
+The summary keeps accuracy, evidence support, wall time, clarification rounds and provider usage separate. It also emits paired `timelineMinusBaselineWallMs` observations for completed matched trials. It never chooses a winner or turns the dimensions into one score.
+
 ## Overhead measurement
 
 Run:
 
 ```sh
 npm run benchmark:timeline
+npm run benchmark:timeline -- --output /tmp/hivemind-timeline-overhead.json
 ```
 
-The benchmark creates one 500-message trace, reports logical timeline metadata bytes, logical bytes per provenance row, and same-machine p50/p95 trace-query time. It also prints the enforced row/event caps and retention interval.
+The benchmark creates one 500-message trace and reports logical timeline metadata bytes, logical bytes per provenance row, total/per-message write time, and same-machine p50/p95 trace-query time. The retained JSON also records Node version, platform and architecture plus the enforced row/event caps and retention interval.
 
-Timing is **observational**, not a cross-runner CI SLA. The regression test instead checks deterministic structural bounds (one compact provenance row per new message, hard caps, and bounded trace output).
+Write timing includes the normal message write and timeline metadata together; it is **not** an A/B estimate of timeline-only cost. All timing is observational, not a cross-runner CI SLA. Regression tests check deterministic structural bounds and only assert that timing fields are valid measurements.

@@ -1,0 +1,466 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "id": "offline-dropped-delivery",
+      "sourceCoordinationFixture": "offline-dropped-delivery",
+      "question": "A structured task is eventually accepted after a long gap following assignment. Locate the first recoverable loss of progress and identify the evidence that recovery occurred.",
+      "groundTruth": {
+        "diagnosis": "The first assignment delivery was offered but not acknowledged. A redelivery was required before the worker acknowledged the delivery and accepted the task.",
+        "evidence": [
+          "The same delivery has attempt 1 and attempt 2 offers.",
+          "There is no acknowledgement between the first and second offer.",
+          "The acknowledgement and task accept occur only after attempt 2."
+        ]
+      },
+      "timeline": {
+        "schemaVersion": 1,
+        "mode": "fake-only",
+        "traceId": "11111111-1111-4111-8111-111111111111",
+        "taskId": "11111111-1111-4111-8111-111111111111",
+        "exportedAt": 5000,
+        "events": [
+          {
+            "kind": "message",
+            "id": "message-1",
+            "at": 1000,
+            "traceId": "11111111-1111-4111-8111-111111111111",
+            "messageId": "11111111-1111-4111-8111-111111111112",
+            "seq": 1,
+            "actor": "brain-1",
+            "source": "hive",
+            "eventType": "assignment",
+            "taskAction": "assign",
+            "relation": null,
+            "bodyBytes": 48,
+            "bodySha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "references": { "evidenceSeqs": [], "artifactCount": 0, "checkCount": 0 }
+          },
+          {
+            "kind": "delivery",
+            "id": "delivery-1-offer",
+            "at": 1010,
+            "traceId": "11111111-1111-4111-8111-111111111111",
+            "messageId": "11111111-1111-4111-8111-111111111112",
+            "seq": 1,
+            "actor": "worker-1",
+            "stage": "offered",
+            "deliveryId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+            "attempt": 1,
+            "wakeReason": "task_assignment"
+          },
+          {
+            "kind": "delivery",
+            "id": "delivery-1-redelivery",
+            "at": 4010,
+            "traceId": "11111111-1111-4111-8111-111111111111",
+            "messageId": "11111111-1111-4111-8111-111111111112",
+            "seq": 1,
+            "actor": "worker-1",
+            "stage": "offered",
+            "deliveryId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+            "attempt": 2,
+            "wakeReason": "redelivery"
+          },
+          {
+            "kind": "delivery",
+            "id": "delivery-1-ack",
+            "at": 4020,
+            "traceId": "11111111-1111-4111-8111-111111111111",
+            "messageId": "11111111-1111-4111-8111-111111111112",
+            "seq": 1,
+            "actor": "worker-1",
+            "stage": "acknowledged",
+            "deliveryId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+            "attempt": 2,
+            "wakeReason": "redelivery"
+          },
+          {
+            "kind": "message",
+            "id": "message-2",
+            "at": 4100,
+            "traceId": "11111111-1111-4111-8111-111111111111",
+            "messageId": "11111111-1111-4111-8111-111111111113",
+            "seq": 2,
+            "actor": "worker-1",
+            "source": "hive",
+            "eventType": "acknowledgement",
+            "taskAction": "accept",
+            "relation": {
+              "kind": "explicit",
+              "messageId": "11111111-1111-4111-8111-111111111112"
+            },
+            "bodyBytes": 24,
+            "bodySha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "references": { "evidenceSeqs": [1], "artifactCount": 0, "checkCount": 0 }
+          }
+        ],
+        "truncated": false,
+        "redaction": {
+          "messageBodies": "sha256+byte-length-only",
+          "actorNames": "stable-role-aliases",
+          "secrets": "not-included",
+          "artifacts": "counts-and-evidence-seqs-only"
+        }
+      }
+    },
+    {
+      "id": "noisy-room-wake",
+      "sourceCoordinationFixture": "noisy-room",
+      "question": "A worker wakes and asks a clarification even though its structured assignment did not change. Determine what caused that wake and whether the triggering activity was task-directed.",
+      "groundTruth": {
+        "diagnosis": "Routine collaboration-room progress woke the worker. The wake was room activity rather than a targeted assignment or decision, and the worker then emitted a clarification.",
+        "evidence": [
+          "The triggering message is a progress event with no task action.",
+          "Its delivery wake reason is room_activity.",
+          "The worker's question follows that delivery without an intervening task assignment or decision."
+        ]
+      },
+      "timeline": {
+        "schemaVersion": 1,
+        "mode": "fake-only",
+        "traceId": "22222222-2222-4222-8222-222222222222",
+        "taskId": "22222222-2222-4222-8222-222222222222",
+        "exportedAt": 4000,
+        "events": [
+          {
+            "kind": "message",
+            "id": "message-1",
+            "at": 1000,
+            "traceId": "22222222-2222-4222-8222-222222222222",
+            "messageId": "22222222-2222-4222-8222-222222222223",
+            "seq": 1,
+            "actor": "brain-1",
+            "source": "hive",
+            "eventType": "assignment",
+            "taskAction": "assign",
+            "relation": null,
+            "bodyBytes": 52,
+            "bodySha256": "3333333333333333333333333333333333333333333333333333333333333333",
+            "references": { "evidenceSeqs": [], "artifactCount": 0, "checkCount": 0 }
+          },
+          {
+            "kind": "delivery",
+            "id": "delivery-1-offer",
+            "at": 1010,
+            "traceId": "22222222-2222-4222-8222-222222222222",
+            "messageId": "22222222-2222-4222-8222-222222222223",
+            "seq": 1,
+            "actor": "worker-1",
+            "stage": "offered",
+            "deliveryId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1",
+            "attempt": 1,
+            "wakeReason": "task_assignment"
+          },
+          {
+            "kind": "delivery",
+            "id": "delivery-1-ack",
+            "at": 1020,
+            "traceId": "22222222-2222-4222-8222-222222222222",
+            "messageId": "22222222-2222-4222-8222-222222222223",
+            "seq": 1,
+            "actor": "worker-1",
+            "stage": "acknowledged",
+            "deliveryId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1",
+            "attempt": 1,
+            "wakeReason": "task_assignment"
+          },
+          {
+            "kind": "message",
+            "id": "message-2",
+            "at": 1100,
+            "traceId": "22222222-2222-4222-8222-222222222222",
+            "messageId": "22222222-2222-4222-8222-222222222224",
+            "seq": 2,
+            "actor": "worker-1",
+            "source": "hive",
+            "eventType": "acknowledgement",
+            "taskAction": "accept",
+            "relation": {
+              "kind": "explicit",
+              "messageId": "22222222-2222-4222-8222-222222222223"
+            },
+            "bodyBytes": 18,
+            "bodySha256": "4444444444444444444444444444444444444444444444444444444444444444",
+            "references": { "evidenceSeqs": [1], "artifactCount": 0, "checkCount": 0 }
+          },
+          {
+            "kind": "message",
+            "id": "message-3",
+            "at": 2000,
+            "traceId": "22222222-2222-4222-8222-222222222222",
+            "messageId": "22222222-2222-4222-8222-222222222225",
+            "seq": 3,
+            "actor": "worker-2",
+            "source": "hive",
+            "eventType": "progress",
+            "taskAction": null,
+            "relation": {
+              "kind": "inferred",
+              "messageId": "22222222-2222-4222-8222-222222222223"
+            },
+            "bodyBytes": 67,
+            "bodySha256": "5555555555555555555555555555555555555555555555555555555555555555",
+            "references": { "evidenceSeqs": [], "artifactCount": 0, "checkCount": 0 }
+          },
+          {
+            "kind": "delivery",
+            "id": "delivery-3-offer",
+            "at": 2010,
+            "traceId": "22222222-2222-4222-8222-222222222222",
+            "messageId": "22222222-2222-4222-8222-222222222225",
+            "seq": 3,
+            "actor": "worker-1",
+            "stage": "offered",
+            "deliveryId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb3",
+            "attempt": 1,
+            "wakeReason": "room_activity"
+          },
+          {
+            "kind": "delivery",
+            "id": "delivery-3-ack",
+            "at": 2020,
+            "traceId": "22222222-2222-4222-8222-222222222222",
+            "messageId": "22222222-2222-4222-8222-222222222225",
+            "seq": 3,
+            "actor": "worker-1",
+            "stage": "acknowledged",
+            "deliveryId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb3",
+            "attempt": 1,
+            "wakeReason": "room_activity"
+          },
+          {
+            "kind": "message",
+            "id": "message-4",
+            "at": 2050,
+            "traceId": "22222222-2222-4222-8222-222222222222",
+            "messageId": "22222222-2222-4222-8222-222222222226",
+            "seq": 4,
+            "actor": "worker-1",
+            "source": "hive",
+            "eventType": "question",
+            "taskAction": null,
+            "relation": {
+              "kind": "inferred",
+              "messageId": "22222222-2222-4222-8222-222222222225"
+            },
+            "bodyBytes": 41,
+            "bodySha256": "6666666666666666666666666666666666666666666666666666666666666666",
+            "references": { "evidenceSeqs": [3], "artifactCount": 0, "checkCount": 0 }
+          },
+          {
+            "kind": "message",
+            "id": "message-5",
+            "at": 3000,
+            "traceId": "22222222-2222-4222-8222-222222222222",
+            "messageId": "22222222-2222-4222-8222-222222222227",
+            "seq": 5,
+            "actor": "brain-1",
+            "source": "hive",
+            "eventType": "decision",
+            "taskAction": null,
+            "relation": {
+              "kind": "explicit",
+              "messageId": "22222222-2222-4222-8222-222222222226"
+            },
+            "bodyBytes": 38,
+            "bodySha256": "7777777777777777777777777777777777777777777777777777777777777777",
+            "references": { "evidenceSeqs": [4], "artifactCount": 0, "checkCount": 0 }
+          }
+        ],
+        "truncated": false,
+        "redaction": {
+          "messageBodies": "sha256+byte-length-only",
+          "actorNames": "stable-role-aliases",
+          "secrets": "not-included",
+          "artifacts": "counts-and-evidence-seqs-only"
+        }
+      }
+    },
+    {
+      "id": "superseded-assignment-causality",
+      "sourceCoordinationFixture": "reviewer-disagreement",
+      "question": "After changes are requested and a revised assignment is issued, another result arrives. Determine which instruction actually caused that result and whether the result followed the current revision.",
+      "groundTruth": {
+        "diagnosis": "The second result explicitly references the original assignment rather than the revised assignment, so it is stale work produced from superseded instructions.",
+        "evidence": [
+          "A changes-requested review is followed by a revise task action.",
+          "The revised assignment is delivered and acknowledged.",
+          "The later result has an explicit causal relation to the original assignment message, not to the revise message."
+        ]
+      },
+      "timeline": {
+        "schemaVersion": 1,
+        "mode": "fake-only",
+        "traceId": "33333333-3333-4333-8333-333333333333",
+        "taskId": "33333333-3333-4333-8333-333333333333",
+        "exportedAt": 5000,
+        "events": [
+          {
+            "kind": "message",
+            "id": "message-1",
+            "at": 1000,
+            "traceId": "33333333-3333-4333-8333-333333333333",
+            "messageId": "33333333-3333-4333-8333-333333333334",
+            "seq": 1,
+            "actor": "brain-1",
+            "source": "hive",
+            "eventType": "assignment",
+            "taskAction": "assign",
+            "relation": null,
+            "bodyBytes": 61,
+            "bodySha256": "8888888888888888888888888888888888888888888888888888888888888888",
+            "references": { "evidenceSeqs": [], "artifactCount": 0, "checkCount": 0 }
+          },
+          {
+            "kind": "message",
+            "id": "message-2",
+            "at": 1100,
+            "traceId": "33333333-3333-4333-8333-333333333333",
+            "messageId": "33333333-3333-4333-8333-333333333335",
+            "seq": 2,
+            "actor": "worker-1",
+            "source": "hive",
+            "eventType": "acknowledgement",
+            "taskAction": "accept",
+            "relation": {
+              "kind": "explicit",
+              "messageId": "33333333-3333-4333-8333-333333333334"
+            },
+            "bodyBytes": 17,
+            "bodySha256": "9999999999999999999999999999999999999999999999999999999999999999",
+            "references": { "evidenceSeqs": [1], "artifactCount": 0, "checkCount": 0 }
+          },
+          {
+            "kind": "message",
+            "id": "message-3",
+            "at": 2000,
+            "traceId": "33333333-3333-4333-8333-333333333333",
+            "messageId": "33333333-3333-4333-8333-333333333336",
+            "seq": 3,
+            "actor": "worker-1",
+            "source": "hive",
+            "eventType": "result",
+            "taskAction": "result",
+            "relation": {
+              "kind": "explicit",
+              "messageId": "33333333-3333-4333-8333-333333333334"
+            },
+            "bodyBytes": 72,
+            "bodySha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "references": { "evidenceSeqs": [1], "artifactCount": 1, "checkCount": 1 }
+          },
+          {
+            "kind": "message",
+            "id": "message-4",
+            "at": 2100,
+            "traceId": "33333333-3333-4333-8333-333333333333",
+            "messageId": "33333333-3333-4333-8333-333333333337",
+            "seq": 4,
+            "actor": "brain-1",
+            "source": "hive",
+            "eventType": "decision",
+            "taskAction": "review:changes_requested",
+            "relation": {
+              "kind": "explicit",
+              "messageId": "33333333-3333-4333-8333-333333333336"
+            },
+            "bodyBytes": 55,
+            "bodySha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "references": { "evidenceSeqs": [3], "artifactCount": 0, "checkCount": 0 }
+          },
+          {
+            "kind": "message",
+            "id": "message-5",
+            "at": 2200,
+            "traceId": "33333333-3333-4333-8333-333333333333",
+            "messageId": "33333333-3333-4333-8333-333333333338",
+            "seq": 5,
+            "actor": "brain-1",
+            "source": "hive",
+            "eventType": "assignment",
+            "taskAction": "revise",
+            "relation": {
+              "kind": "explicit",
+              "messageId": "33333333-3333-4333-8333-333333333337"
+            },
+            "bodyBytes": 66,
+            "bodySha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "references": { "evidenceSeqs": [4], "artifactCount": 0, "checkCount": 0 }
+          },
+          {
+            "kind": "delivery",
+            "id": "delivery-5-offer",
+            "at": 2210,
+            "traceId": "33333333-3333-4333-8333-333333333333",
+            "messageId": "33333333-3333-4333-8333-333333333338",
+            "seq": 5,
+            "actor": "worker-1",
+            "stage": "offered",
+            "deliveryId": "cccccccc-cccc-4ccc-8ccc-ccccccccccc5",
+            "attempt": 1,
+            "wakeReason": "task_assignment"
+          },
+          {
+            "kind": "delivery",
+            "id": "delivery-5-ack",
+            "at": 2220,
+            "traceId": "33333333-3333-4333-8333-333333333333",
+            "messageId": "33333333-3333-4333-8333-333333333338",
+            "seq": 5,
+            "actor": "worker-1",
+            "stage": "acknowledged",
+            "deliveryId": "cccccccc-cccc-4ccc-8ccc-ccccccccccc5",
+            "attempt": 1,
+            "wakeReason": "task_assignment"
+          },
+          {
+            "kind": "message",
+            "id": "message-6",
+            "at": 3000,
+            "traceId": "33333333-3333-4333-8333-333333333333",
+            "messageId": "33333333-3333-4333-8333-333333333339",
+            "seq": 6,
+            "actor": "worker-1",
+            "source": "hive",
+            "eventType": "result",
+            "taskAction": "result",
+            "relation": {
+              "kind": "explicit",
+              "messageId": "33333333-3333-4333-8333-333333333334"
+            },
+            "bodyBytes": 74,
+            "bodySha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "references": { "evidenceSeqs": [1], "artifactCount": 1, "checkCount": 1 }
+          },
+          {
+            "kind": "message",
+            "id": "message-7",
+            "at": 3100,
+            "traceId": "33333333-3333-4333-8333-333333333333",
+            "messageId": "33333333-3333-4333-8333-333333333340",
+            "seq": 7,
+            "actor": "brain-1",
+            "source": "hive",
+            "eventType": "decision",
+            "taskAction": "review:changes_requested",
+            "relation": {
+              "kind": "explicit",
+              "messageId": "33333333-3333-4333-8333-333333333339"
+            },
+            "bodyBytes": 43,
+            "bodySha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "references": { "evidenceSeqs": [6], "artifactCount": 0, "checkCount": 0 }
+          }
+        ],
+        "truncated": false,
+        "redaction": {
+          "messageBodies": "sha256+byte-length-only",
+          "actorNames": "stable-role-aliases",
+          "secrets": "not-included",
+          "artifacts": "counts-and-evidence-seqs-only"
+        }
+      }
+    }
+  ]
+}
