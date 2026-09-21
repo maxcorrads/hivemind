@@ -43,6 +43,7 @@ test("adaptive routing settings keep the TypeSafe key private and support enable
       apiKeySet: false,
       apiKeyHint: null,
       model: "jev-latest",
+      fallback: "orchestrated",
     });
     assert.throws(() => saveAdaptiveRouting(dir, { enabled: true }), /API key is required/);
     assert.throws(() => saveAdaptiveRouting(dir, null), /must be an object/);
@@ -83,6 +84,9 @@ test("active strategy chooses a direct brain session only for high-confidence si
   const uncertain = decideAdaptiveStrategy({ ...singleSignals, complexity: score(0.4, 0.2) });
   assert.equal(uncertain.strategy, "orchestrated");
   assert.equal(uncertain.reason, "low_confidence_fallback");
+  const lowCostFallback = decideAdaptiveStrategy({ ...singleSignals, complexity: score(0.4, 0.2) }, "single");
+  assert.equal(lowCostFallback.strategy, "single");
+  assert.equal(lowCostFallback.fallbackUsed, true);
 });
 
 test("Jev request uses the current System One contract and returns an active decision", async () => {
@@ -132,6 +136,15 @@ test("Jev failure conservatively activates orchestration instead of blocking Hum
   assert.equal(decision.fallbackUsed, true);
   assert.equal(decision.providerStatus, "unavailable");
   assert.match(adaptiveDirective(decision), /ORCHESTRATED/);
+
+  const singleFallback = await evaluateAdaptiveRequest(
+    "Implement a feature.",
+    { apiKey: "fixture-key", fallback: "single" },
+    { fetchImpl: async () => { throw new Error("offline"); } },
+  );
+  assert.equal(singleFallback.strategy, "single");
+  assert.equal(singleFallback.fallbackUsed, true);
+  assert.match(adaptiveDirective(singleFallback), /SINGLE/);
 });
 
 test("only new top-level Human messages in a brain DM are active-routing candidates", () => {
