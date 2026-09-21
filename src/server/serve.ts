@@ -2,7 +2,6 @@ import { REQUEST_BODY_MS, REQUEST_HEADER_MS, integerArgument } from "../shared/a
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
-import { readFileSync, existsSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -13,6 +12,7 @@ import { Hive } from "./hive.ts";
 import { createApp } from "./app.ts";
 import { startTelegram } from "./telegram.ts";
 import { LocalHumanAuth } from "./local-auth.ts";
+import { createStaticWeb } from "./static-web.ts";
 import { WS_HEARTBEAT_MS } from "../shared/realtime.ts";
 import { heartbeatClients, sendRealtime } from "./websocket-policy.ts";
 
@@ -30,6 +30,7 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
   });
 
   const humanAuth = new LocalHumanAuth();
+  const serveWeb = createStaticWeb(path.join(packageRoot, "dist/web"));
   let closing = false;
   const sockets = new Set<Socket>();
   const listener = getRequestListener(app.fetch);
@@ -173,22 +174,3 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
   return { server, hive, port, shutdown, ready };
 }
 
-function serveWeb(res: import("node:http").ServerResponse, url: string): boolean {
-  const webRoot = path.join(packageRoot, "dist/web");
-  if (!existsSync(webRoot)) return false;
-  const clean = url.split("?")[0] ?? "/";
-  const rel = clean === "/" ? "index.html" : clean.replace(/^\//, "");
-  const file = path.normalize(path.join(webRoot, rel));
-  if (file !== webRoot && !file.startsWith(webRoot + path.sep)) return false;
-  let target = file;
-  if (!existsSync(target) || statSync(target).isDirectory()) target = path.join(webRoot, "index.html");
-  if (!existsSync(target)) return false;
-  const ext = path.extname(target);
-  const types: Record<string, string> = {
-    ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
-    ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".json": "application/json", ".woff2": "font/woff2",
-  };
-  res.writeHead(200, { "Content-Type": types[ext] ?? "application/octet-stream" });
-  res.end(readFileSync(target));
-  return true;
-}
