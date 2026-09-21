@@ -18,6 +18,9 @@ import {
   codexArgs,
   humanRoomInstructionBody,
   codexExecutable,
+  hostExecutable,
+  hostInvocation,
+  opencodeArgs,
   parseProviderTokens,
   main as runnerMain,
   reviewArtifact,
@@ -39,7 +42,7 @@ const config = {
   taskVersion: 'coordination-task-v1',
 };
 
-test('real-agent v2 prompt carries executable deterministic work without leaking answers', () => {
+test('real-agent v3 prompt carries executable deterministic work without leaking answers', () => {
   const fixture = byId.get('shared-interface-coupled');
   const trial = trialTemplate(fixture, 'brain_multi_dm', 29, 0, config);
   const expected = expectedTaskOutputs(fixture, 29, 0);
@@ -74,6 +77,57 @@ test('Codex runner is generic: default executable is codex and local override is
   assert.ok(args.includes('memories.use_memories=false'));
   assert.ok(args.includes('memories.generate_memories=false'));
   assert.ok(args.includes('workspace-write'));
+});
+
+test('OpenCode host uses requested model, --auto, standalone mode and runtime Hivemind MCP', () => {
+  const fixture = byId.get('independent-implementation');
+  const openConfig = {
+    ...config,
+    provider: 'opencode',
+    model: 'opencode/muse-spark-1.3',
+    host: 'opencode',
+    configuration: 'auto',
+  };
+  const trial = trialTemplate(fixture, 'brain_multi_dm', 29, 0, openConfig);
+  assert.equal(hostExecutable('opencode', {}), 'opencode');
+  assert.equal(hostExecutable('opencode', { OPENCODE_BIN: '/opt/local/opencode-custom' }), '/opt/local/opencode-custom');
+  const args = opencodeArgs(trial, 'benchmark prompt');
+  assert.deepEqual(args.slice(0, 4), ['--pure', 'run', '--standalone', '--model']);
+  assert.ok(args.includes('opencode/muse-spark-1.3'));
+  assert.ok(args.includes('--auto'));
+  assert.ok(args.includes('--format'));
+  assert.equal(args.at(-1), 'benchmark prompt');
+
+  const baseEnv = {
+    PATH: '/usr/bin',
+    HIVEMIND_URL: 'http://127.0.0.1:7420',
+    HIVEMIND_HOME: '/tmp/hive-identities',
+  };
+  const invocation = hostInvocation(trial, 'benchmark prompt', baseEnv, root, true);
+  assert.equal(invocation.stdin, null);
+  assert.equal(invocation.env.OPENCODE_DISABLE_AUTOUPDATE, 'true');
+  const inline = JSON.parse(invocation.env.OPENCODE_CONFIG_CONTENT);
+  assert.equal(inline.tools.task, false);
+  assert.equal(inline.mcp.hivemind.type, 'local');
+  assert.equal(inline.mcp.hivemind.enabled, true);
+  assert.equal(inline.mcp.hivemind.environment.HIVEMIND_URL, baseEnv.HIVEMIND_URL);
+  assert.equal(inline.mcp.hivemind.environment.HIVEMIND_HOME, baseEnv.HIVEMIND_HOME);
+  assert.ok(inline.mcp.hivemind.command.includes('src/cli.ts'));
+});
+
+test('single-worker OpenCode invocation does not expose the Hivemind MCP', () => {
+  const fixture = byId.get('independent-implementation');
+  const trial = trialTemplate(fixture, 'single_worker', 29, 0, {
+    ...config,
+    provider: 'opencode',
+    model: 'opencode/muse-spark-1.3',
+    host: 'opencode',
+    configuration: 'auto',
+  });
+  const invocation = hostInvocation(trial, 'single prompt', { PATH: '/usr/bin' }, root, false);
+  const inline = JSON.parse(invocation.env.OPENCODE_CONFIG_CONTENT);
+  assert.equal(inline.tools.task, false);
+  assert.equal(inline.mcp, undefined);
 });
 
 test('runner seat plans preserve the four workflow shapes', () => {
