@@ -56,7 +56,7 @@ These are scheduling weights, not claims that they capture every millisecond in 
 - Ubuntu is the primary CI platform for quality/build/package, Node tests and Chromium. This avoids scheduling the parallel shard fan-out against the much smaller hosted macOS concurrency pool.
 - Node 24: unit and four timing-balanced integration shards run independently on Ubuntu.
 - Node 22.13.0: the same full unit/integration scope is retained on Ubuntu and integration is split into two timing-balanced shards. Compatibility coverage is **not** reduced to a smoke subset.
-- One focused `macOS compatibility` job runs the launch/plugin shell contracts with native macOS zsh. Linux integration jobs also ensure zsh exists, so the same shell contracts remain part of the complete suites.
+- One focused `macOS compatibility` job runs the launch/plugin shell contracts with native macOS zsh. Linux uses bash for the cross-platform shell argument contracts and does not install zsh on every ephemeral runner; zsh-only syntax validation remains native to macOS.
 - The historical required gates `Tests / Node 24` and `Tests / Node 22.13.0` remain. `Tests / Node 24` aggregates its unit/integration producers **and** the native macOS compatibility job, so branch protection cannot silently omit the platform check.
 - Normal Node 24 unit/integration jobs collect LCOV alongside their ordinary redacted logs. A lightweight `Coverage` aggregator merges those artifacts and enforces the unchanged 80% line / 75% branch / 75% function thresholds. There is no third full test execution in CI.
 - Playwright browser downloads are cached by OS + lockfile and installed only on a cache miss. Ubuntu installs the required Chromium system dependencies explicitly.
