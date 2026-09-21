@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { HiveError, type Channel } from "../shared/types.ts";
+import type { AdaptiveTopology } from "../shared/adaptive-topology.ts";
 
 export const ADAPTIVE_ROUTING_CONFIG_VERSION = 1;
 export const ADAPTIVE_ROUTING_CONTRACT_VERSION = "adaptive-routing-v1";
@@ -64,6 +65,7 @@ export type AdaptiveRoutingFile = {
   enabled: boolean;
   apiKey: string;
   fallback: AdaptiveStrategy;
+  topologyFallback: Exclude<AdaptiveTopology, "single">;
 };
 
 export type AdaptiveRoutingPublic = {
@@ -72,12 +74,14 @@ export type AdaptiveRoutingPublic = {
   apiKeyHint: string | null;
   model: string;
   fallback: AdaptiveStrategy;
+  topologyFallback: Exclude<AdaptiveTopology, "single">;
 };
 
 export type AdaptiveRoutingInput = {
   enabled?: boolean;
   apiKey?: string | null;
   fallback?: AdaptiveStrategy;
+  topologyFallback?: Exclude<AdaptiveTopology, "single">;
 };
 
 const QUESTIONS = Object.freeze({
@@ -170,8 +174,15 @@ function readRawConfig(home: string): AdaptiveRoutingFile | null {
     const apiKey = typeof raw.apiKey === "string" ? raw.apiKey.trim() : "";
     if (raw.version !== ADAPTIVE_ROUTING_CONFIG_VERSION || typeof raw.enabled !== "boolean") return null;
     if (raw.fallback !== undefined && raw.fallback !== "single" && raw.fallback !== "orchestrated") return null;
+    if (raw.topologyFallback !== undefined && !["brain_one_worker", "brain_multi_dm", "brain_multi_room"].includes(raw.topologyFallback)) return null;
     if (raw.enabled && !apiKey) return null;
-    return { version: 1, enabled: raw.enabled, apiKey, fallback: raw.fallback ?? "orchestrated" };
+    return {
+      version: 1,
+      enabled: raw.enabled,
+      apiKey,
+      fallback: raw.fallback ?? "orchestrated",
+      topologyFallback: raw.topologyFallback ?? "brain_one_worker",
+    };
   } catch {
     return null;
   }
@@ -202,6 +213,7 @@ export function adaptiveRoutingPublic(home: string): AdaptiveRoutingPublic {
     apiKeyHint: config?.apiKey ? maskKey(config.apiKey) : null,
     model: TYPESAFE_MODEL,
     fallback: config?.fallback ?? "orchestrated",
+    topologyFallback: config?.topologyFallback ?? "brain_one_worker",
   };
 }
 
@@ -209,7 +221,8 @@ export function saveAdaptiveRouting(home: string, raw: unknown): AdaptiveRouting
   if (!raw || typeof raw !== "object" || Array.isArray(raw))
     throw new HiveError(400, "Adaptive routing settings must be an object");
   const input = raw as AdaptiveRoutingInput & Record<string, unknown>;
-  const unknown = Object.keys(input).filter(key => key !== "enabled" && key !== "apiKey" && key !== "fallback");
+  const unknown = Object.keys(input).filter(key =>
+    key !== "enabled" && key !== "apiKey" && key !== "fallback" && key !== "topologyFallback");
   if (unknown.length) throw new HiveError(400, "Unknown adaptive routing setting");
   const previous = readRawConfig(home);
   if (input.enabled !== undefined && typeof input.enabled !== "boolean")
@@ -218,12 +231,16 @@ export function saveAdaptiveRouting(home: string, raw: unknown): AdaptiveRouting
     throw new HiveError(400, "Invalid TypeSafe API key");
   if (input.fallback !== undefined && input.fallback !== "single" && input.fallback !== "orchestrated")
     throw new HiveError(400, "Adaptive routing fallback must be single or orchestrated");
+  if (input.topologyFallback !== undefined &&
+      !["brain_one_worker", "brain_multi_dm", "brain_multi_room"].includes(input.topologyFallback))
+    throw new HiveError(400, "Adaptive topology fallback must be Brain+1, Multi-DM or Room");
   const enabled = input.enabled ?? previous?.enabled ?? false;
   const apiKey = input.apiKey === null ? "" : input.apiKey?.trim() || previous?.apiKey || "";
   const fallback = input.fallback ?? previous?.fallback ?? "orchestrated";
+  const topologyFallback = input.topologyFallback ?? previous?.topologyFallback ?? "brain_one_worker";
   if (apiKey.length > 512) throw new HiveError(400, "TypeSafe API key is too long");
   if (enabled && !apiKey) throw new HiveError(400, "TypeSafe API key is required when Jev adaptive routing is enabled");
-  persistConfig(home, { version: 1, enabled, apiKey, fallback });
+  persistConfig(home, { version: 1, enabled, apiKey, fallback, topologyFallback });
   return adaptiveRoutingPublic(home);
 }
 
