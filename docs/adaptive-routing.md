@@ -66,6 +66,17 @@ The settings panel contains:
 
 Enabling requires an API key. Disabling leaves the saved key available for a later re-enable but completely bypasses Jev at runtime.
 
+### Per-request override
+
+In a top-level Human → brain DM, the composer exposes an execution-mode selector:
+
+- **Auto · Jev** — use the global Jev toggle; when enabled, classify the request normally;
+- **Single** — bypass Jev and explicitly run this request in the receiving brain session;
+- **Orchestrated** — bypass Jev and explicitly use normal Hivemind coordination/delegation.
+
+The override applies to one send only and resets to **Auto · Jev** after a successful request. Explicit modes remain available even when global Jev routing is disabled because they do not require an external classifier call. They are rejected outside a top-level Human → brain DM.
+
+
 The key is stored in:
 
 ```
