@@ -250,6 +250,26 @@ test("private-channel UI grants a bot access only after an explicit same-project
   assert.throws(() => f.hive.postBotMessage(f.botB.bot, channel.id, input), /channel|Channel|access/);
 });
 
+test("brain DMs expose per-request routing and show the committed directive without websocket echo", async t => {
+  const f = await fixture(t);
+  await act(async () => f.root.render(createElement(App)));
+  await f.click(f.button(f.brainA.name));
+  const mode = f.host.querySelector<HTMLSelectElement>('[aria-label="Execution mode"]');
+  assert.ok(mode, "brain DM should expose execution mode");
+  assert.equal(mode.value, "auto");
+  await f.change(mode, "single");
+  const composer = f.host.querySelector<HTMLTextAreaElement>(".composer textarea")!;
+  await f.change(composer, "Handle this directly");
+  await f.click(f.button("Send"));
+  assert.equal(mode.value, "auto", "explicit mode is one-request only");
+  assert.match(f.host.textContent!, /Hivemind adaptive routing · SINGLE/);
+  assert.match(f.host.textContent!, /Handle this directly/);
+  const sent = f.hive.db.prepare("SELECT body FROM messages WHERE author_id='human' AND channel_id=? ORDER BY seq DESC LIMIT 2")
+    .all(f.hive.findDm(f.human.id, f.brainA.id)!.id) as Array<{ body: string }>;
+  assert.equal(sent[0]!.body, "Handle this directly");
+  assert.match(sent[1]!.body, /adaptive routing · SINGLE/);
+});
+
 test("observation threads support Human replies and reactions without granting bot workflow authority", async t => {
   const f = await fixture(t);
   const message = f.hive.postBotMessage(f.botA.bot, f.channel.id, {
