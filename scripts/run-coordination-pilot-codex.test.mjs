@@ -12,6 +12,7 @@ import {
   trialTemplate,
 } from './benchmark-coordination-real.mjs';
 import {
+  bootstrapBenchmarkHumanSession,
   buildBrainPrompt,
   buildSinglePrompt,
   buildWorkerPrompt,
@@ -167,12 +168,39 @@ test('room workflow requires and embeds a real Human instruction sequence', () =
   assert.match(authority, /finite task-scoped collaboration room/);
 });
 
-test('room authority seeding writes a local Human message and returns its seq', async t => {
+test('benchmark Human session bootstrap requires a returned local session cookie', async t => {
+  t.mock.method(globalThis, 'fetch', async (url, init = {}) => {
+    assert.match(String(url), /\/api\/ui\/session$/);
+    assert.equal(init.method, 'POST');
+    assert.equal(init.headers.origin, `http://127.0.0.1:${BENCHMARK_PORT}`);
+    assert.equal(init.headers['content-type'], 'application/json');
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: {
+        'content-type': 'application/json',
+        'set-cookie': 'hivemind_human_7420=session-value; HttpOnly; SameSite=Strict; Path=/',
+      },
+    });
+  });
+  const cookie = await bootstrapBenchmarkHumanSession(`http://127.0.0.1:${BENCHMARK_PORT}`);
+  assert.equal(cookie, 'hivemind_human_7420=session-value');
+});
+
+test('room authority seeding bootstraps Human auth, writes a local Human message and returns its seq', async t => {
   const fixture = byId.get('independent-implementation');
   const room = trialTemplate(fixture, 'brain_multi_room', 29, 0, config);
   const calls = [];
   t.mock.method(globalThis, 'fetch', async (url, init = {}) => {
     calls.push({ url: String(url), init });
+    if (String(url).endsWith('/api/ui/session')) {
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: {
+          'content-type': 'application/json',
+          'set-cookie': 'hivemind_human_7420=session-value; HttpOnly; SameSite=Strict; Path=/',
+        },
+      });
+    }
     if (String(url).endsWith('/api/ui/snapshot')) {
       return new Response(JSON.stringify({
         projects: [{ id: 'project-1', slug: 'chapter' }],
@@ -185,9 +213,16 @@ test('room authority seeding writes a local Human message and returns its seq', 
   const seeded = await seedHumanRoomInstruction(room);
   assert.equal(seeded.seq, 73);
   assert.equal(seeded.channelId, 'general-1');
-  assert.equal(calls.length, 2);
-  assert.match(calls[1].url, /\/api\/ui\/channels\/general-1\/messages$/);
-  const posted = JSON.parse(calls[1].init.body);
+  assert.equal(calls.length, 3);
+  assert.match(calls[0].url, /\/api\/ui\/session$/);
+  assert.match(calls[1].url, /\/api\/ui\/snapshot$/);
+  assert.match(calls[2].url, /\/api\/ui\/channels\/general-1\/messages$/);
+  for (const call of calls.slice(1)) {
+    assert.equal(call.init.headers.cookie, 'hivemind_human_7420=session-value');
+    assert.equal(call.init.headers.origin, `http://127.0.0.1:${BENCHMARK_PORT}`);
+    assert.equal(call.init.headers['x-hivemind-ui'], '1');
+  }
+  const posted = JSON.parse(calls[2].init.body);
   assert.equal(posted.requestId, `benchmark-authority-${room.trialId}`);
   assert.match(posted.body, /Human authorizes the coordinating brain/);
 });
