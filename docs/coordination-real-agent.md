@@ -75,7 +75,7 @@ npm run benchmark:coordination:pilot -- \
   --output /tmp/hivemind-pilot-v1
 ```
 
-The OpenCode runner invokes each seat with `opencode --pure run --model opencode/muse-spark-1.3 --auto --format json`. `--auto` is part of the recorded cohort configuration and is rejected if the manifest does not record `configuration=auto`. The runner injects the Hivemind MCP via runtime OpenCode config for coordinated workflows and disables OpenCode's native `task` subagent tool so the measured multi-agent topology remains Hivemind's. OpenCode supports `provider/model` selection and `--auto` for non-interactive runs; see the upstream CLI documentation.
+The OpenCode runner invokes each seat with `opencode --pure run --dir <trial-workspace> --model opencode/muse-spark-1.3 --auto --format json`. `--auto` is part of the recorded cohort configuration and is rejected if the manifest does not record `configuration=auto`. The runner injects the Hivemind MCP via runtime OpenCode config for coordinated workflows and disables OpenCode's native `task` subagent tool so the measured multi-agent topology remains Hivemind's. OpenCode supports `provider/model` selection and `--auto` for non-interactive runs; see the upstream CLI documentation.
 
 Executor behavior:
 
@@ -92,7 +92,7 @@ Executor behavior:
 - finite room setup uses the first dependency-ready runbook task as the external origin task, then binds the room contract to that `originTaskId`; remaining room-bound assignments use the live contract version/action keys;
 - worker capability cards mirror the versioned fixture capabilities;
 - the brain assembles `BENCHMARK_RESULT.json` from reviewed worker results; the harness compares it with the hidden deterministic expected artifact;
-- wall time is retained for both hosts; explicit Codex CLI token counts are retained when available, while OpenCode token totals remain `null` until the harness has a parser-verified aggregate rather than inferring usage;
+- wall time is retained for both hosts; Codex CLI token counts are retained when available, and OpenCode JSONL `step_finish.part.tokens.total` values are summed across each seat and then across the trial as parser-verified provider usage;
 - run logs, Hivemind state, final artifacts, and harness failures stay under the trial directory;
 - a trial that has been attempted is skipped on resume rather than silently rerun away.
 
