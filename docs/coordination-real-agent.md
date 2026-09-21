@@ -75,7 +75,7 @@ npm run benchmark:coordination:pilot -- \
   --output /tmp/hivemind-pilot-v1
 ```
 
-The OpenCode runner invokes each seat with `opencode --pure run --standalone --model opencode/muse-spark-1.3 --auto --format json`. `--auto` is part of the recorded cohort configuration and is rejected if the manifest does not record `configuration=auto`. The runner injects the Hivemind MCP via runtime OpenCode config for coordinated workflows and disables OpenCode's native `task` subagent tool so the measured multi-agent topology remains Hivemind's. OpenCode supports `provider/model` selection and `--auto` for non-interactive runs; see the upstream CLI documentation.
+The OpenCode runner invokes each seat with `opencode --pure run --model opencode/muse-spark-1.3 --auto --format json`. `--auto` is part of the recorded cohort configuration and is rejected if the manifest does not record `configuration=auto`. The runner injects the Hivemind MCP via runtime OpenCode config for coordinated workflows and disables OpenCode's native `task` subagent tool so the measured multi-agent topology remains Hivemind's. OpenCode supports `provider/model` selection and `--auto` for non-interactive runs; see the upstream CLI documentation.
 
 Executor behavior:
 
