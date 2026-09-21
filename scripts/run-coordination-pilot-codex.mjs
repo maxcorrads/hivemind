@@ -319,7 +319,7 @@ function appendTail(current, chunk, limit = 1_000_000) {
   return joined.length > limit ? joined.slice(-limit) : joined;
 }
 
-function openCodeUsageAccumulator() {
+export function openCodeUsageAccumulator() {
   let pending = '', total = 0, observed = 0;
   const consume = line => {
     if (!line.trim().startsWith('{')) return;
