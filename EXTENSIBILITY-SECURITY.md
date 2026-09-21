@@ -62,12 +62,25 @@ permissions or protect against a malicious process with the same user privileges
 Never place credentials in event content, generic settings, source URLs, instructions,
 or commits: those are not secret-storage channels.
 
+Optional Jev adaptive routing uses a separate local credential file,
+`adaptive-routing.json`, written atomically with mode 0600 under `HIVEMIND_HOME`.
+The Human settings API returns only whether the key exists plus a short suffix hint,
+never the full key. When the toggle is enabled, the outbound TypeSafe request contains
+the new Human request text and current project name/slug; it does not include
+repository files, Git diffs, Hivemind history or agent/bot credentials. Runtime
+routing telemetry stores the request hash/byte length rather than duplicating the
+request text, and its JSONL file is forced to mode 0600. A local process running as
+the same OS user remains inside the existing local-process trust boundary.
+
+
 ## Admission and execution bounds
 
 | Surface | Enforced bound |
 | --- | --- |
 | Bot event JSON | 64 KiB of actual streamed UTF-8 bytes |
 | Bot creation/credential JSON | 4 KiB |
+| Jev adaptive-routing settings JSON | 4 KiB; private local config is 0600 |
+| Jev runtime classification | 2-second provider timeout; provider failure falls back to orchestration |
 | Plugin HTTP settings envelope | 128 KiB; persisted config remains 64 KiB |
 | JSON reading | 10-second deadline, abort cleanup, no parsing before byte validation |
 | Bot admission | 60-request burst, 10 requests/second refill per identity |
