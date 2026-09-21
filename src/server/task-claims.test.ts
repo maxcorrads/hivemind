@@ -235,13 +235,21 @@ test('separate SQLite processes serialize the same claim revision with one expli
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
   const file = path.join(f.hive.home, 'claim-child.mjs');
   writeFileSync(file, `import { Hive } from ${JSON.stringify(new URL('./hive.ts', import.meta.url).href)};
-    const hive = new Hive(process.argv[2]);
-    let pending;
+    let hive, pending;
     const finish = (message) => {
-      hive.db.close();
+      hive?.db.close();
       process.send(message, () => process.disconnect());
     };
     process.on('message', (input) => {
+      if (input?.type === 'init') {
+        try {
+          hive = new Hive(process.argv[2]);
+          process.send({ phase: 'ready' });
+        } catch (error) {
+          finish({ phase: 'result', status: error.status ?? 500, error: String(error?.stack ?? error) });
+        }
+        return;
+      }
       if (input?.type === 'arm') {
         try {
           pending = { actor: hive.agentByToken(input.token), id: input.id, event: input.event };
@@ -258,8 +266,7 @@ test('separate SQLite processes serialize the same claim revision with one expli
         catch (error) { status = error.status ?? 500; errorText = String(error?.stack ?? error); }
         finish({ phase: 'result', status, error: errorText });
       });
-    });
-    process.send({ phase: 'ready' });`, { mode: 0o600 });
+    });`, { mode: 0o600 });
 
   type ChildMessage =
     | { phase: 'ready' }
@@ -349,7 +356,13 @@ test('separate SQLite processes serialize the same claim revision with one expli
     });
 
   try {
-    await Promise.all(children.map((child, index) => waitForMessage(child, index, 'ready', 12000)));
+    // Schema/bootstrap writes are not the concurrency target of this test. Initialize
+    // each process against the shared DB in sequence, then race only the claim event.
+    for (const [index, child] of children.entries()) {
+      const ready = waitForMessage(child, index, 'ready', 12000);
+      await send(child, index, { type: 'init' });
+      await ready;
+    }
 
     const armed = children.map((child, index) => waitForMessage(child, index, 'armed', 3000));
     await Promise.all(children.map((child, index) => send(child, index, {
