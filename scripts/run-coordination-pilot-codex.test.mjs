@@ -112,7 +112,7 @@ test('OpenCode host uses requested model, --auto, standalone mode and runtime Hi
   assert.equal(inline.mcp.hivemind.enabled, true);
   assert.equal(inline.mcp.hivemind.environment.HIVEMIND_URL, baseEnv.HIVEMIND_URL);
   assert.equal(inline.mcp.hivemind.environment.HIVEMIND_HOME, baseEnv.HIVEMIND_HOME);
-  assert.ok(inline.mcp.hivemind.command.includes('src/cli.ts'));
+  assert.ok(inline.mcp.hivemind.command.some(value => value.endsWith('/src/cli.ts')));
 });
 
 test('single-worker OpenCode invocation does not expose the Hivemind MCP', () => {
