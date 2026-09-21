@@ -23,6 +23,7 @@ import {
   hostExecutable,
   hostInvocation,
   opencodeArgs,
+  openCodeUsageAccumulator,
   parseProviderTokens,
   main as runnerMain,
   reviewArtifact,
@@ -93,8 +94,9 @@ test('OpenCode host uses requested model, --auto and runtime Hivemind MCP', () =
   const trial = trialTemplate(fixture, 'brain_multi_dm', 29, 0, openConfig);
   assert.equal(hostExecutable('opencode', {}), 'opencode');
   assert.equal(hostExecutable('opencode', { OPENCODE_BIN: '/opt/local/opencode-custom' }), '/opt/local/opencode-custom');
-  const args = opencodeArgs(trial, 'benchmark prompt');
-  assert.deepEqual(args.slice(0, 3), ['--pure', 'run', '--model']);
+  const workdir = '/tmp/hive-opencode-trial-workspace';
+  const args = opencodeArgs(trial, 'benchmark prompt', workdir);
+  assert.deepEqual(args.slice(0, 5), ['--pure', 'run', '--dir', workdir, '--model']);
   assert.ok(args.includes('opencode/muse-spark-1.3'));
   assert.ok(args.includes('--auto'));
   assert.ok(!args.includes('--standalone'));
@@ -106,8 +108,9 @@ test('OpenCode host uses requested model, --auto and runtime Hivemind MCP', () =
     HIVEMIND_URL: 'http://127.0.0.1:7420',
     HIVEMIND_HOME: '/tmp/hive-identities',
   };
-  const invocation = hostInvocation(trial, 'benchmark prompt', baseEnv, root, true);
+  const invocation = hostInvocation(trial, 'benchmark prompt', baseEnv, root, true, workdir);
   assert.equal(invocation.stdin, null);
+  assert.equal(invocation.args[invocation.args.indexOf('--dir') + 1], workdir);
   assert.equal(invocation.env.OPENCODE_DISABLE_AUTOUPDATE, 'true');
   const inline = JSON.parse(invocation.env.OPENCODE_CONFIG_CONTENT);
   assert.equal(inline.tools.task, false);
@@ -127,10 +130,12 @@ test('single-worker OpenCode invocation does not expose the Hivemind MCP', () =>
     host: 'opencode',
     configuration: 'auto',
   });
-  const invocation = hostInvocation(trial, 'single prompt', { PATH: '/usr/bin' }, root, false);
+  const workdir = '/tmp/hive-opencode-single-workspace';
+  const invocation = hostInvocation(trial, 'single prompt', { PATH: '/usr/bin' }, root, false, workdir);
   const inline = JSON.parse(invocation.env.OPENCODE_CONFIG_CONTENT);
   assert.equal(inline.tools.task, false);
   assert.equal(inline.mcp, undefined);
+  assert.equal(invocation.args[invocation.args.indexOf('--dir') + 1], workdir);
 });
 
 test('runner seat plans preserve the four workflow shapes', () => {
@@ -229,10 +234,25 @@ test('room authority seeding bootstraps Human auth, writes a local Human message
   assert.match(posted.body, /Human authorizes the coordinating brain/);
 });
 
-test('token parsing uses explicit Codex CLI usage and handles thousands separators', () => {
+test('OpenCode usage accumulator keeps the latest cumulative total across chunk boundaries', () => {
+  const usage = openCodeUsageAccumulator();
+  usage.push(Buffer.from('{"type":"step_finish","part":{"tokens":{"total":12}}}\n{"type":"step_'));
+  usage.push(Buffer.from('finish","part":{"tokens":{"total":34}}}\n{"type":"text"'));
+  usage.push(Buffer.from('}\n'));
+  assert.equal(usage.finish(), 34);
+});
+
+test('token parsing uses explicit Codex usage or the latest cumulative OpenCode total', () => {
   assert.equal(parseProviderTokens('tokens used\n9024\n'), 9024);
   assert.equal(parseProviderTokens('x\ntokens used\n12.077\n'), 12077);
   assert.equal(parseProviderTokens('tokens used\n9,024\n'), 9024);
+  const openCode = [
+    JSON.stringify({ type: 'step_finish', part: { tokens: { total: 18949 } } }),
+    JSON.stringify({ type: 'text', part: { text: 'progress' } }),
+    JSON.stringify({ type: 'step_finish', part: { tokens: { total: 21261 } } }),
+  ].join('\n');
+  assert.equal(parseProviderTokens(openCode), 21261);
+  assert.equal(parseProviderTokens('{bad json}\n{"type":"step_finish","part":{"tokens":{"total":-1}}}'), null);
   assert.equal(parseProviderTokens('no usage line'), null);
 });
 
