@@ -240,7 +240,7 @@ export function buildBrainPrompt(trial, fixture, workerCount, humanInstructionSe
   const roomInstructions = workflow === 'brain_multi_room'
     ? [
         `A real Human-authored benchmark authorization message already exists in this project at message sequence ${humanInstructionSeq}. Use humanInstructionSeq=${humanInstructionSeq} on the initial room_event configure. Do not ask Human for another authorization.`,
-        'Bootstrap the finite room deterministically: assign the first dependency-ready runbook task outside the room, then use that task ID as contract.originTaskId when configuring the room.',
+        'Bootstrap the finite room deterministically: assign the first dependency-ready runbook task outside the room solely to obtain contract.originTaskId, then configure the room immediately before expecting clarification work. If this fixture is information-partitioned, direct the origin worker to wait for room setup before asking peers for missing facts.',
         'Create one private collaboration channel with all benchmark workers as members. Do not invite a worker again if create_channel already included that worker.',
         'Configure one finite task-scoped room contract, then use its current contractVersion and stable actionKey values on remaining room-bound structured assignments.',
         fixture.id === 'noisy-room'
@@ -568,6 +568,37 @@ function totalTokens(results) {
   return values.reduce((sum, value) => sum + value, 0);
 }
 
+export function readCoordinationEvidence(dbPath) {
+  if (!existsSync(dbPath)) return null;
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    const roles = new Map(db.prepare('SELECT id, role FROM agents').all().map(row => [String(row.id), String(row.role)]));
+    const rows = db.prepare(`SELECT m.event_type, m.author_id, m.recipients, c.type AS channel_type
+      FROM messages m JOIN channels c ON c.id=m.channel_id WHERE m.event_type='question'`).all();
+    let workerQuestions = 0, peerDirectedQuestions = 0, brainDirectedQuestions = 0, roomQuestions = 0, dmQuestions = 0;
+    for (const row of rows) {
+      if (row.channel_type === 'private') roomQuestions++;
+      if (row.channel_type === 'dm') dmQuestions++;
+      if (roles.get(String(row.author_id)) !== 'worker') continue;
+      workerQuestions++;
+      let recipients = [];
+      try { recipients = JSON.parse(String(row.recipients ?? '[]')); } catch { recipients = []; }
+      if (recipients.some(id => roles.get(String(id)) === 'worker' && String(id) !== String(row.author_id))) peerDirectedQuestions++;
+      if (recipients.some(id => roles.get(String(id)) === 'brain')) brainDirectedQuestions++;
+    }
+    return {
+      questionMessages: rows.length,
+      workerQuestions,
+      peerDirectedQuestions,
+      brainDirectedQuestions,
+      roomQuestions,
+      dmQuestions,
+    };
+  } finally {
+    db.close();
+  }
+}
+
 async function runTrial(options, trial, fixture, binary, binaryVersion) {
   const plan = seatPlan(trial, fixture);
   if (options.dryRun) {
@@ -717,6 +748,7 @@ async function runTrial(options, trial, fixture, binary, binaryVersion) {
     await stopServer(server);
   }
 
+  const coordinationEvidence = server ? readCoordinationEvidence(path.join(server.home, 'hive.db')) : null;
   const completed = Date.now();
   const artifactPath = path.join(workspace, 'BENCHMARK_RESULT.json');
   let artifact = null, acceptance;
@@ -755,11 +787,16 @@ async function runTrial(options, trial, fixture, binary, binaryVersion) {
   meta.completedAt = trial.timing.completedAt;
   meta.wallMs = trial.timing.wallMs;
   meta.providerTokens = providerTokens;
+  meta.coordinationEvidence = coordinationEvidence;
   meta.acceptance = {
     passed: acceptance.acceptancePassed,
     defects: acceptance.defects,
     issues: acceptance.issues,
   };
+  if (fixture.realAgent?.informationPartition && trial.trial.workflow !== 'single_worker' &&
+    (coordinationEvidence?.workerQuestions ?? 0) === 0) {
+    meta.notes.push('Information-partitioned fixture produced no worker question events; treat this trial as non-discriminative coordination evidence even if artifact acceptance passed.');
+  }
   meta.seats = seatResults.map(result => ({
     id: result.id,
     exitCode: result.code,
