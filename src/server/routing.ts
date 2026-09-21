@@ -90,7 +90,7 @@ export class RoutingStore {
     });
   }
   suggest(actor: Agent, id: string, raw: unknown): RoutingSuggestions {
-    const input = validated(suggestWorkersSchema, raw), task = this.task(actor, id);
+    const input = validated(suggestWorkersSchema, raw), requiredCapabilities = input.requiredCapabilities ?? [], task = this.task(actor, id);
     const channel = this.hive.getChannel(task.channelId), project = channel.projectId;
     const rows = this.db.prepare(`SELECT c.worker_id, c.revision, c.card, c.configuration, a.name FROM worker_capabilities c
       JOIN agents a ON a.id = c.worker_id WHERE c.project_id = ? AND a.project_id = ? AND a.role = 'worker'
@@ -102,7 +102,7 @@ export class RoutingStore {
       const card = JSON.parse(row.card) as CapabilityCard;
       const worker = this.hive.getAgent(row.worker_id);
       if (!card.enabled || card.availability === 'unavailable' || !card.modes.includes(input.mode) ||
-        !input.requiredCapabilities.every(tag => card.capabilities.includes(tag)) ||
+        !requiredCapabilities.every(tag => card.capabilities.includes(tag)) ||
         (input.minContext !== undefined && (card.availableContext === null || card.availableContext < input.minContext)) ||
         (input.mode === 'review' && task.workerId === worker.id) ||
         !this.hive.canSeeChannel(worker, channel) || !this.hive.canPost(worker, channel)) continue;
@@ -125,7 +125,7 @@ export class RoutingStore {
         visibleInProgress: workload.n, workloadIncomplete: actor.role !== 'human', providerCost: null,
         evidence: { reviewed: evidence.length, accepted, acceptedRate: evidence.length ? accepted / evidence.length : null,
           interval95: interval, basis: 'Caller-visible, reviewer-classified outcomes for the declared configuration and category; not independent verification of runtime model or code quality.' },
-        reasons: [`Declared capabilities match: ${input.requiredCapabilities.join(', ') || 'no capabilities required'}`,
+        reasons: [`Declared capabilities match: ${requiredCapabilities.join(', ') || 'no capabilities required'}`,
           `Declared ${card.availability}; ${workload.n} other visible unfinished tasks. Confirm capacity with the worker.`,
           evidence.length ? `${accepted}/${evidence.length} classified reviews; small and selected samples are not general ability.` : 'Cold start: no matching evidence, not excluded by default.',
           input.mode === 'review' ? 'Not the implementation worker; separate review is still required.' : 'No implicit task assignment.'] });
