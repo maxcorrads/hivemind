@@ -16,11 +16,13 @@ import {
   buildSinglePrompt,
   buildWorkerPrompt,
   codexArgs,
+  humanRoomInstructionBody,
   codexExecutable,
   parseProviderTokens,
   main as runnerMain,
   reviewArtifact,
   seatPlan,
+  seedHumanRoomInstruction,
   strictTrialFiles,
 } from './run-coordination-pilot-codex.mjs';
 
@@ -41,9 +43,9 @@ test('real-agent v2 prompt carries executable deterministic work without leaking
   const fixture = byId.get('shared-interface-coupled');
   const trial = trialTemplate(fixture, 'brain_multi_dm', 29, 0, config);
   const expected = expectedTaskOutputs(fixture, 29, 0);
-  assert.equal(REAL_AGENT_PROMPT_VERSION, 'coordination-real-v2');
+  assert.equal(REAL_AGENT_PROMPT_VERSION, 'coordination-real-v3');
   assert.match(trial.runbook.prompt, /Executable benchmark artifact contract/);
-  assert.match(trial.runbook.prompt, /coordination-real-v2\|fixture=shared-interface-coupled/);
+  assert.match(trial.runbook.prompt, /coordination-real-v3\|fixture=shared-interface-coupled/);
   assert.match(trial.runbook.prompt, /BENCHMARK_RESULT|final acceptance artifact/i);
   for (const output of Object.values(expected)) {
     assert.match(output, /^[a-f0-9]{64}$/);
@@ -96,6 +98,44 @@ test('runner prompts keep native agents disabled while coordinating through Hive
   assert.match(brainPrompt, /Join with role=brain/);
   assert.match(brainPrompt, /task DMs only/);
   assert.match(brainPrompt, /Do not perform worker task outputs yourself/);
+});
+
+test('room workflow requires and embeds a real Human instruction sequence', () => {
+  const fixture = byId.get('independent-implementation');
+  const room = trialTemplate(fixture, 'brain_multi_room', 29, 0, config);
+  assert.throws(() => buildBrainPrompt(room, fixture, 3), /requires a real Human instruction sequence/);
+  const prompt = buildBrainPrompt(room, fixture, 3, 42);
+  assert.match(prompt, /humanInstructionSeq=42/);
+  assert.match(prompt, /originTaskId/);
+  assert.match(prompt, /Do not ask Human for another authorization/);
+  const authority = humanRoomInstructionBody(room);
+  assert.match(authority, new RegExp(room.blindId));
+  assert.match(authority, /finite task-scoped collaboration room/);
+});
+
+test('room authority seeding writes a local Human message and returns its seq', async t => {
+  const fixture = byId.get('independent-implementation');
+  const room = trialTemplate(fixture, 'brain_multi_room', 29, 0, config);
+  const calls = [];
+  t.mock.method(globalThis, 'fetch', async (url, init = {}) => {
+    calls.push({ url: String(url), init });
+    if (String(url).endsWith('/api/ui/snapshot')) {
+      return new Response(JSON.stringify({
+        projects: [{ id: 'project-1', slug: 'chapter' }],
+        channels: [{ id: 'general-1', name: 'general', projectId: 'project-1' }],
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    return new Response(JSON.stringify({ message: { id: 'message-1', seq: 73 } }),
+      { status: 200, headers: { 'content-type': 'application/json' } });
+  });
+  const seeded = await seedHumanRoomInstruction(room);
+  assert.equal(seeded.seq, 73);
+  assert.equal(seeded.channelId, 'general-1');
+  assert.equal(calls.length, 2);
+  assert.match(calls[1].url, /\/api\/ui\/channels\/general-1\/messages$/);
+  const posted = JSON.parse(calls[1].init.body);
+  assert.equal(posted.requestId, `benchmark-authority-${room.trialId}`);
+  assert.match(posted.body, /Human authorizes the coordinating brain/);
 });
 
 test('token parsing uses explicit Codex CLI usage and handles thousands separators', () => {
