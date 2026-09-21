@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "id": "clarification-v1",
+  "purpose": "Focused discriminative real-agent cohort for #29/#33: force genuine information exchange and compare single-session baseline against brain-mediated DM relay and direct peer clarification in a room.",
+  "seed": 29,
+  "repeat": 2,
+  "fixtures": [
+    "room-peer-clarification"
+  ],
+  "workflows": [
+    "single_worker",
+    "brain_multi_dm",
+    "brain_multi_room"
+  ],
+  "expectedTrials": 6,
+  "promotionChecks": [
+    "All six trials use the same pinned provider/model/host/Hivemind/prompt/task cohort.",
+    "The shared runbook does not contain private worker fact values.",
+    "Each multi-agent worker receives exactly one private fact from the harness.",
+    "At least one real clarification question is observable in each successful orchestrated trial; room questions should be peer-addressed when possible.",
+    "Acceptance remains based on the deterministic final artifact, not on message-count gaming.",
+    "Post-#121 recoverable MCP/tool errors are compared with the pilot-v1 baseline."
+  ],
+  "notes": [
+    "This is intentionally six trials, not a broad 96-trial expansion.",
+    "single_worker receives the same complete information set in one host prompt; multi-agent conditions receive the same information partitioned across worker seats.",
+    "brain_multi_dm must relay missing facts through the brain because worker-to-worker DMs remain forbidden.",
+    "brain_multi_room allows addressed peer clarification inside the finite collaboration room."
+  ]
+}
