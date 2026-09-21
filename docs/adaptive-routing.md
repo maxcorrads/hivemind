@@ -54,6 +54,9 @@ It does not reclassify:
 
 This keeps the active interception point narrow and prevents repeated Jev calls during an already-running conversation.
 
+The same Auto policy applies when Human replies from Telegram inside a topic mapped to that Human ↔ brain DM. Telegram thread replies remain conversation replies and are not reclassified. The routing request sent to TypeSafe contains the Telegram message text without the Telegram sender display name or attachment contents.
+
+
 ## Enable or disable Jev
 
 Open **Adaptive routing** from the Hivemind top bar (`⇄`).
