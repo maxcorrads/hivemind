@@ -96,7 +96,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     hive.getAgent("human");
     return c.json(saveAdaptiveRouting(
       hive.home,
-      await readLimitedJson(c.req.raw, CREDENTIAL_JSON_BYTES) as { enabled?: boolean; apiKey?: string | null },
+      await readLimitedJson(c.req.raw, CREDENTIAL_JSON_BYTES),
     ));
   });
   ui.get("/projects/:project/agents/:id/credential", (c) => c.json(hive.agentCredential(hive.getAgent("human"), c.req.param("project"), c.req.param("id"))));
