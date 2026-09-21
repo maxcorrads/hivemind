@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_SEED, WORKFLOWS, loadFixtures, seededShuffle } from './benchmark-coordination.mjs';
 
 export const REAL_AGENT_PROTOCOL_VERSION = 1;
-export const REAL_AGENT_PROMPT_VERSION = 'coordination-real-v1';
+export const REAL_AGENT_PROMPT_VERSION = 'coordination-real-v2';
 export const REAL_AGENT_TASK_VERSION = 'coordination-task-v1';
 export const PILOT_PRESET_VERSION = 1;
 
@@ -21,31 +21,107 @@ const hash = value => createHash('sha256').update(String(value)).digest('hex');
 const id = (prefix, value) => `${prefix}-${hash(value).slice(0, 16)}`;
 const finiteOrNull = value => value === null || (typeof value === 'number' && Number.isFinite(value) && value >= 0);
 
+export function taskBaseInput(fixture, task, seed, repeatIndex) {
+  return [
+    'coordination-real-v2',
+    `fixture=${fixture.id}`,
+    `seed=${seed}`,
+    `repeat=${repeatIndex}`,
+    `task=${task.id}`,
+    `scope=${task.scope.join(',')}`,
+    `capability=${task.requiredCapability ?? 'none'}`,
+  ].join('|');
+}
+
+export function taskMaterial(fixture, task, seed, repeatIndex, outputs) {
+  const dependencies = [...task.dependsOn].sort().map(dependency => {
+    const output = outputs[dependency];
+    assert.ok(typeof output === 'string' && output.length > 0, `missing dependency output ${dependency} for ${task.id}`);
+    return `${dependency}=${output}`;
+  }).join(',');
+  return `${taskBaseInput(fixture, task, seed, repeatIndex)}|deps=${dependencies}`;
+}
+
+export function expectedTaskOutputs(fixture, seed, repeatIndex) {
+  const pending = new Map(fixture.tasks.map(task => [task.id, task]));
+  const outputs = {};
+  while (pending.size) {
+    const ready = [...pending.values()].filter(task => task.dependsOn.every(dependency => outputs[dependency]));
+    assert.ok(ready.length, 'fixture dependency graph cannot be resolved');
+    for (const task of ready) {
+      outputs[task.id] = hash(taskMaterial(fixture, task, seed, repeatIndex, outputs));
+      pending.delete(task.id);
+    }
+  }
+  return outputs;
+}
+
+function workContract(fixture, seed, repeatIndex) {
+  const taskLines = fixture.tasks.map(task =>
+    `- ${task.id}: baseInput=${JSON.stringify(taskBaseInput(fixture, task, seed, repeatIndex))}; dependsOn=${task.dependsOn.join(',') || 'none'}`);
+  return [
+    'Executable benchmark artifact contract:',
+    'For every task, compute lowercase SHA-256 hex over this exact UTF-8 material:',
+    '  BASE_INPUT + "|deps=" + dependency pairs sorted by dependency id and joined with commas.',
+    'A dependency pair is DEPENDENCY_ID=DEPENDENCY_OUTPUT. With no dependencies the material ends in "|deps=".',
+    'Do not include quotes or a trailing newline in the hashed material.',
+    'Task inputs:',
+    ...taskLines,
+    'The final acceptance artifact is JSON with exactly: schemaVersion=1, fixtureId, seed, repeatIndex, and taskOutputs keyed by task id.',
+    'Downstream task outputs must be computed from the actual dependency outputs, so dependencies cannot be bypassed.',
+    'You may use a local SHA-256 command/tool. Do not guess hashes or use benchmark answer keys.',
+  ];
+}
+
 function revision(root) {
   const found = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' });
   return found.status === 0 ? found.stdout.trim() : 'unknown';
 }
 
 function workflowInstructions(workflow, workerCount) {
-  if (workflow === 'single_worker') return ['Use one model session as the only worker.', 'Do not delegate or create a brain/worker hierarchy.'];
-  if (workflow === 'brain_one_worker') return ['Use one brain and exactly one worker.', 'Use structured tasks and checkpoint/handoff when the fixture calls for them.'];
-  if (workflow === 'brain_multi_dm') return [`Use one brain and up to ${workerCount} workers.`, 'Coordinate workers through task DMs; do not create a collaboration room.'];
-  return [`Use one brain and up to ${workerCount} workers.`, 'Create/use one collaboration room for peer-visible coordination and use structured tasks.'];
+  if (workflow === 'single_worker') return [
+    'Use one model session as the only worker.',
+    'Do not delegate, create a brain/worker hierarchy, or use Hivemind coordination for this condition.',
+  ];
+  if (workflow === 'brain_one_worker') return [
+    'Use Hivemind with one brain and exactly one worker.',
+    'The brain coordinates and does not compute task outputs itself. Use structured tasks and checkpoint/handoff when the fixture calls for them.',
+  ];
+  if (workflow === 'brain_multi_dm') return [
+    `Use Hivemind with one brain and up to ${workerCount} workers.`,
+    'The brain coordinates and does not compute task outputs itself. Coordinate workers through task DMs; do not create a collaboration room.',
+  ];
+  return [
+    `Use Hivemind with one brain and up to ${workerCount} workers.`,
+    'The brain coordinates and does not compute task outputs itself. Create/use one task-scoped collaboration room for peer-visible coordination and use structured tasks.',
+  ];
 }
 
-function promptFor(fixture, workflow) {
+function scenarioInstructions(fixture, workflow) {
+  if (fixture.id === 'noisy-room' && workflow !== 'brain_multi_room') {
+    return [
+      'This workflow has no collaboration room. Room-only noise injection is not applicable in this condition; do not create a room solely to inject noise.',
+      'Preserve the relevant task and clarification sequence using only the coordination shape allowed by this workflow.',
+    ];
+  }
+  return fixture.instructions?.length ? fixture.instructions : ['none'];
+}
+
+function promptFor(fixture, workflow, seed, repeatIndex) {
   const tasks = fixture.tasks.map(task => `- ${task.id}: effort=${task.effort}; scope=${task.scope.join(', ')}; dependsOn=${task.dependsOn.join(', ') || 'none'}; clarifications=${task.clarifications ?? 0}; capability=${task.requiredCapability ?? 'none'}`).join('\n');
   const faults = fixture.faults.length ? fixture.faults.map(fault => `- ${fault.type} on ${fault.taskId}`).join('\n') : '- none';
-  const instructions = fixture.instructions?.length ? fixture.instructions.map(line => `- ${line}`).join('\n') : '- none';
+  const instructions = scenarioInstructions(fixture, workflow).map(line => `- ${line}`).join('\n');
   return [
     `Coordination benchmark fixture: ${fixture.id}`,
     fixture.description,
     '',
     ...workflowInstructions(workflow, Math.min(3, fixture.workers.length)),
-    'Preserve the fixture task/dependency shape. Use Hivemind coordination primitives when the workflow calls for them.',
+    'Preserve the fixture task/dependency shape. Effort values are relative scheduling hints, not literal sleep requirements.',
+    'Use Hivemind coordination primitives only when the selected workflow calls for them.',
     'Do the task normally with the configured real model/provider. Do not optimize for benchmark counters.',
     'Stop when the acceptance artifact is ready for independent review.',
-    '', 'Tasks:', tasks, '', 'Scenario instructions:', instructions, '', 'Injected/recovery conditions:', faults,
+    '', 'Tasks:', tasks, '', ...workContract(fixture, seed, repeatIndex),
+    '', 'Scenario instructions:', instructions, '', 'Injected/recovery conditions:', faults,
   ].join('\n');
 }
 
@@ -64,7 +140,12 @@ export function trialTemplate(fixture, workflow, seed, repeatIndex, config) {
     trial: { workflow, seed, repeatIndex },
     versions: { hivemindRevision: config.hivemindRevision, provider: config.provider, model: config.model, host: config.host, configuration: config.configuration,
       promptVersion: config.promptVersion, taskVersion: config.taskVersion },
-    runbook: { prompt: promptFor(fixture, workflow), acceptanceCriteria: ['Complete the fixture objective', 'Retain inspectable artifacts/evidence', 'Independent reviewer records defects and rework without seeing workflow metadata when practical'] },
+    runbook: { prompt: promptFor(fixture, workflow, seed, repeatIndex), acceptanceCriteria: [
+      'Produce the complete deterministic taskOutputs artifact for this fixture/repeat',
+      'Every task output matches the SHA-256 contract, including dependency-derived material',
+      'Retain inspectable coordination artifacts/evidence',
+      'Independent reviewer records defects and rework without seeing workflow metadata when practical',
+    ] },
     timing: { startedAt: null, completedAt: null, wallMs: null },
     quality: { acceptancePassed: null, defects: null, reworkEvents: null, duplicateWork: null },
     coordination: { clarificationRounds: null, handoffCount: null, recoveryEvents: null },
@@ -205,7 +286,7 @@ function args(argv) {
   return options;
 }
 
-function jsonFiles(dir) { return readdirSync(dir).filter(name => name.endsWith('.json') && name !== 'manifest.json' && name !== 'summary.json').sort(); }
+function jsonFiles(dir) { return readdirSync(dir).filter(name => /^trial-[a-f0-9]{16}\.json$/.test(name)).sort(); }
 
 export function main(argv = process.argv.slice(2)) {
   const options = args(argv);
