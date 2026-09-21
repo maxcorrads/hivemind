@@ -73,7 +73,6 @@ export function opencodeArgs(trial, prompt) {
   return [
     '--pure',
     'run',
-    '--standalone',
     '--model', trial.versions.model,
     '--auto',
     '--format', 'json',
