@@ -74,6 +74,35 @@ test('scope changes fence existing work until coordinator reconciliation and wor
   assert.equal(f.hive.rooms.peek(f.channel.id)!.state, 'active');
 });
 
+test('concurrent worker acknowledgements of the same unchanged contract do not conflict', t => {
+  const f = fixture(t); f.configure();
+  const observedRevision = f.hive.rooms.peek(f.channel.id)!.revision;
+  const contractVersion = f.hive.rooms.peek(f.channel.id)!.contractVersion;
+  f.hive.rooms.event(f.a.agent, f.channel.id, {
+    requestId: 'ack-a', expectedRevision: observedRevision,
+    action: { type: 'acknowledge', contractVersion },
+  });
+  assert.equal(f.hive.rooms.peek(f.channel.id)!.revision, observedRevision + 1);
+  f.hive.rooms.event(f.b.agent, f.channel.id, {
+    requestId: 'ack-b', expectedRevision: observedRevision,
+    action: { type: 'acknowledge', contractVersion },
+  });
+  assert.equal(f.hive.rooms.peek(f.channel.id)!.revision, observedRevision + 2);
+  const rows = f.hive.db.prepare('SELECT actor_id, version FROM room_acks WHERE channel_id=? ORDER BY actor_id')
+    .all(f.channel.id) as Array<{ actor_id: string; version: number }>;
+  assert.deepEqual(rows.map(row => [row.actor_id, row.version]).sort(),
+    [[f.a.agent.id, contractVersion], [f.b.agent.id, contractVersion]].sort());
+
+  const staleRevision = f.hive.rooms.peek(f.channel.id)!.revision;
+  f.configure({ limits: ['Changed contract'] });
+  const currentVersion = f.hive.rooms.peek(f.channel.id)!.contractVersion;
+  assert.ok(currentVersion > contractVersion);
+  assert.throws(() => f.hive.rooms.event(f.a.agent, f.channel.id, {
+    requestId: 'stale-contract-ack', expectedRevision: staleRevision,
+    action: { type: 'acknowledge', contractVersion: currentVersion },
+  }), /Room changed/);
+});
+
 test('request retries, stale versions and stable action keys do not create duplicate work', t => {
   const f = fixture(t), seq = f.command();
   const input = { requestId: 'same-config', expectedRevision: 0, humanInstructionSeq: seq, action: { type: 'configure', contract: f.contract, reason: 'Set rules' } };
