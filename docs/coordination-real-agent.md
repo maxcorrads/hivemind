@@ -32,6 +32,51 @@ That produces exactly **24 trials** (3 fixtures × 4 workflows × 2 repeats). Pr
 
 Treat this as a methodology pilot, not as sufficient evidence for a general productivity claim. Promote to the full 8-fixture × 4-workflow × 3-repeat = **96 trial** cohort only after the 24 runs reveal no systematic prompt/fixture/harness ambiguity and failed runs have been retained rather than rerun away.
 
+### Executable v2 work contract
+
+Real-agent prompt version `coordination-real-v2` adds a deterministic artifact to every fixture task. Each task has a versioned base input and produces a lowercase SHA-256 value; dependent tasks hash the actual upstream outputs as part of their material. The final artifact is a small JSON object containing every task output.
+
+This gives the pilot a real acceptance check instead of asking a model to “implement” only an abstract effort/scope label. Expected hashes are computed by the harness and are **not** placed in participant prompts.
+
+For `noisy-room`, the 12 unrelated observations apply only to `brain_multi_room`. The DM, brain+one, and single-worker conditions must not create a room solely to inject noise. This avoids the previous contradiction between “DM only” and “noise must stay in the shared room”. Because this changes participant instructions materially, old `coordination-real-v1` pilot directories must be regenerated rather than mixed into the v2 cohort.
+
+### Optional Codex pilot executor
+
+The core benchmark remains provider-neutral. For the Codex-hosted cohort there is an optional local executor:
+
+```sh
+npm run benchmark:coordination:pilot:run -- \
+  --input /tmp/hivemind-pilot-v1 \
+  --dry-run
+
+npm run benchmark:coordination:pilot:run -- \
+  --input /tmp/hivemind-pilot-v1
+```
+
+The checked-in command name is `codex`. A local wrapper or alternate executable is selected **only at runtime** and is never persisted in the benchmark:
+
+```sh
+CODEX_BIN=/path/to/local-codex-wrapper \
+npm run benchmark:coordination:pilot:run -- --input /tmp/hivemind-pilot-v1
+```
+
+Executor behavior:
+
+- trials run in the exact seeded manifest order;
+- one trial runs at a time; seats within a multi-agent trial run concurrently;
+- `single_worker` launches one Codex process with native subagents disabled and no Hivemind coordination;
+- brain workflows launch one isolated Codex process per worker plus one brain, all with native subagents disabled, and coordinate only through Hivemind;
+- the runner starts a fresh isolated Hivemind home per trial on port **7420** and retains its database/logs;
+- the normal local Hivemind server must therefore be stopped while the pilot runs;
+- Codex must already have the Hivemind MCP server configured for `http://127.0.0.1:7420`;
+- worker capability cards mirror the versioned fixture capabilities;
+- the brain assembles `BENCHMARK_RESULT.json` from reviewed worker results; the harness compares it with the hidden deterministic expected artifact;
+- wall time and explicit Codex CLI token counts are retained when available;
+- run logs, Hivemind state, final artifacts, and harness failures stay under the trial directory;
+- a trial that has been attempted is skipped on resume rather than silently rerun away.
+
+The executor intentionally leaves each trial `pending`. It fills only observed execution fields such as wall time, deterministic acceptance/defect count, and provider-reported tokens. Independent review must still fill rework/duplicate-work, clarification/handoff/recovery counts, review metadata, and finally set `status: "complete"`.
+
 ## Prepare a balanced trial set
 
 ```sh
