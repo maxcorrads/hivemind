@@ -343,7 +343,11 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       adaptiveDirective(routing),
       `adaptive-${routing.routeId}`,
     );
-    appendAdaptiveTelemetry(hive.home, routing, originalBody, { id: project.id, slug: project.slug });
+    try {
+      appendAdaptiveTelemetry(hive.home, routing, originalBody, { id: project.id, slug: project.slug });
+    } catch {
+      console.error("Adaptive routing telemetry write failed");
+    }
     return c.json({ message: delivered.message, routing, routingMessage: delivered.routingMessage });
   });
   ui.post("/files", async (c) => {
