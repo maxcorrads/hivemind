@@ -149,7 +149,7 @@ test("only new top-level Human messages in a brain DM are active-routing candida
   const brains = new Set(["brain-id"]);
   assert.equal(shouldRouteHumanMessage(channel, "Do this", null, brains), true);
   assert.equal(shouldRouteHumanMessage(channel, "Do this", "thread-id", brains), false);
-  assert.equal(shouldRouteHumanMessage(channel, "   ", null, brains), false);
+  assert.equal(shouldRouteHumanMessage(channel, "   ", null, brains), true);
   assert.equal(shouldRouteHumanMessage({ ...channel, type: "public" }, "Do this", null, brains), false);
 });
 
@@ -185,6 +185,24 @@ test("enabled Jev routing changes real Human-to-brain delivery while disabled mo
   assert.equal(legacyJson.message.body, "Legacy request");
   assert.equal(legacyJson.routing, null);
   assert.equal(calls, 0);
+
+  const manual = await app.request(`/api/ui/channels/${dm.id}/messages`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ body: "Manual single request", requestId: "manual-single", routing: "single" }),
+  });
+  assert.equal(manual.status, 200);
+  const manualJson = await manual.json() as {
+    message: { body: string };
+    routingMessage: { body: string };
+    routing: { strategy: string; providerStatus: string; reason: string };
+  };
+  assert.equal(calls, 0, "explicit routing must bypass TypeSafe");
+  assert.equal(manualJson.message.body, "Manual single request");
+  assert.equal(manualJson.routing.strategy, "single");
+  assert.equal(manualJson.routing.providerStatus, "bypassed");
+  assert.equal(manualJson.routing.reason, "human_explicit_single");
+  assert.match(manualJson.routingMessage.body, /SINGLE/);
 
   const settingsResponse = await app.request("/api/ui/adaptive-routing", {
     method: "PUT",
