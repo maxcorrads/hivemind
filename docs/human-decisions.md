@@ -54,3 +54,47 @@ These are transport receipts only. They do not imply that the recipient accepted
 Creation, Human answer and withdrawal use request IDs. Exact retries return the prior result; reusing a key with another payload fails. Human answer and brain withdrawal are decision-revision fenced.
 
 If the linked task revision changes while Human is deciding, the request projects as `superseded`. A dedicated answer endpoint then fails closed. Free-text replies are preserved as ordinary history rather than being silently applied to the new task revision.
+
+## Paired Human evaluation
+
+The functional queue is not by itself evidence that Human handling is faster or safer than the existing mention view. Issue #34 therefore has a small paired protocol dedicated to that remaining empirical question.
+
+Version 1 contains four bounded cases: a current compatibility choice, a superseded task revision, related-but-distinct questions with repeated worker reminders, and an expired recommendation. Each case is shown in both `mentions` and `decision_queue` conditions, with two repeats by default: **4 cases × 2 conditions × 2 repeats = 16 trials**.
+
+Trial packets omit the condition label, fixture ID and answer key. The presentation itself cannot be perfectly blinded because a decision card is visibly different from a mention stream; the manifest keeps the mapping and objective answer/context key separate from the participant packet.
+
+The protocol measures dimensions separately:
+
+- Human handling wall time;
+- blocker-to-decision latency;
+- repeated/follow-up question count;
+- unrelated contexts opened;
+- objective decision correctness;
+- exact task/revision context correctness and wrong-context answers;
+- independent evidence-support review.
+
+It deliberately emits no aggregate score or automatic winner. A smaller local cohort is evidence about those cases and that participant cohort, not a general productivity claim.
+
+Prepare the default cohort from the exact Hivemind revision under evaluation:
+
+```sh
+npm run benchmark:human-decisions -- prepare \
+  --participant-cohort local-human-v1 \
+  --hivemind-revision <exact-sha> \
+  --output /tmp/hivemind-human-decisions
+```
+
+Present the generated `trial-*.json` packets in manifest order without exposing `manifest.json`. Retain interrupted runs as `status: "aborted"` rather than silently replacing them. For completed trials record real start/end timing, handling and blocker-to-decision milliseconds, the chosen action/option, exact task/revision, evidence references, repeated questions, unrelated contexts opened, and an evidence-support review. In the packet-only protocol the blocker becomes visible when the trial is presented, so blocker-to-decision will normally equal or exceed handling time; a live UI study may include real queue wait before presentation.
+
+Validate and summarize after the cohort:
+
+```sh
+npm run benchmark:human-decisions -- validate \
+  --input /tmp/hivemind-human-decisions
+
+npm run benchmark:human-decisions -- summarize \
+  --input /tmp/hivemind-human-decisions \
+  --output /tmp/hivemind-human-decisions-summary.json
+```
+
+The summary keeps per-condition distributions and matched `decision_queue - mentions` deltas for time and interaction counts. Objective decision/context correctness is derived from the hidden manifest answer key; wrong-context answers are reported explicitly. Keep #34 open until a retained Human cohort exists.
