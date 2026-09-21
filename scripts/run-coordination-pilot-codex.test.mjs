@@ -234,15 +234,15 @@ test('room authority seeding bootstraps Human auth, writes a local Human message
   assert.match(posted.body, /Human authorizes the coordinating brain/);
 });
 
-test('OpenCode usage accumulator preserves JSONL token totals across chunk boundaries', () => {
+test('OpenCode usage accumulator keeps the latest cumulative total across chunk boundaries', () => {
   const usage = openCodeUsageAccumulator();
   usage.push(Buffer.from('{"type":"step_finish","part":{"tokens":{"total":12}}}\n{"type":"step_'));
   usage.push(Buffer.from('finish","part":{"tokens":{"total":34}}}\n{"type":"text"'));
   usage.push(Buffer.from('}\n'));
-  assert.equal(usage.finish(), 46);
+  assert.equal(usage.finish(), 34);
 });
 
-test('token parsing uses explicit Codex usage or sums OpenCode step_finish JSON totals', () => {
+test('token parsing uses explicit Codex usage or the latest cumulative OpenCode total', () => {
   assert.equal(parseProviderTokens('tokens used\n9024\n'), 9024);
   assert.equal(parseProviderTokens('x\ntokens used\n12.077\n'), 12077);
   assert.equal(parseProviderTokens('tokens used\n9,024\n'), 9024);
@@ -251,7 +251,7 @@ test('token parsing uses explicit Codex usage or sums OpenCode step_finish JSON 
     JSON.stringify({ type: 'text', part: { text: 'progress' } }),
     JSON.stringify({ type: 'step_finish', part: { tokens: { total: 21261 } } }),
   ].join('\n');
-  assert.equal(parseProviderTokens(openCode), 40210);
+  assert.equal(parseProviderTokens(openCode), 21261);
   assert.equal(parseProviderTokens('{bad json}\n{"type":"step_finish","part":{"tokens":{"total":-1}}}'), null);
   assert.equal(parseProviderTokens('no usage line'), null);
 });
