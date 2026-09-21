@@ -43,7 +43,7 @@ export function parseProviderTokens(text) {
     return Number.isSafeInteger(value) && value >= 0 ? value : null;
   }
 
-  let total = 0, observed = 0;
+  let latest = null;
   for (const line of source.split(/\r?\n/)) {
     if (!line.trim().startsWith('{')) continue;
     let event;
@@ -51,10 +51,9 @@ export function parseProviderTokens(text) {
     if (event?.type !== 'step_finish') continue;
     const value = event?.part?.tokens?.total;
     if (!Number.isSafeInteger(value) || value < 0) continue;
-    total += value;
-    observed++;
+    latest = value;
   }
-  return observed ? total : null;
+  return latest;
 }
 
 export function parseReasoningEffort(configuration) {
@@ -320,7 +319,7 @@ function appendTail(current, chunk, limit = 1_000_000) {
 }
 
 export function openCodeUsageAccumulator() {
-  let pending = '', total = 0, observed = 0;
+  let pending = '', latest = null;
   const consume = line => {
     if (!line.trim().startsWith('{')) return;
     let event;
@@ -328,8 +327,7 @@ export function openCodeUsageAccumulator() {
     if (event?.type !== 'step_finish') return;
     const value = event?.part?.tokens?.total;
     if (!Number.isSafeInteger(value) || value < 0) return;
-    total += value;
-    observed++;
+    latest = value;
   };
   return {
     push(chunk) {
@@ -340,7 +338,7 @@ export function openCodeUsageAccumulator() {
     },
     finish() {
       if (pending) consume(pending);
-      return observed ? total : null;
+      return latest;
     },
   };
 }
