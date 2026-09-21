@@ -32,7 +32,7 @@ That produces exactly **24 trials** (3 fixtures × 4 workflows × 2 repeats). Pr
 
 Treat this as a methodology pilot, not as sufficient evidence for a general productivity claim. Promote to the full 8-fixture × 4-workflow × 3-repeat = **96 trial** cohort only after the 24 runs reveal no systematic prompt/fixture/harness ambiguity and failed runs have been retained rather than rerun away.
 
-### Executable v2 work contract
+### Executable v3 work contract
 
 Real-agent prompt version `coordination-real-v3` adds a deterministic artifact to every fixture task. Each task has a versioned base input and produces a lowercase SHA-256 value; dependent tasks hash the actual upstream outputs as part of their material. The final artifact is a small JSON object containing every task output.
 
