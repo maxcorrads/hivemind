@@ -9,6 +9,7 @@ import { api, connectWs, type ChannelPayload, type Snapshot, type TelegramSettin
 import { LaunchSheet } from "./LaunchSheet.tsx";
 import { BotOrigin, BotSetup, BotCredentials } from "./Bots.tsx";
 import { ProjectPlugins } from "./ProjectPlugins.tsx";
+import { AdaptiveRoutingSettings } from "./AdaptiveRoutingSettings.tsx";
 import { InboxReceipt, QueueBadge } from "./InboxReceipt.tsx";
 import { loadMailLog, mergeMailLog, saveMailLog } from "./mail-log.ts";
 import type { MentionPage, ReadSnapshot } from "../src/shared/read-state.ts";
@@ -135,6 +136,7 @@ export function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [launchOpen, setLaunchOpen] = useState(false);
   const [telegramOpen, setTelegramOpen] = useState(false);
+  const [adaptiveRoutingOpen, setAdaptiveRoutingOpen] = useState(false);
   const [telegram, setTelegram] = useState<TelegramSettings | null>(null);
   const [tgToken, setTgToken] = useState("");
   const [tgUsers, setTgUsers] = useState("");
@@ -750,6 +752,14 @@ export function App() {
               }}
             >
               {telegramDegraded(snap.telegram) ? "⚠" : snap.telegram?.running ? "✈" : "⌬"}
+            </button>
+            <button
+              type="button"
+              className="icon-btn"
+              title="Adaptive routing"
+              onClick={() => setAdaptiveRoutingOpen(true)}
+            >
+              ⇄
             </button>
             <button type="button" className="icon-btn" title="Launch agent" onClick={() => setLaunchOpen(true)}>
               ▶
@@ -1483,6 +1493,10 @@ export function App() {
             </div>
           </form>
         </div>
+      )}
+
+      {adaptiveRoutingOpen && (
+        <AdaptiveRoutingSettings onClose={() => setAdaptiveRoutingOpen(false)} />
       )}
 
       {telegramOpen && telegram && (

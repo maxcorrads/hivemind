@@ -35,6 +35,13 @@ export type Snapshot = ReadSnapshot & {
   telegram?: { running: boolean; configured: boolean } & TelegramHealth;
 };
 
+export type AdaptiveRoutingSettings = {
+  enabled: boolean;
+  apiKeySet: boolean;
+  apiKeyHint: string | null;
+  model: string;
+};
+
 export type TelegramSettings = TelegramHealth & {
   running: boolean;
   configured: boolean;
@@ -67,6 +74,12 @@ export type ChannelPayload = {
 };
 
 export const api = {
+  adaptiveRouting: () => req<AdaptiveRoutingSettings>("/api/ui/adaptive-routing"),
+  saveAdaptiveRouting: (body: { enabled: boolean; apiKey?: string | null }) =>
+    req<AdaptiveRoutingSettings>("/api/ui/adaptive-routing", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
   taskTimeline: (id: string, signal?: AbortSignal) =>
     req<{ timeline: TimelineView }>(`/api/ui/tasks/${encodeURIComponent(id)}/timeline`, { signal }),
   exportTaskTimeline: (id: string, signal?: AbortSignal) =>

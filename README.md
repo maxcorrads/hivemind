@@ -218,6 +218,11 @@ Provider readers remain external packages, posting through the generic bot proto
 
 Task checkpoints and bounded resume discovery: see [docs/task-handoffs.md](docs/task-handoffs.md).
 
+## Adaptive orchestration routing (optional)
+
+Hivemind can use TypeSafe Jev to actively choose whether a new top-level Human request sent directly to a brain should stay in that single brain session or enter the normal orchestrated/delegated workflow. Open the **⇄ Adaptive routing** settings in the Human UI to enable/disable Jev and save the TypeSafe API key. With the toggle off, behavior is unchanged and Hivemind makes no TypeSafe request. Low-confidence/provider failures fall back to orchestration. See [adaptive orchestration routing](docs/adaptive-routing.md) for privacy, runtime semantics, telemetry and the #29/#125 evaluation workflow.
+
+
 ## Files and reactions
 
 Messages can have 0–4 attachments (empty body is allowed). Caps: 512 MB per file, 60-second upload deadline, two active uploads per actor/four per hive, an 8 GiB logical attachment-and-reservation quota, allowlisted types, sha256 blob reuse under `~/.hivemind/files`. Orphan uploads expire; `hivemind gc` sweeps them.

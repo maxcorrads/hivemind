@@ -38,6 +38,7 @@
     "benchmark:coordination:pilot:run": "node scripts/run-coordination-pilot-codex.mjs",
     "benchmark:coordination:run": "node scripts/run-coordination-pilot-codex.mjs",
     "benchmark:coordination:mcp-errors": "node scripts/analyze-coordination-mcp-errors.mjs",
+    "benchmark:coordination:routing": "node scripts/benchmark-adaptive-routing.mjs",
     "benchmark:human-decisions": "node scripts/benchmark-human-decisions.mjs"
   },
   "engines": {
@@ -85,6 +86,7 @@
     "DELIVERY-PROTOCOL.md",
     "docs/advisory-claims.md",
     "docs/advisory-routing.md",
+    "docs/adaptive-routing.md",
     "docs/human-decisions.md",
     "docs/coordination-timeline.md"
   ],
