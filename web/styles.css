@@ -427,6 +427,91 @@ html.dark .avatar.role-bot { color: var(--ink); }
   font-size: 0.75rem;
 }
 html.dark .routing-mode { background: var(--desk); }
+
+.routing-lock-mode {
+  flex: none;
+  align-self: center;
+  max-width: 8rem;
+  height: 2rem;
+  padding: 0 1.6rem 0 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+  font-size: 0.72rem;
+}
+.routing-lock-mode:disabled { opacity: 0.45; }
+html.dark .routing-lock-mode { background: var(--desk); }
+
+.routing-strip {
+  margin: 0.4rem 1rem 0;
+  padding: 0.4rem 0.55rem;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--moss) 7%, transparent);
+  font-size: 0.75rem;
+}
+.routing-strip.warning {
+  background: color-mix(in srgb, var(--wax) 15%, transparent);
+}
+.routing-strip button {
+  flex: none;
+  padding: 0.2rem 0.45rem;
+  border-radius: 8px;
+  font-size: inherit;
+}
+.routing-strip span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.routing-sheet { max-width: 720px; }
+.routing-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: center;
+  padding: 0.55rem 0;
+}
+.routing-summary span {
+  padding: 0.15rem 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.75rem;
+}
+.routing-warning {
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--wax) 15%, transparent);
+}
+.routing-lock {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.55rem;
+  margin: 0.7rem 0;
+}
+.routing-lock .row { grid-column: 1 / -1; }
+.routing-events {
+  max-height: min(50vh, 420px);
+  overflow: auto;
+  display: grid;
+  gap: 0.35rem;
+}
+.routing-event {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.76rem;
+}
+.routing-event.transition { font-weight: 700; }
+.routing-event.warning { background: color-mix(in srgb, var(--wax) 10%, transparent); }
+.routing-event time { flex: none; opacity: 0.6; }
 .send {
   flex: none;
   height: 2rem;
