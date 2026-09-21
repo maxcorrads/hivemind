@@ -8,6 +8,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { Hive } from './hive.ts';
 import { BODY_MAX, HiveError, type Agent, type Channel } from '../shared/types.ts';
 import { assignTaskSchema, taskEventSchema, taskBody, type TaskContract, type TaskEnvelope, type TaskSnapshot } from '../shared/tasks.ts';
+import { admitAdaptiveTask, linkAdaptiveTask } from './adaptive-topology-admission.ts';
 
 type Row = { id: string; channel_id: string; worker_id: string; dispatch_seq: number; received_at: number | null; snapshot: string };
 type StoredEvent = { message_id: string; task_id: string; request_hash: string };
@@ -129,10 +130,11 @@ export class TaskStore {
     if (old.request_hash !== hash) throw new HiveError(409, 'requestId was already used for a different task event');
     return { task, message: this.hive.getMessageById(old.message_id), duplicate: true };
   }
-  private transaction<T>(f: () => T): T {
-    return immediateTransaction(this.db, f);
-  }
+  private transaction<T>(f: () => T): T { return immediateTransaction(this.db, f); }
   private write(actor: Agent, task: TaskSnapshot, envelope: TaskEnvelope, requestId: string, hash: string, initial: boolean) {
+    // Admission observes live capacity inside this transaction; a stale preflight cannot oversubscribe workers.
+    const adaptiveExecution = envelope.action.type === 'assign' || envelope.action.type === 'revise'
+      ? admitAdaptiveTask(this.hive, actor, task, requestId) : null;
     const body = taskBody(envelope);
     if (body.length > BODY_MAX || Buffer.byteLength(JSON.stringify(envelope)) > 16000)
       throw new HiveError(400, 'Task envelope is too large; use a compact contract and evidence references');
@@ -153,30 +155,26 @@ export class TaskStore {
     const seq = Number(this.db.prepare('SELECT seq FROM messages WHERE id = ?').get(id)!.seq);
     task.lastEventSeq = seq; task.updatedAt = now;
     if (envelope.action.type === 'checkpoint' && task.checkpoint) {
-      task.checkpoint.messageId = id;
-      task.checkpoint.messageSeq = seq;
+      task.checkpoint.messageId = id; task.checkpoint.messageSeq = seq;
     }
     if (initial || envelope.action.type === 'revise') { task.dispatchSeq = seq; task.receivedAt = null; }
     this.db.prepare(`INSERT INTO task_records(id, channel_id, worker_id, dispatch_seq, received_at, snapshot) VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET worker_id=excluded.worker_id, dispatch_seq=excluded.dispatch_seq,
         received_at=excluded.received_at, snapshot=excluded.snapshot`)
       .run(task.id, task.channelId, task.workerId, task.dispatchSeq, task.receivedAt, JSON.stringify(this.record(task)));
+    linkAdaptiveTask(this.hive, task.id, adaptiveExecution);
     this.db.prepare('INSERT INTO task_events(message_id, task_id, actor_id, request_id, request_hash, envelope) VALUES (?, ?, ?, ?, ?, ?)')
       .run(id, task.id, actor.id, requestId, hash, JSON.stringify(envelope));
     this.db.prepare('INSERT OR IGNORE INTO threads(id, channel_id, status) VALUES (?, ?, NULL)').run(task.id, task.channelId);
     return id;
   }
   private record(task: TaskSnapshot) {
-    // Room metadata is a projection of the channel contract and current worker ACK,
-    // not another task-owned state machine. Never persist that derived snapshot.
     const { room: _room, coordination: _coordination, ...record } = task;
     return record;
   }
   private published(actor: Agent, taskId: string, messageId: string) {
-    const task = this.get(actor, taskId);
-    const message = this.hive.getMessageById(messageId);
-    this.hive.publishTaskMessage(message);
-    this.hive.bus.emit('task', task);
+    const task = this.get(actor, taskId), message = this.hive.getMessageById(messageId);
+    this.hive.publishTaskMessage(message); this.hive.bus.emit('task', task);
     return { task, message, duplicate: false };
   }
   assign(actor: Agent, raw: unknown) {
@@ -188,8 +186,7 @@ export class TaskStore {
     this.transaction(() => {
       duplicate = this.retry(actor, input.requestId, hash); if (duplicate) return;
       const worker = this.worker(actor, input.worker);
-      this.contract(actor, input.contract);
-      this.workerEvidence(worker, input.contract.evidenceSeqs);
+      this.contract(actor, input.contract); this.workerEvidence(worker, input.contract.evidenceSeqs);
       const channel = input.channel ? this.hive.getChannel(input.channel, actor.projectId) : this.hive.openDm(actor, worker.name, true);
       this.writable(actor, worker, channel);
       const room = this.hive.rooms.assignment(actor, channel, worker, input);
@@ -227,17 +224,13 @@ export class TaskStore {
       if (input.expectedRevision !== task.revision) throw new HiveError(409, 'Task changed; get_task and use its current revision');
       this.hive.rooms.checkTask(actor, task, action.type);
       const previousWorkerId = task.workerId;
-      if (action.type === 'accept' || action.type === 'result' || (action.type === 'review' && action.decision === 'accepted'))
-        this.coordination.assertReady(task);
-      if (isClaimAction(action.type)) {
-        this.coordination.apply(actor, task, claimActionSchema.parse(action));
-      } else if (action.type === 'revise') {
-        const worker = this.worker(actor, action.worker);
-        const room = this.hive.rooms.peek(task.channelId);
+      if (action.type === 'accept' || action.type === 'result' || (action.type === 'review' && action.decision === 'accepted')) this.coordination.assertReady(task);
+      if (isClaimAction(action.type)) this.coordination.apply(actor, task, claimActionSchema.parse(action));
+      else if (action.type === 'revise') {
+        const worker = this.worker(actor, action.worker), room = this.hive.rooms.peek(task.channelId);
         if (room && !room.participantIds.includes(worker.id)) throw new HiveError(403, 'Replacement worker must be a declared room participant');
         this.writable(actor, worker, this.hive.getChannel(task.channelId));
-        this.contract(actor, action.contract, task.id);
-        this.workerEvidence(worker, action.contract.evidenceSeqs);
+        this.contract(actor, action.contract, task.id); this.workerEvidence(worker, action.contract.evidenceSeqs);
         task.workerId = worker.id; task.workerName = worker.name;
         task.contract = action.contract; task.contractVersion++; task.state = 'sent'; task.result = null; task.review = null;
       } else if (action.type === 'review') {
@@ -246,26 +239,22 @@ export class TaskStore {
         if (action.decision === 'changes_requested' && action.evidenceSeqs.length) {
           try { this.evidence(this.hive.getAgent(task.workerId), action.evidenceSeqs); }
           catch (error) {
-            if (error instanceof HiveError && error.status === 403)
-              throw new HiveError(403, 'Changes-requested review evidence must be readable by the assigned worker; use a reference in a shared channel');
+            if (error instanceof HiveError && error.status === 403) throw new HiveError(403, 'Changes-requested review evidence must be readable by the assigned worker; use a reference in a shared channel');
             throw error;
           }
         }
         task.review = { reviewerId: actor.id, decision: action.decision, summary: action.summary };
         task.state = action.decision === 'accepted' ? 'accepted_complete' : 'changes_requested';
-        if (action.decision === 'accepted' && task.claim?.state === 'held')
-          task.claim = { ...task.claim, state: 'released', version: task.claim.version + 1, updatedAt: Date.now() };
+        if (action.decision === 'accepted' && task.claim?.state === 'held') task.claim = { ...task.claim, state: 'released', version: task.claim.version + 1, updatedAt: Date.now() };
       } else if (action.type === 'accept' || action.type === 'reject') {
-        if (!(action.type === 'accept' ? ['sent', 'delivered', 'blocked', 'changes_requested'] : ['sent', 'delivered']).includes(task.state))
-          throw new HiveError(409, 'Task cannot be accepted/rejected in its current state');
+        if (!(action.type === 'accept' ? ['sent', 'delivered', 'blocked', 'changes_requested'] : ['sent', 'delivered']).includes(task.state)) throw new HiveError(409, 'Task cannot be accepted/rejected in its current state');
         task.state = action.type === 'accept' ? 'accepted' : 'rejected';
       } else {
         if (!['accepted', 'blocked', 'changes_requested'].includes(task.state)) throw new HiveError(409, 'Accept the current contract before submitting work');
         if (action.type === 'block') task.state = 'blocked';
         else if (action.type === 'checkpoint') {
           const references = [...action.checkpoint.evidenceSeqs, ...action.checkpoint.checks.flatMap(check => check.evidenceSeqs)];
-          this.evidence(actor, references);
-          this.evidence(this.hive.getAgent(task.assignerId), references);
+          this.evidence(actor, references); this.evidence(this.hive.getAgent(task.assignerId), references);
           task.checkpoint = { version: (task.checkpoint?.version ?? 0) + 1,
             taskRevision: task.revision + 1, contractVersion: task.contractVersion, workerId: task.workerId,
             objective: task.contract.objective, worktree: task.contract.worktree, branch: task.contract.branch,
@@ -287,7 +276,6 @@ export class TaskStore {
     });
     return duplicate! ?? this.published(actor, taskId, messageId);
   }
-  /** Called inside the receipt transaction; no chat message or model wake. */
   recordReceipt(workerId: string, seqs: number[], at: number): string[] {
     return (this.db.prepare(`UPDATE task_records SET received_at = ? WHERE worker_id = ? AND received_at IS NULL
       AND dispatch_seq IN (SELECT value FROM json_each(?)) RETURNING id`).all(at, workerId, JSON.stringify(seqs)) as { id: string }[]).map(r => r.id);
