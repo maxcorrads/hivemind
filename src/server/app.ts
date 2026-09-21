@@ -15,6 +15,7 @@ import { BotIngressBudget, readLimitedJson, assertLocalHumanRequest, BOT_JSON_BY
 import {
   adaptiveDirective,
   adaptiveRoutingPublic,
+  explicitAdaptiveDecision,
   appendAdaptiveTelemetry,
   evaluateAdaptiveRequest,
   loadAdaptiveRouting,
@@ -323,20 +324,27 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       recipients: body.recipients,
       attachmentIds: Array.isArray(body.attachmentIds) ? body.attachmentIds.map(String) : undefined,
     };
-    const config = loadAdaptiveRouting(hive.home);
-    if (!config?.enabled || hive.hasActiveSendRequest(human, channel.id, body.requestId)) {
+    if (hive.hasActiveSendRequest(human, channel.id, body.requestId)) {
       return c.json({ message: hive.postMessage(human, messageInput), routing: null });
     }
     const brainIds = new Set(hive.listAgents(human)
       .filter(agent => agent.role === "brain" && agent.project === channel.project)
       .map(agent => agent.id));
-    if (!shouldRouteHumanMessage(channel, originalBody, threadId, brainIds)) {
+    const routingCandidate = shouldRouteHumanMessage(channel, originalBody, threadId, brainIds);
+    const requestedRouting = body.routing ?? "auto";
+    if (requestedRouting !== "auto" && !routingCandidate) {
+      throw new HiveError(400, "Explicit routing is only valid for a top-level Human-to-brain DM");
+    }
+    const config = loadAdaptiveRouting(hive.home);
+    if (!routingCandidate || (requestedRouting === "auto" && !config?.enabled)) {
       return c.json({ message: hive.postMessage(human, messageInput), routing: null });
     }
     const project = hive.getProjectBySlug(channel.project);
-    const routing = await evaluateAdaptiveRequest(originalBody, config, {
-      project: { slug: project.slug, name: project.name },
-    });
+    const routing = requestedRouting === "single" || requestedRouting === "orchestrated"
+      ? explicitAdaptiveDecision(requestedRouting)
+      : await evaluateAdaptiveRequest(originalBody, config!, {
+          project: { slug: project.slug, name: project.name },
+        });
     const delivered = hive.postAdaptiveRequest(
       human,
       messageInput,
