@@ -63,6 +63,7 @@ import { TaskStore } from './tasks.ts';
 import { NotificationStore } from './notifications.ts';
 import { RoomStore } from './rooms.ts';
 import { ROUTINE_BATCH_MS } from '../shared/notifications.ts';
+import { AdaptiveTopologyRuntime } from './adaptive-topology.ts';
 import type { TaskEnvelope } from '../shared/tasks.ts';
 
 export { hiveHome } from "./paths.ts";
@@ -152,6 +153,7 @@ export class Hive {
   readonly notifications!: NotificationStore;
   readonly decisions!: DecisionStore;
   readonly timeline!: TimelineStore;
+  readonly adaptiveTopology!: AdaptiveTopologyRuntime;
   private waiters = new Map<string, Waiter>();
   private telegramOrigin = new Set<string>();
   readonly uploads!: UploadBudget;
@@ -201,6 +203,7 @@ export class Hive {
       this.routing = new RoutingStore(this);
       this.timeline = new TimelineStore(this);
       this.decisions = new DecisionStore(this, work => this.transaction(work));
+      this.adaptiveTopology = new AdaptiveTopologyRuntime(this);
       this.inbox = new InboxDeliveryStore(this.db);
       this.inboxReader = new InboxReader(this.db, this.inbox, this.notifications, options.routineBatchMs ?? ROUTINE_BATCH_MS);
     } catch (error) {
@@ -1394,6 +1397,7 @@ export class Hive {
     directive: string,
     directiveRequestId: string,
     persistReceipt?: (message: Message) => void,
+    persistRouting?: (message: Message, routingMessage: Message) => void,
   ): { message: Message; routingMessage: Message } {
     return this.transaction(() => {
       const routingMessage = this.postMessage(actor, {
@@ -1403,6 +1407,7 @@ export class Hive {
         eventType: "assignment",
       });
       const message = this.postMessage(actor, input, persistReceipt);
+      persistRouting?.(message, routingMessage);
       return { message, routingMessage };
     });
   }
