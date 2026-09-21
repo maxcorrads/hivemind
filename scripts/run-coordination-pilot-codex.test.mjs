@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,6 +8,7 @@ import { loadFixtures } from './benchmark-coordination.mjs';
 import {
   REAL_AGENT_PROMPT_VERSION,
   expectedTaskOutputs,
+  main as realMain,
   trialTemplate,
 } from './benchmark-coordination-real.mjs';
 import {
@@ -17,6 +18,7 @@ import {
   codexArgs,
   codexExecutable,
   parseProviderTokens,
+  main as runnerMain,
   reviewArtifact,
   seatPlan,
   strictTrialFiles,
@@ -91,7 +93,7 @@ test('runner prompts keep native agents disabled while coordinating through Hive
   const brainPrompt = buildBrainPrompt(multi, fixture, 3);
   assert.match(brainPrompt, /Join with role=brain/);
   assert.match(brainPrompt, /task DMs only/);
-  assert.match(brainPrompt, /does not compute task outputs itself|Do not compute task hashes yourself/);
+  assert.match(brainPrompt, /Do not perform worker task outputs yourself/);
 });
 
 test('token parsing uses explicit Codex CLI usage and handles thousands separators', () => {
@@ -128,6 +130,28 @@ test('strict trial discovery ignores runner metadata JSON', () => {
     writeFileSync(path.join(dir, 'trial-1111111111111111.run-meta.json'), '{}');
     writeFileSync(path.join(dir, 'manifest.json'), '{}');
     assert.deepEqual(strictTrialFiles(dir), ['trial-1111111111111111.json', 'trial-2222222222222222.json']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test('pilot dry-run plans all 24 trials without creating run metadata', async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-pilot-dry-run-'));
+  try {
+    const out = path.join(dir, 'pilot');
+    realMain([
+      'prepare', '--root', root, '--output', out, '--preset', 'pilot-v1',
+      '--provider', 'openai', '--model', 'fixture-model', '--host', 'codex',
+      '--configuration', 'reasoning=max', '--hivemind-revision', 'dryrunsha',
+    ]);
+    const before = new Set(readdirSync(out));
+    const planned = await runnerMain(['--input', out, '--repo-root', root, '--dry-run']);
+    assert.equal(planned.length, 24);
+    assert.ok(planned.every(row => row.dryRun === true));
+    assert.deepEqual(new Set(readdirSync(out)), before);
+    assert.ok(!readdirSync(out).some(name => name.startsWith('run-')));
+    assert.ok(!existsSync(path.join(out, 'runs')));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
