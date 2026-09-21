@@ -196,7 +196,7 @@ export function buildWorkerPrompt(trial, fixture, worker, seatIndex) {
   const partitionInstructions = ownFact ? [
     `Your private benchmark fact is exactly: ${ownFact.workerId}=${ownFact.value}`,
     'This fact exists only in your host prompt. Do not read parent attempt logs, benchmark source files, or another seat output to recover peer facts.',
-    'Every task output in this fixture requires all worker facts in canonical worker-id order. Never guess or derive missing facts.',
+    'Every task output in this fixture requires all worker facts in canonical worker-id order. The exact suffix is "|facts=" followed by WORKER_ID=FACT_VALUE pairs joined with commas. Never guess or derive missing facts.',
     'Do not proactively broadcast your private fact. Disclose it only when another benchmark participant asks a relevant explicit question.',
     'When you are assigned work, request every missing fact through Hivemind with eventType=question before computing the result.',
     trial.trial.workflow === 'brain_multi_room'
