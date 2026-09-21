@@ -894,6 +894,7 @@ export class AdaptiveTopologyRuntime {
     rawMode: string | undefined,
     rawLockScope: string | undefined,
     persistReceipt?: (message: Message) => void,
+    routingText?: string,
   ): Promise<{ message: Message; routingMessage: Message; routing: AdaptiveTopologyDecision; state: AdaptiveExecutionState } | null> {
     if (human.role !== "human") throw new HiveError(403, "Only Human starts adaptive topology execution");
     const channel = this.hive.getChannel(input.channel);
@@ -913,7 +914,7 @@ export class AdaptiveTopologyRuntime {
       manualTopology && lockScope !== "none" ? lockScope : inheritedLock ? "conversation" : "none";
     const orchestratedOnly = mode === "orchestrated_auto";
     const initialSnapshot = this.initialSnapshot(
-      channel.id, input.body, brain, orchestratedOnly, effectiveLockScope, lockedTopology,
+      channel.id, routingText ?? input.body, brain, orchestratedOnly, effectiveLockScope, lockedTopology,
     );
     const capacity = initialSnapshot.capacity.workers;
     let decision: AdaptiveTopologyDecision;
