@@ -53,14 +53,16 @@ These are scheduling weights, not claims that they capture every millisecond in 
 
 ## New topology
 
-- Node 24: unit and four timing-balanced integration shards run independently.
-- Node 22.13.0: the same full unit/integration scope is retained and integration is split into two timing-balanced shards. Compatibility coverage is **not** reduced to a smoke subset; the lower shard count deliberately limits setup/queue overhead on the compatibility runtime.
-- The historical required gates `Tests / Node 24` and `Tests / Node 22.13.0` remain as aggregation jobs that require every corresponding unit/shard job.
+- Ubuntu is the primary CI platform for quality/build/package, Node tests and Chromium. This avoids scheduling the parallel shard fan-out against the much smaller hosted macOS concurrency pool.
+- Node 24: unit and four timing-balanced integration shards run independently on Ubuntu.
+- Node 22.13.0: the same full unit/integration scope is retained on Ubuntu and integration is split into two timing-balanced shards. Compatibility coverage is **not** reduced to a smoke subset.
+- One focused `macOS compatibility` job runs the launch/plugin shell contracts with native macOS zsh. Linux integration jobs also ensure zsh exists, so the same shell contracts remain part of the complete suites.
+- The historical required gates `Tests / Node 24` and `Tests / Node 22.13.0` remain. `Tests / Node 24` aggregates its unit/integration producers **and** the native macOS compatibility job, so branch protection cannot silently omit the platform check.
 - Normal Node 24 unit/integration jobs collect LCOV alongside their ordinary redacted logs. A lightweight `Coverage` aggregator merges those artifacts and enforces the unchanged 80% line / 75% branch / 75% function thresholds. There is no third full test execution in CI.
-- Playwright browser downloads are cached by OS + lockfile and installed only on a cache miss.
+- Playwright browser downloads are cached by OS + lockfile and installed only on a cache miss. Ubuntu installs the required Chromium system dependencies explicitly.
 - setup-node's npm download cache is enabled; `node_modules` is not cached.
 - Browser contracts remain isolated from server integration shards.
-- PR-title and dependency-review checks run on Ubuntu because they have no macOS dependency, leaving scarce macOS capacity to the tests that actually require it.
+- PR-title and dependency-review checks run on Ubuntu as well; the only macOS runner is the focused compatibility job.
 - Failed suite logs remain redacted and retained independently, so a shard failure names the responsible shard immediately.
 
 The extra shard setup intentionally trades some runner-minutes for lower critical-path latency. The baseline above keeps runner cost visible so that trade can be reviewed rather than hidden.
@@ -70,6 +72,8 @@ The extra shard setup intentionally trades some runner-minutes for lower critica
 The first validation run of the initial 4+4 shard topology was CI run `35604713765` on PR #117 (commit `ff5161f`). Every check passed, including merged coverage at **93.20% lines / 76.01% branches / 90.48% functions**.
 
 That run recorded **533 s wall-clock**, **552 runner-seconds**, and a **477 s maximum job queue**. The queue therefore dominated wall-clock far more than execution time. Rather than hide that result, the final topology reacts to it: Node 22 keeps the full integration suite but uses two shards instead of four, and the PR-title/dependency-review checks move off macOS. This run is a tuning observation, not part of the final after-sample because it used the superseded 4+4 topology.
+
+A later 4+2 validation on PR #119 (run `35607991015`) was fully green but still used macOS for the heavy jobs. It recorded **200 s wall-clock**, **NaN runner-seconds**, and a **NaN s maximum job queue**. The queue appeared after the workflow exposed more runnable macOS jobs than the hosted pool could start at once. That observation motivated the Linux-first topology above; it is also excluded from the final after-sample because it predates that topology.
 
 ## After measurement
 
