@@ -50,7 +50,7 @@ export type AdaptiveRoutingDecision = {
   strategy: AdaptiveStrategy;
   reason: string;
   fallbackUsed: boolean;
-  providerStatus: "ok" | "unavailable";
+  providerStatus: "ok" | "unavailable" | "bypassed";
   model: string | null;
   latencyMs: number;
   inputTokens: number | null;
@@ -305,6 +305,22 @@ export function decideAdaptiveStrategy(signals: AdaptiveSignals): {
     return { strategy: "orchestrated", reason: "coordination_pressure", fallbackUsed: false, minimumConfidence };
   }
   return { strategy: POLICY.fallback, reason: "ambiguous_policy_fallback", fallbackUsed: true, minimumConfidence };
+}
+
+export function explicitAdaptiveDecision(strategy: AdaptiveStrategy): AdaptiveRoutingDecision {
+  return {
+    routeId: `route-${randomUUID()}`,
+    strategy,
+    reason: `human_explicit_${strategy}`,
+    fallbackUsed: false,
+    providerStatus: "bypassed",
+    model: null,
+    latencyMs: 0,
+    inputTokens: null,
+    outputTokens: null,
+    minimumConfidence: null,
+    signals: null,
+  };
 }
 
 function failureDecision(routeId: string, reason: string, latencyMs: number): AdaptiveRoutingDecision {
