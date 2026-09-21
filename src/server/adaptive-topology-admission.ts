@@ -96,10 +96,18 @@ export function bindAdaptiveMessage(hive: Hive, actor: Agent, message: Message,
     current.workerBudget !== expected.workerBudget)
     throw new HiveError(409, 'Adaptive policy changed before message delivery');
   const channel = hive.getChannel(message.channelId, actor.projectId);
+  if (hive.db.prepare('SELECT status FROM threads WHERE id=?').get(message.threadId ?? message.id)?.status === 'done')
+    throw new HiveError(409, 'Delegation thread is completed; start a new assignment instead of reusing closed work');
   assertAdaptiveWorkerAdmission(hive, actor, channel, workerIds, current);
-  for (const workerId of new Set(workerIds)) hive.db.prepare(`INSERT INTO adaptive_topology_messages
-    (root_id,worker_id,execution_id,project_id) VALUES(?,?,?,?)`)
-    .run(message.threadId ?? message.id, workerId, current.executionId, channel.projectId);
+  for (const workerId of new Set(workerIds)) {
+    const root = message.threadId ?? message.id;
+    const previous = hive.db.prepare('SELECT execution_id FROM adaptive_topology_messages WHERE root_id=? AND worker_id=?').get(root, workerId);
+    if (previous && previous.execution_id !== current.executionId)
+      throw new HiveError(409, 'This delegation thread belongs to another execution');
+    hive.db.prepare(`INSERT OR IGNORE INTO adaptive_topology_messages
+      (root_id,worker_id,execution_id,project_id) VALUES(?,?,?,?)`)
+      .run(root, workerId, current.executionId, channel.projectId);
+  }
 }
 
 /** Serializes the full await + synchronous mutation, rather than only the classifier call. */

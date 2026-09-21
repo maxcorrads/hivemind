@@ -51,7 +51,7 @@ export type AdaptiveRoutingEvent = {
   channelId: string;
   projectId: string;
   createdAt: number;
-  kind: "evaluation" | "transition" | "warning" | "lock";
+  kind: "evaluation" | "transition" | "warning" | "lock" | "status";
   fromTopology: AdaptiveTopology;
   targetTopology: AdaptiveTopology;
   appliedTopology: AdaptiveTopology;
@@ -64,7 +64,13 @@ export type AdaptiveRoutingEvent = {
   warning: string | null;
 };
 
+export type AdaptiveMonitoring = "active" | "pending" | "disabled" | "unavailable" | "completed";
+
 export type AdaptiveExecutionState = {
+  /** Monotonic within a channel, including settings/lifecycle changes. */
+  revision?: number;
+  completedAt?: number | null;
+  monitoring?: AdaptiveMonitoring;
   executionId: string;
   channelId: string;
   projectId: string;

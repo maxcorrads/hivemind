@@ -17,6 +17,7 @@ export function routingEventLabel(event: AdaptiveRoutingEvent): string {
   if (event.kind === "transition")
     return `${topologyLabel(event.fromTopology)} → ${topologyLabel(event.appliedTopology)}${workers}${confidence} · ${event.reason}`;
   if (event.kind === "warning") return `⚠ ${event.warning ?? event.reason}`;
+  if (event.kind === "status") return `Hivemind · ${event.reason.replaceAll("_", " ")}`;
   if (event.kind === "lock") return `Human · ${event.reason} · ${topologyLabel(event.appliedTopology)}`;
   if (event.providerStatus === "bypassed") return `Manual · ${topologyLabel(event.appliedTopology)} · Jev not called`;
   return `Jev recommends ${topologyLabel(event.targetTopology)}${workers}${confidence} · ${event.reason}`;
@@ -50,7 +51,7 @@ function RoutingPanelContent({ channelId, state, events, onChange, onClose }: Pa
   const mutate = (body: { scope: AdaptiveLockScope; topology?: AdaptiveTopology | null }) => {
     if (busy) return;
     setBusy(true); setError(null);
-    api.setAdaptiveRoutingLock(channelId, body).then(next => {
+    api.setAdaptiveRoutingLock(channelId, { ...body, expectedExecutionId: state?.executionId, expectedRevision: state?.revision }).then(next => {
       if (mounted.current && next.state?.channelId === channelId && next.state.executionId === state?.executionId)
         onChange(next);
     }).catch(err => {
@@ -70,6 +71,9 @@ function RoutingPanelContent({ channelId, state, events, onChange, onClose }: Pa
             {state.desiredTopology && <span>pending → {topologyLabel(state.desiredTopology)}</span>}
             {state.lockedTopology && <span>Human override · {state.lockScope === "none" ? "this request" : state.lockScope}</span>}
           </div>
+          {state.monitoring === "disabled" && <p className="routing-warning" role="status">Jev disabled · automatic verification is off. Manual locks remain authoritative.</p>}
+          {state.monitoring === "pending" && <p className="help-p" role="status">Jev enabled · awaiting the next coordination event.</p>}
+          {state.monitoring === "completed" && <p className="help-p" role="status">Execution completed. No further Jev calls are scheduled for this request.</p>}
           {state.warning && <p className="routing-warning" role="alert">⚠ {state.warning}</p>}
           {state.recommendation?.providerStatus === "ok" && <p className="help-p">
             Latest Jev recommendation: <strong>{topologyLabel(state.recommendation.targetTopology)}</strong>
@@ -78,7 +82,7 @@ function RoutingPanelContent({ channelId, state, events, onChange, onClose }: Pa
             {state.lockedTopology ? " · recommendation only; Human override remains authoritative" : ""}
           </p>}
           {state.recommendation?.providerStatus === "bypassed" && <p className="help-p">Manual selection · Jev was not called for this decision.</p>}
-          <fieldset className="routing-lock">
+          <fieldset className="routing-lock" disabled={Boolean(state.completedAt)}>
             <legend>Human topology lock</legend>
             <label>Topology
               <select value={topology} onChange={event => setTopology(event.target.value as AdaptiveTopology)} disabled={busy}>

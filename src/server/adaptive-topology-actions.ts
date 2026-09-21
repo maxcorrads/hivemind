@@ -5,6 +5,7 @@ import { validated, sendInputSchema } from '../shared/api-contract.ts';
 import { assignTaskSchema, taskEventSchema } from '../shared/tasks.ts';
 import { roomEventSchema } from '../shared/rooms.ts';
 import { bindAdaptiveMessage, clearAdaptivePermit, coordinateMutation, coordinationEventId, permitAdaptiveTask } from './adaptive-topology-admission.ts';
+import { readAdaptiveCapacity } from './adaptive-topology-capacity.ts';
 import type { AdaptiveAgentPolicy, AdaptiveCoordinationEvent } from './adaptive-topology.ts';
 
 function event(actor: Agent, family: string, requestId: string,
@@ -50,11 +51,24 @@ export function sendAdaptiveAgentMessage(hive: Hive, actor: Agent, channelRef: s
     ]);
     const targets = roster.filter(a => a.role === 'worker' && directed.has(a.id));
     const room = hive.rooms.peek(channel.id);
-    if (actor.role === 'brain' && room && directed.size === 0 && input.eventType === 'assignment') {
+    if (actor.role === 'brain' && room && directed.size === 0) {
       for (const id of room.participantIds) { const worker = roster.find(a => a.id === id); if (worker) targets.push(worker); }
     }
-    const newWork = actor.role === 'brain' && targets.length > 0 &&
-      (input.eventType === 'assignment' || (!input.threadId && !['progress','acknowledgement','decision'].includes(input.eventType ?? '')));
+    // Sender-declared progress/decision labels are not authority to contact a new worker.
+    // Only a known, still-open assignment thread can continue without admitting new work.
+    const current = actor.role === 'brain' ? hive.adaptiveTopology.forAgent(actor) : null;
+    const continuing = Boolean(current && input.threadId && targets.length &&
+      hive.db.prepare('SELECT status FROM threads WHERE id=?').get(input.threadId)?.status !== 'done' &&
+      targets.every(worker => Boolean(
+        hive.db.prepare(`SELECT 1 FROM adaptive_topology_messages
+          WHERE root_id=? AND worker_id=? AND execution_id=?`).get(input.threadId!, worker.id, current.executionId) ||
+        hive.db.prepare(`SELECT 1 FROM adaptive_topology_tasks a JOIN task_records t ON t.id=a.task_id
+          WHERE a.task_id=? AND a.execution_id=? AND t.worker_id=?
+          AND json_extract(t.snapshot,'$.state') NOT IN ('accepted_complete','rejected')`)
+          .get(input.threadId!, current.executionId, worker.id))));
+    const inertAcknowledgement = input.eventType === 'acknowledgement' && !input.attachmentIds?.length;
+    const newWork = actor.role === 'brain' && !inertAcknowledgement &&
+      (input.eventType === 'assignment' || (targets.length > 0 && !continuing));
     const coordination = event(actor, 'message', requestId, {
       kind: newWork ? 'delegation_attempt' : actor.role === 'brain' ? 'brain_message' : 'worker_message',
       channelId: channel.id, taskId: input.threadId && hive.tasks.has(input.threadId) ? input.threadId : undefined,
@@ -140,7 +154,12 @@ export function mutateAdaptiveRoom(hive: Hive, actor: Agent, channelId: string, 
     if (participants && actor.role === 'brain') {
       policy = await hive.adaptiveTopology.beforeBrainAction(actor, coordination);
       authenticate(hive, actor, token);
-      if (policy && participants.length > policy.workerBudget) throw new HiveError(409, 'Room participants exceed the applied worker budget');
+      if (policy) {
+        if (participants.length > policy.workerBudget) throw new HiveError(409, 'Room participants exceed the applied worker budget');
+        const available = readAdaptiveCapacity(hive, { projectId: actor.projectId!, executionId: policy.executionId }).workers.available;
+        if (participants.some(member => !available.some(worker => worker.name === member.name)))
+          throw new HiveError(409, 'A room participant is not available for this execution');
+      }
     }
     const result = hive.rooms.event(actor, channelId, input);
     if (!participants) policy = await hive.adaptiveTopology.afterAgentAction(actor, coordination);

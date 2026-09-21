@@ -7,7 +7,7 @@ test("adaptive routing settings expose the opt-in Jev toggle, topology fallback 
   const html = renderToStaticMarkup(<AdaptiveRoutingSettings onClose={() => {}} />);
   assert.match(html, /Adaptive routing · Jev/);
   assert.match(html, /Use Jev for continuous execution-topology routing/);
-  assert.match(html, /Fallback when Jev is uncertain or unavailable/);
+  assert.match(html, /Initial fallback when Jev is uncertain or unavailable/);
   assert.match(html, /Orchestrated topology fallback/);
   assert.match(html, /Brain \+ 1 · lowest coordination overhead/);
   assert.match(html, /Orchestrated · safer default/);

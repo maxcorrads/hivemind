@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api, type AdaptiveRoutingSettings } from "./api.ts";
 import type { AdaptiveTopology } from "../src/shared/adaptive-topology.ts";
 
-export function AdaptiveRoutingSettings({ onClose }: { onClose: () => void }) {
+export function AdaptiveRoutingSettings({ onClose, onSaved }: { onClose: () => void; onSaved?: () => void }) {
   const [settings, setSettings] = useState<AdaptiveRoutingSettings | null>(null);
   const [enabled, setEnabled] = useState(false);
   const [apiKey, setApiKey] = useState("");
@@ -49,6 +49,7 @@ export function AdaptiveRoutingSettings({ onClose }: { onClose: () => void }) {
             setFallback(value.fallback);
             setTopologyFallback(value.topologyFallback);
             setApiKey("");
+            onSaved?.();
           }).catch(err => setError(String(err.message || err)))
             .finally(() => setBusy(false));
         }}
@@ -68,7 +69,7 @@ export function AdaptiveRoutingSettings({ onClose }: { onClose: () => void }) {
           Use Jev for continuous execution-topology routing
         </label>
         <label>
-          Fallback when Jev is uncertain or unavailable
+          Initial fallback when Jev is uncertain or unavailable
           <select
             value={fallback}
             onChange={e => setFallback(e.target.value as "single" | "orchestrated")}

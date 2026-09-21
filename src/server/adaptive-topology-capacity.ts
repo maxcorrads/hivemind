@@ -26,8 +26,9 @@ export function readAdaptiveCapacity(hive: Hive, scope: ExecutionCapacityScope):
       json_extract(t.snapshot,'$.contract.dependencies') AS dependencies
     FROM task_records t JOIN channels c ON c.id=t.channel_id
     LEFT JOIN adaptive_topology_tasks link ON link.task_id=t.id
-    WHERE c.project_id=? AND (json_extract(t.snapshot,'$.state') NOT IN ('accepted_complete','rejected')
-      OR json_extract(t.snapshot,'$.claim.state')='held')`).all(scope.projectId).map(row => ({
+    LEFT JOIN room_tasks room ON room.task_id=t.id
+    WHERE c.project_id=? AND ((json_extract(t.snapshot,'$.state') NOT IN ('accepted_complete','rejected')
+      AND COALESCE(room.status,'active')!='stopped') OR json_extract(t.snapshot,'$.claim.state')='held')`).all(scope.projectId).map(row => ({
       id: String(row.id), workerId: String(row.worker_id), executionId: row.execution_id == null ? null : String(row.execution_id),
       state: String(row.state), held: row.claim_state === 'held',
       dependencies: row.dependencies ? JSON.parse(String(row.dependencies)) as string[] : [],

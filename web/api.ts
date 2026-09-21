@@ -98,9 +98,9 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(body),
     }),
-  adaptiveRoutingView: (channelId: string) =>
-    req<AdaptiveRoutingView>(`/api/ui/channels/${encodeURIComponent(channelId)}/adaptive-routing`),
-  setAdaptiveRoutingLock: (channelId: string, body: { scope: AdaptiveLockScope; topology?: AdaptiveTopology | null }) =>
+  adaptiveRoutingView: (channelId: string, signal?: AbortSignal) =>
+    req<AdaptiveRoutingView>(`/api/ui/channels/${encodeURIComponent(channelId)}/adaptive-routing`, { signal }),
+  setAdaptiveRoutingLock: (channelId: string, body: { scope: AdaptiveLockScope; topology?: AdaptiveTopology | null; expectedExecutionId?: string; expectedRevision?: number }) =>
     req<AdaptiveRoutingView>(`/api/ui/channels/${encodeURIComponent(channelId)}/adaptive-routing/lock`, {
       method: "PUT",
       body: JSON.stringify(body),

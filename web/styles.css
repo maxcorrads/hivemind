@@ -975,3 +975,5 @@ html.dark .primary { background: var(--wax); color: #1b2017; }
 .timeline-list li { display: grid; grid-template-columns: 5rem 1fr; gap: 4px 8px; }
 .timeline-list time { opacity: .7; font-size: 11px; }
 .timeline-list small { grid-column: 2; opacity: .72; overflow-wrap: anywhere; }
+
+.routing-inline { margin: 0.4rem 1rem; padding: 0.5rem 0.7rem; border-left: 2px solid var(--line); font-size: 0.78rem; opacity: 0.85; }
