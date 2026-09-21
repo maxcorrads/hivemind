@@ -95,10 +95,17 @@ export class RoomStore {
       }
       let room = this.peek(ch.id);
       const previousCoordinator = room?.coordinatorId;
-      const concurrentContractAck = action.type === 'acknowledge' && room !== null &&
-        action.contractVersion === room.contractVersion && input.expectedRevision <= room.revision;
-      if ((room?.revision ?? 0) !== input.expectedRevision && !concurrentContractAck)
-        throw new HiveError(409, 'Room changed; get_room and reconcile the current revision');
+      if ((room?.revision ?? 0) !== input.expectedRevision) {
+        let concurrentContractAck = false;
+        if (action.type === 'acknowledge' && room && input.expectedRevision > 0 && input.expectedRevision < room.revision &&
+          action.contractVersion === room.contractVersion) {
+          const previous = this.db.prepare(
+            "SELECT json_extract(snapshot,'$.contractVersion') AS contract_version FROM room_events WHERE channel_id=? AND revision=?",
+          ).get(ch.id, input.expectedRevision) as { contract_version: number } | undefined;
+          concurrentContractAck = previous?.contract_version === room.contractVersion;
+        }
+        if (!concurrentContractAck) throw new HiveError(409, 'Room changed; get_room and reconcile the current revision');
+      }
       if (action.type === 'acknowledge' || action.type === 'stopped') {
         if (!room || !room.participantIds.includes(actor.id) || actor.role !== 'worker') throw new HiveError(403, 'Only a participating worker can acknowledge');
       } else if (actor.role !== 'human' && (actor.role !== 'brain' || (room && room.coordinatorId !== actor.id)))
