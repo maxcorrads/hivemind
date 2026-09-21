@@ -66,7 +66,7 @@ test("production MCP schemas and calls retain their observable contracts", { tim
       join: [["role"], { role: "string", seniority: "string", focus: "string", resume: "string", project: "string" }],
       get_worker_capabilities: [["workerId"], { workerId: "string" }],
       set_capabilities: [["expectedRevision", "card"], { expectedRevision: "integer", card: "object" }],
-      suggest_workers: [["taskId", "requiredCapabilities", "mode", "category"], { taskId: "string", requiredCapabilities: "array", mode: "string", category: "string", minContext: "integer", minReviewedResults: "integer", minimumAcceptedRate: "number", offset: "integer" }],
+      suggest_workers: [["taskId", "mode", "category"], { taskId: "string", requiredCapabilities: "array", mode: "string", category: "string", minContext: "integer", minReviewedResults: "integer", minimumAcceptedRate: "number", offset: "integer" }],
       record_routing_outcome: [["taskId", "expectedRevision", "category", "capabilityRevision"], { taskId: "string", expectedRevision: "integer", category: "string", capabilityRevision: "integer" }],
       record_routing_override: [["taskId", "expectedRevision", "workerId", "reason", "requestId"], { taskId: "string", expectedRevision: "integer", workerId: "string", reason: "string", requestId: "string" }],
       whoami: [[], {}], standing_orders: [[], {}], agents: [[], {}], wait: [[], {}],
