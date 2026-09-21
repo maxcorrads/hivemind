@@ -18,13 +18,7 @@ import { resolveUploadMime } from "../shared/mime.ts";
 import { Hive, channelLabel } from "./hive.ts";
 import { hiveHome } from "./paths.ts";
 import { filePathForHash, safeFileName } from "./files.ts";
-import {
-  adaptiveDirective,
-  appendAdaptiveTelemetry,
-  evaluateAdaptiveRequest,
-  loadAdaptiveRouting,
-  shouldRouteHumanMessage,
-} from "./adaptive-routing.ts";
+import { shouldRouteHumanMessage } from "./adaptive-routing.ts";
 
 export type TelegramConfig = {
   botToken: string;
@@ -862,23 +856,21 @@ export class TelegramBridge {
     };
     try {
       const channel = this.hive.getChannel(channelId);
-      const config = loadAdaptiveRouting(this.hive.home);
       const brainIds = new Set(this.hive.listAgents(human)
         .filter(agent => agent.role === "brain" && agent.project === channel.project)
         .map(agent => agent.id));
-      if (config?.enabled && shouldRouteHumanMessage(channel, routingText, threadId, brainIds)) {
-        const project = this.hive.getProjectBySlug(channel.project);
-        const routing = await evaluateAdaptiveRequest(routingText, config, {
-          project: { slug: project.slug, name: project.name },
-        });
-        this.hive.postAdaptiveRequest(human, {
+      if (shouldRouteHumanMessage(channel, routingText, threadId, brainIds)) {
+        const routed = await this.hive.adaptiveTopology.routeHumanRequest(
+          human,
+          { channel: channelId, body, threadId, source: "telegram", attachmentIds },
+          "auto",
+          "none",
+          persistReceipt,
+          routingText,
+        );
+        if (!routed) this.hive.postMessage(human, {
           channel: channelId, body, threadId, source: "telegram", attachmentIds,
-        }, adaptiveDirective(routing), `adaptive-${routing.routeId}`, persistReceipt);
-        try {
-          appendAdaptiveTelemetry(this.hive.home, routing, routingText, { id: project.id, slug: project.slug });
-        } catch {
-          console.error("Adaptive routing telemetry write failed");
-        }
+        }, persistReceipt);
       } else {
         this.hive.postMessage(human, {
           channel: channelId, body, threadId, source: "telegram", attachmentIds,
