@@ -102,6 +102,14 @@ export class TaskStore {
   private evidence(actor: Agent, sequences: number[]) {
     for (const seq of sequences) this.hive.getVisibleMessage(actor, seq);
   }
+  private workerEvidence(worker: Agent, sequences: number[]) {
+    try { this.evidence(worker, sequences); }
+    catch (error) {
+      if (error instanceof HiveError)
+        throw new HiveError(error.status, 'Assigned worker cannot read one or more contract evidenceSeqs; use [] or messages already visible to that worker');
+      throw error;
+    }
+  }
   private contract(actor: Agent, contract: TaskContract, taskId?: string) {
     this.evidence(actor, contract.evidenceSeqs);
     this.coordination.validateDependencies(actor, contract, taskId);
@@ -181,7 +189,7 @@ export class TaskStore {
       duplicate = this.retry(actor, input.requestId, hash); if (duplicate) return;
       const worker = this.worker(actor, input.worker);
       this.contract(actor, input.contract);
-      this.evidence(worker, input.contract.evidenceSeqs);
+      this.workerEvidence(worker, input.contract.evidenceSeqs);
       const channel = input.channel ? this.hive.getChannel(input.channel, actor.projectId) : this.hive.openDm(actor, worker.name, true);
       this.writable(actor, worker, channel);
       const room = this.hive.rooms.assignment(actor, channel, worker, input);
@@ -229,7 +237,7 @@ export class TaskStore {
         if (room && !room.participantIds.includes(worker.id)) throw new HiveError(403, 'Replacement worker must be a declared room participant');
         this.writable(actor, worker, this.hive.getChannel(task.channelId));
         this.contract(actor, action.contract, task.id);
-        this.evidence(worker, action.contract.evidenceSeqs);
+        this.workerEvidence(worker, action.contract.evidenceSeqs);
         task.workerId = worker.id; task.workerName = worker.name;
         task.contract = action.contract; task.contractVersion++; task.state = 'sent'; task.result = null; task.review = null;
       } else if (action.type === 'review') {
