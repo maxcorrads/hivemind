@@ -91,6 +91,7 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
   const onTask = (payload: unknown) => emit('task', payload);
   const onRoom = (payload: unknown) => emit('room', payload);
   const onDecision = (payload: unknown) => emit('decision', payload);
+  const onAdaptiveRouting = (payload: unknown) => emit('adaptive-routing', payload);
   hive.bus.on("message", onMessage);
   hive.bus.on("agent", onAgent);
   hive.bus.on("channel", onChannel);
@@ -102,6 +103,7 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
   hive.bus.on('task', onTask);
   hive.bus.on('room', onRoom);
   hive.bus.on('decision', onDecision);
+  hive.bus.on('adaptive-routing', onAdaptiveRouting);
 
   server.requestTimeout = REQUEST_BODY_MS;
   server.headersTimeout = REQUEST_HEADER_MS;
@@ -147,6 +149,7 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
     hive.bus.off('task', onTask);
     hive.bus.off('room', onRoom);
     hive.bus.off('decision', onDecision);
+    hive.bus.off('adaptive-routing', onAdaptiveRouting);
     hive.bus.off("telegram-health", onTelegramHealth);
     hive.cancelWaits();
     for (const ws of clients) ws.close(1001, "server shutdown");
