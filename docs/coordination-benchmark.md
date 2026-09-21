@@ -4,7 +4,7 @@ Issue #29 needs evidence about when coordination primitives help, hurt, or merel
 
 `synthetic_contract` is the phase-1 harness in this change. Fake-agent fixtures use virtual ticks and deterministic accounting to lock down scenario definitions, randomised trial order, metric names, budgets and JSON output. These numbers are **not** evidence of model quality, real latency, productivity, or token savings.
 
-`real_agent` is reserved by result schema v1 for the follow-up trials that run actual agent/provider workflows. Those trials should reuse the same fixture IDs where practical, pin prompt/model/task versions, retain raw trial outputs, blind human review where practical and report uncertainty across repeated runs.
+`real_agent` is reserved by result schema v1 for follow-up trials that run actual agent/provider workflows. Those trials reuse the same fixture IDs where practical, pin prompt/model/task versions, retain raw trial outputs, blind human review where practical and report uncertainty across repeated runs.
 
 ## Run
 
@@ -33,6 +33,14 @@ Results keep dimensions separate:
 
 Unavailable provider or infrastructure usage is `null`, never zero. Synthetic virtual ticks and bytes are contract-test inputs, not measured production performance. The storage/inbox benchmarks remain the source for current infrastructure-load measurements until a real-agent runner captures those fields directly.
 
-## Follow-up real-agent protocol
+## Real-agent protocol
 
-The next #29 change should add an opt-in runner/importer for real agents rather than silently changing these synthetic fixtures. At minimum it should pin the Hivemind revision, provider/model and prompt version; repeat trials in seeded random order; retain per-trial acceptance artifacts and review defects; capture provider-reported usage when available; and report uncertainty instead of one headline score. A room/no-room comparison should use the same task fixture before making the #33 keep/simplify/defer decision.
+`scripts/benchmark-coordination-real.mjs` provides the opt-in `prepare → validate → summarize` workflow for actual model sessions. It pins Hivemind revision, provider/model/host/configuration and prompt/task versions, randomizes workflow order reproducibly, retains incomplete trials, and reports per-dimension uncertainty without an aggregate winner.
+
+The versioned `pilot-v1` preset uses three representative fixtures, all four workflow shapes, two repeats and seed 29 for exactly 24 trials. It is methodology validation before a larger cohort, not evidence of multi-agent productivity by itself.
+
+## #32 timeline-diagnosis bridge
+
+Issue #32 asks a narrower empirical question: whether persisted provenance makes representative coordination faults faster or more reliable to diagnose. `scripts/benchmark-timeline-diagnosis.mjs` reuses the #29 `offline-dropped-delivery`, `noisy-room` and `reviewer-disagreement` scenario families and creates paired baseline/timeline trial packets from the same redacted traces.
+
+This protocol is intentionally separate from the workflow benchmark: it measures diagnosis accuracy/evidence support and wall time, not task execution productivity. Use the same pinned provider/model/host configuration as the relevant #29 cohort where possible, retain failed/incomplete runs, and leave unavailable provider usage as `null`. See `docs/coordination-timeline.md` for the runbook.
