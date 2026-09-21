@@ -908,7 +908,8 @@ export class AdaptiveTopologyRuntime {
       throw new HiveError(400, "Task/conversation locks require an explicit topology");
 
     const existingConversationLock = this.conversationLock(channel.id);
-    const inheritedLock = !manualTopology && existingConversationLock?.topology;
+    const inheritedLock: AdaptiveTopology | null =
+      manualTopology ? null : existingConversationLock?.topology ?? null;
     const lockedTopology = manualTopology && lockScope !== "none" ? manualTopology : inheritedLock ?? null;
     const effectiveLockScope: AdaptiveLockScope =
       manualTopology && lockScope !== "none" ? lockScope : inheritedLock ? "conversation" : "none";
