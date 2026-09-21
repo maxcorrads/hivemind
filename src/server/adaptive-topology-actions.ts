@@ -98,7 +98,8 @@ export function mutateAdaptiveTask(hive: Hive, actor: Agent, taskId: string, raw
   return coordinateMutation(hive, actor, async () => {
     authenticate(hive, actor, token);
     const task = hive.tasks.get(actor, taskId);
-    if (actor.id !== task.assignerId && actor.id !== task.workerId) throw new HiveError(403, 'Only task participants may mutate this task');
+    // TaskStore owns claim permissions and revision conflicts; routing must not replace a 409 with its own 403.
+    const participant = actor.id === task.assignerId || actor.id === task.workerId;
     if (taskRetry(hive, actor, input.requestId)) return { ...hive.tasks.event(actor, taskId, input), adaptiveRouting: hive.adaptiveTopology.forAgent(actor) };
     const coordination = event(actor, 'task', input.requestId, {
       kind: action.type === 'revise' ? 'delegation_attempt' : 'task_event', channelId: task.channelId, taskId,
@@ -116,8 +117,8 @@ export function mutateAdaptiveTask(hive: Hive, actor: Agent, taskId: string, raw
     }
     try {
       const result = hive.tasks.event(actor, taskId, input);
-      // The safe checkpoint must observe the newly committed result/review, not its preceding state.
-      if (action.type !== 'revise') policy = await hive.adaptiveTopology.afterAgentAction(actor, coordination);
+      // Only participants contribute private task context, after the mutation reaches its safe checkpoint.
+      if (action.type !== 'revise' && participant) policy = await hive.adaptiveTopology.afterAgentAction(actor, coordination);
       await hive.adaptiveTopology.capacityChanged(actor, input.requestId, policy?.executionId);
       return { ...result, adaptiveRouting: policy };
     } finally { clearAdaptivePermit(hive, actor.id); }
