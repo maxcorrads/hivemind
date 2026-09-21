@@ -1,222 +1,128 @@
 # Adaptive orchestration routing
 
-Issue #120 adds an optional TypeSafe Jev policy layer that actively chooses between two execution modes:
+Hivemind's optional TypeSafe Jev integration is configured from **⇄ Adaptive routing** in the Human UI. The Phase 2 implementation in #128/#129 extends Phase 1 (#120/#126) from a one-time `single | orchestrated` recommendation to continuously evaluated execution topology.
 
-- `single` — the receiving brain executes the Human request directly in its current model session and does not delegate it;
-- `orchestrated` — the brain keeps the normal Hivemind coordinator role and delegates/coordinates workers when useful.
+The feature remains opt-in. Disabling Jev stops external classification and releases automatic routing enforcement. Explicit Human overrides remain authoritative. Hivemind does not launch external Codex/Claude/Cursor sessions: the Human starts agents, and routing uses the workers that actually joined the hive.
 
-The feature is **opt-in**. With Jev disabled, Hivemind preserves the existing message and execution behavior and makes no TypeSafe request.
+## Execution modes
 
-The repository also retains a separate shadow replay/scoring harness for #29/#125 benchmark data. Shadow replay is evaluation tooling; it is no longer the only implementation mode.
+| Mode | Worker budget | New delegated work |
+| --- | --- | --- |
+| Single | 0 | The brain works directly; new delegation is blocked. |
+| Brain + 1 | 1 | One worker, normally through a structured task/DM. |
+| Multi-DM | At least 2 | Independent worker task threads/DMs within the approved budget. |
+| Room | At least 2 | New work uses a Human-authorized room contract. Existing DM tasks may finish in place. |
 
-## Runtime behavior
+Transitions are not a ladder. Single can jump directly to Room, and Room can return directly to Single once the destination's confidence and safe-checkpoint requirements are met.
 
-Hivemind does not launch Codex, Claude, Cursor, or other external model terminals itself. Human starts those employee sessions and they join Hivemind.
+Jev selects the topology and total worker budget. It does not choose particular workers, decompose the request, create subtasks, or grant room authority. Those remain the brain's responsibility within existing Hivemind authorization rules.
 
-Active routing therefore applies at the Hivemind instruction boundary:
+## Settings and Human overrides
 
-```
-Human sends a new request to a brain DM
-  ↓
-Jev enabled?
-  ├─ no  → deliver the original Human message unchanged
-  └─ yes → one structured Jev call
-              ↓
-          deterministic policy
-          ├─ single
-          └─ orchestrated
-              ↓
-          Hivemind atomically publishes:
-          1. the routing directive
-          2. the original Human request unchanged
-```
+The settings panel exposes the Jev toggle, TypeSafe API key, initial strategy fallback, and orchestrated topology fallback. The default orchestrated fallback is **Brain + 1**. Fallback selection is constrained by available capacity.
 
-The routing directive is a real Human-authored Hivemind assignment visible to the brain before the request.
+The Human-to-brain composer exposes:
 
-For `single`, the directive tells that brain to perform the request itself and not delegate. If execution later reveals concrete evidence that one session cannot safely finish the work, the brain may escalate to normal orchestration and should state that reason before delegating.
+- **Auto · Jev**: Jev chooses between all feasible modes.
+- **Single**, **Brain + 1**, **Multi-DM**, **Room**: an explicit Human mode for this request.
+- **Orchestrated Auto**: Human requires orchestration; Jev chooses the feasible orchestrated topology.
 
-For `orchestrated`, the brain follows the normal Hivemind coordinator model and may use workers, structured tasks, DMs, rooms and other existing coordination primitives.
+A manual choice can apply to this request, be locked to the current task/execution, or be locked to the conversation. A conversation lock survives the next Human request until explicitly removed. The composer resetting to Auto after sending does **not** release the one-request override on work already underway.
 
-### What is routed
+With Jev enabled, manual overrides do not suppress classification: recommendations continue for Human review, but cannot automatically replace the locked mode. With Jev disabled, manual choices do not make an external request.
 
-Version 1 classifies only:
+## Capacity is execution-scoped
 
-- new top-level Human messages;
-- in a direct message whose other participant is a brain.
+A free worker is online with fresh presence, has no unfinished task or held claim, and is not committed to another execution. Capacity distinguishes free workers from workers already committed to this execution; the latter remain usable without being counted twice.
 
-It does not reclassify:
+Structured task ownership is linked to the execution in the same transaction that creates/revises the task. A successful preflight is not a reservation: availability, destination, policy revision and worker budget are checked again inside task admission. Failed admission rolls back the task and its assignment message together.
 
-- thread replies;
-- public/private channel conversation;
-- Human-to-worker DMs;
-- bot observations;
-- existing structured task events.
+Free-form DM assignments are also tracked as commitments. The coordinating brain closes their threads when the delegated work has finished; an unclosed delegated thread is not treated as a free worker merely because it lacks a structured task record.
 
-This keeps the active interception point narrow and prevents repeated Jev calls during an already-running conversation.
+The classifier is offered only feasible topology choices and bounded worker-count choices. A contradictory or out-of-range response is rejected, not silently rewritten into a different Jev plan. If availability changes during classification, Hivemind refreshes capacity and re-evaluates. Repeated races preserve the existing mode rather than oversubscribing workers.
 
-The same Auto policy applies when Human replies from Telegram inside a topic mapped to that Human ↔ brain DM. Telegram thread replies remain conversation replies and are not reclassified. The routing request sent to TypeSafe contains the Telegram message text without the Telegram sender display name or attachment contents.
+When no worker is free but orchestration is needed, the brain can continue safe local work. Human sees **Orchestration needed · no workers available**. Capacity changes trigger further evaluation.
 
+A new top-level request cannot silently take ownership of outstanding delegated work from the preceding execution. Continue in the existing request's thread or reconcile its delegated work before starting a replacement execution.
 
-## Enable or disable Jev
+## Coordination boundaries
 
-Open **Adaptive routing** from the Hivemind top bar (`⇄`).
+Jev is evaluated on brain coordination messages, delegation attempts, task/claim/dependency mutations, worker result/accept/block/checkpoint events, room operations, and relevant capacity changes. Ordinary file reads, searches, uploads, receipt acknowledgements and heartbeats do not themselves require classification.
 
-The settings panel contains:
+Delegation is evaluated **before** committing the new assignment, including when the current mode is Single. Results and reviews are evaluated **after** their mutation commits, so the classifier and safe-checkpoint check see the work that has just finished.
 
-- **Use Jev to choose single-session vs orchestrated execution** — the on/off toggle;
-- **TypeSafe API key** — the credential used for Jev;
-- **Fallback** — `Orchestrated` (default) or `Single` for low confidence/provider failure;
-- the current Jev model alias.
+The same mutation is not counted twice merely because both pre- and post-action hooks exist. Stable event identities distinguish independent evidence from a retry. Retrying a committed send or task event reuses the existing operation and does not add another confidence vote.
 
-Enabling requires an API key. Disabling leaves the saved key available for a later re-enable but completely bypasses Jev at runtime.
+Agent mutation controllers serialize the classifier check and mutation boundary. Credentials are revalidated after asynchronous waits; a credential rotation cannot authorize a pending write through an old identity.
 
-### Per-request override
+This is execution policy, not a replacement for task, claim, channel or room authorization. In particular, existing claim conflict/revision semantics remain owned by TaskStore. Free-form messages still depend on accurate event/thread semantics; Hivemind cannot infer arbitrary off-platform tool use or work performed outside its coordination APIs.
 
-In a top-level Human → brain DM, the composer exposes an execution-mode selector:
+## Confidence and anti-flapping
 
-- **Auto · Jev** — use the global Jev toggle; when enabled, classify the request normally;
-- **Single** — bypass Jev and explicitly run this request in the receiving brain session;
-- **Orchestrated** — bypass Jev and explicitly use normal Hivemind coordination/delegation.
+The policy is versioned in `src/shared/adaptive-topology-policy.ts`.
 
-The override applies to one send only and resets to **Auto · Jev** after a successful request. Explicit modes remain available even when global Jev routing is disabled because they do not require an external classifier call. They are rejected outside a top-level Human → brain DM.
+- High confidence is **0.90**, inclusive.
+- Values below **0.60** do not authorize a mode transition, even after repetition.
+- High-confidence escalation can apply on the first independent event.
+- Medium-confidence escalation requires two consecutive matching targets.
+- De-escalation to a non-Single target requires two consecutive matching targets.
+- Any transition to Single requires **two consecutive evaluations each at least 0.90**, or **three consecutive medium-confidence evaluations**, plus a safe checkpoint.
+- A target change resets the confirmation streak. Worker-count changes participate in target identity.
+- After an actual transition, two new coordination events must occur before another automatic transition. Initial selection does not consume this cooldown.
 
+A medium-confidence evaluation followed by one high-confidence evaluation is not two high-confidence confirmations. These values are explicitly selected policy parameters, not empirically proven calibration of Jev on Hivemind workloads.
 
-The key is stored in:
+## Safe delayed de-escalation
 
-```
-<HIVEMIND_HOME>/adaptive-routing.json
-```
+Hivemind records a pending target while useful distributed work is still active. New delegation pauses; existing work may report results and finish. It is not cancelled just to reduce the mode.
 
-The file is written atomically with mode `0600`. The Human API and browser receive only:
+Single requires no active delegated task/thread, worker still needed, open blocker/dependency or unreconciled held claim. The brain's acceptance of a result is distinct from the worker merely submitting it. The acceptance mutation can release a pending downgrade because revalidation observes the committed state.
 
-- `enabled`;
-- whether a key exists;
-- a short key hint;
-- the Jev model alias;
-- the configured fallback strategy.
+A Room-to-Single downgrade remains a direct transition: no artificial intermediate Brain+1 or Multi-DM execution is required.
 
-The full key is never returned to the browser after save and is never written to adaptive-routing telemetry.
+## Provider failure
 
-## TypeSafe / Jev request
+During ongoing execution, timeout, network failure, malformed response or unstable capacity **preserves the current topology**. A failed call is not evidence for a downgrade or escalation. Human sees a warning that the current mode is not being revalidated; a subsequent successful evaluation clears provider-unavailability status.
 
-The runtime adapter uses:
+The initial request has no previous mode, so it uses the configured feasible fallback when classification is unavailable or too uncertain. This initial fallback is separate from ongoing preserve-current behavior.
 
-```
+The HTTP adapter uses a bounded timeout, rejects redirects, and caps both the routing request and streamed response. Errors are represented by sanitized failure classes rather than provider response bodies or credentials. Owned-server shutdown cancels and drains routing activity before closing SQLite; callers injecting their own Hive own its runtime/database lifecycle.
+
+## TypeSafe API and privacy
+
+The adapter calls:
+
+```text
 POST https://api.typesafe.ai/v1/systemone
 Authorization: Bearer <TypeSafe API key>
+model: jev-latest
 ```
 
-and model alias:
+The Phase 2 contract is `adaptive-routing-v2`. It includes atomic sufficiency, complexity, parallelizability, coupling, specialization and coordination signals, plus feasible topology and worker-budget choices. The provider contract is documented at <https://docs.typesafe.ai/api>.
 
-```
-jev-latest
-```
+The structured snapshot includes the original request, current and pending mode, capacity and available worker metadata, counts of active work/blockers/dependencies, recent coordination-event metadata, the triggering coordination summary, Human override, and the previous decision. It does not send repository files, diffs, attachment contents, full conversation history, agent credentials, or the TypeSafe key as classifier state. Telegram's sender-display prefix is excluded from the routing request; the original stored Telegram message remains unchanged.
 
-Hivemind sends one request containing six independent questions:
+The key lives in `<HIVEMIND_HOME>/adaptive-routing.json`, written atomically with mode `0600`. The Human API returns only whether a key exists and a suffix hint, never the full saved key.
 
-1. `single_agent_sufficiency` — whether one capable session can meet the quality target;
-2. `complexity`;
-3. `parallelizability`;
-4. `coupling`;
-5. `specialization_need`;
-6. `coordination_need`.
+## Human-only evaluation history
 
-Jev supplies structured Choice/Score answers with probabilities and confidence. Jev does not select a Hivemind topology directly; ordinary deterministic Hivemind code combines those signals into `single | orchestrated`.
+Phase 2 audit records live in separate SQLite routing tables and are broadcast on the authenticated Human `adaptive-routing` websocket topic. They do not create ordinary chat messages, inbox items, mentions or agent notifications. The Routing panel shows retained evaluations and recommendations; applied transitions are exposed separately for the Human UI.
 
-## Privacy
+A single initial applied-policy directive accompanies the original Human request. It is operational instruction, not the evaluation history. Agent API responses expose only the compact applied policy: execution ID, current topology, worker budget, whether delegation is paused and whether Human has locked the mode. Confidence votes, model/usage metrics and recommendations are not returned as agent context.
 
-When active routing is enabled, the TypeSafe request state contains only:
+The Human view currently returns the latest 100 retained events, with bounded storage of 500 events per channel. The current recommendation retains provider model, latency and input/output usage; unknown monetary cost is not invented.
 
-- the new Human request text;
-- current project slug;
-- current project name.
+## Tests and validation
 
-The routing state does **not** include:
+The tests use fake TypeSafe responses with real local SQLite, HTTP and UI boundaries. They do not spend a live provider key or establish production model quality.
 
-- repository files or file contents;
-- Git diffs;
-- Hivemind message history;
-- other channels/DMs;
-- stored TypeSafe API key as state;
-- Hivemind agent/bot credentials;
-- benchmark answer keys;
-- worker logs.
+Focused coverage includes destination-aware hysteresis, direct jumps, the inclusive 0.90 threshold, retry identity, Human override precedence, provider failure/recovery, audit/context isolation, actual task admission/link atomicity, free-form commitments, capacity ownership and delayed Single transitions after accepted results.
 
-The TypeSafe API key is used only as the HTTP Authorization credential.
+Run the repository's standard lint, typecheck, unit, integration, browser and coverage jobs before merge. A green fixture suite establishes the implementation contract, not calibrated routing quality on real workloads.
 
-Runtime telemetry stores a SHA-256 hash and byte length of the Human request rather than persisting its text again.
+## Benchmark evaluation retained
 
-## Deterministic policy
-
-The active v1 policy intentionally remains two-way.
-
-A high-confidence `single_agent_sufficiency=sufficient` result is accepted as `single` only while complexity, coordination need and specialization need remain below their configured bounds.
-
-Clear coordination pressure, useful independent workstreams or specialist need selects `orchestrated`.
-
-Low confidence or an ambiguous middle region uses the configured fallback. The default is the conservative:
-
-```
-orchestrated
-```
-
-Human may explicitly configure `single` when minimizing orchestration cost is preferred over the higher under-routing risk.
-
-The thresholds remain versioned policy constants and can continue to be evaluated against the #29/#125 corpus.
-
-## Failure behavior
-
-Jev is optional optimization, never a correctness dependency.
-
-These conditions use the configured fallback rather than blocking the Human request:
-
-- timeout;
-- network error;
-- HTTP/provider error;
-- malformed response;
-- missing confidence/probabilities;
-- missing usage fields;
-- low confidence;
-- ambiguous policy result.
-
-The current provider timeout is bounded. After fallback, the Human request is still delivered. The default fallback is `orchestrated`; choosing `single` is an explicit Human policy choice.
-
-## Delivery and retry semantics
-
-For an actively routed request, the route directive and original Human request are committed as one Hivemind transaction. The original request body remains unchanged.
-
-The ordinary Human send `requestId` still controls idempotency. If the browser retries a request whose send already committed, Hivemind reuses the existing Human message and does not call Jev again.
-
-The routing directive gets its own stable mutation key for that route. No half-committed state should expose a directive without its corresponding Human request.
-
-## Runtime telemetry
-
-Runtime decisions are appended locally to:
-
-```
-<HIVEMIND_HOME>/adaptive-routing-decisions.jsonl
-```
-
-Records include:
-
-- route ID;
-- project ID/slug;
-- request hash and byte length;
-- selected strategy;
-- decision/fallback reason;
-- provider status and resolved model;
-- Jev latency;
-- provider-reported input/output token usage;
-- minimum confidence;
-- atomic routing signals/probabilities.
-
-The API key and original request text are not recorded in this telemetry file.
-
-## Benchmark shadow replay
-
-The #29/#125 replay remains useful for evaluating whether the active policy is actually beneficial.
-
-Use a complete real-agent cohort:
+Phase 1's shadow tooling remains a separate offline evaluation path for #29/#125, not the live runtime switch. It uses `TYPESAFE_API_KEY` from its command-line environment rather than the server UI's private settings.
 
 ```sh
 npm run benchmark:coordination:routing -- shadow \
@@ -224,59 +130,10 @@ npm run benchmark:coordination:routing -- shadow \
   --provider typesafe \
   --decisions /tmp/hivemind-pilot-v1/routing-shadow-v1.jsonl \
   --output /tmp/hivemind-pilot-v1/routing-shadow-v1-summary.json
-```
 
-The same scorer can be used with the discriminative `clarification-v1` cohort.
-
-The benchmark path remains separately configurable through `TYPESAFE_API_KEY` because it is a command-line evaluation harness rather than the running Hivemind server settings UI.
-
-A retained decision file can be rescored without another provider call:
-
-```sh
 npm run benchmark:coordination:routing -- score \
   --decisions /tmp/hivemind-pilot-v1/routing-shadow-v1.jsonl \
   --output /tmp/hivemind-pilot-v1/routing-shadow-v1-rescore.json
 ```
 
-### Evaluation metrics
-
-The replay produces:
-
-- predicted `single | orchestrated`;
-- observed acceptance/defects;
-- rework and duplicate work;
-- clarification, handoff and recovery counts;
-- wall time;
-- provider tokens/cost when available;
-- routing regret in tokens/wall time and comparable monetary cost;
-- under-orchestration errors.
-
-Under-orchestration remains a distinct high-severity metric:
-
-```
-router chooses single
-AND single misses the quality target
-AND an orchestrated condition succeeds
-```
-
-For an `orchestrated` prediction, Phase 1 still does not select among `brain_one_worker`, `brain_multi_dm` and `brain_multi_room`; benchmark regret therefore uses the cheapest observed successful orchestrated condition as a lower-bound cost.
-
-## Future topology selection
-
-The runtime currently decides only whether to stay in one brain session or enter Hivemind orchestration.
-
-A later evidence-backed phase may choose among:
-
-```
-brain + 1 worker
-multi-DM
-room
-```
-
-and may add progressive escalation:
-
-```
-single → brain + 1 worker → multi-DM → room
-```
-
-Escalation should continue to require observable evidence such as newly discovered independent work, blocking dependencies or coordination pressure rather than elapsed time alone.
+That v1 replay reports binary-routing quality, regret and under-orchestration; it must not be presented as empirical validation of Phase 2's continuous four-topology controller. Retained real-agent traces are still needed to calibrate the new policy and assess net cost, latency and quality.
