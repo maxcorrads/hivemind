@@ -1,0 +1,26 @@
+{
+  "evidenceKind": "synthetic",
+  "versions": {
+    "hivemindRevision": "dc9323c650530e4d58be6dc15f2fbf7816c3aca3",
+    "provider": "fixture",
+    "model": "fixture-model-v1",
+    "host": "offline-example",
+    "configuration": "example-only-v1",
+    "policyVersion": "topology-policy-v2.1"
+  },
+  "workloads": [
+    {
+      "id": "sorted-integers-example",
+      "version": "v1",
+      "inputDigest": "a19cdfae37fa2fa96a1422344b3ea8c15ea095c7d177a272657eac1e2cdb2ee5",
+      "acceptanceDigest": "0113badcd989dc71e914c37303dd25de642d3169a1d01a1ee7bb9b313651981f"
+    }
+  ],
+  "repeats": 2,
+  "seed": 29,
+  "freeWorkers": 3,
+  "limits": {
+    "wallMs": 60000,
+    "workloadTokens": 10000
+  }
+}
