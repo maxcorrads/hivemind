@@ -80,7 +80,7 @@ Real-agent prompt version `coordination-real-v4` / task version `coordination-ta
 
 This gives the cohort a real acceptance check instead of asking a model to “implement” only an abstract effort/scope label. Expected hashes are computed by the harness and are **not** placed in participant prompts. In an information-partitioned run, the shared runbook also omits the fact values.
 
-For `noisy-room`, the 12 unrelated observations apply only to `brain_multi_room`. The DM, brain+one, and single-worker conditions must not create a room solely to inject noise. This avoids the previous contradiction between “DM only” and “noise must stay in the shared room”. Because this changes participant instructions materially, old `coordination-real-v1` pilot directories must be regenerated rather than mixed into the v2 cohort.
+For `noisy-room`, the 12 unrelated observations apply only to `brain_multi_room`. The DM, brain+one, and single-worker conditions must not create a room solely to inject noise. This avoids the previous contradiction between “DM only” and “noise must stay in the shared room”. Because prompt/task semantics are version-pinned, never mix historical v1-v3 real-agent directories with a v4/v2 cohort.
 
 ### Optional Codex / OpenCode cohort executor
 
@@ -102,7 +102,7 @@ CODEX_BIN=/path/to/local-codex-wrapper \
 npm run benchmark:coordination:run -- --input /tmp/hivemind-pilot-v1
 
 OPENCODE_BIN=/path/to/opencode \
-npm run benchmark:coordination:pilot:run -- --input /tmp/hivemind-pilot-v1
+npm run benchmark:coordination:run -- --input /tmp/hivemind-pilot-v1
 ```
 
 For an OpenCode + Muse Spark cohort, prepare a fresh cohort identity:
