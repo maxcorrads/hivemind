@@ -265,12 +265,13 @@ test("brain DMs expose per-request routing and show the committed directive with
   await f.change(composer, "Handle this directly");
   await f.click(f.button("Send"));
   assert.equal(mode.value, "auto", "explicit mode is one-request only");
-  assert.match(f.host.textContent!, /Hivemind adaptive routing · SINGLE/);
+  assert.match(f.host.textContent!, /Hivemind adaptive topology · SINGLE/);
   assert.match(f.host.textContent!, /Handle this directly/);
   const sent = f.hive.db.prepare("SELECT body FROM messages WHERE author_id='human' AND channel_id=? ORDER BY seq DESC LIMIT 2")
     .all(f.hive.findDm(f.human.id, f.brainA.id)!.id) as Array<{ body: string }>;
   assert.equal(sent[0]!.body, "Handle this directly");
-  assert.match(sent[1]!.body, /adaptive routing · SINGLE/);
+  assert.match(sent[1]!.body, /adaptive topology · SINGLE/);
+  assert.equal(f.hive.adaptiveTopology.view(f.human, f.hive.findDm(f.human.id, f.brainA.id)!.id).state?.lockedTopology, "single");
 });
 
 test("observation threads support Human replies and reactions without granting bot workflow authority", async t => {
