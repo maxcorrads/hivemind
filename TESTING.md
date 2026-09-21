@@ -19,7 +19,7 @@ PR CI deliberately uses a lower-latency topology than `check:all` while preservi
 its effective scope:
 
 - Node 24 unit and four historically timing-balanced integration shards run independently.
-- Node 22.13.0 runs the same full unit/integration scope, also with four integration shards.
+- Node 22.13.0 runs the same full unit/integration scope with two timing-balanced integration shards, reducing compatibility-runner overhead without reducing coverage.
 - The existing required gate names `Tests / Node 24` and `Tests / Node 22.13.0`
   are aggregation jobs over all corresponding shards.
 - Node 24 test jobs collect LCOV during their normal execution. `Coverage` merges
@@ -31,7 +31,7 @@ its effective scope:
 
 See [ci-performance.md](docs/ci-performance.md) for the measured baseline, shard
 weight methodology, runner-cost trade-off and after-measurement protocol.
-PR title/dependency review and hosted CodeQL are additional CI checks, not local
+PR title/dependency review run on Ubuntu to avoid consuming macOS test capacity; hosted CodeQL is an additional CI check, not a local
 test results. An audit failure needs review, not an automatic claim that the app
 is exploitable.
 
