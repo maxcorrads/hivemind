@@ -2,7 +2,7 @@ import { setCapabilitiesSchema, suggestWorkersSchema, routingOutcomeSchema, rout
 import { z } from "zod";
 import { readLimitedJson } from "./ingress.ts";
 import { API_JSON_BYTES, channelInputSchema, cursorSchema, integerArgument,
-  joinInputSchema, memberNamesSchema, nameSchema, reactionInputSchema, referenceSchema, sendInputSchema,
+  humanSendInputSchema, joinInputSchema, memberNamesSchema, nameSchema, reactionInputSchema, referenceSchema, sendInputSchema,
   sequenceSchema, validated, waitDurationSchema } from "../shared/api-contract.ts";
 import { subscriptionSchema, subscriptionScopeSchema } from "../shared/notifications.ts";
 import { claimPreviewSchema } from '../shared/task-claims.ts';
@@ -34,7 +34,10 @@ const telegram = z.object({ botToken: z.string().max(512).optional(),
 
 function schemaFor(path: string, method: string): z.ZodType | undefined {
   if (path.endsWith('/api/agent/join')) return join;
-  if (/\/channels\/[^/]+\/messages$/.test(path)) return path.startsWith('/api/bot/') ? undefined : sendInputSchema;
+  if (/\/channels\/[^/]+\/messages$/.test(path)) {
+    if (path.startsWith('/api/bot/')) return undefined;
+    return path.startsWith('/api/ui/') ? humanSendInputSchema : sendInputSchema;
+  }
   if (path.endsWith('/channels')) return channelInputSchema;
   if (/\/messages\/[^/]+\/reactions$/.test(path)) return reactionInputSchema;
   if (/\/(?:dms|clear-context)$/.test(path)) return destination;
