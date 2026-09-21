@@ -5,11 +5,13 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import type { Agent, Channel, Message, SearchHit, Thread, ThreadStatus, InboxStatus } from "../src/shared/types.ts";
 import { REACTION_EMOJIS } from "../src/shared/types.ts";
 import { isLiveSearchQuery, parseSearchQuery } from "../src/shared/search-query.ts";
-import { api, connectWs, type ChannelPayload, type Snapshot, type TelegramSettings, type SendRoutingMode } from "./api.ts";
+import { api, connectWs, type ChannelPayload, type Snapshot, type TelegramSettings, type SendRoutingMode, type SendLockScope } from "./api.ts";
 import { LaunchSheet } from "./LaunchSheet.tsx";
 import { BotOrigin, BotSetup, BotCredentials } from "./Bots.tsx";
 import { ProjectPlugins } from "./ProjectPlugins.tsx";
 import { AdaptiveRoutingSettings } from "./AdaptiveRoutingSettings.tsx";
+import { AdaptiveRoutingPanel, routingEventLabel, topologyLabel } from "./AdaptiveRoutingPanel.tsx";
+import type { AdaptiveExecutionState, AdaptiveRoutingEvent, AdaptiveRoutingView } from "../src/shared/adaptive-topology.ts";
 import { InboxReceipt, QueueBadge } from "./InboxReceipt.tsx";
 import { loadMailLog, mergeMailLog, saveMailLog } from "./mail-log.ts";
 import type { MentionPage, ReadSnapshot } from "../src/shared/read-state.ts";
@@ -116,6 +118,9 @@ export function App() {
   }, []);
   const [draft, setDraft] = useState("");
   const [routingMode, setRoutingMode] = useState<SendRoutingMode>("auto");
+  const [routingLockScope, setRoutingLockScope] = useState<SendLockScope>("none");
+  const [routingView, setRoutingView] = useState<AdaptiveRoutingView | null>(null);
+  const [routingPanelOpen, setRoutingPanelOpen] = useState(false);
   const [threadDraft, setThreadDraft] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [live, setLive] = useState(false);
@@ -348,6 +353,19 @@ export function App() {
         setSnap((current) => current ? { ...current, telegram: { running: false, configured: false, ...current.telegram, ...health } } : current);
         return;
       }
+      if (ev.type === "adaptive-routing") {
+        const payload = ev.payload as { channelId: string; event: AdaptiveRoutingEvent; state: AdaptiveExecutionState };
+        if (selRef.current.kind === "channel" && selRef.current.id === payload.channelId) {
+          setRoutingView(current => {
+            const events = current?.events ?? [];
+            const next = events.some(event => event.id === payload.event.id)
+              ? events.map(event => event.id === payload.event.id ? payload.event : event)
+              : [...events, payload.event].slice(-100);
+            return { state: payload.state, events: next };
+          });
+        }
+        return;
+      }
       if (ev.type === "message") {
         const msg = ev.payload as Message;
         recordChannelMessage(channelJournal.current, msg);
@@ -568,6 +586,18 @@ export function App() {
   const activeBrainDm = Boolean(activeChannel?.type === "dm" && activeChannel.memberIds.some(
     id => snap?.agents.some(agent => agent.id === id && agent.role === "brain"),
   ));
+  useEffect(() => {
+    if (!activeBrainDm || !activeChannel) {
+      setRoutingView(null);
+      setRoutingPanelOpen(false);
+      return;
+    }
+    let active = true;
+    api.adaptiveRoutingView(activeChannel.id)
+      .then(view => { if (active) setRoutingView(view); })
+      .catch(error => { if (active && error?.name !== "AbortError") setErr(String(error.message || error)); });
+    return () => { active = false; };
+  }, [activeBrainDm, activeChannel?.id, reconnectTick]);
   const selectedProject =
     sel.kind === "inbox" || sel.kind === "decisions" ? sel.project : (activeChannel?.project ?? projects[0]?.slug ?? "chapter");
   const editingBusy = editingProject
@@ -649,17 +679,19 @@ export function App() {
   }, [inboxSelected, readTick, reconnectTick]);
 
   const sendOperations = useRef(createSendOperations(api.upload, api.send));
-  const send = async (body: string, tid?: string | null, files?: File[], routing: SendRoutingMode = "auto") => {
+  const send = async (body: string, tid?: string | null, files?: File[], routing: SendRoutingMode = "auto",
+    lockScope: SendLockScope = "none") => {
     if (sel.kind !== "channel") return;
     const channelId = sel.id;
     const root = tid ?? null;
     if (!body.trim() && !files?.length) return;
-    const result = await sendOperations.current(channelId, body.trim(), root, files, routing);
+    const result = await sendOperations.current(channelId, body.trim(), root, files, routing, lockScope);
     if (selRef.current.kind !== "channel" || selRef.current.id !== channelId || (root && threadIdRef.current !== root)) return;
     if (root) setThreadDraft((current) => current === body ? "" : current);
     else {
       setDraft((current) => current === body ? "" : current);
       setRoutingMode("auto");
+      setRoutingLockScope("none");
     }
     if (result.routingMessage) {
       recordChannelMessage(channelJournal.current, result.routingMessage);
@@ -667,6 +699,7 @@ export function App() {
     }
     recordChannelMessage(channelJournal.current, result.message);
     setPane((current) => applyChannelMessage(current, result.message));
+    if (!root && activeBrainDm) api.adaptiveRoutingView(channelId).then(setRoutingView).catch(() => undefined);
     if (root) onThreadMessage(result.message);
   };
 
@@ -1085,6 +1118,25 @@ export function App() {
               ))}
               <div ref={bottomRef} />
             </div>
+            {activeBrainDm && routingView?.state && (
+              <div className={`routing-strip ${routingView.state.warning ? "warning" : ""}`}>
+                <button type="button" onClick={() => setRoutingPanelOpen(true)}>
+                  <strong>{topologyLabel(routingView.state.currentTopology)}</strong>
+                  {routingView.state.workerBudget > 0
+                    ? ` · ${routingView.state.workerBudget} worker${routingView.state.workerBudget === 1 ? "" : "s"}`
+                    : ""}
+                  {routingView.state.lockScope !== "none" ? ` · locked ${routingView.state.lockScope}` : ""}
+                </button>
+                <span>
+                  {routingView.state.warning
+                    ? `⚠ ${routingView.state.warning}`
+                    : (() => {
+                        const last = [...routingView.events].reverse().find(event => event.kind === "transition");
+                        return last ? routingEventLabel(last) : "Jev continuous routing active";
+                      })()}
+                </span>
+              </div>
+            )}
             <Composer
               agents={roomAgents}
               value={draft}
@@ -1094,8 +1146,19 @@ export function App() {
                   ? `Message ${channelTitle(activeChannel)}`
                   : "Write…"
               }
-              routing={activeBrainDm ? { value: routingMode, onChange: setRoutingMode } : undefined}
-              onSend={(files) => send(draft, undefined, files, activeBrainDm ? routingMode : "auto")}
+              routing={activeBrainDm ? {
+                value: routingMode,
+                onChange: setRoutingMode,
+                lockScope: routingLockScope,
+                onLockScopeChange: setRoutingLockScope,
+              } : undefined}
+              onSend={(files) => send(
+                draft,
+                undefined,
+                files,
+                activeBrainDm ? routingMode : "auto",
+                activeBrainDm ? routingLockScope : "none",
+              )}
             />
           </>
         )}
@@ -1509,6 +1572,15 @@ export function App() {
 
       {adaptiveRoutingOpen && (
         <AdaptiveRoutingSettings onClose={() => setAdaptiveRoutingOpen(false)} />
+      )}
+
+      {routingPanelOpen && activeChannel && routingView && (
+        <AdaptiveRoutingPanel
+          channelId={activeChannel.id}
+          view={routingView}
+          onChange={setRoutingView}
+          onClose={() => setRoutingPanelOpen(false)}
+        />
       )}
 
       {telegramOpen && telegram && (
@@ -1949,7 +2021,12 @@ function Composer({
   onChange: (v: string) => void;
   onSend: (files?: File[]) => void;
   placeholder: string;
-  routing?: { value: SendRoutingMode; onChange: (mode: SendRoutingMode) => void };
+  routing?: {
+    value: SendRoutingMode;
+    onChange: (mode: SendRoutingMode) => void;
+    lockScope: SendLockScope;
+    onLockScopeChange: (scope: SendLockScope) => void;
+  };
 }) {
   const [hint, setHint] = useState<Agent[]>([]);
   const [files, setFiles] = useState<File[]>([]);
@@ -2037,17 +2114,38 @@ function Composer({
           📎
         </button>
         {routing && (
-          <select
-            className="routing-mode"
-            aria-label="Execution mode"
-            title="Execution mode for this request"
-            value={routing.value}
-            onChange={(e) => routing.onChange(e.target.value as SendRoutingMode)}
-          >
-            <option value="auto">Auto · Jev</option>
-            <option value="single">Single</option>
-            <option value="orchestrated">Orchestrated</option>
-          </select>
+          <>
+            <select
+              className="routing-mode"
+              aria-label="Execution mode"
+              title="Execution mode for this request"
+              value={routing.value}
+              onChange={(e) => {
+                const mode = e.target.value as SendRoutingMode;
+                routing.onChange(mode);
+                if (mode === "auto" || mode === "orchestrated_auto") routing.onLockScopeChange("none");
+              }}
+            >
+              <option value="auto">Auto · Jev</option>
+              <option value="single">Single</option>
+              <option value="brain_one_worker">Brain + 1</option>
+              <option value="brain_multi_dm">Multi-DM</option>
+              <option value="brain_multi_room">Room</option>
+              <option value="orchestrated_auto">Orchestrated Auto</option>
+            </select>
+            <select
+              className="routing-lock-mode"
+              aria-label="Routing lock scope"
+              title="Apply an explicit topology once, to this task, or to this conversation"
+              value={routing.lockScope}
+              disabled={routing.value === "auto" || routing.value === "orchestrated_auto"}
+              onChange={(e) => routing.onLockScopeChange(e.target.value as SendLockScope)}
+            >
+              <option value="none">One request</option>
+              <option value="task">Lock task</option>
+              <option value="conversation">Lock conversation</option>
+            </select>
+          </>
         )}
         <textarea
           rows={2}
