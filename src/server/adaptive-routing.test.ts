@@ -8,6 +8,7 @@ import { Hive } from "./hive.ts";
 import {
   adaptiveDirective,
   adaptiveRoutingPublic,
+  appendAdaptiveTelemetry,
   decideAdaptiveStrategy,
   evaluateAdaptiveRequest,
   loadAdaptiveRouting,
@@ -234,12 +235,33 @@ test("enabled Jev routing changes real Human-to-brain delivery while disabled mo
   assert.equal(calls, 1, "thread replies must not trigger a new Jev call");
 });
 
-test("telemetry config never exposes the saved key in public JSON", () => {
+test("public settings and private telemetry never expose the saved key or duplicate request text", () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-routing-public-"));
   try {
     saveAdaptiveRouting(dir, { enabled: true, apiKey: "ts_not_for_browser_9999" });
     assert.doesNotMatch(JSON.stringify(adaptiveRoutingPublic(dir)), /ts_not_for_browser/);
     assert.match(readFileSync(path.join(dir, "adaptive-routing.json"), "utf8"), /ts_not_for_browser/);
+
+    appendAdaptiveTelemetry(dir, {
+      routeId: "route-fixture",
+      strategy: "single",
+      reason: "high_confidence_single_sufficient",
+      fallbackUsed: false,
+      providerStatus: "ok",
+      model: "jev-fixture",
+      latencyMs: 12,
+      inputTokens: 20,
+      outputTokens: 5,
+      minimumConfidence: 0.9,
+      signals: singleSignals,
+    }, "secret-ish request text", { id: "project-id", slug: "chapter" });
+
+    const telemetryPath = path.join(dir, "adaptive-routing-decisions.jsonl");
+    const telemetry = readFileSync(telemetryPath, "utf8");
+    assert.equal(statSync(telemetryPath).mode & 0o777, 0o600);
+    assert.doesNotMatch(telemetry, /secret-ish request text|ts_not_for_browser/);
+    assert.match(telemetry, /"requestHash":/);
+    assert.match(telemetry, /"inputTokens":20/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
