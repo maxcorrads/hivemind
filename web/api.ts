@@ -33,6 +33,9 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   return data as T;
 }
 
+export type SendRoutingMode = AdaptiveRoutingMode;
+export type SendLockScope = AdaptiveLockScope;
+
 export type Snapshot = ReadSnapshot & {
   you: Agent;
   projects: Project[];
