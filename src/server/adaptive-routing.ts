@@ -200,7 +200,12 @@ export function adaptiveRoutingPublic(home: string): AdaptiveRoutingPublic {
   };
 }
 
-export function saveAdaptiveRouting(home: string, input: AdaptiveRoutingInput): AdaptiveRoutingPublic {
+export function saveAdaptiveRouting(home: string, raw: unknown): AdaptiveRoutingPublic {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw))
+    throw new HiveError(400, "Adaptive routing settings must be an object");
+  const input = raw as AdaptiveRoutingInput & Record<string, unknown>;
+  const unknown = Object.keys(input).filter(key => key !== "enabled" && key !== "apiKey");
+  if (unknown.length) throw new HiveError(400, "Unknown adaptive routing setting");
   const previous = readRawConfig(home);
   if (input.enabled !== undefined && typeof input.enabled !== "boolean")
     throw new HiveError(400, "Adaptive routing enabled must be boolean");
