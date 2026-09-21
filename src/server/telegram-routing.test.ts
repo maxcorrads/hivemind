@@ -9,6 +9,7 @@ import { Hive } from "./hive.ts";
 import { TelegramBridge, startTelegram, writeTelegramFile, readTelegramFile, loadTelegramConfig, telegramConfigKey } from "./telegram.ts";
 import { enqueueTelegramPending } from "./telegram-outbox.ts";
 import { saveAdaptiveRouting } from "./adaptive-routing.ts";
+import { jevTopologyResponse } from "./fixtures/jev-topology.ts";
 
 async function until(predicate: () => boolean) {
   for (let i = 0; i < 5000; i++) { if (predicate()) return; await nextTurn(); }
@@ -53,7 +54,7 @@ test("configuration drains late old topic work before publishing, and never reta
     const body = JSON.parse(String(init?.body));
     if (method === "createForumTopic" && body.chat_id === -1001) {
       oldSignal = init?.signal;
-      return new Promise<Response>(resolve => { release = resolve; }); // intentionally ignores abort until released
+      return new Promise<Response>(resolve => { release = resolve; });
     }
     if (method === "createForumTopic") return Response.json({ ok: true, result: { message_thread_id: 22 } });
     sentChats.push(body.chat_id);
@@ -115,29 +116,18 @@ test("Telegram Human replies in a brain DM use active Jev routing and keep recei
   const dm = hive.openDm(human, brain.name);
   const cfg = { botToken: "fixture", botId: 77, allowUserIds: [1], groups: { chapter: -1001 } };
   const botKey = telegramConfigKey(cfg);
-  const bridge = new TelegramBridge(hive, cfg); // constructor upgrades legacy routing tables first
+  const bridge = new TelegramBridge(hive, cfg);
   hive.db.prepare("INSERT INTO telegram_topics(channel_id,telegram_thread_id,telegram_chat_id,bot_key) VALUES(?,?,?,?)")
     .run(dm.id, 22, -1001, botKey);
   saveAdaptiveRouting(dir, { enabled: true, apiKey: "typesafe-fixture" });
   let polls = 0, jevCalls = 0;
+  const routingRequests: unknown[] = [];
   t.mock.method(globalThis, "fetch", async (url: unknown, init?: RequestInit) => {
     if (String(url) === "https://api.typesafe.ai/v1/systemone") {
       jevCalls++;
       const request = JSON.parse(String(init?.body)) as { state?: { request?: string } };
-      assert.equal(request.state?.request, "Small Telegram request");
-      return Response.json({
-        model: "jev-fixture",
-        answers: {
-          single_agent_sufficiency: { type: "choice", choice: "sufficient", confidence: 0.95,
-            probabilities: { sufficient: 0.95, insufficient: 0.05 } },
-          complexity: { type: "score", score: 0.3, confidence: 0.9, probabilities: { 0: 0.8, 1: 0.15, 2: 0.05 } },
-          parallelizability: { type: "score", score: 0.2, confidence: 0.9, probabilities: { 0: 0.85, 1: 0.1, 2: 0.05 } },
-          coupling: { type: "score", score: 0.2, confidence: 0.9, probabilities: { 0: 0.85, 1: 0.1, 2: 0.05 } },
-          specialization_need: { type: "score", score: 0.2, confidence: 0.9, probabilities: { 0: 0.85, 1: 0.1, 2: 0.05 } },
-          coordination_need: { type: "score", score: 0.2, confidence: 0.9, probabilities: { 0: 0.85, 1: 0.1, 2: 0.05 } },
-        },
-        usage: { input_tokens: 20, output_tokens: 8 },
-      });
+      routingRequests.push(request.state?.request);
+      return Response.json(jevTopologyResponse(String(init?.body), "single"));
     }
     const method = String(url).split("/").at(-1);
     if (method === "getUpdates") {
@@ -158,8 +148,13 @@ test("Telegram Human replies in a brain DM use active Jev routing and keep recei
     ).get(dm.id, "%Small Telegram request%") as { n: number }).n === 1);
     const messages = hive.listMessages(human, dm.id).messages.filter(m => m.kind === "chat");
     const original = messages.find(m => m.body.endsWith("Small Telegram request"))!;
-    const directive = messages.find(m => m.body.includes("adaptive routing · SINGLE"))!;
+    const directive = messages.find(m => m.body.includes("adaptive topology · SINGLE"))!;
     assert.ok(original && directive);
+    assert.deepEqual(routingRequests, ["Small Telegram request"], "Sender display name is not classifier context");
+    const state = hive.adaptiveTopology.view(human, dm.id).state!;
+    assert.equal(state.recommendation?.providerStatus, "ok", "A malformed fixture must not silently pass via fallback");
+    assert.equal(state.recommendation?.contractVersion, "adaptive-routing-v2");
+    assert.equal(state.currentTopology, "single");
     assert.equal(hive.fromTelegram(original.id), true);
     assert.equal(hive.fromTelegram(directive.id), false);
     const mapped = hive.db.prepare(
@@ -168,6 +163,7 @@ test("Telegram Human replies in a brain DM use active Jev routing and keep recei
     assert.equal(mapped.seq, original.seq);
   } finally {
     await bridge.stop();
+    await hive.adaptiveTopology.stop();
     close();
   }
 });
@@ -191,6 +187,5 @@ test("verified same-bot rotation preserves its namespace and publication failure
     assert.equal(readFileSync(path.join(dir, "telegram.json"), "utf8"), before);
     assert.equal(readdirSync(dir).some(file => file.startsWith(".telegram-")), false);
     t.mock.restoreAll(); syncBuiltinESMExports();
-    // Restoring the mocked provider is deliberate; no network call is made after this point.
   } finally { await handle.stop(); t.mock.restoreAll(); syncBuiltinESMExports(); close(); }
 });
