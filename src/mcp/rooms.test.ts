@@ -43,8 +43,8 @@ test('real MCP and CLI room lifecycle shares durable rules, task fences, source 
         participants: [{ name: worker.agent.name, boundary: 'Fixture analysis' }], completion: ['Human archives'], originTaskId: null } } });
     assert.equal(created.room.contractVersion, 1);
     const mail = await call(w, 'wait', {}); await call(w, 'ack_delivery', { deliveryId: mail.delivery.id });
-    const current = await call(w, 'get_room', { channel: channel.id });
-    await call(w, 'room_event', { channel: channel.id, requestId: 'rules-ack', expectedRevision: current.room.revision, action: { type: 'acknowledge', contractVersion: 1 } });
+    const current = await call(w, 'get_room', { channel: `#${channel.name}` });
+    await call(w, 'room_event', { channel: `#${channel.name}`, requestId: 'rules-ack', expectedRevision: current.room.revision, action: { type: 'acknowledge', contractVersion: 1 } });
     const assigned = await call(b, 'assign_task', { requestId: 'work', worker: worker.agent.name, channel: channel.id,
       room: { contractVersion: 1, actionKey: 'fixture-anomaly-1' }, contract: { objective: 'Inspect anomaly 1', scope: ['Fixture'], nonGoals: [], acceptanceCriteria: ['Report value'], dependencies: [], evidenceSeqs: [] } });
     const delivery = await call(w, 'wait', {}); await call(w, 'ack_delivery', { deliveryId: delivery.delivery.id });
