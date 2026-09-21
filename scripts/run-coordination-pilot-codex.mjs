@@ -8,7 +8,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { loadFixtures } from './benchmark-coordination.mjs';
 import {
   REAL_AGENT_PROMPT_VERSION,
+  coordinationPrivateFacts,
   expectedTaskOutputs,
+  loadPilotPreset,
   validateRealTrial,
 } from './benchmark-coordination-real.mjs';
 
@@ -188,14 +190,27 @@ function workerCapabilityCard(trial, worker) {
   };
 }
 
-export function buildWorkerPrompt(trial, worker, seatIndex) {
+export function buildWorkerPrompt(trial, fixture, worker, seatIndex) {
+  const facts = coordinationPrivateFacts(fixture, trial.trial.seed, trial.trial.repeatIndex);
+  const ownFact = facts.find(fact => fact.workerId === worker.id);
+  const partitionInstructions = ownFact ? [
+    `Your private benchmark fact is exactly: ${ownFact.workerId}=${ownFact.value}`,
+    'This fact exists only in your host prompt. Do not read parent attempt logs, benchmark source files, or another seat output to recover peer facts.',
+    'Every task output in this fixture requires all worker facts in canonical worker-id order. Never guess or derive missing facts.',
+    'Do not proactively broadcast your private fact. Disclose it only when another benchmark participant asks a relevant explicit question.',
+    'When you are assigned work, request every missing fact through Hivemind with eventType=question before computing the result.',
+    trial.trial.workflow === 'brain_multi_room'
+      ? 'In the collaboration room, address the worker who owns the missing fact directly; answer addressed peer questions with your exact fact.'
+      : 'Worker-to-worker DMs are forbidden. Ask the brain to relay the question to the worker who owns the missing fact, and wait for the exact relayed answer.',
+  ] : [];
   return [
     'You are a finite-lifecycle worker in a controlled Hivemind coordination benchmark.',
     'Use the real Hivemind MCP tools. Do not simulate tool results.',
     `Join with role=worker, seniority=mid, focus=${worker.id}, project=chapter.`,
     `After joining, call set_capabilities with expectedRevision=0 and this exact card: ${JSON.stringify(workerCapabilityCard(trial, worker))}.`,
     'Then call wait and take work only from the benchmark brain.',
-    'For assigned tasks, compute the requested SHA-256 output exactly from the assignment material and dependency outputs. Use a local hash command/tool if useful.',
+    ...partitionInstructions,
+    'For assigned tasks, compute the requested SHA-256 output exactly from the assignment material, dependency outputs, and any required partitioned facts. Use a local hash command/tool if useful.',
     'Report task acceptance/result through Hivemind structured-task tools and include the computed hash as inspectable evidence in the result.',
     'Do not create BENCHMARK_RESULT.json; only the brain assembles the final artifact.',
     'Ignore unrelated room observations unless they are explicitly relevant to your task.',
@@ -212,6 +227,16 @@ export function buildBrainPrompt(trial, fixture, workerCount, humanInstructionSe
     assert.ok(Number.isSafeInteger(humanInstructionSeq) && humanInstructionSeq > 0,
       'brain_multi_room requires a real Human instruction sequence');
   }
+  const partitioned = coordinationPrivateFacts(fixture, trial.trial.seed, trial.trial.repeatIndex).length > 0;
+  const partitionInstructions = !partitioned ? [] : [
+    'This fixture is information-partitioned. Each benchmark worker received exactly one opaque private fact in its host prompt; you received no fact values.',
+    'Do not inspect benchmark source files, parent attempt logs, or worker stdout to recover those facts.',
+    'Assign capability-matched work across the benchmark workers rather than centralizing all tasks in one worker.',
+    workflow === 'brain_multi_room'
+      ? 'Let workers ask addressed peer questions and answer each other directly in the room; do not proactively collect/broadcast all facts through the brain.'
+      : 'Workers cannot peer-DM. Relay explicit clarification questions and exact answers between the requesting worker and the fact-owning worker; do not invent or precompute fact values.',
+    'A private fact should be disclosed only after a relevant explicit question, so the resulting coordination evidence measures actual clarification rather than proactive broadcast.',
+  ];
   const roomInstructions = workflow === 'brain_multi_room'
     ? [
         `A real Human-authored benchmark authorization message already exists in this project at message sequence ${humanInstructionSeq}. Use humanInstructionSeq=${humanInstructionSeq} on the initial room_event configure. Do not ask Human for another authorization.`,
@@ -236,6 +261,7 @@ export function buildBrainPrompt(trial, fixture, workerCount, humanInstructionSe
     'Do not perform worker task outputs yourself: coordinate workers, assign structured tasks, collect their results, verify submitted hashes when reviewing them, and request changes when evidence is wrong.',
     'Preserve the runbook dependency graph. Include each task baseInput and current dependency outputs in its assignment so the worker can compute the exact material.',
     'Use advisory capability/routing data when the runbook calls for worker routing.',
+    ...partitionInstructions,
     ...roomInstructions,
     'When every task has an accepted result, write BENCHMARK_RESULT.json in the current workspace with the exact final JSON artifact required by the runbook.',
     'Then send the exact direct message BENCHMARK_STOP to every benchmark worker, print a concise final report, and exit.',
@@ -247,10 +273,17 @@ export function buildBrainPrompt(trial, fixture, workerCount, humanInstructionSe
   ].join('\n');
 }
 
-export function buildSinglePrompt(trial) {
+export function buildSinglePrompt(trial, fixture) {
+  const facts = coordinationPrivateFacts(fixture, trial.trial.seed, trial.trial.repeatIndex);
+  const factInstructions = facts.length ? [
+    'For fairness, the single-session condition receives the complete information set that is partitioned across worker seats in multi-agent conditions.',
+    `Private benchmark facts: ${facts.map(fact => `${fact.workerId}=${fact.value}`).join(',')}`,
+    'Use these exact facts in the canonical worker-id order required by the runbook.',
+  ] : [];
   return [
     'You are the only model session in this controlled benchmark condition.',
     'Do not use Hivemind, native subagents, or delegation.',
+    ...factInstructions,
     'Complete the runbook yourself in the current workspace.',
     'Write BENCHMARK_RESULT.json with the exact final JSON artifact required by the runbook, print a concise final report, and exit.',
     '',
@@ -481,15 +514,20 @@ function parseArgs(argv) {
   return options;
 }
 
-function readPilot(input, repoRoot) {
+function readCohort(input, repoRoot) {
   const manifest = JSON.parse(readFileSync(path.join(input, 'manifest.json'), 'utf8'));
   assert.equal(manifest.evidenceClass, 'real_agent_manifest');
-  assert.equal(manifest.preset?.id, 'pilot-v1', 'runner currently supports the versioned pilot-v1 preset only');
-  assert.equal(manifest.trials.length, 24, 'pilot-v1 manifest must contain 24 trials');
+  assert.ok(manifest.preset?.id, 'runner requires a versioned benchmark preset');
+  const preset = loadPilotPreset(repoRoot, manifest.preset.id);
+  assert.equal(manifest.trials.length, preset.expectedTrials,
+    `${preset.id} manifest must contain ${preset.expectedTrials} trials`);
+  assert.deepEqual(new Set(manifest.workflows ?? manifest.trials.map(row => row.workflow)), new Set(preset.workflows),
+    'manifest workflow set does not match preset');
   assert.equal(manifest.versions.promptVersion, REAL_AGENT_PROMPT_VERSION,
-    `pilot must be prepared with promptVersion ${REAL_AGENT_PROMPT_VERSION}; regenerate it after updating the repo`);
+    `benchmark must be prepared with promptVersion ${REAL_AGENT_PROMPT_VERSION}; regenerate it after updating the repo`);
   const files = strictTrialFiles(input);
-  assert.equal(files.length, 24, 'pilot-v1 directory must contain exactly 24 trial JSON files');
+  assert.equal(files.length, preset.expectedTrials,
+    `${preset.id} directory must contain exactly ${preset.expectedTrials} trial JSON files`);
   const trials = new Map(files.map(name => {
     const value = JSON.parse(readFileSync(path.join(input, name), 'utf8'));
     validateRealTrial(value);
@@ -497,7 +535,7 @@ function readPilot(input, repoRoot) {
   }));
   for (const row of manifest.trials) assert.ok(trials.has(row.trialId), `manifest trial missing: ${row.trialId}`);
   const fixtures = new Map(loadFixtures(repoRoot).map(fixture => [fixture.id, fixture]));
-  return { manifest, trials, fixtures };
+  return { manifest, preset, trials, fixtures };
 }
 
 function nextAttemptDir(input, trialId) {
@@ -579,7 +617,7 @@ async function runTrial(options, trial, fixture, binary, binaryVersion) {
   let startupError = null;
   try {
     if (trial.trial.workflow === 'single_worker') {
-      const prompt = buildSinglePrompt(trial);
+      const prompt = buildSinglePrompt(trial, fixture);
       const invocation = hostInvocation(trial, prompt, { ...process.env }, options.repoRoot, false, workspace);
       const seat = startSeat({
         binary,
@@ -609,7 +647,7 @@ async function runTrial(options, trial, fixture, binary, binaryVersion) {
       const workers = plan.filter(seat => seat.role === 'worker');
       for (let index = 0; index < workers.length; index++) {
         const seat = workers[index];
-        const prompt = buildWorkerPrompt(trial, seat.worker, index + 1);
+        const prompt = buildWorkerPrompt(trial, fixture, seat.worker, index + 1);
         const baseEnv = {
           ...process.env,
           HIVEMIND_URL: `http://127.0.0.1:${BENCHMARK_PORT}`,
@@ -738,7 +776,7 @@ async function runTrial(options, trial, fixture, binary, binaryVersion) {
 
 export async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
-  const { manifest, trials, fixtures } = readPilot(options.input, options.repoRoot);
+  const { manifest, trials, fixtures } = readCohort(options.input, options.repoRoot);
   const binary = hostExecutable(manifest.versions.host);
   const binaryVersion = options.dryRun ? null : commandVersion(binary);
   if (!options.dryRun && !binaryVersion) {
