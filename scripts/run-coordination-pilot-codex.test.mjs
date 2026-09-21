@@ -5,8 +5,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { loadFixtures } from './benchmark-coordination.mjs';
+import { Hive } from '../src/server/hive.ts';
 import {
   REAL_AGENT_PROMPT_VERSION,
+  REAL_AGENT_TASK_VERSION,
+  coordinationPrivateFacts,
   expectedTaskOutputs,
   main as realMain,
   trialTemplate,
@@ -26,6 +29,7 @@ import {
   openCodeUsageAccumulator,
   parseProviderTokens,
   main as runnerMain,
+  readCoordinationEvidence,
   reviewArtifact,
   seatPlan,
   seedHumanRoomInstruction,
@@ -42,16 +46,16 @@ const config = {
   configuration: 'reasoning=max',
   hivemindRevision: 'abc123',
   promptVersion: REAL_AGENT_PROMPT_VERSION,
-  taskVersion: 'coordination-task-v1',
+  taskVersion: REAL_AGENT_TASK_VERSION,
 };
 
 test('real-agent v3 prompt carries executable deterministic work without leaking answers', () => {
   const fixture = byId.get('shared-interface-coupled');
   const trial = trialTemplate(fixture, 'brain_multi_dm', 29, 0, config);
   const expected = expectedTaskOutputs(fixture, 29, 0);
-  assert.equal(REAL_AGENT_PROMPT_VERSION, 'coordination-real-v3');
+  assert.equal(REAL_AGENT_PROMPT_VERSION, 'coordination-real-v4');
   assert.match(trial.runbook.prompt, /Executable benchmark artifact contract/);
-  assert.match(trial.runbook.prompt, /coordination-real-v3\|fixture=shared-interface-coupled/);
+  assert.match(trial.runbook.prompt, /coordination-real-v4\|fixture=shared-interface-coupled/);
   assert.match(trial.runbook.prompt, /BENCHMARK_RESULT|final acceptance artifact/i);
   for (const output of Object.values(expected)) {
     assert.match(output, /^[a-f0-9]{64}$/);
@@ -151,8 +155,8 @@ test('runner prompts keep native agents disabled while coordinating through Hive
   const fixture = byId.get('independent-implementation');
   const multi = trialTemplate(fixture, 'brain_multi_dm', 29, 0, config);
   const single = trialTemplate(fixture, 'single_worker', 29, 0, config);
-  assert.match(buildSinglePrompt(single), /Do not use Hivemind, native subagents, or delegation/);
-  const workerPrompt = buildWorkerPrompt(multi, fixture.workers[0], 1);
+  assert.match(buildSinglePrompt(single, fixture), /Do not use Hivemind, native subagents, or delegation/);
+  const workerPrompt = buildWorkerPrompt(multi, fixture, fixture.workers[0], 1);
   assert.match(workerPrompt, /Join with role=worker/);
   assert.match(workerPrompt, /set_capabilities/);
   assert.match(workerPrompt, /BENCHMARK_STOP/);
@@ -160,6 +164,60 @@ test('runner prompts keep native agents disabled while coordinating through Hive
   assert.match(brainPrompt, /Join with role=brain/);
   assert.match(brainPrompt, /task DMs only/);
   assert.match(brainPrompt, /Do not perform worker task outputs yourself/);
+});
+
+test('partitioned prompts expose all facts to single, one fact per worker, and none to the brain', () => {
+  const fixture = byId.get('room-peer-clarification');
+  const dm = trialTemplate(fixture, 'brain_multi_dm', 29, 0, config);
+  const room = trialTemplate(fixture, 'brain_multi_room', 29, 0, config);
+  const single = trialTemplate(fixture, 'single_worker', 29, 0, config);
+  const facts = coordinationPrivateFacts(fixture, 29, 0);
+  assert.equal(facts.length, 3);
+
+  const singlePrompt = buildSinglePrompt(single, fixture);
+  for (const fact of facts) assert.match(singlePrompt, new RegExp(fact.value));
+
+  const brainPrompt = buildBrainPrompt(dm, fixture, 3);
+  assert.match(brainPrompt, /information-partitioned/);
+  assert.match(brainPrompt, /Relay explicit clarification questions/);
+  for (const fact of facts) assert.ok(!brainPrompt.includes(fact.value));
+
+  for (let index = 0; index < fixture.workers.length; index++) {
+    const worker = fixture.workers[index];
+    const prompt = buildWorkerPrompt(dm, fixture, worker, index + 1);
+    const own = facts.find(fact => fact.workerId === worker.id);
+    assert.match(prompt, new RegExp(own.value));
+    for (const other of facts.filter(fact => fact.workerId !== worker.id)) assert.ok(!prompt.includes(other.value));
+    assert.match(prompt, /eventType=question/);
+    assert.match(prompt, /Ask the brain to relay/);
+  }
+
+  const roomWorker = buildWorkerPrompt(room, fixture, fixture.workers[0], 1);
+  assert.match(roomWorker, /address the worker who owns the missing fact directly/);
+  const roomBrain = buildBrainPrompt(room, fixture, 3, 42);
+  assert.match(roomBrain, /ask addressed peer questions/);
+  for (const fact of facts) assert.ok(!roomBrain.includes(fact.value));
+});
+
+test('coordination evidence counts worker questions without retaining message bodies', t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-clarification-evidence-'));
+  const file = path.join(dir, 'hive.db');
+  const hive = new Hive(file);
+  t.after(() => { hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
+  const brain = hive.join({ role: 'brain' }).agent;
+  const a = hive.join({ role: 'worker', seniority: 'mid' }).agent;
+  const b = hive.join({ role: 'worker', seniority: 'mid' }).agent;
+  const roomChannel = hive.createChannel(brain, { name: 'clarification-evidence', type: 'private', memberNames: [a.name, b.name] });
+  hive.postMessage(a, { channel: roomChannel.id, body: 'Need the peer fact', recipients: [b.name], eventType: 'question' });
+  const evidence = readCoordinationEvidence(file);
+  assert.deepEqual(evidence, {
+    questionMessages: 1,
+    workerQuestions: 1,
+    peerDirectedQuestions: 1,
+    brainDirectedQuestions: 0,
+    roomQuestions: 1,
+    dmQuestions: 0,
+  });
 });
 
 test('room workflow requires and embeds a real Human instruction sequence', () => {
@@ -288,6 +346,26 @@ test('strict trial discovery ignores runner metadata JSON', () => {
   }
 });
 
+
+test('focused clarification dry-run plans exactly six trials', async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-clarification-dry-run-'));
+  try {
+    const out = path.join(dir, 'clarification');
+    realMain([
+      'prepare', '--root', root, '--output', out, '--preset', 'clarification-v1',
+      '--provider', 'openai', '--model', 'fixture-model', '--host', 'codex',
+      '--configuration', 'reasoning=max', '--hivemind-revision', 'dryrunsha',
+    ]);
+    const planned = await runnerMain(['--input', out, '--repo-root', root, '--dry-run']);
+    assert.equal(planned.length, 6);
+    assert.deepEqual(new Set(planned.map(row => row.workflow)),
+      new Set(['single_worker', 'brain_multi_dm', 'brain_multi_room']));
+    assert.ok(planned.every(row => row.fixtureId === 'room-peer-clarification' && row.dryRun === true));
+    assert.ok(!readdirSync(out).some(name => name.startsWith('run-')));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test('pilot dry-run plans all 24 trials without creating run metadata', async () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-pilot-dry-run-'));
