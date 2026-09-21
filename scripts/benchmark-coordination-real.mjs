@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_SEED, WORKFLOWS, loadFixtures, seededShuffle } from './benchmark-coordination.mjs';
 
 export const REAL_AGENT_PROTOCOL_VERSION = 1;
-export const REAL_AGENT_PROMPT_VERSION = 'coordination-real-v3';
-export const REAL_AGENT_TASK_VERSION = 'coordination-task-v1';
+export const REAL_AGENT_PROMPT_VERSION = 'coordination-real-v4';
+export const REAL_AGENT_TASK_VERSION = 'coordination-task-v2';
 export const PILOT_PRESET_VERSION = 1;
 
 const metrics = [
@@ -23,7 +23,7 @@ const finiteOrNull = value => value === null || (typeof value === 'number' && Nu
 
 export function taskBaseInput(fixture, task, seed, repeatIndex) {
   return [
-    'coordination-real-v3',
+    'coordination-real-v4',
     `fixture=${fixture.id}`,
     `seed=${seed}`,
     `repeat=${repeatIndex}`,
@@ -33,13 +33,30 @@ export function taskBaseInput(fixture, task, seed, repeatIndex) {
   ].join('|');
 }
 
+export function coordinationPrivateFacts(fixture, seed, repeatIndex) {
+  const partition = fixture.realAgent?.informationPartition;
+  if (!partition?.requireAllWorkerFacts) return [];
+  return fixture.workers.map(worker => ({
+    workerId: worker.id,
+    value: `fact-${hash([
+      partition.namespace,
+      fixture.id,
+      seed,
+      repeatIndex,
+      worker.id,
+    ].join('|')).slice(0, 24)}`,
+  })).sort((a, b) => a.workerId.localeCompare(b.workerId));
+}
+
 export function taskMaterial(fixture, task, seed, repeatIndex, outputs) {
   const dependencies = [...task.dependsOn].sort().map(dependency => {
     const output = outputs[dependency];
     assert.ok(typeof output === 'string' && output.length > 0, `missing dependency output ${dependency} for ${task.id}`);
     return `${dependency}=${output}`;
   }).join(',');
-  return `${taskBaseInput(fixture, task, seed, repeatIndex)}|deps=${dependencies}`;
+  const facts = coordinationPrivateFacts(fixture, seed, repeatIndex)
+    .map(fact => `${fact.workerId}=${fact.value}`).join(',');
+  return `${taskBaseInput(fixture, task, seed, repeatIndex)}|deps=${dependencies}${facts ? `|facts=${facts}` : ''}`;
 }
 
 export function expectedTaskOutputs(fixture, seed, repeatIndex) {
@@ -59,11 +76,23 @@ export function expectedTaskOutputs(fixture, seed, repeatIndex) {
 function workContract(fixture, seed, repeatIndex) {
   const taskLines = fixture.tasks.map(task =>
     `- ${task.id}: baseInput=${JSON.stringify(taskBaseInput(fixture, task, seed, repeatIndex))}; dependsOn=${task.dependsOn.join(',') || 'none'}`);
+  const partitioned = coordinationPrivateFacts(fixture, seed, repeatIndex).length > 0;
+  const material = partitioned
+    ? '  BASE_INPUT + "|deps=" + dependency pairs + "|facts=" + worker-fact pairs.'
+    : '  BASE_INPUT + "|deps=" + dependency pairs sorted by dependency id and joined with commas.';
+  const partitionRules = partitioned ? [
+    'This fixture is information-partitioned: the harness gives one opaque fact to each worker seat, while the coordinating brain receives no fact values.',
+    'For every task, append all worker-fact pairs sorted by worker id and joined with commas: WORKER_ID=FACT_VALUE.',
+    'The final exact material therefore ends with "|facts=worker-a=...,worker-b=...,worker-c=..." in canonical worker-id order.',
+    'Do not guess or derive a missing fact. Acquire it through the coordination path allowed by this workflow.',
+    'The fact values are intentionally absent from this shared runbook.',
+  ] : [];
   return [
     'Executable benchmark artifact contract:',
     'For every task, compute lowercase SHA-256 hex over this exact UTF-8 material:',
-    '  BASE_INPUT + "|deps=" + dependency pairs sorted by dependency id and joined with commas.',
-    'A dependency pair is DEPENDENCY_ID=DEPENDENCY_OUTPUT. With no dependencies the material ends in "|deps=".',
+    material,
+    'A dependency pair is DEPENDENCY_ID=DEPENDENCY_OUTPUT, sorted by dependency id and joined with commas. With no dependencies the dependency section is "|deps=".',
+    ...partitionRules,
     'Do not include quotes or a trailing newline in the hashed material.',
     'Task inputs:',
     ...taskLines,
@@ -192,8 +221,10 @@ export function loadPilotPreset(root, id) {
   assert.ok(Number.isInteger(preset.seed) && preset.seed >= 0, 'pilot seed');
   assert.ok(Number.isInteger(preset.repeat) && preset.repeat >= 1 && preset.repeat <= 20, 'pilot repeat');
   assert.ok(Array.isArray(preset.fixtures) && preset.fixtures.length > 0, 'pilot fixtures');
-  assert.deepEqual(new Set(preset.workflows), new Set(WORKFLOWS), 'pilot must compare all workflow shapes');
-  assert.equal(preset.expectedTrials, preset.fixtures.length * WORKFLOWS.length * preset.repeat, 'pilot expectedTrials mismatch');
+  assert.ok(Array.isArray(preset.workflows) && preset.workflows.length > 0, 'pilot workflows');
+  assert.equal(new Set(preset.workflows).size, preset.workflows.length, 'pilot workflows must be unique');
+  assert.ok(preset.workflows.every(workflow => WORKFLOWS.includes(workflow)), 'pilot references unknown workflow');
+  assert.equal(preset.expectedTrials, preset.fixtures.length * preset.workflows.length * preset.repeat, 'pilot expectedTrials mismatch');
   return preset;
 }
 
@@ -209,10 +240,14 @@ export function selectFixtures(fixtures, ids) {
 }
 
 export function prepareTrials(fixtures, config) {
+  const workflows = config.workflows ?? WORKFLOWS;
+  assert.ok(Array.isArray(workflows) && workflows.length > 0 && workflows.every(workflow => WORKFLOWS.includes(workflow)),
+    'prepareTrials workflows');
+  assert.equal(new Set(workflows).size, workflows.length, 'prepareTrials workflows must be unique');
   const trials = [];
   for (let repeatIndex = 0; repeatIndex < config.repeat; repeatIndex++) {
     for (let fixtureIndex = 0; fixtureIndex < fixtures.length; fixtureIndex++) {
-      const fixture = fixtures[fixtureIndex], order = seededShuffle(WORKFLOWS, config.seed + repeatIndex * 10_000 + fixtureIndex);
+      const fixture = fixtures[fixtureIndex], order = seededShuffle(workflows, config.seed + repeatIndex * 10_000 + fixtureIndex);
       for (const workflow of order) trials.push(trialTemplate(fixture, workflow, config.seed, repeatIndex, config));
     }
   }
@@ -299,7 +334,8 @@ export function main(argv = process.argv.slice(2)) {
       options.seed = preset.seed;
       options.repeat = preset.repeat;
     }
-    const config = { ...options, hivemindRevision: options.hivemindRevision ?? revision(options.root) };
+    const config = { ...options, workflows: preset?.workflows ?? WORKFLOWS,
+      hivemindRevision: options.hivemindRevision ?? revision(options.root) };
     assert.notEqual(config.hivemindRevision, 'unknown', 'Unable to pin Hivemind revision; pass --hivemind-revision explicitly');
     const allFixtures = loadFixtures(options.root);
     const selectedFixtures = preset ? selectFixtures(allFixtures, preset.fixtures) : allFixtures;
@@ -309,7 +345,7 @@ export function main(argv = process.argv.slice(2)) {
     for (const trial of trials) writeFileSync(path.join(options.output, `${trial.trialId}.json`), JSON.stringify(trial, null, 2) + '\n', { flag: 'wx' });
     const manifest = { schemaVersion: 1, evidenceClass: 'real_agent_manifest',
       ...(preset ? { preset: { id: preset.id, schemaVersion: preset.schemaVersion, purpose: preset.purpose } } : {}),
-      seed: options.seed, repeat: options.repeat,
+      seed: options.seed, repeat: options.repeat, workflows: [...config.workflows],
       versions: { hivemindRevision: config.hivemindRevision, provider: config.provider, model: config.model, host: config.host,
         configuration: config.configuration, promptVersion: config.promptVersion, taskVersion: config.taskVersion },
       trials: trials.map(trial => ({ trialId: trial.trialId, blindId: trial.blindId, fixtureId: trial.fixture.id, workflow: trial.trial.workflow })) };
