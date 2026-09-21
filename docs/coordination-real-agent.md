@@ -69,6 +69,7 @@ Executor behavior:
 - the runner starts a fresh isolated Hivemind home per trial on port **7420** and retains its database/logs;
 - the normal local Hivemind server must therefore be stopped while the pilot runs;
 - Codex must already have the Hivemind MCP server configured for `http://127.0.0.1:7420`;
+- every benchmark seat overrides `memories.use_memories=false` and `memories.generate_memories=false` so prior Codex memory is neither injected into nor generated from the trial;
 - worker capability cards mirror the versioned fixture capabilities;
 - the brain assembles `BENCHMARK_RESULT.json` from reviewed worker results; the harness compares it with the hidden deterministic expected artifact;
 - wall time and explicit Codex CLI token counts are retained when available;
