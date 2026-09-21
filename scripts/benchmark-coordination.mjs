@@ -90,6 +90,14 @@ export function validateFixture(fixture) {
     assert.match(worker.id, /^[a-z][a-z0-9-]*$/);
     ensureStringArray(worker.capabilities, `${worker.id}.capabilities`);
   }
+  if (fixture.realAgent !== undefined) {
+    const partition = fixture.realAgent?.informationPartition;
+    assert.ok(partition && typeof partition === 'object' && !Array.isArray(partition), 'realAgent.informationPartition');
+    assert.equal(partition.version, 1, 'informationPartition.version');
+    assert.match(partition.namespace, /^[a-z0-9][a-z0-9._-]+$/, 'informationPartition.namespace');
+    assert.equal(typeof partition.requireAllWorkerFacts, 'boolean', 'informationPartition.requireAllWorkerFacts');
+    assert.equal(typeof partition.requireQuestionBeforeDisclosure, 'boolean', 'informationPartition.requireQuestionBeforeDisclosure');
+  }
   assert.ok(Array.isArray(fixture.faults), 'faults must be an array');
   for (const fault of fixture.faults) {
     assert.ok(['block', 'offline', 'dropped_delivery', 'unsupported_completion'].includes(fault.type), `unknown fault ${fault.type}`);
