@@ -319,13 +319,44 @@ function appendTail(current, chunk, limit = 1_000_000) {
   return joined.length > limit ? joined.slice(-limit) : joined;
 }
 
+function openCodeUsageAccumulator() {
+  let pending = '', total = 0, observed = 0;
+  const consume = line => {
+    if (!line.trim().startsWith('{')) return;
+    let event;
+    try { event = JSON.parse(line); } catch { return; }
+    if (event?.type !== 'step_finish') return;
+    const value = event?.part?.tokens?.total;
+    if (!Number.isSafeInteger(value) || value < 0) return;
+    total += value;
+    observed++;
+  };
+  return {
+    push(chunk) {
+      pending += chunk.toString('utf8');
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop() ?? '';
+      for (const line of lines) consume(line);
+    },
+    finish() {
+      if (pending) consume(pending);
+      return observed ? total : null;
+    },
+  };
+}
+
 function startSeat({ binary, args, cwd, stdin, stdoutPath, stderrPath, env, timeoutMs }) {
   mkdirSync(path.dirname(stdoutPath), { recursive: true });
   const stdoutFile = createWriteStream(stdoutPath, { flags: 'wx' });
   const stderrFile = createWriteStream(stderrPath, { flags: 'wx' });
   const child = spawn(binary, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
   let stdoutTail = '', stderrTail = '', timedOut = false;
-  child.stdout.on('data', chunk => { stdoutTail = appendTail(stdoutTail, chunk); stdoutFile.write(chunk); });
+  const openCodeUsage = openCodeUsageAccumulator();
+  child.stdout.on('data', chunk => {
+    stdoutTail = appendTail(stdoutTail, chunk);
+    openCodeUsage.push(chunk);
+    stdoutFile.write(chunk);
+  });
   child.stderr.on('data', chunk => { stderrTail = appendTail(stderrTail, chunk); stderrFile.write(chunk); });
   child.stdin.on('error', () => undefined);
   child.stdin.end(stdin ?? undefined);
@@ -349,7 +380,7 @@ function startSeat({ binary, args, cwd, stdin, stdoutPath, stderrPath, env, time
         error: spawnError ? String(spawnError.message ?? spawnError) : null,
         stdoutTail,
         stderrTail,
-        providerTokens: parseProviderTokens(stdoutTail + '\n' + stderrTail),
+        providerTokens: openCodeUsage.finish() ?? parseProviderTokens(stdoutTail + '\n' + stderrTail),
       });
     });
   });
