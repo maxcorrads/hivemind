@@ -23,6 +23,7 @@ import {
   hostExecutable,
   hostInvocation,
   opencodeArgs,
+  openCodeUsageAccumulator,
   parseProviderTokens,
   main as runnerMain,
   reviewArtifact,
@@ -231,6 +232,14 @@ test('room authority seeding bootstraps Human auth, writes a local Human message
   const posted = JSON.parse(calls[2].init.body);
   assert.equal(posted.requestId, `benchmark-authority-${room.trialId}`);
   assert.match(posted.body, /Human authorizes the coordinating brain/);
+});
+
+test('OpenCode usage accumulator preserves JSONL token totals across chunk boundaries', () => {
+  const usage = openCodeUsageAccumulator();
+  usage.push(Buffer.from('{"type":"step_finish","part":{"tokens":{"total":12}}}\n{"type":"step_'));
+  usage.push(Buffer.from('finish","part":{"tokens":{"total":34}}}\n{"type":"text"'));
+  usage.push(Buffer.from('}\n'));
+  assert.equal(usage.finish(), 46);
 });
 
 test('token parsing uses explicit Codex usage or sums OpenCode step_finish JSON totals', () => {
