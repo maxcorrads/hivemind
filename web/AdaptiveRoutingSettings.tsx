@@ -81,6 +81,10 @@ export function AdaptiveRoutingSettings({ onClose }: { onClose: () => void }) {
           <strong>orchestrated</strong>: the brain coordinates/delegates normally. Low confidence or Jev failure falls back to orchestrated.
         </p>
         <p className="help-p">
+          Brain DMs also offer a one-request <strong>Auto · Jev / Single / Orchestrated</strong> selector.
+          Manual Single/Orchestrated choices bypass Jev. Telegram replies in a mapped brain DM use Auto routing when Jev is enabled.
+        </p>
+        <p className="help-p">
           Only new top-level Human messages in a brain DM are routed. Thread replies and ordinary channel traffic are not reclassified.
         </p>
         {error && <p className="err">{error}</p>}
