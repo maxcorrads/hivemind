@@ -231,7 +231,10 @@ export class RoomStore {
   }
   assignment(actor: Agent, channel: Channel, worker: Agent, input: { room?: { contractVersion: number; actionKey: string }; contract: unknown }) {
     const room = this.peek(channel.id);
-    if (!room) { if (input.room) throw new HiveError(400, 'No room contract in this channel'); return; }
+    if (!room) {
+      if (input.room) throw new HiveError(400, 'No room contract in this channel; omit room or configure/read get_room before assigning');
+      return;
+    }
     if (actor.id !== room.coordinatorId || !room.participantIds.includes(worker.id)) throw new HiveError(403, 'Room tasks belong to its coordinator and declared workers');
     if (!input.room) throw new HiveError(409, 'Room assignment requires current contractVersion and a stable actionKey');
     const payloadHash = this.hash({ worker: worker.id, contract: input.contract });
