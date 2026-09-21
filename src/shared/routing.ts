@@ -13,7 +13,7 @@ export const capabilityCardSchema = z.object({
 }).strict();
 export const setCapabilitiesSchema = z.object({ expectedRevision: z.number().int().nonnegative().safe(), card: capabilityCardSchema }).strict();
 export const suggestWorkersSchema = z.object({
-  requiredCapabilities: tags.default([]).describe('Optional capability filter. Omit or pass [] when no specific capability is required.'),
+  requiredCapabilities: tags.optional().describe('Optional capability filter. Omit or pass [] when no specific capability is required.'),
   mode: z.enum(['implementation', 'review', 'read_only']), category: tag,
   minContext: z.number().int().min(1).max(10_000_000).optional(),
   minReviewedResults: z.number().int().min(0).max(64).optional(),
