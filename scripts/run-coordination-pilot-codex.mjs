@@ -129,12 +129,19 @@ export function buildWorkerPrompt(trial, worker, seatIndex) {
   ].join('\n');
 }
 
-export function buildBrainPrompt(trial, fixture, workerCount) {
+export function buildBrainPrompt(trial, fixture, workerCount, humanInstructionSeq = null) {
   const workflow = trial.trial.workflow;
   assert.notEqual(workflow, 'single_worker');
+  if (workflow === 'brain_multi_room') {
+    assert.ok(Number.isSafeInteger(humanInstructionSeq) && humanInstructionSeq > 0,
+      'brain_multi_room requires a real Human instruction sequence');
+  }
   const roomInstructions = workflow === 'brain_multi_room'
     ? [
-        'Create one task-scoped private collaboration room, invite the benchmark workers, configure its shared contract, and use it for peer-visible coordination.',
+        `A real Human-authored benchmark authorization message already exists in this project at message sequence ${humanInstructionSeq}. Use humanInstructionSeq=${humanInstructionSeq} on the initial room_event configure. Do not ask Human for another authorization.`,
+        'Bootstrap the finite room deterministically: assign the first dependency-ready runbook task outside the room, then use that task ID as contract.originTaskId when configuring the room.',
+        'Create one private collaboration channel with all benchmark workers as members. Do not invite a worker again if create_channel already included that worker.',
+        'Configure one finite task-scoped room contract, then use its current contractVersion and stable actionKey values on remaining room-bound structured assignments.',
         fixture.id === 'noisy-room'
           ? 'Before the first peer clarification, post exactly 12 unrelated progress observations labelled noise-01 through noise-12 in that room; do not turn them into assignments.'
           : 'Do not add unrelated room traffic.',
@@ -175,6 +182,42 @@ export function buildSinglePrompt(trial) {
     trial.runbook.prompt,
     '--- END BENCHMARK RUNBOOK ---',
   ].join('\n');
+}
+
+export function humanRoomInstructionBody(trial) {
+  return [
+    `Benchmark authorization for ${trial.blindId}.`,
+    'Human authorizes the coordinating brain to create and configure one finite task-scoped collaboration room for this trial only.',
+    'Use only the benchmark workers in project chapter, preserve the generated runbook scope and dependencies, and do not grant broader authority.',
+    'The room may be archived after the benchmark tasks are reviewed and the final result artifact is produced.',
+  ].join(' ');
+}
+
+export async function seedHumanRoomInstruction(trial) {
+  assert.equal(trial.trial.workflow, 'brain_multi_room');
+  const base = `http://127.0.0.1:${BENCHMARK_PORT}`;
+  const snapshotResponse = await fetch(`${base}/api/ui/snapshot`, { signal: AbortSignal.timeout(3_000) });
+  if (!snapshotResponse.ok) throw new Error(`Cannot read benchmark Human snapshot: HTTP ${snapshotResponse.status}`);
+  const snapshot = await snapshotResponse.json();
+  const project = snapshot.projects?.find(value => value.slug === 'chapter');
+  assert.ok(project, 'benchmark project chapter is missing');
+  const channel = snapshot.channels?.find(value => value.projectId === project.id && String(value.name).toLowerCase() === 'general');
+  assert.ok(channel, 'benchmark project #general channel is missing');
+  const body = humanRoomInstructionBody(trial);
+  const response = await fetch(`${base}/api/ui/channels/${encodeURIComponent(channel.id)}/messages`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ requestId: `benchmark-authority-${trial.trialId}`, body }),
+    signal: AbortSignal.timeout(3_000),
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    throw new Error(`Cannot seed benchmark Human authority: HTTP ${response.status}${detail ? ` ${detail}` : ''}`);
+  }
+  const payload = await response.json();
+  const seq = payload.message?.seq;
+  assert.ok(Number.isSafeInteger(seq) && seq > 0, 'benchmark Human authority message has no positive seq');
+  return { seq, channelId: channel.id, messageId: payload.message.id, body };
 }
 
 function appendTail(current, chunk, limit = 1_000_000) {
@@ -426,6 +469,17 @@ async function runTrial(options, trial, fixture, binary, binaryVersion) {
       seatResults.push({ id: 'single', ...(await seat.done) });
     } else {
       server = await startIsolatedServer(options.repoRoot, attemptDir);
+      const humanAuthority = trial.trial.workflow === 'brain_multi_room'
+        ? await seedHumanRoomInstruction(trial)
+        : null;
+      if (humanAuthority) {
+        meta.humanAuthority = {
+          seq: humanAuthority.seq,
+          channelId: humanAuthority.channelId,
+          messageId: humanAuthority.messageId,
+        };
+        writeMeta(metaFile, meta);
+      }
       const workers = plan.filter(seat => seat.role === 'worker');
       for (let index = 0; index < workers.length; index++) {
         const seat = workers[index];
@@ -451,7 +505,7 @@ async function runTrial(options, trial, fixture, binary, binaryVersion) {
         binary,
         args: codexArgs(trial),
         cwd: workspace,
-        prompt: buildBrainPrompt(trial, fixture, workers.length),
+        prompt: buildBrainPrompt(trial, fixture, workers.length, humanAuthority?.seq ?? null),
         stdoutPath: path.join(attemptDir, 'brain.stdout.txt'),
         stderrPath: path.join(attemptDir, 'brain.stderr.log'),
         env: {
