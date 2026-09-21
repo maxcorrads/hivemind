@@ -188,7 +188,7 @@ test("launch instructions apply to brains, survive quoting, and MCP is bound to 
     "runtime=$1; shift\n" +
     "function claude-company() { \"$runtime\" -e 'console.log(JSON.stringify(process.argv.slice(1)))' -- \"$@\"; }\n" +
     command, { mode: 0o700 });
-  const shells = ["/bin/bash", ...(existsSync("/bin/zsh") ? ["/bin/zsh"] : [])];
+  const shells = process.platform === "darwin" ? ["/bin/bash", "/bin/zsh"] : ["/bin/bash"];
   for (const shell of shells) {
     const result = spawnSync(shell, [script, process.execPath], {
       encoding: "utf8", cwd: f.dir, timeout: 5_000, maxBuffer: 1024 * 1024,
