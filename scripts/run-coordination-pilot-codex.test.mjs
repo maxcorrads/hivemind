@@ -49,7 +49,7 @@ const config = {
   taskVersion: REAL_AGENT_TASK_VERSION,
 };
 
-test('real-agent v3 prompt carries executable deterministic work without leaking answers', () => {
+test('real-agent v4 prompt carries executable deterministic work without leaking answers', () => {
   const fixture = byId.get('shared-interface-coupled');
   const trial = trialTemplate(fixture, 'brain_multi_dm', 29, 0, config);
   const expected = expectedTaskOutputs(fixture, 29, 0);
