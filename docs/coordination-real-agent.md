@@ -2,7 +2,7 @@
 
 This is phase 2 of issue #29. Phase 1 defines deterministic fixtures and protocol smoke coverage; this runner prepares and validates trials performed by actual model/provider sessions without making Hivemind depend on a provider SDK or CLI.
 
-The goal is to compare the same fixture under four coordination shapes: `single_worker`, `brain_one_worker`, `brain_multi_dm`, and `brain_multi_room`. Results stay multi-dimensional. There is deliberately no aggregate score and no automatic “winner”.
+The full matrix compares the same fixture under four coordination shapes: `single_worker`, `brain_one_worker`, `brain_multi_dm`, and `brain_multi_room`. Versioned focused presets may intentionally select a smaller workflow subset for a specific hypothesis. Results stay multi-dimensional. There is deliberately no aggregate score and no automatic “winner”.
 
 ## Pilot v1 — 24 trials
 
@@ -32,24 +32,66 @@ That produces exactly **24 trials** (3 fixtures × 4 workflows × 2 repeats). Pr
 
 Treat this as a methodology pilot, not as sufficient evidence for a general productivity claim. Promote to the full 8-fixture × 4-workflow × 3-repeat = **96 trial** cohort only after the 24 runs reveal no systematic prompt/fixture/harness ambiguity and failed runs have been retained rather than rerun away.
 
-### Executable v3 work contract
+## Clarification v1 — 6 discriminative trials
 
-Real-agent prompt version `coordination-real-v3` adds a deterministic artifact to every fixture task. Each task has a versioned base input and produces a lowercase SHA-256 value; dependent tasks hash the actual upstream outputs as part of their material. The final artifact is a small JSON object containing every task output.
+After `pilot-v1` established that the original tasks were single-session sufficient, use the focused `clarification-v1` preset instead of expanding blindly to 96 trials.
 
-This gives the pilot a real acceptance check instead of asking a model to “implement” only an abstract effort/scope label. Expected hashes are computed by the harness and are **not** placed in participant prompts.
+It fixes:
+
+- one fixture: `room-peer-clarification`;
+- workflows: `single_worker`, `brain_multi_dm`, `brain_multi_room`;
+- two repeats;
+- seed 29;
+- exactly **6 trials**.
+
+The fixture is information-partitioned. Each multi-agent worker seat receives one opaque fact in its private host prompt; the brain receives none. Every task output requires all three facts. Workers are instructed not to broadcast proactively: a missing fact must be requested through an explicit Hivemind question. DM runs therefore require brain relay; room runs can use addressed peer clarification. The single session receives the same complete information set in one prompt, so it remains a fair non-orchestrated baseline.
+
+The shared runbook and workspace never contain the private fact values. The runner records only aggregate question-routing counts in run metadata; it does not copy fact/message bodies into those metrics.
+
+Prepare and run with the same OpenCode/Muse cohort used by the initial pilot:
+
+```sh
+rm -rf /tmp/hivemind-clarification-v1
+
+OPENCODE_BIN=opencode \
+npm run benchmark:coordination:clarification -- \
+  --provider opencode-go \
+  --model opencode-go/muse-spark-1.3-contributor \
+  --host opencode \
+  --configuration auto \
+  --output /tmp/hivemind-clarification-v1
+
+OPENCODE_BIN=opencode \
+npm run benchmark:coordination:run -- \
+  --input /tmp/hivemind-clarification-v1
+```
+
+Afterward, compare the post-#121 tool-error count with the 48-error `pilot-v1` baseline:
+
+```sh
+npm run benchmark:coordination:mcp-errors -- --input /tmp/hivemind-clarification-v1
+```
+
+For each orchestrated trial, inspect `run-trial-*.json.coordinationEvidence`. A successful discriminative run should contain real worker `question` events. `peerDirectedQuestions` is the key room signal; `brainDirectedQuestions` is the expected DM-relay signal. Artifact acceptance remains independent of those counters.
+
+### Executable v4 work contract
+
+Real-agent prompt version `coordination-real-v4` / task version `coordination-task-v2` retains the deterministic SHA-256 artifact contract and adds optional information-partitioned material. Each task has a versioned base input and produces a lowercase SHA-256 value; dependent tasks hash the actual upstream outputs as part of their material. Partitioned fixtures additionally append canonical worker-fact pairs. The final artifact is a small JSON object containing every task output.
+
+This gives the cohort a real acceptance check instead of asking a model to “implement” only an abstract effort/scope label. Expected hashes are computed by the harness and are **not** placed in participant prompts. In an information-partitioned run, the shared runbook also omits the fact values.
 
 For `noisy-room`, the 12 unrelated observations apply only to `brain_multi_room`. The DM, brain+one, and single-worker conditions must not create a room solely to inject noise. This avoids the previous contradiction between “DM only” and “noise must stay in the shared room”. Because this changes participant instructions materially, old `coordination-real-v1` pilot directories must be regenerated rather than mixed into the v2 cohort.
 
-### Optional Codex / OpenCode pilot executor
+### Optional Codex / OpenCode cohort executor
 
 The core benchmark remains provider-neutral. The local executor supports both Codex and OpenCode cohorts:
 
 ```sh
-npm run benchmark:coordination:pilot:run -- \
+npm run benchmark:coordination:run -- \
   --input /tmp/hivemind-pilot-v1 \
   --dry-run
 
-npm run benchmark:coordination:pilot:run -- \
+npm run benchmark:coordination:run -- \
   --input /tmp/hivemind-pilot-v1
 ```
 
@@ -57,7 +99,7 @@ Codex uses `codex` by default and may be overridden locally with `CODEX_BIN`. Op
 
 ```sh
 CODEX_BIN=/path/to/local-codex-wrapper \
-npm run benchmark:coordination:pilot:run -- --input /tmp/hivemind-pilot-v1
+npm run benchmark:coordination:run -- --input /tmp/hivemind-pilot-v1
 
 OPENCODE_BIN=/path/to/opencode \
 npm run benchmark:coordination:pilot:run -- --input /tmp/hivemind-pilot-v1
