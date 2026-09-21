@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { loadFixtures } from './benchmark-coordination.mjs';
-import { REAL_AGENT_PROMPT_VERSION, REAL_AGENT_TASK_VERSION, loadPilotPreset, main, prepareTrials, selectFixtures, summarizeTrials, trialTemplate, validateRealTrial } from './benchmark-coordination-real.mjs';
+import { REAL_AGENT_PROMPT_VERSION, REAL_AGENT_TASK_VERSION, coordinationPrivateFacts, expectedTaskOutputs, loadPilotPreset, main, prepareTrials, selectFixtures, summarizeTrials, trialTemplate, validateRealTrial } from './benchmark-coordination-real.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixtures = loadFixtures(root);
@@ -97,6 +97,37 @@ test('CLI prepare, validate and summarize round-trip version-pinned trial templa
 });
 
 
+test('information-partitioned fixture keeps private facts out of the shared runbook', () => {
+  const fixture = fixtures.find(candidate => candidate.id === 'room-peer-clarification');
+  assert.ok(fixture);
+  const facts0 = coordinationPrivateFacts(fixture, 29, 0);
+  const facts1 = coordinationPrivateFacts(fixture, 29, 1);
+  assert.equal(facts0.length, fixture.workers.length);
+  assert.notDeepEqual(facts1, facts0);
+  const trial = trialTemplate(fixture, 'brain_multi_dm', 29, 0, config);
+  assert.match(trial.runbook.prompt, /information-partitioned/);
+  assert.match(trial.runbook.prompt, /\|facts=/);
+  for (const fact of facts0) assert.ok(!trial.runbook.prompt.includes(fact.value), 'shared runbook leaked a private fact');
+  const outputs = expectedTaskOutputs(fixture, 29, 0);
+  assert.deepEqual(Object.keys(outputs).sort(), fixture.tasks.map(task => task.id).sort());
+  assert.ok(Object.values(outputs).every(output => /^[a-f0-9]{64}$/.test(output)));
+});
+
+test('focused clarification preset prepares only single, multi-DM and multi-room', () => {
+  const preset = loadPilotPreset(root, 'clarification-v1');
+  assert.deepEqual(preset.fixtures, ['room-peer-clarification']);
+  assert.deepEqual(preset.workflows, ['single_worker', 'brain_multi_dm', 'brain_multi_room']);
+  assert.equal(preset.repeat, 2);
+  assert.equal(preset.expectedTrials, 6);
+  const selected = selectFixtures(fixtures, preset.fixtures);
+  const trials = prepareTrials(selected, { ...config, workflows: preset.workflows, repeat: preset.repeat, seed: preset.seed });
+  assert.equal(trials.length, 6);
+  for (let repeatIndex = 0; repeatIndex < 2; repeatIndex++) {
+    const rows = trials.filter(trial => trial.trial.repeatIndex === repeatIndex);
+    assert.deepEqual(new Set(rows.map(trial => trial.trial.workflow)), new Set(preset.workflows));
+  }
+});
+
 test('pilot-v1 is a versioned 24-trial balanced subset', () => {
   const preset = loadPilotPreset(root, 'pilot-v1');
   assert.deepEqual(preset.fixtures, ['independent-implementation', 'shared-interface-coupled', 'noisy-room']);
@@ -111,6 +142,23 @@ test('pilot-v1 is a versioned 24-trial balanced subset', () => {
     assert.deepEqual(new Set(rows.map(trial => trial.trial.workflow)),
       new Set(['single_worker', 'brain_one_worker', 'brain_multi_dm', 'brain_multi_room']));
   }
+});
+
+test('CLI clarification preset writes a six-trial focused manifest', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-real-clarification-'));
+  try {
+    const out = path.join(dir, 'clarification');
+    const manifest = main(['prepare', '--root', root, '--output', out, '--preset', 'clarification-v1',
+      '--provider', 'fixture-provider', '--model', 'fixture-model', '--host', 'fixture-host',
+      '--configuration', 'reasoning=medium', '--hivemind-revision', 'clarificationsha']);
+    const trialFiles = readdirSync(out).filter(name => name.startsWith('trial-'));
+    assert.equal(trialFiles.length, 6);
+    assert.equal(manifest.preset.id, 'clarification-v1');
+    assert.deepEqual(manifest.workflows, ['single_worker', 'brain_multi_dm', 'brain_multi_room']);
+    assert.deepEqual(new Set(manifest.trials.map(trial => trial.fixtureId)), new Set(['room-peer-clarification']));
+    assert.deepEqual(new Set(manifest.trials.map(trial => trial.workflow)),
+      new Set(['single_worker', 'brain_multi_dm', 'brain_multi_room']));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('CLI preset prepares exactly pilot-v1 and pins cohort identity in the manifest', () => {
