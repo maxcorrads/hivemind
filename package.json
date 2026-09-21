@@ -31,7 +31,8 @@
     "test:integration": "node scripts/run-tests.mjs --suite=integration",
     "check:all": "node scripts/check-all.mjs",
     "replay:timeline": "node --import tsx scripts/replay-timeline.mjs",
-    "benchmark:timeline": "node --import tsx scripts/benchmark-timeline.mjs"
+    "benchmark:timeline": "node --import tsx scripts/benchmark-timeline.mjs",
+    "benchmark:coordination:pilot": "node scripts/benchmark-coordination-real.mjs prepare --preset pilot-v1"
   },
   "engines": {
     "node": ">=22.13.0"
