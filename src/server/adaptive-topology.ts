@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Hive } from './hive.ts';
 import { HiveError, HUMAN_ID, type Agent, type Message } from '../shared/types.ts';
-import type { TaskSnapshot } from '../shared/tasks.ts';
 import { ADAPTIVE_TOPOLOGIES, type AdaptiveExecutionState, type AdaptiveLockScope,
   type AdaptiveRoutingEvent, type AdaptiveRoutingMode, type AdaptiveRoutingView,
   type AdaptiveTopology, type AdaptiveTopologyDecision, type AdaptiveWorkerCapacity } from '../shared/adaptive-topology.ts';
@@ -35,6 +34,10 @@ type HumanMessageInput = {
   attachmentIds?: string[]; recipients?: string[]; source?: 'hive' | 'telegram';
 };
 function fingerprint(value: unknown): string { return createHash('sha256').update(JSON.stringify(value)).digest('hex'); }
+function requestText(message: Pick<Message, 'body' | 'source'>): string {
+  // Telegram's trusted ingress decorates its stored message with [sender]. It is not routing context.
+  return message.source === 'telegram' ? message.body.replace(/^\[[^\]\r\n]*\]\s?/, '') : message.body;
+}
 function modeOf(value: string | undefined): AdaptiveRoutingMode {
   if (!value || value === 'auto') return 'auto';
   if (value === 'orchestrated') return 'orchestrated_auto';
@@ -160,7 +163,7 @@ export class AdaptiveTopologyRuntime {
   }
   private snapshot(state: StoredExecution, event: AdaptiveCoordinationEvent, capacity = this.capacity(state)): TopologyEvaluationSnapshot {
     const project = this.hive.getProject(state.projectId);
-    return { request: this.hive.getMessageById(state.rootMessageId).body,
+    return { request: requestText(this.hive.getMessageById(state.rootMessageId)),
       project: { slug: project.slug, name: project.name },
       current: { topology: state.currentTopology, workerBudget: state.workerBudget,
         desiredTopology: state.desiredTopology, desiredWorkers: state.desiredWorkers },
@@ -359,7 +362,7 @@ export class AdaptiveTopologyRuntime {
       const lockScope: AdaptiveLockScope = manual ? scope : inherited ? 'conversation' : 'none';
       const executionId = `execution-${randomUUID()}`, project = this.hive.getProject(channel.projectId);
       let capacity = this.capacity({ projectId: channel.projectId, executionId });
-      const makeSnapshot = (): TopologyEvaluationSnapshot => ({ request: input.body,
+      const makeSnapshot = (): TopologyEvaluationSnapshot => ({ request: requestText(input),
         project: { slug: project.slug, name: project.name }, current: null, capacity,
         execution: { orchestratedOnly: mode === 'orchestrated_auto', lockScope, lockedTopology: locked },
         tasks: { active: 0, activeWorkers: 0, blockers: 0, openDependencies: 0, workstreams: 0 },
@@ -374,7 +377,6 @@ export class AdaptiveTopologyRuntime {
         if (decision.providerStatus !== 'ok' || stable) break;
       }
       if (this.stopped) throw new HiveError(503, 'Server is shutting down');
-      // The Human toggle/lock wins over an in-flight classifier request.
       const currentConfig = loadAdaptiveRouting(this.hive.home);
       if (!currentConfig?.enabled && config?.enabled && !locked) return null;
       if (fingerprint(previous) !== fingerprint(this.row(channel.id)) || inherited !== (manual ? null : this.conversationLock(channel.id)))
