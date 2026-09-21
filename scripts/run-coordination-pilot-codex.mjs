@@ -68,6 +68,8 @@ export function codexArgs(trial) {
 
 export function opencodeArgs(trial, prompt) {
   assert.equal(trial.versions.host, 'opencode');
+  assert.match(trial.versions.configuration, /(^|[;,\s])auto(?:=true)?($|[;,\s])/i,
+    'OpenCode pilot configuration must record --auto as configuration=auto');
   return [
     '--pure',
     'run',
