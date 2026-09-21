@@ -1,12 +1,8 @@
-import { useState } from "react";
-import {
-  api,
-} from "./api.ts";
+import { useEffect, useRef, useState } from "react";
+import { api } from "./api.ts";
 import type {
-  AdaptiveLockScope,
-  AdaptiveRoutingEvent,
-  AdaptiveRoutingView,
-  AdaptiveTopology,
+  AdaptiveExecutionState, AdaptiveLockScope, AdaptiveRoutingEvent,
+  AdaptiveRoutingView, AdaptiveTopology,
 } from "../src/shared/adaptive-topology.ts";
 
 export function topologyLabel(topology: AdaptiveTopology): string {
@@ -15,99 +11,102 @@ export function topologyLabel(topology: AdaptiveTopology): string {
   if (topology === "brain_multi_dm") return "Multi-DM";
   return "Room";
 }
-
 export function routingEventLabel(event: AdaptiveRoutingEvent): string {
   const confidence = event.confidence == null ? "" : ` · ${Math.round(event.confidence * 100)}%`;
   const workers = event.targetWorkers > 0 ? ` · ${event.targetWorkers} worker${event.targetWorkers === 1 ? "" : "s"}` : "";
   if (event.kind === "transition")
     return `${topologyLabel(event.fromTopology)} → ${topologyLabel(event.appliedTopology)}${workers}${confidence} · ${event.reason}`;
   if (event.kind === "warning") return `⚠ ${event.warning ?? event.reason}`;
-  return `Jev · ${topologyLabel(event.targetTopology)}${workers}${confidence} · ${event.reason}`;
+  if (event.kind === "lock") return `Human · ${event.reason} · ${topologyLabel(event.appliedTopology)}`;
+  if (event.providerStatus === "bypassed") return `Manual · ${topologyLabel(event.appliedTopology)} · Jev not called`;
+  return `Jev recommends ${topologyLabel(event.targetTopology)}${workers}${confidence} · ${event.reason}`;
 }
 
-export function AdaptiveRoutingPanel({
-  channelId,
-  view,
-  onChange,
-  onClose,
-}: {
-  channelId: string;
-  view: AdaptiveRoutingView;
-  onChange: (view: AdaptiveRoutingView) => void;
-  onClose: () => void;
+type PanelProps = {
+  channelId: string; view: AdaptiveRoutingView;
+  onChange: (view: AdaptiveRoutingView) => void; onClose: () => void;
+};
+
+export function AdaptiveRoutingPanel(props: PanelProps) {
+  const state = props.view.state?.channelId === props.channelId ? props.view.state : null;
+  const events = props.view.events.filter(event => event.channelId === props.channelId);
+  // Never retain an editor or its asynchronous response when navigating to another execution.
+  return <RoutingPanelContent key={`${props.channelId}:${state?.executionId ?? "none"}`}
+    {...props} state={state} events={events} />;
+}
+
+function RoutingPanelContent({ channelId, state, events, onChange, onClose }: PanelProps & {
+  state: AdaptiveExecutionState | null; events: AdaptiveRoutingEvent[];
 }) {
-  const state = view.state;
-  const [scope, setScope] = useState<AdaptiveLockScope>(state?.lockScope ?? "task");
-  const [topology, setTopology] = useState<AdaptiveTopology>(
-    state?.lockedTopology ?? state?.currentTopology ?? "single",
+  const [scope, setScope] = useState<Exclude<AdaptiveLockScope, "none">>(
+    state?.lockScope === "conversation" ? "conversation" : "task",
   );
+  const [topology, setTopology] = useState<AdaptiveTopology>(state?.lockedTopology ?? state?.currentTopology ?? "single");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
+  const mounted = useRef(false);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const close = () => { if (!busy) onClose(); };
   const mutate = (body: { scope: AdaptiveLockScope; topology?: AdaptiveTopology | null }) => {
-    setBusy(true);
-    setError(null);
-    api.setAdaptiveRoutingLock(channelId, body)
-      .then(onChange)
-      .catch(err => setError(String(err.message || err)))
-      .finally(() => setBusy(false));
+    if (busy) return;
+    setBusy(true); setError(null);
+    api.setAdaptiveRoutingLock(channelId, body).then(next => {
+      if (mounted.current && next.state?.channelId === channelId && next.state.executionId === state?.executionId)
+        onChange(next);
+    }).catch(err => {
+      if (mounted.current) setError(String(err.message || err));
+    }).finally(() => { if (mounted.current) setBusy(false); });
   };
 
   return (
-    <div className="modal" onClick={onClose}>
+    <div className="modal" onClick={close}>
       <div className="sheet routing-sheet" role="dialog" aria-modal="true" aria-label="Adaptive routing timeline"
-        onClick={e => e.stopPropagation()}>
+        onClick={event => event.stopPropagation()}>
         <h2>Routing · Jev</h2>
         {!state ? <p className="help-p">No adaptive execution has started in this brain DM yet.</p> : <>
           <div className="routing-summary">
             <strong>{topologyLabel(state.currentTopology)}</strong>
             {state.workerBudget > 0 && <span>{state.workerBudget} worker{state.workerBudget === 1 ? "" : "s"}</span>}
-            {state.desiredTopology && <span>target → {topologyLabel(state.desiredTopology)}</span>}
-            {state.lockScope !== "none" && <span>locked · {state.lockScope}</span>}
+            {state.desiredTopology && <span>pending → {topologyLabel(state.desiredTopology)}</span>}
+            {state.lockedTopology && <span>Human override · {state.lockScope === "none" ? "this request" : state.lockScope}</span>}
           </div>
-          {state.warning && <p className="routing-warning">⚠ {state.warning}</p>}
-          {state.recommendation && <p className="help-p">
+          {state.warning && <p className="routing-warning" role="alert">⚠ {state.warning}</p>}
+          {state.recommendation?.providerStatus === "ok" && <p className="help-p">
             Latest Jev recommendation: <strong>{topologyLabel(state.recommendation.targetTopology)}</strong>
             {state.recommendation.targetWorkers > 0 ? ` · ${state.recommendation.targetWorkers} worker${state.recommendation.targetWorkers === 1 ? "" : "s"}` : ""}
             {state.recommendation.confidence != null ? ` · ${Math.round(state.recommendation.confidence * 100)}%` : ""}
+            {state.lockedTopology ? " · recommendation only; Human override remains authoritative" : ""}
           </p>}
+          {state.recommendation?.providerStatus === "bypassed" && <p className="help-p">Manual selection · Jev was not called for this decision.</p>}
           <fieldset className="routing-lock">
             <legend>Human topology lock</legend>
-            <label>
-              Topology
-              <select value={topology} onChange={e => setTopology(e.target.value as AdaptiveTopology)} disabled={busy}>
-                <option value="single">Single</option>
-                <option value="brain_one_worker">Brain + 1</option>
-                <option value="brain_multi_dm">Multi-DM</option>
-                <option value="brain_multi_room">Room</option>
+            <label>Topology
+              <select value={topology} onChange={event => setTopology(event.target.value as AdaptiveTopology)} disabled={busy}>
+                <option value="single">Single</option><option value="brain_one_worker">Brain + 1</option>
+                <option value="brain_multi_dm">Multi-DM</option><option value="brain_multi_room">Room</option>
               </select>
             </label>
-            <label>
-              Scope
-              <select value={scope} onChange={e => setScope(e.target.value as AdaptiveLockScope)} disabled={busy}>
-                <option value="task">Task</option>
-                <option value="conversation">Conversation</option>
+            <label>Scope
+              <select value={scope} onChange={event => setScope(event.target.value as Exclude<AdaptiveLockScope, "none">)} disabled={busy}>
+                <option value="task">Task</option><option value="conversation">Conversation</option>
               </select>
             </label>
             <div className="row">
-              <button type="button" disabled={busy} onClick={() => mutate({ scope: "none" })}>Unlock</button>
-              <button type="button" className="primary" disabled={busy}
-                onClick={() => mutate({ scope, topology })}>Apply lock</button>
+              <button type="button" disabled={busy || !state.lockedTopology} onClick={() => mutate({ scope: "none" })}>Unlock</button>
+              <button type="button" className="primary" disabled={busy} onClick={() => mutate({ scope, topology })}>Apply lock</button>
             </div>
           </fieldset>
         </>}
         <h3>Jev evaluations</h3>
+        <p className="help-p">Human-only audit: these entries are not messages delivered to agents.</p>
         <div className="routing-events">
-          {view.events.length === 0 && <p className="help-p">No evaluations recorded yet.</p>}
-          {[...view.events].reverse().map(event => (
-            <div key={event.id} className={`routing-event ${event.kind}`}>
-              <span>{routingEventLabel(event)}</span>
-              <time>{new Date(event.createdAt).toLocaleTimeString()}</time>
-            </div>
-          ))}
+          {events.length === 0 && <p className="help-p">No evaluations recorded yet.</p>}
+          {[...events].reverse().map(event => <div key={event.id} className={`routing-event ${event.kind}`}>
+            <span>{routingEventLabel(event)}</span><time>{new Date(event.createdAt).toLocaleTimeString()}</time>
+          </div>)}
         </div>
-        {error && <p className="err">{error}</p>}
-        <div className="row"><button type="button" onClick={onClose}>Close</button></div>
+        {error && <p className="err" role="alert">{error}</p>}
+        <div className="row"><button type="button" disabled={busy} onClick={close}>Close</button></div>
       </div>
     </div>
   );
