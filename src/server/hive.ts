@@ -1389,9 +1389,11 @@ export class Hive {
       causeMessageId?: string;
       attachmentIds?: string[];
       recipients?: string[];
+      source?: "hive" | "telegram";
     },
     directive: string,
     directiveRequestId: string,
+    persistReceipt?: (message: Message) => void,
   ): { message: Message; routingMessage: Message } {
     return this.transaction(() => {
       const routingMessage = this.postMessage(actor, {
@@ -1400,7 +1402,7 @@ export class Hive {
         requestId: directiveRequestId,
         eventType: "assignment",
       });
-      const message = this.postMessage(actor, input);
+      const message = this.postMessage(actor, input, persistReceipt);
       return { message, routingMessage };
     });
   }
