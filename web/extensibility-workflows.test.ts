@@ -253,7 +253,10 @@ test("private-channel UI grants a bot access only after an explicit same-project
 test("brain DMs expose per-request routing and show the committed directive without websocket echo", async t => {
   const f = await fixture(t);
   await act(async () => f.root.render(createElement(App)));
-  await f.click(f.button(f.brainA.name));
+  const brainButton = Array.from(f.host.querySelectorAll<HTMLButtonElement>(".person-main"))
+    .find(button => button.querySelector(".pn")?.textContent === f.brainA.name);
+  assert.ok(brainButton);
+  await f.click(brainButton);
   const mode = f.host.querySelector<HTMLSelectElement>('[aria-label="Execution mode"]');
   assert.ok(mode, "brain DM should expose execution mode");
   assert.equal(mode.value, "auto");
