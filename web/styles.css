@@ -379,6 +379,7 @@ html.dark .mention { color: var(--wax); }
   position: relative;
 }
 html.dark .avatar { color: #11150e; }
+html.dark .avatar.role-bot { color: var(--ink); }
 .avatar.sm { width: 26px; height: 26px; border-radius: 8px; font-size: 0.62rem; }
 .avatar[data-on="1"]::after {
   content: "";
