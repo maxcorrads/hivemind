@@ -12,6 +12,20 @@ import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { Hive } from '../server/hive.ts';
 import { startServer } from '../server/serve.ts';
 import type { CapabilityCard, RoutingSuggestions } from '../shared/routing.ts';
+import { normalizeChannelReference, resolveVisibleWorkerReference } from './index.ts';
+
+test('MCP reference helpers normalize display channels and resolve visible worker names safely', () => {
+  assert.equal(normalizeChannelReference('#fixture-room'), 'fixture-room');
+  assert.equal(normalizeChannelReference('fixture-room'), 'fixture-room');
+  const roster = [
+    { id: '11111111-1111-4111-8111-111111111111', name: 'Loom', role: 'worker', seniority: 'mid', focus: null, online: true, lastSeenAt: 0, createdAt: 0, projectId: 'p', project: 'chapter' },
+    { id: '22222222-2222-4222-8222-222222222222', name: 'Brain', role: 'brain', seniority: null, focus: null, online: true, lastSeenAt: 0, createdAt: 0, projectId: 'p', project: 'chapter' },
+  ] as const;
+  assert.equal(resolveVisibleWorkerReference('Loom', roster as any), roster[0].id);
+  assert.equal(resolveVisibleWorkerReference('loom', roster as any), roster[0].id);
+  assert.equal(resolveVisibleWorkerReference(roster[0].id, roster as any), roster[0].id);
+  assert.throws(() => resolveVisibleWorkerReference('Missing', roster as any), /No visible worker/);
+});
 
 test('real CLI and MCP share opt-in cards and advisory choices without changing task authority', { timeout: 20000 }, async t => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -35,8 +49,11 @@ test('real CLI and MCP share opt-in cards and advisory choices without changing 
       assert.notEqual(result.isError, true, JSON.stringify(result)); const item = result.content[0]; assert.ok(item?.type === 'text'); return JSON.parse(item.text);
     };
     assert.deepEqual((await call('get_worker_capabilities', { workerId: worker.agent.id })).capability.card, card);
+    assert.deepEqual((await call('get_worker_capabilities', { workerId: worker.agent.name })).capability.card, card);
     const suggestion = await call('suggest_workers', { taskId: task.id, requiredCapabilities: ['parser'], mode: 'implementation', category: 'parsing' }) as RoutingSuggestions;
     assert.equal(suggestion.candidates[0]!.workerId, worker.agent.id); assert.equal(suggestion.candidates[0]!.evidence.reviewed, 0);
+    const unfiltered = await call('suggest_workers', { taskId: task.id, mode: 'implementation', category: 'general' }) as RoutingSuggestions;
+    assert.equal(unfiltered.candidates[0]!.workerId, worker.agent.id);
     const choice = { taskId: task.id, expectedRevision: 1, workerId: worker.agent.id, requestId: 'one-preference', reason: 'Inspect this worker first' };
     const first = await call('record_routing_override', choice), second = await call('record_routing_override', choice);
     assert.equal(first.message.id, second.message.id); assert.equal(first.assigned, false);
