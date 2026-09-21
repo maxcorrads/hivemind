@@ -51,3 +51,18 @@ test("a retained expired operation fails visibly instead of silently choosing a 
   now += 86_400_000;
   await assert.rejects(run("a", "pending", null), /expired/);
 });
+
+
+test("routing mode participates in uncertain send identity", async () => {
+  const keys: string[] = [], modes: string[] = [];
+  const run = createSendOperations(async () => ({ id: "unused" }),
+    async (_channel, _body, _root, _ids, key, routing) => {
+      keys.push(key); modes.push(routing); throw new Error("uncertain");
+    });
+  await assert.rejects(run("brain-dm", "same request", null, [], "single"), /uncertain/);
+  await assert.rejects(run("brain-dm", "same request", null, [], "single"), /uncertain/);
+  await assert.rejects(run("brain-dm", "same request", null, [], "orchestrated"), /uncertain/);
+  assert.equal(keys[0], keys[1]);
+  assert.notEqual(keys[1], keys[2]);
+  assert.deepEqual(modes, ["single", "single", "orchestrated"]);
+});
