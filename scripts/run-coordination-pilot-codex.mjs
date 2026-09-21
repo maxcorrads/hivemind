@@ -47,6 +47,8 @@ export function codexArgs(trial) {
   args.push(
     '--config', 'agents.enabled=false',
     '--config', 'web_search="disabled"',
+    '--config', 'memories.use_memories=false',
+    '--config', 'memories.generate_memories=false',
     '--sandbox', 'workspace-write',
     '-',
   );
