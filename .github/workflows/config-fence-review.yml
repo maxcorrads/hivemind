@@ -1,0 +1,44 @@
+name: Prepare config equality fence for PR 129
+on:
+  push:
+    branches: [chore/129-config-fence]
+    paths: [.github/workflows/config-fence-review.yml]
+permissions:
+  contents: write
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Apply only the tested equality fence on the exact reviewed parent
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin 096ee5e0d7b0be7e926741c5702710a9dc8e2fca
+          git checkout --detach 096ee5e0d7b0be7e926741c5702710a9dc8e2fca
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          p = Path('src/server/adaptive-topology.ts')
+          s = p.read_text()
+          marker = "function fingerprint(value: unknown): string { return createHash('sha256').update(JSON.stringify(value)).digest('hex'); }"
+          helper = '''
+          /** Equality fence for an in-flight request, not credential storage or verification. */
+          function sameConfiguration(a: AdaptiveRoutingFile | null, b: AdaptiveRoutingFile | null): boolean {
+            if (!a || !b) return a === b;
+            return a.version === b.version && a.enabled === b.enabled && a.apiKey === b.apiKey &&
+              a.fallback === b.fallback && a.topologyFallback === b.topologyFallback;
+          }'''
+          s = s.replace(marker, marker + helper)
+          s = s.replace('fingerprint(config) !== fingerprint(loadAdaptiveRouting(this.hive.home))', '!sameConfiguration(config, loadAdaptiveRouting(this.hive.home))')
+          s = s.replace('fingerprint(config) !== fingerprint(currentConfig)', '!sameConfiguration(config, currentConfig)')
+          assert hashlib.sha256(s.encode()).hexdigest() == '6849f353c283a3257054cf6fba6c2cb552253ebe354a02082d8d60aeed61452c'
+          p.write_text(s)
+          PY
+          git diff --check
+          git add src/server/adaptive-topology.ts
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m "fix(routing): compare configuration without hashing API credentials"
+          git push origin HEAD:refs/heads/chore/129-config-result
+          git rev-parse HEAD
