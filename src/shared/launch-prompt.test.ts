@@ -157,7 +157,8 @@ test("Claude launch requests eager loading only for Hivemind without changing pe
         const block = buildLaunchBlock(input);
         // Capture argv using a shell function, never launch the real model.
         const capture = `function ${software}() { ${shSingleQuote(process.execPath)} -e 'console.log(JSON.stringify(process.argv.slice(1)))' -- "$@"; }\n`;
-        const result = spawnSync("zsh", ["-f"], { input: capture + block, encoding: "utf8" });
+        const shell = process.platform === "darwin" ? "zsh" : "/bin/bash";
+        const result = spawnSync(shell, ["-f"], { input: capture + block, encoding: "utf8" });
         assert.equal(result.status, 0, result.stderr);
         const argv = JSON.parse(result.stdout) as string[];
         assert.deepEqual(argv.slice(0, 3), ["--mcp-config", JSON.stringify({
@@ -292,8 +293,10 @@ test("roster paste is a macOS script that opens one Terminal window per employee
   assert.match(text, /'Alpha - Forge'/);
   assert.match(text, /'Alpha - Ada'/);
   assert.equal(text.includes("does not launch anyone"), false);
-  const chk = spawnSync("zsh", ["-n"], { input: text, encoding: "utf8" });
-  assert.equal(chk.status, 0, chk.stderr);
+  if (process.platform === "darwin") {
+    const chk = spawnSync("zsh", ["-n"], { input: text, encoding: "utf8" });
+    assert.equal(chk.status, 0, chk.stderr);
+  }
   const empty = buildRosterPaste([]);
   assert.match(empty, /No employees to launch/);
 });
