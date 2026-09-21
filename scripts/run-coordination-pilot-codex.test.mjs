@@ -69,6 +69,8 @@ test('Codex runner is generic: default executable is codex and local override is
   assert.ok(args.includes('model_reasoning_effort="max"'));
   assert.ok(args.includes('agents.enabled=false'));
   assert.ok(args.includes('web_search="disabled"'));
+  assert.ok(args.includes('memories.use_memories=false'));
+  assert.ok(args.includes('memories.generate_memories=false'));
   assert.ok(args.includes('workspace-write'));
 });
 
