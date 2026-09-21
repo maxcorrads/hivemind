@@ -12,11 +12,28 @@ npm run check:all
 `check:all` fails fast and runs lint, all three strict typechecks, separately
 reported unit/integration suites, production build, unchanged coverage thresholds,
 Chromium contracts, installed-package smoke and production dependency audit.
-CI runs the same commands in parallel jobs; the existing Tests / Node gate names
-remain unchanged. PR title/dependency review and hosted CodeQL are additional CI
-checks, not local test results. An audit failure needs review, not an automatic
-claim that the app is exploitable. `npm run check` remains the lighter release
-command for backwards compatibility; use `check:all` for complete acceptance.
+`npm run check` remains the lighter release command for backwards compatibility;
+use `check:all` for complete local acceptance.
+
+PR CI deliberately uses a lower-latency topology than `check:all` while preserving
+its effective scope:
+
+- Node 24 unit and four historically timing-balanced integration shards run independently.
+- Node 22.13.0 runs the same full unit/integration scope with two timing-balanced integration shards, reducing compatibility-runner overhead without reducing coverage.
+- The existing required gate names `Tests / Node 24` and `Tests / Node 22.13.0`
+  are aggregation jobs over all corresponding shards.
+- Node 24 test jobs collect LCOV during their normal execution. `Coverage` merges
+  those artifacts and enforces the unchanged 80% line / 75% branch / 75% function
+  thresholds, so CI no longer executes the complete suite a third time.
+- Playwright browser downloads use a version-sensitive cache. Browser contracts
+  stay isolated from server integration shards.
+- npm's download cache is used; `node_modules` is not cached.
+
+See [ci-performance.md](docs/ci-performance.md) for the measured baseline, shard
+weight methodology, runner-cost trade-off and after-measurement protocol.
+PR title/dependency review run on Ubuntu to avoid consuming macOS test capacity; hosted CodeQL is an additional CI check, not a local
+test results. An audit failure needs review, not an automatic claim that the app
+is exploitable.
 
 ## Discovery and classifications
 
@@ -25,6 +42,12 @@ under src, web and scripts. `test:unit` selects explicitly named `.unit.test.*` 
 pure legacy files in scripts/test-suites.mjs. Everything else, including
 mixed tests, defaults to integration. New tests cannot disappear for lacking a
 manifest entry. Browser `.spec.ts` files are discovered separately by Playwright.
+
+CI integration shards are assigned by deterministic largest-processing-time
+balancing using `scripts/ci-test-timings.json`. Measured slow files receive their
+historical weight; every unmeasured/new integration file gets a fallback weight
+and is still assigned to exactly one shard. Sharding therefore cannot silently
+drop an unlisted test.
 
 The current fault matrix includes message atomicity (#1), real HTTP error status
 and stdio invalid authentication (#2), stdio/HTTP cancellation (#4), storage/CLI/
@@ -44,10 +67,12 @@ are capped at 4 MiB. No generic detector guarantees removal of arbitrary secrets
 in free prose: keep credentials out of test output and fixtures.
 
 CI uploads only sanitized text logs, with separate unit/integration/browser
-artifacts and seven-day retention. Raw Playwright trace/video/screenshot archives
-are deliberately **not uploaded**: binary visual data cannot be reliably redacted
-by a text filter. Developers may inspect the failure-only local synthetic trace
-under artifacts/playwright after reviewing its contents. No raw environments,
+artifacts and seven-day retention. LCOV artifacts contain source paths and numeric
+coverage data only; the intermediate shard artifacts are short-lived and the
+merged report is retained for seven days. Raw Playwright trace/video/screenshot
+archives are deliberately **not uploaded**: binary visual data cannot be reliably
+redacted by a text filter. Developers may inspect the failure-only local synthetic
+trace under artifacts/playwright after reviewing its contents. No raw environments,
 credentials, provider reasoning or user workspace files are fixture inputs.
 
 ## Synthetic storage performance evidence
