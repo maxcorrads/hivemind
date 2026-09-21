@@ -1,7 +1,8 @@
 # Reproducible checks
 
-Supported CI runs on macOS with Node 22.13.0 and Node 24. Install the Node version
-under test, npm, zsh (required by the existing shell contracts), then:
+Primary PR CI runs on Ubuntu with Node 22.13.0 and Node 24, plus one focused
+macOS compatibility job for the native zsh/Terminal-launch shell contracts. For a
+full local check, install the Node version under test, npm, zsh and Chromium, then:
 
 ```sh
 npm ci
@@ -18,6 +19,8 @@ use `check:all` for complete local acceptance.
 PR CI deliberately uses a lower-latency topology than `check:all` while preserving
 its effective scope:
 
+- CPU-heavy quality, test and browser jobs run on Ubuntu rather than competing for
+  the much smaller hosted macOS concurrency pool.
 - Node 24 unit and four historically timing-balanced integration shards run independently.
 - Node 22.13.0 runs the same full unit/integration scope with two timing-balanced integration shards, reducing compatibility-runner overhead without reducing coverage.
 - The existing required gate names `Tests / Node 24` and `Tests / Node 22.13.0`
@@ -25,15 +28,20 @@ its effective scope:
 - Node 24 test jobs collect LCOV during their normal execution. `Coverage` merges
   those artifacts and enforces the unchanged 80% line / 75% branch / 75% function
   thresholds, so CI no longer executes the complete suite a third time.
-- Playwright browser downloads use a version-sensitive cache. Browser contracts
-  stay isolated from server integration shards.
+- Playwright browser downloads use a version-sensitive Linux cache; required
+  Chromium system packages are installed explicitly. Browser contracts stay isolated
+  from server integration shards.
+- Linux integration jobs ensure zsh is available, so generated shell contracts are
+  still parsed/executed during the full Node suites.
+- One focused native macOS job runs the launch/plugin shell contracts with the real
+  macOS zsh environment. `Tests / Node 24` requires that job as well as every Node 24 shard.
 - npm's download cache is used; `node_modules` is not cached.
 
 See [ci-performance.md](docs/ci-performance.md) for the measured baseline, shard
 weight methodology, runner-cost trade-off and after-measurement protocol.
-PR title/dependency review run on Ubuntu to avoid consuming macOS test capacity; hosted CodeQL is an additional CI check, not a local
-test results. An audit failure needs review, not an automatic claim that the app
-is exploitable.
+PR title/dependency review also run on Ubuntu. Hosted CodeQL is an additional CI
+check, not a local test result. An audit failure needs review, not an automatic
+claim that the app is exploitable.
 
 ## Discovery and classifications
 
