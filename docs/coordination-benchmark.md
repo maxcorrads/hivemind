@@ -39,6 +39,8 @@ Unavailable provider or infrastructure usage is `null`, never zero. Synthetic vi
 
 The versioned `pilot-v1` preset uses three representative fixtures, all four workflow shapes, two repeats and seed 29 for exactly 24 trials. It is methodology validation before a larger cohort, not evidence of multi-agent productivity by itself.
 
+Prompt version `coordination-real-v2` gives each task a deterministic SHA-256 artifact contract so real sessions have an objective acceptance target. The optional `benchmark:coordination:pilot:run` command executes a Codex-hosted pilot with isolated Hivemind state and one external model process per actual workflow seat; native subagents stay disabled so the measured coordination shape remains Hivemind's. Local executable aliases are supplied only through `CODEX_BIN` and are not stored in the repository. See `docs/coordination-real-agent.md`.
+
 ## #32 timeline-diagnosis bridge
 
 Issue #32 asks a narrower empirical question: whether persisted provenance makes representative coordination faults faster or more reliable to diagnose. `scripts/benchmark-timeline-diagnosis.mjs` reuses the #29 `offline-dropped-delivery`, `noisy-room` and `reviewer-disagreement` scenario families and creates paired baseline/timeline trial packets from the same redacted traces.
