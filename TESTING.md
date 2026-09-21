@@ -22,7 +22,7 @@ its effective scope:
 - CPU-heavy quality, test and browser jobs run on Ubuntu rather than competing for
   the much smaller hosted macOS concurrency pool.
 - Node 24 unit and four historically timing-balanced integration shards run independently.
-- Node 22.13.0 runs the same full unit/integration scope with two timing-balanced integration shards, reducing compatibility-runner overhead without reducing coverage.
+- Node 22.13.0 runs the same full unit/integration scope with four timing-balanced integration shards; Ubuntu concurrency now makes the full 4-way split useful without the former macOS queue penalty.
 - The existing required gate names `Tests / Node 24` and `Tests / Node 22.13.0`
   are aggregation jobs over all corresponding shards.
 - Node 24 test jobs collect LCOV during their normal execution. `Coverage` merges
@@ -52,8 +52,8 @@ mixed tests, defaults to integration. New tests cannot disappear for lacking a
 manifest entry. Browser `.spec.ts` files are discovered separately by Playwright.
 
 CI integration shards are assigned by deterministic largest-processing-time
-balancing using `scripts/ci-test-timings.json`. Measured slow files receive their
-historical weight; every unmeasured/new integration file gets a fallback weight
+balancing using `scripts/ci-test-timings.json`. The checked-in weights are calibrated
+from successful Ubuntu attempt-1 runs; every unmeasured/new integration file gets a fallback weight
 and is still assigned to exactly one shard. Sharding therefore cannot silently
 drop an unlisted test.
 
