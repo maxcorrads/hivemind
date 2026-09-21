@@ -52,8 +52,7 @@ mixed tests, defaults to integration. New tests cannot disappear for lacking a
 manifest entry. Browser `.spec.ts` files are discovered separately by Playwright.
 
 CI integration shards are assigned by deterministic largest-processing-time
-balancing using `scripts/ci-test-timings.json`. The checked-in weights are calibrated
-from successful Ubuntu attempt-1 runs; every unmeasured/new integration file gets a fallback weight
+balancing using `scripts/ci-test-timings.json`. The checked-in historical weights retain the coverage-stable assignment already validated across normal Node 24 coverage producers; every unmeasured/new integration file gets a fallback weight
 and is still assigned to exactly one shard. Sharding therefore cannot silently
 drop an unlisted test.
 
