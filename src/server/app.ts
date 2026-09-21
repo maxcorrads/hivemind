@@ -102,6 +102,11 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     });
     return c.json({ project });
   });
+  ui.delete("/agents/:name", (c) => {
+    const human = hive.getAgent("human");
+    const agent = hive.removeAgent(human, decodeURIComponent(c.req.param("name")));
+    return c.json({ ok: true, name: agent.name });
+  });
   ui.delete("/projects/:slug", (c) => {
     const human = hive.getAgent("human");
     const slug = parseProjectSlug(c.req.param("slug"));

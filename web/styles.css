@@ -186,6 +186,27 @@ html.dark pre { background: rgba(255, 255, 255, 0.05); }
   line-height: 1;
 }
 .plus:hover, .twist:hover { background: var(--pill); }
+.dm-row {
+  display: flex;
+  align-items: center;
+  position: relative;
+}
+.dm-row .nav { flex: 1; min-width: 0; }
+.dm-picker {
+  margin: 0 0 0.35rem;
+  padding: 0.35rem;
+  background: var(--pill);
+  border-radius: 10px;
+}
+.dm-picker input {
+  width: 100%;
+  border-radius: 8px;
+  background: var(--desk);
+  color: var(--ink);
+  padding: 0.35rem 0.5rem;
+  margin-bottom: 0.2rem;
+  outline: none;
+}
 .text-btn {
   font-size: 0.82rem;
   font-weight: 600;
@@ -506,6 +527,7 @@ html.dark .send { background: var(--wax); color: #1b2017; }
   display: flex;
   align-items: center;
   gap: 0.1rem;
+  position: relative;
 }
 .person-main {
   flex: 1;
@@ -562,11 +584,41 @@ html.dark .queue-badge { color: #1b2017; }
   border-radius: 8px;
 }
 .ghost:hover { color: var(--ember); }
-.clear-ask button {
-  font-size: 0.78rem;
-  color: var(--ember);
-  padding: 0 0.25rem;
+.kebab {
+  flex: none;
+  width: 1.65rem;
+  height: 1.65rem;
+  border-radius: 8px;
+  color: var(--rail-mute);
+  font-weight: 700;
+  line-height: 1;
 }
+.kebab:hover, .kebab.on { background: var(--pill); color: var(--rail-ink); }
+.person-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% - 0.12rem);
+  z-index: 8;
+  min-width: 10.5rem;
+  padding: 0.25rem;
+  background: var(--desk);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+}
+.person-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0.4rem 0.55rem;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 0.82rem;
+}
+.person-menu button:hover { background: rgba(27, 32, 23, 0.05); }
+html.dark .person-menu button:hover { background: rgba(255, 255, 255, 0.06); }
+.person-menu .bad { color: var(--ember); }
 
 .empty, .empty-mini, .hint, .boot-fail {
   color: var(--mute);

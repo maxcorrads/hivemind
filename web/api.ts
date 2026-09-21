@@ -66,6 +66,8 @@ export const api = {
     }),
   deleteProject: (slug: string) =>
     req<{ ok: true }>(`/api/ui/projects/${encodeURIComponent(slug)}`, { method: "DELETE" }),
+  removeAgent: (name: string) =>
+    req<{ ok: true; name: string }>(`/api/ui/agents/${encodeURIComponent(name)}`, { method: "DELETE" }),
   telegram: () => req<TelegramSettings>("/api/ui/telegram"),
   saveTelegram: (body: {
     botToken?: string;

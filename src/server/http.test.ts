@@ -171,6 +171,16 @@ test("HTTP protocol: join, isolate, wait, Human admin", async () => {
     assert.equal(seen.status, 200);
     assert.equal(seen.data.messages.length, 0);
     assert.equal(seen.data.unread.general ?? 0, 0);
+
+    const extra = await json(base, "POST", "/api/agent/join", { role: "brain" });
+    const extraName = extra.data.agent.name as string;
+    const removed = await json(base, "DELETE", `/api/ui/agents/${encodeURIComponent(extraName)}`);
+    assert.equal(removed.status, 200);
+    const afterRm = await json(base, "GET", "/api/ui/snapshot");
+    assert.equal(afterRm.data.agents.some((a: { name: string }) => a.name === extraName), false);
+    assert.ok(afterRm.data.agents.some((a: { name: string }) => a.name === brainName));
+    const noHuman = await json(base, "DELETE", "/api/ui/agents/Human");
+    assert.equal(noHuman.status, 403);
   } finally {
     started.shutdown();
     rmSync(dir, { recursive: true, force: true });
