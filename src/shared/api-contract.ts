@@ -32,6 +32,8 @@ export const sendInputSchema = z.object({
   threadId: z.string().uuid().nullish(), eventType: z.enum(MESSAGE_EVENT_TYPES).optional(),
   traceId: z.string().uuid().optional(), causeMessageId: z.string().uuid().optional(),
   recipients: memberNamesSchema.min(1).optional(), attachmentIds: attachmentIdsSchema.optional(),
+}).strict();
+export const humanSendInputSchema = sendInputSchema.extend({
   routing: z.enum(["auto", "single", "orchestrated"]).optional(),
 }).strict();
 export const channelInputSchema = z.object({ name: nameSchema,
