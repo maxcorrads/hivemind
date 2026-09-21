@@ -2,22 +2,94 @@
   "schemaVersion": 1,
   "id": "room-peer-clarification",
   "kind": "communication",
-  "description": "Three parallel slices need repeated cross-worker clarification around a shared contract.",
-  "exercises": ["structured_tasks", "worker_routing", "collaboration_rooms"],
+  "description": "Three capability-matched slices each receive one private opaque contract fact; every output requires all facts, forcing real clarification/relay before completion.",
+  "exercises": [
+    "structured_tasks",
+    "worker_routing",
+    "collaboration_rooms"
+  ],
   "promptVersion": "coordination-fixture-v1",
   "modelVersion": "fake-agent-v1",
   "workers": [
-    {"id": "worker-a", "capabilities": ["api", "tests"]},
-    {"id": "worker-b", "capabilities": ["ui", "tests"]},
-    {"id": "worker-c", "capabilities": ["storage", "tests"]}
+    {
+      "id": "worker-a",
+      "capabilities": [
+        "api",
+        "tests"
+      ]
+    },
+    {
+      "id": "worker-b",
+      "capabilities": [
+        "ui",
+        "tests"
+      ]
+    },
+    {
+      "id": "worker-c",
+      "capabilities": [
+        "storage",
+        "tests"
+      ]
+    }
   ],
   "tasks": [
-    {"id": "api", "effort": 7, "scope": ["src/contracts/api"], "dependsOn": [], "clarifications": 2, "requiredCapability": "api"},
-    {"id": "ui", "effort": 7, "scope": ["web/contracts/ui"], "dependsOn": [], "clarifications": 3, "requiredCapability": "ui"},
-    {"id": "storage", "effort": 7, "scope": ["src/contracts/storage"], "dependsOn": [], "clarifications": 2, "requiredCapability": "storage"}
+    {
+      "id": "api",
+      "effort": 7,
+      "scope": [
+        "src/contracts/api"
+      ],
+      "dependsOn": [],
+      "clarifications": 2,
+      "requiredCapability": "api"
+    },
+    {
+      "id": "ui",
+      "effort": 7,
+      "scope": [
+        "web/contracts/ui"
+      ],
+      "dependsOn": [],
+      "clarifications": 3,
+      "requiredCapability": "ui"
+    },
+    {
+      "id": "storage",
+      "effort": 7,
+      "scope": [
+        "src/contracts/storage"
+      ],
+      "dependsOn": [],
+      "clarifications": 2,
+      "requiredCapability": "storage"
+    }
   ],
   "faults": [
-    {"type": "unsupported_completion", "taskId": "ui", "penaltyTicks": 2}
+    {
+      "type": "unsupported_completion",
+      "taskId": "ui",
+      "penaltyTicks": 2
+    }
   ],
-  "budgets": {"maxVirtualTicks": 55, "maxCommunicationBytes": 16000}
+  "budgets": {
+    "maxVirtualTicks": 55,
+    "maxCommunicationBytes": 16000
+  },
+  "instructions": [
+    "The harness partitions one opaque contract fact to each benchmark worker seat; the coordinating brain receives no fact values.",
+    "Every task output requires the complete set of worker facts in canonical worker-id order; do not guess or derive missing facts.",
+    "Workers must not proactively broadcast their fact. An assigned worker requests missing facts with an explicit question; a peer discloses its exact fact only in response to a relevant benchmark question.",
+    "In brain_multi_dm, workers cannot contact peers directly: route clarification questions and exact answers through the brain.",
+    "In brain_multi_room, use addressed peer questions/answers in the collaboration room instead of brain relay when possible.",
+    "Do not inspect benchmark source files, parent attempt logs, or another seat's stdout to recover private facts; acquire them only through the allowed benchmark coordination path."
+  ],
+  "realAgent": {
+    "informationPartition": {
+      "version": 1,
+      "namespace": "peer-contract-v1",
+      "requireAllWorkerFacts": true,
+      "requireQuestionBeforeDisclosure": true
+    }
+  }
 }
