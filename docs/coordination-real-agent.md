@@ -34,7 +34,7 @@ Treat this as a methodology pilot, not as sufficient evidence for a general prod
 
 ### Executable v2 work contract
 
-Real-agent prompt version `coordination-real-v2` adds a deterministic artifact to every fixture task. Each task has a versioned base input and produces a lowercase SHA-256 value; dependent tasks hash the actual upstream outputs as part of their material. The final artifact is a small JSON object containing every task output.
+Real-agent prompt version `coordination-real-v3` adds a deterministic artifact to every fixture task. Each task has a versioned base input and produces a lowercase SHA-256 value; dependent tasks hash the actual upstream outputs as part of their material. The final artifact is a small JSON object containing every task output.
 
 This gives the pilot a real acceptance check instead of asking a model to “implement” only an abstract effort/scope label. Expected hashes are computed by the harness and are **not** placed in participant prompts.
 
@@ -70,6 +70,8 @@ Executor behavior:
 - the normal local Hivemind server must therefore be stopped while the pilot runs;
 - Codex must already have the Hivemind MCP server configured for `http://127.0.0.1:7420`;
 - every benchmark seat overrides `memories.use_memories=false` and `memories.generate_memories=false` so prior Codex memory is neither injected into nor generated from the trial;
+- before each `brain_multi_room` seat starts, the isolated harness posts a real local Human authorization message into that trial's project and passes its positive message sequence to the brain; the brain must use that exact `humanInstructionSeq` when configuring the finite room, so it never blocks waiting for a Human process that is not part of the benchmark;
+- finite room setup uses the first dependency-ready runbook task as the external origin task, then binds the room contract to that `originTaskId`; remaining room-bound assignments use the live contract version/action keys;
 - worker capability cards mirror the versioned fixture capabilities;
 - the brain assembles `BENCHMARK_RESULT.json` from reviewed worker results; the harness compares it with the hidden deterministic expected artifact;
 - wall time and explicit Codex CLI token counts are retained when available;
