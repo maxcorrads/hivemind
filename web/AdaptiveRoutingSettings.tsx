@@ -5,6 +5,7 @@ export function AdaptiveRoutingSettings({ onClose }: { onClose: () => void }) {
   const [settings, setSettings] = useState<AdaptiveRoutingSettings | null>(null);
   const [enabled, setEnabled] = useState(false);
   const [apiKey, setApiKey] = useState("");
+  const [fallback, setFallback] = useState<"single" | "orchestrated">("orchestrated");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -15,6 +16,7 @@ export function AdaptiveRoutingSettings({ onClose }: { onClose: () => void }) {
         if (!active) return;
         setSettings(value);
         setEnabled(value.enabled);
+        setFallback(value.fallback);
       })
       .catch(err => { if (active) setError(String(err.message || err)); });
     return () => { active = false; };
@@ -34,10 +36,12 @@ export function AdaptiveRoutingSettings({ onClose }: { onClose: () => void }) {
           setError(null);
           api.saveAdaptiveRouting({
             enabled,
+            fallback,
             ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
           }).then(value => {
             setSettings(value);
             setEnabled(value.enabled);
+            setFallback(value.fallback);
             setApiKey("");
           }).catch(err => setError(String(err.message || err)))
             .finally(() => setBusy(false));
@@ -56,6 +60,17 @@ export function AdaptiveRoutingSettings({ onClose }: { onClose: () => void }) {
             disabled={!settings || busy}
           />
           Use Jev to choose single-session vs orchestrated execution
+        </label>
+        <label>
+          Fallback when Jev is uncertain or unavailable
+          <select
+            value={fallback}
+            onChange={e => setFallback(e.target.value as "single" | "orchestrated")}
+            disabled={!settings || busy}
+          >
+            <option value="orchestrated">Orchestrated · safer default</option>
+            <option value="single">Single · lower cost, higher under-routing risk</option>
+          </select>
         </label>
         <label>
           TypeSafe API key
@@ -78,7 +93,7 @@ export function AdaptiveRoutingSettings({ onClose }: { onClose: () => void }) {
         </p>
         <p className="help-p">
           <strong>single</strong>: the receiving brain executes the request itself without delegating.{" "}
-          <strong>orchestrated</strong>: the brain coordinates/delegates normally. Low confidence or Jev failure falls back to orchestrated.
+          <strong>orchestrated</strong>: the brain coordinates/delegates normally. Low confidence or Jev failure uses the configured fallback.
         </p>
         <p className="help-p">
           Brain DMs also offer a one-request <strong>Auto · Jev / Single / Orchestrated</strong> selector.
