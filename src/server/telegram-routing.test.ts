@@ -8,6 +8,7 @@ import { test } from "node:test";
 import { Hive } from "./hive.ts";
 import { TelegramBridge, startTelegram, writeTelegramFile, readTelegramFile, loadTelegramConfig, telegramConfigKey } from "./telegram.ts";
 import { enqueueTelegramPending } from "./telegram-outbox.ts";
+import { saveAdaptiveRouting } from "./adaptive-routing.ts";
 
 async function until(predicate: () => boolean) {
   for (let i = 0; i < 5000; i++) { if (predicate()) return; await nextTurn(); }
@@ -105,6 +106,70 @@ test("different bots process colliding update and message IDs without inheriting
     const bodies = hive.listMessages(hive.getAgent("human"), "general").messages.map(m => m.body);
     assert.ok(bodies.some(body => body.endsWith("first")) && bodies.some(body => body.endsWith("second")));
   } finally { await bridge.stop(); close(); }
+});
+
+test("Telegram Human replies in a brain DM use active Jev routing and keep receipt on the original request", async t => {
+  const { hive, dir, close } = fixture();
+  const human = hive.getAgent("human");
+  const brain = hive.join({ role: "brain", project: "chapter" }).agent;
+  const dm = hive.openDm(human, brain.name);
+  const cfg = { botToken: "fixture", botId: 77, allowUserIds: [1], groups: { chapter: -1001 } };
+  const botKey = telegramConfigKey(cfg);
+  hive.db.prepare("INSERT INTO telegram_topics(channel_id,telegram_thread_id,telegram_chat_id,bot_key) VALUES(?,?,?,?)")
+    .run(dm.id, 22, -1001, botKey);
+  saveAdaptiveRouting(dir, { enabled: true, apiKey: "typesafe-fixture" });
+  let polls = 0, jevCalls = 0;
+  t.mock.method(globalThis, "fetch", async (url: unknown, init?: RequestInit) => {
+    if (String(url) === "https://api.typesafe.ai/v1/systemone") {
+      jevCalls++;
+      const request = JSON.parse(String(init?.body)) as { state?: { request?: string } };
+      assert.equal(request.state?.request, "Small Telegram request");
+      return Response.json({
+        model: "jev-fixture",
+        answers: {
+          single_agent_sufficiency: { type: "choice", choice: "sufficient", confidence: 0.95,
+            probabilities: { sufficient: 0.95, insufficient: 0.05 } },
+          complexity: { type: "score", score: 0.3, confidence: 0.9, probabilities: { 0: 0.8, 1: 0.15, 2: 0.05 } },
+          parallelizability: { type: "score", score: 0.2, confidence: 0.9, probabilities: { 0: 0.85, 1: 0.1, 2: 0.05 } },
+          coupling: { type: "score", score: 0.2, confidence: 0.9, probabilities: { 0: 0.85, 1: 0.1, 2: 0.05 } },
+          specialization_need: { type: "score", score: 0.2, confidence: 0.9, probabilities: { 0: 0.85, 1: 0.1, 2: 0.05 } },
+          coordination_need: { type: "score", score: 0.2, confidence: 0.9, probabilities: { 0: 0.85, 1: 0.1, 2: 0.05 } },
+        },
+        usage: { input_tokens: 20, output_tokens: 8 },
+      });
+    }
+    const method = String(url).split("/").at(-1);
+    if (method === "getUpdates") {
+      polls++;
+      if (polls === 1) return Response.json({ ok: true, result: [{
+        update_id: 901,
+        message: { message_id: 88, message_thread_id: 22, chat: { id: -1001 },
+          from: { id: 1, first_name: "Matteo" }, text: "Small Telegram request" },
+      }] });
+      return blocked(init?.signal);
+    }
+    return Response.json({ ok: true, result: { message_id: 999 } });
+  });
+  const bridge = new TelegramBridge(hive, cfg);
+  try {
+    bridge.start();
+    await until(() => jevCalls === 1 && (hive.db.prepare(
+      "SELECT COUNT(*) AS n FROM messages WHERE channel_id=? AND body LIKE ?",
+    ).get(dm.id, "%Small Telegram request%") as { n: number }).n === 1);
+    const messages = hive.listMessages(human, dm.id).messages.filter(m => m.kind === "chat");
+    const original = messages.find(m => m.body.endsWith("Small Telegram request"))!;
+    const directive = messages.find(m => m.body.includes("adaptive routing · SINGLE"))!;
+    assert.ok(original && directive);
+    assert.equal(hive.fromTelegram(original.id), true);
+    assert.equal(hive.fromTelegram(directive.id), false);
+    const mapped = hive.db.prepare(
+      "SELECT seq FROM telegram_out WHERE telegram_chat_id=? AND telegram_message_id=? AND bot_key=?",
+    ).get(-1001, 88, botKey) as { seq: number };
+    assert.equal(mapped.seq, original.seq);
+  } finally {
+    await bridge.stop();
+    close();
+  }
 });
 
 test("verified same-bot rotation preserves its namespace and publication failure preserves the prior file", async t => {
