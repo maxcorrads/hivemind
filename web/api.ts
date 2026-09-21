@@ -35,6 +35,16 @@ export type Snapshot = ReadSnapshot & {
   telegram?: { running: boolean; configured: boolean } & TelegramHealth;
 };
 
+export type SendRoutingMode = "auto" | "single" | "orchestrated";
+
+export type AdaptiveRoutingDecisionView = {
+  routeId: string;
+  strategy: "single" | "orchestrated";
+  reason: string;
+  fallbackUsed: boolean;
+  providerStatus: "ok" | "unavailable" | "bypassed";
+};
+
 export type AdaptiveRoutingSettings = {
   enabled: boolean;
   apiKeySet: boolean;
@@ -172,11 +182,13 @@ export const api = {
     const suffix = q.toString() ? `?${q}` : "";
     return req<ChannelPayload>(`/api/ui/channels/${encodeURIComponent(id)}/messages${suffix}`, { signal });
   },
-  send: (id: string, body: string, threadId?: string | null, attachmentIds?: string[], requestId?: string) =>
-    req<{ message: Message }>(`/api/ui/channels/${encodeURIComponent(id)}/messages`, {
-      method: "POST",
-      body: JSON.stringify({ body, threadId: threadId ?? null, attachmentIds, requestId }),
-    }),
+  send: (id: string, body: string, threadId?: string | null, attachmentIds?: string[], requestId?: string,
+    routing: SendRoutingMode = "auto") =>
+    req<{ message: Message; routing: AdaptiveRoutingDecisionView | null; routingMessage?: Message }>(
+      `/api/ui/channels/${encodeURIComponent(id)}/messages`, {
+        method: "POST",
+        body: JSON.stringify({ body, threadId: threadId ?? null, attachmentIds, requestId, routing }),
+      }),
   upload: async (file: File): Promise<AttachmentMeta> => {
     const res = await humanSession.request("/api/ui/files", {
       method: "POST",
