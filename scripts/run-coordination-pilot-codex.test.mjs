@@ -1,0 +1,134 @@
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { test } from 'node:test';
+import { loadFixtures } from './benchmark-coordination.mjs';
+import {
+  REAL_AGENT_PROMPT_VERSION,
+  expectedTaskOutputs,
+  trialTemplate,
+} from './benchmark-coordination-real.mjs';
+import {
+  buildBrainPrompt,
+  buildSinglePrompt,
+  buildWorkerPrompt,
+  codexArgs,
+  codexExecutable,
+  parseProviderTokens,
+  reviewArtifact,
+  seatPlan,
+  strictTrialFiles,
+} from './run-coordination-pilot-codex.mjs';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const fixtures = loadFixtures(root);
+const byId = new Map(fixtures.map(fixture => [fixture.id, fixture]));
+const config = {
+  provider: 'openai',
+  model: 'gpt-fixture',
+  host: 'codex',
+  configuration: 'reasoning=max',
+  hivemindRevision: 'abc123',
+  promptVersion: REAL_AGENT_PROMPT_VERSION,
+  taskVersion: 'coordination-task-v1',
+};
+
+test('real-agent v2 prompt carries executable deterministic work without leaking answers', () => {
+  const fixture = byId.get('shared-interface-coupled');
+  const trial = trialTemplate(fixture, 'brain_multi_dm', 29, 0, config);
+  const expected = expectedTaskOutputs(fixture, 29, 0);
+  assert.equal(REAL_AGENT_PROMPT_VERSION, 'coordination-real-v2');
+  assert.match(trial.runbook.prompt, /Executable benchmark artifact contract/);
+  assert.match(trial.runbook.prompt, /coordination-real-v2\|fixture=shared-interface-coupled/);
+  assert.match(trial.runbook.prompt, /BENCHMARK_RESULT|final acceptance artifact/i);
+  for (const output of Object.values(expected)) {
+    assert.match(output, /^[a-f0-9]{64}$/);
+    assert.ok(!trial.runbook.prompt.includes(output), 'answer hash must not be in participant prompt');
+  }
+});
+
+test('noisy-room instructions are conditional on the room workflow', () => {
+  const fixture = byId.get('noisy-room');
+  const dm = trialTemplate(fixture, 'brain_multi_dm', 29, 0, config);
+  const room = trialTemplate(fixture, 'brain_multi_room', 29, 0, config);
+  assert.match(dm.runbook.prompt, /Room-only noise injection is not applicable/);
+  assert.doesNotMatch(dm.runbook.prompt, /inject 12 unrelated room observations/);
+  assert.match(room.runbook.prompt, /inject 12 unrelated room observations/);
+});
+
+test('Codex runner is generic: default executable is codex and local override is environment-only', () => {
+  assert.equal(codexExecutable({}), 'codex');
+  assert.equal(codexExecutable({ CODEX_BIN: '/opt/local/my-codex-wrapper' }), '/opt/local/my-codex-wrapper');
+  const trial = trialTemplate(byId.get('independent-implementation'), 'single_worker', 29, 0, config);
+  const args = codexArgs(trial);
+  assert.deepEqual(args.slice(0, 4), ['exec', '--skip-git-repo-check', '--model', 'gpt-fixture']);
+  assert.ok(args.includes('model_reasoning_effort="max"'));
+  assert.ok(args.includes('agents.enabled=false'));
+  assert.ok(args.includes('web_search="disabled"'));
+  assert.ok(args.includes('workspace-write'));
+});
+
+test('runner seat plans preserve the four workflow shapes', () => {
+  const fixture = byId.get('independent-implementation');
+  const count = workflow => seatPlan(trialTemplate(fixture, workflow, 29, 0, config), fixture).length;
+  assert.equal(count('single_worker'), 1);
+  assert.equal(count('brain_one_worker'), 2);
+  assert.equal(count('brain_multi_dm'), 4);
+  assert.equal(count('brain_multi_room'), 4);
+});
+
+test('runner prompts keep native agents disabled while coordinating through Hivemind seats', () => {
+  const fixture = byId.get('independent-implementation');
+  const multi = trialTemplate(fixture, 'brain_multi_dm', 29, 0, config);
+  const single = trialTemplate(fixture, 'single_worker', 29, 0, config);
+  assert.match(buildSinglePrompt(single), /Do not use Hivemind, native subagents, or delegation/);
+  const workerPrompt = buildWorkerPrompt(multi, fixture.workers[0], 1);
+  assert.match(workerPrompt, /Join with role=worker/);
+  assert.match(workerPrompt, /set_capabilities/);
+  assert.match(workerPrompt, /BENCHMARK_STOP/);
+  const brainPrompt = buildBrainPrompt(multi, fixture, 3);
+  assert.match(brainPrompt, /Join with role=brain/);
+  assert.match(brainPrompt, /task DMs only/);
+  assert.match(brainPrompt, /does not compute task outputs itself|Do not compute task hashes yourself/);
+});
+
+test('token parsing uses explicit Codex CLI usage and handles thousands separators', () => {
+  assert.equal(parseProviderTokens('tokens used\n9024\n'), 9024);
+  assert.equal(parseProviderTokens('x\ntokens used\n12.077\n'), 12077);
+  assert.equal(parseProviderTokens('tokens used\n9,024\n'), 9024);
+  assert.equal(parseProviderTokens('no usage line'), null);
+});
+
+test('deterministic artifact review accepts exact outputs and reports mismatches', () => {
+  const fixture = byId.get('shared-interface-coupled');
+  const trial = trialTemplate(fixture, 'brain_one_worker', 29, 1, config);
+  const good = {
+    schemaVersion: 1,
+    fixtureId: fixture.id,
+    seed: 29,
+    repeatIndex: 1,
+    taskOutputs: expectedTaskOutputs(fixture, 29, 1),
+  };
+  assert.deepEqual(reviewArtifact(good, trial, fixture).acceptancePassed, true);
+  const bad = structuredClone(good);
+  bad.taskOutputs.contract = 'bad';
+  const reviewed = reviewArtifact(bad, trial, fixture);
+  assert.equal(reviewed.acceptancePassed, false);
+  assert.ok(reviewed.defects >= 1);
+});
+
+test('strict trial discovery ignores runner metadata JSON', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-pilot-runner-files-'));
+  try {
+    writeFileSync(path.join(dir, 'trial-1111111111111111.json'), '{}');
+    writeFileSync(path.join(dir, 'trial-2222222222222222.json'), '{}');
+    writeFileSync(path.join(dir, 'run-trial-1111111111111111.json'), '{}');
+    writeFileSync(path.join(dir, 'trial-1111111111111111.run-meta.json'), '{}');
+    writeFileSync(path.join(dir, 'manifest.json'), '{}');
+    assert.deepEqual(strictTrialFiles(dir), ['trial-1111111111111111.json', 'trial-2222222222222222.json']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
