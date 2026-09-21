@@ -18,8 +18,7 @@ export { evaluateAdaptiveTopology, ADAPTIVE_TOPOLOGY_CONTRACT_VERSION } from './
 export type AdaptiveCoordinationEvent = {
   kind: 'brain_message' | 'worker_message' | 'delegation_attempt' | 'task_event' | 'room_event' | 'capacity_change';
   actorId: string; actorRole: 'brain' | 'worker'; channelId?: string; taskId?: string;
-  eventType?: string; summary?: string; workerName?: string; usesRoom?: boolean;
-  eventId?: string;
+  eventType?: string; summary?: string; workerName?: string; usesRoom?: boolean; eventId?: string;
 };
 export type AdaptiveAgentPolicy = {
   executionId: string; currentTopology: AdaptiveTopology; workerBudget: number;
@@ -35,7 +34,6 @@ type HumanMessageInput = {
 };
 function fingerprint(value: unknown): string { return createHash('sha256').update(JSON.stringify(value)).digest('hex'); }
 function requestText(message: Pick<Message, 'body' | 'source'>): string {
-  // Telegram's trusted ingress decorates its stored message with [sender]. It is not routing context.
   return message.source === 'telegram' ? message.body.replace(/^\[[^\]\r\n]*\]\s?/, '') : message.body;
 }
 function modeOf(value: string | undefined): AdaptiveRoutingMode {
@@ -71,9 +69,8 @@ function policyOf(state: StoredExecution): TopologyPolicyState {
       count: state.confirmations, highCount: state.confirmationHighCount ?? 0 }, eventsSinceChange: state.eventsSinceChange };
 }
 function cleanEvent(event: AdaptiveCoordinationEvent): AdaptiveCoordinationEvent {
-  return { kind: event.kind, actorId: event.actorId, actorRole: event.actorRole,
-    channelId: event.channelId, taskId: event.taskId, eventType: event.eventType,
-    workerName: event.workerName, usesRoom: event.usesRoom, eventId: event.eventId };
+  return { kind: event.kind, actorId: event.actorId, actorRole: event.actorRole, channelId: event.channelId,
+    taskId: event.taskId, eventType: event.eventType, workerName: event.workerName, usesRoom: event.usesRoom, eventId: event.eventId };
 }
 function fallbackDecision(topology: AdaptiveTopology, workers: number): AdaptiveTopologyDecision {
   return { routeId: `route-${randomUUID()}`, contractVersion: ADAPTIVE_TOPOLOGY_CONTRACT_VERSION,
@@ -83,9 +80,7 @@ function fallbackDecision(topology: AdaptiveTopology, workers: number): Adaptive
 }
 export function topologyDirective(state: Pick<AdaptiveExecutionState,
   'executionId' | 'currentTopology' | 'workerBudget' | 'lockScope' | 'orchestratedOnly'>): string {
-  const labels: Record<AdaptiveTopology, string> = {
-    single: 'SINGLE', brain_one_worker: 'BRAIN+1', brain_multi_dm: 'MULTI-DM', brain_multi_room: 'ROOM',
-  };
+  const labels: Record<AdaptiveTopology, string> = { single: 'SINGLE', brain_one_worker: 'BRAIN+1', brain_multi_dm: 'MULTI-DM', brain_multi_room: 'ROOM' };
   const instructions: Record<AdaptiveTopology, string> = {
     single: 'Execute this request in the brain session. Do not delegate while Single is active.',
     brain_one_worker: 'Delegate to at most one worker using a structured task/DM.',
@@ -104,10 +99,8 @@ export class AdaptiveTopologyRuntime {
   private abort = new AbortController();
   private readonly onAgent = (agent: Agent) => {
     if (this.stopped || agent.role !== 'worker' || !agent.projectId) return;
-    void this.revalidateProject(agent.projectId, {
-      kind: 'capacity_change', actorId: agent.id, actorRole: 'worker',
-      eventId: `presence:${agent.id}:${agent.lastSeenAt}:${agent.online}`,
-    }).catch(() => undefined);
+    void this.revalidateProject(agent.projectId, { kind: 'capacity_change', actorId: agent.id, actorRole: 'worker',
+      eventId: `presence:${agent.id}:${agent.lastSeenAt}:${agent.online}` }).catch(() => undefined);
   };
   constructor(private hive: Hive) {
     hive.db.exec(`CREATE TABLE IF NOT EXISTS adaptive_topology_executions (
@@ -122,8 +115,7 @@ export class AdaptiveTopologyRuntime {
       CREATE TABLE IF NOT EXISTS adaptive_topology_tasks (
         task_id TEXT PRIMARY KEY REFERENCES task_records(id) ON DELETE CASCADE, execution_id TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS idx_adaptive_topology_tasks_execution ON adaptive_topology_tasks(execution_id);
-      CREATE TABLE IF NOT EXISTS adaptive_topology_evaluated (
-        execution_id TEXT NOT NULL, event_id TEXT NOT NULL, PRIMARY KEY(execution_id,event_id));`);
+      CREATE TABLE IF NOT EXISTS adaptive_topology_evaluated (execution_id TEXT NOT NULL, event_id TEXT NOT NULL, PRIMARY KEY(execution_id,event_id));`);
     initAdaptiveCommitments(hive);
     hive.bus.on('agent', this.onAgent);
   }
@@ -158,15 +150,11 @@ export class AdaptiveTopologyRuntime {
     else this.hive.db.prepare(`INSERT INTO adaptive_topology_locks(channel_id,topology,updated_at) VALUES(?,?,?)
       ON CONFLICT(channel_id) DO UPDATE SET topology=excluded.topology,updated_at=excluded.updated_at`).run(channel, topology, Date.now());
   }
-  private capacity(state: Pick<StoredExecution, 'projectId' | 'executionId'>): TopologyCapacitySnapshot {
-    return readAdaptiveCapacity(this.hive, state);
-  }
+  private capacity(state: Pick<StoredExecution, 'projectId' | 'executionId'>): TopologyCapacitySnapshot { return readAdaptiveCapacity(this.hive, state); }
   private snapshot(state: StoredExecution, event: AdaptiveCoordinationEvent, capacity = this.capacity(state)): TopologyEvaluationSnapshot {
     const project = this.hive.getProject(state.projectId);
-    return { request: requestText(this.hive.getMessageById(state.rootMessageId)),
-      project: { slug: project.slug, name: project.name },
-      current: { topology: state.currentTopology, workerBudget: state.workerBudget,
-        desiredTopology: state.desiredTopology, desiredWorkers: state.desiredWorkers },
+    return { request: requestText(this.hive.getMessageById(state.rootMessageId)), project: { slug: project.slug, name: project.name },
+      current: { topology: state.currentTopology, workerBudget: state.workerBudget, desiredTopology: state.desiredTopology, desiredWorkers: state.desiredWorkers },
       capacity, execution: { orchestratedOnly: state.orchestratedOnly, lockScope: state.lockScope, lockedTopology: state.lockedTopology },
       tasks: { active: capacity.activeTasks, activeWorkers: capacity.activeWorkers, blockers: capacity.blockers,
         openDependencies: capacity.openDependencies, workstreams: capacity.workstreams },
@@ -178,8 +166,7 @@ export class AdaptiveTopologyRuntime {
     return { id: randomUUID(), executionId: state.executionId, channelId: state.channelId, projectId: state.projectId,
       createdAt: state.updatedAt, kind, fromTopology: from, targetTopology: decision.targetTopology,
       appliedTopology: state.currentTopology, targetWorkers: decision.targetWorkers, appliedWorkers: state.workerBudget,
-      confidence: decision.confidence, reason: decision.reason, providerStatus: decision.providerStatus,
-      applied: changed, warning: state.warning };
+      confidence: decision.confidence, reason: decision.reason, providerStatus: decision.providerStatus, applied: changed, warning: state.warning };
   }
   private saveEvent(event: AdaptiveRoutingEvent) {
     this.hive.db.prepare(`INSERT INTO adaptive_topology_events(id,execution_id,channel_id,project_id,created_at,snapshot)
@@ -190,8 +177,7 @@ export class AdaptiveTopologyRuntime {
   private commit(state: StoredExecution, event: AdaptiveRoutingEvent, evidenceId?: string) {
     immediateTransaction(this.hive.db, () => {
       this.save(state); this.saveEvent(event);
-      if (evidenceId) this.hive.db.prepare('INSERT OR IGNORE INTO adaptive_topology_evaluated(execution_id,event_id) VALUES(?,?)')
-        .run(state.executionId, evidenceId);
+      if (evidenceId) this.hive.db.prepare('INSERT OR IGNORE INTO adaptive_topology_evaluated(execution_id,event_id) VALUES(?,?)').run(state.executionId, evidenceId);
     });
     this.publish(state, event);
   }
@@ -199,8 +185,7 @@ export class AdaptiveTopologyRuntime {
     this.hive.bus.emit('adaptive-routing', { channelId: state.channelId, state: publicState(state), event });
   }
   private assertEventActor(actor: Agent, event: AdaptiveCoordinationEvent) {
-    if (actor.id !== event.actorId || actor.role !== event.actorRole || !['brain', 'worker'].includes(actor.role))
-      throw new HiveError(403, 'Routing event identity does not match the authenticated actor');
+    if (actor.id !== event.actorId || actor.role !== event.actorRole || !['brain', 'worker'].includes(actor.role)) throw new HiveError(403, 'Routing event identity does not match the authenticated actor');
     if (event.channelId) {
       const channel = this.hive.getChannel(event.channelId, actor.projectId);
       if (!this.hive.canSeeChannel(actor, channel) || !this.hive.canPost(actor, channel)) throw new HiveError(403, 'Cannot coordinate in this channel');
@@ -221,8 +206,7 @@ export class AdaptiveTopologyRuntime {
       const task = this.hive.tasks.get(actor, event.taskId); brainId = task.assignerId;
       const link = this.hive.db.prepare('SELECT execution_id FROM adaptive_topology_tasks WHERE task_id=?').get(task.id);
       if (link) {
-        const row = this.hive.db.prepare('SELECT snapshot FROM adaptive_topology_executions WHERE execution_id=? AND project_id=?')
-          .get(String(link.execution_id), actor.projectId);
+        const row = this.hive.db.prepare('SELECT snapshot FROM adaptive_topology_executions WHERE execution_id=? AND project_id=?').get(String(link.execution_id), actor.projectId);
         return row ? JSON.parse(String(row.snapshot)) as StoredExecution : null;
       }
     }
@@ -254,16 +238,13 @@ export class AdaptiveTopologyRuntime {
   private async revalidateStored(state: StoredExecution, event: AdaptiveCoordinationEvent): Promise<StoredExecution> {
     const config = loadAdaptiveRouting(this.hive.home);
     if (!config?.enabled || this.stopped) return state;
-    if (event.eventId && this.hive.db.prepare('SELECT 1 FROM adaptive_topology_evaluated WHERE execution_id=? AND event_id=?')
-      .get(state.executionId, event.eventId)) return state;
+    if (event.eventId && this.hive.db.prepare('SELECT 1 FROM adaptive_topology_evaluated WHERE execution_id=? AND event_id=?').get(state.executionId, event.eventId)) return state;
     const from = state.currentTopology, revision = state.revision ?? 0;
     const { decision, capacity } = await this.evaluateStable(state, event, config);
     const latest = this.row(state.channelId);
-    if (!latest || latest.executionId !== state.executionId || (latest.revision ?? 0) !== revision ||
-      !loadAdaptiveRouting(this.hive.home)?.enabled || this.stopped) return latest ?? state;
+    if (!latest || latest.executionId !== state.executionId || (latest.revision ?? 0) !== revision || !loadAdaptiveRouting(this.hive.home)?.enabled || this.stopped) return latest ?? state;
     const forced: TopologyTarget | null = state.lockedTopology ? { topology: state.lockedTopology,
-      workers: state.lockedTopology === 'single' ? 0 : state.lockedTopology === state.currentTopology
-        ? state.workerBudget : Math.max(minimumTopologyWorkers(state.lockedTopology), state.desiredWorkers ?? 0) } : null;
+      workers: state.lockedTopology === 'single' ? 0 : state.lockedTopology === state.currentTopology ? state.workerBudget : Math.max(minimumTopologyWorkers(state.lockedTopology), state.desiredWorkers ?? 0) } : null;
     const next = advanceTopologyPolicy(policyOf(state), { target: { topology: decision.targetTopology, workers: decision.targetWorkers },
       confidence: decision.confidence, available: decision.providerStatus === 'ok' }, safetyOf(capacity), forced);
     state.currentTopology = next.applied.topology; state.workerBudget = next.applied.workers;
@@ -274,8 +255,7 @@ export class AdaptiveTopologyRuntime {
     state.providerAvailable = decision.providerStatus === 'ok';
     state.warning = !state.providerAvailable ? 'Jev unavailable · execution mode is not being revalidated' : null;
     if (!forced && decision.providerStatus === 'ok' && capacity.workers.usableForExecution === 0 && (decision.needsOrchestration || state.orchestratedOnly)) {
-      state.warning = 'Orchestration needed · no workers available'; state.desiredTopology = config.topologyFallback;
-      state.desiredWorkers = minimumTopologyWorkers(config.topologyFallback);
+      state.warning = 'Orchestration needed · no workers available'; state.desiredTopology = config.topologyFallback; state.desiredWorkers = minimumTopologyWorkers(config.topologyFallback);
     }
     state.recentEvents = [...state.recentEvents, cleanEvent(event)].slice(-8);
     state.updatedAt = Math.max(Date.now(), state.updatedAt + 1); state.revision = revision + 1;
@@ -341,7 +321,7 @@ export class AdaptiveTopologyRuntime {
     return topology === 'single' ? 0 : topology === 'brain_one_worker' ? 1 : Math.max(2, Math.min(proposed || 2, capacity.usableForExecution));
   }
   async routeHumanRequest(human: Agent, input: HumanMessageInput, rawMode: string | undefined,
-    rawScope: string | undefined, persistReceipt?: (message: Message) => void) {
+    rawScope: string | undefined, persistReceipt?: (message: Message) => void, routingRequest?: string) {
     if (human.role !== 'human') throw new HiveError(403, 'Only Human starts adaptive execution');
     const channel = this.hive.getChannel(input.channel);
     const brains = channel.memberIds.map(id => this.hive.getAgent(id)).filter(a => a.role === 'brain');
@@ -362,7 +342,7 @@ export class AdaptiveTopologyRuntime {
       const lockScope: AdaptiveLockScope = manual ? scope : inherited ? 'conversation' : 'none';
       const executionId = `execution-${randomUUID()}`, project = this.hive.getProject(channel.projectId);
       let capacity = this.capacity({ projectId: channel.projectId, executionId });
-      const makeSnapshot = (): TopologyEvaluationSnapshot => ({ request: requestText(input),
+      const makeSnapshot = (): TopologyEvaluationSnapshot => ({ request: routingRequest ?? requestText(input),
         project: { slug: project.slug, name: project.name }, current: null, capacity,
         execution: { orchestratedOnly: mode === 'orchestrated_auto', lockScope, lockedTopology: locked },
         tasks: { active: 0, activeWorkers: 0, blockers: 0, openDependencies: 0, workstreams: 0 },
@@ -379,25 +359,20 @@ export class AdaptiveTopologyRuntime {
       if (this.stopped) throw new HiveError(503, 'Server is shutting down');
       const currentConfig = loadAdaptiveRouting(this.hive.home);
       if (!currentConfig?.enabled && config?.enabled && !locked) return null;
-      if (fingerprint(previous) !== fingerprint(this.row(channel.id)) || inherited !== (manual ? null : this.conversationLock(channel.id)))
-        throw new HiveError(409, 'Human routing state changed; review and retry the request');
+      if (fingerprint(previous) !== fingerprint(this.row(channel.id)) || inherited !== (manual ? null : this.conversationLock(channel.id))) throw new HiveError(409, 'Human routing state changed; review and retry the request');
       if (decision.providerStatus === 'ok' && (!stable || !validTopologyTarget({ topology: decision.targetTopology, workers: decision.targetWorkers }, capacity.workers.usableForExecution)))
         decision = { ...decision, providerStatus: 'unavailable', confidence: null, reason: 'capacity_changed_during_initial_routing', targetTopology: 'single', targetWorkers: 0 };
       const uncertain = decision.providerStatus !== 'ok' || (decision.confidence ?? 0) < MIN_TOPOLOGY_CONFIDENCE;
       let actual = locked ?? decision.targetTopology;
-      if (!locked && uncertain) actual = currentConfig?.fallback === 'single' ? 'single'
-        : currentConfig ? this.feasibleFallback(currentConfig, capacity.workers) : 'single';
-      if (!locked && mode === 'orchestrated_auto' && actual === 'single' && capacity.workers.usableForExecution > 0)
-        actual = currentConfig ? this.feasibleFallback(currentConfig, capacity.workers) : 'brain_one_worker';
+      if (!locked && uncertain) actual = currentConfig?.fallback === 'single' ? 'single' : currentConfig ? this.feasibleFallback(currentConfig, capacity.workers) : 'single';
+      if (!locked && mode === 'orchestrated_auto' && actual === 'single' && capacity.workers.usableForExecution > 0) actual = currentConfig ? this.feasibleFallback(currentConfig, capacity.workers) : 'brain_one_worker';
       const required = minimumTopologyWorkers(actual);
       if (manual && required > capacity.workers.usableForExecution) throw new HiveError(409, `${manual} needs ${required} available workers; only ${capacity.workers.usableForExecution} are available`);
-      let budget = locked || uncertain || actual !== decision.targetTopology
-        ? this.manualBudget(actual, decision.targetWorkers, capacity.workers) : decision.targetWorkers;
+      let budget = locked || uncertain || actual !== decision.targetTopology ? this.manualBudget(actual, decision.targetWorkers, capacity.workers) : decision.targetWorkers;
       let desired: TopologyTarget | null = null;
       let warning = decision.providerStatus === 'unavailable' ? 'Jev unavailable · initial mode used fallback' : null;
       if (required > capacity.workers.usableForExecution || budget > capacity.workers.usableForExecution) {
-        desired = { topology: actual, workers: required }; actual = 'single'; budget = 0;
-        warning = 'Requested topology is waiting for worker capacity';
+        desired = { topology: actual, workers: required }; actual = 'single'; budget = 0; warning = 'Requested topology is waiting for worker capacity';
       }
       if (!locked && capacity.workers.usableForExecution === 0 && (decision.needsOrchestration || mode === 'orchestrated_auto')) {
         const target = currentConfig?.topologyFallback ?? 'brain_one_worker';
