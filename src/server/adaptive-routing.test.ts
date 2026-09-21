@@ -45,6 +45,8 @@ test("adaptive routing settings keep the TypeSafe key private and support enable
       model: "jev-latest",
     });
     assert.throws(() => saveAdaptiveRouting(dir, { enabled: true }), /API key is required/);
+    assert.throws(() => saveAdaptiveRouting(dir, null), /must be an object/);
+    assert.throws(() => saveAdaptiveRouting(dir, { enabled: false, extra: true }), /Unknown adaptive routing setting/);
     const saved = saveAdaptiveRouting(dir, { enabled: true, apiKey: "ts_fixture_secret_1234" });
     assert.equal(saved.enabled, true);
     assert.equal(saved.apiKeySet, true);
