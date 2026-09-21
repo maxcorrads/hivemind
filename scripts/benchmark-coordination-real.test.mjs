@@ -89,6 +89,7 @@ test('CLI prepare, validate and summarize round-trip version-pinned trial templa
     const firstPath = path.join(out, files[0]), first = JSON.parse(readFileSync(firstPath, 'utf8'));
     assert.equal(first.versions.hivemindRevision, 'deadbeef');
     writeFileSync(firstPath, JSON.stringify(complete(first), null, 2) + '\n');
+    writeFileSync(path.join(out, 'run-trial-not-a-trial.json'), JSON.stringify({ state: 'executed-pending-review' }) + '\n');
     const validated = main(['validate', '--input', out]); assert.equal(validated.length, files.length);
     const summary = main(['summarize', '--input', out, '--seed', '29']);
     assert.equal(summary.completeTrials, 1); assert.equal(summary.incompleteTrials, files.length - 1);
