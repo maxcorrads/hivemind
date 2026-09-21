@@ -35,7 +35,7 @@ So dependency installation is measurable but not the critical path. Integration 
 
 ## Historical timing weights
 
-Five recent Node 24 logs were also sampled for stable slow test cases and mapped back to their containing file. The checked-in `scripts/ci-test-timings.json` contains the resulting lower-bound historical weights. The largest observed file weights are:
+The original weights came from five recent Node 24 macOS logs. After moving the heavy path to Ubuntu, two successful attempt-1 Linux runs showed that those relative weights no longer balanced wall time. `scripts/ci-test-timings.json` now applies a documented shard-level Linux calibration to the existing per-file signal and uses a 400 ms fallback for new files. The largest observed file weights are:
 
 | Integration file | Historical weight |
 | --- | ---: |
@@ -55,7 +55,7 @@ These are scheduling weights, not claims that they capture every millisecond in 
 
 - Ubuntu is the primary CI platform for quality/build/package, Node tests and Chromium. This avoids scheduling the parallel shard fan-out against the much smaller hosted macOS concurrency pool.
 - Node 24: unit and four timing-balanced integration shards run independently on Ubuntu.
-- Node 22.13.0: the same full unit/integration scope is retained on Ubuntu and integration is split into two timing-balanced shards. Compatibility coverage is **not** reduced to a smoke subset.
+- Node 22.13.0: the same full unit/integration scope is retained on Ubuntu and integration is split into four timing-balanced shards. Compatibility coverage is **not** reduced to a smoke subset; the earlier two-shard compromise was only necessary while the fan-out competed for scarce macOS runners.
 - One focused `macOS compatibility` job runs the launch/plugin shell contracts with native macOS zsh. Linux uses bash for the cross-platform shell argument contracts and does not install zsh on every ephemeral runner; zsh-only syntax validation remains native to macOS.
 - The historical required gates `Tests / Node 24` and `Tests / Node 22.13.0` remain. `Tests / Node 24` aggregates its unit/integration producers **and** the native macOS compatibility job, so branch protection cannot silently omit the platform check.
 - Normal Node 24 unit/integration jobs collect LCOV alongside their ordinary redacted logs. A lightweight `Coverage` aggregator merges those artifacts and enforces the unchanged 80% line / 75% branch / 75% function thresholds. There is no third full test execution in CI.
@@ -78,3 +78,11 @@ A later 4+2 validation on PR #119 (run `35607991015`) was fully green but still 
 ## After measurement
 
 Do not infer the target from the topology alone. Record successful attempt-1 runs of this branch/revision using the same definitions above. The first PR run is useful as an immediate sanity check; median and p90 should be updated from at least five successful attempt-1 runs before claiming the issue's 30% median target as demonstrated.
+
+## Linux calibration observation
+
+Two successful Ubuntu attempt-1 runs of the same four-shard Node 24 plan measured approximately **43.8 s / 23.4 s / 33.1 s / 46.3 s** of test execution per shard on average. The old macOS-derived planner predicted all four at roughly 24 s, so the imbalance was scheduling-data drift rather than insufficient concurrency.
+
+The checked-in timing weights are calibrated by scaling each file's prior historical weight (or fallback) by its shard's observed/predicted ratio across those two Linux runs. The resulting four-bin LPT plan is approximately **36.5–36.7 weighted seconds per shard**. This retains deterministic assignment and full discovery while adapting the historical signal to the actual CI platform.
+
+With the macOS concurrency bottleneck removed, Node 22 integration also returns from two to **four** shards. The startup fan-out remains below the GitHub Free total-concurrency limit even when CodeQL is active.
