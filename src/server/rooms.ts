@@ -95,7 +95,10 @@ export class RoomStore {
       }
       let room = this.peek(ch.id);
       const previousCoordinator = room?.coordinatorId;
-      if ((room?.revision ?? 0) !== input.expectedRevision) throw new HiveError(409, 'Room changed; get_room and reconcile the current revision');
+      const concurrentContractAck = action.type === 'acknowledge' && room !== null &&
+        action.contractVersion === room.contractVersion && input.expectedRevision <= room.revision;
+      if ((room?.revision ?? 0) !== input.expectedRevision && !concurrentContractAck)
+        throw new HiveError(409, 'Room changed; get_room and reconcile the current revision');
       if (action.type === 'acknowledge' || action.type === 'stopped') {
         if (!room || !room.participantIds.includes(actor.id) || actor.role !== 'worker') throw new HiveError(403, 'Only a participating worker can acknowledge');
       } else if (actor.role !== 'human' && (actor.role !== 'brain' || (room && room.coordinatorId !== actor.id)))
