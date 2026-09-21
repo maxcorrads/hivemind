@@ -5,45 +5,31 @@ import path from "node:path";
 import { test } from "node:test";
 import { createApp } from "./app.ts";
 import { Hive } from "./hive.ts";
+import { jevTopologyResponse } from "./fixtures/jev-topology.ts";
 import {
-  adaptiveDirective,
-  adaptiveRoutingPublic,
-  appendAdaptiveTelemetry,
-  decideAdaptiveStrategy,
-  evaluateAdaptiveRequest,
-  loadAdaptiveRouting,
-  saveAdaptiveRouting,
-  shouldRouteHumanMessage,
+  adaptiveDirective, adaptiveRoutingPublic, appendAdaptiveTelemetry,
+  decideAdaptiveStrategy, evaluateAdaptiveRequest, loadAdaptiveRouting,
+  saveAdaptiveRouting, shouldRouteHumanMessage,
 } from "./adaptive-routing.ts";
-import type { Channel } from "../shared/types.ts";
+import type { Channel, Message } from "../shared/types.ts";
+import type { AdaptiveTopologyDecision, AdaptiveExecutionState } from "../shared/adaptive-topology.ts";
 
 function score(value: number, confidence = 0.9) {
   return { type: "score" as const, score: value, confidence, probabilities: { 0: 0.1, 1: 0.8, 2: 0.1 } };
 }
-
 const singleSignals = {
-  single_agent_sufficiency: {
-    type: "choice" as const,
-    choice: "sufficient" as const,
-    confidence: 0.95,
-    probabilities: { sufficient: 0.95, insufficient: 0.05 },
-  },
-  complexity: score(0.4),
-  parallelizability: score(0.4),
-  coupling: score(0.4),
-  specialization_need: score(0.3),
-  coordination_need: score(0.3),
+  single_agent_sufficiency: { type: "choice" as const, choice: "sufficient" as const,
+    confidence: 0.95, probabilities: { sufficient: 0.95, insufficient: 0.05 } },
+  complexity: score(0.4), parallelizability: score(0.4), coupling: score(0.4),
+  specialization_need: score(0.3), coordination_need: score(0.3),
 };
 
 test("adaptive routing settings keep the TypeSafe key private and support enable/disable", () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-active-routing-"));
   try {
     assert.deepEqual(adaptiveRoutingPublic(dir), {
-      enabled: false,
-      apiKeySet: false,
-      apiKeyHint: null,
-      model: "jev-latest",
-      fallback: "orchestrated",
+      enabled: false, apiKeySet: false, apiKeyHint: null, model: "jev-latest",
+      fallback: "orchestrated", topologyFallback: "brain_one_worker",
     });
     assert.throws(() => saveAdaptiveRouting(dir, { enabled: true }), /API key is required/);
     assert.throws(() => saveAdaptiveRouting(dir, null), /must be an object/);
@@ -55,110 +41,67 @@ test("adaptive routing settings keep the TypeSafe key private and support enable
     assert.equal(JSON.stringify(saved).includes("ts_fixture_secret"), false);
     assert.equal(loadAdaptiveRouting(dir)?.apiKey, "ts_fixture_secret_1234");
     assert.equal(statSync(path.join(dir, "adaptive-routing.json")).mode & 0o777, 0o600);
-
     const disabled = saveAdaptiveRouting(dir, { enabled: false });
     assert.equal(disabled.enabled, false);
     assert.equal(loadAdaptiveRouting(dir)?.apiKey, "ts_fixture_secret_1234");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+    assert.equal(saveAdaptiveRouting(dir, { topologyFallback: "brain_multi_room" }).topologyFallback, "brain_multi_room");
+    assert.throws(() => saveAdaptiveRouting(dir, { topologyFallback: "unknown" }), /topology fallback/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("active strategy chooses a direct brain session only for high-confidence simple requests", () => {
+test("v1 benchmark strategy selects direct work only for high-confidence simple requests", () => {
   const direct = decideAdaptiveStrategy(singleSignals);
   assert.equal(direct.strategy, "single");
   assert.equal(direct.fallbackUsed, false);
-
-  const orchestrated = decideAdaptiveStrategy({
-    ...singleSignals,
-    coordination_need: score(1.8),
-    single_agent_sufficiency: {
-      type: "choice",
-      choice: "insufficient",
-      confidence: 0.95,
-      probabilities: { sufficient: 0.05, insufficient: 0.95 },
-    },
-  });
+  const orchestrated = decideAdaptiveStrategy({ ...singleSignals, coordination_need: score(1.8),
+    single_agent_sufficiency: { type: "choice", choice: "insufficient", confidence: 0.95,
+      probabilities: { sufficient: 0.05, insufficient: 0.95 } } });
   assert.equal(orchestrated.strategy, "orchestrated");
-
   const uncertain = decideAdaptiveStrategy({ ...singleSignals, complexity: score(0.4, 0.2) });
   assert.equal(uncertain.strategy, "orchestrated");
   assert.equal(uncertain.reason, "low_confidence_fallback");
-  const lowCostFallback = decideAdaptiveStrategy({ ...singleSignals, complexity: score(0.4, 0.2) }, "single");
-  assert.equal(lowCostFallback.strategy, "single");
-  assert.equal(lowCostFallback.fallbackUsed, true);
+  const cheaper = decideAdaptiveStrategy({ ...singleSignals, complexity: score(0.4, 0.2) }, "single");
+  assert.equal(cheaper.strategy, "single");
+  assert.equal(cheaper.fallbackUsed, true);
 });
 
-test("Jev request uses the current System One contract and returns an active decision", async () => {
-  const captured: Array<{
-    model?: string;
-    questions?: Record<string, unknown>;
-    state?: { project?: unknown };
-  }> = [];
-  const decision = await evaluateAdaptiveRequest(
-    "Fix the typo in one local label.",
-    { apiKey: "fixture-key" },
-    {
-      project: { slug: "chapter", name: "Chapter" },
-      fetchImpl: async (_url, init) => {
-        captured.push(JSON.parse(String(init?.body)) as {
-          model?: string;
-          questions?: Record<string, unknown>;
-          state?: { project?: unknown };
-        });
-        return new Response(JSON.stringify({
-          model: "jev-1.13.0",
-          answers: singleSignals,
-          usage: { input_tokens: 42, output_tokens: 12 },
-        }), { status: 200, headers: { "content-type": "application/json" } });
-      },
+test("v1 evaluator preserves its System One contract and measured usage", async () => {
+  const captured: Array<{ model?: string; questions?: Record<string, unknown>; state?: { project?: unknown } }> = [];
+  const decision = await evaluateAdaptiveRequest("Fix the typo in one local label.", { apiKey: "fixture-key" }, {
+    project: { slug: "chapter", name: "Chapter" },
+    fetchImpl: async (_url, init) => {
+      captured.push(JSON.parse(String(init?.body)));
+      return Response.json({ model: "jev-fixture-v1", answers: singleSignals, usage: { input_tokens: 42, output_tokens: 12 } });
     },
-  );
+  });
   const outbound = captured[0]!;
   assert.equal(outbound.model, "jev-latest");
   assert.equal(Object.keys(outbound.questions ?? {}).length, 6);
   assert.deepEqual(outbound.state?.project, { slug: "chapter", name: "Chapter" });
   assert.equal(decision.strategy, "single");
-  assert.equal(decision.model, "jev-1.13.0");
+  assert.equal(decision.model, "jev-fixture-v1");
   assert.equal(decision.inputTokens, 42);
   assert.equal(decision.outputTokens, 12);
   assert.match(adaptiveDirective(decision), /SINGLE/);
   assert.match(adaptiveDirective(decision), /Do not delegate/);
 });
 
-test("Jev failure conservatively activates orchestration instead of blocking Human mail", async () => {
-  const decision = await evaluateAdaptiveRequest(
-    "Implement a feature.",
-    { apiKey: "fixture-key" },
-    { fetchImpl: async () => { throw new Error("offline"); } },
-  );
+test("v1 evaluator retains configurable failure fallback", async () => {
+  const failed = async () => { throw new Error("offline"); };
+  const decision = await evaluateAdaptiveRequest("Implement a feature.", { apiKey: "fixture-key" }, { fetchImpl: failed });
   assert.equal(decision.strategy, "orchestrated");
   assert.equal(decision.fallbackUsed, true);
   assert.equal(decision.providerStatus, "unavailable");
   assert.match(adaptiveDirective(decision), /ORCHESTRATED/);
-
-  const singleFallback = await evaluateAdaptiveRequest(
-    "Implement a feature.",
-    { apiKey: "fixture-key", fallback: "single" },
-    { fetchImpl: async () => { throw new Error("offline"); } },
-  );
-  assert.equal(singleFallback.strategy, "single");
-  assert.equal(singleFallback.fallbackUsed, true);
-  assert.match(adaptiveDirective(singleFallback), /SINGLE/);
+  const single = await evaluateAdaptiveRequest("Implement a feature.", { apiKey: "fixture-key", fallback: "single" }, { fetchImpl: failed });
+  assert.equal(single.strategy, "single");
+  assert.equal(single.fallbackUsed, true);
+  assert.match(adaptiveDirective(single), /SINGLE/);
 });
 
-test("only new top-level Human messages in a brain DM are active-routing candidates", () => {
-  const channel = {
-    id: "dm",
-    name: "Human, Brain",
-    type: "dm",
-    topic: null,
-    memberIds: ["human", "brain-id"],
-    projectId: "project-id",
-    project: "chapter",
-    createdBy: "human",
-    createdAt: 1,
-  } as Channel;
+test("only new top-level Human messages in a brain DM start adaptive execution", () => {
+  const channel: Channel = { id: "dm", name: "Human, Brain", type: "dm", topic: null,
+    memberIds: ["human", "brain-id"], projectId: "project-id", project: "chapter", createdBy: "human", createdAt: 1 };
   const brains = new Set(["brain-id"]);
   assert.equal(shouldRouteHumanMessage(channel, "Do this", null, brains), true);
   assert.equal(shouldRouteHumanMessage(channel, "Do this", "thread-id", brains), false);
@@ -166,106 +109,78 @@ test("only new top-level Human messages in a brain DM are active-routing candida
   assert.equal(shouldRouteHumanMessage({ ...channel, type: "public" }, "Do this", null, brains), false);
 });
 
-test("enabled Jev routing changes real Human-to-brain delivery while disabled mode preserves legacy mail", async t => {
+test("enabled topology routing changes real Human delivery while disabled Auto and send retries preserve legacy mail", async t => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-routing-http-"));
   const hive = new Hive(path.join(dir, "hive.db"));
-  t.after(() => {
-    hive.db.close();
-    rmSync(dir, { recursive: true, force: true });
+  t.after(async () => {
+    await hive.adaptiveTopology.stop();
+    hive.db.close(); rmSync(dir, { recursive: true, force: true });
   });
   const human = hive.getAgent("human");
   const brain = hive.join({ role: "brain", project: "chapter" });
   const dm = hive.openDm(human, brain.agent.name);
   const app = createApp(hive);
   let calls = 0;
-  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
     assert.equal(String(input), "https://api.typesafe.ai/v1/systemone");
     calls++;
-    return new Response(JSON.stringify({
-      model: "jev-1.13.0",
-      answers: singleSignals,
-      usage: { input_tokens: 10, output_tokens: 5 },
-    }), { status: 200, headers: { "content-type": "application/json" } });
+    return Response.json(jevTopologyResponse(String(init?.body), "single"));
   });
-
-  const legacy = await app.request(`/api/ui/channels/${dm.id}/messages`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ body: "Legacy request", requestId: "legacy-request" }),
+  const send = (body: unknown) => app.request(`/api/ui/channels/${dm.id}/messages`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
   });
+  const legacy = await send({ body: "Legacy request", requestId: "legacy-request" });
   assert.equal(legacy.status, 200);
-  const legacyJson = await legacy.json() as { message: { body: string }; routing: unknown };
+  const legacyJson = await legacy.json() as { message: Message; routing: unknown };
   assert.equal(legacyJson.message.body, "Legacy request");
   assert.equal(legacyJson.routing, null);
   assert.equal(calls, 0);
 
-  const manual = await app.request(`/api/ui/channels/${dm.id}/messages`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ body: "Manual single request", requestId: "manual-single", routing: "single" }),
-  });
+  const manual = await send({ body: "Manual single request", requestId: "manual-single", routing: "single" });
   assert.equal(manual.status, 200);
-  const manualJson = await manual.json() as {
-    message: { body: string };
-    routingMessage: { body: string };
-    routing: { strategy: string; providerStatus: string; reason: string };
-  };
-  assert.equal(calls, 0, "explicit routing must bypass TypeSafe");
+  const manualJson = await manual.json() as { message: Message; routingMessage: Message;
+    routing: AdaptiveTopologyDecision; adaptiveState: AdaptiveExecutionState };
+  assert.equal(calls, 0, "Jev remains disabled for an explicit local choice");
   assert.equal(manualJson.message.body, "Manual single request");
-  assert.equal(manualJson.routing.strategy, "single");
+  assert.equal(manualJson.routing.targetTopology, "single");
   assert.equal(manualJson.routing.providerStatus, "bypassed");
-  assert.equal(manualJson.routing.reason, "human_explicit_single");
+  assert.equal(manualJson.adaptiveState.lockedTopology, "single");
   assert.match(manualJson.routingMessage.body, /SINGLE/);
 
-  const settingsResponse = await app.request("/api/ui/adaptive-routing", {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
+  const settings = await app.request("/api/ui/adaptive-routing", {
+    method: "PUT", headers: { "content-type": "application/json" },
     body: JSON.stringify({ enabled: true, apiKey: "fixture-key" }),
   });
-  assert.equal(settingsResponse.status, 200);
-  const settingsJson = await settingsResponse.json() as {
-    enabled: boolean; apiKeySet: boolean; apiKeyHint: string | null; apiKey?: string;
-  };
+  assert.equal(settings.status, 200);
+  const settingsJson = await settings.json() as { enabled: boolean; apiKeySet: boolean; apiKey?: string };
   assert.equal(settingsJson.enabled, true);
   assert.equal(settingsJson.apiKeySet, true);
   assert.equal(settingsJson.apiKey, undefined);
 
-  const active = await app.request(`/api/ui/channels/${dm.id}/messages`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ body: "Small direct request", requestId: "active-request" }),
-  });
+  const active = await send({ body: "Small direct request", requestId: "active-request" });
   assert.equal(active.status, 200);
-  const activeJson = await active.json() as {
-    message: { id: string; body: string };
-    routingMessage: { id: string; body: string };
-    routing: { strategy: string; routeId: string };
-  };
+  const activeJson = await active.json() as { message: Message; routingMessage: Message;
+    routing: AdaptiveTopologyDecision; adaptiveState: AdaptiveExecutionState };
   assert.equal(calls, 1);
-  assert.equal(activeJson.routing.strategy, "single");
+  assert.equal(activeJson.routing.targetTopology, "single");
+  assert.equal(activeJson.routing.providerStatus, "ok", "A malformed mock must not make a fallback look like successful routing");
+  assert.equal(activeJson.routing.contractVersion, "adaptive-routing-v2");
+  assert.equal(activeJson.adaptiveState.currentTopology, "single");
+  assert.equal(activeJson.adaptiveState.lockedTopology, null);
   assert.match(activeJson.routing.routeId, /^route-/);
   assert.equal(activeJson.message.body, "Small direct request");
-  assert.match(activeJson.routingMessage.body, /Hivemind adaptive routing · SINGLE/);
+  assert.match(activeJson.routingMessage.body, /Hivemind adaptive topology · SINGLE/);
   assert.match(activeJson.routingMessage.body, /Do not delegate/);
 
-  const retry = await app.request(`/api/ui/channels/${dm.id}/messages`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ body: "Small direct request", requestId: "active-request" }),
-  });
+  const retry = await send({ body: "Small direct request", requestId: "active-request" });
   assert.equal(retry.status, 200);
-  const retryJson = await retry.json() as { message: { id: string }; routing: unknown };
-  assert.equal(retryJson.message.id, activeJson.message.id);
-  assert.equal(retryJson.routing, null);
-  assert.equal(calls, 1, "retry must reuse the committed Human request without another Jev call");
-
-  const reply = await app.request(`/api/ui/channels/${dm.id}/messages`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ body: "Thread clarification", threadId: activeJson.message.id, requestId: "reply-request" }),
-  });
+  const retried = await retry.json() as { message: Message; routing: unknown };
+  assert.equal(retried.message.id, activeJson.message.id);
+  assert.equal(retried.routing, null);
+  assert.equal(calls, 1, "A committed send retry must not reclassify");
+  const reply = await send({ body: "Thread clarification", threadId: activeJson.message.id, requestId: "reply-request" });
   assert.equal(reply.status, 200);
-  assert.equal(calls, 1, "thread replies must not trigger a new Jev call");
+  assert.equal(calls, 1, "A Human reply must not start a second execution");
 });
 
 test("public settings and private telemetry never expose the saved key or duplicate request text", () => {
@@ -274,28 +189,15 @@ test("public settings and private telemetry never expose the saved key or duplic
     saveAdaptiveRouting(dir, { enabled: true, apiKey: "ts_not_for_browser_9999" });
     assert.doesNotMatch(JSON.stringify(adaptiveRoutingPublic(dir)), /ts_not_for_browser/);
     assert.match(readFileSync(path.join(dir, "adaptive-routing.json"), "utf8"), /ts_not_for_browser/);
-
-    appendAdaptiveTelemetry(dir, {
-      routeId: "route-fixture",
-      strategy: "single",
-      reason: "high_confidence_single_sufficient",
-      fallbackUsed: false,
-      providerStatus: "ok",
-      model: "jev-fixture",
-      latencyMs: 12,
-      inputTokens: 20,
-      outputTokens: 5,
-      minimumConfidence: 0.9,
-      signals: singleSignals,
+    appendAdaptiveTelemetry(dir, { routeId: "route-fixture", strategy: "single", reason: "high_confidence_single_sufficient",
+      fallbackUsed: false, providerStatus: "ok", model: "jev-fixture", latencyMs: 12,
+      inputTokens: 20, outputTokens: 5, minimumConfidence: 0.9, signals: singleSignals,
     }, "secret-ish request text", { id: "project-id", slug: "chapter" });
-
-    const telemetryPath = path.join(dir, "adaptive-routing-decisions.jsonl");
-    const telemetry = readFileSync(telemetryPath, "utf8");
-    assert.equal(statSync(telemetryPath).mode & 0o777, 0o600);
-    assert.doesNotMatch(telemetry, /secret-ish request text|ts_not_for_browser/);
-    assert.match(telemetry, /"requestHash":/);
-    assert.match(telemetry, /"inputTokens":20/);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+    const file = path.join(dir, "adaptive-routing-decisions.jsonl");
+    const text = readFileSync(file, "utf8");
+    assert.equal(statSync(file).mode & 0o777, 0o600);
+    assert.doesNotMatch(text, /secret-ish request text|ts_not_for_browser/);
+    assert.match(text, /"requestHash":/);
+    assert.match(text, /"inputTokens":20/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
