@@ -63,6 +63,7 @@ export type AdaptiveRoutingFile = {
   version: 1;
   enabled: boolean;
   apiKey: string;
+  fallback: AdaptiveStrategy;
 };
 
 export type AdaptiveRoutingPublic = {
@@ -70,11 +71,13 @@ export type AdaptiveRoutingPublic = {
   apiKeySet: boolean;
   apiKeyHint: string | null;
   model: string;
+  fallback: AdaptiveStrategy;
 };
 
 export type AdaptiveRoutingInput = {
   enabled?: boolean;
   apiKey?: string | null;
+  fallback?: AdaptiveStrategy;
 };
 
 const QUESTIONS = Object.freeze({
@@ -166,8 +169,9 @@ function readRawConfig(home: string): AdaptiveRoutingFile | null {
     const raw = JSON.parse(readFileSync(file, "utf8")) as Partial<AdaptiveRoutingFile>;
     const apiKey = typeof raw.apiKey === "string" ? raw.apiKey.trim() : "";
     if (raw.version !== ADAPTIVE_ROUTING_CONFIG_VERSION || typeof raw.enabled !== "boolean") return null;
+    if (raw.fallback !== undefined && raw.fallback !== "single" && raw.fallback !== "orchestrated") return null;
     if (raw.enabled && !apiKey) return null;
-    return { version: 1, enabled: raw.enabled, apiKey };
+    return { version: 1, enabled: raw.enabled, apiKey, fallback: raw.fallback ?? "orchestrated" };
   } catch {
     return null;
   }
@@ -197,6 +201,7 @@ export function adaptiveRoutingPublic(home: string): AdaptiveRoutingPublic {
     apiKeySet: Boolean(config?.apiKey),
     apiKeyHint: config?.apiKey ? maskKey(config.apiKey) : null,
     model: TYPESAFE_MODEL,
+    fallback: config?.fallback ?? "orchestrated",
   };
 }
 
@@ -204,18 +209,21 @@ export function saveAdaptiveRouting(home: string, raw: unknown): AdaptiveRouting
   if (!raw || typeof raw !== "object" || Array.isArray(raw))
     throw new HiveError(400, "Adaptive routing settings must be an object");
   const input = raw as AdaptiveRoutingInput & Record<string, unknown>;
-  const unknown = Object.keys(input).filter(key => key !== "enabled" && key !== "apiKey");
+  const unknown = Object.keys(input).filter(key => key !== "enabled" && key !== "apiKey" && key !== "fallback");
   if (unknown.length) throw new HiveError(400, "Unknown adaptive routing setting");
   const previous = readRawConfig(home);
   if (input.enabled !== undefined && typeof input.enabled !== "boolean")
     throw new HiveError(400, "Adaptive routing enabled must be boolean");
   if (input.apiKey !== undefined && input.apiKey !== null && typeof input.apiKey !== "string")
     throw new HiveError(400, "Invalid TypeSafe API key");
+  if (input.fallback !== undefined && input.fallback !== "single" && input.fallback !== "orchestrated")
+    throw new HiveError(400, "Adaptive routing fallback must be single or orchestrated");
   const enabled = input.enabled ?? previous?.enabled ?? false;
   const apiKey = input.apiKey === null ? "" : input.apiKey?.trim() || previous?.apiKey || "";
+  const fallback = input.fallback ?? previous?.fallback ?? "orchestrated";
   if (apiKey.length > 512) throw new HiveError(400, "TypeSafe API key is too long");
   if (enabled && !apiKey) throw new HiveError(400, "TypeSafe API key is required when Jev adaptive routing is enabled");
-  persistConfig(home, { version: 1, enabled, apiKey });
+  persistConfig(home, { version: 1, enabled, apiKey, fallback });
   return adaptiveRoutingPublic(home);
 }
 
@@ -271,7 +279,7 @@ function parseSignals(value: unknown): AdaptiveSignals {
   return parsed as AdaptiveSignals;
 }
 
-export function decideAdaptiveStrategy(signals: AdaptiveSignals): {
+export function decideAdaptiveStrategy(signals: AdaptiveSignals, fallback: AdaptiveStrategy = POLICY.fallback): {
   strategy: AdaptiveStrategy;
   reason: string;
   fallbackUsed: boolean;
@@ -280,7 +288,7 @@ export function decideAdaptiveStrategy(signals: AdaptiveSignals): {
   const confidences = Object.values(signals).map(signal => signal.confidence);
   const minimumConfidence = Math.min(...confidences);
   if (minimumConfidence < POLICY.minConfidence)
-    return { strategy: POLICY.fallback, reason: "low_confidence_fallback", fallbackUsed: true, minimumConfidence };
+    return { strategy: fallback, reason: "low_confidence_fallback", fallbackUsed: true, minimumConfidence };
 
   const parallelPressure = Math.max(0, signals.parallelizability.score - signals.coupling.score * 0.5);
   if (
@@ -304,7 +312,7 @@ export function decideAdaptiveStrategy(signals: AdaptiveSignals): {
   ) {
     return { strategy: "orchestrated", reason: "coordination_pressure", fallbackUsed: false, minimumConfidence };
   }
-  return { strategy: POLICY.fallback, reason: "ambiguous_policy_fallback", fallbackUsed: true, minimumConfidence };
+  return { strategy: fallback, reason: "ambiguous_policy_fallback", fallbackUsed: true, minimumConfidence };
 }
 
 export function explicitAdaptiveDecision(strategy: AdaptiveStrategy): AdaptiveRoutingDecision {
@@ -323,10 +331,10 @@ export function explicitAdaptiveDecision(strategy: AdaptiveStrategy): AdaptiveRo
   };
 }
 
-function failureDecision(routeId: string, reason: string, latencyMs: number): AdaptiveRoutingDecision {
+function failureDecision(routeId: string, reason: string, latencyMs: number, fallback: AdaptiveStrategy): AdaptiveRoutingDecision {
   return {
     routeId,
-    strategy: "orchestrated",
+    strategy: fallback,
     reason: `provider_${reason}_fallback`,
     fallbackUsed: true,
     providerStatus: "unavailable",
@@ -341,7 +349,7 @@ function failureDecision(routeId: string, reason: string, latencyMs: number): Ad
 
 export async function evaluateAdaptiveRequest(
   request: string,
-  config: Pick<AdaptiveRoutingFile, "apiKey">,
+  config: Pick<AdaptiveRoutingFile, "apiKey"> & Partial<Pick<AdaptiveRoutingFile, "fallback">>,
   options: {
     fetchImpl?: typeof fetch;
     timeoutMs?: number;
@@ -349,7 +357,8 @@ export async function evaluateAdaptiveRequest(
   } = {},
 ): Promise<AdaptiveRoutingDecision> {
   const text = request.trim();
-  if (!text) return failureDecision(`route-${randomUUID()}`, "empty_request", 0);
+  const fallback = config.fallback ?? POLICY.fallback;
+  if (!text) return failureDecision(`route-${randomUUID()}`, "empty_request", 0, fallback);
   if (text.length > 8_000) throw new HiveError(400, "Adaptive routing request must be <= 8000 characters");
   const routeId = `route-${randomUUID()}`;
   const started = Date.now();
@@ -372,7 +381,7 @@ export async function evaluateAdaptiveRequest(
       }),
       signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!response.ok) return failureDecision(routeId, `http_${response.status}`, Date.now() - started);
+    if (!response.ok) return failureDecision(routeId, `http_${response.status}`, Date.now() - started, fallback);
     const payload = await response.json() as {
       model?: unknown;
       answers?: unknown;
@@ -382,7 +391,7 @@ export async function evaluateAdaptiveRequest(
     assert.ok(typeof payload.model === "string" && payload.model.length > 0, "Jev model is required");
     assert.ok(Number.isSafeInteger(payload.usage?.input_tokens) && Number(payload.usage!.input_tokens) >= 0, "Invalid Jev input token usage");
     assert.ok(Number.isSafeInteger(payload.usage?.output_tokens) && Number(payload.usage!.output_tokens) >= 0, "Invalid Jev output token usage");
-    const policy = decideAdaptiveStrategy(signals);
+    const policy = decideAdaptiveStrategy(signals, fallback);
     return {
       routeId,
       ...policy,
@@ -397,7 +406,7 @@ export async function evaluateAdaptiveRequest(
     const name = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")
       ? "timeout"
       : "network_or_malformed";
-    return failureDecision(routeId, name, Date.now() - started);
+    return failureDecision(routeId, name, Date.now() - started, fallback);
   }
 }
 
