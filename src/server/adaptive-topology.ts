@@ -33,6 +33,12 @@ type HumanMessageInput = {
   attachmentIds?: string[]; recipients?: string[]; source?: 'hive' | 'telegram';
 };
 function fingerprint(value: unknown): string { return createHash('sha256').update(JSON.stringify(value)).digest('hex'); }
+/** Equality fence for an in-flight request, not credential storage or verification. */
+function sameConfiguration(a: AdaptiveRoutingFile | null, b: AdaptiveRoutingFile | null): boolean {
+  if (!a || !b) return a === b;
+  return a.version === b.version && a.enabled === b.enabled && a.apiKey === b.apiKey &&
+    a.fallback === b.fallback && a.topologyFallback === b.topologyFallback;
+}
 function requestText(message: Pick<Message, 'body' | 'source'>): string {
   return message.source === 'telegram' ? message.body.replace(/^\[[^\]\r\n]*\]\s?/, '') : message.body;
 }
@@ -283,7 +289,7 @@ export class AdaptiveTopologyRuntime {
     const from = state.currentTopology, revision = state.revision ?? 0;
     const { decision, capacity } = await this.evaluateStable(state, event, config);
     const latest = this.row(state.channelId);
-    if (!latest || latest.executionId !== state.executionId || (latest.revision ?? 0) !== revision || fingerprint(config) !== fingerprint(loadAdaptiveRouting(this.hive.home)) || this.stopped) return latest ?? state;
+    if (!latest || latest.executionId !== state.executionId || (latest.revision ?? 0) !== revision || !sameConfiguration(config, loadAdaptiveRouting(this.hive.home)) || this.stopped) return latest ?? state;
     const forced: TopologyTarget | null = state.lockedTopology ? { topology: state.lockedTopology,
       workers: state.lockedTopology === 'single' ? 0 : state.lockedTopology === state.currentTopology ? state.workerBudget : Math.max(minimumTopologyWorkers(state.lockedTopology), state.desiredWorkers ?? 0) } : null;
     const next = advanceTopologyPolicy(policyOf(state), { target: { topology: decision.targetTopology, workers: decision.targetWorkers },
@@ -406,7 +412,7 @@ export class AdaptiveTopologyRuntime {
       if (this.stopped) throw new HiveError(503, 'Server is shutting down');
       const currentConfig = loadAdaptiveRouting(this.hive.home);
       if (!currentConfig?.enabled && config?.enabled && !locked) return null;
-      if (fingerprint(config) !== fingerprint(currentConfig)) throw new HiveError(409, 'Jev settings changed during initial routing; retry with the current configuration');
+      if (!sameConfiguration(config, currentConfig)) throw new HiveError(409, 'Jev settings changed during initial routing; retry with the current configuration');
       if (fingerprint(previous) !== fingerprint(this.row(channel.id)) || inherited !== (manual ? null : this.conversationLock(channel.id))) throw new HiveError(409, 'Human routing state changed; review and retry the request');
       if (decision.providerStatus === 'ok' && (!stable || !validTopologyTarget({ topology: decision.targetTopology, workers: decision.targetWorkers }, capacity.workers.usableForExecution)))
         decision = { ...decision, providerStatus: 'unavailable', confidence: null, reason: 'capacity_changed_during_initial_routing', targetTopology: 'single', targetWorkers: 0 };
