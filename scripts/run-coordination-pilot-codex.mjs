@@ -18,9 +18,20 @@ export const RUNNER_SCHEMA_VERSION = 1;
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
+export function hostExecutable(host, env = process.env) {
+  if (host === 'codex') {
+    const value = String(env.CODEX_BIN ?? '').trim();
+    return value || 'codex';
+  }
+  if (host === 'opencode') {
+    const value = String(env.OPENCODE_BIN ?? '').trim();
+    return value || 'opencode';
+  }
+  throw new Error(`Unsupported real-agent host: ${host}`);
+}
+
 export function codexExecutable(env = process.env) {
-  const value = String(env.CODEX_BIN ?? '').trim();
-  return value || 'codex';
+  return hostExecutable('codex', env);
 }
 
 export function parseProviderTokens(text) {
@@ -53,6 +64,54 @@ export function codexArgs(trial) {
     '-',
   );
   return args;
+}
+
+export function opencodeArgs(trial, prompt) {
+  assert.equal(trial.versions.host, 'opencode');
+  return [
+    '--pure',
+    'run',
+    '--standalone',
+    '--model', trial.versions.model,
+    '--auto',
+    '--format', 'json',
+    prompt,
+  ];
+}
+
+export function hostInvocation(trial, prompt, baseEnv, repoRoot, withHivemind) {
+  if (trial.versions.host === 'codex') {
+    return { args: codexArgs(trial), stdin: prompt, env: baseEnv };
+  }
+  if (trial.versions.host === 'opencode') {
+    const config = {
+      tools: { task: false },
+      ...(withHivemind ? {
+        mcp: {
+          hivemind: {
+            type: 'local',
+            command: [process.execPath, '--import', 'tsx', path.join(repoRoot, 'src/cli.ts'), 'mcp'],
+            cwd: repoRoot,
+            enabled: true,
+            environment: {
+              HIVEMIND_URL: baseEnv.HIVEMIND_URL,
+              HIVEMIND_HOME: baseEnv.HIVEMIND_HOME,
+            },
+          },
+        },
+      } : {}),
+    };
+    return {
+      args: opencodeArgs(trial, prompt),
+      stdin: null,
+      env: {
+        ...baseEnv,
+        OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
+        OPENCODE_DISABLE_AUTOUPDATE: 'true',
+      },
+    };
+  }
+  throw new Error(`Unsupported real-agent host: ${trial.versions.host}`);
 }
 
 export function strictTrialFiles(dir) {
@@ -225,7 +284,7 @@ function appendTail(current, chunk, limit = 1_000_000) {
   return joined.length > limit ? joined.slice(-limit) : joined;
 }
 
-function startSeat({ binary, args, cwd, prompt, stdoutPath, stderrPath, env, timeoutMs }) {
+function startSeat({ binary, args, cwd, stdin, stdoutPath, stderrPath, env, timeoutMs }) {
   mkdirSync(path.dirname(stdoutPath), { recursive: true });
   const stdoutFile = createWriteStream(stdoutPath, { flags: 'wx' });
   const stderrFile = createWriteStream(stderrPath, { flags: 'wx' });
@@ -234,7 +293,7 @@ function startSeat({ binary, args, cwd, prompt, stdoutPath, stderrPath, env, tim
   child.stdout.on('data', chunk => { stdoutTail = appendTail(stdoutTail, chunk); stdoutFile.write(chunk); });
   child.stderr.on('data', chunk => { stderrTail = appendTail(stderrTail, chunk); stderrFile.write(chunk); });
   child.stdin.on('error', () => undefined);
-  child.stdin.end(prompt);
+  child.stdin.end(stdin ?? undefined);
   const timer = setTimeout(() => {
     timedOut = true;
     child.kill('SIGTERM');
@@ -436,7 +495,8 @@ async function runTrial(options, trial, fixture, binary, binaryVersion) {
     startedAt: null,
     completedAt: null,
     wallMs: null,
-    codexVersion: binaryVersion,
+    host: trial.versions.host,
+    hostVersion: binaryVersion,
     workflow: trial.trial.workflow,
     seats: plan.map(seat => ({ id: seat.id, role: seat.role, focus: seat.worker?.id ?? null })),
     acceptance: null,
@@ -455,14 +515,16 @@ async function runTrial(options, trial, fixture, binary, binaryVersion) {
   let startupError = null;
   try {
     if (trial.trial.workflow === 'single_worker') {
+      const prompt = buildSinglePrompt(trial);
+      const invocation = hostInvocation(trial, prompt, { ...process.env }, options.repoRoot, false);
       const seat = startSeat({
         binary,
-        args: codexArgs(trial),
+        args: invocation.args,
         cwd: workspace,
-        prompt: buildSinglePrompt(trial),
+        stdin: invocation.stdin,
         stdoutPath: path.join(attemptDir, 'single.stdout.txt'),
         stderrPath: path.join(attemptDir, 'single.stderr.log'),
-        env: { ...process.env },
+        env: invocation.env,
         timeoutMs: options.timeoutMs,
       });
       runningSeats.push({ id: 'single', ...seat });
@@ -483,36 +545,42 @@ async function runTrial(options, trial, fixture, binary, binaryVersion) {
       const workers = plan.filter(seat => seat.role === 'worker');
       for (let index = 0; index < workers.length; index++) {
         const seat = workers[index];
+        const prompt = buildWorkerPrompt(trial, seat.worker, index + 1);
+        const baseEnv = {
+          ...process.env,
+          HIVEMIND_URL: `http://127.0.0.1:${BENCHMARK_PORT}`,
+          HIVEMIND_HOME: path.join(attemptDir, 'agent-identities'),
+        };
+        const invocation = hostInvocation(trial, prompt, baseEnv, options.repoRoot, true);
         const proc = startSeat({
           binary,
-          args: codexArgs(trial),
+          args: invocation.args,
           cwd: workspace,
-          prompt: buildWorkerPrompt(trial, seat.worker, index + 1),
+          stdin: invocation.stdin,
           stdoutPath: path.join(attemptDir, `${seat.id}.stdout.txt`),
           stderrPath: path.join(attemptDir, `${seat.id}.stderr.log`),
-          env: {
-            ...process.env,
-            HIVEMIND_URL: `http://127.0.0.1:${BENCHMARK_PORT}`,
-            HIVEMIND_HOME: path.join(attemptDir, 'agent-identities'),
-          },
+          env: invocation.env,
           timeoutMs: options.timeoutMs,
         });
         runningSeats.push({ id: seat.id, ...proc });
       }
       await waitForWorkerJoins(path.join(server.home, 'hive.db'), workers.length, runningSeats);
       const brainSeat = plan.find(seat => seat.role === 'brain');
+      const brainPrompt = buildBrainPrompt(trial, fixture, workers.length, humanAuthority?.seq ?? null);
+      const brainEnv = {
+        ...process.env,
+        HIVEMIND_URL: `http://127.0.0.1:${BENCHMARK_PORT}`,
+        HIVEMIND_HOME: path.join(attemptDir, 'agent-identities'),
+      };
+      const brainInvocation = hostInvocation(trial, brainPrompt, brainEnv, options.repoRoot, true);
       const brain = startSeat({
         binary,
-        args: codexArgs(trial),
+        args: brainInvocation.args,
         cwd: workspace,
-        prompt: buildBrainPrompt(trial, fixture, workers.length, humanAuthority?.seq ?? null),
+        stdin: brainInvocation.stdin,
         stdoutPath: path.join(attemptDir, 'brain.stdout.txt'),
         stderrPath: path.join(attemptDir, 'brain.stderr.log'),
-        env: {
-          ...process.env,
-          HIVEMIND_URL: `http://127.0.0.1:${BENCHMARK_PORT}`,
-          HIVEMIND_HOME: path.join(attemptDir, 'agent-identities'),
-        },
+        env: brainInvocation.env,
         timeoutMs: options.timeoutMs,
       });
       runningSeats.push({ id: brainSeat.id, ...brain });
@@ -577,8 +645,10 @@ async function runTrial(options, trial, fixture, binary, binaryVersion) {
   trial.efficiency.providerCost = null;
   trial.efficiency.providerCurrency = null;
   trial.efficiency.providerUsageReason = providerTokens === null
-    ? 'At least one benchmark seat did not emit a parseable Codex CLI token count; total remains null.'
-    : `Sum of Codex CLI-reported token counts across ${seatResults.length} benchmark seat(s).`;
+    ? (trial.versions.host === 'opencode'
+      ? 'OpenCode run output is retained, but this harness does not yet claim a parser-verified provider token aggregate; total remains null.'
+      : 'At least one benchmark seat did not emit a parseable Codex CLI token count; total remains null.')
+    : `Sum of CLI-reported token counts across ${seatResults.length} benchmark seat(s).`;
   writeFileSync(path.join(options.input, `${trial.trialId}.json`), JSON.stringify(trial, null, 2) + '\n');
 
   meta.state = startupError ? 'harness-failure' : 'executed-pending-review';
@@ -606,10 +676,13 @@ async function runTrial(options, trial, fixture, binary, binaryVersion) {
 
 export async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
-  const binary = codexExecutable();
-  const binaryVersion = options.dryRun ? null : commandVersion(binary);
-  if (!options.dryRun && !binaryVersion) throw new Error(`Cannot execute Codex CLI command from CODEX_BIN/default: ${binary}`);
   const { manifest, trials, fixtures } = readPilot(options.input, options.repoRoot);
+  const binary = hostExecutable(manifest.versions.host);
+  const binaryVersion = options.dryRun ? null : commandVersion(binary);
+  if (!options.dryRun && !binaryVersion) {
+    const override = manifest.versions.host === 'opencode' ? 'OPENCODE_BIN' : 'CODEX_BIN';
+    throw new Error(`Cannot execute ${manifest.versions.host} CLI command from ${override}/default: ${binary}`);
+  }
   const selected = options.trialId ? manifest.trials.filter(row => row.trialId === options.trialId) : manifest.trials;
   if (options.trialId) assert.equal(selected.length, 1, `Unknown --trial ${options.trialId}`);
 
