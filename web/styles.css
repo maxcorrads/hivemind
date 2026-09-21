@@ -415,6 +415,18 @@ html.dark .avatar.role-bot { color: var(--ink); }
   line-height: 1.4;
   outline: none;
 }
+.routing-mode {
+  flex: none;
+  align-self: center;
+  max-width: 8.5rem;
+  height: 2rem;
+  padding: 0 1.8rem 0 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+  font-size: 0.75rem;
+}
+html.dark .routing-mode { background: var(--desk); }
 .send {
   flex: none;
   height: 2rem;
