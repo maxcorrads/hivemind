@@ -50,6 +50,7 @@ export type AdaptiveRoutingSettings = {
   apiKeySet: boolean;
   apiKeyHint: string | null;
   model: string;
+  fallback: "single" | "orchestrated";
 };
 
 export type TelegramSettings = TelegramHealth & {
@@ -85,7 +86,7 @@ export type ChannelPayload = {
 
 export const api = {
   adaptiveRouting: () => req<AdaptiveRoutingSettings>("/api/ui/adaptive-routing"),
-  saveAdaptiveRouting: (body: { enabled: boolean; apiKey?: string | null }) =>
+  saveAdaptiveRouting: (body: { enabled: boolean; apiKey?: string | null; fallback: "single" | "orchestrated" }) =>
     req<AdaptiveRoutingSettings>("/api/ui/adaptive-routing", {
       method: "PUT",
       body: JSON.stringify(body),
