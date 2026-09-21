@@ -48,6 +48,8 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
+          cache: npm
+          cache-dependency-path: package-lock.json
 
       - name: Install locked dependencies
         run: npm ci
@@ -67,25 +69,19 @@ jobs:
           set -euo pipefail
           mkdir -p artifacts
           package_file="$(npm pack --silent --pack-destination artifacts | tail -n 1)"
-          echo "Packed artifacts/${package_file}"
-          tar -tzf "artifacts/${package_file}" | sort
+          echo "Packed artifacts/$package_file"
+          tar -tzf "artifacts/$package_file" | sort
           npm sbom --sbom-format cyclonedx > artifacts/SBOM.cdx.json
           node -e 'const fs=require("fs"); const sbom=JSON.parse(fs.readFileSync("artifacts/SBOM.cdx.json","utf8")); if (!sbom.bomFormat || !sbom.metadata) process.exit(1)'
-          bash scripts/smoke-package.sh "artifacts/${package_file}"
+          bash scripts/smoke-package.sh "artifacts/$package_file"
 
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
 
-  tests:
-    name: Tests / Node ${{ matrix.node-version }}
+  unit_node24:
+    name: Unit / Node 24
     runs-on: macos-latest
     timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        node-version:
-          - '22.13.0'
-          - '24'
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -93,7 +89,108 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Verify required shell
+        run: zsh --version
+
+      - name: Unit contracts with coverage
+        run: |
+          mkdir -p artifacts/coverage
+          node scripts/run-logged.mjs artifacts/unit-node24.log npm run test:unit -- \
+            --experimental-test-coverage \
+            --test-reporter=spec \
+            --test-reporter=lcov \
+            --test-reporter-destination=stdout \
+            --test-reporter-destination=artifacts/coverage/unit.info
+
+      - name: Upload unit coverage shard
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-node24-unit
+          path: artifacts/coverage/unit.info
+          retention-days: 1
+
+      - name: Retain redacted failing unit log
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tests-node-24-unit
+          path: artifacts/unit-node24.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+  integration_node24:
+    name: Integration / Node 24 / shard ${{ matrix.shard }}/4
+    runs-on: macos-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Verify required shell
+        run: zsh --version
+
+      - name: Integration shard with coverage
+        run: |
+          mkdir -p artifacts/coverage
+          node scripts/run-logged.mjs artifacts/integration-node24-${{ matrix.shard }}.log npm run test:integration -- \
+            --hivemind-shard=${{ matrix.shard }}/4 \
+            --experimental-test-coverage \
+            --test-reporter=spec \
+            --test-reporter=lcov \
+            --test-reporter-destination=stdout \
+            --test-reporter-destination=artifacts/coverage/integration-${{ matrix.shard }}.info
+
+      - name: Upload integration coverage shard
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-node24-integration-${{ matrix.shard }}
+          path: artifacts/coverage/integration-${{ matrix.shard }}.info
+          retention-days: 1
+
+      - name: Retain redacted failing integration log
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tests-node-24-integration-${{ matrix.shard }}
+          path: artifacts/integration-node24-${{ matrix.shard }}.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+  unit_node22:
+    name: Unit / Node 22.13.0
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.13.0'
+          cache: npm
+          cache-dependency-path: package-lock.json
 
       - name: Install locked dependencies
         run: npm ci
@@ -102,22 +199,85 @@ jobs:
         run: zsh --version
 
       - name: Unit contracts
-        id: unit
-        run: node scripts/run-logged.mjs artifacts/unit.log npm run test:unit
+        run: node scripts/run-logged.mjs artifacts/unit-node22.log npm run test:unit
 
-      - name: Integration contracts
-        if: ${{ !cancelled() && (steps.unit.outcome == 'success' || steps.unit.outcome == 'failure') }}
-        run: node scripts/run-logged.mjs artifacts/integration.log npm run test:integration
-
-      - name: Retain redacted failing suite logs
+      - name: Retain redacted failing unit log
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: tests-node-${{ matrix.node-version }}
-          path: |
-            artifacts/unit.log
-            artifacts/integration.log
+          name: tests-node-22-unit
+          path: artifacts/unit-node22.log
           retention-days: 7
+          if-no-files-found: ignore
+
+  integration_node22:
+    name: Integration / Node 22.13.0 / shard ${{ matrix.shard }}/4
+    runs-on: macos-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.13.0'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Verify required shell
+        run: zsh --version
+
+      - name: Integration shard
+        run: |
+          node scripts/run-logged.mjs artifacts/integration-node22-${{ matrix.shard }}.log npm run test:integration -- \
+            --hivemind-shard=${{ matrix.shard }}/4
+
+      - name: Retain redacted failing integration log
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tests-node-22-integration-${{ matrix.shard }}
+          path: artifacts/integration-node22-${{ matrix.shard }}.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+  tests_node24:
+    name: Tests / Node 24
+    needs: [unit_node24, integration_node24]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every Node 24 test shard
+        env:
+          UNIT_RESULT: ${{ needs.unit_node24.result }}
+          INTEGRATION_RESULT: ${{ needs.integration_node24.result }}
+        run: |
+          test "$UNIT_RESULT" = success
+          test "$INTEGRATION_RESULT" = success
+
+  tests_node22:
+    name: Tests / Node 22.13.0
+    needs: [unit_node22, integration_node22]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every Node 22.13.0 test shard
+        env:
+          UNIT_RESULT: ${{ needs.unit_node22.result }}
+          INTEGRATION_RESULT: ${{ needs.integration_node22.result }}
+        run: |
+          test "$UNIT_RESULT" = success
+          test "$INTEGRATION_RESULT" = success
 
   browser:
     name: Browser / Chromium
@@ -131,11 +291,21 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
+          cache: npm
+          cache-dependency-path: package-lock.json
 
       - name: Install locked dependencies
         run: npm ci
 
-      - name: Install Chromium
+      - name: Restore Playwright browser cache
+        id: playwright-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/Library/Caches/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Install Chromium on cache miss
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps chromium
 
       - name: Run deterministic browser contracts
@@ -152,9 +322,19 @@ jobs:
 
   coverage:
     name: Coverage
-    runs-on: macos-latest
-    timeout-minutes: 15
+    needs: [unit_node24, integration_node24]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
+      - name: Require successful coverage producers
+        env:
+          UNIT_RESULT: ${{ needs.unit_node24.result }}
+          INTEGRATION_RESULT: ${{ needs.integration_node24.result }}
+        run: |
+          test "$UNIT_RESULT" = success
+          test "$INTEGRATION_RESULT" = success
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -163,19 +343,30 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Install locked dependencies
-        run: npm ci
+      - name: Download Node 24 coverage shards
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: coverage-node24-*
+          path: artifacts/coverage-inputs
+          merge-multiple: true
 
-      - name: Collect coverage
-        run: node scripts/run-logged.mjs artifacts/coverage.log npm run test:coverage
+      - name: Merge coverage and enforce unchanged thresholds
+        run: |
+          node scripts/merge-lcov.mjs \
+            --input=artifacts/coverage-inputs \
+            --output=artifacts/coverage/lcov.info \
+            --lines=80 \
+            --branches=75 \
+            --functions=75
 
-      - name: Upload coverage report
+      - name: Upload merged coverage report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage
-          path: artifacts/coverage.log
+          path: artifacts/coverage/lcov.info
           retention-days: 7
+          if-no-files-found: ignore
 
   dependency-review:
     name: Dependency review
