@@ -12,6 +12,15 @@ import { telegramDestinationForSeq, loadTelegramConfig, telegramConfigKey, publi
 import { parseProjectSlug } from "../shared/project.ts";
 import { launchContext, projectPlugins, saveProjectPlugin, setProjectPluginAvailability, pluginErrorMessage } from "./plugins.ts";
 import { BotIngressBudget, readLimitedJson, assertLocalHumanRequest, BOT_JSON_BYTES, PLUGIN_REQUEST_BYTES, CREDENTIAL_JSON_BYTES } from "./ingress.ts";
+import {
+  adaptiveDirective,
+  adaptiveRoutingPublic,
+  appendAdaptiveTelemetry,
+  evaluateAdaptiveRequest,
+  loadAdaptiveRouting,
+  saveAdaptiveRouting,
+  shouldRouteHumanMessage,
+} from "./adaptive-routing.ts";
 
 export type AppHooks = {
   telegramRunning?: () => boolean;
@@ -78,6 +87,17 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       if (error instanceof HiveError) throw error;
       throw new HiveError(400, pluginErrorMessage(error));
     }
+  });
+  ui.get("/adaptive-routing", (c) => {
+    hive.getAgent("human");
+    return c.json(adaptiveRoutingPublic(hive.home));
+  });
+  ui.put("/adaptive-routing", async (c) => {
+    hive.getAgent("human");
+    return c.json(saveAdaptiveRouting(
+      hive.home,
+      await readLimitedJson(c.req.raw, CREDENTIAL_JSON_BYTES) as { enabled?: boolean; apiKey?: string | null },
+    ));
   });
   ui.get("/projects/:project/agents/:id/credential", (c) => c.json(hive.agentCredential(hive.getAgent("human"), c.req.param("project"), c.req.param("id"))));
   ui.post("/projects/:project/agents/:id/credential", async (c) => c.json(hive.changeAgentCredential(hive.getAgent("human"), c.req.param("project"), c.req.param("id"), await readLimitedJson(c.req.raw, CREDENTIAL_JSON_BYTES))));
@@ -289,18 +309,42 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   ui.post("/channels/:id/messages", async (c) => {
     const human = hive.getAgent("human");
     const body = await requestJson(c.req.raw);
-    const message = hive.postMessage(human, {
-      channel: c.req.param("id"),
-      body: String(body.body ?? ""),
+    const channel = hive.getChannel(c.req.param("id"));
+    const originalBody = String(body.body ?? "");
+    const threadId = body.threadId ?? null;
+    const messageInput = {
+      channel: channel.id,
+      body: originalBody,
       requestId: body.requestId,
-      threadId: body.threadId ?? null,
+      threadId,
       eventType: body.eventType,
       traceId: body.traceId,
       causeMessageId: body.causeMessageId,
       recipients: body.recipients,
       attachmentIds: Array.isArray(body.attachmentIds) ? body.attachmentIds.map(String) : undefined,
+    };
+    const config = loadAdaptiveRouting(hive.home);
+    if (!config?.enabled || hive.hasActiveSendRequest(human, channel.id, body.requestId)) {
+      return c.json({ message: hive.postMessage(human, messageInput), routing: null });
+    }
+    const brainIds = new Set(hive.listAgents(human)
+      .filter(agent => agent.role === "brain" && agent.project === channel.project)
+      .map(agent => agent.id));
+    if (!shouldRouteHumanMessage(channel, originalBody, threadId, brainIds)) {
+      return c.json({ message: hive.postMessage(human, messageInput), routing: null });
+    }
+    const project = hive.getProjectBySlug(channel.project);
+    const routing = await evaluateAdaptiveRequest(originalBody, config, {
+      project: { slug: project.slug, name: project.name },
     });
-    return c.json({ message });
+    const delivered = hive.postAdaptiveRequest(
+      human,
+      messageInput,
+      adaptiveDirective(routing),
+      `adaptive-${routing.routeId}`,
+    );
+    appendAdaptiveTelemetry(hive.home, routing, originalBody, { id: project.id, slug: project.slug });
+    return c.json({ message: delivered.message, routing, routingMessage: delivered.routingMessage });
   });
   ui.post("/files", async (c) => {
     const human = hive.getAgent("human");

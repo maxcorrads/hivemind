@@ -1368,6 +1368,43 @@ export class Hive {
     });
   }
 
+  hasActiveSendRequest(actor: Agent, channelRef: string, requestId: string | undefined): boolean {
+    if (!requestId) return false;
+    const channel = this.getChannel(channelRef, actor.projectId);
+    const row = this.db.prepare(`SELECT 1 AS found FROM send_requests
+      WHERE actor_id=? AND project_id=? AND request_id=? AND expires_at>?`)
+      .get(actor.id, channel.projectId, requestId, Date.now()) as { found: number } | undefined;
+    return Boolean(row?.found);
+  }
+
+  postAdaptiveRequest(
+    actor: Agent,
+    input: {
+      channel: string;
+      body: string;
+      requestId?: string;
+      threadId?: string | null;
+      eventType?: Message["eventType"];
+      traceId?: string;
+      causeMessageId?: string;
+      attachmentIds?: string[];
+      recipients?: string[];
+    },
+    directive: string,
+    directiveRequestId: string,
+  ): { message: Message; routingMessage: Message } {
+    return this.transaction(() => {
+      const routingMessage = this.postMessage(actor, {
+        channel: input.channel,
+        body: directive,
+        requestId: directiveRequestId,
+        eventType: "assignment",
+      });
+      const message = this.postMessage(actor, input);
+      return { message, routingMessage };
+    });
+  }
+
   fromTelegram(messageId: string): boolean {
     return this.telegramOrigin.has(messageId) || this.timeline.source(messageId) === 'telegram';
   }
