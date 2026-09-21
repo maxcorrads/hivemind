@@ -552,8 +552,8 @@ async function runTrial(options, trial, fixture, binary, binaryVersion) {
 export async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   const binary = codexExecutable();
-  const binaryVersion = options.dryRun ? commandVersion(binary) : commandVersion(binary);
-  if (!binaryVersion) throw new Error(`Cannot execute Codex CLI command from CODEX_BIN/default: ${binary}`);
+  const binaryVersion = options.dryRun ? null : commandVersion(binary);
+  if (!options.dryRun && !binaryVersion) throw new Error(`Cannot execute Codex CLI command from CODEX_BIN/default: ${binary}`);
   const { manifest, trials, fixtures } = readPilot(options.input, options.repoRoot);
   const selected = options.trialId ? manifest.trials.filter(row => row.trialId === options.trialId) : manifest.trials;
   if (options.trialId) assert.equal(selected.length, 1, `Unknown --trial ${options.trialId}`);
