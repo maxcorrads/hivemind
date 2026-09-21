@@ -115,6 +115,7 @@ test("Telegram Human replies in a brain DM use active Jev routing and keep recei
   const dm = hive.openDm(human, brain.name);
   const cfg = { botToken: "fixture", botId: 77, allowUserIds: [1], groups: { chapter: -1001 } };
   const botKey = telegramConfigKey(cfg);
+  const bridge = new TelegramBridge(hive, cfg); // constructor upgrades legacy routing tables first
   hive.db.prepare("INSERT INTO telegram_topics(channel_id,telegram_thread_id,telegram_chat_id,bot_key) VALUES(?,?,?,?)")
     .run(dm.id, 22, -1001, botKey);
   saveAdaptiveRouting(dir, { enabled: true, apiKey: "typesafe-fixture" });
@@ -150,7 +151,6 @@ test("Telegram Human replies in a brain DM use active Jev routing and keep recei
     }
     return Response.json({ ok: true, result: { message_id: 999 } });
   });
-  const bridge = new TelegramBridge(hive, cfg);
   try {
     bridge.start();
     await until(() => jevCalls === 1 && (hive.db.prepare(
