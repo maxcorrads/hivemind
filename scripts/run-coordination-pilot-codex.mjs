@@ -254,10 +254,27 @@ export function humanRoomInstructionBody(trial) {
   ].join(' ');
 }
 
+export async function bootstrapBenchmarkHumanSession(base) {
+  const response = await fetch(`${base}/api/ui/session`, {
+    method: 'POST',
+    headers: { origin: base, 'content-type': 'application/json' },
+    signal: AbortSignal.timeout(3_000),
+  });
+  if (!response.ok) throw new Error(`Cannot bootstrap benchmark Human session: HTTP ${response.status}`);
+  const cookie = response.headers.get('set-cookie')?.split(';', 1)[0]?.trim();
+  assert.ok(cookie, 'benchmark Human session did not return a cookie');
+  return cookie;
+}
+
 export async function seedHumanRoomInstruction(trial) {
   assert.equal(trial.trial.workflow, 'brain_multi_room');
   const base = `http://127.0.0.1:${BENCHMARK_PORT}`;
-  const snapshotResponse = await fetch(`${base}/api/ui/snapshot`, { signal: AbortSignal.timeout(3_000) });
+  const cookie = await bootstrapBenchmarkHumanSession(base);
+  const humanHeaders = { origin: base, cookie, 'x-hivemind-ui': '1' };
+  const snapshotResponse = await fetch(`${base}/api/ui/snapshot`, {
+    headers: humanHeaders,
+    signal: AbortSignal.timeout(3_000),
+  });
   if (!snapshotResponse.ok) throw new Error(`Cannot read benchmark Human snapshot: HTTP ${snapshotResponse.status}`);
   const snapshot = await snapshotResponse.json();
   const project = snapshot.projects?.find(value => value.slug === 'chapter');
@@ -267,7 +284,7 @@ export async function seedHumanRoomInstruction(trial) {
   const body = humanRoomInstructionBody(trial);
   const response = await fetch(`${base}/api/ui/channels/${encodeURIComponent(channel.id)}/messages`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { ...humanHeaders, 'content-type': 'application/json' },
     body: JSON.stringify({ requestId: `benchmark-authority-${trial.trialId}`, body }),
     signal: AbortSignal.timeout(3_000),
   });
