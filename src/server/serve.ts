@@ -41,10 +41,7 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
     }
     if (!humanAuth.handleHttp(req, res)) return;
     const url = req.url ?? "/";
-    if (url.startsWith("/api") || url.startsWith("/ws")) {
-      listener(req, res);
-      return;
-    }
+    if (url.startsWith("/api") || url.startsWith("/ws")) { listener(req, res); return; }
     if (serveWeb(res, url)) return;
     listener(req, res);
   });
@@ -65,7 +62,7 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
   const clients = new Set<WebSocket>();
   const responsive = new WeakSet<WebSocket>();
   const stream = createRealtimeStream(randomUUID());
-  wss.on("connection", (ws) => {
+  wss.on("connection", ws => {
     if (closing) { ws.terminate(); return; }
     clients.add(ws);
     responsive.add(ws);
@@ -109,7 +106,6 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
   server.headersTimeout = REQUEST_HEADER_MS;
   server.maxHeadersCount = 100;
   server.timeout = 0;
-
   const sweep = setInterval(() => hive.sweepPresence(), 15_000);
   sweep.unref();
   const heartbeat = setInterval(() => heartbeatClients(clients, responsive), WS_HEARTBEAT_MS);
@@ -127,7 +123,6 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
   let shutdownTask: Promise<void> | null = null;
   const shutdown = () => {
     if (shutdownTask) return shutdownTask;
-    // Fence admission synchronously, before cancellation or any drain await.
     closing = true;
     const closeHttp = () => new Promise<void>((resolve, reject) => {
       server.close(error => {
@@ -155,19 +150,19 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
     for (const ws of clients) ws.close(1001, "server shutdown");
     const wsClosed = new Promise<void>(resolve => wss.close(() => resolve()));
     const bridgeStopped = telegram.stop();
+    // An injected Hive belongs to its caller and may be reused by another server.
+    // An owned Hive must cancel and drain classifier/capacity work before closing SQLite.
+    const routingStopped = opts.hive ? Promise.resolve() : hive.adaptiveTopology.stop();
     const grace = Math.min(30_000, Math.max(50, opts.shutdownGraceMs ?? 5_000));
     let timer: ReturnType<typeof setTimeout>;
     const deadline = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => {
         for (const ws of clients) ws.terminate();
         for (const socket of sockets) socket.destroy();
-        // Do not close the database under a bridge that has not drained.
         reject(new Error("Shutdown drain deadline exceeded; connections terminated"));
       }, grace);
     });
-    // Even if the grace deadline wins, close an owned database when its users eventually finish.
-    const drained = Promise.allSettled([bridgeStopped, httpClosed, wsClosed]).then(results => {
-      // A completed drain may report a persistence error; its users are still finished.
+    const drained = Promise.allSettled([bridgeStopped, routingStopped, httpClosed, wsClosed]).then(results => {
       if (!opts.hive) hive.db.close();
       const failed = results.find(result => result.status === "rejected");
       if (failed?.status === "rejected") throw failed.reason;
@@ -186,18 +181,12 @@ function serveWeb(res: import("node:http").ServerResponse, url: string): boolean
   const file = path.normalize(path.join(webRoot, rel));
   if (file !== webRoot && !file.startsWith(webRoot + path.sep)) return false;
   let target = file;
-  if (!existsSync(target) || statSync(target).isDirectory()) {
-    target = path.join(webRoot, "index.html");
-  }
+  if (!existsSync(target) || statSync(target).isDirectory()) target = path.join(webRoot, "index.html");
   if (!existsSync(target)) return false;
   const ext = path.extname(target);
   const types: Record<string, string> = {
-    ".html": "text/html; charset=utf-8",
-    ".js": "text/javascript; charset=utf-8",
-    ".css": "text/css; charset=utf-8",
-    ".svg": "image/svg+xml",
-    ".json": "application/json",
-    ".woff2": "font/woff2",
+    ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".json": "application/json", ".woff2": "font/woff2",
   };
   res.writeHead(200, { "Content-Type": types[ext] ?? "application/octet-stream" });
   res.end(readFileSync(target));
