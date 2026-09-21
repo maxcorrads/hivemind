@@ -548,9 +548,32 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   agent.post("/channels/:id/messages", async (c) => {
     const me = c.get("me");
     const body = await requestJson(c.req.raw);
+    const channel = hive.getChannel(c.req.param("id"), me.projectId);
+    const summary = String(body.body ?? "");
+    let adaptiveRouting = null;
+    if (me.role === "brain") {
+      const dmWorker = channel.type === "dm"
+        ? channel.memberIds.map(id => hive.getAgent(id)).find(agent => agent.role === "worker")
+        : undefined;
+      const explicitWorkerRecipients = Array.isArray(body.recipients) && body.recipients.some((name: unknown) => {
+        const agent = typeof name === "string" ? hive.getAgentByName(name) : null;
+        return agent?.role === "worker";
+      });
+      const delegation = Boolean(dmWorker || explicitWorkerRecipients || body.eventType === "assignment");
+      adaptiveRouting = await hive.adaptiveTopology.beforeBrainAction(me, {
+        kind: delegation ? "delegation_attempt" : "brain_message",
+        actorId: me.id,
+        actorRole: "brain",
+        channelId: channel.id,
+        eventType: body.eventType,
+        summary,
+        workerName: dmWorker?.name,
+        usesRoom: false,
+      });
+    }
     const message = hive.postMessage(me, {
-      channel: c.req.param("id"),
-      body: String(body.body ?? ""),
+      channel: channel.id,
+      body: summary,
       requestId: body.requestId,
       threadId: body.threadId ?? null,
       eventType: body.eventType,
@@ -559,7 +582,15 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       recipients: body.recipients,
       attachmentIds: Array.isArray(body.attachmentIds) ? body.attachmentIds.map(String) : undefined,
     });
-    return c.json({ ok: true, seq: message.seq, id: message.id });
+    if (me.role === "worker") adaptiveRouting = await hive.adaptiveTopology.afterAgentAction(me, {
+      kind: "worker_message",
+      actorId: me.id,
+      actorRole: "worker",
+      channelId: channel.id,
+      eventType: body.eventType,
+      summary,
+    });
+    return c.json({ ok: true, seq: message.seq, id: message.id, adaptiveRouting });
   });
   agent.get("/messages/:seq", (c) => {
     const me = c.get("me");
@@ -570,8 +601,28 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     return c.json(hive.expandDigest(c.get("me"), body));
   });
   agent.post('/tasks', async c => {
+    const me = c.get('me');
     const body = await requestJson(c.req.raw);
-    return c.json(hive.tasks.assign(c.get('me'), body));
+    await hive.adaptiveTopology.beforeBrainAction(me, {
+      kind: "delegation_attempt",
+      actorId: me.id,
+      actorRole: "brain",
+      channelId: typeof body.channel === "string" ? body.channel : undefined,
+      summary: body.contract?.objective,
+      workerName: typeof body.worker === "string" ? body.worker : undefined,
+      usesRoom: Boolean(body.room),
+    });
+    const result = hive.tasks.assign(me, body);
+    const adaptiveRouting = await hive.adaptiveTopology.afterAgentAction(me, {
+      kind: "task_event",
+      actorId: me.id,
+      actorRole: "brain",
+      channelId: result.task.channelId,
+      taskId: result.task.id,
+      eventType: "assignment",
+      summary: result.task.contract.objective,
+    });
+    return c.json({ ...result, adaptiveRouting });
   });
   agent.post('/decisions', async c => c.json(hive.decisions.create(c.get('me'), await requestJson(c.req.raw))));
   agent.get('/decisions/:id', c => c.json({ decision: hive.decisions.get(c.get('me'), c.req.param('id')) }));
@@ -579,8 +630,37 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   agent.post('/decisions/:id/events', async c => c.json(hive.decisions.event(c.get('me'), c.req.param('id'), await requestJson(c.req.raw))));
   agent.get('/channels/:id/room', c => c.json(hive.rooms.view(c.get('me'), c.req.param('id'), c.req.query('beforeTask'))));
   agent.get('/channels/:id/room/history', c => c.json({ history: hive.rooms.history(c.get('me'), c.req.param('id'), Number(c.req.query('before') ?? Number.MAX_SAFE_INTEGER)) }));
-  agent.post('/channels/:id/room', async c => c.json(hive.rooms.event(c.get('me'), c.req.param('id'),
-    await requestJson(c.req.raw))));
+  agent.post('/channels/:id/room', async c => {
+    const me = c.get('me');
+    const body = await requestJson(c.req.raw);
+    let adaptiveRouting = null;
+    if (me.role === "brain") {
+      adaptiveRouting = await hive.adaptiveTopology.beforeBrainAction(me, {
+        kind: body.action?.type === "configure" || body.action?.type === "staff" ? "delegation_attempt" : "room_event",
+        actorId: me.id,
+        actorRole: "brain",
+        channelId: c.req.param('id'),
+        summary: `room ${String(body.action?.type ?? "event")}`,
+        usesRoom: body.action?.type === "configure" || body.action?.type === "staff" ? true : undefined,
+      });
+    }
+    const result = hive.rooms.event(me, c.req.param('id'), body);
+    if (me.role === "worker") adaptiveRouting = await hive.adaptiveTopology.afterAgentAction(me, {
+      kind: "room_event",
+      actorId: me.id,
+      actorRole: "worker",
+      channelId: c.req.param('id'),
+      summary: `room ${String(body.action?.type ?? "event")}`,
+    });
+    else adaptiveRouting = await hive.adaptiveTopology.afterAgentAction(me, {
+      kind: "room_event",
+      actorId: me.id,
+      actorRole: "brain",
+      channelId: c.req.param('id'),
+      summary: `room ${String(body.action?.type ?? "event")}`,
+    });
+    return c.json({ ...result, adaptiveRouting });
+  });
   agent.get('/workers/:id/capabilities', c => c.json({ capability: hive.routing.get(c.get('me'), c.req.param('id')) }));
   agent.post('/capabilities', async c => c.json({ capability: hive.routing.set(c.get('me'), await requestJson(c.req.raw)) }));
   agent.post('/tasks/:id/routing', async c => c.json(hive.routing.suggest(c.get('me'), c.req.param('id'), await requestJson(c.req.raw))));
@@ -593,8 +673,36 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   agent.get('/tasks/:id/timeline/export', c => c.json({ fixture: hive.timeline.exportTask(c.get('me'), c.req.param('id')) }));
   agent.get('/tasks/:id', c => c.json({ task: hive.tasks.get(c.get('me'), c.req.param('id')) }));
   agent.post('/tasks/:id/events', async c => {
+    const me = c.get('me');
+    const taskId = c.req.param('id');
     const body = await requestJson(c.req.raw);
-    return c.json(hive.tasks.event(c.get('me'), c.req.param('id'), body));
+    const before = hive.tasks.get(me, taskId);
+    let adaptiveRouting = null;
+    if (me.role === "brain") {
+      const revise = body.action?.type === "revise";
+      adaptiveRouting = await hive.adaptiveTopology.beforeBrainAction(me, {
+        kind: revise ? "delegation_attempt" : "task_event",
+        actorId: me.id,
+        actorRole: "brain",
+        channelId: before.channelId,
+        taskId,
+        eventType: body.action?.type,
+        summary: revise ? body.action?.contract?.objective : String(body.action?.type ?? "task event"),
+        workerName: revise && typeof body.action?.worker === "string" ? body.action.worker : undefined,
+        usesRoom: revise ? Boolean(before.room) : undefined,
+      });
+    }
+    const result = hive.tasks.event(me, taskId, body);
+    adaptiveRouting = await hive.adaptiveTopology.afterAgentAction(me, {
+      kind: "task_event",
+      actorId: me.id,
+      actorRole: me.role as "brain" | "worker",
+      channelId: result.task.channelId,
+      taskId,
+      eventType: body.action?.type,
+      summary: String(body.action?.type ?? "task event"),
+    });
+    return c.json({ ...result, adaptiveRouting });
   });
   agent.post("/files", async (c) => {
     const me = c.get("me");
