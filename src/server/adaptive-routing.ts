@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  chmodSync,
   closeSync,
   existsSync,
   fsyncSync,
@@ -432,6 +433,7 @@ export function appendAdaptiveTelemetry(
   mkdirSync(home, { recursive: true, mode: 0o700 });
   const file = decisionsPath(home);
   const fd = openSync(file, "a", 0o600);
+  chmodSync(file, 0o600);
   try {
     writeFileSync(fd, JSON.stringify(telemetryRecord(decision, body, project)) + "\n");
   } finally {
