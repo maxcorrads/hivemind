@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { loadFixtures } from './benchmark-coordination.mjs';
-import { REAL_AGENT_PROMPT_VERSION, REAL_AGENT_TASK_VERSION, main, prepareTrials, summarizeTrials, trialTemplate, validateRealTrial } from './benchmark-coordination-real.mjs';
+import { REAL_AGENT_PROMPT_VERSION, REAL_AGENT_TASK_VERSION, loadPilotPreset, main, prepareTrials, selectFixtures, summarizeTrials, trialTemplate, validateRealTrial } from './benchmark-coordination-real.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixtures = loadFixtures(root);
@@ -92,5 +92,39 @@ test('CLI prepare, validate and summarize round-trip version-pinned trial templa
     const validated = main(['validate', '--input', out]); assert.equal(validated.length, files.length);
     const summary = main(['summarize', '--input', out, '--seed', '29']);
     assert.equal(summary.completeTrials, 1); assert.equal(summary.incompleteTrials, files.length - 1);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+
+test('pilot-v1 is a versioned 24-trial balanced subset', () => {
+  const preset = loadPilotPreset(root, 'pilot-v1');
+  assert.deepEqual(preset.fixtures, ['independent-implementation', 'shared-interface-coupled', 'noisy-room']);
+  assert.equal(preset.repeat, 2);
+  assert.equal(preset.seed, 29);
+  assert.equal(preset.expectedTrials, 24);
+  const selected = selectFixtures(fixtures, preset.fixtures);
+  const trials = prepareTrials(selected, { ...config, repeat: preset.repeat, seed: preset.seed });
+  assert.equal(trials.length, 24);
+  for (const fixtureId of preset.fixtures) for (let repeatIndex = 0; repeatIndex < 2; repeatIndex++) {
+    const rows = trials.filter(trial => trial.fixture.id === fixtureId && trial.trial.repeatIndex === repeatIndex);
+    assert.deepEqual(new Set(rows.map(trial => trial.trial.workflow)),
+      new Set(['single_worker', 'brain_one_worker', 'brain_multi_dm', 'brain_multi_room']));
+  }
+});
+
+test('CLI preset prepares exactly pilot-v1 and pins cohort identity in the manifest', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-real-pilot-'));
+  try {
+    const out = path.join(dir, 'pilot');
+    const manifest = main(['prepare', '--root', root, '--output', out, '--preset', 'pilot-v1',
+      '--provider', 'fixture-provider', '--model', 'fixture-model', '--host', 'fixture-host',
+      '--configuration', 'reasoning=medium', '--hivemind-revision', 'pilotsha']);
+    const trialFiles = readdirSync(out).filter(name => name.startsWith('trial-'));
+    assert.equal(trialFiles.length, 24);
+    assert.equal(manifest.preset.id, 'pilot-v1');
+    assert.equal(manifest.versions.hivemindRevision, 'pilotsha');
+    assert.equal(manifest.versions.model, 'fixture-model');
+    assert.deepEqual(new Set(manifest.trials.map(trial => trial.fixtureId)),
+      new Set(['independent-implementation', 'shared-interface-coupled', 'noisy-room']));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

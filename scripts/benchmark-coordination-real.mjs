@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +9,7 @@ import { DEFAULT_SEED, WORKFLOWS, loadFixtures, seededShuffle } from './benchmar
 export const REAL_AGENT_PROTOCOL_VERSION = 1;
 export const REAL_AGENT_PROMPT_VERSION = 'coordination-real-v1';
 export const REAL_AGENT_TASK_VERSION = 'coordination-task-v1';
+export const PILOT_PRESET_VERSION = 1;
 
 const metrics = [
   ['quality', 'defects'], ['quality', 'reworkEvents'], ['quality', 'duplicateWork'],
@@ -100,6 +101,32 @@ export function validateRealTrial(value, { requireComplete = false } = {}) {
   return value;
 }
 
+export function loadPilotPreset(root, id) {
+  assert.match(id, /^[a-z0-9-]+$/, 'invalid preset id');
+  const file = path.join(root, 'benchmarks', 'coordination', 'v1', 'pilots', `${id}.json`);
+  assert.ok(existsSync(file), `unknown pilot preset: ${id}`);
+  const preset = JSON.parse(readFileSync(file, 'utf8'));
+  assert.equal(preset.schemaVersion, PILOT_PRESET_VERSION, 'unsupported pilot preset schemaVersion');
+  assert.equal(preset.id, id, 'pilot preset id mismatch');
+  assert.ok(Number.isInteger(preset.seed) && preset.seed >= 0, 'pilot seed');
+  assert.ok(Number.isInteger(preset.repeat) && preset.repeat >= 1 && preset.repeat <= 20, 'pilot repeat');
+  assert.ok(Array.isArray(preset.fixtures) && preset.fixtures.length > 0, 'pilot fixtures');
+  assert.deepEqual(new Set(preset.workflows), new Set(WORKFLOWS), 'pilot must compare all workflow shapes');
+  assert.equal(preset.expectedTrials, preset.fixtures.length * WORKFLOWS.length * preset.repeat, 'pilot expectedTrials mismatch');
+  return preset;
+}
+
+export function selectFixtures(fixtures, ids) {
+  const byId = new Map(fixtures.map(fixture => [fixture.id, fixture]));
+  const selected = ids.map(id => {
+    const fixture = byId.get(id);
+    assert.ok(fixture, `pilot references unknown fixture: ${id}`);
+    return fixture;
+  });
+  assert.equal(new Set(selected.map(fixture => fixture.id)).size, selected.length, 'pilot fixtures must be unique');
+  return selected;
+}
+
 export function prepareTrials(fixtures, config) {
   const trials = [];
   for (let repeatIndex = 0; repeatIndex < config.repeat; repeatIndex++) {
@@ -156,7 +183,8 @@ export function summarizeTrials(trials, seed = DEFAULT_SEED) {
 
 function args(argv) {
   const command = argv[0]; const options = { command, root: process.cwd(), input: null, output: null, provider: null, model: null, host: null,
-    repeat: 3, seed: DEFAULT_SEED, hivemindRevision: null, configuration: null, promptVersion: REAL_AGENT_PROMPT_VERSION, taskVersion: REAL_AGENT_TASK_VERSION };
+    repeat: 3, seed: DEFAULT_SEED, hivemindRevision: null, configuration: null, preset: null,
+    promptVersion: REAL_AGENT_PROMPT_VERSION, taskVersion: REAL_AGENT_TASK_VERSION };
   for (let i = 1; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--root') options.root = path.resolve(argv[++i]);
@@ -166,6 +194,7 @@ function args(argv) {
     else if (arg === '--model') options.model = argv[++i];
     else if (arg === '--host') options.host = argv[++i];
     else if (arg === '--configuration') options.configuration = argv[++i];
+    else if (arg === '--preset') options.preset = argv[++i];
     else if (arg === '--repeat') options.repeat = Number(argv[++i]);
     else if (arg === '--seed') options.seed = Number(argv[++i]);
     else if (arg === '--hivemind-revision') options.hivemindRevision = argv[++i];
@@ -184,11 +213,25 @@ export function main(argv = process.argv.slice(2)) {
   if (options.command === 'prepare') {
     assert.ok(options.output, '--output directory is required'); assert.ok(options.provider && options.model && options.host && options.configuration, '--provider, --model, --host and --configuration are required');
     assert.ok(Number.isInteger(options.repeat) && options.repeat >= 1 && options.repeat <= 20, '--repeat must be 1..20');
+    const preset = options.preset ? loadPilotPreset(options.root, options.preset) : null;
+    if (preset) {
+      options.seed = preset.seed;
+      options.repeat = preset.repeat;
+    }
     const config = { ...options, hivemindRevision: options.hivemindRevision ?? revision(options.root) };
     assert.notEqual(config.hivemindRevision, 'unknown', 'Unable to pin Hivemind revision; pass --hivemind-revision explicitly');
-    const trials = prepareTrials(loadFixtures(options.root), config); mkdirSync(options.output, { recursive: true });
+    const allFixtures = loadFixtures(options.root);
+    const selectedFixtures = preset ? selectFixtures(allFixtures, preset.fixtures) : allFixtures;
+    const trials = prepareTrials(selectedFixtures, config);
+    if (preset) assert.equal(trials.length, preset.expectedTrials, 'prepared pilot trial count mismatch');
+    mkdirSync(options.output, { recursive: true });
     for (const trial of trials) writeFileSync(path.join(options.output, `${trial.trialId}.json`), JSON.stringify(trial, null, 2) + '\n', { flag: 'wx' });
-    const manifest = { schemaVersion: 1, evidenceClass: 'real_agent_manifest', seed: options.seed, repeat: options.repeat, trials: trials.map(trial => ({ trialId: trial.trialId, blindId: trial.blindId, fixtureId: trial.fixture.id, workflow: trial.trial.workflow })) };
+    const manifest = { schemaVersion: 1, evidenceClass: 'real_agent_manifest',
+      ...(preset ? { preset: { id: preset.id, schemaVersion: preset.schemaVersion, purpose: preset.purpose } } : {}),
+      seed: options.seed, repeat: options.repeat,
+      versions: { hivemindRevision: config.hivemindRevision, provider: config.provider, model: config.model, host: config.host,
+        configuration: config.configuration, promptVersion: config.promptVersion, taskVersion: config.taskVersion },
+      trials: trials.map(trial => ({ trialId: trial.trialId, blindId: trial.blindId, fixtureId: trial.fixture.id, workflow: trial.trial.workflow })) };
     writeFileSync(path.join(options.output, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n', { flag: 'wx' });
     process.stdout.write(JSON.stringify({ output: options.output, trials: trials.length }) + '\n'); return manifest;
   }

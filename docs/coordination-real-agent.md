@@ -4,6 +4,34 @@ This is phase 2 of issue #29. Phase 1 defines deterministic fixtures and protoco
 
 The goal is to compare the same fixture under four coordination shapes: `single_worker`, `brain_one_worker`, `brain_multi_dm`, and `brain_multi_room`. Results stay multi-dimensional. There is deliberately no aggregate score and no automatic “winner”.
 
+## Pilot v1 — 24 trials
+
+Before spending a full 96 real-agent runs, use the checked-in `pilot-v1` preset:
+
+```sh
+node scripts/benchmark-coordination-real.mjs prepare \
+  --preset pilot-v1 \
+  --provider <provider> \
+  --model <exact-model-id> \
+  --host <host> \
+  --configuration <exact-host-model-configuration> \
+  --hivemind-revision <main-sha> \
+  --output /tmp/hivemind-pilot-v1
+```
+
+The preset is versioned at `benchmarks/coordination/v1/pilots/pilot-v1.json` and deliberately fixes:
+
+- seed **29**;
+- **2 repeats**;
+- `independent-implementation` — parallelizable baseline;
+- `shared-interface-coupled` — tightly coupled shared-interface work;
+- `noisy-room` — communication stress and direct #33 DM-vs-room evidence;
+- all four workflow shapes.
+
+That produces exactly **24 trials** (3 fixtures × 4 workflows × 2 repeats). Provider/model/host/configuration are still mandatory because they are part of trial identity; the preset never invents them.
+
+Treat this as a methodology pilot, not as sufficient evidence for a general productivity claim. Promote to the full 8-fixture × 4-workflow × 3-repeat = **96 trial** cohort only after the 24 runs reveal no systematic prompt/fixture/harness ambiguity and failed runs have been retained rather than rerun away.
+
 ## Prepare a balanced trial set
 
 ```sh
@@ -61,3 +89,28 @@ Use the same repository/worktree state, fixture, model configuration and provide
 Run enough repeats to expose variance. Three is a useful first pass, not a statistical guarantee. Preserve failed runs rather than rerunning them away; use a new repeat index for an explicit retry. Record provider outages or harness failures in review notes and distinguish them from task-quality failures.
 
 The #33 room decision should use matched `brain_multi_dm` vs `brain_multi_room` trials on the same fixtures/model/version cohort. Look at quality, rework, clarification/handoff behavior, wall time and provider usage separately. A room may reduce relay traffic while increasing context cost, or the reverse; the harness intentionally preserves that trade-off instead of collapsing it into one score.
+
+
+## Pilot execution checklist
+
+For `pilot-v1`, keep one exact provider/model/host/configuration cohort for all 24 trials. Use the generated manifest order rather than choosing an easier workflow first.
+
+For every completed run retain:
+
+1. timestamps/wall time;
+2. acceptance result;
+3. independent review defects;
+4. rework and duplicate-work counts;
+5. clarification, handoff and recovery counts;
+6. provider-reported tokens/cost only when actually available;
+7. whether review was genuinely blinded.
+
+After all 24 runs:
+
+```sh
+node scripts/benchmark-coordination-real.mjs validate --input /tmp/hivemind-pilot-v1
+node scripts/benchmark-coordination-real.mjs summarize --input /tmp/hivemind-pilot-v1 --seed 29 \
+  --output /tmp/hivemind-pilot-v1-summary.json
+```
+
+Review the three fixtures independently and keep dimensions separate. The pilot can expose methodological problems or large workflow differences, but it should not be converted into a single score or universal break-even threshold.

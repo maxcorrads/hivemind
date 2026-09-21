@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "id": "pilot-v1",
+  "purpose": "Methodology pilot before the full 8-fixture real-agent cohort: one parallelizable workload, one tightly coupled shared-interface workload, and one communication-stress workload that directly exercises DM versus room coordination.",
+  "seed": 29,
+  "repeat": 2,
+  "fixtures": [
+    "independent-implementation",
+    "shared-interface-coupled",
+    "noisy-room"
+  ],
+  "workflows": [
+    "single_worker",
+    "brain_one_worker",
+    "brain_multi_dm",
+    "brain_multi_room"
+  ],
+  "expectedTrials": 24,
+  "promotionChecks": [
+    "All 24 trial templates validate and retain the same pinned cohort configuration.",
+    "No workflow requires ad-hoc prompt edits or fixture reinterpretation after seeing results.",
+    "Failed task/model/provider runs are retained rather than silently rerun away.",
+    "Independent review can use blindId where the artifact does not reveal workflow structure.",
+    "Provider tokens/cost remain null when the host does not report them.",
+    "Observed variance and failure modes are reviewed before promoting to the full 96-trial cohort."
+  ],
+  "notes": [
+    "This pilot is not powered to establish a general productivity claim.",
+    "The noisy-room fixture is included specifically to stress the #33 brain_multi_dm versus brain_multi_room comparison.",
+    "Recovery, reviewer-disagreement and worktree-conflict scenarios remain for the full 8-fixture cohort after methodology validation."
+  ]
+}
