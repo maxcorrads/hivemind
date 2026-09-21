@@ -37,7 +37,7 @@ A free worker is online with fresh presence, has no unfinished task or held clai
 
 Structured task ownership is linked to the execution in the same transaction that creates/revises the task. A successful preflight is not a reservation: availability, destination, policy revision and worker budget are checked again inside task admission. Failed admission rolls back the task and its assignment message together.
 
-Free-form DM assignments are also tracked as commitments. The coordinating brain closes their threads when the delegated work has finished; an unclosed delegated thread is not treated as a free worker merely because it lacks a structured task record.
+Free-form DM assignments are also tracked as commitments. The coordinating brain closes their threads when the delegated work has finished; an unclosed delegated thread is not treated as a free worker merely because it lacks a structured task record. Sender-declared `progress` and `decision` labels cannot bypass admission when a brain contacts a new worker. Known active assignment threads can continue during a drain; new assignments are still blocked. Completed delegation threads cannot be reopened or reused to evade Single.
 
 The classifier is offered only feasible topology choices and bounded worker-count choices. A contradictory or out-of-range response is rejected, not silently rewritten into a different Jev plan. If availability changes during classification, Hivemind refreshes capacity and re-evaluates. Repeated races preserve the existing mode rather than oversubscribing workers.
 
@@ -112,11 +112,16 @@ A single initial applied-policy directive accompanies the original Human request
 
 The Human view currently returns the latest 100 retained events, with bounded storage of 500 events per channel. The current recommendation retains provider model, latency and input/output usage; unknown monetary cost is not invented.
 
+HTTP snapshots and websocket updates merge using a monotonically increasing channel revision, not arrival order. Navigation and reconnect fence earlier requests; a delayed lock response cannot edit another execution. Lock writes from the UI include the execution ID and revision they were based on. The monitoring indicator distinguishes **active**, **waiting for the next check**, **disabled**, **unavailable**, and **completed** rather than showing a stale green status after Jev is switched off.
+
+The brain or Human completes an execution by marking the original request thread done, after delegated work and claims have been reconciled. Closing/reopening the execution and the thread is one transaction. Closed executions are not continuously reclassified; one-request/task overrides expire, while conversation locks remain available for the next request. Replacing a legacy request while Jev is disabled does not resurrect an old execution on re-enable. Channel/project deletion removes routing state, locks and audit in the same database transaction. Routing-vote deduplication is bounded to 5,000 entries per live execution; committed operations retain their own independent retry ledgers.
+
+
 ## Tests and validation
 
 The tests use fake TypeSafe responses with real local SQLite, HTTP and UI boundaries. They do not spend a live provider key or establish production model quality.
 
-Focused coverage includes destination-aware hysteresis, direct jumps, the inclusive 0.90 threshold, retry identity, Human override precedence, provider failure/recovery, audit/context isolation, actual task admission/link atomicity, free-form commitments, capacity ownership and delayed Single transitions after accepted results.
+Focused coverage includes authenticated real websocket delivery, stale UI snapshots and reconnect, lifecycle/lock races, malformed and oversized provider replies, destination-aware hysteresis, direct jumps, the inclusive 0.90 threshold, retry identity, Human override precedence, provider failure/recovery, audit/context isolation, actual task admission/link atomicity, free-form commitments, capacity ownership and delayed Single transitions after accepted results.
 
 Run the repository's standard lint, typecheck, unit, integration, browser and coverage jobs before merge. A green fixture suite establishes the implementation contract, not calibrated routing quality on real workloads.
 

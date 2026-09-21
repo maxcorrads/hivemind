@@ -75,7 +75,9 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   });
   ui.put("/adaptive-routing", async c => {
     hive.getAgent("human");
-    return c.json(saveAdaptiveRouting(hive.home, await readLimitedJson(c.req.raw, CREDENTIAL_JSON_BYTES)));
+    const saved = saveAdaptiveRouting(hive.home, await readLimitedJson(c.req.raw, CREDENTIAL_JSON_BYTES));
+    hive.adaptiveTopology.settingsChanged();
+    return c.json(saved);
   });
   ui.get("/channels/:id/adaptive-routing", c => c.json(hive.adaptiveTopology.view(hive.getAgent("human"), c.req.param("id"))));
   ui.put("/channels/:id/adaptive-routing/lock", async c => c.json(hive.adaptiveTopology.setLock(hive.getAgent("human"), c.req.param("id"), await readLimitedJson(c.req.raw, CREDENTIAL_JSON_BYTES))));

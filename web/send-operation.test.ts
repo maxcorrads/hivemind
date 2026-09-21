@@ -61,8 +61,8 @@ test("routing mode participates in uncertain send identity", async () => {
     });
   await assert.rejects(run("brain-dm", "same request", null, [], "single"), /uncertain/);
   await assert.rejects(run("brain-dm", "same request", null, [], "single"), /uncertain/);
-  await assert.rejects(run("brain-dm", "same request", null, [], "orchestrated"), /uncertain/);
+  await assert.rejects(run("brain-dm", "same request", null, [], "orchestrated_auto"), /uncertain/);
   assert.equal(keys[0], keys[1]);
   assert.notEqual(keys[1], keys[2]);
-  assert.deepEqual(modes, ["single", "single", "orchestrated"]);
+  assert.deepEqual(modes, ["single", "single", "orchestrated_auto"]);
 });

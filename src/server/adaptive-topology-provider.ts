@@ -1,4 +1,3 @@
-import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { TYPESAFE_ENDPOINT, TYPESAFE_MODEL } from './adaptive-routing.ts';
 import type { AdaptiveTopology, AdaptiveTopologyDecision, AdaptiveWorkerCapacity, AdaptiveLockScope } from '../shared/adaptive-topology.ts';
@@ -6,6 +5,9 @@ import { validTopologyTarget } from '../shared/adaptive-topology-policy.ts';
 
 export const ADAPTIVE_TOPOLOGY_CONTRACT_VERSION = 'adaptive-routing-v2' as const;
 const MAX_RESPONSE_BYTES = 128 * 1024;
+function ensure(value: unknown, message = 'Invalid Jev response'): asserts value {
+  if (!value) throw new Error(message);
+}
 // TypeSafe Choice accepts at most 255 options, including the zero-worker option.
 export const MAX_CLASSIFIER_WORKERS = 254;
 
@@ -36,27 +38,27 @@ function probability(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
 }
 function answer(raw: unknown, type: 'choice' | 'score', options: string[]): Answer {
-  assert.ok(raw && typeof raw === 'object' && !Array.isArray(raw));
+  ensure(raw && typeof raw === 'object' && !Array.isArray(raw));
   const value = raw as Record<string, unknown>;
-  assert.equal(value.type, type);
-  assert.ok(probability(value.confidence));
-  assert.ok(value.probabilities && typeof value.probabilities === 'object' && !Array.isArray(value.probabilities));
+  ensure(value.type === type);
+  ensure(probability(value.confidence));
+  ensure(value.probabilities && typeof value.probabilities === 'object' && !Array.isArray(value.probabilities));
   const entries = Object.entries(value.probabilities);
-  assert.deepEqual(entries.map(([key]) => key).sort(), [...options].sort());
-  assert.ok(entries.every(([, p]) => probability(p)));
+  ensure(entries.length === options.length && entries.every(([key]) => options.includes(key)));
+  ensure(entries.every(([, p]) => probability(p)));
   const distribution = Object.fromEntries(entries) as Record<string, number>;
-  assert.ok(Math.abs(Object.values(distribution).reduce((sum, p) => sum + p, 0) - 1) <= 0.02);
+  ensure(Math.abs(Object.values(distribution).reduce((sum, p) => sum + p, 0) - 1) <= 0.02);
   if (type === 'choice') {
-    assert.ok(typeof value.choice === 'string' && options.includes(value.choice));
-    assert.ok(distribution[value.choice]! + 1e-9 >= Math.max(...Object.values(distribution)));
-  } else assert.ok(typeof value.score === 'number' && Number.isFinite(value.score) && value.score >= 0 && value.score <= 2);
+    ensure(typeof value.choice === 'string' && options.includes(value.choice));
+    ensure(distribution[value.choice]! + 1e-9 >= Math.max(...Object.values(distribution)));
+  } else ensure(typeof value.score === 'number' && Number.isFinite(value.score) && value.score >= 0 && value.score <= 2);
   return { type, confidence: value.confidence, probabilities: distribution,
     ...(type === 'choice' ? { choice: value.choice as string } : { score: value.score as number }) };
 }
 
 export function topologyQuestions(snapshot: TopologyEvaluationSnapshot) {
   const usable = Math.min(MAX_CLASSIFIER_WORKERS, snapshot.capacity.workers.usableForExecution);
-  assert.ok(Number.isSafeInteger(usable) && usable >= 0);
+  ensure(Number.isSafeInteger(usable) && usable >= 0);
   const topologies: Record<string, string> = {};
   if (!snapshot.execution.orchestratedOnly || usable === 0)
     topologies.single = 'The brain alone can safely complete the remaining work. Zero workers.';
@@ -93,7 +95,7 @@ export function topologyQuestions(snapshot: TopologyEvaluationSnapshot) {
 }
 
 async function responseJson(response: Response): Promise<unknown> {
-  assert.ok(response.body, 'Provider body missing');
+  ensure(response.body, 'Provider body missing');
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let bytes = 0;
@@ -102,7 +104,7 @@ async function responseJson(response: Response): Promise<unknown> {
       const part = await reader.read();
       if (part.done) break;
       bytes += part.value.byteLength;
-      assert.ok(bytes <= MAX_RESPONSE_BYTES, 'Provider response too large');
+      ensure(bytes <= MAX_RESPONSE_BYTES, 'Provider response too large');
       chunks.push(part.value);
     }
     return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
@@ -122,10 +124,10 @@ export async function evaluateAdaptiveTopology(
   const started = Date.now();
   try {
     const timeout = options.timeoutMs ?? 2_000;
-    assert.ok(Number.isSafeInteger(timeout) && timeout >= 1 && timeout <= 10_000);
+    ensure(Number.isSafeInteger(timeout) && timeout >= 1 && timeout <= 10_000);
     const { questions, topologies, budgets, usable } = topologyQuestions(snapshot);
     const body = JSON.stringify({ state: snapshot, model: TYPESAFE_MODEL, questions });
-    assert.ok(Buffer.byteLength(body) <= 64 * 1024, 'Routing snapshot exceeds budget');
+    ensure(Buffer.byteLength(body) <= 64 * 1024, 'Routing snapshot exceeds budget');
     const deadline = AbortSignal.timeout(timeout);
     const response = await (options.fetchImpl ?? fetch)(TYPESAFE_ENDPOINT, {
       method: 'POST', redirect: 'error',
@@ -134,11 +136,11 @@ export async function evaluateAdaptiveTopology(
     });
     if (!response.ok) { await response.body?.cancel().catch(() => undefined); throw new Error(`http_${response.status}`); }
     const raw = await responseJson(response);
-    assert.ok(raw && typeof raw === 'object' && !Array.isArray(raw));
+    ensure(raw && typeof raw === 'object' && !Array.isArray(raw));
     const envelope = raw as { model?: unknown; answers?: Record<string, unknown>; usage?: { input_tokens?: unknown; output_tokens?: unknown } };
-    assert.ok(typeof envelope.model === 'string' && envelope.model.length > 0 && envelope.model.length <= 200);
-    assert.ok(Number.isSafeInteger(envelope.usage?.input_tokens) && Number(envelope.usage?.input_tokens) >= 0);
-    assert.ok(Number.isSafeInteger(envelope.usage?.output_tokens) && Number(envelope.usage?.output_tokens) >= 0);
+    ensure(typeof envelope.model === 'string' && envelope.model.length > 0 && envelope.model.length <= 200);
+    ensure(Number.isSafeInteger(envelope.usage?.input_tokens) && Number(envelope.usage?.input_tokens) >= 0);
+    ensure(Number.isSafeInteger(envelope.usage?.output_tokens) && Number(envelope.usage?.output_tokens) >= 0);
     const a = envelope.answers ?? {};
     const sufficiency = answer(a.single_agent_sufficiency, 'choice', ['sufficient', 'insufficient']);
     const scores = ['complexity', 'parallelizability', 'coupling', 'specialization_need', 'coordination_need']
@@ -149,8 +151,9 @@ export async function evaluateAdaptiveTopology(
     const targetTopology = (blocked ? 'single' : topology.choice) as AdaptiveTopology;
     const targetWorkers = blocked ? 0 : budget ? Number(budget.choice!.slice('workers_'.length)) : 0;
     // A malformed or internally contradictory plan is not repaired into a different Jev decision.
-    assert.ok(validTopologyTarget({ topology: targetTopology, workers: targetWorkers }, usable));
+    ensure(validTopologyTarget({ topology: targetTopology, workers: targetWorkers }, usable));
     const singleSufficient = sufficiency.choice === 'sufficient';
+    ensure(blocked || targetTopology !== 'single' || singleSufficient || usable === 0, 'Contradictory Single decision');
     const confidence = Math.min(sufficiency.confidence, topology.confidence, ...scores.map(s => s.confidence), ...(budget ? [budget.confidence] : []));
     return {
       routeId, contractVersion: ADAPTIVE_TOPOLOGY_CONTRACT_VERSION,

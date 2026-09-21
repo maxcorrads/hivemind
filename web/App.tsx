@@ -11,7 +11,9 @@ import { BotOrigin, BotSetup, BotCredentials } from "./Bots.tsx";
 import { ProjectPlugins } from "./ProjectPlugins.tsx";
 import { AdaptiveRoutingSettings } from "./AdaptiveRoutingSettings.tsx";
 import { AdaptiveRoutingPanel, routingEventLabel, topologyLabel } from "./AdaptiveRoutingPanel.tsx";
-import type { AdaptiveExecutionState, AdaptiveRoutingEvent, AdaptiveRoutingView } from "../src/shared/adaptive-topology.ts";
+import type { AdaptiveExecutionState, AdaptiveRoutingEvent } from "../src/shared/adaptive-topology.ts";
+import { useAdaptiveRouting } from "./use-adaptive-routing.ts";
+import { routingStreamEntries } from "./adaptive-routing-view.ts";
 import { InboxReceipt, QueueBadge } from "./InboxReceipt.tsx";
 import { loadMailLog, mergeMailLog, saveMailLog } from "./mail-log.ts";
 import type { MentionPage, ReadSnapshot } from "../src/shared/read-state.ts";
@@ -119,7 +121,10 @@ export function App() {
   const [draft, setDraft] = useState("");
   const [routingMode, setRoutingMode] = useState<SendRoutingMode>("auto");
   const [routingLockScope, setRoutingLockScope] = useState<SendLockScope>("none");
-  const [routingView, setRoutingView] = useState<AdaptiveRoutingView | null>(null);
+  const routingChannelId = sel.kind === "channel" && snap?.channels.some(channel => channel.id === sel.id && channel.type === "dm" &&
+    channel.memberIds.some(id => snap.agents.some(agent => agent.id === id && agent.role === "brain"))) ? sel.id : null;
+  const { view: routingView, error: routingError, refresh: refreshRoutingView,
+    onEvent: onRoutingEvent, onChange: changeRoutingView } = useAdaptiveRouting(routingChannelId);
   const [routingPanelOpen, setRoutingPanelOpen] = useState(false);
   const [threadDraft, setThreadDraft] = useState("");
   const [err, setErr] = useState<string | null>(null);
@@ -328,6 +333,7 @@ export function App() {
   }, []);
 
   const resetReadConnection = useCallback(() => {
+    refreshRoutingView(true);
     readFence.current.reset();
     channelLoad.current.cancel();
     channelJournal.current = null;
@@ -337,7 +343,7 @@ export function App() {
     threadReads.current?.reset();
     setReconnectTick((value) => value + 1);
     refreshSnap().catch((error) => { if (error?.name !== "AbortError") setErr(String(error)); });
-  }, [refreshSnap]);
+  }, [refreshSnap, refreshRoutingView]);
 
   useEffect(() => {
     refreshSnap().catch((e) => { if (e?.name !== "AbortError") setErr(String(e.message || e)); });
@@ -354,16 +360,7 @@ export function App() {
         return;
       }
       if (ev.type === "adaptive-routing") {
-        const payload = ev.payload as { channelId: string; event: AdaptiveRoutingEvent; state: AdaptiveExecutionState };
-        if (selRef.current.kind === "channel" && selRef.current.id === payload.channelId) {
-          setRoutingView(current => {
-            const events = current?.events ?? [];
-            const next = events.some(event => event.id === payload.event.id)
-              ? events.map(event => event.id === payload.event.id ? payload.event : event)
-              : [...events, payload.event].slice(-100);
-            return { state: payload.state, events: next };
-          });
-        }
+        onRoutingEvent(ev.payload as { channelId: string; event: AdaptiveRoutingEvent; state: AdaptiveExecutionState });
         return;
       }
       if (ev.type === "message") {
@@ -586,18 +583,7 @@ export function App() {
   const activeBrainDm = Boolean(activeChannel?.type === "dm" && activeChannel.memberIds.some(
     id => snap?.agents.some(agent => agent.id === id && agent.role === "brain"),
   ));
-  useEffect(() => {
-    if (!activeBrainDm || !activeChannel) {
-      setRoutingView(null);
-      setRoutingPanelOpen(false);
-      return;
-    }
-    let active = true;
-    api.adaptiveRoutingView(activeChannel.id)
-      .then(view => { if (active) setRoutingView(view); })
-      .catch(error => { if (active && error?.name !== "AbortError") setErr(String(error.message || error)); });
-    return () => { active = false; };
-  }, [activeBrainDm, activeChannel?.id, reconnectTick]);
+  useEffect(() => { setRoutingPanelOpen(false); }, [activeChannel?.id]);
   const selectedProject =
     sel.kind === "inbox" || sel.kind === "decisions" ? sel.project : (activeChannel?.project ?? projects[0]?.slug ?? "chapter");
   const editingBusy = editingProject
@@ -699,7 +685,7 @@ export function App() {
     }
     recordChannelMessage(channelJournal.current, result.message);
     setPane((current) => applyChannelMessage(current, result.message));
-    if (!root && activeBrainDm) api.adaptiveRoutingView(channelId).then(setRoutingView).catch(() => undefined);
+    if (!root && activeBrainDm) refreshRoutingView();
     if (root) onThreadMessage(result.message);
   };
 
@@ -1100,7 +1086,12 @@ export function App() {
                   Load older
                 </button>
               )}
-              {(pane?.channel.id === selectedChannelId ? pane.messages : []).map((m) => (
+              {routingStreamEntries(pane?.channel.id === selectedChannelId ? pane.messages : [],
+                routingView?.events ?? [], selectedChannelId ?? "").map(entry => entry.kind === "routing" ? (
+                <div key={entry.event.id} className="routing-inline" data-human-only="routing">
+                  {routingEventLabel(entry.event)}
+                </div>
+              ) : ((m) => (
                 <Msg
                   key={m.id}
                   m={m}
@@ -1115,10 +1106,10 @@ export function App() {
                     setPane((p) => applyChannelMessage(p, r.message, false));
                   })}
                 />
-              ))}
+              ))(entry.message))}
               <div ref={bottomRef} />
             </div>
-            {activeBrainDm && routingView?.state && (
+            {activeBrainDm && routingView && routingView.state && routingView.state.channelId === activeChannel?.id && (
               <div className={`routing-strip ${routingView.state.warning ? "warning" : ""}`}>
                 <button type="button" onClick={() => setRoutingPanelOpen(true)}>
                   <strong>{topologyLabel(routingView.state.currentTopology)}</strong>
@@ -1128,7 +1119,9 @@ export function App() {
                   {routingView.state.lockScope !== "none" ? ` · locked ${routingView.state.lockScope}` : ""}
                 </button>
                 <span>
-                  {routingView.state.warning
+                  {routingView.state.monitoring === "completed" ? "Execution completed" : routingView.state.monitoring === "disabled"
+                    ? "Jev disabled · automatic verification is off" : routingView.state.monitoring === "pending"
+                    ? "Jev enabled · awaiting next coordination event" : routingView.state.warning
                     ? `⚠ ${routingView.state.warning}`
                     : (() => {
                         const last = [...routingView.events].reverse().find(event => event.kind === "transition");
@@ -1162,6 +1155,7 @@ export function App() {
             />
           </>
         )}
+        {routingError && activeBrainDm && <div className="err" role="alert">Routing status unavailable: {routingError}</div>}
         {err && (
           <div className="err" onClick={() => setErr(null)}>
             {err}
@@ -1571,14 +1565,14 @@ export function App() {
       )}
 
       {adaptiveRoutingOpen && (
-        <AdaptiveRoutingSettings onClose={() => setAdaptiveRoutingOpen(false)} />
+        <AdaptiveRoutingSettings onClose={() => setAdaptiveRoutingOpen(false)} onSaved={() => refreshRoutingView()} />
       )}
 
       {routingPanelOpen && activeChannel && routingView && (
         <AdaptiveRoutingPanel
           channelId={activeChannel.id}
           view={routingView}
-          onChange={setRoutingView}
+          onChange={changeRoutingView}
           onClose={() => setRoutingPanelOpen(false)}
         />
       )}

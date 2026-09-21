@@ -167,3 +167,43 @@ test('another execution cannot claim a worker that is already busy even when its
   assert.equal(rows.length, 1);
   assert.equal(rows[0]!.worker_id, f.workers[0]!.agent.id);
 });
+
+
+test('sender progress and decision labels cannot smuggle a new delegation past Single', async t => {
+  const f = await fixture(t); await f.start();
+  for (const eventType of ['progress', 'decision', 'question', 'assignment']) {
+    const before = f.calls();
+    const attempted = await f.post(f.brain.token, `/channels/${f.workerDm.id}/messages`, {
+      body: 'Start this independent task.', eventType, requestId: `typed-${eventType}`,
+    });
+    assert.equal(attempted.status, 409, await attempted.clone().text());
+    assert.equal(f.calls(), before + 1);
+  }
+  const unaddressed = await f.post(f.brain.token, '/channels/general/messages', {
+    body: 'Start new work.', eventType: 'assignment', requestId: 'broadcast-assignment',
+  });
+  assert.equal(unaddressed.status, 409);
+  assert.equal(readAdaptiveCapacity(f.hive, f.state()).activeWorkers, 0);
+});
+
+test('an existing delegation can finish its conversation during drain without reserving a new worker', async t => {
+  const f = await fixture(t); f.choose('brain_one_worker'); await f.start();
+  const assigned = await f.post(f.brain.token, `/channels/${f.workerDm.id}/messages`, {
+    body: 'Complete the task.', requestId: 'raw-assignment', eventType: 'assignment',
+  });
+  assert.equal(assigned.status, 200); const root = (await assigned.json() as { id: string }).id;
+  f.choose('single');
+  for (const requestId of ['check-a', 'check-b']) await f.post(f.brain.token, `/channels/${f.dm.id}/messages`, {
+    body: 'Remaining work is local.', eventType: 'progress', requestId,
+  });
+  assert.equal(f.state().desiredTopology, 'single');
+  const reply = await f.post(f.brain.token, `/channels/${f.workerDm.id}/messages`, {
+    body: 'Yes, finish with the existing acceptance criteria.', threadId: root, requestId: 'finish-reply',
+  });
+  assert.equal(reply.status, 200, await reply.clone().text());
+  assert.equal(readAdaptiveCapacity(f.hive, f.state()).activeWorkers, 1);
+  const another = await f.post(f.brain.token, `/channels/${f.workerDm.id}/messages`, {
+    body: 'Also take this new assignment.', threadId: root, eventType: 'assignment', requestId: 'new-assignment',
+  });
+  assert.equal(another.status, 409);
+});

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Hive } from './hive.ts';
-import { HiveError, HUMAN_ID, type Agent, type Message } from '../shared/types.ts';
+import { HiveError, HUMAN_ID, type Agent, type Message, type ThreadStatus } from '../shared/types.ts';
 import { ADAPTIVE_TOPOLOGIES, type AdaptiveExecutionState, type AdaptiveLockScope,
   type AdaptiveRoutingEvent, type AdaptiveRoutingMode, type AdaptiveRoutingView,
   type AdaptiveTopology, type AdaptiveTopologyDecision, type AdaptiveWorkerCapacity } from '../shared/adaptive-topology.ts';
@@ -97,6 +97,14 @@ export class AdaptiveTopologyRuntime {
   private serial = new Map<string, Promise<void>>();
   private stopped = false;
   private abort = new AbortController();
+  // A new legacy Human request must not resurrect an older execution on re-enable.
+  humanMessageCommitted(message: Message): void {
+    if (this.stopped || message.authorRole !== 'human' || message.kind !== 'chat' || message.threadId) return;
+    const state = this.row(message.channelId);
+    if (!state || state.completedAt || state.rootMessageId === message.id) return;
+    if (message.seq <= this.hive.getMessageById(state.rootMessageId).seq) return;
+    this.complete(state, 'superseded_by_human_request');
+  }
   private readonly onAgent = (agent: Agent) => {
     if (this.stopped || agent.role !== 'worker' || !agent.projectId) return;
     void this.revalidateProject(agent.projectId, { kind: 'capacity_change', actorId: agent.id, actorRole: 'worker',
@@ -117,18 +125,31 @@ export class AdaptiveTopologyRuntime {
       CREATE INDEX IF NOT EXISTS idx_adaptive_topology_tasks_execution ON adaptive_topology_tasks(execution_id);
       CREATE TABLE IF NOT EXISTS adaptive_topology_evaluated (execution_id TEXT NOT NULL, event_id TEXT NOT NULL, PRIMARY KEY(execution_id,event_id));`);
     initAdaptiveCommitments(hive);
+    // Cleanup is transactionally tied to channel/project deletion, not a best-effort UI callback.
+    hive.db.exec(`CREATE TRIGGER IF NOT EXISTS adaptive_channel_deleted AFTER DELETE ON channels BEGIN
+      DELETE FROM adaptive_topology_evaluated WHERE execution_id IN
+        (SELECT execution_id FROM adaptive_topology_executions WHERE channel_id=OLD.id);
+      DELETE FROM adaptive_topology_events WHERE channel_id=OLD.id;
+      DELETE FROM adaptive_topology_locks WHERE channel_id=OLD.id;
+      DELETE FROM adaptive_topology_executions WHERE channel_id=OLD.id;
+    END;`);
     hive.bus.on('agent', this.onAgent);
   }
   async stop(): Promise<void> {
     this.stopped = true; this.abort.abort(); this.hive.bus.off('agent', this.onAgent);
     await Promise.allSettled(this.serial.values());
   }
-  private queued<T>(key: string, work: () => Promise<T>): Promise<T> {
+  private queued<T>(key: string, work: () => Promise<T> | T): Promise<T> {
     const next = (this.serial.get(key) ?? Promise.resolve()).then(work);
     const settled = next.then(() => undefined, () => undefined).finally(() => {
       if (this.serial.get(key) === settled) this.serial.delete(key);
     });
     this.serial.set(key, settled); return next;
+  }
+  private displayState(state: StoredExecution): AdaptiveExecutionState {
+    const enabled = Boolean(loadAdaptiveRouting(this.hive.home)?.enabled);
+    return { ...publicState(state), monitoring: state.completedAt ? 'completed' : !enabled ? 'disabled'
+      : state.providerAvailable ? 'active' : state.recommendation?.providerStatus === 'unavailable' ? 'unavailable' : 'pending' };
   }
   private row(channel: string): StoredExecution | null {
     const row = this.hive.db.prepare('SELECT snapshot FROM adaptive_topology_executions WHERE channel_id=?').get(channel);
@@ -177,12 +198,18 @@ export class AdaptiveTopologyRuntime {
   private commit(state: StoredExecution, event: AdaptiveRoutingEvent, evidenceId?: string) {
     immediateTransaction(this.hive.db, () => {
       this.save(state); this.saveEvent(event);
-      if (evidenceId) this.hive.db.prepare('INSERT OR IGNORE INTO adaptive_topology_evaluated(execution_id,event_id) VALUES(?,?)').run(state.executionId, evidenceId);
+      if (evidenceId) {
+        this.hive.db.prepare('INSERT OR IGNORE INTO adaptive_topology_evaluated(execution_id,event_id) VALUES(?,?)').run(state.executionId, evidenceId);
+        // Committed mutations retain their own durable retry ledger; this bounds only routing votes.
+        this.hive.db.prepare(`DELETE FROM adaptive_topology_evaluated WHERE execution_id=? AND rowid NOT IN
+          (SELECT rowid FROM adaptive_topology_evaluated WHERE execution_id=? ORDER BY rowid DESC LIMIT 5000)`)
+          .run(state.executionId, state.executionId);
+      }
     });
     this.publish(state, event);
   }
   private publish(state: StoredExecution, event: AdaptiveRoutingEvent) {
-    this.hive.bus.emit('adaptive-routing', { channelId: state.channelId, state: publicState(state), event });
+    this.hive.bus.emit('adaptive-routing', { channelId: state.channelId, state: this.displayState(state), event });
   }
   private assertEventActor(actor: Agent, event: AdaptiveCoordinationEvent) {
     if (actor.id !== event.actorId || actor.role !== event.actorRole || !['brain', 'worker'].includes(actor.role)) throw new HiveError(403, 'Routing event identity does not match the authenticated actor');
@@ -222,7 +249,7 @@ export class AdaptiveTopologyRuntime {
     if (rows.length > 1) throw new HiveError(409, 'Ambiguous execution: use the task thread');
     return rows[0] ? JSON.parse(String(rows[0].snapshot)) as StoredExecution : null;
   }
-  private enabledOrLocked(state: StoredExecution): boolean { return Boolean(loadAdaptiveRouting(this.hive.home)?.enabled || state.lockedTopology); }
+  private enabledOrLocked(state: StoredExecution): boolean { return !state.completedAt && Boolean(loadAdaptiveRouting(this.hive.home)?.enabled || state.lockedTopology); }
   private async evaluateStable(state: StoredExecution, event: AdaptiveCoordinationEvent, config: AdaptiveRoutingFile) {
     let capacity = this.capacity(state), decision: AdaptiveTopologyDecision | null = null;
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -237,12 +264,26 @@ export class AdaptiveTopologyRuntime {
   }
   private async revalidateStored(state: StoredExecution, event: AdaptiveCoordinationEvent): Promise<StoredExecution> {
     const config = loadAdaptiveRouting(this.hive.home);
-    if (!config?.enabled || this.stopped) return state;
+    if (this.stopped || state.completedAt) return state;
+    if (!config?.enabled) {
+      // A Human-requested drain must still finish when the optional classifier is off.
+      if (state.lockedTopology && state.desiredTopology) {
+        const target = { topology: state.lockedTopology, workers: state.desiredWorkers ?? minimumTopologyWorkers(state.lockedTopology) };
+        if (topologyCheckpointSafe(target, safetyOf(this.capacity(state)))) {
+          const from = state.currentTopology;
+          state.currentTopology = target.topology; state.workerBudget = target.workers;
+          state.desiredTopology = null; state.desiredWorkers = null;
+          this.touchState(state);
+          this.commit(state, this.record(state, { ...fallbackDecision(target.topology, target.workers), reason: 'human_drain_completed' }, from, 'lock', true));
+        }
+      }
+      return state;
+    }
     if (event.eventId && this.hive.db.prepare('SELECT 1 FROM adaptive_topology_evaluated WHERE execution_id=? AND event_id=?').get(state.executionId, event.eventId)) return state;
     const from = state.currentTopology, revision = state.revision ?? 0;
     const { decision, capacity } = await this.evaluateStable(state, event, config);
     const latest = this.row(state.channelId);
-    if (!latest || latest.executionId !== state.executionId || (latest.revision ?? 0) !== revision || !loadAdaptiveRouting(this.hive.home)?.enabled || this.stopped) return latest ?? state;
+    if (!latest || latest.executionId !== state.executionId || (latest.revision ?? 0) !== revision || fingerprint(config) !== fingerprint(loadAdaptiveRouting(this.hive.home)) || this.stopped) return latest ?? state;
     const forced: TopologyTarget | null = state.lockedTopology ? { topology: state.lockedTopology,
       workers: state.lockedTopology === 'single' ? 0 : state.lockedTopology === state.currentTopology ? state.workerBudget : Math.max(minimumTopologyWorkers(state.lockedTopology), state.desiredWorkers ?? 0) } : null;
     const next = advanceTopologyPolicy(policyOf(state), { target: { topology: decision.targetTopology, workers: decision.targetWorkers },
@@ -266,7 +307,10 @@ export class AdaptiveTopologyRuntime {
     this.assertEventActor(actor, event);
     const state = this.resolveState(actor, event);
     if (!state || !this.enabledOrLocked(state)) return null;
-    const updated = await this.queued(state.channelId, () => this.revalidateStored(this.row(state.channelId) ?? state, event));
+    const updated = await this.queued(state.channelId, () => {
+      const current = this.row(state.channelId);
+      return current && current.executionId === state.executionId ? this.revalidateStored(current, event) : state;
+    });
     return this.enabledOrLocked(updated) ? compactPolicy(updated) : null;
   }
   private async revalidateProject(projectId: string, event: AdaptiveCoordinationEvent, exceptExecution?: string) {
@@ -274,7 +318,10 @@ export class AdaptiveTopologyRuntime {
     for (const row of rows) {
       const state = JSON.parse(String(row.snapshot)) as StoredExecution;
       if (state.executionId === exceptExecution) continue;
-      await this.queued(state.channelId, () => this.revalidateStored(this.row(state.channelId) ?? state, event));
+      await this.queued(state.channelId, () => {
+        const current = this.row(state.channelId);
+        return current && current.executionId === state.executionId ? this.revalidateStored(current, event) : state;
+      });
     }
   }
   private assertDelegation(state: StoredExecution, event: AdaptiveCoordinationEvent) {
@@ -359,6 +406,7 @@ export class AdaptiveTopologyRuntime {
       if (this.stopped) throw new HiveError(503, 'Server is shutting down');
       const currentConfig = loadAdaptiveRouting(this.hive.home);
       if (!currentConfig?.enabled && config?.enabled && !locked) return null;
+      if (fingerprint(config) !== fingerprint(currentConfig)) throw new HiveError(409, 'Jev settings changed during initial routing; retry with the current configuration');
       if (fingerprint(previous) !== fingerprint(this.row(channel.id)) || inherited !== (manual ? null : this.conversationLock(channel.id))) throw new HiveError(409, 'Human routing state changed; review and retry the request');
       if (decision.providerStatus === 'ok' && (!stable || !validTopologyTarget({ topology: decision.targetTopology, workers: decision.targetWorkers }, capacity.workers.usableForExecution)))
         decision = { ...decision, providerStatus: 'unavailable', confidence: null, reason: 'capacity_changed_during_initial_routing', targetTopology: 'single', targetWorkers: 0 };
@@ -381,9 +429,9 @@ export class AdaptiveTopologyRuntime {
       const policy = initialTopologyPolicy({ topology: actual, workers: budget });
       const state: StoredExecution = { executionId, channelId: channel.id, projectId: channel.projectId, brainId: brain.id, rootMessageId: '',
         currentTopology: actual, workerBudget: budget, desiredTopology: desired?.topology ?? null, desiredWorkers: desired?.workers ?? null,
-        lockedTopology: locked, lockScope, orchestratedOnly: mode === 'orchestrated_auto', providerAvailable: decision.providerStatus !== 'unavailable',
+        lockedTopology: locked, lockScope, orchestratedOnly: mode === 'orchestrated_auto', providerAvailable: decision.providerStatus === 'ok',
         warning, recommendation: decision, confirmations: 0, confirmationHighCount: 0, confirmationTopology: null, confirmationWorkers: null,
-        eventsSinceChange: policy.eventsSinceChange, updatedAt: Date.now(), recentEvents: [], revision: 1 };
+        eventsSinceChange: policy.eventsSinceChange, updatedAt: Math.max(Date.now(), (previous?.updatedAt ?? 0) + 1), recentEvents: [], revision: (previous?.revision ?? 0) + 1, completedAt: null };
       let item!: AdaptiveRoutingEvent;
       const delivered = this.hive.postAdaptiveRequest(human, input, topologyDirective(state), `adaptive-${executionId}`, persistReceipt, message => {
         state.rootMessageId = message.id;
@@ -393,8 +441,52 @@ export class AdaptiveTopologyRuntime {
         item = this.record(state, decision, actual, warning ? 'warning' : locked ? 'lock' : 'evaluation', false); this.saveEvent(item);
       });
       this.publish(state, item);
-      return { ...delivered, routing: decision, state: publicState(state) };
+      return { ...delivered, routing: decision, state: this.displayState(state) };
     });
+  }
+  private touchState(state: StoredExecution) {
+    state.updatedAt = Math.max(Date.now(), state.updatedAt + 1); state.revision = (state.revision ?? 0) + 1;
+  }
+  settingsChanged(): void {
+    for (const row of this.hive.db.prepare('SELECT snapshot FROM adaptive_topology_executions').all()) {
+      const state = JSON.parse(String(row.snapshot)) as StoredExecution;
+      if (state.completedAt) continue;
+      this.touchState(state); state.providerAvailable = false; state.warning = null;
+      state.confirmations = 0; state.confirmationHighCount = 0; state.confirmationTopology = null; state.confirmationWorkers = null;
+      const decision = { ...fallbackDecision(state.currentTopology, state.workerBudget), reason: 'jev_settings_changed' };
+      state.recommendation = decision;
+      this.commit(state, this.record(state, decision, state.currentTopology, 'status'));
+    }
+  }
+  private complete(state: StoredExecution, reason: string): void {
+    this.touchState(state); state.completedAt = state.updatedAt;
+    state.desiredTopology = null; state.desiredWorkers = null;
+    state.lockedTopology = null; state.lockScope = 'none'; state.warning = null;
+    const decision = { ...fallbackDecision(state.currentTopology, state.workerBudget), reason };
+    this.commit(state, this.record(state, decision, state.currentTopology, 'status'));
+  }
+  /** Invoked inside Hive's thread transaction; returns a post-commit notification. */
+  threadStatusChange(actor: Agent, threadId: string, status: ThreadStatus | null): (() => void) | null {
+    const row = this.hive.db.prepare('SELECT snapshot FROM adaptive_topology_executions WHERE root_message_id=?').get(threadId);
+    if (!row) return null;
+    const state = JSON.parse(String(row.snapshot)) as StoredExecution;
+    if (actor.role !== 'human' && actor.id !== state.brainId) throw new HiveError(403, 'Only Human or the coordinating brain closes this execution');
+    const complete = status === 'done';
+    if (complete === Boolean(state.completedAt)) return null;
+    if (complete) {
+      const capacity = this.capacity(state);
+      if (capacity.activeTasks || capacity.blockers || capacity.openDependencies || capacity.unreconciledClaims)
+        throw new HiveError(409, 'Finish delegated work and reconcile claims before completing this execution');
+    }
+    this.touchState(state); state.completedAt = complete ? state.updatedAt : null;
+    state.desiredTopology = null; state.desiredWorkers = null;
+    state.confirmations = 0; state.confirmationHighCount = 0; state.confirmationTopology = null; state.confirmationWorkers = null;
+    if (complete) { state.lockedTopology = null; state.lockScope = 'none'; state.warning = null; }
+    const decision = { ...fallbackDecision(state.currentTopology, state.workerBudget), reason: complete ? 'execution_completed' : 'execution_reopened' };
+    const item = this.record(state, decision, state.currentTopology, 'status');
+    this.save(state); this.saveEvent(item);
+    if (complete) this.hive.db.prepare('DELETE FROM adaptive_topology_evaluated WHERE execution_id=?').run(state.executionId);
+    return () => this.publish(state, item);
   }
   view(actor: Agent, channelId: string): AdaptiveRoutingView {
     if (actor.role !== 'human') throw new HiveError(403, 'Adaptive routing timeline is Human-only');
@@ -403,18 +495,24 @@ export class AdaptiveTopologyRuntime {
     const state = this.row(channel.id);
     const events = this.hive.db.prepare('SELECT snapshot FROM adaptive_topology_events WHERE channel_id=? ORDER BY rowid DESC LIMIT 100')
       .all(channel.id).map(row => JSON.parse(String(row.snapshot)) as AdaptiveRoutingEvent).reverse();
-    return { state: state ? publicState(state) : null, events };
+    return { state: state ? this.displayState(state) : null, events };
   }
   setLock(actor: Agent, channelId: string, raw: unknown): AdaptiveRoutingView {
     if (actor.role !== 'human') throw new HiveError(403, 'Only Human changes routing locks');
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new HiveError(400, 'Expected lock settings');
     const input = raw as Record<string, unknown>;
-    if (Object.keys(input).some(key => !['scope','topology'].includes(key)) || typeof input.scope !== 'string') throw new HiveError(400, 'Expected an explicit lock scope');
+    if (Object.keys(input).some(key => !['scope','topology','expectedExecutionId','expectedRevision'].includes(key)) || typeof input.scope !== 'string') throw new HiveError(400, 'Expected an explicit lock scope');
     const scope = scopeOf(input.scope);
     const topology = typeof input.topology === 'string' && ADAPTIVE_TOPOLOGIES.includes(input.topology as AdaptiveTopology) ? input.topology as AdaptiveTopology : null;
     if (scope !== 'none' && !topology) throw new HiveError(400, 'Choose a topology to lock');
     const state = this.row(this.hive.getChannel(channelId).id);
     if (!state) throw new HiveError(404, 'No adaptive execution in this DM');
+    if (state.completedAt) throw new HiveError(409, 'This execution has completed; start a new request');
+    if (input.expectedExecutionId !== undefined && input.expectedExecutionId !== state.executionId)
+      throw new HiveError(409, 'Execution changed; reload the routing panel');
+    if (input.expectedRevision !== undefined && input.expectedRevision !== (state.revision ?? 0))
+      throw new HiveError(409, 'Routing changed; reload before applying a Human lock');
+    if (scope === state.lockScope && (scope === 'none' ? state.lockedTopology === null && this.conversationLock(channelId) === null : topology === state.lockedTopology)) return this.view(actor, channelId);
     const from = state.currentTopology;
     state.lockScope = scope; state.lockedTopology = scope === 'none' ? null : topology;
     const capacity = this.capacity(state);
