@@ -363,6 +363,15 @@ function totalTokens(results) {
 }
 
 async function runTrial(options, trial, fixture, binary, binaryVersion) {
+  const plan = seatPlan(trial, fixture);
+  if (options.dryRun) {
+    return {
+      skipped: false,
+      dryRun: true,
+      plan: plan.map(seat => ({ id: seat.id, role: seat.role, focus: seat.worker?.id ?? null })),
+    };
+  }
+
   const metaFile = runMetaPath(options.input, trial.trialId);
   if (existsSync(metaFile)) {
     const previous = JSON.parse(readFileSync(metaFile, 'utf8'));
@@ -374,12 +383,11 @@ async function runTrial(options, trial, fixture, binary, binaryVersion) {
   mkdirSync(workspace, { recursive: true });
   writeFileSync(path.join(workspace, 'BENCHMARK.md'), trial.runbook.prompt + '\n');
 
-  const plan = seatPlan(trial, fixture);
   const meta = {
     schemaVersion: RUNNER_SCHEMA_VERSION,
     trialId: trial.trialId,
     blindId: trial.blindId,
-    state: options.dryRun ? 'dry-run' : 'running',
+    state: 'running',
     startedAt: null,
     completedAt: null,
     wallMs: null,
@@ -391,7 +399,6 @@ async function runTrial(options, trial, fixture, binary, binaryVersion) {
     notes: [],
   };
   writeMeta(metaFile, meta);
-  if (options.dryRun) return { skipped: false, dryRun: true, plan: meta.seats };
 
   const started = Date.now();
   meta.startedAt = new Date(started).toISOString();
