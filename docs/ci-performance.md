@@ -54,15 +54,22 @@ These are scheduling weights, not claims that they capture every millisecond in 
 ## New topology
 
 - Node 24: unit and four timing-balanced integration shards run independently.
-- Node 22.13.0: the same full unit/integration scope is retained and integration is split into the same four shards. Compatibility coverage is **not** reduced to a smoke subset.
+- Node 22.13.0: the same full unit/integration scope is retained and integration is split into two timing-balanced shards. Compatibility coverage is **not** reduced to a smoke subset; the lower shard count deliberately limits setup/queue overhead on the compatibility runtime.
 - The historical required gates `Tests / Node 24` and `Tests / Node 22.13.0` remain as aggregation jobs that require every corresponding unit/shard job.
 - Normal Node 24 unit/integration jobs collect LCOV alongside their ordinary redacted logs. A lightweight `Coverage` aggregator merges those artifacts and enforces the unchanged 80% line / 75% branch / 75% function thresholds. There is no third full test execution in CI.
 - Playwright browser downloads are cached by OS + lockfile and installed only on a cache miss.
 - setup-node's npm download cache is enabled; `node_modules` is not cached.
 - Browser contracts remain isolated from server integration shards.
+- PR-title and dependency-review checks run on Ubuntu because they have no macOS dependency, leaving scarce macOS capacity to the tests that actually require it.
 - Failed suite logs remain redacted and retained independently, so a shard failure names the responsible shard immediately.
 
 The extra shard setup intentionally trades some runner-minutes for lower critical-path latency. The baseline above keeps runner cost visible so that trade can be reviewed rather than hidden.
+
+## Tuning observation
+
+The first validation run of the initial 4+4 shard topology was CI run `35604713765` on PR #117 (commit `ff5161f`). Every check passed, including merged coverage at **93.20% lines / 76.01% branches / 90.48% functions**.
+
+That run recorded **533 s wall-clock**, **552 runner-seconds**, and a **477 s maximum job queue**. The queue therefore dominated wall-clock far more than execution time. Rather than hide that result, the final topology reacts to it: Node 22 keeps the full integration suite but uses two shards instead of four, and the PR-title/dependency-review checks move off macOS. This run is a tuning observation, not part of the final after-sample because it used the superseded 4+4 topology.
 
 ## After measurement
 
