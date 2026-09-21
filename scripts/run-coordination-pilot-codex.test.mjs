@@ -81,7 +81,7 @@ test('Codex runner is generic: default executable is codex and local override is
   assert.ok(args.includes('workspace-write'));
 });
 
-test('OpenCode host uses requested model, --auto, standalone mode and runtime Hivemind MCP', () => {
+test('OpenCode host uses requested model, --auto and runtime Hivemind MCP', () => {
   const fixture = byId.get('independent-implementation');
   const openConfig = {
     ...config,
@@ -94,9 +94,10 @@ test('OpenCode host uses requested model, --auto, standalone mode and runtime Hi
   assert.equal(hostExecutable('opencode', {}), 'opencode');
   assert.equal(hostExecutable('opencode', { OPENCODE_BIN: '/opt/local/opencode-custom' }), '/opt/local/opencode-custom');
   const args = opencodeArgs(trial, 'benchmark prompt');
-  assert.deepEqual(args.slice(0, 4), ['--pure', 'run', '--standalone', '--model']);
+  assert.deepEqual(args.slice(0, 3), ['--pure', 'run', '--model']);
   assert.ok(args.includes('opencode/muse-spark-1.3'));
   assert.ok(args.includes('--auto'));
+  assert.ok(!args.includes('--standalone'));
   assert.ok(args.includes('--format'));
   assert.equal(args.at(-1), 'benchmark prompt');
 
