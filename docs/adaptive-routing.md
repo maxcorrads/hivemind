@@ -65,6 +65,7 @@ The settings panel contains:
 
 - **Use Jev to choose single-session vs orchestrated execution** — the on/off toggle;
 - **TypeSafe API key** — the credential used for Jev;
+- **Fallback** — `Orchestrated` (default) or `Single` for low confidence/provider failure;
 - the current Jev model alias.
 
 Enabling requires an API key. Disabling leaves the saved key available for a later re-enable but completely bypasses Jev at runtime.
@@ -91,7 +92,8 @@ The file is written atomically with mode `0600`. The Human API and browser recei
 - `enabled`;
 - whether a key exists;
 - a short key hint;
-- the Jev model alias.
+- the Jev model alias;
+- the configured fallback strategy.
 
 The full key is never returned to the browser after save and is never written to adaptive-routing telemetry.
 
@@ -152,11 +154,13 @@ A high-confidence `single_agent_sufficiency=sufficient` result is accepted as `s
 
 Clear coordination pressure, useful independent workstreams or specialist need selects `orchestrated`.
 
-Low confidence or an ambiguous middle region uses the conservative fallback:
+Low confidence or an ambiguous middle region uses the configured fallback. The default is the conservative:
 
 ```
 orchestrated
 ```
+
+Human may explicitly configure `single` when minimizing orchestration cost is preferred over the higher under-routing risk.
 
 The thresholds remain versioned policy constants and can continue to be evaluated against the #29/#125 corpus.
 
@@ -164,7 +168,7 @@ The thresholds remain versioned policy constants and can continue to be evaluate
 
 Jev is optional optimization, never a correctness dependency.
 
-These conditions fall back to `orchestrated` rather than blocking the Human request:
+These conditions use the configured fallback rather than blocking the Human request:
 
 - timeout;
 - network error;
@@ -175,7 +179,7 @@ These conditions fall back to `orchestrated` rather than blocking the Human requ
 - low confidence;
 - ambiguous policy result.
 
-The current provider timeout is bounded. After fallback, the Human request is still delivered and the brain can continue through the existing orchestration workflow.
+The current provider timeout is bounded. After fallback, the Human request is still delivered. The default fallback is `orchestrated`; choosing `single` is an explicit Human policy choice.
 
 ## Delivery and retry semantics
 
