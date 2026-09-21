@@ -35,7 +35,8 @@
     "benchmark:timeline:diagnosis": "node --import tsx scripts/benchmark-timeline-diagnosis.mjs",
     "benchmark:coordination:pilot": "node scripts/benchmark-coordination-real.mjs prepare --preset pilot-v1",
     "benchmark:coordination:pilot:run": "node scripts/run-coordination-pilot-codex.mjs",
-    "benchmark:coordination:mcp-errors": "node scripts/analyze-coordination-mcp-errors.mjs"
+    "benchmark:coordination:mcp-errors": "node scripts/analyze-coordination-mcp-errors.mjs",
+    "benchmark:human-decisions": "node scripts/benchmark-human-decisions.mjs"
   },
   "engines": {
     "node": ">=22.13.0"
