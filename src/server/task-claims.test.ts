@@ -226,7 +226,7 @@ test('project-wide cap includes invisible claims but never reveals their metadat
   assert.deepEqual(f.hive.tasks.get(f.other.agent, task.id).coordination!.overlaps, []);
 });
 
-test('separate SQLite processes serialize the same claim revision with one explicit conflict', { timeout: 15000 }, async t => {
+test('separate SQLite processes serialize the same claim revision with one explicit conflict', { timeout: 30000 }, async t => {
   const { spawn } = await import('node:child_process');
   const { once } = await import('node:events');
   const { writeFileSync } = await import('node:fs');
@@ -236,31 +236,150 @@ test('separate SQLite processes serialize the same claim revision with one expli
   const file = path.join(f.hive.home, 'claim-child.mjs');
   writeFileSync(file, `import { Hive } from ${JSON.stringify(new URL('./hive.ts', import.meta.url).href)};
     const hive = new Hive(process.argv[2]);
+    let pending;
+    const finish = (message) => {
+      hive.db.close();
+      process.send(message, () => process.disconnect());
+    };
     process.on('message', (input) => {
-      let status = 200;
-      try { hive.tasks.event(hive.agentByToken(input.token), input.id, input.event); }
-      catch (error) { status = error.status ?? 500; }
-      hive.db.close(); process.send({ status }, () => process.disconnect());
+      if (input?.type === 'arm') {
+        try {
+          pending = { actor: hive.agentByToken(input.token), id: input.id, event: input.event };
+          process.send({ phase: 'armed' });
+        } catch (error) {
+          finish({ phase: 'result', status: error.status ?? 500, error: String(error?.stack ?? error) });
+        }
+        return;
+      }
+      if (input?.type !== 'release' || !pending) return;
+      process.send({ phase: 'claiming' }, () => {
+        let status = 200, errorText;
+        try { hive.tasks.event(pending.actor, pending.id, pending.event); }
+        catch (error) { status = error.status ?? 500; errorText = String(error?.stack ?? error); }
+        finish({ phase: 'result', status, error: errorText });
+      });
     });
-    process.send('ready');`, { mode: 0o600 });
-  const children = [f.brain, f.other].map(() => spawn(process.execPath,
-    ['--import', path.join(root, 'node_modules/tsx/dist/loader.mjs'), file, path.join(f.hive.home, 'hive.db')],
-    { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] }));
-  const exits = children.map(child => once(child, 'close'));
+    process.send({ phase: 'ready' });`, { mode: 0o600 });
+
+  type ChildMessage =
+    | { phase: 'ready' }
+    | { phase: 'armed' }
+    | { phase: 'claiming' }
+    | { phase: 'result'; status: number; error?: string };
+  type ChildState = { phase: string; stderr: string };
+  type MessageFor<P extends ChildMessage['phase']> = Extract<ChildMessage, { phase: P }>;
+
+  const actors = [f.brain, f.other];
+  const states: ChildState[] = [];
+  const queues: ChildMessage[][] = [];
+  const listeners: Array<Array<() => void>> = [];
+  const exits: Array<ReturnType<typeof once>> = [];
+  const children = actors.map((_, index) => {
+    const child = spawn(process.execPath,
+      ['--import', path.join(root, 'node_modules/tsx/dist/loader.mjs'), file, path.join(f.hive.home, 'hive.db')],
+      { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+    exits[index] = once(child, 'close');
+    const state = { phase: 'spawned', stderr: '' };
+    states[index] = state;
+    queues[index] = [];
+    listeners[index] = [];
+    child.stdout?.resume();
+    child.stderr?.setEncoding('utf8');
+    child.stderr?.on('data', (chunk: string) => { state.stderr = (state.stderr + chunk).slice(-4000); });
+    child.on('message', value => {
+      if (typeof value !== 'object' || value === null || !('phase' in value)) return;
+      const message = value as ChildMessage;
+      state.phase = message.phase;
+      queues[index]!.push(message);
+      for (const listener of listeners[index]!.slice()) listener();
+    });
+    child.on('error', error => { state.phase = `process error: ${error.message}`; });
+    return child;
+  });
+
+  const describe = (index: number) => {
+    const state = states[index]!;
+    const stderr = state.stderr.trim().replace(/\s+/g, ' ');
+    return `child ${index} phase=${state.phase}${stderr ? ` stderr=${stderr}` : ''}`;
+  };
+  const waitForMessage = <P extends ChildMessage['phase']>(
+    child: (typeof children)[number], index: number, phase: P, timeoutMs: number,
+  ): Promise<MessageFor<P>> => new Promise((resolve, reject) => {
+    const queue = queues[index]!;
+    const pending = listeners[index]!;
+    const take = () => {
+      const position = queue.findIndex(message => message.phase === phase);
+      if (position < 0) return false;
+      const [message] = queue.splice(position, 1);
+      cleanup();
+      resolve(message as MessageFor<P>);
+      return true;
+    };
+    const notify = () => { take(); };
+    const onClose = (code: number | null, signal: NodeJS.Signals | null) => {
+      cleanup();
+      reject(new Error(`claim child ${index} exited while waiting for ${phase} (code=${code}, signal=${signal}); ${describe(index)}`));
+    };
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error(`claim child ${index} timed out after ${timeoutMs}ms waiting for ${phase}; ${describe(index)}`));
+    }, timeoutMs);
+    const cleanup = () => {
+      clearTimeout(timeout);
+      const listenerIndex = pending.indexOf(notify);
+      if (listenerIndex >= 0) pending.splice(listenerIndex, 1);
+      child.off('close', onClose);
+    };
+    if (take()) return;
+    if (child.exitCode !== null || child.signalCode !== null) {
+      cleanup();
+      reject(new Error(`claim child ${index} already exited while waiting for ${phase}; ${describe(index)}`));
+      return;
+    }
+    pending.push(notify);
+    child.once('close', onClose);
+    take();
+  });
+  const send = (child: (typeof children)[number], index: number, message: object) =>
+    new Promise<void>((resolve, reject) => {
+      child.send(message, error => {
+        if (error) reject(new Error(`claim child ${index} IPC send failed; ${describe(index)}: ${error.message}`));
+        else resolve();
+      });
+    });
+
   try {
-    for (const child of children) { child.stdout?.resume(); child.stderr?.resume(); }
-    const ready = await Promise.all(children.map(child => once(child, 'message', { signal: t.signal })));
-    assert.ok(ready.every(([value]) => value === 'ready'));
-    const responses = children.map(child => once(child, 'message', { signal: t.signal }));
-    for (const [i, child] of children.entries()) child.send({ token: [f.brain, f.other][i]!.token, id: task.id,
-      event: { requestId: `process-${i}`, expectedRevision: 1, action: claim() } });
+    await Promise.all(children.map((child, index) => waitForMessage(child, index, 'ready', 12000)));
+
+    const armed = children.map((child, index) => waitForMessage(child, index, 'armed', 3000));
+    await Promise.all(children.map((child, index) => send(child, index, {
+      type: 'arm',
+      token: actors[index]!.token,
+      id: task.id,
+      event: { requestId: `process-${index}`, expectedRevision: 1, action: claim() },
+    })));
+    await Promise.all(armed);
+
+    const claiming = children.map((child, index) => waitForMessage(child, index, 'claiming', 3000));
+    const responses = children.map((child, index) => waitForMessage(child, index, 'result', 8000));
+    await Promise.all(children.map((child, index) => send(child, index, { type: 'release' })));
+    await Promise.all(claiming);
     const results = await Promise.all(responses);
-    assert.deepEqual(results.map(([result]) => (result as { status: number }).status).sort(), [200, 409]);
+
+    const diagnostics = results.map((result, index) =>
+      `child ${index}: status=${result.status}${result.error ? ` error=${result.error}` : ''}`).join('\n');
+    assert.deepEqual(results.map(result => result.status).sort(), [200, 409],
+      `Expected exactly one successful claim and one explicit conflict.\n${diagnostics}`);
     await Promise.all(exits);
     assert.equal(f.hive.tasks.get(f.brain.agent, task.id).revision, 2);
   } finally {
-    for (const child of children) if (child.exitCode === null) child.kill('SIGKILL');
-    await Promise.all(exits);
+    for (const [index, child] of children.entries()) {
+      if (child.exitCode === null && child.signalCode === null) {
+        states[index]!.phase = `${states[index]!.phase} -> killed by parent`;
+        child.kill('SIGKILL');
+      }
+    }
+    await Promise.allSettled(exits);
   }
 });
 
