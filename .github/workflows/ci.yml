@@ -96,15 +96,6 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
-      - name: Ensure required zsh
-        shell: bash
-        run: |
-          if ! command -v zsh >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y zsh
-          fi
-          zsh --version
-
       - name: Unit contracts with coverage
         run: |
           mkdir -p artifacts/coverage
@@ -153,15 +144,6 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
-      - name: Ensure required zsh
-        shell: bash
-        run: |
-          if ! command -v zsh >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y zsh
-          fi
-          zsh --version
-
       - name: Integration shard with coverage
         run: |
           mkdir -p artifacts/coverage
@@ -207,15 +189,6 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
-      - name: Ensure required zsh
-        shell: bash
-        run: |
-          if ! command -v zsh >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y zsh
-          fi
-          zsh --version
-
       - name: Unit contracts
         run: node scripts/run-logged.mjs artifacts/unit-node22.log npm run test:unit
 
@@ -249,15 +222,6 @@ jobs:
 
       - name: Install locked dependencies
         run: npm ci
-
-      - name: Ensure required zsh
-        shell: bash
-        run: |
-          if ! command -v zsh >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y zsh
-          fi
-          zsh --version
 
       - name: Integration shard
         run: |
