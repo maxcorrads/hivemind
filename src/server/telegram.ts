@@ -18,6 +18,13 @@ import { resolveUploadMime } from "../shared/mime.ts";
 import { Hive, channelLabel } from "./hive.ts";
 import { hiveHome } from "./paths.ts";
 import { filePathForHash, safeFileName } from "./files.ts";
+import {
+  adaptiveDirective,
+  appendAdaptiveTelemetry,
+  evaluateAdaptiveRequest,
+  loadAdaptiveRouting,
+  shouldRouteHumanMessage,
+} from "./adaptive-routing.ts";
 
 export type TelegramConfig = {
   botToken: string;
@@ -845,16 +852,38 @@ export class TelegramBridge {
       return;
     }
     const replyUnavailable = Boolean(replyId && !threadId);
-    const body = inboundPostBody(message.from?.first_name,
-      replyUnavailable ? `[Original reply unavailable] ${text}`.slice(0, 3900) : text, attachmentIds.length > 0);
+    const routingText = replyUnavailable ? `[Original reply unavailable] ${text}`.slice(0, 3900) : text;
+    const body = inboundPostBody(message.from?.first_name, routingText, attachmentIds.length > 0);
+    const human = this.hive.getAgent(HUMAN_ID);
+    const persistReceipt = (posted: Message) => {
+      this.hive.db.prepare(`INSERT OR REPLACE INTO telegram_out
+        (telegram_chat_id, telegram_message_id, seq, channel_id, thread_id, bot_key) VALUES (?, ?, ?, ?, ?, ?)`)
+        .run(chatId, message.message_id, posted.seq, posted.channelId, posted.threadId, telegramConfigKey(this.cfg));
+    };
     try {
-      this.hive.postMessage(this.hive.getAgent(HUMAN_ID), {
-        channel: channelId, body, threadId, source: "telegram", attachmentIds,
-      }, posted => {
-        this.hive.db.prepare(`INSERT OR REPLACE INTO telegram_out
-          (telegram_chat_id, telegram_message_id, seq, channel_id, thread_id, bot_key) VALUES (?, ?, ?, ?, ?, ?)`)
-          .run(chatId, message.message_id, posted.seq, posted.channelId, posted.threadId, telegramConfigKey(this.cfg));
-      });
+      const channel = this.hive.getChannel(channelId);
+      const config = loadAdaptiveRouting(this.hive.home);
+      const brainIds = new Set(this.hive.listAgents(human)
+        .filter(agent => agent.role === "brain" && agent.project === channel.project)
+        .map(agent => agent.id));
+      if (config?.enabled && shouldRouteHumanMessage(channel, routingText, threadId, brainIds)) {
+        const project = this.hive.getProjectBySlug(channel.project);
+        const routing = await evaluateAdaptiveRequest(routingText, config, {
+          project: { slug: project.slug, name: project.name },
+        });
+        this.hive.postAdaptiveRequest(human, {
+          channel: channelId, body, threadId, source: "telegram", attachmentIds,
+        }, adaptiveDirective(routing), `adaptive-${routing.routeId}`, persistReceipt);
+        try {
+          appendAdaptiveTelemetry(this.hive.home, routing, routingText, { id: project.id, slug: project.slug });
+        } catch {
+          console.error("Adaptive routing telemetry write failed");
+        }
+      } else {
+        this.hive.postMessage(human, {
+          channel: channelId, body, threadId, source: "telegram", attachmentIds,
+        }, persistReceipt);
+      }
     } catch (error) { this.discardUnboundAttachments(attachmentIds); throw error; }
   }
 
