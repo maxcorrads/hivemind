@@ -87,6 +87,16 @@ export type AdaptiveExecutionState = {
   updatedAt: number;
 };
 
+export type AdaptiveAgentPolicy = {
+  executionId: string;
+  currentTopology: AdaptiveTopology;
+  workerBudget: number;
+  desiredTopology: AdaptiveTopology | null;
+  desiredWorkers: number | null;
+  lockScope: AdaptiveLockScope;
+  lockedTopology: AdaptiveTopology | null;
+};
+
 export type AdaptiveRoutingView = {
   state: AdaptiveExecutionState | null;
   events: AdaptiveRoutingEvent[];
