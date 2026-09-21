@@ -31,8 +31,8 @@ its effective scope:
 - Playwright browser downloads use a version-sensitive Linux cache; required
   Chromium system packages are installed explicitly. Browser contracts stay isolated
   from server integration shards.
-- Linux integration jobs ensure zsh is available, so generated shell contracts are
-  still parsed/executed during the full Node suites.
+- Cross-platform shell argument contracts run with bash on Linux; zsh-only syntax
+  validation remains in the focused native macOS job, avoiding repeated package-manager setup on ephemeral Linux runners.
 - One focused native macOS job runs the launch/plugin shell contracts with the real
   macOS zsh environment. `Tests / Node 24` requires that job as well as every Node 24 shard.
 - npm's download cache is used; `node_modules` is not cached.
