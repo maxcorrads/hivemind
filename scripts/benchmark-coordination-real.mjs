@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { DEFAULT_SEED, WORKFLOWS, loadFixtures, seededShuffle } from './benchmark-coordination.mjs';
 
 export const REAL_AGENT_PROTOCOL_VERSION = 1;
-export const REAL_AGENT_PROMPT_VERSION = 'coordination-real-v2';
+export const REAL_AGENT_PROMPT_VERSION = 'coordination-real-v3';
 export const REAL_AGENT_TASK_VERSION = 'coordination-task-v1';
 export const PILOT_PRESET_VERSION = 1;
 
@@ -23,7 +23,7 @@ const finiteOrNull = value => value === null || (typeof value === 'number' && Nu
 
 export function taskBaseInput(fixture, task, seed, repeatIndex) {
   return [
-    'coordination-real-v2',
+    'coordination-real-v3',
     `fixture=${fixture.id}`,
     `seed=${seed}`,
     `repeat=${repeatIndex}`,
