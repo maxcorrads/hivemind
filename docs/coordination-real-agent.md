@@ -92,7 +92,7 @@ Executor behavior:
 - finite room setup uses the first dependency-ready runbook task as the external origin task, then binds the room contract to that `originTaskId`; remaining room-bound assignments use the live contract version/action keys;
 - worker capability cards mirror the versioned fixture capabilities;
 - the brain assembles `BENCHMARK_RESULT.json` from reviewed worker results; the harness compares it with the hidden deterministic expected artifact;
-- wall time is retained for both hosts; Codex CLI token counts are retained when available, and OpenCode JSONL `step_finish.part.tokens.total` values are summed across each seat and then across the trial as parser-verified provider usage;
+- wall time is retained for both hosts; Codex CLI token counts are retained when available, while OpenCode JSONL `step_finish.part.tokens.total` is cumulative per seat, so the latest valid total is retained for each seat and seat totals are then summed across the trial;
 - run logs, Hivemind state, final artifacts, and harness failures stay under the trial directory;
 - a trial that has been attempted is skipped on resume rather than silently rerun away.
 
