@@ -106,7 +106,7 @@ export class TaskStore {
     try { this.evidence(worker, sequences); }
     catch (error) {
       if (error instanceof HiveError)
-        throw new HiveError(error.status, 'Assigned worker cannot read one or more contract evidenceSeqs; use [] or messages already visible to that worker');
+        throw new HiveError(error.status, 'Cannot read one or more contract evidenceSeqs as the assigned worker; use [] or messages already visible to that worker');
       throw error;
     }
   }
