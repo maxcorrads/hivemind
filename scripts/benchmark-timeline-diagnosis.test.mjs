@@ -79,7 +79,7 @@ test('baseline condition preserves message/thread evidence but removes timeline-
   assert.ok(baseline.events.length > 0);
   assert.ok(baseline.events.every(event => event.kind === 'message'));
   const serialized = JSON.stringify(baseline);
-  assert.doesNotMatch(serialized, /wakeReason|deliveryId|"source"|explicit/);
+  assert.doesNotMatch(serialized, /wakeReason|deliveryId|"source"|"relation"/);
   assert.match(serialized, /inferredThreadParentMessageId/);
 });
 
