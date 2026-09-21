@@ -1,0 +1,280 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "id": "current-compatibility-boundary",
+      "description": "A current task needs one compatibility decision while unrelated project traffic is active.",
+      "prompt": "Resolve the compatibility boundary blocking the API task.",
+      "answerKey": {
+        "action": "answer",
+        "optionId": "compatible",
+        "taskId": "task-api-contract",
+        "taskRevision": 3
+      },
+      "mentionView": {
+        "mode": "mentions",
+        "project": "chapter",
+        "entries": [
+          {
+            "seq": 101,
+            "channel": "general",
+            "author": "Worker C",
+            "body": "Importer cleanup is complete; no Human action requested."
+          },
+          {
+            "seq": 104,
+            "channel": "api",
+            "author": "Brain",
+            "body": "@Human task task-api-contract revision 3 is blocked. Choose strict (reject legacy payloads immediately) or compatible (accept legacy payloads through the migration window). I recommend compatible because rollout distribution is still uncertain. Evidence: seq 98, artifact src/parser.ts. Affects Worker A and Worker B."
+          },
+          {
+            "seq": 105,
+            "channel": "api",
+            "author": "Worker A",
+            "body": "Blocked on task-api-contract revision 3 until the Human chooses the compatibility boundary."
+          }
+        ]
+      },
+      "decisionView": {
+        "mode": "decision_queue",
+        "project": "chapter",
+        "decision": {
+          "question": "Which compatibility boundary should task-api-contract revision 3 use?",
+          "state": "awaiting_input",
+          "taskId": "task-api-contract",
+          "taskRevision": 3,
+          "currentTaskRevision": 3,
+          "options": [
+            {
+              "id": "strict",
+              "label": "Strict",
+              "impact": "Reject legacy payloads immediately."
+            },
+            {
+              "id": "compatible",
+              "label": "Compatible",
+              "impact": "Accept legacy payloads through the migration window."
+            }
+          ],
+          "recommendation": {
+            "optionId": "compatible",
+            "rationale": "Lower migration risk.",
+            "uncertainty": "Production rollout distribution is not yet known."
+          },
+          "affectedWorkers": ["Worker A", "Worker B"],
+          "evidenceSeqs": [98],
+          "artifacts": ["src/parser.ts"],
+          "warning": "Awaiting Human input. Recommendation is advisory and does not apply automatically."
+        }
+      }
+    },
+    {
+      "id": "superseded-task-revision",
+      "description": "An older Human question remains in mention history after the structured task changed revision.",
+      "prompt": "Decide whether the visible compatibility request may still be applied.",
+      "answerKey": {
+        "action": "do_not_apply",
+        "optionId": null,
+        "taskId": "task-schema-rollout",
+        "taskRevision": 4
+      },
+      "mentionView": {
+        "mode": "mentions",
+        "project": "chapter",
+        "entries": [
+          {
+            "seq": 210,
+            "channel": "schema",
+            "author": "Brain",
+            "body": "@Human task task-schema-rollout revision 3: choose old-schema-only or dual-read. Recommendation: dual-read. Requested by 14:00."
+          },
+          {
+            "seq": 216,
+            "channel": "schema",
+            "author": "Brain",
+            "body": "task-schema-rollout changed to revision 4 after the backend contract moved. The old revision 3 request has not been re-issued."
+          },
+          {
+            "seq": 218,
+            "channel": "general",
+            "author": "Worker D",
+            "body": "Unrelated release note draft ready for review."
+          }
+        ]
+      },
+      "decisionView": {
+        "mode": "decision_queue",
+        "project": "chapter",
+        "decision": {
+          "question": "Should task-schema-rollout use old-schema-only or dual-read?",
+          "state": "superseded",
+          "taskId": "task-schema-rollout",
+          "taskRevision": 3,
+          "currentTaskRevision": 4,
+          "options": [
+            {
+              "id": "old-schema-only",
+              "label": "Old schema only",
+              "impact": "Keep the previous contract and reject the new payload shape."
+            },
+            {
+              "id": "dual-read",
+              "label": "Dual read",
+              "impact": "Accept both payload shapes during migration."
+            }
+          ],
+          "recommendation": {
+            "optionId": "dual-read",
+            "rationale": "Lower rollout risk on revision 3.",
+            "uncertainty": "The recommendation predates the revision 4 contract change."
+          },
+          "affectedWorkers": ["Worker A"],
+          "evidenceSeqs": [210, 216],
+          "artifacts": ["src/schema.ts"],
+          "warning": "Superseded: the task is now revision 4. Do not apply the revision 3 answer."
+        }
+      }
+    },
+    {
+      "id": "related-distinct-questions",
+      "description": "Two related Human questions exist for one task and workers repeat one blocker in separate channels.",
+      "prompt": "Resolve only the retention decision for the audit-storage task.",
+      "answerKey": {
+        "action": "answer",
+        "optionId": "retain-30d",
+        "taskId": "task-audit-storage",
+        "taskRevision": 5
+      },
+      "mentionView": {
+        "mode": "mentions",
+        "project": "chapter",
+        "entries": [
+          {
+            "seq": 330,
+            "channel": "storage",
+            "author": "Brain",
+            "body": "@Human task task-audit-storage revision 5 retention decision: retain-7d or retain-30d? Recommendation retain-30d because support investigations sometimes cross weekly boundaries. Evidence seq 326."
+          },
+          {
+            "seq": 331,
+            "channel": "security",
+            "author": "Brain",
+            "body": "@Human related but separate question for task-audit-storage revision 5: encrypt archived audit blobs now or in the next migration?"
+          },
+          {
+            "seq": 334,
+            "channel": "storage",
+            "author": "Worker A",
+            "body": "@Human still blocked on the retention choice for task-audit-storage revision 5."
+          },
+          {
+            "seq": 337,
+            "channel": "worker-b",
+            "author": "Worker B",
+            "body": "@Human do we have the audit retention answer yet? My task depends on it."
+          }
+        ]
+      },
+      "decisionView": {
+        "mode": "decision_queue",
+        "project": "chapter",
+        "decision": {
+          "question": "How long should task-audit-storage revision 5 retain audit records?",
+          "state": "awaiting_input",
+          "taskId": "task-audit-storage",
+          "taskRevision": 5,
+          "currentTaskRevision": 5,
+          "options": [
+            {
+              "id": "retain-7d",
+              "label": "Retain 7 days",
+              "impact": "Lower storage use but shorter investigation history."
+            },
+            {
+              "id": "retain-30d",
+              "label": "Retain 30 days",
+              "impact": "Higher storage use with a longer support investigation window."
+            }
+          ],
+          "recommendation": {
+            "optionId": "retain-30d",
+            "rationale": "Support investigations can cross weekly boundaries.",
+            "uncertainty": "Future audit volume is estimated rather than measured."
+          },
+          "affectedWorkers": ["Worker A", "Worker B"],
+          "evidenceSeqs": [326],
+          "artifacts": ["src/audit-store.ts"],
+          "relatedDecisionIds": ["decision-encryption-migration"],
+          "warning": "Answer this decision only. The related encryption question remains a distinct request."
+        }
+      }
+    },
+    {
+      "id": "expired-recommendation",
+      "description": "A recommendation is still visible after the requested-by time expired.",
+      "prompt": "Decide whether the expired indexing request may still be applied.",
+      "answerKey": {
+        "action": "do_not_apply",
+        "optionId": null,
+        "taskId": "task-search-index",
+        "taskRevision": 7
+      },
+      "mentionView": {
+        "mode": "mentions",
+        "project": "chapter",
+        "entries": [
+          {
+            "seq": 450,
+            "channel": "search",
+            "author": "Brain",
+            "body": "@Human task task-search-index revision 7: choose rebuild-now or defer-rebuild. I recommend rebuild-now with medium uncertainty. Requested by 09:30."
+          },
+          {
+            "seq": 456,
+            "channel": "search",
+            "author": "Worker C",
+            "body": "The 09:30 requested-by time has passed. No fresh Human decision request has been issued."
+          },
+          {
+            "seq": 459,
+            "channel": "general",
+            "author": "Brain",
+            "body": "Unrelated localization work is continuing normally."
+          }
+        ]
+      },
+      "decisionView": {
+        "mode": "decision_queue",
+        "project": "chapter",
+        "decision": {
+          "question": "Should task-search-index revision 7 rebuild the index now or defer?",
+          "state": "expired",
+          "taskId": "task-search-index",
+          "taskRevision": 7,
+          "currentTaskRevision": 7,
+          "options": [
+            {
+              "id": "rebuild-now",
+              "label": "Rebuild now",
+              "impact": "Spend capacity immediately and refresh results sooner."
+            },
+            {
+              "id": "defer-rebuild",
+              "label": "Defer rebuild",
+              "impact": "Preserve current capacity and keep the older index longer."
+            }
+          ],
+          "recommendation": {
+            "optionId": "rebuild-now",
+            "rationale": "Fresh results would reduce support confusion.",
+            "uncertainty": "Current capacity headroom is only estimated."
+          },
+          "affectedWorkers": ["Worker C"],
+          "evidenceSeqs": [450, 456],
+          "artifacts": ["src/search-index.ts"],
+          "warning": "Expired: the recommendation is advisory and expiry does not authorize it."
+        }
+      }
+    }
+  ]
+}
