@@ -416,8 +416,8 @@ export function adaptiveDirective(decision: AdaptiveRoutingDecision): string {
   ].filter(Boolean).join("\n");
 }
 
-export function shouldRouteHumanMessage(channel: Channel, body: string, threadId: string | null, brainIds: Set<string>): boolean {
-  if (!body.trim() || threadId !== null || channel.type !== "dm") return false;
+export function shouldRouteHumanMessage(channel: Channel, _body: string, threadId: string | null, brainIds: Set<string>): boolean {
+  if (threadId !== null || channel.type !== "dm") return false;
   return channel.memberIds.some(id => brainIds.has(id));
 }
 
