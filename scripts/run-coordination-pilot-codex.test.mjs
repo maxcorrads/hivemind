@@ -12,6 +12,7 @@ import {
   trialTemplate,
 } from './benchmark-coordination-real.mjs';
 import {
+  BENCHMARK_PORT,
   bootstrapBenchmarkHumanSession,
   buildBrainPrompt,
   buildSinglePrompt,
