@@ -35,11 +35,25 @@ export function codexExecutable(env = process.env) {
 }
 
 export function parseProviderTokens(text) {
-  const matches = [...String(text).matchAll(/tokens used\s*\n\s*([0-9][0-9.,]*)/gi)];
-  if (!matches.length) return null;
-  const digits = matches.at(-1)[1].replace(/[.,]/g, '');
-  const value = Number(digits);
-  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+  const source = String(text);
+  const codex = [...source.matchAll(/tokens used\s*\n\s*([0-9][0-9.,]*)/gi)];
+  if (codex.length) {
+    const digits = codex.at(-1)[1].replace(/[.,]/g, '');
+    const value = Number(digits);
+    return Number.isSafeInteger(value) && value >= 0 ? value : null;
+  }
+
+  let latest = null;
+  for (const line of source.split(/\r?\n/)) {
+    if (!line.trim().startsWith('{')) continue;
+    let event;
+    try { event = JSON.parse(line); } catch { continue; }
+    if (event?.type !== 'step_finish') continue;
+    const value = event?.part?.tokens?.total;
+    if (!Number.isSafeInteger(value) || value < 0) continue;
+    latest = value;
+  }
+  return latest;
 }
 
 export function parseReasoningEffort(configuration) {
@@ -66,13 +80,15 @@ export function codexArgs(trial) {
   return args;
 }
 
-export function opencodeArgs(trial, prompt) {
+export function opencodeArgs(trial, prompt, workdir) {
   assert.equal(trial.versions.host, 'opencode');
+  assert.ok(path.isAbsolute(workdir), 'OpenCode benchmark workdir must be absolute');
   assert.match(trial.versions.configuration, /(^|[;,\s])auto(?:=true)?($|[;,\s])/i,
     'OpenCode pilot configuration must record --auto as configuration=auto');
   return [
     '--pure',
     'run',
+    '--dir', workdir,
     '--model', trial.versions.model,
     '--auto',
     '--format', 'json',
@@ -80,7 +96,7 @@ export function opencodeArgs(trial, prompt) {
   ];
 }
 
-export function hostInvocation(trial, prompt, baseEnv, repoRoot, withHivemind) {
+export function hostInvocation(trial, prompt, baseEnv, repoRoot, withHivemind, workdir) {
   if (trial.versions.host === 'codex') {
     return { args: codexArgs(trial), stdin: prompt, env: baseEnv };
   }
@@ -103,7 +119,7 @@ export function hostInvocation(trial, prompt, baseEnv, repoRoot, withHivemind) {
       } : {}),
     };
     return {
-      args: opencodeArgs(trial, prompt),
+      args: opencodeArgs(trial, prompt, workdir),
       stdin: null,
       env: {
         ...baseEnv,
@@ -302,13 +318,43 @@ function appendTail(current, chunk, limit = 1_000_000) {
   return joined.length > limit ? joined.slice(-limit) : joined;
 }
 
+export function openCodeUsageAccumulator() {
+  let pending = '', latest = null;
+  const consume = line => {
+    if (!line.trim().startsWith('{')) return;
+    let event;
+    try { event = JSON.parse(line); } catch { return; }
+    if (event?.type !== 'step_finish') return;
+    const value = event?.part?.tokens?.total;
+    if (!Number.isSafeInteger(value) || value < 0) return;
+    latest = value;
+  };
+  return {
+    push(chunk) {
+      pending += chunk.toString('utf8');
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop() ?? '';
+      for (const line of lines) consume(line);
+    },
+    finish() {
+      if (pending) consume(pending);
+      return latest;
+    },
+  };
+}
+
 function startSeat({ binary, args, cwd, stdin, stdoutPath, stderrPath, env, timeoutMs }) {
   mkdirSync(path.dirname(stdoutPath), { recursive: true });
   const stdoutFile = createWriteStream(stdoutPath, { flags: 'wx' });
   const stderrFile = createWriteStream(stderrPath, { flags: 'wx' });
   const child = spawn(binary, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
   let stdoutTail = '', stderrTail = '', timedOut = false;
-  child.stdout.on('data', chunk => { stdoutTail = appendTail(stdoutTail, chunk); stdoutFile.write(chunk); });
+  const openCodeUsage = openCodeUsageAccumulator();
+  child.stdout.on('data', chunk => {
+    stdoutTail = appendTail(stdoutTail, chunk);
+    openCodeUsage.push(chunk);
+    stdoutFile.write(chunk);
+  });
   child.stderr.on('data', chunk => { stderrTail = appendTail(stderrTail, chunk); stderrFile.write(chunk); });
   child.stdin.on('error', () => undefined);
   child.stdin.end(stdin ?? undefined);
@@ -332,7 +378,7 @@ function startSeat({ binary, args, cwd, stdin, stdoutPath, stderrPath, env, time
         error: spawnError ? String(spawnError.message ?? spawnError) : null,
         stdoutTail,
         stderrTail,
-        providerTokens: parseProviderTokens(stdoutTail + '\n' + stderrTail),
+        providerTokens: openCodeUsage.finish() ?? parseProviderTokens(stdoutTail + '\n' + stderrTail),
       });
     });
   });
@@ -534,7 +580,7 @@ async function runTrial(options, trial, fixture, binary, binaryVersion) {
   try {
     if (trial.trial.workflow === 'single_worker') {
       const prompt = buildSinglePrompt(trial);
-      const invocation = hostInvocation(trial, prompt, { ...process.env }, options.repoRoot, false);
+      const invocation = hostInvocation(trial, prompt, { ...process.env }, options.repoRoot, false, workspace);
       const seat = startSeat({
         binary,
         args: invocation.args,
@@ -569,7 +615,7 @@ async function runTrial(options, trial, fixture, binary, binaryVersion) {
           HIVEMIND_URL: `http://127.0.0.1:${BENCHMARK_PORT}`,
           HIVEMIND_HOME: path.join(attemptDir, 'agent-identities'),
         };
-        const invocation = hostInvocation(trial, prompt, baseEnv, options.repoRoot, true);
+        const invocation = hostInvocation(trial, prompt, baseEnv, options.repoRoot, true, workspace);
         const proc = startSeat({
           binary,
           args: invocation.args,
@@ -590,7 +636,7 @@ async function runTrial(options, trial, fixture, binary, binaryVersion) {
         HIVEMIND_URL: `http://127.0.0.1:${BENCHMARK_PORT}`,
         HIVEMIND_HOME: path.join(attemptDir, 'agent-identities'),
       };
-      const brainInvocation = hostInvocation(trial, brainPrompt, brainEnv, options.repoRoot, true);
+      const brainInvocation = hostInvocation(trial, brainPrompt, brainEnv, options.repoRoot, true, workspace);
       const brain = startSeat({
         binary,
         args: brainInvocation.args,
@@ -663,9 +709,7 @@ async function runTrial(options, trial, fixture, binary, binaryVersion) {
   trial.efficiency.providerCost = null;
   trial.efficiency.providerCurrency = null;
   trial.efficiency.providerUsageReason = providerTokens === null
-    ? (trial.versions.host === 'opencode'
-      ? 'OpenCode run output is retained, but this harness does not yet claim a parser-verified provider token aggregate; total remains null.'
-      : 'At least one benchmark seat did not emit a parseable Codex CLI token count; total remains null.')
+    ? 'At least one benchmark seat did not emit a parser-verified CLI token count; total remains null.'
     : `Sum of CLI-reported token counts across ${seatResults.length} benchmark seat(s).`;
   writeFileSync(path.join(options.input, `${trial.trialId}.json`), JSON.stringify(trial, null, 2) + '\n');
 
