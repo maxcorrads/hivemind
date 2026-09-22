@@ -185,6 +185,9 @@ export function App() {
   const themePainted = useRef(false);
   const channelStream = useRef<HTMLDivElement>(null);
   const threadStream = useRef<HTMLDivElement>(null);
+  const threadOpenAnchor = useRef<{
+    channelId: string; threadId: string; button: HTMLButtonElement; bottom: number; atBottom: boolean;
+  } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const threadBottomRef = useRef<HTMLDivElement>(null);
   const selRef = useRef(sel);
@@ -588,10 +591,20 @@ export function App() {
   // thread opens, even when the bounded message window keeps the same length.
   const threadVisible = !!threadPane;
   useLayoutEffect(() => {
-    if (stickBottom.current && pane?.historyThrough === undefined && channelStream.current)
-      channelStream.current.scrollTop = channelStream.current.scrollHeight;
+    const stream = channelStream.current;
+    const anchor = threadOpenAnchor.current;
+    if (anchor && (anchor.channelId !== selectedChannelId || anchor.threadId !== threadId)) threadOpenAnchor.current = null;
+    if (stream && anchor && anchor.channelId === selectedChannelId && anchor.threadId === threadPane?.threadId) {
+      // A held snapshot can still be scrolled to its bottom. Otherwise keep the
+      // clicked reply link at the same height after the message wraps.
+      if (anchor.atBottom) stream.scrollTop = stream.scrollHeight;
+      else if (anchor.button.isConnected) stream.scrollTop += anchor.button.getBoundingClientRect().bottom - anchor.bottom;
+      threadOpenAnchor.current = null;
+    } else if (stickBottom.current && pane?.historyThrough === undefined && stream) {
+      stream.scrollTop = stream.scrollHeight;
+    }
     stickBottom.current = true;
-  }, [pane, threadVisible]);
+  }, [pane, threadVisible, selectedChannelId, threadId, threadPane?.threadId]);
   useLayoutEffect(() => {
     if (threadPane?.historyThrough === undefined && threadStream.current)
       threadStream.current.scrollTop = threadStream.current.scrollHeight;
@@ -1266,8 +1279,15 @@ export function App() {
                   m={m}
                   replies={pane?.replyCounts[m.id] ?? 0}
                   status={pane?.threads.find((t) => t.id === m.id)?.status ?? null}
-                  onThread={() => {
+                  onThread={(button) => {
                     if (sel.kind !== "channel") return;
+                    const stream = channelStream.current;
+                    if (stream && threadPane?.threadId !== m.id) {
+                      threadOpenAnchor.current = {
+                        channelId: sel.id, threadId: m.id, button, bottom: button.getBoundingClientRect().bottom,
+                        atBottom: stream.scrollHeight - stream.clientHeight - stream.scrollTop <= 48,
+                      };
+                    }
                     go({ kind: "channel", id: sel.id, thread: m.id });
                   }}
                   onReact={(emoji) => api.react(m.seq, emoji, !m.reactions?.some(reaction => reaction.emoji === emoji && reaction.mine)).then((r) => {
@@ -2159,7 +2179,7 @@ function Msg({
   m: Message;
   replies: number;
   status: ThreadStatus | null;
-  onThread?: () => void;
+  onThread?: (button: HTMLButtonElement) => void;
   onReact?: (emoji: string) => void;
 }) {
   const time = new Date(m.createdAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
@@ -2210,7 +2230,7 @@ function Msg({
           </div>
         )}
         {onThread && m.kind === "chat" && (
-          <button type="button" className="replies" onClick={onThread}>
+          <button type="button" className="replies" onClick={event => onThread(event.currentTarget)}>
             {replies > 0 ? `${replies} ${replies === 1 ? "reply" : "replies"}` : "Thread"}
           </button>
         )}
