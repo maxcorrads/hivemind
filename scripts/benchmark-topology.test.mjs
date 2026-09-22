@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { prepareStudy, validateStudy, summarizeStudy, main, CONDITIONS } from './benchmark-topology.mjs';
@@ -15,12 +16,12 @@ function evidence() { return { schemaVersion: 1, evidenceClass: 'adaptive-eviden
   coverage: { attemptsStarted: 1, attemptsFinished: 1, pendingAttempts: 0, retainedAttempts: 1, prunedAttempts: 0, historyComplete: true, usageComplete: true },
   overhead: { successfulAttempts: 1, unavailableAttempts: 0, tokenObservations: 1, unknownUsageAttempts: 0, knownInputTokens: 10, knownOutputTokens: 5,
     totalInputTokens: 10, totalOutputTokens: 5, latencyObservations: 1, knownLatencyMs: 50, summedLatencyMs: 50 } }; }
-function completed() {
-  const study = prepareStudy(structuredClone(config));
-  for (const t of study.trials) t.observed = { evidenceKind: 'synthetic', versions: structuredClone(config.versions), freeWorkers: 3,
+function completed(studyConfig = config, routerEvidenceForTrial = evidence) {
+  const study = prepareStudy(structuredClone(studyConfig));
+  for (const t of study.trials) t.observed = { evidenceKind: 'synthetic', versions: structuredClone(studyConfig.versions), freeWorkers: studyConfig.freeWorkers,
     jevEnabled: t.condition === 'auto', initialTopology: t.condition === 'auto' ? 'single' : t.condition, routingOverrides: 0, outcome: 'passed', independentlyReviewed: true, instrumentationHealthy: true,
     wallMs: t.condition === 'auto' ? 110 : 100, workloadTokens: t.condition === 'auto' ? 80 : 100,
-    workloadUsageSource: 'provider_reported', defects: 0, routerEvidence: t.condition === 'auto' ? evidence() : null,
+    workloadUsageSource: 'provider_reported', defects: 0, routerEvidence: t.condition === 'auto' ? routerEvidenceForTrial() : null,
     routingReview: t.condition === 'auto' ? { underOrchestration: null, prematureDowngrade: null, flapping: null } : null,
     evidenceRef: 'redacted/review.json' };
   return study;
@@ -146,6 +147,60 @@ test('CLI is offline, uses exclusive private outputs, preserves inputs and diagn
   assert.throws(() => main(['validate','--input',input,'--bogus','value']));
 });
 
+test('CLI validates and summarizes the full supported cohort with retained export detail', t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-large-study-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const input = path.join(dir, 'study.json'), output = path.join(dir, 'summary.json');
+  const model = 'm'.repeat(200), attempts = 500;
+  // Synthetic adaptive-evidence-v1 export shape, including the producer's bounded
+  // policy tail. This contract fixture does not import or require its recorder.
+  const retained = { ...evidence(), executionAlias: 'execution-1', models: [model],
+    coverage: { startedAt: 1900000000000, endedAt: 1900000000500, attemptsStarted: attempts, attemptsFinished: attempts,
+      pendingAttempts: 0, retainedAttempts: attempts, prunedAttempts: 0, historyComplete: true, usageComplete: true,
+      collection: 'since_recorder_installation', countsAre: 'classifier_attempts_not_verified_billable_calls' },
+    overhead: { successfulAttempts: attempts, unavailableAttempts: 0, tokenObservations: attempts, unknownUsageAttempts: 0,
+      knownInputTokens: 5000, knownOutputTokens: 2500, totalInputTokens: 5000, totalOutputTokens: 2500,
+      latencyObservations: attempts, knownLatencyMs: 25000, summedLatencyMs: 25000, monetaryCost: null },
+    attempts: Array.from({ length: attempts }, (_, i) => ({ ordinal: i + 1, phase: i ? 'continuous' : 'initial', status: 'ok',
+      currentTopology: i ? 'brain_multi_room' : null, currentWorkers: i ? 254 : 0, usableWorkers: 254, targetTopology: 'brain_multi_room',
+      targetWorkers: 254, confidence: 0.9999999999999999, latencyMs: 50, inputTokens: 10, outputTokens: 5, model })),
+    policyEvents: Array.from({ length: 500 }, () => ({ kind: 'transition', from: 'brain_multi_room', target: 'brain_multi_room',
+      applied: 'brain_multi_room', targetWorkers: 254, appliedWorkers: 254, changed: false, hasWarning: false })),
+    policyEventCoverage: 'retained_tail_only', limitations: ['Synthetic export fixture; not measured performance.'] };
+  const study = completed({ ...config, repeats: 10, freeWorkers: 254, limits: { ...config.limits, wallMs: 60000 },
+    workloads: Array.from({ length: 10 }, (_, i) => ({ ...config.workloads[0], id: `fixture-work-${i}` })) }, () => retained);
+  for (const trial of study.trials) {
+    trial.observed.wallMs = trial.condition === 'auto' ? 30000 : 28000;
+    if (trial.condition === 'auto') trial.observed.initialTopology = 'brain_multi_room';
+  }
+  writeFileSync(input, JSON.stringify(study, null, 2), { mode: 0o600 });
+  const bytes = statSync(input).size;
+  assert.ok(bytes > 8 * 1024 * 1024, 'Regression must exceed the former CLI bound');
+  t.diagnostic(`Full exported-evidence cohort: ${bytes} bytes, 500 trials, 50,000 attempt details and 50,000 policy events`);
+  const cli = new URL('./benchmark-topology.mjs', import.meta.url).pathname;
+  const validated = spawnSync(process.execPath, [cli, 'validate', '--input', input], { encoding: 'utf8' });
+  assert.equal(validated.status, 0, validated.stderr);
+  assert.deepEqual(JSON.parse(validated.stdout), { expected: 500, completed: 500, pending: 0, resolvedModels: [model] });
+  const summarized = spawnSync(process.execPath, [cli, 'summarize', '--input', input, '--output', output], { encoding: 'utf8' });
+  assert.equal(summarized.status, 0, summarized.stderr);
+  const summary = JSON.parse(readFileSync(output, 'utf8'));
+  assert.equal(summary.evidenceClass, 'synthetic_topology_comparison');
+  for (const comparison of summary.comparison) {
+    assert.equal(comparison.matchedPairs, 100);
+    assert.equal(comparison.deltaNetTokens.observations, 100);
+    assert.equal(comparison.deltaNetTokens.mean, 7480);
+  }
+});
+
+test('CLI rejects oversized input before parsing and does not create output', t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-oversized-study-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const input = path.join(dir, 'oversized.json'), output = path.join(dir, 'summary.json');
+  writeFileSync(input, '{}'); truncateSync(input, 128 * 1024 * 1024 + 1);
+  for (const command of ['validate', 'summarize']) {
+    assert.throws(() => main([command, '--input', input, '--output', output]), /Study file exceeds 128 MiB/);
+    assert.throws(() => statSync(output), { code: 'ENOENT' });
+  }
+});
+
 test('mid-execution or pruned capture cannot claim complete net router savings', () => {
   const study = completed(); auto(study).observed.routerEvidence.attempts[0].phase = 'continuous';
   for (const c of summarizeStudy(study).comparison) assert.equal(c.deltaNetTokens.observations, 1);
@@ -176,4 +231,16 @@ test('missing resolved model or pruned capture suppresses net usage comparison',
   const pruned = completed(), e = auto(pruned).observed.routerEvidence;
   Object.assign(e.coverage, { retainedAttempts: 0, prunedAttempts: 1, historyComplete: false }); e.attempts = [];
   for (const c of summarizeStudy(pruned).comparison) assert.equal(c.deltaNetTokens.observations, 1);
+});
+
+test('acknowledged incomplete history needs no pruning to suppress net usage', () => {
+  const study = completed(), e = auto(study).observed.routerEvidence;
+  e.coverage.historyComplete = false;
+  for (const comparison of summarizeStudy(study).comparison) assert.equal(comparison.deltaNetTokens.observations, 1);
+  e.attempts[0].phase = 'continuous';
+  for (const comparison of summarizeStudy(study).comparison) assert.equal(comparison.deltaNetTokens.observations, 1);
+  e.coverage.historyComplete = 'false';
+  assert.throws(() => summarizeStudy(study));
+  Object.assign(e.coverage, { retainedAttempts: 0, prunedAttempts: 1, historyComplete: true }); e.attempts = [];
+  assert.throws(() => summarizeStudy(study), /Pruned evidence/);
 });

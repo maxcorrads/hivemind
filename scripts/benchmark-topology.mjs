@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { closeSync, openSync, readSync, writeFileSync } from 'node:fs';
+import { closeSync, fstatSync, openSync, readSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const STUDY_VERSION = 'topology-comparison-v1';
 export const CONDITIONS = ['auto', 'single', 'brain_one_worker', 'brain_multi_dm', 'brain_multi_room'];
+// Up to 100 Auto trials, each retaining 500 attempt details and 500 policy events.
+const MAX_STUDY_BYTES = 128 * 1024 * 1024;
 const sha = /^[a-f0-9]{40}$/;
 const digest = /^[a-f0-9]{64}$/;
 const key = /^[a-z0-9][a-z0-9._/-]{0,199}$/i;
@@ -63,7 +65,8 @@ function validateEvidence(e, policyVersion) {
   assert.ok(c.attemptsStarted > 0 && c.attemptsFinished <= c.attemptsStarted);
   assert.equal(c.pendingAttempts, c.attemptsStarted - c.attemptsFinished);
   assert.equal(c.retainedAttempts + c.prunedAttempts, c.attemptsStarted, 'Inconsistent retained evidence count');
-  assert.equal(c.historyComplete, c.prunedAttempts === 0);
+  assert.equal(typeof c.historyComplete, 'boolean');
+  assert.ok(!c.historyComplete || c.prunedAttempts === 0, 'Pruned evidence cannot claim complete history');
   assert.ok(Array.isArray(e.attempts) && e.attempts.length === c.retainedAttempts, 'Retained attempt detail must match its count');
   let previous = 0;
   for (const a of e.attempts) {
@@ -205,12 +208,21 @@ export function summarizeStudy(study) {
 }
 
 function readJson(file) {
-  const max = 8 * 1024 * 1024, fd = openSync(file, 'r'), buffer = Buffer.alloc(max + 1);
+  const fd = openSync(file, 'r'), buffer = Buffer.alloc(64 * 1024), chunks = [];
+  const withinLimit = bytes => assert.ok(bytes <= MAX_STUDY_BYTES, 'Study file exceeds 128 MiB');
   let bytes = 0;
-  try { while (bytes <= max) { const n = readSync(fd, buffer, bytes, buffer.length - bytes, null); if (!n) break; bytes += n; } }
+  try {
+    const stat = fstatSync(fd);
+    if (stat.isFile()) withinLimit(stat.size);
+    while (true) {
+      const n = readSync(fd, buffer, 0, Math.min(buffer.length, MAX_STUDY_BYTES - bytes + 1), null);
+      if (!n) break;
+      bytes += n; withinLimit(bytes);
+      chunks.push(Buffer.from(buffer.subarray(0, n)));
+    }
+  }
   finally { closeSync(fd); }
-  assert.ok(bytes <= max, 'Study file exceeds 8 MiB');
-  return JSON.parse(buffer.subarray(0, bytes).toString('utf8'));
+  return JSON.parse(Buffer.concat(chunks, bytes).toString('utf8'));
 }
 export function main(argv = process.argv.slice(2)) {
   const [command, ...args] = argv, options = {};
