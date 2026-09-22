@@ -770,25 +770,40 @@ for (const inThread of [false, true]) {
   });
 }
 
-test("opening a side thread keeps a live main chat aligned after text reflows", async ({ page }) => {
-  const alpha = project("alpha", "Alpha Hive"), a = channel("a", "Alpha", alpha);
-  const messages = Array.from({ length: 20 }, (_, index) => message(`root-${index}`, index + 1, a.id,
-    `Message ${index}. ${"Text that wraps into more lines when the side thread opens. ".repeat(12)}`));
-  const last = messages.at(-1)!;
-  const threads: Thread[] = [{ id: last.id, channelId: a.id, status: "open" }];
-  await installSnapshot(page, () => snapshot([alpha], [a]));
-  await installSocketHarness(page);
-  await installMessages(page, async (route, _id, threadId) => fulfillJson(route,
-    { ...payload(a, threadId ? [last] : messages, threads), threadId }));
-  await page.setViewportSize({ width: 1440, height: 800 });
-  await page.goto("/#/c/a");
-  const stream = page.locator("main .stream");
-  await expect(page.locator("main .msg")).toHaveCount(20);
-  await expect.poll(() => stream.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(3);
-  const before = await stream.evaluate(el => el.scrollWidth);
-  await page.locator("main .msg").last().getByRole("button", { name: "Thread", exact: true }).click();
-  await expect(page.locator("aside.thread")).toBeVisible();
-  expect(await stream.evaluate(el => el.scrollWidth)).toBeLessThan(before);
-  await expect.poll(() => stream.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(3);
-  await expect(page.locator("main").getByRole("button", { name: "Return to live", exact: true })).toHaveCount(0);
-});
+for (const reading of ["live", "held-bottom", "held-middle"] as const) {
+  test(`opening a side thread preserves the main chat position after reflow (${reading})`, async ({ page }) => {
+    const alpha = project("alpha", "Alpha Hive"), a = channel("a", "Alpha", alpha);
+    const messages = Array.from({ length: 20 }, (_, index) => message(`root-${index}`, index + 1, a.id,
+      `Message ${index}. ${"Text that wraps into more lines when the side thread opens. ".repeat(12)}`));
+    const last = reading === "held-middle" ? messages[10]! : messages.at(-1)!;
+    const threads: Thread[] = [{ id: last.id, channelId: a.id, status: "open" }];
+    await installSnapshot(page, () => snapshot([alpha], [a]));
+    await installSocketHarness(page);
+    await installMessages(page, async (route, _id, threadId) => fulfillJson(route,
+      { ...payload(a, threadId ? [last] : messages, threads), threadId, replyCounts: { [last.id]: 1 } }));
+    await page.setViewportSize({ width: 1440, height: 800 });
+    await page.goto("/#/c/a");
+    const stream = page.locator("main .stream");
+    await expect(page.locator("main .msg")).toHaveCount(20);
+    await expect.poll(() => stream.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(3);
+    if (reading !== "live") {
+      await stream.evaluate(el => { el.scrollTop = 0; });
+      await expect(page.locator("main").getByRole("button", { name: "Return to live", exact: true })).toBeVisible();
+      if (reading === "held-bottom") await stream.evaluate(el => { el.scrollTop = el.scrollHeight; });
+    }
+    const reply = page.locator("main .msg").filter({ has: page.getByText(last.body, { exact: true }) }).getByRole("button", { name: "1 reply", exact: true });
+    if (reading === "held-middle") await reply.evaluate(el => el.scrollIntoView({ block: "center" }));
+    const replyBottom = await reply.evaluate(el => el.getBoundingClientRect().bottom);
+    const before = await stream.evaluate(el => el.scrollWidth);
+    await reply.click();
+    await expect(page.locator("aside.thread")).toBeVisible();
+    expect(await stream.evaluate(el => el.scrollWidth)).toBeLessThan(before);
+    await expect(reply).toBeInViewport();
+    if (reading === "held-middle") {
+      await expect.poll(async () => Math.abs(await reply.evaluate(el => el.getBoundingClientRect().bottom) - replyBottom)).toBeLessThan(3);
+    } else {
+      await expect.poll(() => stream.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(3);
+    }
+    await expect(page.locator("main").getByRole("button", { name: "Return to live", exact: true })).toHaveCount(reading === "live" ? 0 : 1);
+  });
+}
