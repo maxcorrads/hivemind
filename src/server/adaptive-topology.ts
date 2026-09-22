@@ -9,8 +9,9 @@ import { loadAdaptiveRouting, type AdaptiveRoutingFile } from './adaptive-routin
 import { advanceTopologyPolicy, initialTopologyPolicy, minimumTopologyWorkers, topologyCheckpointSafe,
   topologyIsEscalation, validTopologyTarget, MIN_TOPOLOGY_CONFIDENCE,
   type TopologyTarget, type TopologyPolicyState, type TopologySafety } from '../shared/adaptive-topology-policy.ts';
-import { evaluateAdaptiveTopology, ADAPTIVE_TOPOLOGY_CONTRACT_VERSION,
+import { ADAPTIVE_TOPOLOGY_CONTRACT_VERSION,
   type TopologyCapacitySnapshot, type TopologyEvaluationSnapshot } from './adaptive-topology-provider.ts';
+import { observeTopologyEvaluation } from './adaptive-evidence-observer.ts';
 import { initAdaptiveCommitments, readAdaptiveCapacity } from './adaptive-topology-capacity.ts';
 import { coordinationEventId } from './adaptive-topology-admission.ts';
 import { immediateTransaction } from './transaction.ts';
@@ -256,7 +257,9 @@ export class AdaptiveTopologyRuntime {
     let capacity = this.capacity(state), decision: AdaptiveTopologyDecision | null = null;
     for (let attempt = 0; attempt < 3; attempt++) {
       const signature = fingerprint(capacity.workers.available);
-      decision = await evaluateAdaptiveTopology(this.snapshot(state, event, capacity), config, { signal: this.abort.signal });
+      decision = await observeTopologyEvaluation(this.hive.db,
+        { executionId: state.executionId, channelId: state.channelId, projectId: state.projectId, phase: 'continuous' },
+        this.snapshot(state, event, capacity), config, { signal: this.abort.signal });
       const next = this.capacity(state);
       if (decision.providerStatus !== 'ok' || signature === fingerprint(next.workers.available)) return { decision, capacity: next };
       capacity = next;
@@ -400,7 +403,9 @@ export class AdaptiveTopologyRuntime {
       let stable = !config?.enabled;
       if (config?.enabled) for (let attempt = 0; attempt < 3; attempt++) {
         const signature = fingerprint(capacity.workers.available);
-        decision = await evaluateAdaptiveTopology(makeSnapshot(), config, { signal: this.abort.signal });
+        decision = await observeTopologyEvaluation(this.hive.db,
+          { executionId, channelId: channel.id, projectId: channel.projectId, phase: 'initial' },
+          makeSnapshot(), config, { signal: this.abort.signal });
         capacity = this.capacity({ projectId: channel.projectId, executionId });
         stable = signature === fingerprint(capacity.workers.available);
         if (decision.providerStatus !== 'ok' || stable) break;
