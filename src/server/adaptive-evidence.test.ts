@@ -58,6 +58,53 @@ test('recent runs are bounded per channel and channel deletion removes evidence 
   assert.equal(exportAdaptiveEvidence(db, 'other').coverage.attemptsStarted, 1);
 });
 
+test('recently updated runs survive retention even when they were inserted first', t => {
+  const { db, store } = fixture(); t.after(() => db.close());
+  let now = 1_000; t.mock.method(Date, 'now', () => now++);
+  for (let i = 0; i < EVIDENCE_RUN_LIMIT; i++)
+    store.finish(store.begin({ ...scope, executionId: `e${i}`, phase: 'initial' }, input), decision);
+  store.finish(store.begin({ ...scope, executionId: 'e0' }, input), decision);
+  store.finish(store.begin({ ...scope, executionId: 'new', phase: 'initial' }, input), decision);
+  assert.equal(exportAdaptiveEvidence(db, 'e0').coverage.attemptsStarted, 2);
+  assert.throws(() => exportAdaptiveEvidence(db, 'e1'), /not found/);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM adaptive_evidence_runs').get()!.n, EVIDENCE_RUN_LIMIT);
+});
+
+test('active execution protection stays within the cap and ends when its lifecycle completes', t => {
+  const { db, store } = fixture(); t.after(() => db.close());
+  let now = 1_000; t.mock.method(Date, 'now', () => now++);
+  db.exec('CREATE TABLE adaptive_topology_executions(channel_id TEXT PRIMARY KEY, execution_id TEXT, snapshot TEXT)');
+  db.prepare('INSERT INTO adaptive_topology_executions VALUES(?,?,?)').run('c1', 'active', JSON.stringify({ completedAt: null }));
+  store.finish(store.begin({ ...scope, executionId: 'active', phase: 'initial' }, input), decision);
+  for (let i = 0; i < EVIDENCE_RUN_LIMIT; i++)
+    store.finish(store.begin({ ...scope, executionId: `rejected-${i}`, phase: 'initial' }, input), decision);
+  assert.equal(exportAdaptiveEvidence(db, 'active').coverage.attemptsStarted, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM adaptive_evidence_runs').get()!.n, EVIDENCE_RUN_LIMIT);
+  assert.throws(() => exportAdaptiveEvidence(db, 'rejected-0'), /not found/);
+  db.prepare('UPDATE adaptive_topology_executions SET snapshot=?').run(JSON.stringify({ completedAt: now }));
+  store.finish(store.begin({ ...scope, executionId: 'new', phase: 'initial' }, input), decision);
+  assert.throws(() => exportAdaptiveEvidence(db, 'active'), /not found/);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM adaptive_evidence_attempts').get()!.n, EVIDENCE_RUN_LIMIT);
+});
+
+test('recreated continuous capture does not claim complete execution history', t => {
+  const { db, store } = fixture(); t.after(() => db.close());
+  let now = 1_000; t.mock.method(Date, 'now', () => now++);
+  store.finish(store.begin({ ...scope, phase: 'initial' }, input), decision);
+  assert.equal(exportAdaptiveEvidence(db, scope.executionId).coverage.historyComplete, true);
+  for (let i = 0; i < EVIDENCE_RUN_LIMIT; i++)
+    store.finish(store.begin({ ...scope, executionId: `new-${i}`, phase: 'initial' }, input), decision);
+  assert.throws(() => exportAdaptiveEvidence(db, scope.executionId), /not found/);
+  const resumed = new AdaptiveEvidenceStore(db);
+  resumed.finish(resumed.begin(scope, input), decision);
+  const report = exportAdaptiveEvidence(db, scope.executionId);
+  assert.equal(report.coverage.historyComplete, false);
+  assert.equal(report.coverage.prunedAttempts, 0);
+  assert.equal(report.coverage.usageComplete, true);
+  assert.equal(report.overhead.knownInputTokens, 40);
+  assert.equal(report.attempts[0]!.phase, 'continuous');
+});
+
 test('evidence projects only numeric routing facts, never private input or decision fields', t => {
   const { db, store } = fixture(); t.after(() => db.close());
   const sensitiveInput = { ...input, request: 'private request', apiKey: 'private-key', workerName: 'private worker' };
