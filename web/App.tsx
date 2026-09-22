@@ -15,6 +15,7 @@ import type { AdaptiveExecutionState, AdaptiveRoutingEvent } from "../src/shared
 import { useAdaptiveRouting } from "./use-adaptive-routing.ts";
 import { routingStreamEntries } from "./adaptive-routing-view.ts";
 import { InboxReceipt, QueueBadge } from "./InboxReceipt.tsx";
+import { loadClosedDms, saveClosedDms } from "./closed-dms.ts";
 import { loadMailLog, mergeMailLog, saveMailLog } from "./mail-log.ts";
 import type { MentionPage, ReadSnapshot } from "../src/shared/read-state.ts";
 import { createReadFence, createReadRefresh, createReceiptQueue, createRequestGate, readFields } from "../src/shared/read-client.ts";
@@ -143,7 +144,8 @@ export function App() {
   const [botBusy, setBotBusy] = useState(false);
   const [credentialBot, setCredentialBot] = useState<Agent | null>(null);
   const [credentialBusy, setCredentialBusy] = useState(false);
-  const [confirmClear, setConfirmClear] = useState<string | null>(null);
+  const [agentConfirm, setAgentConfirm] = useState<{ name: string; kind: "clear" | "remove" } | null>(null);
+  const [agentBusy, setAgentBusy] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [launchOpen, setLaunchOpen] = useState(false);
   const [telegramOpen, setTelegramOpen] = useState(false);
@@ -174,6 +176,10 @@ export function App() {
   const [deletingProject, setDeletingProject] = useState(false);
   const [createIn, setCreateIn] = useState<string | null>(null);
   const [mailLog, setMailLog] = useState<Message[]>(loadMailLog);
+  const [closedDms, setClosedDms] = useState<string[]>(loadClosedDms);
+  const [dmPicker, setDmPicker] = useState<string | null>(null);
+  const [dmPickQ, setDmPickQ] = useState("");
+  const [dmMenu, setDmMenu] = useState<string | null>(null);
   const stickBottom = useRef(true);
   const themePainted = useRef(false);
   const channelStream = useRef<HTMLDivElement>(null);
@@ -370,6 +376,12 @@ export function App() {
         onThreadMessage(msg);
         readFence.current.observe(msg.seq);
         readRefresh.current?.request();
+        setClosedDms((ids) => {
+          if (!ids.includes(msg.channelId)) return ids;
+          const next = ids.filter((id) => id !== msg.channelId);
+          saveClosedDms(next);
+          return next;
+        });
         setMailLog((prev) => {
           const next = mergeMailLog(prev, [msg], channelsRef.current);
           if (next !== prev) saveMailLog(next);
@@ -474,6 +486,29 @@ export function App() {
   }, [loadChannel, refreshSnap, resetReadConnection, changeSelection, onThreadMessage, viewingThread, loadThread, setThreadPane]);
 
   const missingChannel = Boolean(snap && sel.kind === "channel" && !snap.channels.some((c) => c.id === sel.id));
+
+  useEffect(() => {
+    if (sel.kind !== "channel") return;
+    setClosedDms((ids) => {
+      if (!ids.includes(sel.id)) return ids;
+      const next = ids.filter((id) => id !== sel.id);
+      saveClosedDms(next);
+      return next;
+    });
+  }, [sel]);
+
+  useEffect(() => {
+    if (!dmPicker && !dmMenu) return;
+    const onDoc = (e: PointerEvent) => {
+      if (!(e.target instanceof Node)) return;
+      const el = e.target as HTMLElement;
+      if (el.closest(".dm-picker") || el.closest(".dm-row") || el.closest("[data-dm-open]")) return;
+      setDmPicker(null);
+      setDmMenu(null);
+    };
+    document.addEventListener("pointerdown", onDoc);
+    return () => document.removeEventListener("pointerdown", onDoc);
+  }, [dmPicker, dmMenu]);
 
   useEffect(() => {
     if (!snap) return;
@@ -708,17 +743,57 @@ export function App() {
     go({ kind: "channel", id: channel.id });
   };
 
+  const hideDm = (ch: Channel) => {
+    setClosedDms((ids) => {
+      if (ids.includes(ch.id)) return ids;
+      const next = [...ids, ch.id];
+      saveClosedDms(next);
+      return next;
+    });
+    setDmMenu(null);
+    if (sel.kind === "channel" && sel.id === ch.id) {
+      go({ kind: "inbox", project: ch.project });
+    }
+  };
+
+  const showDm = (ch: Channel) => {
+    setClosedDms((ids) => {
+      if (!ids.includes(ch.id)) return ids;
+      const next = ids.filter((id) => id !== ch.id);
+      saveClosedDms(next);
+      return next;
+    });
+    setDmPicker(null);
+    setDmPickQ("");
+    go({ kind: "channel", id: ch.id });
+  };
+
   const onAgent = async (agent: Agent) => {
     if (agent.id === "human") return;
     const { channel } = await api.openDm(agent.name);
+    setClosedDms((ids) => {
+      if (!ids.includes(channel.id)) return ids;
+      const next = ids.filter((id) => id !== channel.id);
+      saveClosedDms(next);
+      return next;
+    });
     await refreshSnap();
     go({ kind: "channel", id: channel.id });
   };
 
-  const onClear = async (name: string) => {
-    await api.clearContext(name);
-    setConfirmClear(null);
-    await refreshSnap();
+  const onAgentConfirm = async () => {
+    if (!agentConfirm) return;
+    setAgentBusy(true);
+    try {
+      if (agentConfirm.kind === "clear") await api.clearContext(agentConfirm.name);
+      else await api.removeAgent(agentConfirm.name);
+      setAgentConfirm(null);
+      await refreshSnap();
+    } catch (e) {
+      setErr(String((e as Error).message || e));
+    } finally {
+      setAgentBusy(false);
+    }
   };
 
   if (!snap && err) {
@@ -831,12 +906,20 @@ export function App() {
               (c.type === "public" || c.type === "brains" || c.type === "private") &&
               match(c.name),
           );
-          const myDms = channels.filter(
-            (c) => c.project === project.slug && c.type === "dm" && c.memberIds.includes("human") && match(c.name),
-          );
-          const otherDms = channels.filter(
-            (c) => c.project === project.slug && c.type === "dm" && !c.memberIds.includes("human") && match(c.name),
-          );
+          const projectDms = channels.filter((c) => c.project === project.slug && c.type === "dm" && match(c.name));
+          const openDms = projectDms
+            .filter((c) => !closedDms.includes(c.id))
+            .sort((a, b) => {
+              const unreadDelta = (snap.unread[b.id] ?? 0) - (snap.unread[a.id] ?? 0);
+              if (unreadDelta) return unreadDelta;
+              const mine = Number(!a.memberIds.includes("human")) - Number(!b.memberIds.includes("human"));
+              if (mine) return mine;
+              return a.name.localeCompare(b.name);
+            });
+          const hiddenDms = projectDms
+            .filter((c) => closedDms.includes(c.id))
+            .filter((c) => !dmPickQ.trim() || c.name.toLowerCase().includes(dmPickQ.trim().toLowerCase()))
+            .sort((a, b) => a.name.localeCompare(b.name));
           const hiveAgents = (snap.agents ?? []).filter(
             (a) => a.role === "human" || a.project === project.slug,
           ).filter((a) => !q || match(a.name) || match(a.focus ?? "") || match(a.role));
@@ -911,34 +994,63 @@ export function App() {
                   <div className="group">
                     <div className="group-h">
                       <span>Direct messages</span>
+                      <button
+                        type="button"
+                        className="plus"
+                        data-dm-open={project.slug}
+                        title="Open a conversation"
+                        onClick={() => {
+                          setDmMenu(null);
+                          setDmPickQ("");
+                          setDmPicker((cur) => (cur === project.slug ? null : project.slug));
+                        }}
+                      >
+                        +
+                      </button>
                     </div>
-                    {myDms.length === 0 && <div className="empty-mini">No direct messages</div>}
-                    {myDms.map((ch) => (
-                      <ChannelItem
+                    {dmPicker === project.slug && (
+                      <div className="dm-picker">
+                        <input
+                          autoFocus
+                          value={dmPickQ}
+                          onChange={(e) => setDmPickQ(e.target.value)}
+                          placeholder="Find a closed conversation"
+                        />
+                        {hiddenDms.length === 0 && (
+                          <div className="empty-mini">
+                            {projectDms.some((c) => closedDms.includes(c.id))
+                              ? "No match."
+                              : "Nothing closed. Close a DM from its ··· menu."}
+                          </div>
+                        )}
+                        {hiddenDms.map((ch) => (
+                          <button
+                            key={ch.id}
+                            type="button"
+                            className="nav"
+                            onClick={() => showDm(ch)}
+                          >
+                            <span>{ch.name}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {openDms.length === 0 && dmPicker !== project.slug && (
+                      <div className="empty-mini">No open conversations</div>
+                    )}
+                    {openDms.map((ch) => (
+                      <DmRow
                         key={ch.id}
                         ch={ch}
                         unread={snap.unread[ch.id] ?? 0}
                         active={sel.kind === "channel" && sel.id === ch.id}
+                        menuOpen={dmMenu === ch.id}
                         onClick={() => go({ kind: "channel", id: ch.id })}
+                        onMenu={() => setDmMenu((cur) => (cur === ch.id ? null : ch.id))}
+                        onClose={() => hideDm(ch)}
                       />
                     ))}
                   </div>
-                  {otherDms.length > 0 && (
-                    <div className="group">
-                      <div className="group-h">
-                        <span>Other directs</span>
-                      </div>
-                      {otherDms.map((ch) => (
-                        <ChannelItem
-                          key={ch.id}
-                          ch={ch}
-                          unread={snap.unread[ch.id] ?? 0}
-                          active={sel.kind === "channel" && sel.id === ch.id}
-                          onClick={() => go({ kind: "channel", id: ch.id })}
-                        />
-                      ))}
-                    </div>
-                  )}
                   <div className="group">
                     <div className="group-h">
                       <span>Hive</span>
@@ -951,9 +1063,8 @@ export function App() {
                       queued={snap.queued ?? {}}
                       inbox={snap.inbox}
                       onOpen={onAgent}
-                      confirmClear={confirmClear}
-                      setConfirmClear={setConfirmClear}
-                      onClear={onClear}
+                      onAskClear={(name) => setAgentConfirm({ name, kind: "clear" })}
+                      onAskRemove={(name) => setAgentConfirm({ name, kind: "remove" })}
                     />
                   </div>
                 </>
@@ -1659,6 +1770,46 @@ export function App() {
         />
       )}
 
+      {agentConfirm && (
+        <div className="modal" onClick={() => !agentBusy && setAgentConfirm(null)}>
+          <div className="sheet" onClick={(e) => e.stopPropagation()}>
+            {agentConfirm.kind === "clear" ? (
+              <>
+                <h2>Clear context</h2>
+                <p className="help-p">
+                  {agentConfirm.name} discards task memory, keeps identity and standing orders, then waits. They stay
+                  in the hive.
+                </p>
+                <div className="row">
+                  <button type="button" onClick={() => setAgentConfirm(null)} disabled={agentBusy}>
+                    Cancel
+                  </button>
+                  <button type="button" className="primary" onClick={onAgentConfirm} disabled={agentBusy}>
+                    Clear context
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h2>Remove {agentConfirm.name}</h2>
+                <p className="help-p">
+                  Takes {agentConfirm.name} off the roster. Messages stay. They cannot come back with that name unless
+                  they join again as someone new.
+                </p>
+                <div className="row">
+                  <button type="button" onClick={() => setAgentConfirm(null)} disabled={agentBusy}>
+                    Cancel
+                  </button>
+                  <button type="button" className="danger" onClick={onAgentConfirm} disabled={agentBusy}>
+                    Remove
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {helpOpen && (
         <div className="modal" onClick={() => setHelpOpen(false)}>
           <div className="sheet" onClick={(e) => e.stopPropagation()}>
@@ -1702,6 +1853,47 @@ function ChannelItem({
       <span>{ch.type === "dm" ? ch.name : `# ${ch.name}`}</span>
       {unread > 0 && <em>{unread}</em>}
     </button>
+  );
+}
+
+function DmRow({
+  ch,
+  unread,
+  active,
+  menuOpen,
+  onClick,
+  onMenu,
+  onClose,
+}: {
+  ch: Channel;
+  unread: number;
+  active: boolean;
+  menuOpen: boolean;
+  onClick: () => void;
+  onMenu: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="dm-row">
+      <ChannelItem ch={ch} unread={unread} active={active} onClick={onClick} />
+      <button
+        type="button"
+        className={`kebab ${menuOpen ? "on" : ""}`}
+        title="Conversation actions"
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
+        onClick={onMenu}
+      >
+        ⋯
+      </button>
+      {menuOpen && (
+        <div className="person-menu" role="menu">
+          <button type="button" role="menuitem" onClick={onClose}>
+            Close
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -2191,9 +2383,8 @@ export function AgentList({
   queued,
   inbox = {},
   onOpen,
-  confirmClear,
-  setConfirmClear,
-  onClear,
+  onAskClear,
+  onAskRemove,
 }: {
   agents: Agent[];
   projectName: string;
@@ -2202,10 +2393,10 @@ export function AgentList({
   queued: Record<string, number>;
   inbox?: Record<string, InboxStatus>;
   onOpen: (a: Agent) => void;
-  confirmClear: string | null;
-  setConfirmClear: (n: string | null) => void;
-  onClear: (n: string) => void;
+  onAskClear: (name: string) => void;
+  onAskRemove: (name: string) => void;
 }) {
+  const [menu, setMenu] = useState<string | null>(null);
   const human = agents.find((a) => a.role === "human");
   const brains = agents.filter((a) => a.role === "brain");
   const workers = agents.filter((a) => a.role === "worker");
@@ -2218,7 +2409,21 @@ export function AgentList({
       {human && <PersonRow agent={human} onOpen={() => undefined} self />}
       {brains.length > 0 && <div className="subh">brain</div>}
       {brains.map((a) => (
-        <PersonRow key={a.id} agent={a} queued={queued[a.id] ?? 0} inbox={inbox[a.id]} onOpen={() => onOpen(a)} onManageCredential={onManageBot ? () => onManageBot(a) : undefined} />
+        <PersonRow
+          key={a.id}
+          agent={a}
+          queued={queued[a.id] ?? 0}
+          inbox={inbox[a.id]}
+          onManageCredential={onManageBot ? () => onManageBot(a) : undefined}
+          onOpen={() => onOpen(a)}
+          menuOpen={menu === a.name}
+          onMenu={() => setMenu(menu === a.name ? null : a.name)}
+          onCloseMenu={() => setMenu(null)}
+          onAskRemove={() => {
+            setMenu(null);
+            onAskRemove(a.name);
+          }}
+        />
       ))}
       {workers.length > 0 && <div className="subh">worker</div>}
       {workers.map((a) => (
@@ -2228,10 +2433,18 @@ export function AgentList({
           queued={queued[a.id] ?? 0}
           inbox={inbox[a.id]}
           onOpen={() => onOpen(a)}
-          confirmClear={confirmClear}
-          setConfirmClear={setConfirmClear}
-          onClear={onClear}
           onManageCredential={onManageBot ? () => onManageBot(a) : undefined}
+          menuOpen={menu === a.name}
+          onMenu={() => setMenu(menu === a.name ? null : a.name)}
+          onCloseMenu={() => setMenu(null)}
+          onAskClear={() => {
+            setMenu(null);
+            onAskClear(a.name);
+          }}
+          onAskRemove={() => {
+            setMenu(null);
+            onAskRemove(a.name);
+          }}
         />
       ))}
       <div className="subh bot-h">
@@ -2260,9 +2473,11 @@ function PersonRow({
   inbox,
   onOpen,
   self,
-  confirmClear,
-  setConfirmClear,
-  onClear,
+  menuOpen,
+  onMenu,
+  onCloseMenu,
+  onAskClear,
+  onAskRemove,
 }: {
   onManageCredential?: () => void;
   agent: Agent;
@@ -2270,13 +2485,28 @@ function PersonRow({
   inbox?: InboxStatus;
   onOpen: () => void;
   self?: boolean;
-  confirmClear?: string | null;
-  setConfirmClear?: (n: string | null) => void;
-  onClear?: (n: string) => void;
+  menuOpen?: boolean;
+  onMenu?: () => void;
+  onCloseMenu?: () => void;
+  onAskClear?: () => void;
+  onAskRemove?: () => void;
 }) {
+  const menuRef = useRef<HTMLDivElement>(null);
   const bars = seniorityBars(agent);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDoc = (e: PointerEvent) => {
+      if (!(e.target instanceof Node)) return;
+      if (menuRef.current?.contains(e.target)) return;
+      onCloseMenu?.();
+    };
+    document.addEventListener("pointerdown", onDoc);
+    return () => document.removeEventListener("pointerdown", onDoc);
+  }, [menuOpen, onCloseMenu]);
+
   return (
-    <div className={`person ${agent.online ? "on" : "off"}`}>
+    <div className={`person ${agent.online ? "on" : "off"}`} ref={menuRef}>
       <button type="button" className="person-main" onClick={onOpen} disabled={self}>
         <Avatar name={agent.name} role={agent.role} online={agent.online} small />
         <span className="pn">{agent.name}</span>
@@ -2293,21 +2523,31 @@ function PersonRow({
         <QueueBadge count={queued} estimate={inbox?.queued} />
       </button>
       {onManageCredential && <button type="button" aria-label={`Manage credentials for ${agent.name}`} onClick={onManageCredential}>Credentials</button>}
-      {agent.role === "worker" && setConfirmClear && onClear && (
-        confirmClear === agent.name ? (
-          <span className="clear-ask">
-            <button type="button" onClick={() => onClear(agent.name)}>
-              clear
+      {!self && onMenu && (
+        <button
+          type="button"
+          className={`kebab ${menuOpen ? "on" : ""}`}
+          title="Agent actions"
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          onClick={onMenu}
+        >
+          ⋯
+        </button>
+      )}
+      {menuOpen && (
+        <div className="person-menu" role="menu">
+          {onAskClear && (
+            <button type="button" role="menuitem" onClick={onAskClear}>
+              Clear context
             </button>
-            <button type="button" onClick={() => setConfirmClear(null)}>
-              no
+          )}
+          {onAskRemove && (
+            <button type="button" role="menuitem" className="bad" onClick={onAskRemove}>
+              Remove
             </button>
-          </span>
-        ) : (
-          <button type="button" className="ghost" title="clear context" onClick={() => setConfirmClear(agent.name)}>
-            ⌧
-          </button>
-        )
+          )}
+        </div>
       )}
     </div>
   );
