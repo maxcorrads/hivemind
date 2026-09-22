@@ -46,6 +46,8 @@ A failed smoke is a test result, not a reason to silently rewrite or drop the tr
 
 ### Existing fixed-topology clarification experiment
 
+Before the live execution step, stop the normal local Hivemind server and confirm that port **7420** is free. The executor starts an isolated server on that fixed port; a collision is recorded as a harness failure. Attempted trials, including harness failures, are skipped on resume. If a collision has already affected a cohort, preserve it and prepare a new output directory after freeing the port. See the [real-agent executor runbook](coordination-real-agent.md#optional-codex--opencode-cohort-executor) for the remaining prerequisites.
+
 From a clean checkout, choose a **new** output directory so previous evidence is preserved:
 
 ```sh
