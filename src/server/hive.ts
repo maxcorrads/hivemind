@@ -8,7 +8,7 @@ import { initTelegramInbox, telegramQuarantine, retryTelegramUpdate, discardTele
 import { initTelegramOutbox, retryTelegramOutboxFailure, pruneTelegramFailures, type TelegramDestination } from "./telegram-outbox.ts";
 import { immediateTransaction } from './transaction.ts';
 import { createHash, randomBytes } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { EventEmitter } from "node:events";
@@ -779,6 +779,49 @@ export class Hive {
   setOffline(agentId: string) {
     if (agentId === HUMAN_ID) return;
     this.touch(agentId, false);
+  }
+
+  removeAgent(actor: Agent, name: string): Agent {
+    if (actor.role !== "human") throw new HiveError(403, "Only Human can remove agents");
+    const target = this.getAgentByName(name);
+    if (!target) throw new HiveError(404, `No agent named ${name}`);
+    if (target.id === HUMAN_ID || target.role === "human") {
+      throw new HiveError(403, "Cannot remove Human");
+    }
+    const waiter = this.waiters.get(target.id);
+    if (waiter) waiter.supersede();
+    this.waiters.delete(target.id);
+    this.db.prepare("DELETE FROM channel_members WHERE agent_id = ?").run(target.id);
+    this.db.prepare("DELETE FROM reads WHERE agent_id = ?").run(target.id);
+    this.db.prepare("DELETE FROM reactions WHERE agent_id = ?").run(target.id);
+    this.db.prepare("DELETE FROM attachments WHERE created_by = ? AND message_id IS NULL").run(target.id);
+    this.db.prepare("DELETE FROM agents WHERE id = ?").run(target.id);
+    this.forgetIdentityFiles(target.name);
+    if (target.projectId) {
+      const general = this.db.prepare(
+        "SELECT id FROM channels WHERE project_id = ? AND lower(name) = 'general'",
+      ).get(target.projectId) as { id: string } | undefined;
+      if (general) this.postSystem(general.id, `${actor.name} removed ${target.name} from the hive.`);
+    }
+    this.bus.emit("project", { removed: target.name });
+    return target;
+  }
+
+  private forgetIdentityFiles(name: string) {
+    const idFile = path.join(this.home, "identities", `${name}.json`);
+    try {
+      if (existsSync(idFile)) unlinkSync(idFile);
+    } catch {
+      /* leave the roster delete in place */
+    }
+    const last = path.join(this.home, "last-join.json");
+    try {
+      if (!existsSync(last)) return;
+      const raw = JSON.parse(readFileSync(last, "utf8")) as { name?: string };
+      if (raw.name && raw.name.toLowerCase() === name.toLowerCase()) unlinkSync(last);
+    } catch {
+      /* last-join is best-effort */
+    }
   }
 
   getAgent(id: string): Agent {
