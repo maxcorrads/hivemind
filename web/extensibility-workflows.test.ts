@@ -117,6 +117,7 @@ test("App routes project bot creation, one-time credentials and plugin settings 
   assert.equal(f.hive.agentByToken(f.botB.token).id, f.botB.bot.id);
   await f.click(f.button("Close", dialog));
   assert.equal(f.host.querySelector('[aria-label="Create project bot"]'), null);
+  await f.click(f.host.querySelector<HTMLButtonElement>('[aria-label="Actions for CreatedFeed"]')!);
   await f.click(f.host.querySelector<HTMLButtonElement>('[aria-label="Manage credentials for CreatedFeed"]')!);
   dialog = f.host.querySelector('[aria-label="Manage bot credentials"]')!;
   assert.match(dialog.textContent!, /revision 1/);
@@ -167,7 +168,7 @@ test("mounted launch switches project tools safely, excludes bot seats and only 
   await f.change(f.field("Seniority"), "junior");
   assert.match(f.host.querySelector("pre")!.textContent!, /junior/);
   await f.change(f.field("Role"), "brain");
-  await f.change(f.field("Hive"), f.b.slug);
+  await f.change(f.field("Project"), f.b.slug);
   assert.match(f.host.querySelector("pre")!.textContent!, /ONLY_PROJECT_OTHER_TOOLS/);
   assert.doesNotMatch(f.host.querySelector("pre")!.textContent!, new RegExp(f.context(f.a.slug).pluginInstructions));
   await f.change(f.field("CLI flags"), "; untrusted-command");
@@ -196,7 +197,7 @@ test("mounted launch switches project tools safely, excludes bot seats and only 
   assert.ok(!f.copies[0]!.includes(f.botA.token));
   assert.ok(!window.localStorage.getItem("hivemind-launch")!.includes("ONLY_PROJECT"));
   await act(async () => {
-    f.field("Hive").dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as unknown as Event);
+    f.field("Project").dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as unknown as Event);
   });
   assert.equal(f.closed(), 0);
   await act(async () => { window.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape" })); });

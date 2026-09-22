@@ -1,3 +1,4 @@
+import { Modal } from "./Modal.tsx";
 import { createSendOperations } from "./send-operation.ts";
 import { beginChannelJournal, recordChannelMessage, recordChannelThread, applyChannelMessage, reconcileChannelSnapshot, type ChannelJournal } from "./channel-state.ts";
 import { newerTelegramHealth, telegramDegraded, type TelegramHealth } from "./telegram-health.ts";
@@ -824,17 +825,23 @@ export function App() {
             <div className="you">you are Human</div>
           </div>
           <div className="brand-tools">
+            <details className="tools-menu" onClick={event => {
+              if ((event.target as HTMLElement).closest("button")) event.currentTarget.open = false;
+            }}>
+              <summary title="Settings and tools">Settings</summary>
+              <div className="tools-popover">
+
             <button
               type="button"
-              className="icon-btn"
+              className="tool-action"
               title={theme === "dark" ? "Light" : "Dark"}
               onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
             >
-              {theme === "dark" ? "☀" : "☾"}
+              {theme === "dark" ? "Light theme" : "Dark theme"}
             </button>
             <button
               type="button"
-              className="icon-btn"
+              className="tool-action"
               title={telegramDegraded(snap.telegram) ? `Telegram · ${snap.telegram?.failures ?? 0} outbound failures · ${snap.telegram?.quarantined ?? 0} quarantined · ${snap.telegram?.retrying ?? 0} retrying${snap.telegram?.lastError ? ` · ${snap.telegram.lastError}` : ""}` : "Telegram"}
               onClick={() => {
                 api
@@ -856,22 +863,24 @@ export function App() {
                   .catch((e) => setErr(String(e.message || e)));
               }}
             >
-              {telegramDegraded(snap.telegram) ? "⚠" : snap.telegram?.running ? "✈" : "⌬"}
+              Telegram{telegramDegraded(snap.telegram) ? " · Needs attention" : ""}
             </button>
             <button
               type="button"
-              className="icon-btn"
+              className="tool-action"
               title="Adaptive routing"
               onClick={() => setAdaptiveRoutingOpen(true)}
             >
-              ⇄
+              Adaptive routing
             </button>
-            <button type="button" className="icon-btn" title="Launch agent" onClick={() => setLaunchOpen(true)}>
-              ▶
+            <button type="button" className="tool-action" title="Launch agent" onClick={() => setLaunchOpen(true)}>
+              Launch agent
             </button>
-            <button type="button" className="icon-btn" title="How to join" onClick={() => setHelpOpen(true)}>
-              ?
+            <button type="button" className="tool-action" title="How to join" onClick={() => setHelpOpen(true)}>
+              Help
             </button>
+              </div>
+            </details>
             <span className={`pulse ${live ? "on" : ""}`} title={live ? "live" : "waiting"} />
           </div>
         </div>
@@ -887,7 +896,7 @@ export function App() {
               setSearchTick((n) => n + 1);
             }
           }}
-          placeholder="Search this hive"
+          placeholder="Search projects and messages" aria-label="Search projects and messages"
         />
 
         <div className="group-h">
@@ -1035,10 +1044,9 @@ export function App() {
                         ))}
                       </div>
                     )}
-                    {openDms.length === 0 && dmPicker !== project.slug && (
-                      <div className="empty-mini">No open conversations</div>
-                    )}
-                    {openDms.map((ch) => (
+                    <div className="subh">With you</div>
+                    {!openDms.some(ch => ch.memberIds.includes("human")) && <p className="empty-mini">No conversations yet.</p>}
+                    {openDms.filter(ch => ch.memberIds.includes("human")).map((ch) => (
                       <DmRow
                         key={ch.id}
                         ch={ch}
@@ -1050,6 +1058,21 @@ export function App() {
                         onClose={() => hideDm(ch)}
                       />
                     ))}
+                    <details className="agent-conversations" open={q || (sel.kind === "channel" && openDms.some(ch => ch.id === sel.id && !ch.memberIds.includes("human"))) ? true : undefined}>
+                      <summary>Between agents <span>{openDms.filter(ch => !ch.memberIds.includes("human")).length}</span></summary>
+                      {openDms.filter(ch => !ch.memberIds.includes("human")).map((ch) => (
+                      <DmRow
+                        key={ch.id}
+                        ch={ch}
+                        unread={snap.unread[ch.id] ?? 0}
+                        active={sel.kind === "channel" && sel.id === ch.id}
+                        menuOpen={dmMenu === ch.id}
+                        onClick={() => go({ kind: "channel", id: ch.id })}
+                        onMenu={() => setDmMenu((cur) => (cur === ch.id ? null : ch.id))}
+                        onClose={() => hideDm(ch)}
+                      />
+                    ))}
+                    </details>
                   </div>
                   <div className="group">
                     <div className="group-h">
@@ -1114,6 +1137,18 @@ export function App() {
             onOpen={decision => go({ kind: "channel", id: decision.channelId, thread: decision.id })} />
         ) : sel.kind === "inbox" ? (
           <Inbox
+            key={`${sel.project}:${inboxBox}`}
+            onDecisions={() => go({ kind: "decisions", project: sel.project })}
+            onMarkMessage={async (message) => {
+              const project = sel.project;
+              const ticket = readFence.current.ticket();
+              const read = await api.markMessagesSeen(message.channelId, message.threadId, [message.seq]);
+              if (acceptRead(read, ticket)) {
+                setInboxPage(previous => previous?.project === project ? {
+                  ...previous, messages: previous.messages.filter(item => item.id !== message.id),
+                } : previous);
+              } else readRefresh.current?.request();
+            }}
             box={inboxBox}
             mentions={inboxBox === "all" ? allForYou : inboxMentions}
             hasMore={inboxBox === "unread" && !inboxBusy && inboxPage?.project === sel.project && Boolean(inboxPage.hasMore)}
@@ -1395,7 +1430,7 @@ export function App() {
       )}
 
       {creating && (
-        <div className="modal" onClick={() => setCreating(false)}>
+        <Modal onClose={() => setCreating(false)}>
           <form
             className="sheet"
             onClick={(e) => e.stopPropagation()}
@@ -1450,30 +1485,30 @@ export function App() {
               </button>
             </div>
           </form>
-        </div>
+        </Modal>
       )}
 
       {botProject && projects.some((p) => p.id === botProject) && (
-        <div className="modal">
+        <Modal onClose={() => { if (!botBusy) setBotProject(null); }}>
           <div className="sheet" role="dialog" aria-modal="true" aria-label="Create project bot">
             <h2>Create bot</h2>
             <BotSetup key={botProject} project={projects.find((p) => p.id === botProject)!}
               onBusy={setBotBusy} onCreated={() => { void refreshSnap().catch((e) => setErr(String(e.message || e))); }} />
             <div className="row"><button type="button" disabled={botBusy} onClick={() => setBotProject(null)}>Close</button></div>
           </div>
-        </div>
+        </Modal>
       )}
 
-      {credentialBot && snap.agents.some(a => a.id === credentialBot.id) && <div className="modal">
+      {credentialBot && snap.agents.some(a => a.id === credentialBot.id) && <Modal onClose={() => { if (!credentialBusy) setCredentialBot(null); }}>
         <div className="sheet" role="dialog" aria-modal="true" aria-label={credentialBot.role === "bot" ? "Manage bot credentials" : "Manage agent credentials"}>
           <h2>{credentialBot.role === "bot" ? "Bot credentials" : "Agent credentials"}</h2>
           <BotCredentials key={credentialBot.id} bot={credentialBot} onBusy={setCredentialBusy} />
           <div className="row"><button type="button" disabled={credentialBusy} onClick={() => setCredentialBot(null)}>Close</button></div>
         </div>
-      </div>}
+      </Modal>}
 
       {inviteOpen && activeChannel && (
-        <div className="modal" onClick={() => setInviteOpen(false)}>
+        <Modal onClose={() => setInviteOpen(false)}>
           <form
             className="sheet"
             onClick={(e) => e.stopPropagation()}
@@ -1524,17 +1559,14 @@ export function App() {
               </button>
             </div>
           </form>
-        </div>
+        </Modal>
       )}
 
       {editingProject && (
-        <div
-          className="modal"
-          onClick={() => {
+        <Modal onClose={() => {
             setEditingProject(null);
             setProjectDeleteConfirm("");
-          }}
-        >
+          }}>
           <form
             className="sheet"
             onClick={(e) => e.stopPropagation()}
@@ -1622,7 +1654,7 @@ export function App() {
               </div>
             </div>
           </form>
-        </div>
+        </Modal>
       )}
 
       {pluginsProject && projects.some((p) => p.slug === pluginsProject) && (
@@ -1631,7 +1663,7 @@ export function App() {
       )}
 
       {creatingProject && (
-        <div className="modal" onClick={() => setCreatingProject(false)}>
+        <Modal onClose={() => setCreatingProject(false)}>
           <form
             className="sheet"
             onClick={(e) => e.stopPropagation()}
@@ -1672,7 +1704,7 @@ export function App() {
               </button>
             </div>
           </form>
-        </div>
+        </Modal>
       )}
 
       {adaptiveRoutingOpen && (
@@ -1689,7 +1721,7 @@ export function App() {
       )}
 
       {telegramOpen && telegram && (
-        <div className="modal" onClick={() => setTelegramOpen(false)}>
+        <Modal onClose={() => setTelegramOpen(false)}>
           <form
             className="sheet"
             onClick={(e) => e.stopPropagation()}
@@ -1717,9 +1749,10 @@ export function App() {
             }}
           >
             <h2>Telegram</h2>
-            <p className="help-p">
-              One bot, one forum group per project. The bot needs admin and Manage Topics. {telegram.running ? "Bridge is on." : "Bridge is off."}
-            </p>
+            <div className="sheet-body">
+            <p className="config-status">{telegram.configured ? "Configured" : "Not configured"} · {telegram.running ? "Connected" : "Bridge is off"}</p>
+            <h3>Connection</h3>
+            <p className="help-p">Connect a bot with admin and Manage Topics permissions.</p>
             <label>
               Bot token
               <input
@@ -1738,6 +1771,8 @@ export function App() {
                 placeholder="123456789"
               />
             </label>
+            <details className="settings-disclosure"><summary>Project groups ({projects.filter(p => telegram.projects[p.slug] != null).length}/{projects.length} configured)</summary>
+            <p className="help-p">Assign one forum group to each project you want to connect.</p>
             {projects.map((p) => (
               <label key={p.id}>
                 {p.name} group chat id
@@ -1748,7 +1783,9 @@ export function App() {
                 />
               </label>
             ))}
+            </details>
             <p className="help-p">Unmapped groups are ignored. Saved next to the hive db, never in git.</p>
+            </div>
             <div className="row">
               <button type="button" onClick={() => setTelegramOpen(false)}>
                 Close
@@ -1758,7 +1795,7 @@ export function App() {
               </button>
             </div>
           </form>
-        </div>
+        </Modal>
       )}
 
       {launchOpen && (
@@ -1771,7 +1808,7 @@ export function App() {
       )}
 
       {agentConfirm && (
-        <div className="modal" onClick={() => !agentBusy && setAgentConfirm(null)}>
+        <Modal onClose={() => !agentBusy && setAgentConfirm(null)}>
           <div className="sheet" onClick={(e) => e.stopPropagation()}>
             {agentConfirm.kind === "clear" ? (
               <>
@@ -1807,11 +1844,11 @@ export function App() {
               </>
             )}
           </div>
-        </div>
+        </Modal>
       )}
 
       {helpOpen && (
-        <div className="modal" onClick={() => setHelpOpen(false)}>
+        <Modal onClose={() => setHelpOpen(false)}>
           <div className="sheet" onClick={(e) => e.stopPropagation()}>
             <h2>How to join</h2>
             <p className="help-p">
@@ -1831,7 +1868,7 @@ npx tsx src/cli.ts wait`}</pre>
               </button>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
     </div>
   );
@@ -1874,7 +1911,7 @@ function DmRow({
   onClose: () => void;
 }) {
   return (
-    <div className="dm-row">
+    <div className={`dm-row ${ch.memberIds.includes("human") ? "with-human" : "between-agents"}`}>
       <ChannelItem ch={ch} unread={unread} active={active} onClick={onClick} />
       <button
         type="button"
@@ -2024,17 +2061,7 @@ export function SearchDesk({
   );
 }
 
-function Inbox({
-  box,
-  mentions,
-  hasMore,
-  channels,
-  agents,
-  onBox,
-  onOpen,
-  onOlder,
-  onMarkSeen,
-}: {
+function Inbox({ box, mentions, hasMore, channels, agents, onBox, onOpen, onOlder, onMarkSeen, onMarkMessage, onDecisions }: {
   box: InboxBox;
   mentions: Message[];
   hasMore: boolean;
@@ -2044,66 +2071,59 @@ function Inbox({
   onOpen: (message: Message) => void;
   onOlder: () => void;
   onMarkSeen: () => void;
+  onMarkMessage: (message: Message) => Promise<void>;
+  onDecisions: () => void;
 }) {
-  return (
-    <>
-      <header className="desk-h">
-        <div>
-          <h1>For you</h1>
-          <p>
-            {box === "all"
-              ? "Every @Human mention and brain DM this browser has seen, newest first."
-              : "@Human mentions not marked seen. Brains ask you here when a cycle is done or when they are stuck."}
-          </p>
-          <div className="inbox-tabs" role="tablist">
-            <button type="button" className={box === "unread" ? "on" : ""} onClick={() => onBox("unread")}>
-              Unread
-            </button>
-            <button type="button" className={box === "all" ? "on" : ""} onClick={() => onBox("all")}>
-              All
-            </button>
-          </div>
+  const [filter, setFilter] = useState<"all" | "direct" | "mentions">("all");
+  const [expanded, setExpanded] = useState<string[]>([]);
+  const [marking, setMarking] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const direct = (m: Message) => channels.some(ch => ch.id === m.channelId && ch.type === "dm" && ch.memberIds.includes("human"));
+  const visible = mentions.filter(m => filter === "all" || (filter === "direct" ? direct(m) : !direct(m)));
+  return <>
+    <header className="desk-h inbox-header">
+      <div>
+        <h1>For you</h1>
+        <p>{box === "all" ? "Activity saved in this browser. Older read messages may not be included." : "Unread messages addressed to you, including mentions in other conversations."}</p>
+        <div className="inbox-tabs" aria-label="Read status">
+          <button type="button" className={box === "unread" ? "on" : ""} aria-pressed={box === "unread"} onClick={() => onBox("unread")}>Unread</button>
+          <button type="button" className={box === "all" ? "on" : ""} aria-pressed={box === "all"} onClick={() => onBox("all")}>All</button>
+          <button type="button" onClick={onDecisions}>Decisions →</button>
         </div>
-        {box === "unread" && mentions.length > 0 && (
-          <button type="button" className="text-btn" onClick={onMarkSeen}>
-            Mark seen
-          </button>
-        )}
-      </header>
-      <div className="stream">
-        {mentions.length === 0 && (
-          <div className="empty">
-            {box === "all"
-              ? "Nothing in this browser log yet. New @Human mail and brain DMs collect here while the UI is open. Opening a conversation also adds it. Older seen mail is not available without a hive change."
-              : "No mentions. When a brain needs you, it shows up here."}
+        <div className="inbox-tabs inbox-filters" aria-label="Activity type">
+          {([["all", "All activity"], ["direct", "Direct messages"], ["mentions", "Mentions elsewhere"]] as const).map(([value, label]) =>
+            <button key={value} type="button" className={filter === value ? "on" : ""} aria-pressed={filter === value} onClick={() => setFilter(value)}>{label}</button>)}
+        </div>
+      </div>
+      {box === "unread" && mentions.length > 0 && <button type="button" className="text-btn" onClick={onMarkSeen}>Mark all read</button>}
+    </header>
+    <div className="stream inbox-stream">
+      {error && <p className="inbox-error" role="alert">{error}</p>}
+      {visible.length === 0 && <div className="empty">{mentions.length ? "No messages in this category on this page." : box === "all" ? "No activity saved in this browser yet." : "You're all caught up."}</div>}
+      {visible.map(m => {
+        const ch = channels.find(c => c.id === m.channelId);
+        const isExpanded = expanded.includes(m.id);
+        return <article key={m.id} className={`inbox-item inbox-card ${isExpanded ? "expanded" : "collapsed"}`}>
+          <div className="inbox-context">
+            <span>{direct(m) ? "Direct message" : "Mention"}</span>
+            <strong>{ch ? (ch.type === "dm" ? ch.name : `#${ch.name}`) : "Conversation"}</strong>
+            <time dateTime={new Date(m.createdAt).toISOString()}>{new Date(m.createdAt).toLocaleDateString(undefined, { day: "numeric", month: "short" })}</time>
           </div>
-        )}
-        {mentions.map((m) => {
-          const ch = channels.find((c) => c.id === m.channelId);
-          const where = ch ? (ch.type === "dm" ? ch.name : `#${ch.name}`) : "";
-          return (
-            <button key={m.id} className="inbox-item" onClick={() => onOpen(m)}>
-              <Msg m={m} replies={0} status={null} />
-              <span className="open-link">
-                {where ? `${where} · ` : ""}
-                {m.threadId ? "open thread" : "open conversation"}
-              </span>
-            </button>
-          );
-        })}
-        {hasMore && (
-          <button type="button" className="older" onClick={onOlder}>
-            Older mentions
-          </button>
-        )}
-      </div>
-      <div className="hint">
-        {agents.filter((a) => a.role !== "human").length === 0
-          ? "Nobody in the hive yet. Open a Codex, Claude, or Cursor terminal and join."
-          : "You set the goals. Brains dispatch. Workers execute."}
-      </div>
-    </>
-  );
+          <Msg m={m} replies={0} status={null} />
+          <div className="inbox-actions">
+            <button type="button" className="text-btn" onClick={() => onOpen(m)}>{m.threadId ? "Open thread" : "Open conversation"}</button>
+            <button type="button" className="text-btn" aria-expanded={isExpanded} onClick={() => setExpanded(ids => isExpanded ? ids.filter(id => id !== m.id) : [...ids, m.id])}>{isExpanded ? "Collapse" : "Expand"}</button>
+            {box === "unread" && <button type="button" className="text-btn" disabled={marking.includes(m.id)} onClick={() => {
+              setMarking(ids => [...ids, m.id]); setError(null);
+              onMarkMessage(m).catch(err => setError(String(err.message || err))).finally(() => setMarking(ids => ids.filter(id => id !== m.id)));
+            }}>{marking.includes(m.id) ? "Marking…" : "Mark read"}</button>}
+          </div>
+        </article>;
+      })}
+      {hasMore && <button type="button" className="older" onClick={onOlder}>Load older activity</button>}
+    </div>
+    {agents.filter(a => a.role !== "human").length === 0 && <div className="hint">Launch an agent to start a conversation.</div>}
+  </>;
 }
 
 function Msg({
@@ -2284,23 +2304,16 @@ function Composer({
           ))}
         </ul>
       )}
-      <div className="composer-box">
-        <input
-          ref={pick}
-          type="file"
-          hidden
-          multiple
-          accept="image/*,.pdf,.txt,.csv,.json,.zip"
-          onChange={(e) => {
-            if (e.target.files) addFiles(e.target.files);
-            e.target.value = "";
-          }}
-        />
-        <button type="button" className="clip" title="Attach" onClick={() => pick.current?.click()}>
-          📎
-        </button>
         {routing && (
-          <>
+          <details className="composer-routing">
+            <summary title="Choose how agents handle this message" aria-label="Message routing options">
+              <svg className="routing-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M3 6h13m-3-3 3 3-3 3M17 14H4m3-3-3 3 3 3" /></svg>
+              <span>{routing.value === "auto" ? "Auto · Jev" : routing.value === "orchestrated_auto" ? "Orchestrated Auto" : topologyLabel(routing.value)}</span>
+              {routing.lockScope !== "none" && <span className="routing-scope">{routing.lockScope} lock</span>}
+              <svg className="routing-chevron" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
+            </summary>
+            <div className="composer-routing-fields">
+            <label>Team
             <select
               className="routing-mode"
               aria-label="Execution mode"
@@ -2319,6 +2332,8 @@ function Composer({
               <option value="brain_multi_room">Room</option>
               <option value="orchestrated_auto">Orchestrated Auto</option>
             </select>
+            </label>
+            <label>Apply to
             <select
               className="routing-lock-mode"
               aria-label="Routing lock scope"
@@ -2331,8 +2346,25 @@ function Composer({
               <option value="task">Lock task</option>
               <option value="conversation">Lock conversation</option>
             </select>
-          </>
+            </label>
+            </div>
+          </details>
         )}
+      <div className="composer-box">
+        <input
+          ref={pick}
+          type="file"
+          hidden
+          multiple
+          accept="image/*,.pdf,.txt,.csv,.json,.zip"
+          onChange={(e) => {
+            if (e.target.files) addFiles(e.target.files);
+            e.target.value = "";
+          }}
+        />
+        <button type="button" className="clip" title="Attach" onClick={() => pick.current?.click()}>
+          📎
+        </button>
         <textarea
           rows={2}
           value={value}
@@ -2452,10 +2484,13 @@ export function AgentList({
         <button type="button" className="plus" title={`Create bot in ${projectName}`}
           aria-label={`Create bot in ${projectName}`} onClick={onCreateBot}>+</button>
       </div>
-      {bots.map((a) => <div key={a.id}>
-        <PersonRow agent={a} onOpen={() => undefined} self />
-        {onManageBot && <button type="button" aria-label={`Manage credentials for ${a.name}`} onClick={() => onManageBot(a)}>Credentials</button>}
-      </div>)}
+      {bots.map((a) => (
+        <PersonRow key={a.id} agent={a} onOpen={() => undefined} self
+          onManageCredential={onManageBot ? () => onManageBot(a) : undefined}
+          menuOpen={menu === a.name}
+          onMenu={onManageBot ? () => setMenu(menu === a.name ? null : a.name) : undefined}
+          onCloseMenu={() => setMenu(null)} />
+      ))}
       {brains.length + workers.length === 0 && (
         <p className="empty-mini">
           Open Codex, Claude, or Cursor, then <code>hivemind join --as brain</code> or{" "}
@@ -2492,7 +2527,12 @@ function PersonRow({
   onAskRemove?: () => void;
 }) {
   const menuRef = useRef<HTMLDivElement>(null);
+  const actionRef = useRef<HTMLButtonElement>(null);
   const bars = seniorityBars(agent);
+
+  useEffect(() => {
+    if (menuOpen) menuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+  }, [menuOpen]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -2509,25 +2549,32 @@ function PersonRow({
     <div className={`person ${agent.online ? "on" : "off"}`} ref={menuRef}>
       <button type="button" className="person-main" onClick={onOpen} disabled={self}>
         <Avatar name={agent.name} role={agent.role} online={agent.online} small />
-        <span className="pn">{agent.name}</span>
-        {bars > 0 && (
-          <span className="stripes" title={agent.seniority ?? ""}>
-            {Array.from({ length: bars }, (_, i) => (
-              <i key={i} />
-            ))}
+        <span className="person-details">
+          <span className="person-label">
+            <span className="pn" title={agent.name}>{agent.name}</span>
+            <QueueBadge count={queued} estimate={inbox?.queued} />
           </span>
-        )}
-        {agent.seniority && <span className="sen">{agent.seniority}</span>}
-        {agent.focus && <span className="focus">{agent.focus}</span>}
-        <InboxReceipt status={inbox} />
-        <QueueBadge count={queued} estimate={inbox?.queued} />
+          {(agent.seniority || agent.focus) && (
+            <span className="person-meta">
+              {agent.seniority && <span className="person-rank">
+                {bars > 0 && <span className="stripes" aria-hidden="true">
+                  {Array.from({ length: bars }, (_, i) => <i key={i} />)}
+                </span>}
+                <span className="sen">{agent.seniority}</span>
+              </span>}
+              {agent.focus && <span className="focus" title={agent.focus}>{agent.focus}</span>}
+            </span>
+          )}
+          <InboxReceipt status={inbox} />
+        </span>
       </button>
-      {onManageCredential && <button type="button" aria-label={`Manage credentials for ${agent.name}`} onClick={onManageCredential}>Credentials</button>}
-      {!self && onMenu && (
+      {onMenu && (
         <button
           type="button"
           className={`kebab ${menuOpen ? "on" : ""}`}
-          title="Agent actions"
+          ref={actionRef}
+          title={`Actions for ${agent.name}`}
+          aria-label={`Actions for ${agent.name}`}
           aria-haspopup="menu"
           aria-expanded={menuOpen}
           onClick={onMenu}
@@ -2536,7 +2583,30 @@ function PersonRow({
         </button>
       )}
       {menuOpen && (
-        <div className="person-menu" role="menu">
+        <div className="person-menu" role="menu" aria-label={`Actions for ${agent.name}`}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              onCloseMenu?.();
+              actionRef.current?.focus();
+            } else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+              event.preventDefault();
+              const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'));
+              const index = items.indexOf(document.activeElement as HTMLButtonElement);
+              const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
+                : (index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+              items[next]?.focus();
+            } else if (event.key === "Tab") {
+              actionRef.current?.focus();
+              onCloseMenu?.();
+            }
+          }}>
+          {onManageCredential && (
+            <button type="button" role="menuitem" aria-label={`Manage credentials for ${agent.name}`}
+              onClick={() => { onCloseMenu?.(); onManageCredential(); }}>
+              Credentials
+            </button>
+          )}
           {onAskClear && (
             <button type="button" role="menuitem" onClick={onAskClear}>
               Clear context

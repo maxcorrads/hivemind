@@ -1,3 +1,4 @@
+import { Modal } from "./Modal.tsx";
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api.ts";
 import type {
@@ -60,10 +61,11 @@ function RoutingPanelContent({ channelId, state, events, onChange, onClose }: Pa
   };
 
   return (
-    <div className="modal" onClick={close}>
+    <Modal onClose={close}>
       <div className="sheet routing-sheet" role="dialog" aria-modal="true" aria-label="Adaptive routing timeline"
         onClick={event => event.stopPropagation()}>
         <h2>Routing · Jev</h2>
+        <div className="sheet-body">
         {!state ? <p className="help-p">No adaptive execution has started in this brain DM yet.</p> : <>
           <div className="routing-summary">
             <strong>{topologyLabel(state.currentTopology)}</strong>
@@ -110,8 +112,9 @@ function RoutingPanelContent({ channelId, state, events, onChange, onClose }: Pa
           </div>)}
         </div>
         {error && <p className="err" role="alert">{error}</p>}
+        </div>
         <div className="row"><button type="button" disabled={busy} onClick={close}>Close</button></div>
       </div>
-    </div>
+    </Modal>
   );
 }

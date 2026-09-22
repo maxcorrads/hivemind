@@ -1,3 +1,4 @@
+import { Modal } from "./Modal.tsx";
 import { useEffect, useState } from "react";
 import { api } from "./api.ts";
 import type { Project } from "../src/shared/types.ts";
@@ -303,15 +304,15 @@ export function ProjectPlugins({
     };
   }, [project.slug, reload]);
   return (
-    <div className="modal">
+    <Modal onClose={() => { if (!busy) onClose(); }}>
       <div
         className="sheet sheet-wide"
         role="dialog"
         aria-modal="true"
         aria-label={"Plugins for " + project.name}
       >
+        <h2>{project.name} · Plugins</h2>
         <div className="sheet-body">
-          <h2>{project.name} · Plugins</h2>
           <p>
             Installed code is shared. Configuration, source state and
             availability are specific to this project.
@@ -372,6 +373,6 @@ export function ProjectPlugins({
           </button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }
