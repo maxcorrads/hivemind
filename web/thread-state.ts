@@ -12,7 +12,7 @@ export type ThreadView = {
   pendingMessages: Message[];
   pendingTask?: TaskSnapshot;
   historyTruncated?: boolean;
-  pendingLoad?: { id: number; liveMessages: Message[]; liveThread?: Thread; truncated?: boolean };
+  pendingLoad?: { id: number; liveMessages: Message[]; liveThread?: Thread; truncated?: boolean; returnToLive?: boolean };
 };
 
 export function selectThread(view: ThreadView | null, channelId: string, threadId: string): ThreadView {
@@ -20,8 +20,8 @@ export function selectThread(view: ThreadView | null, channelId: string, threadI
     { channelId, threadId, pane: null, pendingMessages: [] };
 }
 
-export function beginThreadLoad(view: ThreadView | null, channelId: string, threadId: string, requestId: number): ThreadView {
-  return { ...selectThread(view, channelId, threadId), pendingLoad: { id: requestId, liveMessages: [] } };
+export function beginThreadLoad(view: ThreadView | null, channelId: string, threadId: string, requestId: number, returnToLive = false): ThreadView {
+  return { ...selectThread(view, channelId, threadId), pendingLoad: { id: requestId, liveMessages: [], returnToLive } };
 }
 
 export function failThreadLoad(view: ThreadView | null, requestId: number): ThreadView | null {
@@ -85,7 +85,8 @@ export function receiveThreadTask(view: ThreadView, task: TaskSnapshot): ThreadV
 
 export function receiveThreadSnapshot(view: ThreadView | null, threadId: string, data: ChannelPayload, requestId: number): ThreadView | null {
   if (!view || view.channelId !== data.channel.id || view.threadId !== threadId || view.pendingLoad?.id !== requestId) return view;
-  const currentMessages = view.pane?.messages ?? view.pendingMessages;
+  const returnToLive = view.pendingLoad.returnToLive;
+  const currentMessages = returnToLive ? [] : view.pane?.messages ?? view.pendingMessages;
   // HTTP refreshes pre-request metadata (including missed reactions while offline).
   // Only live updates received during THIS request take precedence over its snapshot.
   const messages = mergeMessages(mergeMessages(currentMessages, data.messages), view.pendingLoad.liveMessages);
@@ -94,9 +95,9 @@ export function receiveThreadSnapshot(view: ThreadView | null, threadId: string,
   return {
     ...view, pendingMessages: [], pendingTask: undefined, pendingLoad: undefined,
     historyTruncated: undefined,
-    pane: boundLivePane({ ...data, threads, historyThrough: view.pane?.historyThrough,
-      deferredLive: view.pane?.deferredLive, messages: messages.filter(message => belongs(view, message)),
-      hasOlder: data.hasOlder || view.historyTruncated || view.pendingLoad.truncated,
+    pane: boundLivePane({ ...data, threads, historyThrough: returnToLive ? undefined : view.pane?.historyThrough,
+      deferredLive: returnToLive ? undefined : view.pane?.deferredLive, messages: messages.filter(message => belongs(view, message)),
+      hasOlder: data.hasOlder || (!returnToLive && view.historyTruncated) || view.pendingLoad.truncated,
       task: reconcileTask(view.pane?.task ?? view.pendingTask, data.task) }),
   };
 }
