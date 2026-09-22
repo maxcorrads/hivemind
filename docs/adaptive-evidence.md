@@ -12,7 +12,9 @@ The numeric/enum projection contains current/target topology and worker counts, 
 
 ## Bounded persistence
 
-`adaptive_evidence_runs` retains the most recent 50 recorded executions per channel. `adaptive_evidence_attempts` retains the last 500 attempt details per execution. Aggregate counters survive detail pruning; `prunedAttempts` and `historyComplete` make the loss of older detail explicit. Channel deletion cascades to both tables transactionally.
+`adaptive_evidence_runs` retains at most 50 recorded executions per channel. The active execution from the persisted routing lifecycle and the attempt currently being recorded are protected within that limit; the remaining runs are retained by their last recording time. Rejected initial requests cannot displace an ongoing execution, including after a server restart. Completed executions are eligible for normal retention. `adaptive_evidence_attempts` retains the last 500 attempt details per execution. Aggregate counters survive detail pruning; `prunedAttempts` makes the loss of older detail explicit. Channel deletion cascades to both tables transactionally.
+
+`historyComplete` requires an initial attempt at ordinal 1 and no pruned attempt detail. A capture that begins or resumes with continuous monitoring is incomplete even if all newly recorded attempts have known usage. This also prevents previously evicted evidence from being recreated as complete history. `usageComplete` describes usage for the recorded attempts only; it does not establish full-execution capture.
 
 Pending attempts are retained as unknown outcomes, not free calls. A crash after the remote request but before outcome persistence cannot establish usage or billing; the pending count remains visible. No external exactly-once billing claim is made. The detail cap also applies to repeated interrupted attempts.
 

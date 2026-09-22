@@ -5,12 +5,13 @@ import path from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { Hive } from './hive.ts';
 import { saveAdaptiveRouting } from './adaptive-routing.ts';
-import { exportAdaptiveEvidence } from './adaptive-evidence.ts';
+import { exportAdaptiveEvidence, EVIDENCE_RUN_LIMIT } from './adaptive-evidence.ts';
 import { jevTopologyResponse } from './fixtures/jev-topology.ts';
 
 function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-evidence-runtime-'));
-  const hive = new Hive(path.join(dir, 'hive.db')), human = hive.getAgent('human');
+  let hive = new Hive(path.join(dir, 'hive.db'));
+  const human = hive.getAgent('human');
   const brain = hive.join({ role: 'brain', project: 'chapter' }).agent;
   const workers = [0, 1, 2].map(() => hive.join({ role: 'worker', seniority: 'senior', project: 'chapter' }).agent);
   const dm = hive.openDm(human, brain.name);
@@ -29,7 +30,8 @@ function fixture(t: TestContext) {
   const check = (id: string) => hive.adaptiveTopology.revalidateForActor(brain, {
     kind: 'brain_message', actorId: brain.id, actorRole: 'brain', channelId: dm.id, eventId: id,
   });
-  return { hive, dir, human, brain, workers, dm, start, check, calls: () => calls,
+  return { get hive() { return hive; }, dir, human, brain, workers, dm, start, check, calls: () => calls,
+    restart: async () => { await hive.adaptiveTopology.stop(); hive.db.close(); hive = new Hive(path.join(dir, 'hive.db')); },
     fail: () => { fail = true; }, beforeReply: (action: () => void) => { hook = action; } };
 }
 
@@ -78,3 +80,30 @@ test('recorder failure warns without changing a valid Jev decision or adding a s
   assert.ok(errors.some(message => message.includes('measurements may be incomplete')));
   assert.doesNotMatch(errors.join('\n'), /secret-database-error|never-export-this-key/);
 });
+
+for (const interleaved of [false, true]) {
+  test(`active evidence survives rejected starts and restart with ${interleaved ? 'interleaved' : 'deferred'} revalidation`, async t => {
+    const f = fixture(t), started = await f.start(); assert.ok(started);
+    const initial = exportAdaptiveEvidence(f.hive.db, started.state.executionId);
+    f.hive.db.prepare("UPDATE agents SET online=0 WHERE role='worker'").run();
+    for (let i = 0; i < EVIDENCE_RUN_LIMIT; i++) {
+      await assert.rejects(f.hive.adaptiveTopology.routeHumanRequest(f.human,
+        { channel: f.dm.id, body: 'Rejected manual request', requestId: `rejected-${i}` }, 'brain_multi_room', 'task'),
+      /needs 2 available workers/);
+      if (i === Math.floor(EVIDENCE_RUN_LIMIT / 2)) await f.restart();
+      if (interleaved) await f.check(`between-${i}`);
+    }
+    assert.equal(f.hive.adaptiveTopology.view(f.human, f.dm.id).state?.executionId, started.state.executionId);
+    await f.check('after-rejections');
+    const report = exportAdaptiveEvidence(f.hive.db, started.state.executionId);
+    const expected = 2 + (interleaved ? EVIDENCE_RUN_LIMIT : 0);
+    assert.equal(f.calls(), expected + EVIDENCE_RUN_LIMIT);
+    assert.equal(report.coverage.attemptsStarted, expected);
+    assert.equal(report.coverage.attemptsFinished, expected);
+    assert.equal(report.coverage.startedAt, initial.coverage.startedAt);
+    assert.equal(report.coverage.historyComplete, true);
+    assert.equal(report.coverage.prunedAttempts, 0);
+    assert.equal(report.overhead.totalInputTokens, expected * 80);
+    assert.equal(f.hive.db.prepare('SELECT COUNT(*) AS n FROM adaptive_evidence_runs').get()!.n, EVIDENCE_RUN_LIMIT);
+  });
+}

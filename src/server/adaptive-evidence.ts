@@ -21,6 +21,17 @@ function pruneAttempts(db: DatabaseSync, executionId: string): number {
     (SELECT id FROM adaptive_evidence_attempts WHERE execution_id=? ORDER BY rowid DESC LIMIT ?)`)
     .run(executionId, executionId, EVIDENCE_ATTEMPT_LIMIT).changes);
 }
+function pruneRuns(db: DatabaseSync, scope: EvidenceScope): void {
+  const hasExecutions = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='adaptive_topology_executions'").get();
+  const active = hasExecutions ? db.prepare(`SELECT execution_id FROM adaptive_topology_executions
+    WHERE channel_id=? AND json_extract(snapshot, '$.completedAt') IS NULL`).get(scope.channelId) : undefined;
+  // Rejected initial requests must not evict the execution that still owns the channel.
+  // Both it and the attempt being recorded count toward the hard per-channel limit.
+  db.prepare(`DELETE FROM adaptive_evidence_runs WHERE channel_id=? AND execution_id NOT IN
+    (SELECT execution_id FROM adaptive_evidence_runs WHERE channel_id=?
+      ORDER BY (execution_id IN (?,?)) DESC, json_extract(snapshot, '$.lastRecordedAt') DESC, rowid DESC LIMIT ?)`)
+    .run(scope.channelId, scope.channelId, String(active?.execution_id ?? ''), scope.executionId, EVIDENCE_RUN_LIMIT);
+}
 const safeInt = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) >= 0;
 const duration = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 function add(a: number, b: number): number {
@@ -73,9 +84,7 @@ export class AdaptiveEvidenceStore {
       this.db.prepare('INSERT INTO adaptive_evidence_attempts(id,execution_id,snapshot) VALUES(?,?,?)').run(id, scope.executionId, JSON.stringify(attempt));
       state.totals.prunedAttempts = add(state.totals.prunedAttempts, pruneAttempts(this.db, scope.executionId));
       this.db.prepare('UPDATE adaptive_evidence_runs SET snapshot=? WHERE execution_id=?').run(JSON.stringify(state), scope.executionId);
-      this.db.prepare(`DELETE FROM adaptive_evidence_runs WHERE channel_id=? AND execution_id NOT IN
-        (SELECT execution_id FROM adaptive_evidence_runs WHERE channel_id=? ORDER BY rowid DESC LIMIT ?)`)
-        .run(scope.channelId, scope.channelId, EVIDENCE_RUN_LIMIT);
+      pruneRuns(this.db, scope);
       return id;
     });
   }
@@ -149,7 +158,8 @@ export function exportAdaptiveEvidence(db: DatabaseSync, executionId: string) {
     executionAlias: 'execution-1', models: state.models, modelsTruncated: state.modelsTruncated,
     coverage: { startedAt: state.firstRecordedAt, endedAt: state.lastRecordedAt, attemptsStarted: t.started,
       attemptsFinished: t.finished, pendingAttempts: t.started - t.finished, retainedAttempts: attempts.length,
-      prunedAttempts: t.prunedAttempts, historyComplete: t.prunedAttempts === 0,
+      prunedAttempts: t.prunedAttempts, historyComplete: t.prunedAttempts === 0 &&
+        attempts[0]?.ordinal === 1 && attempts[0]?.phase === 'initial',
       usageComplete, collection: 'since_recorder_installation', countsAre: 'classifier_attempts_not_verified_billable_calls' },
     overhead: { successfulAttempts: t.ok, unavailableAttempts: t.unavailable,
       tokenObservations: t.usageObservations, unknownUsageAttempts: t.started - t.usageObservations,
