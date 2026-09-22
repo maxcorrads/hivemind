@@ -435,6 +435,22 @@ test("Human can see brain-worker DMs and invite to private rooms", () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+test("Human can remove a brain and keep their messages", () => {
+  const { hive, dir } = tempHive();
+  const human = hive.getAgent("human");
+  const extra = hive.join({ role: "brain" });
+  const keep = hive.join({ role: "brain" });
+  const posted = hive.postMessage(extra.agent, { channel: "general", body: "stay after I am gone" });
+  assert.throws(() => hive.removeAgent(keep.agent, extra.agent.name), /Only Human/);
+  assert.throws(() => hive.removeAgent(human, "Human"), /Cannot remove Human/);
+  hive.removeAgent(human, extra.agent.name);
+  assert.equal(hive.getAgentByName(extra.agent.name), null);
+  assert.ok(hive.getAgentByName(keep.agent.name));
+  const still = hive.listMessages(human, "general").messages;
+  assert.ok(still.some((m) => m.id === posted.id));
+  rmSync(dir, { recursive: true, force: true });
+});
+
 test("search stays in one project and only rooms the actor can see", async () => {
   const { hive, dir } = tempHive();
   const human = hive.getAgent("human");

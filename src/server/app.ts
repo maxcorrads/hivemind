@@ -149,6 +149,11 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const body = await requestJson(c.req.raw);
     return c.json({ project: hive.updateProject(hive.getAgent('human'), c.req.param('slug'), { name: body.name, worktree: body.worktree }) });
   });
+  ui.delete("/agents/:name", (c) => {
+    const human = hive.getAgent("human");
+    const agent = hive.removeAgent(human, decodeURIComponent(c.req.param("name")));
+    return c.json({ ok: true, name: agent.name });
+  });
   ui.delete("/projects/:slug", async c => {
     const human = hive.getAgent('human'), slug = parseProjectSlug(c.req.param('slug'));
     const chatId = readTelegramFile(hive.home)?.projects[slug];
