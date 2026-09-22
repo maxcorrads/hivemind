@@ -729,3 +729,66 @@ test("direct conversations, inbox receipts and compact routing remain independen
   await expect(page.locator(".inbox-card")).toHaveCount(0);
   expect(harnesses.get(page)!.receipts.some(receipt => receipt.length === 1 && receipt[0] === 2)).toBe(true);
 });
+
+for (const inThread of [false, true]) {
+  test(`sending while reading history returns to the confirmed message without websocket echo (thread=${inThread})`, async ({ page }) => {
+    const alpha = project("alpha", "Alpha Hive"), a = channel("a", "Alpha", alpha);
+    const root = message("root", 1, a.id, "A root for the conversation");
+    const threadId = inThread ? root.id : null;
+    let messages = Array.from({ length: 40 }, (_, index) => message(`old-${index}`, index + 2, a.id,
+      `History ${index}: ${"A longer message for scrolling. ".repeat(8)}`, threadId));
+    const threads: Thread[] = [{ id: root.id, channelId: a.id, status: "open" }];
+    await installSnapshot(page, () => snapshot([alpha], [a]));
+    await installSocketHarness(page);
+    await page.route("**/api/ui/channels/a/messages*", async route => {
+      const requestedThread = new URL(route.request().url()).searchParams.get("threadId");
+      if (route.request().method() === "POST") {
+        const body = route.request().postDataJSON() as { body: string; threadId: string | null };
+        expect(body.threadId).toBe(threadId);
+        const missed = message("missed-before-send", 100, a.id, "Previously unseen message", threadId);
+        const sent = message("confirmed", 101, a.id, body.body, threadId);
+        messages = [...messages, missed, sent];
+        return fulfillJson(route, { message: sent });
+      }
+      if (inThread && !requestedThread) return fulfillJson(route, payload(a, [root], threads));
+      return fulfillJson(route, { ...payload(a, messages, threads), threadId });
+    });
+    await page.goto(inThread ? "/#/c/a/t/root" : "/#/c/a");
+    const scope = page.locator(inThread ? "aside.thread" : "main");
+    await expect(scope.locator(".msg")).toHaveCount(40);
+    const stream = scope.locator(".stream");
+    await stream.evaluate(element => { element.scrollTop = 0; });
+    await expect(scope.getByRole("button", { name: inThread ? "Refresh thread" : "Return to live", exact: true })).toBeVisible();
+    const composer = scope.locator(".composer textarea");
+    await composer.fill("My confirmed message");
+    await composer.press("Enter");
+    await expect(scope.getByText("My confirmed message", { exact: true })).toHaveCount(1);
+    await expect(scope.getByText("My confirmed message", { exact: true })).toBeInViewport();
+    await expect(scope.getByText("Previously unseen message", { exact: true })).toHaveCount(1);
+    await expect.poll(() => stream.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(3);
+    await expect(composer).toHaveValue("");
+  });
+}
+
+test("opening a side thread keeps a live main chat aligned after text reflows", async ({ page }) => {
+  const alpha = project("alpha", "Alpha Hive"), a = channel("a", "Alpha", alpha);
+  const messages = Array.from({ length: 20 }, (_, index) => message(`root-${index}`, index + 1, a.id,
+    `Message ${index}. ${"Text that wraps into more lines when the side thread opens. ".repeat(12)}`));
+  const last = messages.at(-1)!;
+  const threads: Thread[] = [{ id: last.id, channelId: a.id, status: "open" }];
+  await installSnapshot(page, () => snapshot([alpha], [a]));
+  await installSocketHarness(page);
+  await installMessages(page, async (route, _id, threadId) => fulfillJson(route,
+    { ...payload(a, threadId ? [last] : messages, threads), threadId }));
+  await page.setViewportSize({ width: 1440, height: 800 });
+  await page.goto("/#/c/a");
+  const stream = page.locator("main .stream");
+  await expect(page.locator("main .msg")).toHaveCount(20);
+  await expect.poll(() => stream.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(3);
+  const before = await stream.evaluate(el => el.scrollWidth);
+  await page.locator("main .msg").last().getByRole("button", { name: "Thread", exact: true }).click();
+  await expect(page.locator("aside.thread")).toBeVisible();
+  expect(await stream.evaluate(el => el.scrollWidth)).toBeLessThan(before);
+  await expect.poll(() => stream.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(3);
+  await expect(page.locator("main").getByRole("button", { name: "Return to live", exact: true })).toHaveCount(0);
+});

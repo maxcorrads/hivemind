@@ -2,7 +2,7 @@ import { Modal } from "./Modal.tsx";
 import { createSendOperations } from "./send-operation.ts";
 import { beginChannelJournal, recordChannelMessage, recordChannelThread, applyChannelMessage, reconcileChannelSnapshot, type ChannelJournal } from "./channel-state.ts";
 import { newerTelegramHealth, telegramDegraded, type TelegramHealth } from "./telegram-health.ts";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import type { Agent, Channel, Message, SearchHit, Thread, ThreadStatus, InboxStatus } from "../src/shared/types.ts";
 import { REACTION_EMOJIS } from "../src/shared/types.ts";
 import { isLiveSearchQuery, parseSearchQuery } from "../src/shared/search-query.ts";
@@ -191,17 +191,22 @@ export function App() {
   selRef.current = sel;
   const threadIdRef = useRef(threadId);
   threadIdRef.current = threadId;
+  const panesRef = useRef({ pane, threadPane });
+  panesRef.current = { pane, threadPane };
   const channelsRef = useRef<Channel[]>([]);
   const threadLoadIdRef = useRef(0);
 
   const viewingThread = useCallback((channelId: string, root: string) =>
     selRef.current.kind === 'channel' && selRef.current.id === channelId && threadIdRef.current === root, []);
 
-  const loadThread = useCallback(async (channelId: string, root: string) => {
+  const loadThread = useCallback(async (channelId: string, root: string, confirmed?: Message) => {
     if (!viewingThread(channelId, root)) return;
     const requestId = ++threadLoadIdRef.current;
     const load = threadLoad.current.begin();
-    setThreadView(view => beginThreadLoad(view, channelId, root, requestId));
+    setThreadView(view => {
+      const loading = beginThreadLoad(view, channelId, root, requestId, !!confirmed);
+      return confirmed ? receiveThreadMessage(loading, confirmed) : loading;
+    });
     try {
       const data = await api.messages(channelId, root, undefined, load.signal);
       if (load.valid() && viewingThread(channelId, root)) setThreadView(view => receiveThreadSnapshot(view, root, data, requestId));
@@ -316,10 +321,11 @@ export function App() {
     return next;
   }, [acceptRead]);
 
-  const loadChannel = useCallback(async (id: string, before?: number) => {
+  const loadChannel = useCallback(async (id: string, before?: number, confirmed?: Message[]) => {
     const load = channelLoad.current.begin();
     for (let attempt = 0; attempt < 3; attempt++) {
       const journal = beginChannelJournal(id);
+      for (const message of confirmed ?? []) recordChannelMessage(journal, message);
       channelJournal.current = journal;
       try {
         const data = await api.messages(id, null, before, load.signal);
@@ -328,7 +334,7 @@ export function App() {
           if (attempt < 2) continue;
           throw new Error("Live traffic overtook the channel refresh. Reload the page to retry.");
         }
-        setPane((current) => reconcileChannelSnapshot(current, data, journal, before !== undefined));
+        setPane((current) => reconcileChannelSnapshot(confirmed ? null : current, data, journal, before !== undefined));
         return;
       } catch (error) {
         if (!load.valid() || selRef.current.kind !== "channel" || selRef.current.id !== id) return;
@@ -578,13 +584,18 @@ export function App() {
     else apply();
   }, [theme]);
 
-  useEffect(() => {
-    if (stickBottom.current && pane?.historyThrough === undefined) bottomRef.current?.scrollIntoView({ block: "end" });
+  // Reflow happens before scroll events: keep a live pane pinned when the side
+  // thread opens, even when the bounded message window keeps the same length.
+  const threadVisible = !!threadPane;
+  useLayoutEffect(() => {
+    if (stickBottom.current && pane?.historyThrough === undefined && channelStream.current)
+      channelStream.current.scrollTop = channelStream.current.scrollHeight;
     stickBottom.current = true;
-  }, [pane?.messages.length, pane?.historyThrough]);
-  useEffect(() => {
-    if (threadPane?.historyThrough === undefined) threadBottomRef.current?.scrollIntoView({ block: "end" });
-  }, [threadPane?.messages.length, threadPane?.historyThrough]);
+  }, [pane, threadVisible]);
+  useLayoutEffect(() => {
+    if (threadPane?.historyThrough === undefined && threadStream.current)
+      threadStream.current.scrollTop = threadStream.current.scrollHeight;
+  }, [threadPane]);
 
   useEffect(() => {
     if (!snap) return;
@@ -709,6 +720,8 @@ export function App() {
     if (!body.trim() && !files?.length) return;
     const result = await sendOperations.current(channelId, body.trim(), root, files, routing, lockScope);
     if (selRef.current.kind !== "channel" || selRef.current.id !== channelId || (root && threadIdRef.current !== root)) return;
+    const sentPane = root ? panesRef.current.threadPane : panesRef.current.pane;
+    const returnToLive = sentPane?.historyThrough !== undefined || isReadingHistory(root ? threadStream.current : channelStream.current);
     if (root) setThreadDraft((current) => current === body ? "" : current);
     else {
       setDraft((current) => current === body ? "" : current);
@@ -723,6 +736,16 @@ export function App() {
     setPane((current) => applyChannelMessage(current, result.message));
     if (!root && activeBrainDm) refreshRoutingView();
     if (root) onThreadMessage(result.message);
+    if (returnToLive) {
+      // Fetch the complete latest window, including messages hidden while reading
+      // history. The HTTP acknowledgement is journaled even without a WS echo.
+      try {
+        if (root) await loadThread(channelId, root, result.message);
+        else await loadChannel(channelId, undefined, result.routingMessage ? [result.routingMessage, result.message] : [result.message]);
+      } catch (error) {
+        setErr(`Message sent, but the conversation could not refresh. Return to live to retry. ${String(error)}`);
+      }
+    }
   };
 
   const onCreate = async () => {
