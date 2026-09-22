@@ -1,3 +1,4 @@
+import { Modal } from "./Modal.tsx";
 import { useEffect, useState } from "react";
 import { api, type AdaptiveRoutingSettings } from "./api.ts";
 import type { AdaptiveTopology } from "../src/shared/adaptive-topology.ts";
@@ -29,9 +30,9 @@ export function AdaptiveRoutingSettings({ onClose, onSaved }: { onClose: () => v
   const canSave = Boolean(settings) && !busy && (!enabled || settings!.apiKeySet || apiKey.trim().length > 0);
 
   return (
-    <div className="modal" onClick={onClose}>
+    <Modal onClose={() => { if (!busy) onClose(); }}>
       <form
-        className="sheet"
+        className="sheet settings-sheet" role="dialog" aria-modal="true" aria-label="Adaptive routing settings"
         onClick={e => e.stopPropagation()}
         onSubmit={e => {
           e.preventDefault();
@@ -55,10 +56,9 @@ export function AdaptiveRoutingSettings({ onClose, onSaved }: { onClose: () => v
         }}
       >
         <h2>Adaptive routing · Jev</h2>
-        <p className="help-p">
-          TypeSafe Jev selects and continuously revalidates Single, Brain + 1, Multi-DM or Room for Human requests sent to a brain.
-          When disabled, Auto behaves exactly as legacy Hivemind.
-        </p>
+        <div className="sheet-body">
+        <p className="help-p">Let Jev choose how many agents a request needs and adjust the team as work progresses.</p>
+        <p className="config-status" role="status">{!settings ? "Loading settings…" : settings.enabled ? "Enabled" : "Disabled"} · {settings?.apiKeySet ? "API key configured" : "No API key saved"}</p>
         <label className="check">
           <input
             type="checkbox"
@@ -66,8 +66,21 @@ export function AdaptiveRoutingSettings({ onClose, onSaved }: { onClose: () => v
             onChange={e => setEnabled(e.target.checked)}
             disabled={!settings || busy}
           />
-          Use Jev for continuous execution-topology routing
+          Enable adaptive routing
         </label>
+        <label>
+          TypeSafe API key
+          <input
+            type="password"
+            value={apiKey}
+            onChange={e => setApiKey(e.target.value)}
+            placeholder={settings?.apiKeyHint ? `saved ${settings.apiKeyHint}` : "required when enabled"}
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </label>
+        <p className="help-p">The API key stays in your private local configuration.</p>
+        <details className="settings-disclosure"><summary>Fallback and advanced options</summary>
         <label>
           Initial fallback when Jev is uncertain or unavailable
           <select
@@ -91,48 +104,25 @@ export function AdaptiveRoutingSettings({ onClose, onSaved }: { onClose: () => v
             <option value="brain_multi_room">Room</option>
           </select>
         </label>
-        <label>
-          TypeSafe API key
-          <input
-            type="password"
-            value={apiKey}
-            onChange={e => setApiKey(e.target.value)}
-            placeholder={settings?.apiKeyHint ? `saved ${settings.apiKeyHint}` : "required when enabled"}
-            autoComplete="off"
-            spellCheck={false}
-          />
-        </label>
-        <p className="help-p">
-          Model: <code>{settings?.model ?? "jev-latest"}</code>. The key is stored only in Hivemind's private local config
-          and is never returned to the browser after save.
-        </p>
-        <p className="help-p">
-          Initial routing sends the Human request plus project name/slug. Continuous checks send a bounded structured snapshot:
-          current topology, live worker capacity, task/dependency/blocker counts, recent coordination events, locks and the previous decision.
-          Repository/file contents, full message history and Hivemind credentials are not sent.
-        </p>
-        <p className="help-p">
-          During continuous execution, Jev failure preserves the current topology and raises a Human-only warning.
-          Initial provider failure uses the configured Single/Orchestrated fallback; orchestrated fallback starts with the topology fallback above.
-        </p>
-        <p className="help-p">
-          Brain DMs expose <strong>Auto · Jev / Single / Brain + 1 / Multi-DM / Room / Orchestrated Auto</strong>.
-          Manual choices can be one-shot or locked to the task/conversation. Jev still evaluates locked executions but cannot override the Human lock.
-        </p>
-        <p className="help-p">
-          Only new top-level Human messages in a brain DM are routed. Thread replies and ordinary channel traffic are not reclassified.
-        </p>
+        <p className="help-p">If Jev is unavailable, new requests use these fallbacks. Existing work keeps its current team and shows a warning.</p>
+        <p className="help-p">Model: <code>{settings?.model ?? "jev-latest"}</code>. Manual routing can apply once or stay locked to a task or conversation.</p>
+        </details>
+        <details className="settings-disclosure"><summary>What data is sent to Jev?</summary>
+        <p className="help-p">New brain DMs send your request and project name/slug to TypeSafe. Ongoing checks send the current topology, worker capacity, task/dependency/blocker counts, recent coordination events, locks and the previous decision.</p>
+        <p className="help-p">Repository contents, full message history and Hivemind credentials are not sent. Thread replies and ordinary channel messages are not routed.</p>
+        </details>
         {error && <p className="err">{error}</p>}
         {enabled && settings && !settings.apiKeySet && !apiKey.trim() && (
           <p className="help-p">Enter an API key before enabling Jev.</p>
         )}
-        <div className="row">
-          <button type="button" onClick={onClose}>Close</button>
+        </div>
+        <div className="row sheet-footer">
+          <button type="button" onClick={onClose} disabled={busy}>Close</button>
           <button type="submit" className="primary" disabled={!canSave}>
             {busy ? "Saving…" : "Save"}
           </button>
         </div>
       </form>
-    </div>
+    </Modal>
   );
 }

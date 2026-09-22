@@ -1,3 +1,4 @@
+import { Modal } from "./Modal.tsx";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Agent, Project, Seniority } from "../src/shared/types.ts";
 import { modelChoiceGroups, parseChoiceId, selectedChoiceId } from "../src/shared/launch-models.ts";
@@ -230,18 +231,9 @@ export function LaunchSheet({
     return () => { active = false; };
   }, [projects.map((p) => p.id + ":" + p.slug).join("|")]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      if (e.target instanceof HTMLSelectElement) return;
-      onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
-    };
-  }, [onClose]);
+  useEffect(() => () => {
+    if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
+  }, []);
 
   useEffect(() => {
     setProjectSlug(defaultProject);
@@ -408,35 +400,27 @@ export function LaunchSheet({
   const canCopyAll = resume && resumeBlocks.length > 0 && resumeBlocks.every((b) => b.ok);
 
   return (
-    <div className="modal" onClick={onClose}>
-      <div className="sheet sheet-wide" onClick={(e) => e.stopPropagation()}>
+    <Modal onClose={onClose}>
+      <div className="sheet sheet-wide launch-sheet" role="dialog" aria-modal="true" aria-label="Launch agent" onClick={(e) => e.stopPropagation()}>
+        <h2>Launch agent</h2>
         <div className="sheet-body">
-          <h2>Launch agent</h2>
-          <p className="help-p" role="status">
-            {contextError ? "Cannot load Hivemind connection: " + contextError : !launchContext ? "Loading Hivemind connection…" :
-              role === "worker" ? "Hivemind connection ready. Workers do not need project plugin instructions." :
-              launchContext.pluginError ? "Cannot load project tools: " + launchContext.pluginError :
-              "Project plugins: " + (launchContext.plugins.map((p) => p.name).join(", ") || "none enabled") + ". Instructions are included; no tool is started here."}
-          </p>
-          {launchContext && softwareFamily(software) !== "claude" && <p className="help-p">
-            Use this CLI’s normal Hivemind MCP configuration. Automatic server binding is available for Claude launchers.
-          </p>}
-          <p className="help-p">
-            One block: command plus prompt. Paste it in a terminal. One chat is one employee. Hive is the Hivemind project name.
-          </p>
-          {softwareFamily(software) === "codex" && (
-            <p className="help-p">
-              Codex has no session-name flag at open. After join, type{" "}
-              <code>/rename {hiveName ? `${hiveName} - ` : ""}Name</code> in the TUI — the copied prompt includes that command
-              {resume ? " with the employee name." : " once join returns the assigned name."}
-            </p>
-          )}
-          {softwareFamily(software) === "opencode" && (
-            <p className="help-p">
-              OpenCode TUI takes <code>--prompt</code>, not a positional path. It has no{" "}
-              <code>--variant</code> flag — use the last effort you picked for that model in OpenCode.
-            </p>
-          )}
+          <p className="help-p">Choose an agent, then copy its launch command into your terminal.</p>
+          <label>
+            Project
+            <select
+              value={project?.slug ?? projectSlug}
+              onChange={(e) => {
+                setProjectSlug(e.target.value);
+                setPathDirty(false);
+              }}
+            >
+              {projects.map((p) => (
+                <option key={p.id} value={p.slug}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </label>
           <label>
             Software
             <input
@@ -464,33 +448,7 @@ export function LaunchSheet({
               remember({ model: next.model, effort: next.effort });
             }}
           />
-          <label>
-            CLI flags
-            <input
-              value={extraFlags}
-              onChange={(e) => setExtraFlags(e.target.value)}
-              onBlur={() => remember()}
-              placeholder="optional"
-              autoComplete="off"
-            />
-          </label>
-          <label>
-            Hive
-            <select
-              value={project?.slug ?? projectSlug}
-              onChange={(e) => {
-                setProjectSlug(e.target.value);
-                setPathDirty(false);
-              }}
-            >
-              {projects.map((p) => (
-                <option key={p.id} value={p.slug}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
+          <label className="launch-workspace">
             Workspace path
             <input
               value={workspacePath}
@@ -503,54 +461,6 @@ export function LaunchSheet({
               spellCheck={false}
             />
           </label>
-          <fieldset className="checks">
-            <legend>Launch</legend>
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={cdWorktree}
-                onChange={(e) => {
-                  setCdWorktree(e.target.checked);
-                  remember({ cdWorktree: e.target.checked });
-                }}
-              />
-              cd into workspace path
-            </label>
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={passProject}
-                onChange={(e) => {
-                  setPassProject(e.target.checked);
-                  remember({ passProject: e.target.checked });
-                }}
-              />
-              pass project on join
-            </label>
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={adoptUntrusted}
-                onChange={(e) => {
-                  setAdoptUntrusted(e.target.checked);
-                  remember({ adoptUntrusted: e.target.checked });
-                }}
-              />
-              treat hive mail as my authorization
-            </label>
-          </fieldset>
-          {resume && allHives && pathDirty && (
-            <p className="help-p">
-              The path override applies only to the selected hive. Other hives keep their registered worktree.
-            </p>
-          )}
-          {cdWorktree && !workspacePath.trim() && (
-            <p className="help-p">
-              {resume
-                ? "No workspace path for this hive — commands start here unless that employee’s hive has its own worktree. Set a path above or in hive settings."
-                : "No workspace path — the command starts here. Set a path above or in hive settings."}
-            </p>
-          )}
           {!resume && (
             <>
               <label>
@@ -602,6 +512,93 @@ export function LaunchSheet({
               </label>
             </>
           )}
+          <details className="settings-disclosure"><summary>Advanced launch options</summary>
+          <label>
+            CLI flags
+            <input
+              value={extraFlags}
+              onChange={(e) => setExtraFlags(e.target.value)}
+              onBlur={() => remember()}
+              placeholder="optional"
+              autoComplete="off"
+            />
+          </label>
+          <fieldset className="checks">
+            <legend>Launch</legend>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={cdWorktree}
+                onChange={(e) => {
+                  setCdWorktree(e.target.checked);
+                  remember({ cdWorktree: e.target.checked });
+                }}
+              />
+              cd into workspace path
+            </label>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={passProject}
+                onChange={(e) => {
+                  setPassProject(e.target.checked);
+                  remember({ passProject: e.target.checked });
+                }}
+              />
+              pass project on join
+            </label>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={adoptUntrusted}
+                onChange={(e) => {
+                  setAdoptUntrusted(e.target.checked);
+                  remember({ adoptUntrusted: e.target.checked });
+                }}
+              />
+              treat hive mail as my authorization
+            </label>
+          </fieldset>
+          {resume && allHives && pathDirty && (
+            <p className="help-p">
+              The path override applies only to the selected hive. Other hives keep their registered worktree.
+            </p>
+          )}
+          {cdWorktree && !workspacePath.trim() && (
+            <p className="help-p">
+              {resume
+                ? "No workspace path for this hive — commands start here unless that employee’s hive has its own worktree. Set a path above or in hive settings."
+                : "No workspace path — the command starts here. Set a path above or in hive settings."}
+            </p>
+          )}
+          </details>
+          <details className="settings-disclosure"><summary>Connection and launch instructions</summary>
+          <p className="help-p" role="status">
+            {contextError ? "Cannot load Hivemind connection: " + contextError : !launchContext ? "Loading Hivemind connection…" :
+              role === "worker" ? "Hivemind connection ready. Workers do not need project plugin instructions." :
+              launchContext.pluginError ? "Cannot load project tools: " + launchContext.pluginError :
+              "Project plugins: " + (launchContext.plugins.map((p) => p.name).join(", ") || "none enabled") + ". Instructions are included; no tool is started here."}
+          </p>
+          {launchContext && softwareFamily(software) !== "claude" && <p className="help-p">
+            Use this CLI’s normal Hivemind MCP configuration. Automatic server binding is available for Claude launchers.
+          </p>}
+          <p className="help-p">
+            One block: command plus prompt. Paste it in a terminal. One chat is one employee. Hive is the Hivemind project name.
+          </p>
+          {softwareFamily(software) === "codex" && (
+            <p className="help-p">
+              Codex has no session-name flag at open. After join, type{" "}
+              <code>/rename {hiveName ? `${hiveName} - ` : ""}Name</code> in the TUI — the copied prompt includes that command
+              {resume ? " with the employee name." : " once join returns the assigned name."}
+            </p>
+          )}
+          {softwareFamily(software) === "opencode" && (
+            <p className="help-p">
+              OpenCode TUI takes <code>--prompt</code>, not a positional path. It has no{" "}
+              <code>--variant</code> flag — use the last effort you picked for that model in OpenCode.
+            </p>
+          )}
+          </details>
           <fieldset className="checks">
             <legend>Resume</legend>
             <label className="check">
@@ -683,7 +680,7 @@ export function LaunchSheet({
               </>
             )
           ) : built.ok ? (
-            <pre className="launch-pre">{built.text}</pre>
+            <details className="settings-disclosure" open><summary>Command preview</summary><pre className="launch-pre">{built.text}</pre></details>
           ) : (
             <p className="help-p">{built.error}</p>
           )}
@@ -713,6 +710,6 @@ export function LaunchSheet({
           )}
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }

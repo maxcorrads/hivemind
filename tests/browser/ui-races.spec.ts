@@ -573,3 +573,159 @@ for (const inThread of [false, true]) {
     await expect(scope.locator(".msg-b")).toHaveCount(500);
   });
 }
+
+test("agent roster stays readable in a narrow sidebar and keeps actions scoped", async ({ page }, testInfo) => {
+  const alpha = project("alpha", "Example Hive");
+  const a = channel("a", "General", alpha);
+  const snap = snapshot([alpha], [a]);
+  const agent = (id: string, name: string, role: Agent["role"], patch: Partial<Agent> = {}): Agent => ({
+    ...human, id, name, role, projectId: alpha.id, project: alpha.slug, ...patch,
+  });
+  snap.agents.push(agent("brain", "Beacon", "brain"),
+    agent("worker", "LongWorkerNameForLayout", "worker", { seniority: "senior", focus: "Frontend and accessibility" }),
+    agent("bot", "BuildFeed", "bot"));
+  snap.inbox = { brain: { awaitingReceipt: 0, acknowledgedMessages: 7, lastAcknowledgedAt: 1 },
+    worker: { awaitingReceipt: 12, acknowledgedMessages: 24, lastAcknowledgedAt: 1, queued: { atLeast: 120, exact: false } } };
+  await installSnapshot(page, () => snap);
+  await installSocketHarness(page);
+  await installMessages(page, async route => fulfillJson(route, payload(a, [])));
+  await page.goto("/#/c/a");
+  const row = page.locator(".person").filter({ has: page.getByRole("button", { name: "Actions for LongWorkerNameForLayout", exact: true }) });
+  await expect(row).toBeVisible();
+  await expect(page.getByText("Credentials", { exact: true })).toHaveCount(0);
+  for (const width of [260, 300]) {
+    await page.addStyleTag({ content: `.shell { grid-template-columns: ${width}px minmax(0, 1fr); }` });
+    for (const dark of [false, true]) {
+      await page.evaluate(value => document.documentElement.classList.toggle("dark", value), dark);
+      const issues = await page.locator(".agents").evaluate(container => {
+        const failures: string[] = [];
+        for (const item of container.querySelectorAll<HTMLElement>(".person")) {
+          const main = item.querySelector<HTMLElement>(".person-main")!;
+          const action = item.querySelector<HTMLElement>(".kebab");
+          if (item.scrollWidth > item.clientWidth + 1) failures.push("row overflows");
+          if (main.scrollWidth > main.clientWidth + 1) failures.push("content overflows");
+          if (action && main.getBoundingClientRect().right > action.getBoundingClientRect().left + 1) failures.push("action overlaps");
+          const label = item.querySelector<HTMLElement>(".person-label")!;
+          for (const detail of item.querySelectorAll<HTMLElement>(".person-meta, .inbox-receipt:not(:empty)")) {
+            if (detail.getBoundingClientRect().top < label.getBoundingClientRect().bottom - 1) failures.push("details overlap name");
+          }
+        }
+        return failures;
+      });
+      expect(issues).toEqual([]);
+      await page.locator(".agents").screenshot({ path: testInfo.outputPath(`roster-${width}-${dark ? "dark" : "light"}.png`) });
+    }
+  }
+  const action = row.getByRole("button", { name: "Actions for LongWorkerNameForLayout", exact: true });
+  await action.click();
+  const menu = row.getByRole("menu");
+  await expect(menu.getByRole("menuitem", { name: "Manage credentials for LongWorkerNameForLayout" })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(menu.getByRole("menuitem", { name: "Clear context", exact: true })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  await expect(action).toBeFocused();
+  await action.click();
+  await menu.getByRole("menuitem", { name: "Remove", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Remove LongWorkerNameForLayout", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(row).toBeVisible();
+});
+
+test("settings stay inside the viewport and backdrop dismissal requires a complete click", async ({ page }, testInfo) => {
+  const alpha = project("alpha", "Example Hive"), a = channel("a", "General", alpha);
+  const snap = snapshot([alpha, project("beta", "Second Hive")], [a]);
+  await installSnapshot(page, () => snap);
+  await installSocketHarness(page);
+  await installMessages(page, async route => fulfillJson(route, payload(a, [])));
+  await page.route("**/api/ui/adaptive-routing", route => fulfillJson(route, {
+    enabled: false, apiKeySet: false, apiKeyHint: null, model: "jev-latest", fallback: "orchestrated", topologyFallback: "brain_one_worker",
+  }));
+  await page.route("**/api/ui/telegram", route => fulfillJson(route, {
+    configured: false, running: false, tokenSet: false, tokenHint: null, allowUserIds: [], projects: {},
+  }));
+  await page.route("**/api/ui/launch-context?*", route => fulfillJson(route, {
+    project: { id: alpha.id, slug: alpha.slug }, plugins: [], pluginInstructions: "",
+    hivemindMcp: { command: "hivemind", args: ["mcp"], env: {} },
+  }));
+  await page.setViewportSize({ width: 1180, height: 700 });
+  await page.goto("/#/c/a");
+  for (const title of ["Adaptive routing", "Telegram", "Launch agent"]) {
+    await page.locator(".tools-menu > summary").click();
+    await page.getByTitle(title, { exact: true }).click();
+    const modal = page.locator(".modal"), sheet = modal.locator(".sheet");
+    await expect(sheet).toBeVisible();
+    const bounds = await sheet.boundingBox();
+    expect(bounds!.y).toBeGreaterThanOrEqual(0);
+    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(700);
+    await expect(sheet.getByRole("button", { name: "Close", exact: true })).toBeInViewport();
+    await page.screenshot({ path: testInfo.outputPath(`${title.replaceAll(" ", "-")}.png`) });
+    await page.setViewportSize({ width: 390, height: 700 });
+    await page.evaluate(() => document.documentElement.classList.add("dark"));
+    const mobile = await sheet.boundingBox();
+    expect(mobile!.x).toBeGreaterThanOrEqual(0);
+    expect(mobile!.x + mobile!.width).toBeLessThanOrEqual(390);
+    await expect(sheet.getByRole("button", { name: "Close", exact: true })).toBeInViewport();
+    await page.screenshot({ path: testInfo.outputPath(`${title.replaceAll(" ", "-")}-mobile.png`) });
+    await page.setViewportSize({ width: 1180, height: 700 });
+    await page.evaluate(() => document.documentElement.classList.remove("dark"));
+    const heading = await sheet.locator("h2").boundingBox();
+    await page.mouse.move(heading!.x + 12, heading!.y + 10);
+    await page.mouse.down();
+    await page.mouse.move(6, 6, { steps: 8 });
+    await page.mouse.up();
+    await expect(sheet).toBeVisible();
+    // Dragging on the backdrop is not a tap either.
+    await page.mouse.move(5, 5); await page.mouse.down();
+    await page.mouse.move(5, 80, { steps: 4 }); await page.mouse.up();
+    await expect(sheet).toBeVisible();
+    await page.mouse.click(6, 6);
+    await expect(modal).toHaveCount(0);
+  }
+});
+
+test("direct conversations, inbox receipts and compact routing remain independent", async ({ page }, testInfo) => {
+  const alpha = project("alpha", "Example Hive");
+  const dm = { ...channel("dm", "Human · Beacon", alpha), type: "dm" as const, memberIds: ["human", "brain"] };
+  const peers = { ...channel("peers", "Beacon · Helper", alpha), type: "dm" as const, memberIds: ["brain", "worker"] };
+  const snap = snapshot([alpha], [dm, peers]);
+  snap.agents.push({ ...human, id: "brain", name: "Beacon", role: "brain", project: alpha.slug, projectId: alpha.id });
+  const direct = message("direct", 1, dm.id, "A direct update. ".repeat(50), null, { authorId: "brain", authorName: "Beacon", authorRole: "brain", mentions: ["human"] });
+  const mentioned = message("mention", 2, peers.id, "An update mentioning @Human.", null, { authorId: "brain", authorName: "Beacon", authorRole: "brain", mentions: ["human"] });
+  snap.mentions = [mentioned, direct]; snap.mentionCounts = { alpha: 2 }; snap.unread = { dm: 1, peers: 1 };
+  await installSnapshot(page, () => snap);
+  await installSocketHarness(page);
+  await installMessages(page, async (route, id) => fulfillJson(route, payload(id === "dm" ? dm : peers, [id === "dm" ? direct : mentioned])));
+  await page.route("**/api/ui/mentions?*", route => fulfillJson(route, {
+    readInstance: "browser-fixture", readRevision: harnesses.get(page)!.revision, readSeq: 2,
+    messages: [mentioned, direct].filter(m => !harnesses.get(page)!.receipts.flat().includes(m.seq)), hasMore: false,
+  }));
+  await page.route("**/api/ui/channels/*/adaptive-routing", route => fulfillJson(route, { state: null, events: [] }));
+  await page.goto("/#/c/dm");
+  await expect(page.locator(".with-human")).toBeVisible();
+  await expect(page.locator(".between-agents")).not.toBeVisible();
+  const routing = page.getByLabel("Message routing options");
+  await expect(routing).toHaveText("Auto · Jev");
+  await page.locator(".composer").screenshot({ path: testInfo.outputPath("composer-auto.png") });
+  const pill = await routing.boundingBox(); expect(pill!.height).toBeLessThan(40);
+  await routing.click();
+  await page.getByLabel("Execution mode", { exact: true }).selectOption("brain_one_worker");
+  await page.getByLabel("Routing lock scope", { exact: true }).selectOption("task");
+  await routing.click();
+  await expect(routing).toContainText("Brain + 1");
+  await expect(routing).toContainText("task lock");
+  await page.locator(".composer").screenshot({ path: testInfo.outputPath("composer.png") });
+  await page.getByRole("button", { name: /^For you/ }).click();
+  // Channel reading already acknowledged the direct message; test only the remaining mention.
+  await expect(page.locator(".inbox-card")).toHaveCount(1);
+  await page.getByRole("button", { name: "Direct messages", exact: true }).click();
+  await expect(page.locator(".inbox-card")).toHaveCount(0);
+  await page.getByRole("button", { name: "Mentions elsewhere", exact: true }).click();
+  await expect(page.locator(".inbox-card")).toHaveCount(1);
+  await page.getByRole("button", { name: "Expand", exact: true }).click();
+  await expect(page.locator(".inbox-card")).toHaveClass(/expanded/);
+  await page.screenshot({ path: testInfo.outputPath("for-you.png") });
+  await page.getByRole("button", { name: "Mark read", exact: true }).click();
+  await expect(page.locator(".inbox-card")).toHaveCount(0);
+  expect(harnesses.get(page)!.receipts.some(receipt => receipt.length === 1 && receipt[0] === 2)).toBe(true);
+});

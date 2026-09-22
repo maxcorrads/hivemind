@@ -663,8 +663,20 @@ html.dark .send { background: var(--wax); color: #1b2017; }
 html.dark .person-main:hover { background: rgba(255, 255, 255, 0.08); }
 .person-main:disabled { cursor: default; }
 .person-details { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.person-label { display: flex; align-items: center; gap: 0.4rem; }
-.person-details .focus { white-space: nowrap; }
+.person-label { display: flex; align-items: center; gap: 0.4rem; min-width: 0; }
+.person-label .pn { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.person-label .queue-badge { flex: none; }
+.person-meta { display: flex; align-items: center; gap: 0.5rem; min-width: 0; line-height: 1.3; }
+.person-rank { display: inline-flex; align-items: center; gap: 0.3rem; flex: none; }
+.person-details .focus { min-width: 0; white-space: nowrap; }
+.person-details .inbox-receipt { line-height: 1.4; gap: 0 0.5rem; }
+.person-details .inbox-receipt:empty { display: none; }
+.person-details .inbox-receipt > span { white-space: nowrap; }
+.person > .kebab { align-self: flex-start; margin-top: 0.35rem; }
+.person-main:focus-visible, .person > .kebab:focus-visible, .person-menu button:focus-visible {
+  outline: 2px solid var(--wax);
+  outline-offset: 2px;
+}
 .dot {
   width: 0.42rem;
   height: 0.42rem;
@@ -813,13 +825,16 @@ html.dark .err { background: #3a221c; color: #f3d2cb; }
   background: rgba(18, 20, 16, 0.42);
   display: grid;
   justify-items: center;
-  align-items: start;
-  overflow: auto;
-  padding: 1.25rem 0;
+  align-items: center;
+  overflow: hidden;
+  padding: 1rem;
   z-index: 20;
 }
 .sheet {
-  width: min(26rem, calc(100% - 2rem));
+  width: min(32rem, 100%);
+  max-height: calc(100dvh - 2rem);
+  overflow: auto;
+  overscroll-behavior: contain;
   margin-block: auto;
   background: var(--desk);
   color: var(--ink);
@@ -838,10 +853,14 @@ html.dark .err { background: #3a221c; color: #f3d2cb; }
   letter-spacing: -0.03em;
 }
 .sheet-wide {
-  width: min(40rem, calc(100% - 2rem));
-  max-height: calc(100dvh - 2.5rem);
+  width: min(44rem, 100%);
+  max-height: calc(100dvh - 2rem);
   overflow: hidden;
 }
+.sheet:has(> .sheet-body) { overflow: hidden; }
+.sheet > h2, .sheet > .row { flex: none; }
+.sheet > h2 { position: sticky; top: 0; z-index: 1; background: var(--desk); padding-bottom: 0.4rem; }
+.sheet > .row:last-child { position: sticky; bottom: 0; background: var(--desk); border-top: 1px solid var(--line); padding-top: 0.8rem; }
 .sheet-body {
   flex: 1 1 auto;
   min-height: 0;
@@ -1029,3 +1048,77 @@ html.dark .primary { background: var(--wax); color: #1b2017; }
 .timeline-list small { grid-column: 2; opacity: .72; overflow-wrap: anywhere; }
 
 .routing-inline { margin: 0.4rem 1rem; padding: 0.5rem 0.7rem; border-left: 2px solid var(--line); font-size: 0.78rem; opacity: 0.85; }
+
+/* Navigation, reading and configuration share the existing hive palette. */
+.rail { min-width: 0; overflow-x: hidden; }
+.brand { min-width: 0; }
+.brand > div:not(.brand-tools) { min-width: 0; }
+.tools-menu { position: relative; font-size: 0.76rem; }
+.tools-menu > summary { cursor: pointer; list-style: none; padding: 0.35rem 0.45rem; border-radius: 8px; background: var(--pill); }
+.tools-menu > summary::-webkit-details-marker { display: none; }
+.tools-popover { position: absolute; right: 0; top: calc(100% + 6px); width: 190px; padding: 0.35rem; border: 1px solid var(--line); border-radius: 10px; background: var(--desk); color: var(--ink); box-shadow: var(--shadow); z-index: 12; }
+.tool-action { display: block; width: 100%; text-align: left; padding: 0.55rem; border-radius: 6px; }
+.tool-action:hover { background: var(--paper); }
+.dm-row { min-width: 0; }
+.dm-row .nav { min-width: 0; flex: 1; }
+.nav > span { min-width: 0; }
+.nav em { flex: none; }
+.between-agents .nav em, .group > .nav em { background: var(--pill); color: var(--rail-ink); }
+.agent-conversations > summary { cursor: pointer; color: var(--rail-mute); font-size: 0.78rem; padding: 0.6rem 0.45rem; }
+.agent-conversations > summary span { float: right; font-variant-numeric: tabular-nums; }
+.msg > div { min-width: 0; }
+.msg-b { max-width: 76ch; }
+.msg-h { flex-wrap: wrap; }
+.inbox-header { gap: 1rem; flex-wrap: wrap; }
+.inbox-header > .text-btn { font-size: 0.78rem; white-space: nowrap; align-self: flex-start; }
+.inbox-tabs { flex-wrap: wrap; }
+.inbox-filters { margin-top: 0.6rem; }
+.inbox-stream { padding: 1rem; }
+.inbox-card { max-width: 86ch; margin: 0 0 1rem; padding: 0.75rem 0; border-bottom: 1px solid var(--line); }
+.inbox-context { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.4rem 0.65rem; padding: 0 1.15rem 0.35rem; font-size: 0.75rem; color: var(--mute); }
+.inbox-context strong { color: var(--ink); overflow-wrap: anywhere; }
+.inbox-context time { margin-left: auto; white-space: nowrap; }
+.inbox-card.collapsed .msg-b { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.inbox-actions { display: flex; flex-wrap: wrap; gap: 0.8rem; padding: 0.6rem 1.15rem 0.25rem 4rem; }
+.inbox-actions .text-btn { font-size: 0.78rem; }
+.inbox-actions .text-btn:first-child { color: var(--wax); }
+.inbox-error { color: var(--ember); }
+.settings-disclosure { border-top: 1px solid var(--line); padding: 0.7rem 0; }
+.settings-disclosure > summary { cursor: pointer; font-weight: 600; font-size: 0.85rem; }
+.settings-disclosure > :not(summary) { margin-top: 0.8rem; }
+.config-status { color: var(--mute); font-size: 0.8rem; margin: 0; }
+.sheet h3 { font-size: 0.9rem; margin: 0.4rem 0 0; }
+.sheet-body > * { flex-shrink: 0; }
+.sheet .launch-pre { max-height: 18rem; overflow: auto; }
+.composer textarea { min-width: 0; flex: 1; }
+.composer-routing { position: relative; width: fit-content; max-width: 100%; margin: 0 0 0.4rem 0.4rem; }
+.composer-routing > summary { display: flex; align-items: center; gap: 0.4rem; width: fit-content; max-width: 100%; padding: 0.35rem 0.6rem; border: 1px solid var(--line); border-radius: 999px; color: var(--mute); background: var(--desk); cursor: pointer; list-style: none; font-size: 0.75rem; font-weight: 600; line-height: 1.2; }
+.composer-routing > summary::-webkit-details-marker { display: none; }
+.composer-routing > summary:hover, .composer-routing[open] > summary { color: var(--ink); background: var(--paper); }
+.composer-routing svg { flex: none; width: 14px; height: 14px; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.composer-routing .routing-icon { color: var(--wax); }
+.composer-routing .routing-chevron { width: 12px; height: 12px; opacity: 0.6; }
+.composer-routing[open] .routing-chevron { transform: rotate(180deg); }
+.routing-scope { font-weight: 400; opacity: 0.8; }
+.composer-routing-fields { position: absolute; bottom: calc(100% + 8px); left: 0; width: min(310px, calc(100vw - 3rem)); display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0.65rem; padding: 0.85rem; background: var(--desk); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); z-index: 9; }
+.composer-routing-fields label { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.72rem; color: var(--mute); }
+.composer-routing-fields select { width: 100%; max-width: none; font-size: 0.76rem; }
+summary:focus-visible, .tool-action:focus-visible { outline: 2px solid var(--wax); outline-offset: 2px; }
+@media (max-width: 960px) {
+  .rail { display: block; max-height: 30dvh; overflow-x: hidden; overflow-y: auto; }
+  .rail .group { display: block; }
+  .brand-tools { display: flex; }
+  .rail .search { width: 100%; min-width: 0; max-width: 100%; }
+  .inbox-stream { padding: 0.4rem; }
+  .inbox-context { padding-inline: 0.6rem; }
+}
+
+.launch-sheet > .sheet-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-content: start; gap: 0.85rem 1rem; }
+.launch-sheet > .sheet-body > * { grid-column: 1 / -1; min-width: 0; }
+.launch-sheet > .sheet-body > label:not(.check) { grid-column: auto; }
+.launch-sheet > .sheet-body > label:first-of-type, .launch-sheet > .sheet-body > label.launch-workspace { grid-column: 1 / -1; }
+@media (max-width: 540px) {
+  .modal { padding: 0.6rem; }
+  .sheet { max-height: calc(100dvh - 1.2rem); padding: 0.9rem; }
+  .launch-sheet > .sheet-body { grid-template-columns: minmax(0, 1fr); }
+}

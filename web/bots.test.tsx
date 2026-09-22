@@ -38,7 +38,8 @@ test('bot credentials action is separate from disabled DM and clear-context cont
     seniority: null, focus: null, online: false, lastSeenAt: 0, createdAt: 0 };
   const html = renderToStaticMarkup(<AgentList agents={[bot]} projectName="Example" onManageBot={() => {}}
     onCreateBot={() => {}} queued={{}} onOpen={() => {}} onAskClear={() => {}} onAskRemove={() => {}} />);
-  assert.match(html, /aria-label="Manage credentials for FixtureFeed"/);
+  assert.match(html, /aria-label="Actions for FixtureFeed"/);
+  assert.doesNotMatch(html, /Manage credentials|>Credentials</);
   assert.match(html, /class="person-main" disabled=""/);
   assert.doesNotMatch(html, /title="clear context"/);
 });
