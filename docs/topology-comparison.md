@@ -89,7 +89,7 @@ node scripts/benchmark-topology.mjs summarize \
   --output /tmp/hivemind-topology-new-summary.json
 ```
 
-`validate` permits pending trials and reports expected/completed/pending counts. `summarize` rejects pending, missing, duplicate, reordered, changed-config or unreviewed quality records. All CLI input files are bounded to 8 MiB; the tool never fetches referenced files or network resources.
+`validate` permits pending trials and reports expected/completed/pending counts. `summarize` rejects pending, missing, duplicate, reordered, changed-config or unreviewed quality records. CLI input files are bounded to 128 MiB to accommodate the full 10-workload, 10-repeat cohort, including each Auto trial's 500 retained attempt details, 500 retained policy events and 200-character model identifiers in the normal two-space JSON format. Input is read in 64 KiB chunks, so small studies do not reserve the full limit; parsing still holds the supplied JSON in memory. Larger or excessively padded files are rejected. The tool never fetches referenced files or network resources.
 
 The summary reports `auto_minus_fixed` for each matched workload/repeat, then describes the retained pair deltas with mean, median, min/max and deterministic 2,000-resample bootstrap intervals when there are at least two observations. These are descriptive intervals for the supplied paired sample, not proof of generalization to other workloads or a universal optimal topology. Raw pair deltas and observation counts are included.
 
@@ -97,6 +97,7 @@ The summary reports `auto_minus_fixed` for each matched workload/repeat, then de
 
 - Net tokens are `workloadTokens + Jev inputTokens + Jev outputTokens` for Auto; fixed router usage is zero only under the explicit Jev-off condition.
 - Complete net comparisons require healthy instrumentation, known workload and router usage, exactly one known resolved Jev model, and an unpruned capture beginning at the initial attempt. Missing, truncated or mid-execution evidence suppresses the net delta instead of becoming zero cost.
+- An export may acknowledge incomplete history even when no retained attempt was pruned, for example after its capture was recreated. Such exports remain valid observations but cannot establish complete net usage. Legacy exports claiming complete history are still checked for an initial first attempt before entering net comparisons.
 - Distinct resolved Jev model versions cannot be pooled. Preserve and split those cohorts; a mutable alias alone is not a reproducibility guarantee.
 - End-to-end `wallMs` already includes classifier waits. Summed classifier latency is **not added again**.
 - Efficiency deltas include only jointly acceptance-passing, independently reviewed pairs. Independent defect deltas remain visible alongside them; a faster result with more review defects is not automatically better.
