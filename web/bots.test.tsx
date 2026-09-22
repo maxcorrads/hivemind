@@ -9,7 +9,7 @@ import { createBotSchema } from "../src/shared/bot-message.ts";
 
 test("the create action lives in the bot section even with no bots", () => {
   const html = renderToStaticMarkup(<AgentList agents={[]} projectName="Example"
-    onCreateBot={() => {}} queued={{}} onOpen={() => {}} confirmClear={null} setConfirmClear={() => {}} onClear={() => {}} />);
+    onCreateBot={() => {}} queued={{}} onOpen={() => {}} onAskClear={() => {}} onAskRemove={() => {}} />);
   assert.match(html, /class="subh bot-h"><span>bot · context only<\/span><button/);
   assert.match(html, /aria-label="Create bot in Example"/);
 });
@@ -18,7 +18,7 @@ test("bot roster rows are visible but do not offer a DM or clear-context action"
   const bot: Agent = { id: "fixture", name: "UpdatesBot", role: "bot", projectId: "project", project: "example",
     seniority: null, focus: null, online: false, lastSeenAt: 0, createdAt: 0 };
   const html = renderToStaticMarkup(<AgentList agents={[bot]} projectName="Example"
-    onCreateBot={() => {}} queued={{}} onOpen={() => {}} confirmClear={null} setConfirmClear={() => {}} onClear={() => {}} />);
+    onCreateBot={() => {}} queued={{}} onOpen={() => {}} onAskClear={() => {}} onAskRemove={() => {}} />);
   assert.match(html, /UpdatesBot/);
   assert.match(html, /class="person-main" disabled=""/);
   assert.doesNotMatch(html, /title="clear context"/);
@@ -37,7 +37,7 @@ test('bot credentials action is separate from disabled DM and clear-context cont
   const bot: Agent = { id: 'fixture', name: 'FixtureFeed', role: 'bot', projectId: 'project', project: 'example',
     seniority: null, focus: null, online: false, lastSeenAt: 0, createdAt: 0 };
   const html = renderToStaticMarkup(<AgentList agents={[bot]} projectName="Example" onManageBot={() => {}}
-    onCreateBot={() => {}} queued={{}} onOpen={() => {}} confirmClear={null} setConfirmClear={() => {}} onClear={() => {}} />);
+    onCreateBot={() => {}} queued={{}} onOpen={() => {}} onAskClear={() => {}} onAskRemove={() => {}} />);
   assert.match(html, /aria-label="Manage credentials for FixtureFeed"/);
   assert.match(html, /class="person-main" disabled=""/);
   assert.doesNotMatch(html, /title="clear context"/);
