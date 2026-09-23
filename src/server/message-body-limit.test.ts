@@ -11,6 +11,7 @@ import { markInboxRead } from "./test-fixtures.ts";
 import { API_JSON_BYTES, humanSendInputSchema, messageBodySchema, sendInputSchema } from "../shared/api-contract.ts";
 import { botMessageSchema } from "../shared/bot-message.ts";
 import { BODY_MAX, WAIT_MAX_BYTES, type Message, type WaitResult } from "../shared/types.ts";
+import type { TaskAction } from "../shared/tasks.ts";
 
 // Owner decision: real requests/specs exceed 4,000 characters; everyone gets 20,000.
 const ASCII = "a".repeat(BODY_MAX);
@@ -124,4 +125,37 @@ test("long progress bodies are still digested to an excerpt; the full originals 
   assert.deepEqual(history.messages.filter(m => sent.some(s => s.id === m.id)).map(m => m.body), bodies);
   const hits = f.hive.messageQueries.searchMessages(f.brain.agent, { q: "second" });
   assert.ok(hits.hits.some(hit => hit.seq === sent[1]!.seq));
+});
+
+test("task events follow BODY_MAX: a large checkpoint is accepted and delivered in full within the wait budget", async t => {
+  const f = fixture(t);
+  const contract = { objective: "Run the study", scope: ["study"], nonGoals: [], acceptanceCriteria: ["Report numbers"],
+    dependencies: [], evidenceSeqs: [] };
+  const task = f.hive.tasks.assign(f.brain.agent, { requestId: "assign-long", worker: f.worker.agent.name, contract }).task;
+  const event = (requestId: string, action: TaskAction) => f.hive.tasks.event(f.worker.agent, task.id,
+    { requestId, expectedRevision: f.hive.tasks.get(f.worker.agent, task.id).revision, action });
+  event("accept", { type: "accept" });
+  markInboxRead(f.hive, f.brain.agent.id);
+  const sessionId = f.hive.delivery.openInboxSession(f.brain.agent, crypto.randomUUID());
+  const checkpoints = [
+    // Readable message > 4,000 units (rejected under the former limit).
+    { completedSteps: Array(8).fill("a".repeat(240)), unresolvedQuestions: Array(8).fill("b".repeat(240)),
+      nextAction: "c".repeat(400), artifacts: Array(8).fill(`docs/${"d".repeat(195)}`), checks: [], evidenceSeqs: [] },
+    // Near the 16,000-byte envelope cap with 3-byte UTF-8 text: the largest realistic task wake.
+    { completedSteps: Array(8).fill("界".repeat(240)), unresolvedQuestions: Array(8).fill("問".repeat(240)),
+      nextAction: "次".repeat(400), artifacts: Array(8).fill(`docs/${"d".repeat(195)}`), checks: [], evidenceSeqs: [] },
+  ];
+  for (const [i, checkpoint] of checkpoints.entries()) {
+    const saved = event(`checkpoint-${i}`, { type: "checkpoint", checkpoint });
+    assert.ok(saved.message.body.length > 4_000 && saved.message.body.length <= BODY_MAX, `${saved.message.body.length}`);
+    for (const compact of [true, false]) {
+      const result = await f.hive.delivery.wait(f.brain.agent, 1, undefined, { sessionId, compact });
+      const item = compact ? result.mail![0]! : [...result.messages, ...result.mentions][0]!;
+      assert.equal(item.body, saved.message.body, "task events are never digested or clipped");
+      assert.deepEqual(item.taskEvent, saved.message.taskEvent);
+      assert.equal(item.recovery, undefined);
+      assert.ok(waitWireBytes(result) <= WAIT_MAX_BYTES);
+      if (!compact) f.hive.delivery.acknowledgeInbox(f.brain.agent, sessionId, result.delivery!.id);
+    }
+  }
 });

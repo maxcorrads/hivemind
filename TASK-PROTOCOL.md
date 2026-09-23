@@ -79,9 +79,11 @@ Unknown types/fields, forged authors, forbidden transitions and
 unauthorized participants fail without creating a message or changing a task.
 No pre-commit notifications escape a failed assignment, including a new DM.
 
-Each envelope is bounded to 16,000 UTF-8 bytes and its readable message to 4,000
-UTF-16 units. Contracts/results have bounded strings/lists; use evidence references
-for larger material. Structured messages carry `taskEvent` in history and wait, stay
+Each envelope is bounded to 16,000 UTF-8 bytes and its readable message to 20,000
+UTF-16 units (the shared message `BODY_MAX`); in practice the byte-bounded envelope
+and per-field caps are the binding limits. Contracts/results have bounded strings/lists;
+use evidence references for larger material. The largest envelope, even with 3-byte
+UTF-8 text, still fits one 64 KiB wait page together with its readable message. Structured messages carry `taskEvent` in history and wait, stay
 full in compact mail, and retain canonical task/root IDs. The existing aggregate
 64 KiB wait budget still applies; an oversized legacy envelope has explicit history
 recovery instead of silent truncation. File references are not file contents.
