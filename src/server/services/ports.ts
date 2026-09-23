@@ -4,6 +4,9 @@ import type { Storage } from "../storage.ts";
 import type { AdaptiveTopologyRuntime } from "../adaptive-topology.ts";
 import type { RoomStore } from "../rooms.ts";
 import type { TaskStore } from "../tasks.ts";
+import type { IdentityService } from "./identity.ts";
+import type { MessageQueries } from "./message-queries.ts";
+import type { MessageService } from "./messages.ts";
 
 /**
  * Narrow interfaces the domain services (and the sub-stores) depend on instead of
@@ -78,13 +81,18 @@ export interface WaiterRegistry {
  */
 
 export type TaskCoordinationHost = Core & ChannelAccess;
-export type CapacityHost = Core & Pick<AgentDirectory, "listAgents">;
-export type AdmissionHost = Core & ChannelAccess & AgentDirectory & {
-  readonly rooms: RoomStore;
+export type CapacityDeps = Core & { readonly identity: Pick<AgentDirectory, "listAgents"> };
+export type AdmissionDeps = CapacityDeps & {
+  readonly channels: ChannelAccess;
+  readonly identity: AgentDirectory;
+  readonly rooms: Pick<RoomStore, "peek">;
   readonly adaptiveTopology: AdaptiveTopologyRuntime;
 };
-export type TaskStoreHost = AdmissionHost & Pick<MessageReader, "getMessageById" | "getVisibleMessage"> &
-  Pick<MessagePoster, "publishTaskMessage"> & { openDm(actor: Agent, otherName: string): Channel };
+export type TaskStoreHost = AdmissionDeps & ChannelAccess & Pick<AgentDirectory, "getAgent" | "getAgentByName"> &
+  Pick<MessageReader, "getMessageById" | "getVisibleMessage"> & Pick<MessagePoster, "publishTaskMessage"> & {
+    openDm(actor: Agent, otherName: string): Channel;
+    readonly rooms: RoomStore;
+  };
 export type RoomStoreHost = Core & ChannelAccess & AgentDirectory & Pick<MessageReader, "getMessageById" | "getVisibleMessage"> &
   Pick<MessagePoster, "publishTaskMessage"> & { readonly tasks: TaskStore };
 export type NotificationHost = Core & ChannelAccess & { readonly rooms: RoomStore };
@@ -99,3 +107,24 @@ export type DecisionHost = Core & ChannelAccess & AgentDirectory & MessageReader
   readonly tasks: TaskStore;
 };
 export type DiagnosticsHost = { readonly home: string } & Pick<AgentDirectory, "getAgent">;
+
+/** What the adaptive topology runtime reads and writes outside its own tables. */
+export type AdaptiveRuntimeDeps = Core & {
+  readonly home: string;
+  readonly identity: AgentDirectory & Pick<IdentityService, "sessionFingerprint">;
+  readonly projects: Pick<ProjectDirectory, "getProject">;
+  readonly channels: ChannelAccess;
+  readonly messageQueries: Pick<MessageReader, "getMessageById"> & Pick<MessageQueries, "threadStatus">;
+  readonly messages: Pick<MessageService, "hasActiveSendRequest" | "postAdaptiveRequest" | "setThreadStatus">;
+  readonly rooms: Pick<RoomStore, "peek">;
+  readonly tasks: Pick<TaskStore, "get">;
+};
+
+/** The brain coordination actions routed through adaptive admission (adaptive-topology-actions.ts). */
+export type AdaptiveActionDeps = AdmissionDeps & {
+  readonly identity: AgentDirectory & Pick<IdentityService, "agentByToken" | "sessionFingerprint">;
+  readonly messageQueries: Pick<MessageReader, "getMessageById"> & Pick<MessageQueries, "threadStatus">;
+  readonly messages: Pick<MessageService, "postMessage" | "hasActiveSendRequest" | "setThreadStatus">;
+  readonly rooms: Pick<RoomStore, "peek" | "view" | "event">;
+  readonly tasks: Pick<TaskStore, "assign" | "event" | "get" | "has">;
+};
