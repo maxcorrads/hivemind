@@ -243,5 +243,5 @@ safety is not promised indefinitely. Agent/project deletion removes its ledger.
 Reactions accept `present: true` to add and `present: false` to remove. Repeating
 the desired state is a no-op and does not emit duplicate events. MCP/CLI default
 to add (CLI `--remove` removes); UI clicks send the desired state explicitly.
-Legacy HTTP calls omitting `present` and Hive.toggleReaction still toggle and
+Legacy HTTP calls omitting `present` and MessageService.toggleReaction still toggle and
 must not be automatically retried after an ambiguous response.
