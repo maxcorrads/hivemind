@@ -10,7 +10,7 @@ import { jevTopologyResponse } from './fixtures/jev-topology.ts';
 import { readAdaptiveCapacity } from './adaptive-topology-capacity.ts';
 import { coordinationEventId, settleAdaptiveFollowUps } from './adaptive-topology-admission.ts';
 import { HiveError } from '../shared/types.ts';
-import type { AdaptiveTopology } from '../shared/adaptive-topology.ts';
+import type { AdaptiveRoutingEvent, AdaptiveTopology } from '../shared/adaptive-topology.ts';
 import type { TaskSnapshot } from '../shared/tasks.ts';
 import { countRows, failWrites, findRow, hasRow, listRows } from './test-fixtures.ts';
 
@@ -29,13 +29,17 @@ async function fixture(t: TestContext) {
   const workerDm = hive.openDm(brain.agent, workers[0]!.agent.name);
   const app = createApp(hive);
   let target: AdaptiveTopology = 'single';
-  let calls = 0;
+  let calls = 0, latency = 0, inFlight = 0, maxInFlight = 0;
   // A held Jev call models a slow classifier: it answers only once the test releases it.
   const held: Array<{ matches: (call: number, body: string) => boolean; gate: Promise<void>; release: () => void }> = [];
   t.mock.method(globalThis, 'fetch', async (url: unknown, init?: RequestInit) => {
     assert.equal(String(url), 'https://api.typesafe.ai/v1/systemone');
     const call = ++calls, body = String(init?.body);
     await Promise.all(held.filter(item => item.matches(call, body)).map(item => item.gate));
+    if (latency) {
+      maxInFlight = Math.max(maxInFlight, ++inFlight);
+      try { await new Promise(resolve => setTimeout(resolve, latency)); } finally { inFlight--; }
+    }
     return Response.json(jevTopologyResponse(body, target));
   });
   const hold = (matches: (call: number, body: string) => boolean) => {
@@ -74,7 +78,9 @@ async function fixture(t: TestContext) {
   });
   const state = () => hive.adaptiveTopology.view(human, dm.id).state!;
   return { hive, human, brain, otherBrain, workers, dm, otherDm, workerDm, app, post, start, assign, taskEvent, exec,
-    state, hold, calls: () => calls, choose: (mode: AdaptiveTopology) => { target = mode; } };
+    state, hold, calls: () => calls, choose: (mode: AdaptiveTopology) => { target = mode; },
+    /** Every later Jev call answers after `ms`; returns the peak number of concurrent calls since then. */
+    delay: (ms: number) => { latency = ms; maxInFlight = 0; return () => maxInFlight; } };
 }
 
 test('a Single delegation is checked once, then admitted and linked atomically; committed retry does not reclassify', async t => {
@@ -350,6 +356,8 @@ test('a committed task review or thread close is reported as committed when post
   const task = (await assigned.json() as { task: TaskSnapshot }).task;
   assert.equal((await f.taskEvent(task, f.workers[0]!.token, 'warned-accept', { type: 'accept' })).status, 200);
   assert.equal((await f.taskEvent(task, f.workers[0]!.token, 'warned-result', { type: 'result', result })).status, 200);
+  const published: AdaptiveRoutingEvent[] = [];
+  f.hive.bus.on('adaptive-routing', (payload: { event: AdaptiveRoutingEvent }) => published.push(payload.event));
   t.mock.method(f.hive.adaptiveTopology, 'afterAgentAction', async () => { throw new HiveError(409, 'Adaptive execution changed'); });
   const reviewed = await f.taskEvent(task, f.brain.token, 'warned-review', {
     type: 'review', decision: 'accepted', summary: 'Verified fixture result.', evidenceSeqs: [],
@@ -367,4 +375,56 @@ test('a committed task review or thread close is reported as committed when post
   assert.equal(thread.thread.status, 'done');
   assert.equal(thread.adaptiveRouting, null);
   assert.match(thread.routingWarning ?? '', /Adaptive execution changed/);
+  // The Human routing audit sees both warnings on the execution the committed actions belong to.
+  const audit = (events: AdaptiveRoutingEvent[]) => events.filter(item => item.reason === 'post_commit_routing_failed')
+    .map(item => [item.kind, item.executionId, item.warning]);
+  const expected = [0, 1].map(() => ['warning', f.exec(), 'Committed; adaptive routing was not updated: Adaptive execution changed']);
+  assert.deepEqual(audit(f.hive.adaptiveTopology.view(f.human, f.dm.id).events), expected);
+  assert.deepEqual(audit(published), expected, 'each warning is published to the live panel');
+});
+
+test('a post-commit routing warning with no resolvable execution records nothing', async t => {
+  const f = await fixture(t);
+  const before = countRows(f.hive, 'adaptive_topology_events');
+  const coordination = { kind: 'task_event' as const, actorId: f.brain.agent.id, actorRole: 'brain' as const, channelId: f.dm.id, eventId: 'no-execution' };
+  assert.equal(f.hive.adaptiveTopology.recordRoutingWarning(f.brain.agent, coordination, 'Committed; routing failed'), null);
+  assert.equal(f.hive.adaptiveTopology.recordRoutingWarning(f.workers[0]!.agent, coordination, 'Committed; routing failed'), null);
+  assert.equal(countRows(f.hive, 'adaptive_topology_events'), before);
+});
+
+test('capacity revalidation runs other executions concurrently, bounded, and isolates failures', async t => {
+  const f = await fixture(t);
+  // Five executions, one per brain, each in its own Human DM.
+  const extra = [0, 1, 2].map(() => f.hive.join({ role: 'brain', project: 'chapter' }));
+  await f.start(f.brain, f.dm); await f.start(f.otherBrain, f.otherDm);
+  for (const brain of extra) await f.start(brain, f.hive.openDm(f.human, brain.agent.name));
+  const ids = [f.brain, f.otherBrain, ...extra].map(brain => f.exec(brain)!);
+  const evaluated = (eventId: string) => ids.filter(id => hasRow(f.hive, 'adaptive_topology_evaluated',
+    { execution_id: id, event_id: coordinationEventId(f.brain.agent.id, 'capacity', eventId) })).length;
+  const latency = 200;
+
+  // Four other executions complete in about one Jev latency, not four.
+  let peak = f.delay(latency), started = performance.now();
+  await f.hive.adaptiveTopology.capacityChanged(f.brain.agent, 'four-at-once', ids[0]!);
+  const elapsed = performance.now() - started;
+  assert.equal(evaluated('four-at-once'), 4);
+  assert.equal(peak(), 4);
+  assert.ok(elapsed < latency * 2, `four executions took ${Math.round(elapsed)}ms; sequential would be ${latency * 4}ms`);
+
+  // Five executions never exceed the bound of four concurrent Jev calls.
+  peak = f.delay(latency);
+  await f.hive.adaptiveTopology.capacityChanged(f.brain.agent, 'bounded');
+  assert.equal(evaluated('bounded'), 5);
+  assert.equal(peak(), 4, 'at most four Jev calls run at once');
+
+  // One execution fails; the others are still revalidated and the failure is reported once all settle.
+  f.delay(0);
+  const runtime = f.hive.adaptiveTopology as unknown as { revalidateStored: (state: { executionId: string }, event: unknown) => Promise<unknown> };
+  const original = runtime.revalidateStored.bind(runtime);
+  t.mock.method(runtime, 'revalidateStored', async (state: { executionId: string }, event: unknown) => {
+    if (state.executionId === ids[1]) throw new Error('fixture revalidation failure');
+    return original(state, event);
+  });
+  await assert.rejects(f.hive.adaptiveTopology.capacityChanged(f.brain.agent, 'isolated', ids[0]!), /fixture revalidation failure/);
+  assert.equal(evaluated('isolated'), 3, 'every other execution was still revalidated');
 });

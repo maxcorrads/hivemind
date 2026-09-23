@@ -38,6 +38,20 @@ if [[ ! -f "$package_root/dist/node/cli.js" || -e "$package_root/src" || -e "$in
 fi
 "$hivemind" mcp-config 2>/dev/null | grep -q "dist/node/cli.js"
 
+# Every local Markdown page the packaged README links (e.g. docs/adaptive-routing.md) ships with it.
+if [[ ! -f "$package_root/docs/adaptive-routing.md" ]]; then
+  echo "Packaged hivemind is missing docs/adaptive-routing.md linked from the README" >&2
+  exit 1
+fi
+missing_docs=""
+while IFS= read -r doc; do
+  [[ -f "$package_root/$doc" ]] || missing_docs+=" $doc"
+done < <(grep -oE '\]\((\./)?[A-Za-z0-9_./-]+\.md' "$package_root/README.md" | sed -E 's/^\]\((\.\/)?//' | sort -u)
+if [[ -n "$missing_docs" ]]; then
+  echo "Packaged README links docs missing from the package:$missing_docs" >&2
+  exit 1
+fi
+
 # One MCP process per agent: the compiled server must answer initialize over stdio.
 PACKAGE_ROOT="$package_root" HIVEMIND_HOME="$home_root" node --input-type=module <<'NODE'
 import assert from "node:assert/strict";

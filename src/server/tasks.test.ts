@@ -236,6 +236,24 @@ test('assignment failure rolls back the message, task, DM and all notifications'
   assert.deepEqual(events, []);
 });
 
+test('assignment opens the worker DM inside its own transaction without extra system messages', t => {
+  const f = fixture(t); const events: Array<[string, boolean]> = [];
+  // Every event is published after commit: the DM and its task message are already readable.
+  for (const name of ['message', 'channel', 'task'] as const)
+    f.hive.bus.on(name, () => events.push([name, f.hive.storage.active]));
+  assert.equal(f.hive.findDm(f.brain.agent.id, f.worker.agent.id), null);
+  const { task } = f.assign();
+  const dm = f.hive.findDm(f.brain.agent.id, f.worker.agent.id)!;
+  assert.equal(task.channelId, dm.id);
+  assert.deepEqual([...dm.memberIds].sort(), [f.brain.agent.id, f.worker.agent.id].sort());
+  const messages = listRows(f.hive, 'messages', { where: { channel_id: dm.id } });
+  assert.deepEqual(messages.map(row => [row.id, row.kind]), [[task.id, 'chat']], 'only the task message, no system message');
+  assert.ok(events.some(([name]) => name === 'channel'), 'the new DM is announced');
+  assert.ok(events.every(([, open]) => !open), 'no event is published inside the transaction');
+  assert.equal(f.assign().task.channelId, dm.id, 'a later assignment reuses the DM');
+  assert.equal(listRows(f.hive, 'messages', { where: { channel_id: dm.id, kind: 'system' } }).length, 0);
+});
+
 for (const historical of [0, 10_000]) test(`task receipt, cursor and totals roll back together with ${historical} old receipts`, async t => {
   const f = fixture(t);
   const sessionId = f.hive.openInboxSession(f.worker.agent, crypto.randomUUID());
