@@ -1,3 +1,4 @@
+import type { JevCall, JevCallLogView } from '../src/shared/jev-calls.ts';
 import type { RoutingRequest, RoutingSuggestions } from '../src/shared/routing.ts';
 import type { TelegramHealth } from "./telegram-health.ts";
 import type { Agent, BotCredentialView, AttachmentMeta, Channel, Message, Project, SearchHit, Thread, ThreadStatus, InboxStatus } from "../src/shared/types.ts";
@@ -111,6 +112,10 @@ export const api = {
     req<{ fixture: TimelineExport }>(`/api/ui/tasks/${encodeURIComponent(id)}/timeline/export`, { signal }),
   decisions: (project: string, includeClosed = true, signal?: AbortSignal) =>
     req<DecisionPage>('/api/ui/decisions?project=' + encodeURIComponent(project) + '&includeClosed=' + (includeClosed ? '1' : '0'), { signal }),
+  jevCalls: (project: string, before?: number, signal?: AbortSignal) =>
+    req<JevCallLogView>(`/api/ui/projects/${encodeURIComponent(project)}/jev-calls${before ? `?before=${before}` : ''}`, { signal }),
+  jevCall: (project: string, id: string, signal?: AbortSignal) =>
+    req<{ call: JevCall }>(`/api/ui/projects/${encodeURIComponent(project)}/jev-calls/${encodeURIComponent(id)}`, { signal }),
   answerDecision: (id: string, body: { requestId: string; expectedRevision: number; body: string }, signal?: AbortSignal) =>
     req<{ decision: DecisionView; message: Message; duplicate: boolean }>('/api/ui/decisions/' + encodeURIComponent(id) + '/answer',
       { method: 'POST', body: JSON.stringify(body), signal }),

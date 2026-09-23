@@ -15,6 +15,8 @@ import { observeTopologyEvaluation } from './adaptive-evidence-observer.ts';
 import { initAdaptiveCommitments, readAdaptiveCapacity } from './adaptive-topology-capacity.ts';
 import { coordinationEventId } from './adaptive-topology-admission.ts';
 import { immediateTransaction } from './transaction.ts';
+import { jevCallLog } from './jev-call-log.ts';
+import type { JevCallSummary } from '../shared/jev-calls.ts';
 
 export { evaluateAdaptiveTopology, ADAPTIVE_TOPOLOGY_CONTRACT_VERSION } from './adaptive-topology-provider.ts';
 // Workers never drive Jev: only Human requests and brain coordination are evaluated.
@@ -255,9 +257,14 @@ export class AdaptiveTopologyRuntime {
     return { id: randomUUID(), executionId: state.executionId, channelId: state.channelId, projectId: state.projectId,
       createdAt: state.updatedAt, kind, fromTopology: from, targetTopology: decision.targetTopology,
       appliedTopology: state.currentTopology, targetWorkers: decision.targetWorkers, appliedWorkers: state.workerBudget,
-      confidence: decision.confidence, reason: decision.reason, providerStatus: decision.providerStatus, applied: changed, warning: state.warning };
+      confidence: decision.confidence, reason: decision.reason, providerStatus: decision.providerStatus, applied: changed, warning: state.warning,
+      routeId: decision.routeId };
   }
+  private readonly callRecorded = (summary: JevCallSummary) => this.hive.bus.emit('jev-call', summary);
   private saveEvent(event: AdaptiveRoutingEvent) {
+    const settled = jevCallLog(this.hive.db).settle(event);
+    // Published after the caller's transaction; a rolled-back event leaves the call unsettled on reload.
+    if (settled) queueMicrotask(() => this.hive.bus.emit('jev-call', settled));
     this.hive.db.prepare(`INSERT INTO adaptive_topology_events(id,execution_id,channel_id,project_id,created_at,snapshot)
       VALUES(?,?,?,?,?,?)`).run(event.id, event.executionId, event.channelId, event.projectId, event.createdAt, JSON.stringify(event));
     this.hive.db.prepare(`DELETE FROM adaptive_topology_events WHERE channel_id=? AND rowid NOT IN
@@ -339,7 +346,8 @@ export class AdaptiveTopologyRuntime {
       const signature = fingerprint(capacity.workers.available);
       decision = await observeTopologyEvaluation(this.hive.db,
         { executionId: state.executionId, channelId: state.channelId, projectId: state.projectId, phase: 'continuous' },
-        this.snapshot(state, event, capacity), config, { signal: this.abort.signal });
+        this.snapshot(state, event, capacity), config, { signal: this.abort.signal },
+        { context: { brainId: state.brainId, phase: 'continuous', trigger: { kind: event.kind, eventType: event.eventType ?? null } }, recorded: this.callRecorded });
       const next = this.capacity(state);
       if (decision.providerStatus !== 'ok' || signature === fingerprint(next.workers.available)) return { decision, capacity: next };
       capacity = next;
@@ -534,13 +542,14 @@ export class AdaptiveTopologyRuntime {
         execution: { orchestratedOnly: false, lockScope: 'none', lockedTopology: null },
         tasks: { active: 0, activeWorkers: 0, blockers: 0, openDependencies: 0, workstreams: 0 },
         recentCoordinationEvents: [], trigger: { kind: 'human_request', owner: 'ambiguous' }, previousDecision: null },
-      config, { signal: this.abort.signal });
+      config, { signal: this.abort.signal },
+      { context: { brainId: null, phase: 'observation', trigger: { kind: 'observation', eventType: null } }, recorded: this.callRecorded });
     if (this.stopped) return;
     const event: AdaptiveRoutingEvent = { id: randomUUID(), executionId, channelId: channel.id, projectId: channel.projectId,
       createdAt: Date.now(), kind: 'observation', fromTopology: 'single', targetTopology: decision.targetTopology,
       appliedTopology: 'single', targetWorkers: decision.targetWorkers, appliedWorkers: 0, confidence: decision.confidence,
       reason: decision.reason, providerStatus: decision.providerStatus, applied: false,
-      warning: 'No single owning brain · recommendation only' };
+      warning: 'No single owning brain · recommendation only', routeId: decision.routeId };
     immediateTransaction(this.hive.db, () => this.saveEvent(event));
     this.hive.bus.emit('adaptive-routing', { channelId: channel.id, state: null, event });
   }
@@ -568,7 +577,8 @@ export class AdaptiveTopologyRuntime {
       const signature = fingerprint(capacity.workers.available);
       decision = await observeTopologyEvaluation(this.hive.db,
         { executionId, channelId: channel.id, projectId: channel.projectId, phase: 'initial' },
-        makeSnapshot(), config, { signal: this.abort.signal });
+        makeSnapshot(), config, { signal: this.abort.signal },
+        { context: { brainId: brain.id, phase: 'initial', trigger: { kind: input.threadId ? 'human_message' : 'human_request', eventType: null } }, recorded: this.callRecorded });
       capacity = this.capacity({ projectId: channel.projectId, executionId });
       stable = signature === fingerprint(capacity.workers.available);
       if (decision.providerStatus !== 'ok' || stable) break;

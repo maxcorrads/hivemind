@@ -63,6 +63,8 @@ export type AdaptiveRoutingEvent = {
   providerStatus: AdaptiveTopologyDecision["providerStatus"];
   applied: boolean;
   warning: string | null;
+  /** The Jev decision this event consumed; links it to the Human-only call log. */
+  routeId?: string;
 };
 
 export type AdaptiveMonitoring = "active" | "pending" | "disabled" | "unavailable" | "completed";

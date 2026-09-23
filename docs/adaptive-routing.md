@@ -119,6 +119,19 @@ The structured snapshot includes the original request, current and pending mode,
 
 The key lives in `<HIVEMIND_HOME>/adaptive-routing.json`, written atomically with mode `0600`. The Human API returns only whether a key exists and a suffix hint, never the full saved key.
 
+## Jev call history (Human-only)
+
+Each project has a **Jev** entry in the left sidebar, below Decisions. It lists every call Hivemind made to Jev, grouped by the Human request (execution) that caused it, newest activity first. Each call shows why it was made (your request, your thread reply, a brain message, a delegation attempt, a task review, a room change or a capacity change), Jev's answer in one line, and what Hivemind did with it: applied a new mode, confirmed the current one, kept it while waiting for confirmation, kept it because Jev was unavailable, recorded an observation only, or discarded the answer because routing state changed during the call.
+
+Selecting a call shows:
+
+1. **Sent to Jev**: the request text and the context sent with it (mode at the time, worker capacity, delegated work, locks, triggering message).
+2. **Jev's answers**: every question with its answer, confidence and probability distribution.
+3. **Decision and result**: recommendation, overall confidence (the lowest answer confidence), reason, what Hivemind applied, model, latency and tokens.
+4. **Raw JSON**: the exact request body sent to TypeSafe and the parsed response.
+
+The full payloads are stored only in the local SQLite database (`jev_calls`), are served only on the authenticated Human API (`GET /api/ui/projects/:project/jev-calls` and `/jev-calls/:id`), and never include the TypeSafe key or provider error bodies. Failed calls keep what was sent and a local failure class (for example `timeout` or `http_503`). History is bounded to the latest 1,000 calls per project and is removed with its channel or project. New calls appear live through the Human `jev-call` websocket event.
+
 ## Human-only evaluation history
 
 Phase 2 audit records live in separate SQLite routing tables and are broadcast on the authenticated Human `adaptive-routing` websocket topic. They do not create ordinary chat messages, inbox items, mentions or agent notifications. The Routing panel shows retained evaluations, recommendations and observations, with one tab per brain when several brains have executions in the channel; a lock applies to the selected brain's execution. Applied transitions are exposed separately for the Human UI.

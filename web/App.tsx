@@ -14,6 +14,7 @@ import { AdaptiveRoutingSettings } from "./AdaptiveRoutingSettings.tsx";
 import { AdaptiveRoutingPanel, routingEventLabel, topologyLabel } from "./AdaptiveRoutingPanel.tsx";
 import type { AdaptiveExecutionState, AdaptiveRoutingEvent } from "../src/shared/adaptive-topology.ts";
 import { useAdaptiveRouting } from "./use-adaptive-routing.ts";
+import { JevLog } from "./JevLog.tsx";
 import { routingStreamEntries } from "./adaptive-routing-view.ts";
 import { InboxReceipt, QueueBadge } from "./InboxReceipt.tsx";
 import { loadClosedDms, saveClosedDms } from "./closed-dms.ts";
@@ -35,6 +36,7 @@ type InboxBox = "unread" | "all";
 type Sel =
   | { kind: "inbox"; project: string; box?: InboxBox }
   | { kind: "decisions"; project: string }
+  | { kind: "jev"; project: string }
   | { kind: "channel"; id: string; thread?: string | null };
 
 const STATUSES: ThreadStatus[] = ["open", "in_progress", "blocked", "done"];
@@ -50,6 +52,7 @@ function parseHash(): Sel {
     };
   }
   if (parts[0] === "decisions") return { kind: "decisions", project: parts[1] ? decodeURIComponent(parts[1]) : "" };
+  if (parts[0] === "jev") return { kind: "jev", project: parts[1] ? decodeURIComponent(parts[1]) : "" };
   if (parts[1]) {
     const thread = parts[2] === "t" && parts[3] ? decodeURIComponent(parts[3]) : undefined;
     return { kind: "channel", id: decodeURIComponent(parts[1]), thread };
@@ -66,13 +69,13 @@ function setHash(sel: Sel) {
   location.hash =
     sel.kind === "inbox"
       ? `${sel.project ? `/inbox/${encodeURIComponent(sel.project)}` : "/inbox"}${sel.box === "all" ? "/all" : ""}`
-      : sel.kind === "decisions"
-        ? `${sel.project ? `/decisions/${encodeURIComponent(sel.project)}` : "/decisions"}`
+      : sel.kind === "decisions" || sel.kind === "jev"
+        ? `/${sel.kind}${sel.project ? `/${encodeURIComponent(sel.project)}` : ""}`
         : `/c/${encodeURIComponent(sel.id)}${sel.thread ? `/t/${encodeURIComponent(sel.thread)}` : ""}`;
 }
 
 function repairSel(sel: Sel, snap: Snapshot): Sel | null {
-  if (sel.kind === "inbox" || sel.kind === "decisions") {
+  if (sel.kind === "inbox" || sel.kind === "decisions" || sel.kind === "jev") {
     if (!sel.project) return snap.projects[0] ? { ...sel, project: snap.projects[0].slug } : null;
     if (snap.projects.some((p) => p.slug === sel.project)) return null;
     const fallback = snap.projects[0];
@@ -135,6 +138,7 @@ export function App() {
   const [live, setLive] = useState(false);
   const [roomTick, setRoomTick] = useState(0);
   const [decisionTick, setDecisionTick] = useState(0);
+  const [jevTick, setJevTick] = useState(0);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [newTopic, setNewTopic] = useState("");
@@ -386,6 +390,10 @@ export function App() {
         const health = newerTelegramHealth(latestTelegramHealth.current, ev.payload as TelegramHealth);
         latestTelegramHealth.current = health;
         setSnap((current) => current ? { ...current, telegram: { running: false, configured: false, ...current.telegram, ...health } } : current);
+        return;
+      }
+      if (ev.type === "jev-call") {
+        if (selRef.current.kind === "jev") setJevTick(t => t + 1);
         return;
       }
       if (ev.type === "adaptive-routing") {
@@ -661,7 +669,7 @@ export function App() {
   const activeExecutions = (routingView?.executions ?? []).filter(item => item.channelId === activeChannel?.id && !item.completedAt).length;
   useEffect(() => { setRoutingPanelOpen(false); }, [activeChannel?.id]);
   const selectedProject =
-    sel.kind === "inbox" || sel.kind === "decisions" ? sel.project : (activeChannel?.project ?? projects[0]?.slug ?? "chapter");
+    sel.kind === "inbox" || sel.kind === "decisions" || sel.kind === "jev" ? sel.project : (activeChannel?.project ?? projects[0]?.slug ?? "chapter");
   const editingBusy = editingProject
     ? (snap?.agents ?? []).filter((a) => a.role !== "human" && a.project === editingProject && a.online)
     : [];
@@ -1030,6 +1038,13 @@ export function App() {
                   >
                     <span>Decisions</span>
                   </button>
+                  <button
+                    className={`nav ${sel.kind === "jev" && sel.project === project.slug ? "active" : ""}`}
+                    onClick={() => go({ kind: "jev", project: project.slug })}
+                    title="Every request sent to Jev and its answer"
+                  >
+                    <span>Jev</span>
+                  </button>
                   <div className="group">
                     <div className="group-h">
                       <span>Channels</span>
@@ -1187,6 +1202,11 @@ export function App() {
             }}
             onClear={() => setQuery("")}
           />
+        ) : sel.kind === "jev" ? (
+          <JevLog project={sel.project} tick={jevTick}
+            channelLabel={id => { const channel = channels.find(item => item.id === id); return channel ? channelTitle(channel) : "Deleted channel"; }}
+            agentName={id => snap.agents.find(agent => agent.id === id)?.name ?? "Removed brain"}
+            onOpenChannel={id => go({ kind: "channel", id })} />
         ) : sel.kind === "decisions" ? (
           <DecisionQueue project={sel.project} tick={decisionTick}
             onOpen={decision => go({ kind: "channel", id: decision.channelId, thread: decision.id })} />
