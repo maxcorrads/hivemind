@@ -12,6 +12,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { Hive } from "../server/hive.ts";
 import { startServer } from "../server/serve.ts";
 import { PNG } from "../server/fixtures/preview-images.ts";
+import { childEnv } from "../test-support/child-process.ts";
 
 function workspace(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-mcp-file-"));
@@ -23,7 +24,7 @@ async function client(t: TestContext, cwd: string, url: string, token: string) {
     command: process.execPath,
     args: ["--import", fileURLToPath(import.meta.resolve("tsx")), fileURLToPath(new URL("./index.ts", import.meta.url))],
     cwd,
-    env: { PATH: process.env.PATH ?? "", HIVEMIND_URL: url, HIVEMIND_HOME: cwd, HIVEMIND_TOKEN: token },
+    env: childEnv({ PATH: process.env.PATH ?? "", HIVEMIND_URL: url, HIVEMIND_HOME: cwd, HIVEMIND_TOKEN: token }),
     stderr: "pipe",
   });
   transport.stderr?.on("data", () => { /* drain diagnostics without credentials in test logs */ });

@@ -10,6 +10,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { Hive } from '../server/hive.ts';
 import { startServer } from '../server/serve.ts';
+import { childEnv } from '../test-support/child-process.ts';
 
 test('real MCP and CLI room lifecycle shares durable rules, task fences, source state and ACKs', { timeout: 30000 }, async () => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -19,7 +20,7 @@ test('real MCP and CLI room lifecycle shares durable rules, task fences, source 
   const brain = hive.identity.join({ role: 'brain' }), worker = hive.identity.join({ role: 'worker', seniority: 'mid' });
   const channel = hive.channels.createChannel(brain.agent, { name: 'generic-events', type: 'private', memberNames: [worker.agent.name] });
   const humanInstructionSeq = hive.messages.postMessage(hive.identity.getAgent('human'), { channel: channel.id, body: 'Follow synthetic events and ask the worker to inspect anomalies. No external writes.' }).seq;
-  const env = (token: string) => ({ PATH: process.env.PATH ?? '', HIVEMIND_TOKEN: token, HIVEMIND_HOME: path.join(dir, 'identities'), HIVEMIND_URL: `http://127.0.0.1:${port}` });
+  const env = (token: string) => childEnv({ PATH: process.env.PATH ?? '', HIVEMIND_TOKEN: token, HIVEMIND_HOME: path.join(dir, 'identities'), HIVEMIND_URL: `http://127.0.0.1:${port}` });
   const args = ['--import', path.join(root, 'node_modules/tsx/dist/loader.mjs'), path.join(root, 'src/cli.ts')];
   const connect = async (token: string) => {
     const client = new Client({ name: 'room-fixture', version: '1' }); clients.push(client);

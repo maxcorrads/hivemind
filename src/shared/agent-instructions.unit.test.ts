@@ -280,8 +280,15 @@ test("no sentence is duplicated between standing orders and MCP text, or within 
   }
 });
 
-/** Tools allowed above the 400-character budget, each with a reason. None today. */
-const LENGTH_EXCEPTIONS: Partial<Record<ToolName, string>> = {};
+/**
+ * Tools allowed above the 400-character budget, each with a reason. Discriminated `action`
+ * unions need their exact shapes in the tool description: without them models omit `type`
+ * and fail validation (observed in the study-v1 smoke after the #185 rewrite).
+ */
+const LENGTH_EXCEPTIONS: Partial<Record<ToolName, string>> = {
+  task_event: 'lists every action shape; models omitted action.type without them',
+  room_event: 'lists every action shape; models omitted action.type without them',
+};
 
 test("tool and parameter descriptions stay within their length budgets", () => {
   for (const [name, description] of Object.entries(TOOL_DESCRIPTIONS) as Array<[ToolName, string]>) {
@@ -308,4 +315,14 @@ test("brain launch prompts carry the SINGLE exception and nothing forbids implem
     assert.doesNotMatch(text, /do not implement|don't implement|never implement/i);
   }
   for (const prompt of launch.worker) assert.doesNotMatch(prompt, /SINGLE/);
+});
+
+test("action tool descriptions list every action type of their schema", async () => {
+  const { taskActionSchema } = await import("./tasks.ts");
+  const { roomActionSchema } = await import("./rooms.ts");
+  const types = (schema: { options: ReadonlyArray<{ shape: { type: { value: string } } }> }) =>
+    schema.options.map(option => option.shape.type.value);
+  for (const type of types(taskActionSchema as never)) assert.ok(TOOL_DESCRIPTIONS.task_event.includes(`{type:"${type}"`), `task_event lacks ${type}`);
+  for (const type of types(roomActionSchema as never)) assert.ok(TOOL_DESCRIPTIONS.room_event.includes(`{type:"${type}"`), `room_event lacks ${type}`);
+  assert.ok(TOOL_DESCRIPTIONS.decision_event.includes('{type:"withdraw"'));
 });

@@ -13,6 +13,7 @@ import { Hive } from '../server/hive.ts';
 import { startServer } from '../server/serve.ts';
 import type { CapabilityCard, RoutingSuggestions } from '../shared/routing.ts';
 import { normalizeChannelReference, resolveVisibleWorkerReference } from './index.ts';
+import { childEnv } from '../test-support/child-process.ts';
 
 test('MCP reference helpers normalize display channels and resolve visible worker names safely', () => {
   assert.equal(normalizeChannelReference('#fixture-room'), 'fixture-room');
@@ -36,7 +37,7 @@ test('real CLI and MCP share opt-in cards and advisory choices without changing 
     const port = await server.ready, brain = hive.identity.join({ role: 'brain' }), worker = hive.identity.join({ role: 'worker', seniority: 'mid' });
     const task = hive.tasks.assign(brain.agent, { requestId: 'one-task', worker: worker.agent.name,
       contract: { objective: 'Fixture', scope: [], nonGoals: [], acceptanceCriteria: ['Review'], evidenceSeqs: [], dependencies: [] } }).task;
-    const env = (token: string) => ({ PATH: process.env.PATH ?? '', HIVEMIND_TOKEN: token, HIVEMIND_URL: `http://127.0.0.1:${port}`, HIVEMIND_HOME: path.join(dir, 'client') });
+    const env = (token: string) => childEnv({ PATH: process.env.PATH ?? '', HIVEMIND_TOKEN: token, HIVEMIND_URL: `http://127.0.0.1:${port}`, HIVEMIND_HOME: path.join(dir, 'client') });
     const args = ['--import', path.join(root, 'node_modules/tsx/dist/loader.mjs'), path.join(root, 'src/cli.ts')];
     const card: CapabilityCard = { enabled: true, capabilities: ['parser'], modes: ['implementation'], model: null, host: null, availableContext: null, availability: 'available', maxInProgress: 1 };
     const file = path.join(dir, 'card.json'); writeFileSync(file, JSON.stringify({ expectedRevision: 0, card }));

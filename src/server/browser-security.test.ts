@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { childEnv } from "../test-support/child-process.ts";
 import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,7 +15,7 @@ import { registerPlugin, projectPlugins } from "./plugins.ts";
 // protocol: no downloaded browsers, npm dependencies, or browser-security flags.
 async function browser(t: TestContext, executable: string) {
   const profile = mkdtempSync(path.join(os.tmpdir(), "hive-browser-profile-"));
-  const child = spawn(executable, ["--port=0"], { stdio: ["ignore", "pipe", "pipe"], detached: true });
+  const child = spawn(executable, ["--port=0"], { stdio: ["ignore", "pipe", "pipe"], detached: true, env: childEnv() });
   let driver = "";
   let session = "";
   const exited = new Promise<void>((resolve) => child.once("close", () => resolve()));

@@ -9,6 +9,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { CallToolResultSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { Hive } from "../server/hive.ts";
 import { startServer } from "../server/serve.ts";
+import { childEnv } from "../test-support/child-process.ts";
 
 async function fixture(t: TestContext) {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -36,8 +37,8 @@ async function fixture(t: TestContext) {
       command: process.execPath,
       args: ["--import", path.join(root, "node_modules/tsx/dist/loader.mjs"), path.join(root, "src/cli.ts"), "mcp"],
       cwd: dir,
-      env: { PATH: process.env.PATH ?? "", HIVEMIND_HOME: path.join(dir, "identities"),
-        HIVEMIND_URL: `http://127.0.0.1:${port}`, HIVEMIND_TOKEN: token },
+      env: childEnv({ PATH: process.env.PATH ?? "", HIVEMIND_HOME: path.join(dir, "identities"),
+        HIVEMIND_URL: `http://127.0.0.1:${port}`, HIVEMIND_TOKEN: token }),
       stderr: "pipe",
     });
     clients.push({ client, transport });

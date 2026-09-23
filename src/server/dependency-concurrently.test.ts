@@ -8,6 +8,7 @@ import path from "node:path";
 import { test, type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
 import { stripVTControlCharacters } from "node:util";
+import { childEnv, stopProcessGroup } from "../test-support/child-process.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const manifest = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8")) as {
@@ -44,9 +45,8 @@ function fixture(t: TestContext) {
       await Promise.all(processes.map(async ({ pid, closed }) => {
         // Only this test's detached process group. A failing assertion must not
         // leave watchers or grandchildren alive. Success is checked before this.
-        try { process.kill(-pid, "SIGKILL"); } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-        }
+        // SIGTERM first so members can finish exiting; SIGKILL only survivors.
+        await stopProcessGroup(pid, closed);
         await deadline(closed, "subprocess cleanup");
       }));
     } finally {
@@ -58,10 +58,10 @@ function fixture(t: TestContext) {
     start(args: string[], cwd = dir) {
       const child = spawn(process.execPath, args, {
         cwd, detached: true, stdio: ["ignore", "pipe", "pipe"],
-        env: {
+        env: childEnv({
           ...process.env, FORCE_COLOR: "0", NO_COLOR: "1",
           HIVEMIND_HOME: path.join(dir, "home"), HIVEMIND_PORT: "0", HIVEMIND_TOKEN: "",
-        },
+        }),
       });
       const updates = new EventEmitter();
       let output = "";
@@ -127,7 +127,7 @@ async function assertGroupStopped(pid: number, signal: AbortSignal) {
   do {
     const output = await new Promise<string>((resolve, reject) => {
       execFile("ps", ["-A", "-o", "pid=,pgid=,stat="], {
-        encoding: "utf8", timeout: 1_000, signal,
+        encoding: "utf8", timeout: 1_000, signal, env: childEnv(),
       }, (error, stdout) => error ? reject(error) : resolve(stdout));
     });
     // Ignore already-dead zombies while the OS reaps them. Do not inspect
@@ -145,6 +145,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 const label = process.argv[2];
 if (label === "leader") {
+  // child-env: exempt (runs inside a test child whose env already comes from childEnv())
   spawn(process.execPath, [fileURLToPath(import.meta.url), "grandchild"], { stdio: "inherit" });
 }
 let stopping = false;
