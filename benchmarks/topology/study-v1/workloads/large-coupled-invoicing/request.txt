@@ -1,0 +1,62 @@
+Build an order invoicing engine in the current working directory. It is the project workspace and starts empty; create every file inside it and do not read or write anything outside it.
+
+The engine is split into six modules that all exchange the same shared data shapes (Money values and invoice lines). Each module builds on the shapes produced by the previous one, so the Money representation, the line shape and the rounding rules must be used consistently by every module.
+
+Runtime and constraints:
+- Plain Node.js 22 or newer, ECMAScript modules only. Every source and test file uses the `.mjs` extension with `import`/`export` syntax.
+- Use only Node.js built-in modules. No npm packages, no package.json dependencies, no network access, no build step.
+- Write tests with `node:test` and `node:assert/strict` in files under `test/` named `*.test.mjs`, including at least one end-to-end test in `test/invoice.test.mjs`. Running `node --test test/*.test.mjs` from the workspace root must pass.
+- The result is checked by an automated hidden test suite that imports the exact file paths and named exports below and by running your tests. Follow the names, shapes, error types and rounding rules exactly. Hidden tests compare objects with deep equality, so do not add extra properties to the objects described below.
+
+Shared shapes:
+- A Money value is a frozen plain object `{ amount, currency }`: `amount` is a safe integer number of minor units (cents) and `currency` a three-letter upper-case code such as `"EUR"`. All currencies have two decimal places.
+- Percentages are integers from 0 to 100. Whenever an amount is multiplied by a percentage, the exact value `amount * percent / 100` is rounded half to even (banker's rounding) using integer arithmetic, so that 1005 cents at 10% is 100 cents (100.5 rounds to 100) and 1015 cents at 10% is 102 cents (101.5 rounds to 102).
+
+1. `src/money.mjs` exports:
+   - `money(amount, currency)`: validates and returns a frozen Money. A non-safe-integer amount or a currency not matching `/^[A-Z]{3}$/` throws `TypeError`.
+   - `add(a, b)` and `subtract(a, b)`: return a new Money. Different currencies throw `TypeError`.
+   - `multiply(m, quantity)`: `quantity` must be a non-negative integer (otherwise `RangeError`); returns `amount * quantity`.
+   - `percentage(m, percent)`: `percent` must be an integer from 0 to 100 (otherwise `RangeError`); returns the half-to-even rounded share described above. It works for negative amounts too, rounding the exact value half to even.
+   - `allocate(m, weights)`: splits a non-negative Money into parts proportional to `weights`, an array of non-negative integers with a positive sum (otherwise `RangeError`; a negative amount also throws `RangeError`). Each part first gets `floor(amount * weight / sum)`; the remaining cents are then given one at a time to the parts with the largest remainder `amount * weight mod sum`, ties going to the lower index. The parts always add up to the original amount. Returns an array of Money.
+   - `isZero(m)` returns whether the amount is 0. `compare(a, b)` returns `-1`, `0` or `1` and throws `TypeError` for different currencies.
+   - `format(m)`: returns the amount with two decimals, a leading `-` for negative amounts, a space and the currency: `1234` EUR is `"12.34 EUR"`, `-5` EUR is `"-0.05 EUR"`, `0` is `"0.00 EUR"`.
+
+2. `src/catalog.mjs` exports `createCatalog(products)`.
+   - `products` is a non-empty array of `{ sku, name, price, taxCategory }` where `sku` and `name` are non-empty strings, `price` is a Money with a non-negative amount and `taxCategory` is one of `"standard"`, `"reduced"`, `"exempt"`. Invalid products or an empty array throw `TypeError`; a duplicate `sku` throws `Error`; products with different price currencies throw `TypeError`.
+   - It returns `{ currency, get(sku), has(sku) }`: `currency` is the shared currency code, `get` returns the product object `{ sku, name, price, taxCategory }` and throws `RangeError` for an unknown sku, `has` returns a boolean.
+
+3. `src/cart.mjs` exports `createCart(catalog)`, returning a cart with these methods:
+   - `add(sku, quantity = 1)`: `quantity` must be a positive integer (otherwise `RangeError`); an unknown sku throws `RangeError`. Adding a sku that is already in the cart increases its quantity and keeps its original position. Returns the cart.
+   - `setQuantity(sku, quantity)`: sets the quantity of a sku already in the cart (`RangeError` if it is not in the cart); `quantity` must be a non-negative integer (otherwise `RangeError`), and 0 removes the line. Returns the cart.
+   - `remove(sku)`: removes the line, returning `true` if it existed, otherwise `false`.
+   - `lines()`: returns a new array of line objects in the order skus were first added, each exactly `{ sku, name, quantity, unitPrice, taxCategory, subtotal }` where `unitPrice` is the product price and `subtotal` is `unitPrice` times `quantity`.
+   - `subtotal()`: the sum of line subtotals as a Money in the catalog currency (zero when empty).
+
+4. `src/discounts.mjs` exports `applyDiscounts(lines, rules)`.
+   - `lines` are cart lines as returned by `cart.lines()`. It returns `{ lines, applied }` where each output line is the input line plus two properties, `discount` (Money) and `net` (Money, `subtotal - discount`), and `applied` is an array of `{ ruleId, amount }` for every rule that discounted a positive amount, in the order rules were processed. Input lines are not mutated.
+   - Rules are objects with a unique string `id` and a `type`. Line rules are processed first, in their given order, then order rules in their given order. A line's total discount never exceeds its subtotal: when a line rule would exceed it, the rule discounts only the rest. Rule types:
+     - `{ id, type: "percent_off_sku", sku, percent }`: on the line with that sku (if any), discount `percentage(line.subtotal, percent)`.
+     - `{ id, type: "buy_x_get_y", sku, buy, get }` with positive integers `buy` and `get`: on the line with that sku (if any), `floor(quantity / (buy + get)) * get` units are free; discount is `unitPrice` times the free units.
+     - `{ id, type: "order_percent", percent, minSubtotal }` where `minSubtotal` is a Money: if the sum of the current line nets is at least `minSubtotal`, the discount is `percentage(currentNetTotal, percent)`, split across lines with `allocate` using the current line net amounts as weights, and added to each line's discount. If the current net total is 0 nothing is discounted.
+     - `{ id, type: "order_fixed", amount, minSubtotal }` where `amount` and `minSubtotal` are Money: if the current net total is at least `minSubtotal`, the discount is the smaller of `amount` and the current net total, split with `allocate` in the same way.
+   - Rules are validated before any discount is computed: an unknown rule type, a missing or duplicate rule id, an invalid `percent` (not an integer from 0 to 100), invalid `buy`/`get`, or a rule Money in a currency different from the lines' currency throws `TypeError`.
+   - With no lines, it returns `{ lines: [], applied: [] }` after validating the rules.
+
+5. `src/tax.mjs` exports `computeTax(lines, rates)`.
+   - `lines` are discounted lines as returned by `applyDiscounts`. `rates` is `{ standard, reduced, exempt }` with integer percentages from 0 to 100; a missing or invalid rate throws `RangeError`.
+   - It returns `{ lines, byCategory }`: each output line is the input line plus `tax` (`percentage(net, rate of its taxCategory)`) and `total` (`net + tax`). `byCategory` has one entry per tax category present in the lines, `{ net, tax }` with summed Money values, and its keys are in the order categories first appear in the lines. Input lines are not mutated.
+
+6. `src/invoice.mjs` exports `createInvoice(options)` and `renderInvoice(invoice)`.
+   - `createInvoice({ catalog, items, rules = [], rates })`: builds a cart from `items` (an array of `{ sku, quantity }`, added in order with `cart.add`), applies the discount rules, computes tax and returns exactly:
+     `{ currency, lines, subtotal, discountTotal, netTotal, taxTotal, grandTotal, applied, taxByCategory }`
+     where `lines` are the lines returned by `computeTax` (each exactly `{ sku, name, quantity, unitPrice, taxCategory, subtotal, discount, net, tax, total }`), the totals are the Money sums of the corresponding line fields (`grandTotal` sums `total`), `applied` comes from `applyDiscounts` and `taxByCategory` is `byCategory` from `computeTax`. With no items all totals are zero Money in the catalog currency.
+   - `renderInvoice(invoice)` returns this text, lines joined with `\n` and no trailing newline: one line per invoice line, `${sku} x${quantity} ${format(total)}`, then `Subtotal: ${format(subtotal)}`, `Discounts: ${format(discountTotal)}`, `Tax: ${format(taxTotal)}` and `Total: ${format(grandTotal)}`.
+
+Example: with a catalog containing `{ sku: "PEN", name: "Pen", price: money(250, "EUR"), taxCategory: "standard" }` and `{ sku: "BOOK", name: "Book", price: money(1999, "EUR"), taxCategory: "reduced" }`, rates `{ standard: 22, reduced: 4, exempt: 0 }`, items `[{ sku: "PEN", quantity: 3 }, { sku: "BOOK", quantity: 1 }]` and rules `[{ id: "pens", type: "buy_x_get_y", sku: "PEN", buy: 2, get: 1 }]`, the pen line has subtotal 750, discount 250, net 500, tax 110 and total 610; the book line has net 1999, tax 80 and total 2079; and `renderInvoice` returns:
+
+PEN x3 6.10 EUR
+BOOK x1 20.79 EUR
+Subtotal: 27.49 EUR
+Discounts: 2.50 EUR
+Tax: 1.90 EUR
+Total: 26.89 EUR

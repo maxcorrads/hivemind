@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "evidenceKind": "live",
+  "versions": {
+    "provider": "opencode-go",
+    "model": "muse-spark-1.3-contributor",
+    "host": "opencode/1.18.31",
+    "configuration": "auto",
+    "policyVersion": "topology-policy-v2.1"
+  },
+  "workloads": [
+    { "id": "small-duration", "version": "v1" },
+    { "id": "medium-csv", "version": "v1" },
+    { "id": "large-parallel-toolkit", "version": "v1" },
+    { "id": "large-coupled-invoicing", "version": "v1" }
+  ],
+  "repeats": 2,
+  "seed": 20260923,
+  "freeWorkers": 4,
+  "limits": { "wallMs": 5400000, "workloadTokens": 8000000 }
+}
