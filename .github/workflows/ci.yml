@@ -246,20 +246,22 @@ jobs:
 
   tests_node24:
     name: Tests / Node 24
-    needs: [unit_node24, integration_node24, macos_compat]
+    needs: [unit_node24, integration_node24, macos_compat, browser]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Require every Node 24 test shard and macOS compatibility
+      - name: Require every Node 24 test shard, macOS compatibility and the browser suite
         env:
           UNIT_RESULT: ${{ needs.unit_node24.result }}
           INTEGRATION_RESULT: ${{ needs.integration_node24.result }}
           MACOS_RESULT: ${{ needs.macos_compat.result }}
+          BROWSER_RESULT: ${{ needs.browser.result }}
         run: |
           test "$UNIT_RESULT" = success
           test "$INTEGRATION_RESULT" = success
           test "$MACOS_RESULT" = success
+          test "$BROWSER_RESULT" = success
 
   tests_node22:
     name: Tests / Node 22.13.0
@@ -318,7 +320,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: browser-chromium-failures
-          path: artifacts/browser.log
+          path: |
+            artifacts/browser.log
+            artifacts/playwright
           retention-days: 7
           if-no-files-found: ignore
 

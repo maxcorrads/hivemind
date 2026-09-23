@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route, type WebSocketRoute } from '@playwright/test';
+import { expect, test, type Page, type Route, type WebSocketRoute } from './fixtures.ts';
 import type { Agent, Channel, Message, Project } from '../../src/shared/types.ts';
 import type { TaskSnapshot } from '../../src/shared/tasks.ts';
 import type { TimelineView } from '../../src/shared/timeline.ts';
