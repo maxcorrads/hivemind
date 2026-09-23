@@ -29,10 +29,9 @@ function contractHash(contract: TaskContract): string {
   return createHash('sha256').update(JSON.stringify(contract)).digest('hex');
 }
 function stateRevision(deps: AdmissionDeps, executionId: string): number {
-  const row = deps.storage.db.prepare("SELECT COALESCE(json_extract(snapshot,'$.revision'),0) AS revision FROM adaptive_topology_executions WHERE execution_id=?")
-    .get(executionId);
-  if (!row) throw new HiveError(409, 'Adaptive execution changed');
-  return Number(row.revision);
+  const revision = deps.adaptiveTopology.store.executionRevision(executionId);
+  if (revision === undefined) throw new HiveError(409, 'Adaptive execution changed');
+  return revision;
 }
 
 /** Only the pre-action controller can create this short-lived capability. Never accepted from request JSON. */
@@ -94,9 +93,9 @@ export function admitAdaptiveTask(deps: AdmissionDeps, actor: Agent, task: TaskS
 /** Called after task_records is written but before the same transaction commits. */
 export function linkAdaptiveTask(deps: AdmissionDeps, taskId: string, executionId: string | null): void {
   if (!executionId) return;
-  const previous = deps.storage.db.prepare('SELECT execution_id FROM adaptive_topology_tasks WHERE task_id=?').get(taskId);
-  if (previous && previous.execution_id !== executionId) throw new HiveError(409, 'Task belongs to another adaptive execution');
-  deps.storage.db.prepare('INSERT OR IGNORE INTO adaptive_topology_tasks(task_id,execution_id) VALUES(?,?)').run(taskId, executionId);
+  const previous = deps.adaptiveTopology.store.taskExecution(taskId);
+  if (previous !== undefined && previous !== executionId) throw new HiveError(409, 'Task belongs to another adaptive execution');
+  deps.adaptiveTopology.store.linkTask(taskId, executionId);
 }
 
 /** postMessage's receipt callback runs inside its transaction: no post-commit reservation race. */
@@ -108,17 +107,15 @@ export function bindAdaptiveMessage(deps: AdmissionDeps, actor: Agent, message: 
     current.workerBudget !== expected.workerBudget)
     throw new HiveError(409, 'Adaptive policy changed before message delivery');
   const channel = deps.channels.getChannel(message.channelId, actor.projectId);
-  if (deps.storage.db.prepare('SELECT status FROM threads WHERE id=?').get(message.threadId ?? message.id)?.status === 'done')
+  if (deps.messageQueries.threadStatus(message.threadId ?? message.id) === 'done')
     throw new HiveError(409, 'Delegation thread is completed; start a new assignment instead of reusing closed work');
   assertAdaptiveWorkerAdmission(deps, actor, channel, workerIds, current);
   for (const workerId of new Set(workerIds)) {
     const root = message.threadId ?? message.id;
-    const previous = deps.storage.db.prepare('SELECT execution_id FROM adaptive_topology_messages WHERE root_id=? AND worker_id=?').get(root, workerId);
-    if (previous && previous.execution_id !== current.executionId)
+    const previous = deps.adaptiveTopology.store.delegationExecution(root, workerId);
+    if (previous !== undefined && previous !== current.executionId)
       throw new HiveError(409, 'This delegation thread belongs to another execution');
-    deps.storage.db.prepare(`INSERT OR IGNORE INTO adaptive_topology_messages
-      (root_id,worker_id,execution_id,project_id) VALUES(?,?,?,?)`)
-      .run(root, workerId, current.executionId, channel.projectId);
+    deps.adaptiveTopology.store.bindDelegation(root, workerId, current.executionId, channel.projectId);
   }
 }
 

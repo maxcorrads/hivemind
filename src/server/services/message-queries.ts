@@ -455,6 +455,13 @@ export class MessageQueries implements MessageReader {
       ORDER BY m.seq LIMIT ?`).all(traceId, limit) as Array<Record<string, any>>;
   }
 
+  /** Stored status of each thread among `ids` that has one (null when it was cleared). */
+  threadStatuses(ids: string[]): Map<string, string | null> {
+    const rows = this.db.prepare("SELECT id, status FROM threads WHERE id IN (SELECT value FROM json_each(?))")
+      .all(JSON.stringify(ids)) as { id: string; status: string | null }[];
+    return new Map(rows.map((row) => [row.id, row.status]));
+  }
+
   /** True when `messageId` is a message of `channelId`. */
   isInChannel(messageId: string, channelId: string): boolean {
     return Boolean(this.db.prepare("SELECT 1 FROM messages WHERE id = ? AND channel_id = ?").get(messageId, channelId));
