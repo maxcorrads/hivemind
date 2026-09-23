@@ -60,13 +60,45 @@ export function prepareStudy(raw) {
   return { schemaVersion: 1, studyVersion: STUDY_VERSION, studyId, config, trials };
 }
 
+const CAPTURES = ['complete', 'incomplete', 'unknown'];
+// Mirrors src/shared/evidence-health.ts: known losses make a capture incomplete, anything else only unknown.
+const INCOMPLETE_REASONS = ['collection_gap', 'history_truncated', 'recorder_installed_mid_execution'];
+const CAPTURE_REASONS = [...INCOMPLETE_REASONS, 'attempts_pending', 'not_recorded', 'legacy_record', 'recorder_unavailable'];
+const classify = reasons => reasons.some(r => INCOMPLETE_REASONS.includes(r)) ? 'incomplete' : reasons.length ? 'unknown' : 'complete';
+/** Exports made before collector-health tracking carry no capture state: their completeness is unknown. */
+export function routerCapture(e) { return e && CAPTURES.includes(e.coverage?.capture) ? e.coverage.capture : e ? 'unknown' : 'missing'; }
+
+function validateCapture(c) {
+  if (c.capture === undefined) {
+    // Legacy export: validated as before, but never eligible for complete net comparisons.
+    for (const k of ['captureReasons', 'aggregateCapture', 'collectionGap']) assert.equal(c[k], undefined, `Legacy export cannot carry ${k}`);
+    return null;
+  }
+  assert.ok(CAPTURES.includes(c.capture) && CAPTURES.includes(c.aggregateCapture), 'Invalid capture state');
+  assert.ok(Array.isArray(c.captureReasons) && c.captureReasons.every(r => CAPTURE_REASONS.includes(r)) &&
+    new Set(c.captureReasons).size === c.captureReasons.length, 'Invalid capture reasons');
+  assert.equal(c.capture, classify(c.captureReasons), 'Capture state does not match its reasons');
+  assert.equal(c.aggregateCapture, classify(c.captureReasons.filter(r => r !== 'history_truncated')), 'Aggregate capture does not match its reasons');
+  assert.equal(c.captureReasons.includes('history_truncated'), c.prunedAttempts > 0, 'Pruned detail must be reported as truncation');
+  assert.ok(c.capture !== 'complete' || (c.historyComplete === true && c.pendingAttempts === 0), 'A complete capture needs complete history');
+  assert.ok(!c.historyComplete || c.capture === 'complete', 'Complete history cannot accompany an incomplete or unknown capture');
+  if (c.collectionGap !== null) {
+    exact(c.collectionGap, ['missedBegins', 'missedFinishes', 'unattributed'], 'collectionGap');
+    for (const k of ['missedBegins', 'missedFinishes', 'unattributed']) assert.ok(count(c.collectionGap[k]), `Invalid collectionGap.${k}`);
+    assert.ok(c.captureReasons.includes('collection_gap'), 'A recorded collection gap must be reported');
+  }
+  return c.aggregateCapture;
+}
+
 function validateEvidence(e, policyVersion) {
   object(e, 'router evidence');
   assert.equal(e.schemaVersion, 1); assert.equal(e.evidenceClass, 'adaptive-evidence-v1');
   assert.equal(e.contractVersion, 'adaptive-routing-v2'); assert.equal(e.policyVersion, policyVersion);
   const c = object(e.coverage, 'coverage'), o = object(e.overhead, 'overhead');
   for (const k of ['attemptsStarted','attemptsFinished','pendingAttempts','retainedAttempts','prunedAttempts']) assert.ok(count(c[k]), `Invalid ${k}`);
-  assert.ok(c.attemptsStarted > 0 && c.attemptsFinished <= c.attemptsStarted);
+  const aggregate = validateCapture(c);
+  // Gap-only evidence (every attempt was lost) is valid but explicitly incomplete.
+  assert.ok((c.attemptsStarted > 0 || c.capture === 'incomplete') && c.attemptsFinished <= c.attemptsStarted);
   assert.equal(c.pendingAttempts, c.attemptsStarted - c.attemptsFinished);
   assert.equal(c.retainedAttempts + c.prunedAttempts, c.attemptsStarted, 'Inconsistent retained evidence count');
   assert.equal(typeof c.historyComplete, 'boolean');
@@ -82,10 +114,10 @@ function validateEvidence(e, policyVersion) {
   assert.equal(o.successfulAttempts + o.unavailableAttempts, c.attemptsFinished);
   assert.ok(o.tokenObservations <= c.attemptsFinished && o.latencyObservations <= c.attemptsFinished);
   assert.equal(o.unknownUsageAttempts, c.attemptsStarted - o.tokenObservations);
-  assert.equal(c.usageComplete, o.tokenObservations === c.attemptsStarted);
+  assert.equal(c.usageComplete, o.tokenObservations === c.attemptsStarted && (aggregate === null || aggregate === 'complete'));
   assert.equal(o.totalInputTokens, c.usageComplete ? o.knownInputTokens : null);
   assert.equal(o.totalOutputTokens, c.usageComplete ? o.knownOutputTokens : null);
-  assert.equal(o.summedLatencyMs, o.latencyObservations === c.attemptsStarted ? o.knownLatencyMs : null);
+  assert.equal(o.summedLatencyMs, o.latencyObservations === c.attemptsStarted && (aggregate === null || aggregate === 'complete') ? o.knownLatencyMs : null);
   assert.ok(Array.isArray(e.models) && e.models.length <= 16 && e.models.every(m => typeof m === 'string' && key.test(m)));
   assert.equal(new Set(e.models).size, e.models.length); assert.equal(typeof e.modelsTruncated, 'boolean');
   // Exports recorded before #134 have no requested identifiers: unknown (null), never an empty list.
@@ -173,7 +205,8 @@ function metric(values) {
 function tokens(trial) {
   const o = trial.observed;
   if (!o.instrumentationHealthy || o.workloadTokens === null) return null;
-  const router = trial.condition === 'auto' ? o.routerEvidence && !o.routerEvidence.modelsTruncated && o.routerEvidence.models.length === 1 &&
+  // The exported capture state decides eligibility; a reviewer's healthy flag or a green provider status cannot promote it.
+  const router = trial.condition === 'auto' ? routerCapture(o.routerEvidence) === 'complete' && !o.routerEvidence.modelsTruncated && o.routerEvidence.models.length === 1 &&
     o.routerEvidence.coverage.historyComplete && o.routerEvidence.attempts[0]?.ordinal === 1 && o.routerEvidence.attempts[0]?.phase === 'initial'
     ? validateEvidence(o.routerEvidence, o.versions.policyVersion) : null : 0;
   if (router === null) return null;
@@ -213,6 +246,7 @@ export function summarizeStudy(study) {
   });
   return { schemaVersion: 1, evidenceClass: study.config.evidenceKind === 'live' ? 'live_topology_comparison' : 'synthetic_topology_comparison',
     studyId: study.studyId, studyVersion: STUDY_VERSION, coverage, versions: study.config.versions,
+    routerCapture: Object.fromEntries([...CAPTURES, 'missing'].map(state => [state, auto.filter(t => routerCapture(t.observed.routerEvidence) === state).length])),
     deltaConvention: 'auto_minus_fixed; negative is lower consumption/time, not a quality-adjusted universal winner',
     outcomes: Object.fromEntries(CONDITIONS.map(c => [c, Object.fromEntries(['passed','quality_failed','harness_failed','interrupted'].map(outcome =>
       [outcome, study.trials.filter(t => t.condition === c && t.observed.outcome === outcome).length]))])),
@@ -221,7 +255,7 @@ export function summarizeStudy(study) {
       ((t.observed.wallMs !== null && t.observed.wallMs > study.config.limits.wallMs) ||
         (t.observed.workloadTokens !== null && t.observed.workloadTokens > study.config.limits.workloadTokens))).length])),
     comparison, monetaryCost: null,
-    limitations: ['Fixture/synthetic output is not empirical validation.', 'Negative token deltas require complete observed workload/router usage and an unpruned capture starting with the initial attempt.',
+    limitations: ['Fixture/synthetic output is not empirical validation.', 'Negative token deltas require complete observed workload/router usage and an exported router capture of `complete` (unpruned, from the initial attempt, no collection gap); incomplete or unknown captures, including legacy exports, are excluded.',
       'End-to-end wall time already includes router waits; summed router latency is not added again.',
       'Only jointly acceptance-passing reviewed pairs enter efficiency deltas. Independent defect deltas, quality regressions and failed/interrupted runs remain explicit; efficiency is not automatically quality-adjusted.',
       'Bootstrap intervals resample the retained matched pairs; small samples and workload selection limit generalization.',

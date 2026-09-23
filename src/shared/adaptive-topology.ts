@@ -1,3 +1,5 @@
+import type { EvidenceCaptureView, EvidenceCollectorHealth } from "./evidence-health.ts";
+
 export const ADAPTIVE_TOPOLOGIES = [
   "single",
   "brain_one_worker",
@@ -106,6 +108,8 @@ export type AdaptiveExecutionState = {
   requestExcerpt?: string;
   /** Draining executions only: delegated work still open (structured tasks and free-form delegations). */
   openWork?: { tasks: number; delegations: number };
+  /** Human-only: whether Jev overhead for this execution was completely measured. Absent when nothing was recorded. */
+  evidence?: EvidenceCaptureView;
 };
 
 export type AdaptiveAgentPolicy = {
@@ -127,4 +131,6 @@ export type AdaptiveRoutingView = {
    */
   executions?: AdaptiveExecutionState[];
   events: AdaptiveRoutingEvent[];
+  /** Human-only health of the evidence collector (independent of Jev availability). */
+  collector?: EvidenceCollectorHealth;
 };

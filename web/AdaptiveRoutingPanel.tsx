@@ -2,6 +2,7 @@ import { Modal } from "./Modal.tsx";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "./api.ts";
 import { drainingExecutions, isCurrentExecution } from "./adaptive-routing-view.ts";
+import { captureLabel, CollectorHealthNotice } from "./EvidenceHealth.tsx";
 import type {
   AdaptiveExecutionState, AdaptiveLockScope, AdaptiveRoutingEvent,
   AdaptiveRoutingView, AdaptiveTopology,
@@ -86,7 +87,7 @@ function DrainingList({ executions, name }: { executions: AdaptiveExecutionState
   </section>;
 }
 
-function RoutingPanelContent({ channelId, state, events, tabs, finishing, onChange, onClose }: PanelProps & {
+function RoutingPanelContent({ channelId, view, state, events, tabs, finishing, onChange, onClose }: PanelProps & {
   state: AdaptiveExecutionState | null; events: AdaptiveRoutingEvent[]; tabs: ReactNode; finishing: ReactNode;
 }) {
   const [scope, setScope] = useState<Exclude<AdaptiveLockScope, "none">>(
@@ -116,6 +117,7 @@ function RoutingPanelContent({ channelId, state, events, tabs, finishing, onChan
         <h2>Routing · Jev</h2>
         {tabs}
         <div className="sheet-body">
+        <CollectorHealthNotice health={view.collector} />
         {!state ? <p className="help-p">No adaptive execution has started in this channel yet. Every Human message addressed to a brain here is routed through Jev.</p> : <>
           <div className="routing-summary">
             <strong>{topologyLabel(state.currentTopology)}</strong>
@@ -134,6 +136,7 @@ function RoutingPanelContent({ channelId, state, events, tabs, finishing, onChan
             {state.lockedTopology ? " · recommendation only; Human override remains authoritative" : ""}
           </p>}
           {state.recommendation?.providerStatus === "bypassed" && <p className="help-p">Manual selection · Jev was not called for this decision.</p>}
+          {state.evidence && <p className={state.evidence.capture === "complete" ? "help-p" : "routing-warning"} role="status">{captureLabel(state.evidence)}</p>}
           <fieldset className="routing-lock" disabled={Boolean(state.completedAt)}>
             <legend>Human topology lock</legend>
             <label>Topology

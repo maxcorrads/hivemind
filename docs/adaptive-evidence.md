@@ -14,11 +14,29 @@ The numeric/enum projection contains current/target topology and worker counts, 
 
 `adaptive_evidence_runs` retains at most 50 recorded executions per channel. The active execution from the persisted routing lifecycle and the attempt currently being recorded are protected within that limit; the remaining runs are retained by their last recording time. Rejected initial requests cannot displace an ongoing execution, including after a server restart. Completed executions are eligible for normal retention. `adaptive_evidence_attempts` retains the last 500 attempt details per execution. Aggregate counters survive detail pruning; `prunedAttempts` makes the loss of older detail explicit. Channel deletion cascades to both tables transactionally.
 
-`historyComplete` requires an initial attempt at ordinal 1 and no pruned attempt detail. A capture that begins or resumes with continuous monitoring is incomplete even if all newly recorded attempts have known usage. This also prevents previously evicted evidence from being recreated as complete history. `usageComplete` describes usage for the recorded attempts only; it does not establish full-execution capture.
+`historyComplete` requires a `complete` capture: an initial attempt at ordinal 1, no pruned attempt detail and no collection gap. A capture that begins or resumes with continuous monitoring is incomplete even if all newly recorded attempts have known usage. This also prevents previously evicted evidence from being recreated as complete history. `usageComplete` (and thus `totalInputTokens` / `totalOutputTokens` / `summedLatencyMs`) additionally requires `aggregateCapture: complete`: pruned detail keeps exact lifetime counters, but any gap, mid-execution installation or unknown capture keeps the retained usage as `known*` only, never a full-run total.
 
 Pending attempts are retained as unknown outcomes, not free calls. A crash after the remote request but before outcome persistence cannot establish usage or billing; the pending count remains visible. No external exactly-once billing claim is made. The detail cap also applies to repeated interrupted attempts.
 
-Collector write errors produce sanitized server warnings but never block or change the Human request. A run with recorder errors must be marked instrumentation-incomplete in an experiment and excluded from complete-overhead claims. The counters describe recorded attempts, not an independently reconciled provider invoice.
+Collector write errors produce sanitized server warnings but never block or change the Human request. The counters describe recorded attempts, not an independently reconciled provider invoice.
+
+## Collector health and capture completeness
+
+Collector health (#135) is tracked separately from Jev provider availability: a successful classification does not imply a successful measurement. The server keeps it in memory for the Human only; agents never see it, and no extra Jev call is made to produce it.
+
+- **Failure.** A failed `begin` (including a store that cannot be opened) or `finish` cannot be recorded in the same failing database. The collector logs a sanitized warning, keeps the Jev decision, and holds a *gap marker* for that execution in a bounded in-memory set (64 executions; beyond that, a single overflow marker). Health becomes `degraded`.
+- **Recovery.** Held markers are persisted, each in its own transaction, before the next evidence attempt, after each outcome, whenever the Human reads the routing view or collector health, and on graceful shutdown. A marker is written into the run's snapshot JSON (no schema change): it creates a gap-only record if the run does not exist yet. An overflow marker conservatively marks every record of a still-running execution and every record touched since the first untracked failure. A marker whose channel was deleted is discarded, since its evidence was deleted with it. Once nothing is held, health is `recovered` (it returns to `healthy` only on restart).
+- **Residual limit.** A process crash (or a restart while the store still rejects writes) loses held markers. This is not fully observable: the next process reports `healthy` and cannot know about the lost failure. Some such losses are still caught conservatively (an execution whose first recorded attempt is continuous is `recorder_installed_mid_execution`; an attempt left pending is `attempts_pending`), but a lost continuous `begin` in an otherwise recorded execution can be missed. Do not export or score evidence while the collector is `degraded`: an offline export only sees persisted markers.
+
+Each record is classified as:
+
+| `capture` | Meaning | Reasons |
+| --- | --- | --- |
+| `complete` | Every attempt since the initial one is recorded, with an outcome. | none |
+| `incomplete` | A known loss. | `collection_gap`, `history_truncated`, `recorder_installed_mid_execution` |
+| `unknown` | Completeness cannot be established. | `attempts_pending`, `not_recorded`, `legacy_record`, `recorder_unavailable` |
+
+Records written before this tracking existed are `legacy_record`: a silent write failure cannot be ruled out. The Human Routing panel shows each execution's capture state and a collector warning; the Routing log shows the collector warning. The realtime `evidence-health` event and `GET /api/ui/adaptive-routing/evidence-health` carry the categories and counters only, never database or provider errors.
 
 Historical runs without this recorder have unknown measurements. There is no fabricated backfill from the latest recommendation, and absence of an evidence record is not evidence of zero router cost.
 
@@ -39,6 +57,7 @@ Exports use `schemaVersion: 1`, `evidenceClass: adaptive-evidence-v1`, `contract
 
 ## Interpreting the report
 
+- `capture` / `captureReasons` say whether the record is a complete, explicitly incomplete or unknown capture; `collectionGap` counts missed begins, missed finishes and unattributed failures from persisted gap markers. `aggregateCapture` ignores only pruned detail.
 - `attemptsStarted` / `attemptsFinished` count classifier attempts, not verified billable HTTP calls or applied policy changes.
 - `knownInputTokens` / `knownOutputTokens` sum only reported observations. Complete totals are **null** if any attempt lacks usage.
 - `pendingAttempts` and `unknownUsageAttempts` are distinct from successful calls with reported zero usage.

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import type { AdaptiveTopologyDecision } from '../shared/adaptive-topology.ts';
+import { classifyCapture, type EvidenceCaptureReason, type EvidenceCaptureView } from '../shared/evidence-health.ts';
 import { Storage } from './storage.ts';
 import { validJevModel } from './adaptive-config.ts';
 
@@ -21,7 +22,33 @@ export type EvidenceAttempt = { ordinal: number; phase: EvidenceScope['phase']; 
   requestedModel?: string | null };
 type RunState = { policyVersion: string; firstRecordedAt: number; lastRecordedAt: number; totals: Totals; models: string[]; modelsTruncated: boolean;
   /** Absent on runs recorded before #134: requested identifiers are then unknown, not empty. */
-  requestedModels?: string[]; requestedModelsTruncated?: boolean };
+  requestedModels?: string[]; requestedModelsTruncated?: boolean;
+  /** Collector-health tracking (#135), kept inside the snapshot JSON (no DDL). Absent on records made before it existed. */
+  capture?: CaptureState };
+/** Attempts known to be missing from this record: begins/finishes that failed, or failures that could not be attributed. */
+export type EvidenceGap = { missedBegins: number; missedFinishes: number; unattributed: number; firstAt: number; lastAt: number };
+type CaptureState = { version: 1; firstPhase: EvidenceScope['phase'] | null; gap: EvidenceGap | null; legacy?: true };
+const newCapture = (firstPhase: CaptureState['firstPhase']): CaptureState => ({ version: 1, firstPhase, gap: null });
+function mergeGap(a: EvidenceGap | null, b: EvidenceGap): EvidenceGap {
+  if (!a) return { ...b };
+  return { missedBegins: add(a.missedBegins, b.missedBegins), missedFinishes: add(a.missedFinishes, b.missedFinishes),
+    unattributed: add(a.unattributed, b.unattributed), firstAt: Math.min(a.firstAt, b.firstAt), lastAt: Math.max(a.lastAt, b.lastAt) };
+}
+/**
+ * Why a record is not a complete capture. `memoryGap`: a gap marker the live collector holds but has not persisted yet.
+ * Pruned detail is reported separately so lifetime counters can still be totals when nothing else is missing.
+ */
+function captureReasons(state: RunState, first: Pick<EvidenceAttempt, 'ordinal' | 'phase'> | undefined, memoryGap = false): EvidenceCaptureReason[] {
+  const reasons: EvidenceCaptureReason[] = [], capture = state.capture, t = state.totals;
+  if (!capture || capture.legacy) reasons.push('legacy_record');
+  if (capture?.gap || memoryGap) reasons.push('collection_gap');
+  if (t.prunedAttempts > 0) reasons.push('history_truncated');
+  // Legacy records infer the first phase from retained detail; undefined means it can no longer be known.
+  const firstPhase = capture && !capture.legacy ? capture.firstPhase : first?.ordinal === 1 ? first.phase : undefined;
+  if (firstPhase === 'continuous' || (firstPhase === null && !capture?.gap)) reasons.push('recorder_installed_mid_execution');
+  if (t.started > t.finished && !capture?.gap && !memoryGap) reasons.push('attempts_pending');
+  return reasons;
+}
 function pruneAttempts(db: DatabaseSync, executionId: string): number {
   return Number(db.prepare(`DELETE FROM adaptive_evidence_attempts WHERE execution_id=? AND id NOT IN
     (SELECT id FROM adaptive_evidence_attempts WHERE execution_id=? ORDER BY rowid DESC LIMIT ?)`)
@@ -72,6 +99,7 @@ export class AdaptiveEvidenceStore {
       const state: RunState = existing ? JSON.parse(String(existing.snapshot)) as RunState : {
         policyVersion: input.policyVersion, firstRecordedAt: Date.now(), lastRecordedAt: Date.now(), models: [], modelsTruncated: false,
         requestedModels: [], requestedModelsTruncated: false,
+        capture: newCapture(scope.phase),
         totals: { started: 0, finished: 0, ok: 0, unavailable: 0, usageObservations: 0,
           inputTokens: 0, outputTokens: 0, latencyMs: 0, latencyObservations: 0, prunedAttempts: 0 },
       };
@@ -131,6 +159,65 @@ export class AdaptiveEvidenceStore {
       this.db.prepare('UPDATE adaptive_evidence_runs SET snapshot=? WHERE execution_id=?').run(JSON.stringify(state), String(row.execution_id));
     });
   }
+  /**
+   * Persists a conservative collection-gap marker for attempts the collector failed to record. A record that does not
+   * exist yet (its first begin failed, or retention evicted it) is created as gap-only evidence, never as a complete
+   * capture. Returns `discarded` when the channel no longer exists: its evidence was deleted with it.
+   */
+  recordGap(scope: Omit<EvidenceScope, 'phase'>, policyVersion: string, gap: EvidenceGap): 'persisted' | 'discarded' {
+    return Storage.for(this.db).transaction(() => {
+      if (!this.db.prepare('SELECT 1 FROM channels WHERE id=?').get(scope.channelId)) return 'discarded';
+      const existing = this.db.prepare('SELECT snapshot,channel_id,project_id FROM adaptive_evidence_runs WHERE execution_id=?').get(scope.executionId);
+      if (existing && (existing.channel_id !== scope.channelId || existing.project_id !== scope.projectId)) return 'discarded';
+      const state: RunState = existing ? JSON.parse(String(existing.snapshot)) as RunState : {
+        policyVersion, firstRecordedAt: gap.firstAt, lastRecordedAt: gap.lastAt, models: [], modelsTruncated: false,
+        requestedModels: [], requestedModelsTruncated: false, capture: newCapture(null),
+        totals: { started: 0, finished: 0, ok: 0, unavailable: 0, usageObservations: 0,
+          inputTokens: 0, outputTokens: 0, latencyMs: 0, latencyObservations: 0, prunedAttempts: 0 },
+      };
+      state.capture ??= { ...newCapture(null), legacy: true };
+      state.capture.gap = mergeGap(state.capture.gap, gap);
+      state.lastRecordedAt = Math.max(state.lastRecordedAt, Date.now());
+      this.db.prepare(`INSERT INTO adaptive_evidence_runs(execution_id,channel_id,project_id,snapshot) VALUES(?,?,?,?)
+        ON CONFLICT(execution_id) DO UPDATE SET snapshot=excluded.snapshot`)
+        .run(scope.executionId, scope.channelId, scope.projectId, JSON.stringify(state));
+      pruneRuns(this.db, { ...scope, phase: 'continuous' });
+      return 'persisted';
+    });
+  }
+  /**
+   * Marks every retained record that may have been affected by failures the bounded in-memory marker set could not
+   * name individually: records of executions still running and records touched since the first such failure.
+   */
+  recordUnattributedGap(since: number, now = Date.now()): number {
+    return Storage.for(this.db).transaction(() => {
+      const hasExecutions = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='adaptive_topology_executions'").get();
+      const rows = this.db.prepare(`SELECT execution_id,snapshot FROM adaptive_evidence_runs WHERE json_extract(snapshot,'$.lastRecordedAt')>=?
+        ${hasExecutions ? `OR execution_id IN (SELECT execution_id FROM adaptive_topology_executions WHERE json_extract(snapshot,'$.completedAt') IS NULL)` : ''}`)
+        .all(since);
+      for (const row of rows) {
+        const state = JSON.parse(String(row.snapshot)) as RunState;
+        state.capture ??= { ...newCapture(null), legacy: true };
+        state.capture.gap = mergeGap(state.capture.gap, { missedBegins: 0, missedFinishes: 0, unattributed: 1, firstAt: since, lastAt: now });
+        this.db.prepare('UPDATE adaptive_evidence_runs SET snapshot=? WHERE execution_id=?').run(JSON.stringify(state), String(row.execution_id));
+      }
+      return rows.length;
+    });
+  }
+}
+
+/**
+ * Human-only capture state of one execution's evidence, or null when nothing was recorded for it.
+ * `memoryGap`: the live collector holds an unpersisted gap marker for this execution.
+ */
+export function evidenceCapture(db: DatabaseSync, executionId: string, memoryGap = false): EvidenceCaptureView | null {
+  if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='adaptive_evidence_runs'").get())
+    return memoryGap ? classifyCapture(['collection_gap']) : null;
+  const run = db.prepare('SELECT snapshot FROM adaptive_evidence_runs WHERE execution_id=?').get(executionId) as RunRow | undefined;
+  if (!run) return memoryGap ? classifyCapture(['collection_gap']) : null;
+  const first = db.prepare('SELECT snapshot FROM adaptive_evidence_attempts WHERE execution_id=? ORDER BY rowid LIMIT 1').get(executionId);
+  return classifyCapture(captureReasons(JSON.parse(run.snapshot) as RunState,
+    first ? JSON.parse(String(first.snapshot)) as EvidenceAttempt : undefined, memoryGap));
 }
 
 /** Read-only export for the local Human/operator. Call inside a read transaction for a live database. */
@@ -159,27 +246,34 @@ export function exportAdaptiveEvidence(db: DatabaseSync, executionId: string) {
         targetWorkers: number(value.targetWorkers), appliedWorkers: number(value.appliedWorkers),
         changed: value.applied === true, hasWarning: typeof value.warning === 'string' && value.warning.length > 0 };
     }) : [];
-  const usageComplete = t.usageObservations === t.started;
+  const reasons = captureReasons(state, attempts[0]), gap = state.capture?.gap ?? null;
+  const capture = classifyCapture(reasons);
+  // Pruned detail keeps exact lifetime counters; every other reason means the counters are not full-run totals.
+  const aggregate = classifyCapture(reasons.filter(reason => reason !== 'history_truncated'));
+  const usageComplete = t.usageObservations === t.started && aggregate.capture === 'complete';
   return {
     schemaVersion: 1, evidenceClass: EVIDENCE_VERSION, contractVersion: 'adaptive-routing-v2', policyVersion: state.policyVersion,
     executionAlias: 'execution-1', models: state.models, modelsTruncated: state.modelsTruncated,
     requestedModels: state.requestedModels ?? null, requestedModelsTruncated: state.requestedModelsTruncated ?? null,
     coverage: { startedAt: state.firstRecordedAt, endedAt: state.lastRecordedAt, attemptsStarted: t.started,
       attemptsFinished: t.finished, pendingAttempts: t.started - t.finished, retainedAttempts: attempts.length,
-      prunedAttempts: t.prunedAttempts, historyComplete: t.prunedAttempts === 0 &&
+      prunedAttempts: t.prunedAttempts, historyComplete: capture.capture === 'complete' && t.prunedAttempts === 0 &&
         attempts[0]?.ordinal === 1 && attempts[0]?.phase === 'initial',
-      usageComplete, collection: 'since_recorder_installation', countsAre: 'classifier_attempts_not_verified_billable_calls' },
+      usageComplete, collection: 'since_recorder_installation', countsAre: 'classifier_attempts_not_verified_billable_calls',
+      capture: capture.capture, captureReasons: capture.reasons, aggregateCapture: aggregate.capture,
+      collectionGap: gap && { missedBegins: gap.missedBegins, missedFinishes: gap.missedFinishes, unattributed: gap.unattributed } },
     overhead: { successfulAttempts: t.ok, unavailableAttempts: t.unavailable,
       tokenObservations: t.usageObservations, unknownUsageAttempts: t.started - t.usageObservations,
       knownInputTokens: t.inputTokens, knownOutputTokens: t.outputTokens,
       totalInputTokens: usageComplete ? t.inputTokens : null, totalOutputTokens: usageComplete ? t.outputTokens : null,
-      summedLatencyMs: t.latencyObservations === t.started ? t.latencyMs : null,
+      summedLatencyMs: t.latencyObservations === t.started && aggregate.capture === 'complete' ? t.latencyMs : null,
       knownLatencyMs: t.latencyMs, latencyObservations: t.latencyObservations, monetaryCost: null },
     attempts, policyEvents, policyEventCoverage: 'retained_tail_only',
     limitations: ['No prompt, API key, project/worker name, raw provider response or stable execution identifier is exported.',
       'Classification attempts include capacity retries and responses later discarded as stale; they are not applied-transition counts.',
       'Summed classifier latency is overhead, not elapsed execution wall time. Do not add it to end-to-end wall time.',
       'No historical backfill, provider billing reconciliation, quality assessment or counterfactual savings is inferred.',
+      'Capture state reflects persisted gap markers only; a process crash while the store was unwritable can leave a gap unrecorded.',
       'requestedModels is what Hivemind asked for; models is what the provider reported. Even a pinned identifier is not assumed immutable.'],
   };
 }

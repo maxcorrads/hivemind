@@ -13,7 +13,8 @@ const config = {
 };
 function evidence() { return { schemaVersion: 1, evidenceClass: 'adaptive-evidence-v1', contractVersion: 'adaptive-routing-v2', policyVersion: 'topology-policy-v2.1',
   models: ['jev-fixture-v1'], modelsTruncated: false, attempts: [{ ordinal: 1, phase: 'initial', status: 'ok' }],
-  coverage: { attemptsStarted: 1, attemptsFinished: 1, pendingAttempts: 0, retainedAttempts: 1, prunedAttempts: 0, historyComplete: true, usageComplete: true },
+  coverage: { attemptsStarted: 1, attemptsFinished: 1, pendingAttempts: 0, retainedAttempts: 1, prunedAttempts: 0, historyComplete: true, usageComplete: true,
+    capture: 'complete', captureReasons: [], aggregateCapture: 'complete', collectionGap: null },
   overhead: { successfulAttempts: 1, unavailableAttempts: 0, tokenObservations: 1, unknownUsageAttempts: 0, knownInputTokens: 10, knownOutputTokens: 5,
     totalInputTokens: 10, totalOutputTokens: 5, latencyObservations: 1, knownLatencyMs: 50, summedLatencyMs: 50 } }; }
 function completed(studyConfig = config, routerEvidenceForTrial = evidence) {
@@ -179,7 +180,8 @@ test('CLI validates and summarizes the full supported cohort with retained expor
   const retained = { ...evidence(), executionAlias: 'execution-1', models: [model],
     coverage: { startedAt: 1900000000000, endedAt: 1900000000500, attemptsStarted: attempts, attemptsFinished: attempts,
       pendingAttempts: 0, retainedAttempts: attempts, prunedAttempts: 0, historyComplete: true, usageComplete: true,
-      collection: 'since_recorder_installation', countsAre: 'classifier_attempts_not_verified_billable_calls' },
+      collection: 'since_recorder_installation', countsAre: 'classifier_attempts_not_verified_billable_calls',
+      capture: 'complete', captureReasons: [], aggregateCapture: 'complete', collectionGap: null },
     overhead: { successfulAttempts: attempts, unavailableAttempts: 0, tokenObservations: attempts, unknownUsageAttempts: 0,
       knownInputTokens: 5000, knownOutputTokens: 2500, totalInputTokens: 5000, totalOutputTokens: 2500,
       latencyObservations: attempts, knownLatencyMs: 25000, summedLatencyMs: 25000, monetaryCost: null },
@@ -252,12 +254,17 @@ test('missing resolved model or pruned capture suppresses net usage comparison',
   const unknown = completed(); auto(unknown).observed.routerEvidence.models = [];
   for (const c of summarizeStudy(unknown).comparison) assert.equal(c.deltaNetTokens.observations, 1);
   const pruned = completed(), e = auto(pruned).observed.routerEvidence;
-  Object.assign(e.coverage, { retainedAttempts: 0, prunedAttempts: 1, historyComplete: false }); e.attempts = [];
+  Object.assign(e.coverage, { retainedAttempts: 0, prunedAttempts: 1, historyComplete: false,
+    capture: 'incomplete', captureReasons: ['history_truncated'] }); e.attempts = [];
   for (const c of summarizeStudy(pruned).comparison) assert.equal(c.deltaNetTokens.observations, 1);
 });
 
 test('acknowledged incomplete history needs no pruning to suppress net usage', () => {
   const study = completed(), e = auto(study).observed.routerEvidence;
+  // Exports made before capture state existed: validated as before, never eligible for net comparisons.
+  for (const k of ['capture', 'captureReasons', 'aggregateCapture', 'collectionGap']) delete e.coverage[k];
+  for (const comparison of summarizeStudy(study).comparison) assert.equal(comparison.deltaNetTokens.observations, 1);
+  assert.equal(summarizeStudy(study).routerCapture.unknown, 1);
   e.coverage.historyComplete = false;
   for (const comparison of summarizeStudy(study).comparison) assert.equal(comparison.deltaNetTokens.observations, 1);
   e.attempts[0].phase = 'continuous';
@@ -266,4 +273,48 @@ test('acknowledged incomplete history needs no pruning to suppress net usage', (
   assert.throws(() => summarizeStudy(study));
   Object.assign(e.coverage, { retainedAttempts: 0, prunedAttempts: 1, historyComplete: true }); e.attempts = [];
   assert.throws(() => summarizeStudy(study), /Pruned evidence/);
+});
+
+function gapEvidence() {
+  const e = evidence();
+  Object.assign(e.coverage, { capture: 'incomplete', captureReasons: ['collection_gap'], aggregateCapture: 'incomplete',
+    collectionGap: { missedBegins: 1, missedFinishes: 0, unattributed: 0 }, historyComplete: false, usageComplete: false });
+  Object.assign(e.overhead, { totalInputTokens: null, totalOutputTokens: null, summedLatencyMs: null });
+  return e;
+}
+
+test('the scorer consumes exported capture state instead of trusting a healthy flag or provider status', () => {
+  const gap = completed(config, gapEvidence);
+  for (const trial of gap.trials) assert.equal(trial.observed.instrumentationHealthy, true);
+  const summary = summarizeStudy(gap);
+  assert.deepEqual(summary.routerCapture, { complete: 0, incomplete: 2, unknown: 0, missing: 0 });
+  for (const c of summary.comparison) {
+    assert.equal(c.deltaNetTokens.observations, 0, 'Retained usage across a known gap is never a full-run total');
+    assert.equal(c.deltaWallMs.observations, 2, 'Wall time is measured outside the collector');
+  }
+  const complete = summarizeStudy(completed());
+  assert.deepEqual(complete.routerCapture, { complete: 2, incomplete: 0, unknown: 0, missing: 0 });
+});
+
+test('inconsistent capture state is rejected instead of promoted', () => {
+  const cases = [
+    e => { e.coverage.capture = 'complete'; },
+    e => { e.coverage.captureReasons = ['invented']; },
+    e => { e.overhead.totalInputTokens = e.overhead.knownInputTokens; e.overhead.totalOutputTokens = e.overhead.knownOutputTokens; e.coverage.usageComplete = true; },
+    e => { e.coverage.collectionGap = null; e.coverage.captureReasons = []; },
+    e => { e.coverage.historyComplete = true; },
+    e => { e.coverage.aggregateCapture = 'complete'; },
+    e => { e.coverage.collectionGap.missedBegins = -1; },
+  ];
+  for (const mutate of cases) {
+    const study = completed(config, () => { const e = gapEvidence(); mutate(e); return e; });
+    assert.throws(() => validateStudy(study), mutate.toString());
+  }
+  const gapOnly = completed(config, () => {
+    const e = gapEvidence(); e.attempts = [];
+    Object.assign(e.coverage, { attemptsStarted: 0, attemptsFinished: 0, retainedAttempts: 0 });
+    Object.assign(e.overhead, { successfulAttempts: 0, tokenObservations: 0, knownInputTokens: 0, knownOutputTokens: 0, latencyObservations: 0, knownLatencyMs: 0 });
+    return e;
+  });
+  assert.equal(validateStudy(gapOnly).completed, gapOnly.trials.length, 'Gap-only evidence is a valid, incomplete observation');
 });

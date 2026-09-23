@@ -1,4 +1,5 @@
 import type { JevCall, JevCallLogView } from '../src/shared/jev-calls.ts';
+import type { EvidenceCollectorHealth } from '../src/shared/evidence-health.ts';
 import type { RoutingRequest, RoutingSuggestions } from '../src/shared/routing.ts';
 import type { TelegramHealth } from "./telegram-health.ts";
 import type { Agent, BotCredentialView, AttachmentMeta, Channel, Message, Project, SearchHit, Thread, ThreadStatus, InboxStatus } from "../src/shared/types.ts";
@@ -121,6 +122,7 @@ export const api = {
   /** `cursor` is the previous page's opaque `nextCursor`; omit it for the newest page. */
   jevCalls: (project: string, cursor?: string | null, signal?: AbortSignal) =>
     req<JevCallLogView>(`/api/ui/projects/${encodeURIComponent(project)}/jev-calls${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`, { signal }),
+  evidenceHealth: (signal?: AbortSignal) => req<EvidenceCollectorHealth>('/api/ui/adaptive-routing/evidence-health', { signal }),
   jevCall: (project: string, id: string, signal?: AbortSignal) =>
     req<{ call: JevCall }>(`/api/ui/projects/${encodeURIComponent(project)}/jev-calls/${encodeURIComponent(id)}`, { signal }),
   answerDecision: (id: string, body: { requestId: string; expectedRevision: number; body: string }, signal?: AbortSignal) =>

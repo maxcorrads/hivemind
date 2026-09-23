@@ -63,7 +63,7 @@ Required observation fields:
 | `routingOverrides` | Must be zero: unplanned Human mode changes require a different condition. |
 | `outcome` | `passed`, `quality_failed`, `harness_failed`, or `interrupted`. |
 | `independentlyReviewed` | Boolean; quality outcomes require review before summary. |
-| `instrumentationHealthy` | Boolean; false for collector/usage failures or unverified completeness. |
+| `instrumentationHealthy` | Boolean reviewer veto; false for workload/usage failures or unverified completeness. It can only exclude a trial: router completeness comes from the export's `coverage.capture`, never from this flag or a green Jev status. |
 | `wallMs` | Measured end-to-end elapsed time, or null when unavailable. Required for quality outcomes. |
 | `workloadTokens` | Provider-reported total across workload sessions, excluding Jev tokens, or null. |
 | `workloadUsageSource` | `provider_reported` only when the token total is known; otherwise `unknown`. |
@@ -97,8 +97,9 @@ The summary reports `auto_minus_fixed` for each matched workload/repeat, then de
 ### No inflated savings
 
 - Net tokens are `workloadTokens + Jev inputTokens + Jev outputTokens` for Auto; fixed router usage is zero only under the explicit Jev-off condition.
-- Complete net comparisons require healthy instrumentation, known workload and router usage, exactly one known resolved Jev model, and an unpruned capture beginning at the initial attempt. Missing, truncated or mid-execution evidence suppresses the net delta instead of becoming zero cost.
-- An export may acknowledge incomplete history even when no retained attempt was pruned, for example after its capture was recreated. Such exports remain valid observations but cannot establish complete net usage. Legacy exports claiming complete history are still checked for an initial first attempt before entering net comparisons.
+- Complete net comparisons require healthy instrumentation, known workload and router usage, exactly one known resolved Jev model, and a router export whose `coverage.capture` is `complete` (unpruned, beginning at the initial attempt, no collection gap, no unexplained pending attempt). Missing, truncated, gapped, mid-execution or unknown evidence suppresses the net delta instead of becoming zero cost.
+- The scorer checks that `capture`, `captureReasons`, `aggregateCapture`, `collectionGap`, `historyComplete` and the nullable totals agree, and rejects an export that promotes retained usage to a total across a known gap. The summary's `routerCapture` counts Auto trials by capture state (`complete`, `incomplete`, `unknown`, `missing`).
+- An export may acknowledge incomplete history even when no retained attempt was pruned, for example after its capture was recreated. Such exports remain valid observations but cannot establish complete net usage. Exports made before capture state existed (#135) still validate, but count as `unknown` and never enter net comparisons.
 - Distinct resolved Jev model versions cannot be pooled, and neither can distinct requested identifiers. `validate` reports `requestedModels` and `resolvedModels` separately. Preserve and split those cohorts; a mutable alias alone is not a reproducibility guarantee, and a pinned identifier is not assumed immutable either: drift in the resolved model still splits the cohort.
 - End-to-end `wallMs` already includes classifier waits. Summed classifier latency is **not added again**.
 - Efficiency deltas include only jointly acceptance-passing, independently reviewed pairs. Independent defect deltas remain visible alongside them; a faster result with more review defects is not automatically better.
