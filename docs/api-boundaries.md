@@ -8,7 +8,13 @@ history cursor; page limits must be positive safe integers and retain the existi
 server clamp to 200. Optional null values retained for native join compatibility
 mean absence, not an invalid enum value. MCP arguments remain explicit optionals.
 
-Ordinary JSON is measured while streaming (128 KiB, 10 seconds, 32 simultaneous
+Message bodies are at most 20,000 UTF-16 units (`BODY_MAX`) for every sender:
+Human UI, Telegram, agents via MCP/HTTP/CLI and bots. One more unit is rejected
+with 400 `Invalid request field: body` (or `Message too long (n > 20000)` from the
+service layer). A JSON-escaped body costs at most 6 bytes per unit (120,000 bytes),
+so the JSON caps below keep headroom for the other request fields.
+
+Ordinary JSON is measured while streaming (256 KiB, 10 seconds, 32 simultaneous
 body readers), rather than trusting Content-Length. Bot/plugin/credential routes
 retain their own narrower byte budgets. Missing bodies are accepted only for
 explicit empty actions/mark-all-seen; malformed/null bodies are not replaced by

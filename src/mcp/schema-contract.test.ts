@@ -11,6 +11,7 @@ import { Hive } from "../server/hive.ts";
 import { startServer } from "../server/serve.ts";
 import { countTables } from "../server/test-fixtures.ts";
 import { childEnv } from "../test-support/child-process.ts";
+import { BODY_MAX } from "../shared/types.ts";
 
 function textResult(result: CallToolResult): Record<string, unknown> {
   assert.notEqual(result.isError, true, JSON.stringify(result));
@@ -180,7 +181,7 @@ test("production MCP schemas and calls retain their observable contracts", { tim
     ["join", { role: "brain", resume: 3 }], ["join", { role: "brain", project: false }],
     ["search", { q: "x", limit: 0 }], ["history", { channel: "general", since: -1 }],
     ["history", { channel: "general", limit: 1.5 }], ["history", { channel: "general", before: 9007199254740992 }],
-    ["send", { to: "Nobody", body: "x".repeat(4001) }],
+    ["send", { to: "Nobody", body: "x".repeat(BODY_MAX + 1) }],
     ["send", { to: "Nobody", body: "x", attachmentIds: ["invalid"] }],
     ["channels", { unread: "true" }], ["channels", { unread: null }],
     ["search", {}], ["search", { q: "x", limit: "1" }], ["search", { q: "x", before: null }],

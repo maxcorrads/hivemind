@@ -14,6 +14,7 @@ import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { Hive } from "../server/hive.ts";
 import { createApp } from "../server/app.ts";
 import { countRows } from "../server/test-fixtures.ts";
+import { BODY_MAX } from "../shared/types.ts";
 import { childEnv } from "../test-support/child-process.ts";
 
 // Actual CLI process restart, upload, HTTP after-commit loss and stdio tool calls.
@@ -80,4 +81,14 @@ test("CLI and MCP preserve send keys and uploaded IDs across lost replies and pr
   const attached = { channel: dm.id, path: file, body: "MCP file", requestId: "mcp-attachment" };
   const af = await call("attach", attached), bf = await call("attach", attached);
   assert.equal(af.id, bf.id); assert.equal(uploads, 2); assert.equal(messages.length, 3);
+
+  // A BODY_MAX body (UTF-8 worst case) passes the MCP send schema end-to-end; one more unit does not.
+  const long = "界".repeat(BODY_MAX);
+  const accepted = await call("send", { channel: dm.id, body: long, requestId: "mcp-long" });
+  assert.equal(hive.messageQueries.getMessageById(accepted.id).body, long);
+  const over = await client.callTool({ name: "send", arguments: { channel: dm.id, body: "x".repeat(BODY_MAX + 1) } },
+    CallToolResultSchema, { timeout: 5000, signal: t.signal }).then(result => CallToolResultSchema.parse(result), (error: unknown) => error instanceof Error ? error : new Error(String(error)));
+  if (over instanceof Error) assert.match(over.message, /body/);
+  else assert.equal(over.isError, true, JSON.stringify(over));
+  assert.equal(messages.length, 4);
 });

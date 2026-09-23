@@ -9,7 +9,7 @@ import { createApp } from "./app.ts";
 import { botMessageSchema } from "../shared/bot-message.ts";
 import { buildLaunchPrompt } from "../shared/launch-prompt.ts";
 import { standingOrders } from "../shared/standing-orders.ts";
-import type { Agent, AttachmentMeta, Message } from "../shared/types.ts";
+import { BODY_MAX, type Agent, type AttachmentMeta, type Message } from "../shared/types.ts";
 
 function setup(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-bots-"));
@@ -337,7 +337,7 @@ test("bot payload validation rejects forged authority and invalid metadata", () 
   const base = { eventId: "1", body: "observation" };
   for (const extra of [
     { authorRole: "human" }, { kind: "control" }, { mentions: ["human"] }, { source: "hive" },
-    { authorId: "human" }, { control: "clear_context" }, { eventId: "" }, { body: "a".repeat(4001) },
+    { authorId: "human" }, { control: "clear_context" }, { eventId: "" }, { body: "a".repeat(BODY_MAX + 1) },
     { origin: { url: "javascript:alert(1)" } }, { origin: { url: "https://user:password@example.invalid/" } },
     { origin: { occurredAt: 9_000_000_000_000_000 } }, { origin: { anything: "unexpected" } },
     { attachmentIds: ["1", "2", "3", "4", "5"] }, { attachmentIds: ["1", "1"] },

@@ -1,6 +1,7 @@
 import { HiveError } from "../shared/types.ts";
 
-export const BOT_JSON_BYTES = 64 * 1024;
+/** Fits a worst-case JSON-escaped BODY_MAX bot body (6 bytes per unit) plus event metadata. */
+export const BOT_JSON_BYTES = 256 * 1024;
 export const PLUGIN_REQUEST_BYTES = 128 * 1024;
 export const CREDENTIAL_JSON_BYTES = 4 * 1024;
 

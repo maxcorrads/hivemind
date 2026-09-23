@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, beforeEach, test, type TestContext } from "node:test";
 import { arg, argRest, isCliEntrypoint, mcpLauncher, runCli } from "./cli.ts";
+import { BODY_MAX } from "./shared/types.ts";
 
 // Every command runs in-process against a mocked fetch; HIVEMIND_HOME is a
 // throwaway directory so send journals and gc never touch a real hive.
@@ -339,6 +340,15 @@ test("send validates its flags before contacting the hive", async (t) => {
   await assert.rejects(runCli(["send", "--channel", "general", "--body", "x", "--thread", "not-a-uuid"]));
   await assert.rejects(runCli(["send", "--channel", "general", "--file", path.join(home, "blob.bin")]), /unsupported file type/);
   assert.equal(calls.length, 0);
+});
+
+test("send accepts a BODY_MAX body and rejects one more unit before contacting the hive", async (t) => {
+  const { calls } = harness(t, sent);
+  const body = "s".repeat(BODY_MAX);
+  await runCli(["send", "--channel", "general", "--body", body, "--request-id", "long-1"]);
+  assert.equal((calls[0]!.body as { body: string }).body, body);
+  await assert.rejects(runCli(["send", "--channel", "general", "--body", body + "s"]), /Invalid request field: body/);
+  assert.equal(calls.length, 1);
 });
 
 test("send reports a failed post with its retry key", async (t) => {

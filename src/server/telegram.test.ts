@@ -15,7 +15,9 @@ import {
   publicTelegramView,
   writeTelegramFile,
   removeTelegramProjectSlug,
-  formatOutbound,
+  formatOutboundParts,
+  outboundPartKey,
+  TELEGRAM_TEXT_MAX,
   inboundBody,
   inboundPostBody,
   isTelegramPermanentOutError,
@@ -34,7 +36,7 @@ import {
   recordTelegramFailure,
   telegramPartDelivered,
 } from "./telegram.ts";
-import type { Channel, Message } from "../shared/types.ts";
+import { BODY_MAX, type Channel, type Message } from "../shared/types.ts";
 
 function msg(over: Partial<Message> = {}): Message {
   return {
@@ -216,16 +218,42 @@ test("telegram config maps each group chat to a project and ignores unknown chat
 });
 
 test("telegram text format stays under Telegram and hive caps", () => {
-  assert.equal(formatOutbound(msg({ body: "go" })), "Solace\ngo");
-  const long = inboundBody("Sara", "x".repeat(5000));
-  assert.ok(long.startsWith("[Sara] "));
-  assert.ok(long.length <= 4000);
+  assert.deepEqual(formatOutboundParts(msg({ body: "go" })), ["Solace\ngo"]);
+  // Telegram inbound text is at most 4,096 characters, so the prefixed body is never clipped now.
+  const long = inboundBody("Sara", "x".repeat(4096));
+  assert.equal(long, `[Sara] ${"x".repeat(4096)}`);
+  assert.ok(inboundBody("Sara", "x".repeat(BODY_MAX * 2)).length <= BODY_MAX);
   assert.equal(inboundBody("Sara", ""), "[Sara]");
   assert.equal(inboundPostBody("Sara", "", true), "");
   assert.equal(inboundPostBody("Sara", "go", true), "[Sara] go");
   assert.equal(inboundPostBody("Sara", "", false), "[Sara]");
 });
 
+
+test("telegram outbound splits a maximum-length body into ordered parts under the Telegram cap", () => {
+  const exact = `Solace\n${"y".repeat(TELEGRAM_TEXT_MAX - "Solace\n".length)}`;
+  assert.deepEqual(formatOutboundParts(msg({ body: exact.slice("Solace\n".length) })), [exact]);
+  const bodies = [
+    Array.from({ length: BODY_MAX / 10 }, (_, i) => `${String(i).padStart(8, "0")} \n`).join(""), // word/line boundaries
+    "z".repeat(BODY_MAX), // no boundary at all
+    "😀".repeat(BODY_MAX / 2), // a cut must never split a surrogate pair
+  ];
+  for (const body of bodies) {
+    assert.equal(body.length, BODY_MAX);
+    const parts = formatOutboundParts(msg({ body }));
+    assert.ok(parts.length > 1 && parts.length <= 6);
+    const rebuilt = parts.map((part, i) => {
+      assert.ok(part.length <= TELEGRAM_TEXT_MAX, `part ${i + 1} has ${part.length} units`);
+      const header = `Solace (${i + 1}/${parts.length})\n`;
+      assert.ok(part.startsWith(header));
+      const chunk = part.slice(header.length);
+      assert.ok(!/^[\uDC00-\uDFFF]/.test(chunk) && !/[\uD800-\uDBFF]$/.test(chunk));
+      return chunk;
+    }).join("");
+    assert.equal(rebuilt, body, "parts reassemble the body losslessly and in order");
+  }
+  assert.deepEqual([0, 1, 4].map(outboundPartKey), ["text", "text:2", "text:5"]);
+});
 
 test("telegram queue overflow dead-letters reactions before messages", () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-tg-dead-"));

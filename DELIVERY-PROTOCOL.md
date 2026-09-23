@@ -56,10 +56,17 @@ checks; at most the message cap plus three candidates are hydrated. Wait does no
 load file contents or reaction rosters. The original remains available through history.
 Body reads are byte-bounded and preserve embedded NUL characters. Any clipped UTF-8
 tail or surrogate pair is omitted only with an explicit recovery reference.
-Control bodies exceeding 4,000 UTF-16 units and individual items exceeding the budget
+Control bodies exceeding 20,000 UTF-16 units and individual items exceeding the budget
 carry explicit `recovery` arguments for the existing MCP `history` tool. Use those
 arguments to fetch the original item before relying on its full content. This fallback
 is distinct from expanding a compact digest (below).
+
+The 64 KiB page budget is deliberately unchanged by the 20,000-unit body limit.
+An ordinary maximum-length body, even in the 3-byte UTF-8 worst case, fits a page
+on its own and is delivered in full; long bodies simply leave room for fewer other
+items, which follow in the next page. A body whose JSON escaping alone exceeds the
+page (for example one made mostly of control characters) arrives as a recovery
+stub. Progress digests still carry only an 80-character excerpt.
 
 Compact mail, including digests, always carries the canonical `channelId`. Pass it
 as `channel` to `send` or `history`. `ch` is display-only: names longer than 200
