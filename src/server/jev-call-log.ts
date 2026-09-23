@@ -17,13 +17,6 @@ export type JevCallContext = {
   phase: JevCallSummary['phase']; trigger: JevCallTrigger;
 };
 
-const stores = new WeakMap<DatabaseSync, JevCallLog>();
-export function jevCallLog(db: DatabaseSync): JevCallLog {
-  let store = stores.get(db);
-  if (!store) { store = new JevCallLog(db); stores.set(db, store); }
-  return store;
-}
-
 function requestOf(sent: unknown): string {
   const text = (sent as { state?: { request?: unknown } } | null)?.state?.request;
   return typeof text === 'string' ? text.slice(0, REQUEST_EXCERPT) : '';

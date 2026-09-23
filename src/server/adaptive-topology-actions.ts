@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { Hive, parseMentions } from './hive.ts';
+import type { Hive } from './hive.ts';
+import { parseMentions } from '../shared/mentions.ts';
 import { HiveError, type Agent, type ThreadStatus } from '../shared/types.ts';
 import { validated, sendInputSchema } from '../shared/api-contract.ts';
 import { assignTaskSchema, taskEventSchema } from '../shared/tasks.ts';
