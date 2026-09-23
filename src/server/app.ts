@@ -12,7 +12,7 @@ import { telegramDestinationForSeq, loadTelegramConfig, telegramConfigKey, publi
 import { parseProjectSlug } from "../shared/project.ts";
 import { launchContext, projectPlugins, saveProjectPlugin, setProjectPluginAvailability, pluginErrorMessage } from "./plugins.ts";
 import { BotIngressBudget, readLimitedJson, assertLocalHumanRequest, BOT_JSON_BYTES, PLUGIN_REQUEST_BYTES, CREDENTIAL_JSON_BYTES } from "./ingress.ts";
-import { adaptiveRoutingPublic, saveAdaptiveRouting } from "./adaptive-routing.ts";
+import { adaptiveRoutingPublic, saveAdaptiveRouting } from "./adaptive-config.ts";
 import { jevCallLog } from "./jev-call-log.ts";
 import { decodeJevCallCursor } from "../shared/jev-calls.ts";
 import { installJevDiagnostics } from './adaptive-routing-diagnostics.ts';

@@ -6,23 +6,9 @@ import { test } from "node:test";
 import { createApp } from "./app.ts";
 import { Hive } from "./hive.ts";
 import { jevTopologyResponse } from "./fixtures/jev-topology.ts";
-import {
-  adaptiveDirective, adaptiveRoutingPublic, appendAdaptiveTelemetry,
-  decideAdaptiveStrategy, evaluateAdaptiveRequest, loadAdaptiveRouting,
-  saveAdaptiveRouting,
-} from "./adaptive-routing.ts";
+import { adaptiveRoutingPublic, loadAdaptiveRouting, saveAdaptiveRouting } from "./adaptive-config.ts";
 import type { Message } from "../shared/types.ts";
 import type { AdaptiveTopologyDecision, AdaptiveExecutionState } from "../shared/adaptive-topology.ts";
-
-function score(value: number, confidence = 0.9) {
-  return { type: "score" as const, score: value, confidence, probabilities: { 0: 0.1, 1: 0.8, 2: 0.1 } };
-}
-const singleSignals = {
-  single_agent_sufficiency: { type: "choice" as const, choice: "sufficient" as const,
-    confidence: 0.95, probabilities: { sufficient: 0.95, insufficient: 0.05 } },
-  complexity: score(0.4), parallelizability: score(0.4), coupling: score(0.4),
-  specialization_need: score(0.3), coordination_need: score(0.3),
-};
 
 test("adaptive routing settings keep the TypeSafe key private and support enable/disable", () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-active-routing-"));
@@ -47,56 +33,6 @@ test("adaptive routing settings keep the TypeSafe key private and support enable
     assert.equal(saveAdaptiveRouting(dir, { topologyFallback: "brain_multi_room" }).topologyFallback, "brain_multi_room");
     assert.throws(() => saveAdaptiveRouting(dir, { topologyFallback: "unknown" }), /topology fallback/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
-});
-
-test("v1 benchmark strategy selects direct work only for high-confidence simple requests", () => {
-  const direct = decideAdaptiveStrategy(singleSignals);
-  assert.equal(direct.strategy, "single");
-  assert.equal(direct.fallbackUsed, false);
-  const orchestrated = decideAdaptiveStrategy({ ...singleSignals, coordination_need: score(1.8),
-    single_agent_sufficiency: { type: "choice", choice: "insufficient", confidence: 0.95,
-      probabilities: { sufficient: 0.05, insufficient: 0.95 } } });
-  assert.equal(orchestrated.strategy, "orchestrated");
-  const uncertain = decideAdaptiveStrategy({ ...singleSignals, complexity: score(0.4, 0.2) });
-  assert.equal(uncertain.strategy, "orchestrated");
-  assert.equal(uncertain.reason, "low_confidence_fallback");
-  const cheaper = decideAdaptiveStrategy({ ...singleSignals, complexity: score(0.4, 0.2) }, "single");
-  assert.equal(cheaper.strategy, "single");
-  assert.equal(cheaper.fallbackUsed, true);
-});
-
-test("v1 evaluator preserves its System One contract and measured usage", async () => {
-  const captured: Array<{ model?: string; questions?: Record<string, unknown>; state?: { project?: unknown } }> = [];
-  const decision = await evaluateAdaptiveRequest("Fix the typo in one local label.", { apiKey: "fixture-key" }, {
-    project: { slug: "chapter", name: "Chapter" },
-    fetchImpl: async (_url, init) => {
-      captured.push(JSON.parse(String(init?.body)));
-      return Response.json({ model: "jev-fixture-v1", answers: singleSignals, usage: { input_tokens: 42, output_tokens: 12 } });
-    },
-  });
-  const outbound = captured[0]!;
-  assert.equal(outbound.model, "jev-latest");
-  assert.equal(Object.keys(outbound.questions ?? {}).length, 6);
-  assert.deepEqual(outbound.state?.project, { slug: "chapter", name: "Chapter" });
-  assert.equal(decision.strategy, "single");
-  assert.equal(decision.model, "jev-fixture-v1");
-  assert.equal(decision.inputTokens, 42);
-  assert.equal(decision.outputTokens, 12);
-  assert.match(adaptiveDirective(decision), /SINGLE/);
-  assert.match(adaptiveDirective(decision), /Do not delegate/);
-});
-
-test("v1 evaluator retains configurable failure fallback", async () => {
-  const failed = async () => { throw new Error("offline"); };
-  const decision = await evaluateAdaptiveRequest("Implement a feature.", { apiKey: "fixture-key" }, { fetchImpl: failed });
-  assert.equal(decision.strategy, "orchestrated");
-  assert.equal(decision.fallbackUsed, true);
-  assert.equal(decision.providerStatus, "unavailable");
-  assert.match(adaptiveDirective(decision), /ORCHESTRATED/);
-  const single = await evaluateAdaptiveRequest("Implement a feature.", { apiKey: "fixture-key", fallback: "single" }, { fetchImpl: failed });
-  assert.equal(single.strategy, "single");
-  assert.equal(single.fallbackUsed, true);
-  assert.match(adaptiveDirective(single), /SINGLE/);
 });
 
 test("enabled topology routing changes real Human delivery while disabled Auto and send retries preserve legacy mail", async t => {
@@ -183,21 +119,11 @@ test("enabled topology routing changes real Human delivery while disabled Auto a
   assert.equal(calls, 2, "A committed reply retry must not reclassify");
 });
 
-test("public settings and private telemetry never expose the saved key or duplicate request text", () => {
+test("public settings never expose the saved key", () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-routing-public-"));
   try {
     saveAdaptiveRouting(dir, { enabled: true, apiKey: "ts_not_for_browser_9999" });
     assert.doesNotMatch(JSON.stringify(adaptiveRoutingPublic(dir)), /ts_not_for_browser/);
     assert.match(readFileSync(path.join(dir, "adaptive-routing.json"), "utf8"), /ts_not_for_browser/);
-    appendAdaptiveTelemetry(dir, { routeId: "route-fixture", strategy: "single", reason: "high_confidence_single_sufficient",
-      fallbackUsed: false, providerStatus: "ok", model: "jev-fixture", latencyMs: 12,
-      inputTokens: 20, outputTokens: 5, minimumConfidence: 0.9, signals: singleSignals,
-    }, "secret-ish request text", { id: "project-id", slug: "chapter" });
-    const file = path.join(dir, "adaptive-routing-decisions.jsonl");
-    const text = readFileSync(file, "utf8");
-    assert.equal(statSync(file).mode & 0o777, 0o600);
-    assert.doesNotMatch(text, /secret-ish request text|ts_not_for_browser/);
-    assert.match(text, /"requestHash":/);
-    assert.match(text, /"inputTokens":20/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
