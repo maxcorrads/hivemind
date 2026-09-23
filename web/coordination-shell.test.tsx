@@ -56,7 +56,7 @@ test('mounted Human App follows task review and contract history without offerin
   globalThis.WebSocket = BrowserSocket as unknown as typeof WebSocket;
   const host = document.createElement('div'); document.body.append(host);
   const root = createRoot(host);
-  const events = ['message', 'task', 'room', 'agent', 'queued', 'thread', 'channel'];
+  const events = ['message', 'task', 'room', 'agent', 'queued', 'thread', 'channel'] as const;
   const listeners = events.map(type => {
     const listener = (payload: unknown) => BrowserSocket.current?.event(type, payload);
     hive.bus.on(type, listener); return listener;

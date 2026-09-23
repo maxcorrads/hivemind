@@ -9,6 +9,7 @@ import { getRequestListener } from "@hono/node-server";
 import { DEFAULT_PORT } from "../shared/types.ts";
 import { createRealtimeStream } from "../shared/realtime-client.ts";
 import { Hive } from "./hive.ts";
+import type { HiveEvents } from "./hive-events.ts";
 import { createApp } from "./app.ts";
 import { startTelegram } from "./telegram.ts";
 import { LocalHumanAuth } from "./local-auth.ts";
@@ -18,6 +19,13 @@ import { heartbeatClients, sendRealtime } from "./websocket-policy.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(here, "../..");
+
+/** Hive events forwarded verbatim to every web UI socket; Telegram wake signals stay server-side. */
+const FORWARDED_EVENTS = [
+  "message", "agent", "channel", "thread", "reaction", "queued", "project", "telegram-health",
+  "task", "room", "decision", "adaptive-routing", "jev-call",
+] as const satisfies ReadonlyArray<keyof HiveEvents>;
+type ForwardedEvent = (typeof FORWARDED_EVENTS)[number];
 
 export function startServer(opts: { port?: number; hive?: Hive; telegram?: boolean; shutdownGraceMs?: number } = {}) {
   const port = integerArgument(String(opts.port ?? process.env.HIVEMIND_PORT ?? DEFAULT_PORT), 0, 65535);
@@ -73,37 +81,13 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
     ws.on("close", () => clients.delete(ws));
   });
 
-  const emit = (type: string, payload: unknown) => {
+  const emit = (type: ForwardedEvent, payload: unknown) => {
     const data = JSON.stringify(stream.event(type, payload));
     const bytes = Buffer.byteLength(data);
     for (const ws of clients) sendRealtime(ws, data, bytes);
   };
-  const onMessage = (payload: unknown) => emit("message", payload);
-  const onAgent = (payload: unknown) => emit("agent", payload);
-  const onChannel = (payload: unknown) => emit("channel", payload);
-  const onThread = (payload: unknown) => emit("thread", payload);
-  const onReaction = (payload: unknown) => emit("reaction", payload);
-  const onQueued = (payload: unknown) => emit("queued", payload);
-  const onTelegramHealth = (payload: unknown) => emit("telegram-health", payload);
-  const onProject = (payload: unknown) => emit("project", payload);
-  const onTask = (payload: unknown) => emit('task', payload);
-  const onRoom = (payload: unknown) => emit('room', payload);
-  const onDecision = (payload: unknown) => emit('decision', payload);
-  const onAdaptiveRouting = (payload: unknown) => emit('adaptive-routing', payload);
-  const onJevCall = (payload: unknown) => emit('jev-call', payload);
-  hive.bus.on("message", onMessage);
-  hive.bus.on("agent", onAgent);
-  hive.bus.on("channel", onChannel);
-  hive.bus.on("thread", onThread);
-  hive.bus.on("reaction", onReaction);
-  hive.bus.on("queued", onQueued);
-  hive.bus.on("project", onProject);
-  hive.bus.on("telegram-health", onTelegramHealth);
-  hive.bus.on('task', onTask);
-  hive.bus.on('room', onRoom);
-  hive.bus.on('decision', onDecision);
-  hive.bus.on('adaptive-routing', onAdaptiveRouting);
-  hive.bus.on('jev-call', onJevCall);
+  const forwarders = FORWARDED_EVENTS.map(type => [type, (payload: unknown) => emit(type, payload)] as const);
+  for (const [type, forward] of forwarders) hive.bus.on(type, forward);
 
   server.requestTimeout = REQUEST_BODY_MS;
   server.headersTimeout = REQUEST_HEADER_MS;
@@ -137,19 +121,7 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
     const httpClosed = server.listening ? closeHttp() : ready.then(closeHttp, () => undefined);
     clearInterval(sweep);
     clearInterval(heartbeat);
-    hive.bus.off("message", onMessage);
-    hive.bus.off("agent", onAgent);
-    hive.bus.off("channel", onChannel);
-    hive.bus.off("thread", onThread);
-    hive.bus.off("reaction", onReaction);
-    hive.bus.off("queued", onQueued);
-    hive.bus.off("project", onProject);
-    hive.bus.off('task', onTask);
-    hive.bus.off('room', onRoom);
-    hive.bus.off('decision', onDecision);
-    hive.bus.off('adaptive-routing', onAdaptiveRouting);
-    hive.bus.off('jev-call', onJevCall);
-    hive.bus.off("telegram-health", onTelegramHealth);
+    for (const [type, forward] of forwarders) hive.bus.off(type, forward);
     hive.cancelWaits();
     for (const ws of clients) ws.close(1001, "server shutdown");
     const wsClosed = new Promise<void>(resolve => wss.close(() => resolve()));

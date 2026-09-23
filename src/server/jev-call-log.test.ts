@@ -7,7 +7,7 @@ import { Hive } from './hive.ts';
 import { createApp } from './app.ts';
 import { saveAdaptiveRouting } from './adaptive-config.ts';
 import { jevTopologyResponse } from './fixtures/jev-topology.ts';
-import { GROUPS_PER_PAGE, JEV_CALLS_PER_PROJECT, jevCallLog } from './jev-call-log.ts';
+import { GROUPS_PER_PAGE, JEV_CALLS_PER_PROJECT } from './jev-call-log.ts';
 import type { JevCall, JevCallLogView } from '../shared/jev-calls.ts';
 
 function fixture(t: TestContext) {
@@ -83,14 +83,14 @@ test('observations are logged without a brain and the history is bounded per pro
   const group = f.hive.createChannel(f.human, { name: 'council', type: 'private', project: 'chapter',
     memberNames: f.brains.map(brain => brain.agent.name) });
   await f.hive.adaptiveTopology.routeHumanRequest(f.human, { channel: group.id, body: 'Who takes this?', requestId: 'who' }, 'auto', 'none');
-  const view = jevCallLog(f.hive.db).view(group.projectId);
+  const view = f.hive.adaptiveTopology.observations.jevCalls.view(group.projectId);
   const call = view.requests[0]!.calls[0]!;
   assert.equal(call.phase, 'observation');
   assert.equal(call.brainId, null);
   assert.equal(call.outcome?.kind, 'observation');
   assert.equal(call.outcome?.applied, false);
 
-  const log = jevCallLog(f.hive.db), decision = { ...call, providerStatus: 'ok' as const, contractVersion: 'adaptive-routing-v2' as const,
+  const log = f.hive.adaptiveTopology.observations.jevCalls, decision = { ...call, providerStatus: 'ok' as const, contractVersion: 'adaptive-routing-v2' as const,
     singleSufficient: true, needsOrchestration: false };
   for (let i = 0; i < JEV_CALLS_PER_PROJECT + 5; i++)
     log.record({ executionId: `bulk-${i % 7}`, channelId: group.id, projectId: group.projectId, brainId: null, phase: 'observation',
@@ -106,7 +106,7 @@ test('observations are logged without a brain and the history is bounded per pro
 test('pagination returns every request exactly once when groups share the page-boundary millisecond', async t => {
   const f = fixture(t);
   await f.hive.adaptiveTopology.stop();
-  const log = jevCallLog(f.hive.db);
+  const log = f.hive.adaptiveTopology.observations.jevCalls;
   const decision = { routeId: '', providerStatus: 'ok' as const, contractVersion: 'adaptive-routing-v2' as const, targetTopology: 'single' as const,
     targetWorkers: 0, confidence: 0.9, reason: 'single_sufficient', model: 'jev-latest', latencyMs: 1, inputTokens: null, outputTokens: null,
     singleSufficient: true, needsOrchestration: false } as unknown as Parameters<typeof log.record>[2];
