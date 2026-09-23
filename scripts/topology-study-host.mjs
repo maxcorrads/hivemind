@@ -15,6 +15,7 @@ import { Storage } from '../src/server/storage.ts';
 import { TOPOLOGY_POLICY_VERSION } from '../src/shared/adaptive-topology-policy.ts';
 import { validJevModel } from '../src/shared/jev-model.ts';
 import { hostInvocation } from './run-coordination-pilot-codex.mjs';
+import { createWatcher, watchEnabled } from './topology-study-watch.mjs';
 
 export const JEV_KEY_ENV = 'HIVEMIND_STUDY_TYPESAFE_KEY';
 const COLLECTOR_WARNINGS = ['Adaptive evidence recording unavailable', 'Adaptive evidence outcome unavailable'];
@@ -111,20 +112,24 @@ export function liveUsage() {
   };
 }
 
-function startSeat({ command, args, stdin, env, cwd, attemptDir, name }) {
-  const out = createWriteStream(path.join(attemptDir, `${name}.stdout.log`), { flags: 'wx', mode: 0o600 });
-  const err = createWriteStream(path.join(attemptDir, `${name}.stderr.log`), { flags: 'wx', mode: 0o600 });
+function startSeat({ command, args, stdin, env, cwd, attemptDir, name, logName = name }) {
+  const out = createWriteStream(path.join(attemptDir, `${logName}.stdout.log`), { flags: 'wx', mode: 0o600 });
+  const err = createWriteStream(path.join(attemptDir, `${logName}.stderr.log`), { flags: 'wx', mode: 0o600 });
   const child = spawn(command[0], [...command.slice(1), ...args], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
   const usage = liveUsage();
-  let spawnError = null;
+  let spawnError = null, stderrTail = '';
   child.stdout.on('data', chunk => { out.write(chunk); usage.push(chunk); });
-  child.stderr.on('data', chunk => err.write(chunk));
+  child.stderr.on('data', chunk => { err.write(chunk); stderrTail = (stderrTail + chunk.toString('utf8')).slice(-8_192); });
   child.stdin.on('error', () => undefined);
   child.stdin.end(stdin ?? undefined);
   child.on('error', error => { spawnError = error; });
   const closed = new Promise(resolve => child.on('close', () => { out.end(); err.end(); usage.finish(); resolve(); }));
-  return { name, child, closed, spawnError: () => spawnError, tokens: () => usage.latest(), exited: () => child.exitCode !== null || child.signalCode !== null };
+  return { name, child, closed, spawnError: () => spawnError, tokens: () => usage.latest(), stderrTail: () => stderrTail,
+    exited: () => child.exitCode !== null || child.signalCode !== null };
 }
+
+/** OpenCode keeps one local SQLite store per user; seats started at the same instant can fail on its lock. */
+export const SEAT_LOCK_ERROR = /database is locked/i;
 
 function readEvidence(dbPath, executionId) {
   if (!existsSync(dbPath)) return { evidence: null, jevAttempts: 0 };
@@ -176,14 +181,22 @@ async function runAcceptance(acceptancePath, workspace, timeoutMs) {
  * @param {string[]} [options.serverImports] extra --import modules for the trial server (tests: a fake Jev)
  * @param {object} [options.seatEnv]  extra seat environment (tests: fake seat control)
  * @param {'live'|'synthetic'} [options.evidenceKind] tests using fake seats must label their output synthetic
+ * @param {number} [options.joinTimeoutMs]  bound for the whole sequential seat start-up (all seats online)
+ * @param {number} [options.seatLockRetries]  retries of a seat that exits on opencode's "database is locked" before joining
+ * @param {number} [options.seatRetryBackoffMs]  wait before such a retry
+ * @param {boolean} [options.watch]  open the live tmux viewer (also HIVEMIND_STUDY_WATCH=1); never affects trials
+ * @param {object} [options.watcher]  injected viewer (tests)
  */
 export function createHivemindHost({ repoRoot, plan, env, seatCommand, serverImports = [], seatEnv = {}, serverEnv = {},
-  evidenceKind = 'live', probeCheckout = gitCheckout, joinTimeoutMs = 120_000, pollMs = 500, acceptanceTimeoutMs = 120_000 }) {
+  evidenceKind = 'live', probeCheckout = gitCheckout, joinTimeoutMs = 300_000, pollMs = 500, acceptanceTimeoutMs = 120_000,
+  seatLockRetries = 1, seatRetryBackoffMs = 2_000, watch = false, watcher = null }) {
   if (plan.host.name !== 'opencode') throw new Error('Only the opencode seat host is wired for live runs');
   const command = seatCommand ?? [String(env.OPENCODE_BIN ?? '').trim() || 'opencode'];
   const jevKey = String(env[JEV_KEY_ENV] ?? '').trim();
   // Seats and the trial server never receive the study's TypeSafe key through their environment.
   const baseEnv = Object.fromEntries(Object.entries(env).filter(([k]) => k !== JEV_KEY_ENV));
+  // Optional live tmux viewer (read-only log followers); best effort and outside the evidence path.
+  const viewer = watcher ?? createWatcher({ enabled: watchEnabled({ watch, env }), env });
 
   function probeVersion() {
     const found = spawnSync(command[0], [...command.slice(1), '--version'], { encoding: 'utf8', timeout: 15_000,
@@ -219,7 +232,9 @@ export function createHivemindHost({ repoRoot, plan, env, seatCommand, serverImp
       await Promise.all(seats.map(seat => seat.closed));
       if (server) await stopChild(server.child);
       scrubCredential(spec.home);
+      viewer.trialEnded(spec);
     };
+    viewer.trialStarted(spec);
     try {
       try { server = await startIsolatedServer({ repoRoot, home: spec.home, logPath: path.join(spec.attemptDir, 'server.log'), imports, env: { ...baseEnv, ...serverEnv } }); }
       catch { return aborted('server_start_failed'); }
@@ -237,28 +252,68 @@ export function createHivemindHost({ repoRoot, plan, env, seatCommand, serverImp
 
       const identities = path.join(spec.attemptDir, 'agent-identities');
       const seatBase = { ...baseEnv, ...seatEnv, HIVEMIND_URL: server.base, HIVEMIND_HOME: identities, OPENCODE_DISABLE_AUTOUPDATE: 'true' };
-      const launch = (name, prompt) => {
+      const launch = (name, prompt, logName = name) => {
         // opencode addresses models as provider/model; the manifest pins them separately.
         const versions = { ...spec.versions, host: plan.host.name, model: `${spec.versions.provider}/${spec.versions.model}` };
         const invocation = hostInvocation({ versions }, prompt, seatBase, repoRoot, true, spec.workspace);
-        seats.push(startSeat({ command, args: invocation.args, stdin: invocation.stdin, env: invocation.env, cwd: spec.workspace, attemptDir: spec.attemptDir, name }));
-        artifacts.push(`${name}.stdout.log`, `${name}.stderr.log`);
+        artifacts.push(`${logName}.stdout.log`, `${logName}.stderr.log`);
+        return startSeat({ command, args: invocation.args, stdin: invocation.stdin, env: invocation.env, cwd: spec.workspace,
+          attemptDir: spec.attemptDir, name, logName });
       };
-      launch('brain', brainPrompt(spec));
-      for (let i = 0; i < spec.freeWorkers; i++) launch(`worker-${i + 1}`, workerPrompt(spec, i));
+      const online = async role => (await human.get('/api/ui/snapshot')).agents.filter(a => a.role === role && a.online);
 
-      // Equivalent initial capacity: exactly one brain and `freeWorkers` online workers before the request is sent.
+      // Seats start one at a time and each must be online before the next starts, so opencode processes never race on
+      // opencode's own local database at startup. A seat that exits on that lock before joining is retried once after a
+      // short backoff; any other exit, or a second lock failure, is a genuine `seats_did_not_join`. The whole sequence
+      // is bounded by joinTimeoutMs, and every start/retry is retained in seat-launch.json.
       const deadline = Date.now() + joinTimeoutMs;
-      let brain = null, workers = [];
-      while (Date.now() < deadline) {
-        if (signal?.aborted) return aborted('interrupted_before_request');
-        if (seats.some(seat => seat.exited())) break;
-        const snapshot = await human.get('/api/ui/snapshot');
-        const brains = snapshot.agents.filter(a => a.role === 'brain' && a.online);
-        workers = snapshot.agents.filter(a => a.role === 'worker' && a.online);
-        if (brains.length === 1 && workers.length >= spec.freeWorkers) { brain = brains[0]; break; }
-        await delay(pollMs);
+      const planned = [['brain', brainPrompt(spec), 'brain'],
+        ...Array.from({ length: spec.freeWorkers }, (_, i) => [`worker-${i + 1}`, workerPrompt(spec, i), 'worker'])];
+      const launchLog = [];
+      const writeLaunchLog = () => writeFileSync(path.join(spec.attemptDir, 'seat-launch.json'),
+        JSON.stringify({ sequential: true, seats: launchLog }, null, 2) + '\n', { mode: 0o600 });
+      artifacts.push('seat-launch.json');
+      let brain = null;
+      for (const [name, prompt, role] of planned) {
+        const before = (await online(role)).length; // this seat has joined once its role count grows past this
+        const entry = { seat: name, starts: 1, retries: [], joined: false, failure: null };
+        launchLog.push(entry);
+        let seat = launch(name, prompt);
+        seats.push(seat);
+        for (;;) {
+          if (signal?.aborted) { writeLaunchLog(); return aborted('interrupted_before_request'); }
+          const lost = seats.slice(0, -1).find(earlier => earlier.exited());
+          if (lost) {
+            launchLog.find(e => e.seat === lost.name).failure = 'exited_after_join';
+            writeLaunchLog();
+            return aborted('seats_did_not_join', [], `${lost.name} exited_after_join`);
+          }
+          const present = await online(role);
+          if (present.length > before) { entry.joined = true; if (role === 'brain') brain = present[0]; break; }
+          if (seat.exited()) {
+            await seat.closed;
+            const locked = SEAT_LOCK_ERROR.test(seat.stderrTail());
+            if (!locked || entry.retries.length >= seatLockRetries || Date.now() + seatRetryBackoffMs >= deadline) {
+              entry.failure = locked ? 'database_locked' : 'exited_before_join';
+              writeLaunchLog();
+              return aborted('seats_did_not_join', [], `${name} ${entry.failure} (exit ${seat.child.exitCode ?? seat.child.signalCode})`);
+            }
+            entry.retries.push({ reason: 'database_locked', exitCode: seat.child.exitCode, backoffMs: seatRetryBackoffMs });
+            await delay(seatRetryBackoffMs);
+            entry.starts++;
+            seat = launch(name, prompt, `${name}.retry-${entry.retries.length}`);
+            seats[seats.length - 1] = seat;
+            continue;
+          }
+          if (Date.now() >= deadline) {
+            entry.failure = 'join_timeout';
+            writeLaunchLog();
+            return aborted('seats_did_not_join', [], `${name} join_timeout`);
+          }
+          await delay(pollMs);
+        }
       }
+      writeLaunchLog();
       if (!brain) return aborted('seats_did_not_join');
       await delay(pollMs); // let any late join settle before verifying the exact count
       const settled = (await human.get('/api/ui/snapshot')).agents;

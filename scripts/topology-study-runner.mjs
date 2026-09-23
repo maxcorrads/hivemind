@@ -494,18 +494,20 @@ const USAGE = `Usage (all but run are credential-free and offline):
   prepare   --plan <plan.json> --run-dir <new dir>
   validate  --run-dir <dir>
   dry-run   --run-dir <dir>
-  run       --run-dir <dir> --authorize-paid-run <studyId> [--max-trials <n>]
+  run       --run-dir <dir> --authorize-paid-run <studyId> [--max-trials <n>] [--watch]
   reconcile --run-dir <dir> --trial <id> --resolution interrupted|harness_failed [--initial-topology <t>] [--note <text>]
   export    --run-dir <dir> --output <new study.json> --report <new report.json>`;
 const FLAGS = { prepare: ['--plan', '--run-dir'], validate: ['--run-dir'], 'dry-run': ['--run-dir'],
   run: ['--run-dir', '--authorize-paid-run', '--max-trials'], reconcile: ['--run-dir', '--trial', '--resolution', '--initial-topology', '--note'],
   export: ['--run-dir', '--output', '--report'] };
+const SWITCHES = { run: ['--watch'] };
 
 export function parseArgs(argv) {
   const [command, ...args] = argv;
   assert.ok(Object.hasOwn(FLAGS, command), USAGE);
   const options = {};
   for (let i = 0; i < args.length; i += 2) {
+    if ((SWITCHES[command] ?? []).includes(args[i])) { assert.ok(!options[args[i]], USAGE); options[args[i]] = true; i--; continue; }
     assert.ok(FLAGS[command].includes(args[i]) && args[i + 1] !== undefined && !args[i + 1].startsWith('--') && !options[args[i]], USAGE);
     options[args[i]] = args[i + 1];
   }
@@ -540,7 +542,8 @@ export async function main(argv = process.argv.slice(2), { env = process.env, cr
   const pendingAuto = ctx.study.trials.some(t => t.condition === 'auto' && !TERMINAL.has(trialState(ctx, t.id).state));
   assert.ok(!pendingAuto || String(env.HIVEMIND_STUDY_TYPESAFE_KEY ?? '').trim(), 'Auto trials need HIVEMIND_STUDY_TYPESAFE_KEY; refusing before any paid trial starts');
   const factory = createHost ?? (await import('./topology-study-host.mjs')).createHivemindHost;
-  const host = factory({ repoRoot: root, plan: ctx.run, env });
+  // --watch only opens the read-only tmux viewer; it never changes what a trial does or records.
+  const host = factory({ repoRoot: root, plan: ctx.run, env, watch: options['--watch'] === true });
   const controller = new AbortController();
   const stop = () => controller.abort();
   process.once('SIGINT', stop); process.once('SIGTERM', stop);
