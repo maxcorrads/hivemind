@@ -838,6 +838,7 @@ export class AdaptiveTopologyRuntime {
     const state = expected === undefined ? current[0]! : executions.find(item => item.executionId === expected);
     if (!state) throw new HiveError(409, 'Execution changed; reload the routing panel');
     if (state.completedAt) throw new HiveError(409, 'This execution has completed; start a new request');
+    if (state.supersededBy) throw new HiveError(409, 'This execution is finishing older work; lock the current request instead');
     if (input.expectedRevision !== undefined && input.expectedRevision !== (state.revision ?? 0))
       throw new HiveError(409, 'Routing changed; reload before applying a Human lock');
     if (scope === state.lockScope && (scope === 'none' ? state.lockedTopology === null && this.conversationLock(state.channelId, state.brainId) === null : topology === state.lockedTopology)) return this.view(actor, channelId);
