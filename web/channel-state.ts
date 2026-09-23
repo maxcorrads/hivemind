@@ -8,11 +8,21 @@ export type ChannelJournal = {
   channelId: string;
   messages: Map<string, { message: Message; inserted: boolean }>;
   threads: Map<string, Thread>;
+  confirmations: Map<string, Message>;
   overflow: boolean;
 };
 
-export function beginChannelJournal(channelId: string): ChannelJournal {
-  return { channelId, messages: new Map(), threads: new Map(), overflow: false };
+export function beginChannelJournal(channelId: string, confirmations: Message[] = []): ChannelJournal {
+  const journal: ChannelJournal = { channelId, messages: new Map(), threads: new Map(), confirmations: new Map(), overflow: false };
+  for (const message of confirmations) recordChannelConfirmation(journal, message);
+  return journal;
+}
+
+/** A send response is a missing-ID fallback, even when received during a GET. */
+export function recordChannelConfirmation(journal: ChannelJournal | null, message: Message): void {
+  if (!journal || journal.channelId !== message.channelId) return;
+  journal.confirmations.set(message.id, message);
+  boundJournal(journal, journal.confirmations);
 }
 
 function boundJournal<T>(journal: ChannelJournal, entries: Map<string, T>): void {
@@ -58,23 +68,32 @@ export function applyChannelMessage(pane: ChannelPayload | null, message: Messag
 
 /** Snapshot refreshes pre-request data; only this request's live updates win. */
 export function reconcileChannelSnapshot(
-  current: ChannelPayload | null, data: ChannelPayload, journal: ChannelJournal, older = false,
+  current: ChannelPayload | null, data: ChannelPayload, journal: ChannelJournal, older = false, returnToLive = false,
 ): ChannelPayload | null {
   if (data.channel.id !== journal.channelId || data.threadId !== null) return current;
   // Never install a partially replayed snapshot and silently erase live state.
   // The caller retries with a fresh bounded journal (at most three attempts).
   if (journal.overflow) throw new Error("Channel refresh exceeded its live event window");
   const previous = current?.channel.id === data.channel.id ? current : null;
-  const held = previous?.historyThrough !== undefined;
+  const held = !returnToLive && previous?.historyThrough !== undefined;
   const byId = new Map((held || older ? previous?.messages ?? [] : []).map(message => [message.id, message]));
+  for (const message of journal.confirmations.values()) {
+    if (!message.threadId && !byId.has(message.id)) byId.set(message.id, message);
+  }
   for (const message of data.messages) byId.set(message.id, message);
   for (const { message, inserted } of journal.messages.values()) {
     if (!message.threadId && (inserted || byId.has(message.id))) byId.set(message.id, message);
   }
   const counts = { ...data.replyCounts };
   const replySeqs: Record<string, number> = {};
+  // Count each insertion once across ACK + WS, including a reply missing from
+  // the snapshot. A reaction-only entry must not erase proof of insertion.
+  const insertions = new Map(journal.confirmations);
   for (const { message, inserted } of journal.messages.values()) {
-    if (!inserted || !message.threadId) continue;
+    if (inserted) insertions.set(message.id, message);
+  }
+  for (const message of insertions.values()) {
+    if (!message.threadId) continue;
     if (data.snapshotSeq === undefined) {
       // Older/mock payloads lack a sequence fence; avoid duplicate counts.
       counts[message.threadId] = Math.max(counts[message.threadId] ?? 0, previous?.replyCounts[message.threadId] ?? 0);

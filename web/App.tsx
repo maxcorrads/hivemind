@@ -1,8 +1,8 @@
 import { Modal } from "./Modal.tsx";
 import { createSendOperations } from "./send-operation.ts";
-import { beginChannelJournal, recordChannelMessage, recordChannelThread, applyChannelMessage, reconcileChannelSnapshot, type ChannelJournal } from "./channel-state.ts";
+import { beginChannelJournal, recordChannelMessage, recordChannelConfirmation, recordChannelThread, applyChannelMessage, reconcileChannelSnapshot, type ChannelJournal } from "./channel-state.ts";
 import { newerTelegramHealth, telegramDegraded, type TelegramHealth } from "./telegram-health.ts";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import type { Agent, Channel, Message, SearchHit, Thread, ThreadStatus, InboxStatus } from "../src/shared/types.ts";
 import { REACTION_EMOJIS } from "../src/shared/types.ts";
 import { isLiveSearchQuery, parseSearchQuery } from "../src/shared/search-query.ts";
@@ -22,12 +22,13 @@ import type { MentionPage, ReadSnapshot } from "../src/shared/read-state.ts";
 import { createReadFence, createReadRefresh, createReceiptQueue, createRequestGate, readFields } from "../src/shared/read-client.ts";
 import { renderBody } from "./markdown.tsx";
 import { holdLivePane, isReadingHistory } from "./pane-window.ts";
+import { mergeConfirmations } from "./message-confirmations.ts";
 import { TaskCard } from './TaskCard.tsx';
 import { RoomPanel } from './RoomPanel.tsx';
 import { DecisionCard, DecisionQueue } from './DecisionQueue.tsx';
 import type { DecisionView } from '../src/shared/decisions.ts';
 import type { TaskSnapshot } from '../src/shared/tasks.ts';
-import { selectThread, beginThreadLoad, failThreadLoad, receiveThreadMessage, receiveThreadTask, receiveThreadSnapshot, receiveThreadStatus, type ThreadView } from './thread-state.ts';
+import { selectThread, beginThreadLoad, cancelThreadLoad, failThreadLoad, receiveThreadConfirmation, receiveThreadMessage, receiveThreadTask, receiveThreadSnapshot, receiveThreadStatus, type ThreadView } from './thread-state.ts';
 
 type InboxBox = "unread" | "all";
 
@@ -186,48 +187,55 @@ export function App() {
   const themePainted = useRef(false);
   const channelStream = useRef<HTMLDivElement>(null);
   const threadStream = useRef<HTMLDivElement>(null);
+  const threadOpenAnchor = useRef<{
+    channelId: string; threadId: string; button: HTMLButtonElement; bottom: number; atBottom: boolean;
+  } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const threadBottomRef = useRef<HTMLDivElement>(null);
   const selRef = useRef(sel);
   selRef.current = sel;
   const threadIdRef = useRef(threadId);
   threadIdRef.current = threadId;
+  const panesRef = useRef({ pane, threadPane });
+  panesRef.current = { pane, threadPane };
   const channelsRef = useRef<Channel[]>([]);
   const threadLoadIdRef = useRef(0);
 
   const viewingThread = useCallback((channelId: string, root: string) =>
     selRef.current.kind === 'channel' && selRef.current.id === channelId && threadIdRef.current === root, []);
 
-  const loadThread = useCallback(async (channelId: string, root: string) => {
+  const loadThread = useCallback(async (channelId: string, root: string, confirmed?: Message, returnToLive = !!confirmed) => {
     if (!viewingThread(channelId, root)) return;
     const requestId = ++threadLoadIdRef.current;
     const load = threadLoad.current.begin();
-    setThreadView(view => beginThreadLoad(view, channelId, root, requestId));
+    setThreadView(view => beginThreadLoad(view, channelId, root, requestId, returnToLive, confirmed ? [confirmed] : []));
     try {
       const data = await api.messages(channelId, root, undefined, load.signal);
       if (load.valid() && viewingThread(channelId, root)) setThreadView(view => receiveThreadSnapshot(view, root, data, requestId));
     } catch (error) {
       if (load.valid() && viewingThread(channelId, root) && requestId === threadLoadIdRef.current) {
         setThreadView(view => failThreadLoad(view, requestId));
+        setErr("Thread could not refresh. Refresh thread to retry.");
         throw error;
       }
     }
   }, [viewingThread]);
 
-  const onThreadMessage = useCallback((message: Message) => {
+  const onThreadMessage = useCallback((message: Message, confirmation = false) => {
     const root = threadIdRef.current;
     if (root && viewingThread(message.channelId, root))
       setThreadView(view => {
         const current = selectThread(view, message.channelId, root);
         const held = current.pane && isReadingHistory(threadStream.current)
           ? { ...current, pane: holdLivePane(current.pane) } : current;
-        return receiveThreadMessage(held, message);
+        return confirmation ? receiveThreadConfirmation(held, message) : receiveThreadMessage(held, message);
       });
   }, [viewingThread]);
 
   const readFence = useRef(createReadFence());
   const channelLoad = useRef(createRequestGate());
   const channelJournal = useRef<ChannelJournal | null>(null);
+  const channelRefreshIntent = useRef<{ channelId: string; confirmations: Message[] } | null>(null);
   const threadLoad = useRef(createRequestGate());
   const snapshotLoad = useRef(createRequestGate());
   const inboxLoad = useRef(createRequestGate());
@@ -248,10 +256,12 @@ export function App() {
     if (priorChannel !== nextChannel) {
       channelLoad.current.cancel();
       channelJournal.current = null;
+      channelRefreshIntent.current = null;
       channelReads.current?.reset();
     }
     if (priorChannel !== nextChannel || threadIdRef.current !== nextThread) {
       threadLoad.current.cancel();
+      setThreadView(null);
       threadReads.current?.reset();
     }
     const previousKey = previous.kind === "inbox" ? `${previous.project}/${previous.box ?? "unread"}` : null;
@@ -317,10 +327,20 @@ export function App() {
     return next;
   }, [acceptRead]);
 
-  const loadChannel = useCallback(async (id: string, before?: number) => {
+  const loadChannel = useCallback(async (id: string, before?: number, confirmed?: Message[]) => {
+    // A replacement/reconnect GET must not silently cancel the Human's pending
+    // return-to-live. Explicit older-page navigation and selection changes can.
+    if (before !== undefined) channelRefreshIntent.current = null;
+    else if (confirmed) {
+      const previous = channelRefreshIntent.current;
+      channelRefreshIntent.current = { channelId: id, confirmations: mergeConfirmations(
+        previous?.channelId === id ? previous.confirmations : [], confirmed,
+      ) };
+    }
+    const intent = channelRefreshIntent.current?.channelId === id ? channelRefreshIntent.current : null;
     const load = channelLoad.current.begin();
     for (let attempt = 0; attempt < 3; attempt++) {
-      const journal = beginChannelJournal(id);
+      const journal = beginChannelJournal(id, intent?.confirmations);
       channelJournal.current = journal;
       try {
         const data = await api.messages(id, null, before, load.signal);
@@ -329,7 +349,8 @@ export function App() {
           if (attempt < 2) continue;
           throw new Error("Live traffic overtook the channel refresh. Reload the page to retry.");
         }
-        setPane((current) => reconcileChannelSnapshot(current, data, journal, before !== undefined));
+        setPane((current) => reconcileChannelSnapshot(current, data, journal, before !== undefined, !!intent));
+        if (channelRefreshIntent.current === intent) channelRefreshIntent.current = null;
         return;
       } catch (error) {
         if (!load.valid() || selRef.current.kind !== "channel" || selRef.current.id !== id) return;
@@ -535,6 +556,7 @@ export function App() {
     if (!selectedChannelId || missingChannel) {
       channelLoad.current.cancel();
       channelJournal.current = null;
+      channelRefreshIntent.current = null;
       setPane(null);
       return;
     }
@@ -579,18 +601,33 @@ export function App() {
     else apply();
   }, [theme]);
 
-  useEffect(() => {
-    if (stickBottom.current && pane?.historyThrough === undefined) bottomRef.current?.scrollIntoView({ block: "end" });
+  // Reflow happens before scroll events: keep a live pane pinned when the side
+  // thread opens, even when the bounded message window keeps the same length.
+  const threadVisible = !!threadPane;
+  useLayoutEffect(() => {
+    const stream = channelStream.current;
+    const anchor = threadOpenAnchor.current;
+    if (anchor && (anchor.channelId !== selectedChannelId || anchor.threadId !== threadId)) threadOpenAnchor.current = null;
+    if (stream && anchor && anchor.channelId === selectedChannelId && anchor.threadId === threadPane?.threadId) {
+      // A held snapshot can still be scrolled to its bottom. Otherwise keep the
+      // clicked reply link at the same height after the message wraps.
+      if (anchor.atBottom) stream.scrollTop = stream.scrollHeight;
+      else if (anchor.button.isConnected) stream.scrollTop += anchor.button.getBoundingClientRect().bottom - anchor.bottom;
+      threadOpenAnchor.current = null;
+    } else if (stickBottom.current && pane?.historyThrough === undefined && stream) {
+      stream.scrollTop = stream.scrollHeight;
+    }
     stickBottom.current = true;
-  }, [pane?.messages.length, pane?.historyThrough]);
-  useEffect(() => {
-    if (threadPane?.historyThrough === undefined) threadBottomRef.current?.scrollIntoView({ block: "end" });
-  }, [threadPane?.messages.length, threadPane?.historyThrough]);
+  }, [pane, threadVisible, selectedChannelId, threadId, threadPane?.threadId]);
+  useLayoutEffect(() => {
+    if (threadPane?.historyThrough === undefined && threadStream.current)
+      threadStream.current.scrollTop = threadStream.current.scrollHeight;
+  }, [threadPane]);
 
   useEffect(() => {
     if (!snap) return;
     setMailLog((prev) => {
-      const next = mergeMailLog(prev, snap.mentions, snap.channels);
+      const next = mergeMailLog(prev, snap.mentions, channelsRef.current);
       if (next !== prev) saveMailLog(next);
       return next;
     });
@@ -712,6 +749,8 @@ export function App() {
     if (!body.trim() && !files?.length) return;
     const result = await sendOperations.current(channelId, body.trim(), root, files, routing, lockScope);
     if (selRef.current.kind !== "channel" || selRef.current.id !== channelId || (root && threadIdRef.current !== root)) return;
+    const sentPane = root ? panesRef.current.threadPane : panesRef.current.pane;
+    const returnToLive = sentPane?.historyThrough !== undefined || isReadingHistory(root ? threadStream.current : channelStream.current);
     if (root) setThreadDraft((current) => current === body ? "" : current);
     else {
       setDraft((current) => current === body ? "" : current);
@@ -719,14 +758,26 @@ export function App() {
       setRoutingLockScope("none");
     }
     // One directive per owning brain precedes the request.
-    for (const routingMessage of result.routingMessages ?? (result.routingMessage ? [result.routingMessage] : [])) {
-      recordChannelMessage(channelJournal.current, routingMessage);
+    const routingMessages = result.routingMessages ?? (result.routingMessage ? [result.routingMessage] : []);
+    for (const routingMessage of routingMessages) {
+      recordChannelConfirmation(channelJournal.current, routingMessage);
       setPane((current) => applyChannelMessage(current, routingMessage));
     }
-    recordChannelMessage(channelJournal.current, result.message);
+    recordChannelConfirmation(channelJournal.current, result.message);
     setPane((current) => applyChannelMessage(current, result.message));
     if (activeBrainChannel) refreshRoutingView();
-    if (root) onThreadMessage(result.message);
+    if (root) onThreadMessage(result.message, true);
+    if (returnToLive) {
+      // Fetch the complete latest window, including messages hidden while reading
+      // history. ACKs fill missing IDs; snapshots refresh their metadata, and
+      // genuinely in-flight WebSocket updates remain authoritative.
+      try {
+        if (root) await loadThread(channelId, root, result.message);
+        else await loadChannel(channelId, undefined, [...routingMessages, result.message]);
+      } catch (error) {
+        setErr(`Message sent, but the conversation could not refresh. Return to live to retry. ${String(error)}`);
+      }
+    }
   };
 
   const onCreate = async () => {
@@ -1208,8 +1259,7 @@ export function App() {
             {pane?.historyThrough !== undefined && (
               <button type="button" className="older" onClick={() => {
                 const id = sel.id;
-                setPane(null);
-                loadChannel(id).catch((error) => { if (error?.name !== "AbortError") setErr(String(error)); });
+                loadChannel(id, undefined, []).catch((error) => { if (error?.name !== "AbortError") setErr(String(error)); });
               }}>
                 {pane.deferredLive ? "New messages — return to live" : "Return to live"}
               </button>
@@ -1247,8 +1297,15 @@ export function App() {
                   m={m}
                   replies={pane?.replyCounts[m.id] ?? 0}
                   status={pane?.threads.find((t) => t.id === m.id)?.status ?? null}
-                  onThread={() => {
+                  onThread={(button) => {
                     if (sel.kind !== "channel") return;
+                    const stream = channelStream.current;
+                    if (stream && threadPane?.threadId !== m.id) {
+                      threadOpenAnchor.current = {
+                        channelId: sel.id, threadId: m.id, button, bottom: button.getBoundingClientRect().bottom,
+                        atBottom: stream.scrollHeight - stream.clientHeight - stream.scrollTop <= 48,
+                      };
+                    }
                     go({ kind: "channel", id: sel.id, thread: m.id });
                   }}
                   onReact={(emoji) => api.react(m.seq, emoji, !m.reactions?.some(reaction => reaction.emoji === emoji && reaction.mine)).then((r) => {
@@ -1356,8 +1413,7 @@ export function App() {
             <button type="button" className="older" onClick={() => {
               const channelId = sel.id;
               const root = threadId;
-              setThreadView(null);
-              loadThread(channelId, root).catch((error) => { if (error?.name !== "AbortError") setErr(String(error)); });
+              loadThread(channelId, root, undefined, true).catch((error) => { if (error?.name !== "AbortError") setErr(String(error)); });
             }}>
               {threadPane.deferredLive ? "New replies — refresh thread" : "Refresh thread"}
             </button>
@@ -1377,6 +1433,7 @@ export function App() {
                 const root = threadId;
                 const before = threadPane.messages[0]?.seq;
                 if (!before) return;
+                setThreadView(cancelThreadLoad);
                 setThreadPane((current) => current ? holdLivePane(current) : current);
                 const load = threadLoad.current.begin();
                 api.messages(channelId, root, before, load.signal).then((page) => {
@@ -1407,6 +1464,7 @@ export function App() {
                 const root = threadId;
                 const after = threadPane.cursors?.after ?? threadPane.messages.at(-1)?.seq;
                 if (!after) return;
+                setThreadView(cancelThreadLoad);
                 const load = threadLoad.current.begin();
                 api.messages(channelId, root, undefined, load.signal, after).then((page) => {
                   if (!load.valid() || selRef.current.kind !== "channel" || selRef.current.id !== channelId || threadIdRef.current !== root) return;
@@ -2142,7 +2200,7 @@ function Msg({
   m: Message;
   replies: number;
   status: ThreadStatus | null;
-  onThread?: () => void;
+  onThread?: (button: HTMLButtonElement) => void;
   onReact?: (emoji: string) => void;
 }) {
   const time = new Date(m.createdAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
@@ -2193,7 +2251,7 @@ function Msg({
           </div>
         )}
         {onThread && m.kind === "chat" && (
-          <button type="button" className="replies" onClick={onThread}>
+          <button type="button" className="replies" onClick={event => onThread(event.currentTarget)}>
             {replies > 0 ? `${replies} ${replies === 1 ? "reply" : "replies"}` : "Thread"}
           </button>
         )}
