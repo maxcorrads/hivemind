@@ -1,10 +1,10 @@
 # Phase 2 classifier evidence
 
-Related: #29, #35, #128/#129. This collector measures the existing controller; it does not change Jev's schedule, topology policy, confidence thresholds, locks, or fallback behavior.
+Related: #29, #35, #128/#129, #211. This collector measures Jev calls; it never changes when Jev is called or what the brain receives. Since #211 Jev is advisory-only ([Jev advice](adaptive-routing.md)): runs recorded since then carry policy version `topology-advisory-v1`, their attempts have no current mode (`currentTopology: null`, `currentWorkers: 0`) and their `policyEvents` are `advice` entries that were never applied. Runs recorded before #211 keep `topology-policy-v2.1` and must not be pooled with advisory runs.
 
 ## Capture boundary
 
-Each initial or continuous classifier attempt is recorded before awaiting the provider. Its outcome is saved before the controller checks for a capacity race or stale configuration/revision. Thus an extra classification due to changing worker availability, or a result discarded after key rotation, still contributes to observed overhead.
+Each initial or continuous classifier attempt is recorded before awaiting the provider, and its outcome is saved as soon as the call returns, so every call contributes to observed overhead.
 
 The evidence is separate from ordinary messages, task records and the Human routing timeline. It is not returned by agent APIs and does not consume agent inbox/context. No new provider call is made to collect or export evidence. Disabling Jev continues to bypass external classification.
 
@@ -67,8 +67,8 @@ Exports use `schemaVersion: 1`, `evidenceClass: adaptive-evidence-v1`, the Jev `
 
 The report does not judge task quality, correctness of a downgrade, or under-orchestration by itself. Those labels need comparable reviewed execution results. A failed workload, an unavailable classifier, a lost measurement, and a poor routing choice must remain separate outcomes.
 
-For clean fixed-mode baselines, disable Jev monitoring explicitly. A manual Single/Room lock with Jev still enabled remains a monitored execution and does not establish zero-router overhead.
+Before #211, a manual Single/Room lock with Jev still enabled remained a monitored execution and did not establish zero-router overhead. Locks no longer exist; with Jev disabled no call is made and no evidence is recorded.
 
 ## Validation
 
-Tests use fake TypeSafe responses and local SQLite/HTTP boundaries only. They cover complete/unknown usage, duplicate outcome persistence, hard detail/run caps, pending interruptions, cascading cleanup, private allowlisted export, read-only/non-overwriting CLI behavior, stale-key and capacity-retry accounting, context isolation and recorder failure. They are not live provider calibration or measured economic benefit.
+Tests use fake TypeSafe responses and local SQLite/HTTP boundaries only. They cover complete/unknown usage, duplicate outcome persistence, hard detail/run caps, pending interruptions, cascading cleanup, private allowlisted export, read-only/non-overwriting CLI behavior, context isolation and recorder failure. They are not live provider calibration or measured economic benefit.

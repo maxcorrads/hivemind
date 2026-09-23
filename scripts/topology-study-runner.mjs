@@ -2,6 +2,10 @@
 //
 // prepare / validate / dry-run / reconcile / export are credential-free and never reach the network.
 // `run` is the only paid path: it requires an explicit per-study authorization and loads the live host lazily.
+//
+// LEGACY (#211): the study compares Auto against server-enforced fixed topologies, which no longer exist (Jev is
+// advisory-only). The live host now refuses to run, and dry-run reports this build's policy version
+// (`topology-advisory-v1`) as a mismatch for manifests pinned to `topology-policy-v2.1`.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';

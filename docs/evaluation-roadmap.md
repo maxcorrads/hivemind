@@ -21,7 +21,7 @@ Issue references are in [the Hivemind repository](https://github.com/maxcorrads/
 1. Preserve bounded, privacy-safe evidence for every classifier attempt, including failures, capacity retries and stale decisions discarded before applying policy. Separate attempts from accepted evaluations and actual transitions.
 2. Export a versioned report without request text, credentials, worker names, project paths or provider response bodies. Make missing history and unknown usage explicit.
 3. Prepare deterministic, offline Auto-versus-fixed experiment manifests and validators. Require complete matched cohorts and compatible pinned versions. Fixtures are software tests, not measured provider performance.
-4. Add regression coverage for the selected 0.90 policy, direct jumps, Human locks, safe drains, provider failure and evidence isolation. Do not alter agreed thresholds to make evaluation easier.
+4. Add regression coverage for the selected 0.90 policy, direct jumps, Human locks, safe drains, provider failure and evidence isolation. Do not alter agreed thresholds to make evaluation easier. (Superseded by #211: Jev is advisory-only, so there is no applied policy, lock or drain left to cover; see [Jev advice](adaptive-routing.md).)
 5. Review concrete remaining gaps and record focused issues with reproduction/evidence and acceptance criteria, avoiding duplicates of #29/#33/#34.
 
 No live request, paid agent run, release, or merge is implicitly authorized by this plan.

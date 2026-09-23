@@ -1,5 +1,7 @@
 # Phase 2 matched topology comparison
 
+> **Enforced topologies were removed in #211.** Jev is now advisory-only: Hivemind no longer applies or locks a topology, so the fixed baselines below (`single`, `brain_one_worker`, `brain_multi_dm`, `brain_multi_room` as Human-selected, enforced modes) cannot be produced by the current server, and the `auto` condition no longer describes a controller that applies its choice. The validator and scorer keep working for manifests and observations recorded before #211 (policy version `topology-policy-v2.1`); evidence recorded since then carries `topology-advisory-v1` and must not be pooled with it. See [Jev advice](adaptive-routing.md).
+
 Related: #29, #33, #35 and #128/#129. `scripts/benchmark-topology.mjs` prepares an immutable randomized trial manifest, validates supplied observations and summarizes matched outcomes. **It does not launch agents, call Jev, collect Human timings, or execute paid trials.** Execution is the separate [paired-study runner](topology-study-runner.md) (#136); the older fixed-workflow host runner is not part of this protocol.
 
 This protocol evaluates the continuous four-topology controller, not the old binary shadow predictor. Do not pool its observations with `pilot-v1` or `clarification-v1` results merely because some mode names resemble one another.

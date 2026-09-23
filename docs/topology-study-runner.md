@@ -1,5 +1,7 @@
 # Phase 2 paired-study runner
 
+> **Legacy since #211.** The study compares Auto against server-enforced fixed topologies, which were removed when Jev became advisory-only. The live host (`scripts/topology-study-host.mjs`) now refuses to run trials; `prepare`, `validate`, `dry-run`, `reconcile` and `export` still work on existing run directories, and `dry-run` reports this build's policy version (`topology-advisory-v1`) as a mismatch for manifests pinned to `topology-policy-v2.1`. To execute the study, use a Hivemind release before #211. See [Jev advice](adaptive-routing.md).
+
 Related: #136, #29, #131, #132, #134, #135. `scripts/topology-study-runner.mjs` is the execution adapter between the immutable [#132 topology-comparison manifest](topology-comparison.md) and an isolated host. It replaces hand-transcribing settings, execution IDs, usage and artifacts into observations. It does **not** decide whether a study should run, review the results or summarize them. Summaries remain [`benchmark-topology.mjs summarize`](topology-comparison.md#validate-and-summarize), after independent review.
 
 This runner is for the continuous-controller Auto vs four fixed topologies comparison only. The older `run-coordination-pilot-codex.mjs` executor (`pilot-v1` / `clarification-v1`, #125) is the fixed-workflow cohort, and it stays that. Do not relabel its results as controller evidence or pool the two.

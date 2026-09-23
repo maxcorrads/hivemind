@@ -1,122 +1,81 @@
-# Adaptive orchestration routing
+# Jev advice (advisory routing)
 
-Hivemind's optional TypeSafe Jev integration is configured from **Settings → Adaptive routing** in the Human UI. The Phase 2 implementation in #128/#129 extends Phase 1 (#120/#126) from a one-time `single | orchestrated` recommendation to continuously evaluated execution topology.
+Hivemind's optional TypeSafe Jev integration is configured from **Settings → Adaptive routing** in the Human UI. Since #211 Jev is **advisory-only**: it suggests to a brain how to organize a Human request (work alone, one worker, several workers in DMs, or a room) and how many workers to use. Hivemind never applies, enforces or locks that suggestion. The brain decides, and **Human instructions always take precedence over Jev's advice**.
 
-## Which messages are routed
+Earlier releases (#128/#129, #207, #209) enforced the suggested topology: they applied a mode and a worker budget, rejected delegations that did not fit it with HTTP 409, posted a `[Hivemind adaptive topology · …]` directive, required an `executionId` on delegation, and offered Human locks. All of that was removed in #211; see [What changed in #211](#what-changed-in-211).
 
-Jev decides how a **brain** handles a Human request: work alone, or delegate. Workers never go through Jev.
+## When Jev is called
 
-- **Every top-level Human message addressed to a brain**, from the Human UI or Telegram, in any channel: DMs, group channels and rooms. The message waits for the classification before it is delivered.
-- **Owning brain**, in order: the room coordinator, then the @mentioned brains (one execution and one classification each), then the only brain in the channel. When several brains share a channel and none is mentioned, Jev still classifies the request and records an **observation** in the Routing panel, but nothing is enforced. An explicit mode needs a named owner.
-- **Human thread replies** are a `human_message` coordination event: they revalidate the execution of their thread (or the brain's active execution in that channel) before delivery, with the usual anti-flapping rules. A reply in the thread of a completed execution reopens it together with its thread; a reply where the brain has no execution starts a new one rooted at that thread.
-- **Not routed**: messages in channels without a brain (for example a Human DM with a worker), messages between brains, and all worker activity: messages, task lifecycle events, room acknowledgements and presence changes.
+Workers never trigger Jev. Jev is called **synchronously** (the call waits for Jev, bounded by the provider timeout of 2 seconds):
 
-The feature remains opt-in. Disabling Jev stops external classification and releases automatic routing enforcement. Explicit Human overrides remain authoritative. Hivemind does not launch external Codex/Claude/Cursor sessions: the Human starts agents, and routing uses the workers that actually joined the hive.
+- **Every Human message addressed to a brain**, from the Human UI or Telegram, in any channel: DMs, group channels and rooms. Jev is asked before the message is posted. The owning brain is, in order: the room coordinator, then the @mentioned brains (one call each, in parallel), then the only brain in the channel. When several brains share a channel and none is mentioned, Jev still classifies the request and records an **observation** for the Human; no brain receives advice. A Human reply in the thread of a request continues that request (and reopens it if its thread was marked done).
+- **Every brain action**: `send`, `attach`, `assign_task`, `task_event`, `room_event`, `set_thread_status`, and each `wait` that delivers mail. The action runs first and is never blocked or reshaped; then Hivemind asks Jev and returns the advice in the response.
 
-## Execution modes
+No call is made when Jev is disabled, when the brain serves no open Human request (for example before any Human message, or after the request thread was marked done), for a retried request (same `requestId`: the latest advice is returned without a new call), or for a `wait` that returns without mail.
 
-| Mode | Worker budget | New delegated work |
-| --- | --- | --- |
-| Single | 0 | The brain works directly; new delegation is blocked. |
-| Brain + 1 | 1 | One worker, normally through a structured task/DM. |
-| Multi-DM | At least 2 | Independent worker task threads/DMs within the approved budget. |
-| Room | At least 2 | New work uses a Human-authorized room contract. Existing DM tasks may finish in place. |
+## The advice a brain receives
 
-Transitions are not a ladder. Single can jump directly to Room, and Room can return directly to Single once the destination's confidence and safe-checkpoint requirements are met.
+Each brain action response and each `wait` result that delivered mail carries `jevAdvice`:
 
-Jev selects the topology and total worker budget. It does not choose particular workers, decompose the request, create subtasks, or grant room authority. Those remain the brain's responsibility within existing Hivemind authorization rules.
+```json
+{
+  "jevAdvice": {
+    "plan": "brain_multi_dm_2",
+    "topology": "brain_multi_dm",
+    "workers": 2,
+    "confidence": 0.72,
+    "state": "ok",
+    "reason": "parallel_workstreams",
+    "at": 1790000000000,
+    "note": "Advisory only — you decide; Human instructions take precedence."
+  }
+}
+```
 
-## Settings and Human overrides
+- `plan` is a joint plan id of [contract v3](#question-design-contract-v3): `single`, `brain_one_worker`, `brain_multi_dm_<n>`, `brain_multi_room_<n>`, or `capacity_blocked` (workers would help but none is usable).
+- `state` says how far the advice can be relied on:
 
-The settings panel exposes the Jev toggle, TypeSafe API key, initial strategy fallback, and orchestrated topology fallback. The default orchestrated fallback is **Brain + 1**. Fallback selection is constrained by available capacity.
+| State | When | `plan` / `topology` / `workers` | `reason` |
+| --- | --- | --- | --- |
+| `ok` | A valid, coherent answer at or above 60% confidence | set | why Jev chose the plan, e.g. `parallel_workstreams` |
+| `uncertain` | A valid answer below 60% | set | as above |
+| `incoherent` | A valid answer whose parts contradict each other (a zero-worker plan while saying delegation materially helps) | set | `incoherent_plan_vs_sufficiency` |
+| `rejected` | A response arrived but could not be used (malformed, or a plan that was not offered) | `null` | the failure class, e.g. `plan_not_offered` |
+| `unavailable` | No response: timeout, network or HTTP error, cancelled at shutdown | `null` | the failure class, e.g. `timeout`, `http_503` |
 
-The composer of any channel with a brain exposes:
+- `jevAdvice` is `null` when Jev is off or the brain serves no open request; it is absent from worker responses.
+- A provider failure never fails the action: it only yields `unavailable` advice.
 
-- **Auto · Jev**: Jev chooses between all feasible modes.
-- **Single**, **Brain + 1**, **Multi-DM**, **Room**: an explicit Human mode for this request.
-- **Orchestrated Auto**: Human requires orchestration; Jev chooses the feasible orchestrated topology.
+The standing orders tell brains that the advice is advisory, that they decide from the task, that Human instructions always override it, and to treat any state other than `ok` as no advice.
 
-A manual choice can apply to this request, be locked to the current task/execution, or be locked to the conversation. A conversation lock survives the next Human request until explicitly removed. The composer resetting to Auto after sending does **not** release the one-request override on work already underway.
+## Requests (executions)
 
-With Jev enabled, manual overrides do not suppress classification: recommendations continue for Human review, but cannot automatically replace the locked mode. With Jev disabled, manual choices do not make an external request.
+Each Human request handled by a brain is an **execution** (`execution-<uuid>`), one per brain and channel: a new top-level Human request to the same brain in the same channel replaces the previous one. Executions only group Jev calls for the Routing log and the evidence export, and keep the latest advice. A brain action is attributed to the brain's open request rooted at the action's thread, else its open request in the action's channel, else its most recently updated open request in the project. Marking the request's thread done closes the execution (no more calls for it); a Human reply in that thread reopens it.
 
-## Parallel executions and attribution
+`executionId` is still **accepted and ignored** on `send`, `attach`, `assign_task`, `task_event`, `room_event` (MCP and HTTP) and by `hivemind send --execution-id`, so older clients keep working.
 
-An execution belongs to one brain in one channel. A brain can coordinate several Human requests at once, in different channels, each with its own topology and worker budget. In the same channel, a new request to the same brain replaces that brain's previous execution (other brains in the channel keep theirs). A Human request is never rejected because of routing state: if the previous execution still has delegated work (an open task, a held claim or an open free-form delegation), the new request starts its own execution (initial Jev classification, new directive and executionId) while the previous one keeps **draining** beside it. A draining execution keeps its workers, commitments, policy and executionId, is reached by executionId, task or delegation thread (a bare channel names only the current request), and completes by itself once its delegated work ends. An idle previous execution is replaced as before. When several brains own a request, their initial classifications (and the revalidations of a thread reply) run in parallel, so a Human send waits for the slowest brain rather than the sum; there is no total deadline on that wait.
+## Human UI
 
-Each directive names its brain and executionId and, outside DMs, is addressed only to that brain, so workers in a group channel are not woken by it. While a brain has at least one active execution, every **delegation** (send to a worker, attach, `assign_task`, `task_event` revise, `room_event` configure/staff) must declare `executionId`; otherwise it is rejected with 400 listing the active executions. An executionId of another brain is 403, an unknown or finished one is 404/409. Other brain coordination may pass `executionId` too; without it, it is attributed only from explicit structure (task link, request or delegation thread, request channel) and is otherwise not evaluated. Agent responses include `adaptiveRouting` only when exactly one execution is active, and always list `adaptiveExecutions`.
+- **Advice strip** above the composer of a channel with a brain: `Jev suggests: Multi-DM · 2 workers (72%)`, or the state (`Jev uncertain (41%) · Brain + 1`, `Jev unavailable (timeout)`), with *Advisory only · the brain decides*. It opens the Routing panel. The composer has no mode or lock selector, and the Human send API rejects the removed `routing` and `lockScope` fields.
+- **Routing panel**: the latest advice of each brain with a request in the channel (one tab per brain), evidence-capture state, and the Human-only audit of every piece of advice (`Brain delegated · Jev suggested Multi-DM · 2 workers (72%)`). There are no locks.
+- **Settings**: enable Jev, the TypeSafe API key, the model identifier and the connection test. The former fallback settings are gone (they chose the enforced mode when Jev was uncertain); older configuration files that still contain them keep working and drop them on the next save.
 
-## Capacity is execution-scoped
+## Routing log (Human-only)
 
-A free worker is online with fresh presence, has no unfinished task or held claim, and is not committed to another execution. Capacity distinguishes free workers from workers already committed to this execution; the latter remain usable without being counted twice.
+Each project has a **Routing log** entry in the left sidebar, below Decisions (`#/routing-log/<project>`; the older `#/jev/<project>` link still works). It lists every request Hivemind sent to Jev (TypeSafe) and its answer, grouped by the Human request (execution) that caused it, newest activity first. Each call shows why it was made (your request, your thread reply, a brain message, a delegation, a task update, a room change, a thread status, mail delivered by `wait`), Jev's answer in one line, and what happened: *Advice returned to the brain · not enforced*, *Uncertain advice returned to the brain*, *Brain told Jev had no advice*, or *Recorded only · no single owning brain*. Calls recorded before #211 keep the enforced outcome they had (*Before #211: applied Brain + 1*).
 
-Structured task ownership is linked to the execution in the same transaction that creates/revises the task. A successful preflight is not a reservation: availability, destination, policy revision and worker budget are checked again inside task admission. Failed admission rolls back the task and its assignment message together.
+Selecting a call shows:
 
-Free-form DM assignments are also tracked as commitments. A commitment ends when its delegation thread is marked done, or when the worker reports the outcome in that thread with `eventType: 'decision'` (or an `acknowledgement` carrying attachments as evidence); a bare acknowledgement only confirms receipt, and there is no idle timeout. Until then an open delegated thread is not treated as a free worker merely because it lacks a structured task record. Commitments of a completed or deleted execution never keep a worker busy. Sender-declared `progress` and `decision` labels cannot bypass admission when a brain contacts a new worker. Known active assignment threads can continue during a drain; new assignments are still blocked. Completed delegation threads cannot be reopened or reused to evade Single.
+1. **Sent to Jev**: the request text and the context sent with it (worker capacity, the brain's open structured work, triggering action; calls recorded before #211 also show the mode and locks of that time).
+2. **Jev's answers**: every question with its answer, confidence and probability distribution.
+3. **Advice**: the suggested plan, overall confidence (the lowest answer confidence), reason, what happened, requested and resolved model, latency and tokens.
+4. **Raw JSON**: the exact request body sent to TypeSafe and the parsed response.
 
-The classifier is offered only feasible plans: each option fixes both the topology and the total worker count, so a topology/budget contradiction cannot be expressed (see [Question design](#question-design-contract-v3)). A response outside the offered options, or otherwise malformed, is rejected with a specific reason, not silently rewritten into a different Jev plan. If availability changes during classification, Hivemind refreshes capacity and re-evaluates. Repeated races preserve the existing mode rather than oversubscribing workers.
+The full payloads are stored only in the local SQLite database (`jev_calls`), are served only on the authenticated Human API (`GET /api/ui/projects/:project/jev-calls` and `/jev-calls/:id`), and never include the TypeSafe key or provider error bodies. A rejected answer is labelled **Answer rejected** (never "Jev unavailable") and still shows Jev's answers, the resolved model and the tokens it used. History is bounded to the latest 1,000 calls per project and is removed with its channel or project. New calls appear live through the Human `jev-call` websocket event; advice updates through the Human `adaptive-routing` event. Neither creates chat messages, inbox items, mentions or agent notifications.
 
-When no worker is free but orchestration is needed, the brain can continue safe local work. Human sees **Orchestration needed · no workers available**. Capacity changes trigger further evaluation.
+## Worker capacity
 
-A new top-level request never takes ownership of outstanding delegated work from the preceding execution: that work stays attributed to the draining execution until it finishes.
-
-## Coordination boundaries
-
-Jev is evaluated on Human messages addressed to a brain, brain coordination messages, delegation attempts, the assigning brain's task reviews and thread changes, brain room operations, and capacity changes caused by brain actions. Worker messages, worker task/room events and worker presence never trigger an evaluation, so a pending drain completes at the next brain or Human event. Ordinary file reads, searches, uploads, receipt acknowledgements and heartbeats do not themselves require classification.
-
-Delegation is evaluated **before** committing the new assignment, including when the current mode is Single. The assigning brain's reviews are evaluated **after** their mutation commits, so the classifier and safe-checkpoint check see the work that has just finished. A worker submitting a result is not itself evaluated.
-
-The same mutation is not counted twice merely because both pre- and post-action hooks exist. Stable event identities distinguish independent evidence from a retry. Retrying a committed send or task event reuses the existing operation and does not add another confidence vote.
-
-Agent mutation controllers serialize the classifier check and mutation boundary. The agent's session key is revalidated after asynchronous waits; a session superseded by a resume cannot complete a pending write.
-
-This is execution policy, not a replacement for task, claim, channel or room authorization. In particular, existing claim conflict/revision semantics remain owned by TaskStore. Free-form messages still depend on accurate event/thread semantics; Hivemind cannot infer arbitrary off-platform tool use or work performed outside its coordination APIs.
-
-## Confidence and anti-flapping
-
-The policy is versioned in `src/shared/adaptive-topology-policy.ts`.
-
-- High confidence is **0.90**, inclusive.
-- Values below **0.60** do not authorize a mode transition, even after repetition.
-- An **incoherent** answer (see *Sufficiency cross-check*) never authorizes a transition either, whatever confidence Jev reported: the policy treats it exactly like one below 0.60 and it resets the confirmation streak.
-- High-confidence escalation can apply on the first independent event.
-- Medium-confidence escalation requires two consecutive matching targets.
-- De-escalation to a non-Single target requires two consecutive matching targets.
-- Any transition to Single requires **two consecutive evaluations each at least 0.90**, or **three consecutive medium-confidence evaluations**, plus a safe checkpoint.
-- A target change resets the confirmation streak. Worker-count changes participate in target identity.
-- After an actual transition, two new coordination events must occur before another automatic transition. Initial selection does not consume this cooldown.
-
-A medium-confidence evaluation followed by one high-confidence evaluation is not two high-confidence confirmations. These values are explicitly selected policy parameters, not empirically proven calibration of Jev on Hivemind workloads.
-
-## Safe delayed de-escalation
-
-Hivemind records a pending target while useful distributed work is still active. New delegation pauses; existing work may report results and finish. It is not cancelled just to reduce the mode.
-
-Single requires no active delegated task/thread, worker still needed, open blocker/dependency or unreconciled held claim. The brain's acceptance of a result is distinct from the worker merely submitting it. The acceptance mutation can release a pending downgrade because revalidation observes the committed state.
-
-A Room-to-Single downgrade remains a direct transition: no artificial intermediate Brain+1 or Multi-DM execution is required.
-
-## Provider failure
-
-During ongoing execution, timeout, network failure, malformed response or unstable capacity **preserves the current topology**. A failed call is not evidence for a downgrade or escalation. Human sees a warning that the current mode is not being revalidated; a subsequent successful evaluation clears provider-unavailability status.
-
-The initial request has no previous mode, so it uses the configured feasible fallback when classification is unavailable or too uncertain. This initial fallback is separate from ongoing preserve-current behavior.
-
-### Why Jev's answer was not used (#209)
-
-Hivemind never says "Jev unavailable" when an answer arrived. Every call falls in exactly one case (`jevAnswerState` in `src/shared/jev-outcome.ts`), and the routing warning, panel, strip and Routing log name it together with the mode that was used instead:
-
-| Case | When | `providerAvailable` | Evidence | Example warning (initial / ongoing) |
-| --- | --- | --- | --- | --- |
-| Unavailable | No response: timeout, network error, HTTP error, or a request that was never sent | false | `unavailable` | `Jev unavailable (timeout) · used fallback Brain + 1` / `Jev unavailable (http_503) · current mode kept, not revalidated` |
-| Answer rejected | A response arrived but could not be used (malformed, a plan that was not offered) | false | `unavailable` | `Jev answer rejected (plan_not_offered) · used fallback Brain + 1` / `… · current mode kept, not revalidated` |
-| Uncertain | A valid answer below 0.60 | true | `ok`, counted in `uncertainAttempts` | `Jev uncertain (17%) · used fallback Brain + 1` / no warning: the mode is kept |
-| Incoherent | A valid answer whose parts contradict each other | true | `ok`, counted in `uncertainAttempts` and `incoherentAttempts` | `Jev uncertain (incoherent: plan contradicts sufficiency) · used fallback Brain + 1` / no warning: the mode is kept |
-| Capacity changed | Jev answered, but worker capacity changed during the call | false | `ok` (the call itself succeeded) | `Capacity changed during the Jev call · used fallback …` |
-
-With a Human lock, an uncertain answer is irrelevant and produces no warning; a failed call is surfaced as `… · your <mode> lock applies`. Ongoing uncertain and incoherent evaluations are listed in the Routing panel as `Jev uncertain (…) · would choose <mode> · kept <mode>`. Warnings recorded before #209 keep their original text.
-
-The HTTP adapter uses a bounded timeout, rejects redirects, and caps both the routing request and streamed response. Errors are represented by sanitized failure classes rather than provider response bodies or credentials. Owned-server shutdown cancels and drains routing activity before closing SQLite; callers injecting their own Hive own its runtime/database lifecycle.
+Jev sees capacity from the brain's point of view: a live worker is *free*, *working for this brain* (it holds unfinished structured work this brain assigned) or *busy elsewhere* (work from another brain). Free-form DM delegation is not tracked. Capacity is context for the advice, never a limit.
 
 ## TypeSafe API and privacy
 
@@ -128,88 +87,65 @@ Authorization: Bearer <TypeSafe API key>
 model: <requested Jev model; default jev-latest>
 ```
 
+The snapshot sent with each call includes the original request, the project slug and name, worker capacity and available worker metadata, counts of the brain's active work/blockers/dependencies, the last few brain actions (kind, event type, short summary), the triggering action with a summary of at most 400 characters, and the previous decision. It does not send repository files, diffs, attachment contents, full conversation history, agent credentials or the TypeSafe key. Telegram's sender-display prefix is excluded from the request; the stored Telegram message is unchanged.
+
+The key lives in `<HIVEMIND_HOME>/adaptive-routing.json`, written atomically with mode `0600`. The Human API returns only whether a key exists and a suffix hint, never the full saved key. The HTTP adapter uses a bounded timeout, rejects redirects, and caps both the request and the streamed response. Errors are represented by sanitized failure classes, never provider response bodies or credentials. Shutdown cancels in-flight calls (the action still answers, with `unavailable` advice) before closing SQLite.
+
 ### Jev model: alias or pinned identifier
 
-By default Hivemind requests the alias `jev-latest`, which TypeSafe may resolve to a different model over time. For reproducible routing evaluation, Human can pin an exact identifier in **Adaptive routing · Jev → Fallback and advanced options → Jev model identifier** (or `PUT /api/ui/adaptive-routing` with `{"model": "<id>"}`; `null` or an empty string returns to the alias). The identifier is bounded: 1–64 letters, digits, dots, underscores or hyphens, starting and ending with a letter or digit. It can never be a URL, host or path, and the TypeSafe endpoint is fixed regardless of it.
+By default Hivemind requests the alias `jev-latest`, which TypeSafe may resolve to a different model over time. For reproducible evaluation, Human can pin an exact identifier in **Adaptive routing · Jev → Advanced options → Jev model identifier** (or `PUT /api/ui/adaptive-routing` with `{"model": "<id>"}`; `null` or an empty string returns to the alias). The identifier is bounded: 1–64 letters, digits, dots, underscores or hyphens, starting and ending with a letter or digit. It can never be a URL, host or path, and the TypeSafe endpoint is fixed regardless of it.
 
-- Configuration files saved before this setting have no `model` field and keep using the alias. Reading them never enables Jev or contacts TypeSafe, and the alias is not written back to the file.
-- Hivemind does not list models or prices and does not verify that an identifier exists or is immutable. An unavailable identifier makes the call fail (`http_<status>` in the Routing log); ongoing work preserves its current topology and the initial request uses its fallback, exactly as for any other provider failure. Hivemind never retries with a different model.
-- The Routing log, the evidence export and the Human connection test use the configured identifier. Each call records the **requested** model and the **resolved** model the provider reports, separately; a difference is shown, never rewritten.
-- The requested alias resolving to a concrete version is normal and is shown as information (`jev-latest → jev-1.13.0`). Only a **pinned** identifier that resolves to something else is flagged (*differs from the pinned model*).
-- Changing the model is a settings change: it invalidates in-flight initial and ongoing classifications and connection-test revisions, just like key or fallback changes.
+- Configuration files saved before this setting have no `model` field and keep using the alias. Reading them never enables Jev or contacts TypeSafe.
+- Hivemind does not list models or prices and does not verify that an identifier exists or is immutable. An unavailable identifier makes the call fail (`http_<status>`), and the brain gets `unavailable` advice. Hivemind never retries with a different model.
+- Each call records the **requested** model and the **resolved** model the provider reports, separately. The alias resolving to a concrete version is shown as information (`jev-latest → jev-1.13.0`); only a pinned identifier that resolves to something else is flagged.
+- Changing the model affects later calls and revokes pending connection-test revisions. A call already in flight still returns its advice.
 
 ### Question design (contract v3)
 
-The routing contract is `adaptive-routing-v3` (#207). Every call asks the atomic signal questions (single-agent sufficiency, complexity, parallelizability, coupling, specialization and coordination) plus **one joint `plan` choice**. Contract `adaptive-routing-v2` asked for the topology (`target_topology`) and the worker budget (`worker_budget`) independently, so Jev could answer an impossible pair such as Brain + 1 with 2 workers; v3 makes that inexpressible. The provider contract is documented at <https://docs.typesafe.ai/api>.
-
-The `plan` options are built from the capacity usable by the execution at the time of the call (`usable`), each with human-readable criteria:
+The contract is `adaptive-routing-v3` (#207). Every call asks the atomic signal questions (single-agent sufficiency, complexity, parallelizability, coupling, specialization and coordination) plus **one joint `plan` choice**, so a topology/worker-count contradiction cannot be expressed. The provider contract is documented at <https://docs.typesafe.ai/api>.
 
 | Option id | Plan | Offered when |
 | --- | --- | --- |
-| `single` | Single · 0 workers | Unless Human requires orchestration and a worker is usable |
+| `single` | Single · 0 workers | always |
 | `brain_one_worker` | Brain + 1 · 1 worker | `usable ≥ 1` |
 | `brain_multi_dm_<n>` | Multi-DM · n workers | `2 ≤ n ≤ min(usable, 8)` |
 | `brain_multi_room_<n>` | Multi-Room · n workers | `2 ≤ n ≤ min(usable, 8)` |
-| `capacity_blocked` | Orchestration needed but infeasible (keep safe local work) | `usable = 0`, or Human requires orchestration and only Brain + 1 fits |
+| `capacity_blocked` | Workers would help, none usable | `usable = 0` |
 
-- **Cap (`MAX_PLAN_WORKERS = 8`).** Every option is sent and billed on every call and takes a share of Jev's probability mass, and one brain cannot usefully supervise more parallel workstreams. With the cap the question has at most 18 options, far below TypeSafe's 255-option Choice limit. When the execution already runs a multi-worker plan above the cap that is still feasible, that worker count stays offered (as Multi-DM and Multi-Room), so the cap alone never pushes a running execution down.
-- The chosen option alone gives the decision's topology and worker count; `capacity_blocked` maps to Single · 0 with `needsOrchestration`. `singleSufficient` comes from the sufficiency answer and `needsOrchestration` is `capacity_blocked` or "insufficient", as before.
-- Overall confidence is the lowest confidence among the plan and signal answers.
-- **Sufficiency cross-check.** A `single` plan together with "insufficient" while workers are usable is **incoherent**: "delegation materially helps" and "use no worker" cannot both be followed, and Hivemind never picks one reading for Jev. Since #209 such an answer is no longer rejected: it is a valid call (`providerStatus: ok`, Jev stays available, its tokens and answers are recorded) flagged `incoherent: "plan_vs_sufficiency"` with reason `incoherent_plan_vs_sufficiency`, in the decision, the routing event, the Routing log and the evidence export. Jev's reported confidence is kept unchanged for transparency, but the answer is uncertain by definition: initial routing uses the fallback, and ongoing routing keeps the current mode without counting a provider failure. Hivemind chose a flag over lowering the stored confidence so the log shows what Jev actually said, and every place that could act on an answer goes through one check (`jevDecisionActionable`, and `incoherent` in the policy evidence). The reverse ("sufficient" with a delegating plan) is coherent and used normally: the brain could work alone, but delegation can still pay off.
+`usable` counts free workers plus those already working for this brain (`already_working_for_this_brain` in the question; they are not counted twice). Every option is sent and billed on every call, so the worker count is capped at `MAX_PLAN_WORKERS = 8` (at most 17 options). Overall confidence is the lowest confidence among the plan and signal answers. A `single` plan together with "insufficient" while workers are usable is **incoherent** (#209): it is kept as a valid call with Jev's reported confidence, flagged `incoherent: "plan_vs_sufficiency"`, and delivered as `incoherent` advice. The reverse ("sufficient" with a delegating plan) is coherent.
 
 ### Rejection reasons
 
-A call that does not produce a usable decision keeps the current mode (or uses the initial fallback) and records one specific failure class. When the response arrived and was read, its **resolved model and token usage are recorded even though the answer was rejected**, in the Routing log and in the evidence export (those tokens were spent).
+A call that does not produce a usable answer records one specific failure class, which becomes the advice's `reason`. When the response arrived and was read, its resolved model and token usage are recorded even though the answer was rejected.
 
 | Code | Meaning |
 | --- | --- |
 | `plan_not_offered` | Jev chose a plan that was not among the offered options |
-| `plan_contradicts_sufficiency` | Before #209 only: Jev chose Single while saying the brain alone is not enough. Now accepted as an incoherent (uncertain) answer; older calls keep this code |
+| `plan_contradicts_sufficiency` | Before #209 only; such answers are now incoherent advice |
 | `malformed_answer:<question>` | An answer is missing or has the wrong type, confidence, choice or score |
 | `probabilities_invalid:<question>` | An answer's probability distribution is missing, has the wrong keys, does not sum to 1, or its choice is not the most likely option |
 | `model_missing` / `missing_usage` | The response does not name the resolved model / does not report token usage |
 | `malformed_response` | The body is empty, not JSON, or not a JSON object |
-| `response_too_large` / `request_too_large` | The response or the routing request exceeds its size bound |
+| `response_too_large` / `request_too_large` | The response or the request exceeds its size bound |
 | `http_<status>` | TypeSafe answered with an HTTP error (for example `http_503`) |
-| `timeout` / `cancelled` / `network` | No answer in time / the call was cancelled at shutdown / TypeSafe could not be reached |
+| `timeout` / `cancelled` / `network` | No answer in time / cancelled at shutdown / TypeSafe could not be reached |
 | `invalid_model_setting` / `invalid_timeout` / `invalid_snapshot` / `internal_error` | Local problems; nothing (or nothing usable) was sent |
 
-The decision's `reason` is `response_rejected_preserve_current` when the response was read and rejected, `provider_timeout_preserve_current` on timeout, and `provider_unavailable_preserve_current` otherwise; the failure class is the decision's `error`. Calls logged before #207 keep their original text (for example "Invalid Jev response") and their v2 questions still render.
+## Storage
 
-The structured snapshot includes the original request, current and pending mode, capacity and available worker metadata, counts of active work/blockers/dependencies, recent coordination-event metadata, the triggering coordination summary, Human override, and the previous decision. It does not send repository files, diffs, attachment contents, full conversation history, agent credentials, or the TypeSafe key as classifier state. Telegram's sender-display prefix is excluded from the routing request; the original stored Telegram message remains unchanged.
+Migration 27 (`jev_advisory`, `src/server/migrations/jev-advisory.ts`) upgrades existing databases on the first start:
 
-The key lives in `<HIVEMIND_HOME>/adaptive-routing.json`, written atomically with mode `0600`. The Human API returns only whether a key exists and a suffix hint, never the full saved key.
+- drops `adaptive_topology_locks` (Human locks), `adaptive_topology_tasks` and `adaptive_topology_messages` (task and free-form delegation links used for admission and worker budgets) and `adaptive_topology_evaluated` (the anti-flapping vote ledger);
+- deletes draining (non-current) executions, rebuilds `adaptive_topology_executions` with one row per (channel, brain) and strips the enforcement fields (applied mode, budget, pending target, lock, confirmations, warning) from their snapshots, keeping the latest decision;
+- clears `adaptive_topology_events`, whose transitions, locks and warnings described enforcement (the full history remains in `jev_calls`);
+- keeps `jev_calls` and the evidence tables (`adaptive_evidence_runs`, `adaptive_evidence_attempts`) unchanged. New evidence is recorded with policy version `topology-advisory-v1`, so it is never pooled with evidence of the enforced `topology-policy-v2.1`.
 
-## Jev call history (Human-only)
+## What changed in #211
 
-Each project has a **Routing log** entry in the left sidebar, below Decisions (`#/routing-log/<project>`; the older `#/jev/<project>` link still works). It lists every request Hivemind sent to Jev (TypeSafe) and its answer, grouped by the Human request (execution) that caused it, newest activity first. Each call shows why it was made (your request, your thread reply, a brain message, a delegation attempt, a task review, a room change or a capacity change), Jev's answer in one line, and what Hivemind did with it: applied a new mode, confirmed the current one, kept it while waiting for confirmation, kept it or used the fallback because Jev was unavailable, rejected, uncertain or incoherent, recorded an observation only, or discarded the answer because routing state changed during the call.
+Removed: applied topologies and worker budgets, delegation admission (409 responses, permits, per-brain coordination lanes), room/DM restrictions, pending de-escalation and draining executions, the anti-flapping policy (confirmation streaks, cooldown), Human locks and their API (`PUT /api/ui/channels/:id/adaptive-routing/lock`), the composer mode selector and the Human send fields `routing` and `lockScope`, the `[Hivemind adaptive topology · …]` directive message, the mandatory `executionId`, the `adaptiveRouting`/`adaptiveExecutions` fields of agent responses, and the fallback settings. The live host of the paired topology study ([topology-study-runner.md](topology-study-runner.md)) is legacy: it needed fixed, enforced baselines.
 
-Selecting a call shows:
-
-1. **Sent to Jev**: the request text and the context sent with it (mode at the time, worker capacity, delegated work, locks, triggering message).
-2. **Jev's answers**: every question with its answer, confidence and probability distribution.
-3. **Decision and result**: recommendation, overall confidence (the lowest answer confidence), reason, what Hivemind applied, requested and resolved model, latency and tokens.
-4. **Raw JSON**: the exact request body sent to TypeSafe and the parsed response.
-
-The full payloads are stored only in the local SQLite database (`jev_calls`), are served only on the authenticated Human API (`GET /api/ui/projects/:project/jev-calls` and `/jev-calls/:id`), and never include the TypeSafe key or provider error bodies. Failed calls keep what was sent and a local failure class (for example `timeout`, `http_503` or `plan_not_offered`), shown in plain words; a rejected answer is labelled **Answer rejected** (not "Jev unavailable") and still shows Jev's answers, the resolved model and the tokens it used. An uncertain answer is labelled `· uncertain`, and an incoherent one `· uncertain · incoherent: plan contradicts sufficiency`, with a note that Hivemind did not act on it. History is bounded to the latest 1,000 calls per project and is removed with its channel or project. New calls appear live through the Human `jev-call` websocket event.
-
-## Human-only evaluation history
-
-Phase 2 audit records live in separate SQLite routing tables and are broadcast on the authenticated Human `adaptive-routing` websocket topic. They do not create ordinary chat messages, inbox items, mentions or agent notifications. The Routing panel shows retained evaluations, recommendations and observations, with one tab per brain when several brains have executions in the channel; a lock applies to the selected brain's execution. Applied transitions are exposed separately for the Human UI.
-
-A single initial applied-policy directive accompanies the original Human request. It is operational instruction, not the evaluation history. Agent API responses expose only the compact applied policy: execution ID, current topology, worker budget, whether delegation is paused and whether Human has locked the mode. Confidence votes, model/usage metrics and recommendations are not returned as agent context.
-
-The Human view currently returns the latest 100 retained events, with bounded storage of 500 events per channel. The current recommendation retains provider model, latency and input/output usage; unknown monetary cost is not invented.
-
-HTTP snapshots and websocket updates merge using a monotonically increasing channel revision, not arrival order. Navigation and reconnect fence earlier requests; a delayed lock response cannot edit another execution. Lock writes from the UI include the execution ID and revision they were based on. The monitoring indicator distinguishes **active**, **waiting for the next check**, **disabled**, **unavailable**, and **completed** rather than showing a stale green status after Jev is switched off.
-
-The brain or Human completes an execution by marking the original request thread done, after delegated work and claims have been reconciled. Human may also complete a request whose free-form delegations are still open: they are released and the routing audit records a warning; structured tasks and claims must still be finished or reconciled. Human closes every brain's execution rooted at that thread; a brain closes only its own. Conversation locks are kept per brain and channel; databases from earlier releases are migrated from channel-only keys on startup. Closing/reopening the execution and the thread is one transaction. Closed executions are not continuously reclassified; one-request/task overrides expire, while conversation locks remain available for the next request. Replacing a legacy request while Jev is disabled does not resurrect an old execution on re-enable (one with delegated work drains instead of being completed). Executions are keyed by execution ID with one current execution per brain and channel; databases from earlier releases are migrated on startup, keeping every existing execution current. The Routing panel shows each brain's current execution; a draining one appears through its audit events (superseded while draining, then drained) and its row is dropped at that brain's next request once finished. Channel/project deletion removes routing state, locks and audit in the same database transaction. Routing-vote deduplication is bounded to 5,000 entries per live execution; committed operations retain their own independent retry ledgers.
-
+Kept: Jev calls on Human requests and brain actions, the contract v3 question design, the precise answer states of #209/#210, the Routing log, evidence and collector health, the model pin and the connection test.
 
 ## Tests and validation
 
-The tests use fake TypeSafe responses with real local SQLite, HTTP and UI boundaries. They do not spend a live provider key or establish production model quality.
-
-Focused coverage includes authenticated real websocket delivery, stale UI snapshots and reconnect, lifecycle/lock races, malformed and oversized provider replies, destination-aware hysteresis, direct jumps, the inclusive 0.90 threshold, retry identity, Human override precedence, provider failure/recovery, audit/context isolation, actual task admission/link atomicity, free-form commitments, capacity ownership and delayed Single transitions after accepted results.
-
-Run the repository's standard lint, typecheck, unit, integration, browser and coverage jobs before merge. A green fixture suite establishes the implementation contract, not calibrated routing quality on real workloads.
+The tests use fake TypeSafe responses with real local SQLite, HTTP and UI boundaries; they never call the real provider. `src/server/jev-advisory.test.ts` covers: a delegation that contradicts Jev's advice succeeds; every brain action returns `jevAdvice` after exactly one Jev call while workers trigger none; a provider failure lets the action succeed with `unavailable` advice; the Human send has no routing or lock fields; shutdown and project deletion. `src/server/migrations/runner.test.ts` covers the migration on the populated fixture. `web/adaptive-routing-workflows.test.tsx` covers the strip, the panel without locks and the composer without a selector.
