@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Hive } from "./hive.ts";
+import { countRows } from "./test-fixtures.ts";
 import { createApp } from "./app.ts";
 import { BotIngressBudget, readLimitedJson, assertLocalHumanRequest, BOT_JSON_BYTES } from "./ingress.ts";
 import { HiveError } from "../shared/types.ts";
@@ -136,7 +137,7 @@ test("local Human boundary rejects bot credentials, foreign browsers and rebindi
 test("HTTP rejects malformed/oversized ingress, unknown fields and credential URLs before publishing", async t => {
   const f = fixture(t), app = createApp(f.hive);
   const url = `http://localhost/api/bot/channels/${f.channelA.id}/messages`;
-  const before = f.hive.db.prepare("SELECT count(*) AS n FROM messages").get()!.n;
+  const before = countRows(f.hive, "messages");
   for (const body of ["{", JSON.stringify({ eventId: "too-large", body: "x".repeat(BOT_JSON_BYTES) }),
     JSON.stringify({ eventId: "wrong-plugin", body: "test", pluginId: "unknown" }),
     JSON.stringify({ eventId: "wrong-type", body: "test", type: "execute" })]) {
@@ -150,7 +151,7 @@ test("HTTP rejects malformed/oversized ingress, unknown fields and credential UR
   const body = { eventId: "ok", body: "observation" };
   assert.equal((await app.request(jsonRequest(url, body, f.botA.token))).status, 201);
   assert.equal((await app.request(jsonRequest(url, body, f.botA.token))).status, 200);
-  assert.equal(f.hive.db.prepare("SELECT count(*) AS n FROM messages").get()!.n, Number(before) + 1);
+  assert.equal(countRows(f.hive, "messages"), before + 1);
 });
 
 test("a credential revoked while JSON is streaming cannot commit an observation", async t => {
@@ -168,7 +169,7 @@ test("a credential revoked while JSON is streaming cannot commit an observation"
   controller.enqueue(new TextEncoder().encode(JSON.stringify({ eventId: "in-flight", body: "denied" })));
   controller.close();
   assert.equal((await result).status, 401);
-  assert.equal(f.hive.db.prepare("SELECT count(*) AS n FROM bot_events").get()!.n, 0);
+  assert.equal(countRows(f.hive, "bot_events"), 0);
 });
 
 test("parallel retries publish one event, retry conflicts do not poison the next transaction on Node 22.13", async t => {
@@ -208,7 +209,7 @@ test("bot HTTP credentials cannot enumerate another project, use Human/plugin se
   }
   const cross = `http://localhost/api/bot/channels/${f.channelB.id}/messages`;
   assert.equal((await app.request(jsonRequest(cross, { eventId: "foreign", body: "denied" }, f.botA.token))).status, 404);
-  assert.equal(f.hive.db.prepare("SELECT count(*) AS n FROM bot_events").get()!.n, 0);
+  assert.equal(countRows(f.hive, "bot_events"), 0);
 });
 
 test("bot burst refusals carry retry guidance and another bot keeps its own budget", async t => {
@@ -238,7 +239,7 @@ test("credentials remain hashes across restart; HTTP and internal error diagnost
   assert.equal(result.status, 500);
   assert.equal(await result.text(), '{"error":"Internal server error"}');
   assert.doesNotMatch(JSON.stringify(logs), new RegExp(f.botA.token));
-  f.hive.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  f.hive.db.exec("PRAGMA wal_checkpoint(TRUNCATE)"); // schema-level assertion: flush WAL to inspect the file
   assert.equal(readFileSync(f.dbPath).includes(Buffer.from(f.botA.token)), false);
   assert.ok(statSync(f.dbPath).size > 0);
   assert.equal(statSync(f.dbPath).mode & 0o777, 0o600);

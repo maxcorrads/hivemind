@@ -7,6 +7,7 @@ import { test, type TestContext } from 'node:test';
 import { Hive } from './hive.ts';
 import { HiveError } from '../shared/types.ts';
 import { replayTimeline, TIMELINE_RETENTION_MS } from '../shared/timeline.ts';
+import { backdate, countRows } from './test-fixtures.ts';
 
 function fixture(t: TestContext) {
   const dir=mkdtempSync(path.join(os.tmpdir(),'hive-timeline-')), file=path.join(dir,'hive.db');
@@ -81,17 +82,17 @@ test('generic trace metadata is opt-in and rejects invisible cross-project causa
 
 test('retention pruning never deletes active-task provenance or changes live task state', t => {
   const f=fixture(t), old=Date.now()-TIMELINE_RETENTION_MS-1000;
-  f.hive.db.prepare('UPDATE message_provenance SET created_at=? WHERE trace_id=?').run(old,f.task.id);
+  backdate(f.hive,'message_provenance','created_at',{trace_id:f.task.id},old);
   const before=f.hive.tasks.get(f.brain.agent,f.task.id);
   f.hive.timeline.prune(Date.now());
-  assert.equal(f.hive.db.prepare('SELECT COUNT(*) AS n FROM message_provenance WHERE trace_id=?').get(f.task.id)!.n,1);
+  assert.equal(countRows(f.hive,'message_provenance',{trace_id:f.task.id}),1);
   assert.deepEqual(f.hive.tasks.get(f.brain.agent,f.task.id),before);
 
   f.hive.tasks.event(f.worker.agent,f.task.id,{requestId:'accept-prune',expectedRevision:1,action:{type:'accept'}});
   f.hive.tasks.event(f.worker.agent,f.task.id,{requestId:'result-prune',expectedRevision:2,action:{type:'result',result:{
     summary:'done',artifacts:[],checks:[],gaps:[],evidenceSeqs:[]}}});
   f.hive.tasks.event(f.brain.agent,f.task.id,{requestId:'review-prune',expectedRevision:3,action:{type:'review',decision:'accepted',summary:'ok',evidenceSeqs:[]}});
-  f.hive.db.prepare('UPDATE message_provenance SET created_at=? WHERE trace_id=?').run(old,f.task.id);
+  backdate(f.hive,'message_provenance','created_at',{trace_id:f.task.id},old);
   const removed=f.hive.timeline.prune(Date.now());
   assert.ok(removed.provenanceDeleted>=1);
   assert.equal(f.hive.tasks.get(f.brain.agent,f.task.id).state,'accepted_complete');

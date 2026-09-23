@@ -5,6 +5,7 @@ import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { test } from "node:test";
 import { Hive } from "./hive.ts";
+import { failWrites, hasRow, readValue } from "./test-fixtures.ts";
 import { createApp } from "./app.ts";
 import { TelegramBridge, writeTelegramFile } from "./telegram.ts";
 import { recordTelegramFailure, enqueueTelegramPending, TELEGRAM_FAILURE_CAP, telegramBotKey } from "./telegram-outbox.ts";
@@ -71,7 +72,7 @@ test("real bridge resumes only the failed part after restart and Human retry wak
     await until(() => sent.length === 4);
     assert.deepEqual(sent, ["text", "a.txt", "b.txt", "b.txt"]);
     assert.equal(hive.telegramFailureCount(), 0);
-    assert.equal((hive.db.prepare("SELECT resolution FROM telegram_failures WHERE id = ?").get(failure.id) as { resolution: string }).resolution, "retried");
+    assert.equal(readValue(hive, "telegram_failures", "resolution", { id: failure.id }), "retried");
   } finally {
     await bridge?.stop();
     hive.db.close();
@@ -88,13 +89,13 @@ test("retry rejects changed bot/chat and rolls back queue insertion on an audit 
   for (const dest of [undefined, { ...original, chatId: -1002 }, { ...original, botKey: telegramBotKey("b") }]) {
     assert.throws(() => hive.retryTelegramFailure(failure.id, () => dest), /destination changed or unknown/);
   }
-  hive.db.exec(`CREATE TEMP TRIGGER fail_audit BEFORE UPDATE ON telegram_failures BEGIN SELECT RAISE(ABORT, 'fixture audit failure'); END`);
+  const restoreAudit = failWrites(hive, "telegram_failures", { on: "update", message: "fixture audit failure" });
   assert.throws(() => hive.retryTelegramFailure(failure.id, () => original), /fixture audit failure/);
-  assert.equal(hive.db.prepare("SELECT 1 FROM telegram_pending WHERE seq = ?").get(message.seq), undefined);
+  assert.equal(hasRow(hive, "telegram_pending", { seq: message.seq }), false);
   assert.equal(hive.telegramFailureCount(), 1);
-  hive.db.exec("DROP TRIGGER fail_audit");
+  restoreAudit();
   let wake = 0;
-  hive.bus.on("telegram-outbox-wake", () => { wake++; assert.ok(hive.db.prepare("SELECT 1 FROM telegram_pending WHERE seq = ?").get(message.seq)); });
+  hive.bus.on("telegram-outbox-wake", () => { wake++; assert.ok(hasRow(hive, "telegram_pending", { seq: message.seq })); });
   hive.retryTelegramFailure(failure.id, () => original);
   assert.equal(wake, 1);
 });

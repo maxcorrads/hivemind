@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { test, type TestContext } from "node:test";
 import { Hive } from "./hive.ts";
 import { STORAGE_VERSION } from "./storage-migrations.ts";
+import { failWrites, findRow, insertRow, readValue } from "./test-fixtures.ts";
 
 function temp(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-migrations-"));
@@ -58,6 +59,7 @@ for (const chatColumn of [false, true]) {
     legacy(file, chatColumn);
     const hive = new Hive(file);
     try {
+      // schema-level assertion: migrated table shapes and rewritten legacy rows.
       assert.equal((hive.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, STORAGE_VERSION);
       const expectedChat = chatColumn ? -123 : 0;
       assert.deepEqual(hive.db.prepare("SELECT telegram_chat_id, telegram_message_id, payload FROM telegram_hold ORDER BY telegram_message_id").all().map((r) => ({ ...r })), [
@@ -77,7 +79,7 @@ for (const chatColumn of [false, true]) {
 test("fresh install and an unversioned current-main database are idempotent", (t) => {
   const { file } = temp(t);
   const first = new Hive(file);
-  first.db.exec("PRAGMA user_version = 0");
+  first.db.exec("PRAGMA user_version = 0"); // schema-level assertion
   first.db.close();
   const second = new Hive(file);
   second.db.close();
@@ -157,7 +159,7 @@ for (const mutation of [
   test(`reject inconsistent/version-unknown current schemas without mutations: ${mutation}`, (t) => {
     const { file } = temp(t);
     const hive = new Hive(file);
-    hive.db.exec(mutation);
+    hive.db.exec(mutation); // schema-level assertion
     hive.db.close();
     const before = snapshot(file);
     assert.throws(() => new Hive(file), /Invalid storage schema|Unsupported storage schema/);
@@ -168,6 +170,7 @@ for (const mutation of [
 test("unversioned lookalike tables without the composite key are rejected rather than marked migrated", (t) => {
   const { file } = temp(t);
   const hive = new Hive(file);
+  // schema-level assertion
   hive.db.exec("PRAGMA user_version = 0; ALTER TABLE telegram_hold RENAME TO old_hold; CREATE TABLE telegram_hold AS SELECT * FROM old_hold; DROP TABLE old_hold");
   hive.db.close();
   const before = snapshot(file);
@@ -193,14 +196,15 @@ test("project, channel, DM, join and invitation failures roll back all rows and 
     assert.deepEqual(events, []);
   };
   check(() => hive.invite(brain, room.id, [worker.name, "missing-fixture"]), /No agent named/);
-  hive.db.exec(`CREATE TRIGGER fail_membership BEFORE INSERT ON channel_members WHEN NEW.agent_id = '${worker.id}'
-    BEGIN SELECT RAISE(ABORT, 'injected membership failure'); END`);
+  const restoreMembership = failWrites(hive, "channel_members", {
+    when: `NEW.agent_id = '${worker.id}'`, message: "injected membership failure", persistent: true,
+  });
   check(() => hive.createChannel(brain, { name: "public-fault", type: "public" }), /membership failure/);
   check(() => hive.openDm(brain, worker.name), /membership failure/);
-  hive.db.exec("DROP TRIGGER fail_membership");
-  hive.db.exec(`CREATE TRIGGER fail_brains BEFORE INSERT ON channel_members
-    WHEN (SELECT type FROM channels WHERE id = NEW.channel_id) = 'brains'
-    BEGIN SELECT RAISE(ABORT, 'injected brains failure'); END`);
+  restoreMembership();
+  failWrites(hive, "channel_members", {
+    when: "(SELECT type FROM channels WHERE id = NEW.channel_id) = 'brains'", message: "injected brains failure", persistent: true,
+  });
   check(() => hive.createProject(human, { name: "Fault", slug: "fault" }), /brains failure/);
   check(() => hive.join({ role: "brain" }), /brains failure/);
 });
@@ -235,9 +239,9 @@ test("the documented stopped-home WAL-aware backup restores messages, attachment
     const human = hive.getAgent("human");
     const attachment = await hive.createFileFromBytes(human, { name: "fixture.txt", mime: "text/plain", bytes: Buffer.from("backup fixture") });
     const message = hive.postMessage(human, { channel: "general", body: "backup", attachmentIds: [attachment.id] });
-    hive.db.prepare("INSERT INTO telegram_out VALUES (?, ?, ?, ?, ?)").run(-100, 7, message.seq, "general", null);
-    hive.db.prepare("INSERT INTO telegram_topics VALUES (?, ?, ?)").run("general", 11, -100);
-    hive.db.prepare("INSERT INTO telegram_hold VALUES (?, ?, ?, ?)").run(-100, 8, 11, "{}");
+    insertRow(hive, "telegram_out", { telegram_chat_id: -100, telegram_message_id: 7, seq: message.seq, channel_id: "general", thread_id: null });
+    insertRow(hive, "telegram_topics", { channel_id: "general", telegram_thread_id: 11, telegram_chat_id: -100 });
+    insertRow(hive, "telegram_hold", { telegram_chat_id: -100, telegram_message_id: 8, telegram_thread_id: 11, payload: "{}" });
     assert.ok(existsSync(`${file}-wal`) && statSync(`${file}-wal`).size > 0);
   } finally { hive.db.close(); }
   // All connections are closed before copying the complete home, including any remaining WAL/SHM files.
@@ -245,9 +249,9 @@ test("the documented stopped-home WAL-aware backup restores messages, attachment
   const copy = new Hive(restored.file);
   try {
     assert.deepEqual(snapshot(restored.file), snapshot(file));
-    const row = copy.db.prepare("SELECT id, sha256 FROM attachments").get() as { id: string; sha256: string };
+    const row = findRow(copy, "attachments", {}, ["id", "sha256"]) as { id: string; sha256: string };
     assert.equal(readFileSync(path.join(restored.dir, "files", row.sha256), "utf8"), "backup fixture");
     assert.equal(copy.getAttachment(copy.getAgent("human"), row.id).channelId, "general");
-    assert.equal(copy.db.prepare("SELECT seq FROM telegram_out WHERE telegram_message_id = 7").get()?.seq, copy.getVisibleMessage(copy.getAgent("human"), 1).seq);
+    assert.equal(readValue(copy, "telegram_out", "seq", { telegram_message_id: 7 }), copy.getVisibleMessage(copy.getAgent("human"), 1).seq);
   } finally { copy.db.close(); }
 });

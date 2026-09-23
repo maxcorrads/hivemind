@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { Hive } from "./hive.ts";
+import { hasRow, insertRow, listRows, readValue } from "./test-fixtures.ts";
 import {
   TELEGRAM_PENDING_CAP,
   chatIdForProject,
@@ -113,10 +114,7 @@ test("telegram outbound pending drops reactions first, then oldest messages", ()
     enqueueTelegramPending(hive.db, seq, "message");
   }
   enqueueTelegramPending(hive.db, TELEGRAM_PENDING_CAP + 50, "reaction");
-  const rows = hive.db.prepare("SELECT seq, kind FROM telegram_pending ORDER BY seq ASC, kind ASC").all() as Array<{
-    seq: number;
-    kind: string;
-  }>;
+  const rows = listRows(hive, "telegram_pending", { columns: ["seq", "kind"], orderBy: ["seq", "kind"] });
   assert.equal(rows.length, TELEGRAM_PENDING_CAP);
   assert.equal(rows[0]?.seq, 51);
   assert.equal(rows[0]?.kind, "message");
@@ -235,8 +233,8 @@ test("telegram queue overflow dead-letters reactions before messages", () => {
   enqueueTelegramPending(hive.db, 1, "message", 2);
   enqueueTelegramPending(hive.db, 1, "reaction", 2);
   enqueueTelegramPending(hive.db, 2, "message", 2);
-  const pending = hive.db.prepare("SELECT seq, kind FROM telegram_pending ORDER BY seq, kind").all() as Array<{seq:number;kind:string}>;
-  assert.deepEqual(pending.map(row => ({ ...row })), [{ seq: 1, kind: "message" }, { seq: 2, kind: "message" }]);
+  const pending = listRows(hive, "telegram_pending", { columns: ["seq", "kind"], orderBy: ["seq", "kind"] });
+  assert.deepEqual(pending, [{ seq: 1, kind: "message" }, { seq: 2, kind: "message" }]);
   const failure = hive.telegramFailures(10)[0];
   assert.equal(failure?.seq, 1);
   assert.equal(failure?.kind, "reaction");
@@ -248,21 +246,16 @@ test("telegram delivery checkpoints survive restart and dead letters are retryab
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-tg-progress-"));
   const dbPath = path.join(dir, "hive.db");
   const hive = new Hive(dbPath);
-  hive.db.prepare(
-    `INSERT INTO telegram_delivery_parts
-      (seq, part_key, telegram_chat_id, telegram_message_id, completed_at, bot_key)
-     VALUES (?, ?, ?, ?, ?, 'fixture-key')`,
-  ).run(9, "attachment:a", -1001, 44, Date.now());
+  insertRow(hive, "telegram_delivery_parts", {
+    seq: 9, part_key: "attachment:a", telegram_chat_id: -1001, telegram_message_id: 44, completed_at: Date.now(), bot_key: "fixture-key",
+  });
   assert.equal(telegramPartDelivered(hive.db, 9, "attachment:a", -1001, "fixture-key"), true);
   recordTelegramFailure(hive.db, 9, "message", "boom", 5, -1001, "fixture-key");
   const failure = hive.telegramFailures(10)[0]!;
   hive.retryTelegramFailure(failure.id, () => ({ botKey: "fixture-key", chatId: -1001 }));
   assert.equal(hive.telegramFailureCount(), 0);
-  assert.ok(hive.db.prepare("SELECT 1 FROM telegram_pending WHERE seq = 9 AND kind = 'message'").get());
-  assert.equal(
-    (hive.db.prepare("SELECT resolution FROM telegram_failures WHERE id = ?").get(failure.id) as { resolution: string }).resolution,
-    "retried",
-  );
+  assert.ok(hasRow(hive, "telegram_pending", { seq: 9, kind: "message" }));
+  assert.equal(readValue(hive, "telegram_failures", "resolution", { id: failure.id }), "retried");
   hive.db.close();
 
   const reopened = new Hive(dbPath);

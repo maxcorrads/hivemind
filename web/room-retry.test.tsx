@@ -7,6 +7,7 @@ import { Window } from 'happy-dom';
 import { act } from 'react';
 import { Hive } from '../src/server/hive.ts';
 import { createApp } from '../src/server/app.ts';
+import { countRows } from '../src/server/test-fixtures.ts';
 import { RoomPanel } from './RoomPanel.tsx';
 
 // Import the DOM renderer after the DOM exists so its event system is real.
@@ -66,7 +67,7 @@ async function fixture(t: TestContext) {
     fail: (kind: typeof fault) => { fault = kind; },
     hold: () => { let release!: () => void; gate = new Promise<void>(resolve => { release = resolve; }); return () => { gate = null; release(); }; },
     edit: async () => { await click('Edit contract'); await input('Purpose', 'Changed synthetic rules'); await input('Reason for this change', 'Fixture edit'); },
-    count: () => hive.db.prepare('SELECT COUNT(*) AS n FROM room_events').get()!.n };
+    count: () => countRows(hive, 'room_events') };
 }
 
 for (const fault of ['disconnect', 'server', 'invalid-json'] as const) {

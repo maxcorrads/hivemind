@@ -6,6 +6,7 @@ import { test, type TestContext } from "node:test";
 import type { SQLInputValue } from "node:sqlite";
 import type { Message, WaitMailItem } from "../shared/types.ts";
 import { Hive } from "./hive.ts";
+import { addChannelMember, insertRows, markInboxRead, seedMessages } from "./test-fixtures.ts";
 
 function setup(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-queries-"));
@@ -38,20 +39,16 @@ function record(t: TestContext, hive: Hive) {
 }
 
 function fillAgents(hive: Hive, projectId: string, count: number, prefix: string) {
-  const insert = hive.db.prepare(`INSERT INTO agents
-    (id,name,role,seniority,token_hash,online,last_seen_at,created_at,inbox_cursor,project_id)
-    VALUES (?,?,'worker','mid',?,0,1,1,0,?)`);
-  for (let i = 0; i < count; i++) insert.run(`${prefix}${i}`, `${prefix}${i}`, `${prefix}${i}`, projectId);
+  insertRows(hive, "agents", Array.from({ length: count }, (_, i) => ({ id: `${prefix}${i}`, name: `${prefix}${i}`, role: "worker",
+    seniority: "mid", token_hash: `${prefix}${i}`, online: 0, last_seen_at: 1, created_at: 1, inbox_cursor: 0, project_id: projectId })));
 }
 function fillChannels(hive: Hive, projectId: string, actorId: string, count: number, prefix: string) {
-  const channel = hive.db.prepare("INSERT INTO channels VALUES (?,?,'private',NULL,'human',1,?)");
-  const member = hive.db.prepare("INSERT INTO channel_members VALUES (?,?)");
-  for (let i = 0; i < count; i++) {
-    const id = `${prefix}${i}`;
-    channel.run(id, id, projectId); member.run(id, actorId); member.run(id, "human");
-  }
+  const ids = Array.from({ length: count }, (_, i) => `${prefix}${i}`);
+  insertRows(hive, "channels", ids.map(id => ({ id, name: id, type: "private", topic: null, created_by: "human", created_at: 1, project_id: projectId })));
+  insertRows(hive, "channel_members", ids.flatMap(id => [{ channel_id: id, agent_id: actorId }, { channel_id: id, agent_id: "human" }]));
 }
 function plan(hive: Hive, call: Call): string {
+  // schema-level assertion: inspects SQLite query plans.
   return (hive.db.prepare(`EXPLAIN QUERY PLAN ${call.sql}`).all(...call.args) as { detail: string }[]).map((row) => row.detail).join("\n");
 }
 
@@ -62,12 +59,8 @@ test("50,000 unrelated agents and 2,000 channels do not enter scoped hydration; 
   const expectedChannels = hive.listChannels(worker);
   const baseline = initial.calls.map(({ count }) => count);
   initial.restore();
-  hive.db.exec("BEGIN");
-  try {
-    fillAgents(hive, other.id, 50_000, "other-agent-");
-    fillChannels(hive, other.id, "other-agent-0", 2_000, "other-channel-");
-    hive.db.exec("COMMIT");
-  } catch (error) { hive.db.exec("ROLLBACK"); throw error; }
+  fillAgents(hive, other.id, 50_000, "other-agent-");
+  fillChannels(hive, other.id, "other-agent-0", 2_000, "other-channel-");
   const observed = record(t, hive);
   assert.deepEqual(hive.listAgents(worker), expectedAgents);
   assert.deepEqual(hive.listChannels(worker), expectedChannels);
@@ -85,9 +78,7 @@ test("50,000 unrelated agents and 2,000 channels do not enter scoped hydration; 
 
 test("33,000 visible channels hydrate in two constant-parameter statements and inbox reads avoid the SQLite bind limit", async (t) => {
   const { hive, human, worker, project } = setup(t);
-  hive.db.exec("BEGIN");
-  try { fillChannels(hive, project.id, worker.id, 33_000, "room-"); hive.db.exec("COMMIT"); }
-  catch (error) { hive.db.exec("ROLLBACK"); throw error; }
+  fillChannels(hive, project.id, worker.id, 33_000, "room-");
   const listing = record(t, hive);
   const channels = hive.listChannels(worker);
   assert.equal(channels.length, 33_001); // includes the built-in general channel
@@ -96,7 +87,7 @@ test("33,000 visible channels hydrate in two constant-parameter statements and i
   assert.deepEqual(channels.find((c) => c.id === "room-32999")!.memberIds, [human.id, worker.id].sort());
   listing.restore();
   // Insert a single deliverable row directly to avoid generating a notification recount for every fixture room.
-  hive.db.prepare("INSERT INTO messages (id,channel_id,author_id,body,created_at) VALUES ('large-inbox','room-32999','human','fixture',2)").run();
+  seedMessages(hive, [{ id: "large-inbox", channelId: "room-32999", authorId: "human", body: "fixture", createdAt: 2 }]);
   const inbox = record(t, hive);
   const result = await hive.wait(worker, 100);
   const captured = [...inbox.calls]; inbox.restore();
@@ -126,8 +117,8 @@ test("SQL visibility matches point authorization across projects, private rooms,
     const foreign = hive.createChannel(human, { name: "foreign", type: "private", project: other.slug });
     const privateRoom = hive.createChannel(brain, { name: "secret", type: "private" });
     const brains = hive.getChannel("brains", brain.projectId);
-    hive.db.prepare("INSERT INTO channel_members VALUES (?,?)").run(foreign.id, worker.id);
-    hive.db.prepare("INSERT INTO channel_members VALUES (?,?)").run(brains.id, worker.id);
+    addChannelMember(hive, foreign.id, worker.id);
+    addChannelMember(hive, brains.id, worker.id);
     for (const actor of [human, brain, worker, { ...worker, projectId: null }]) {
       const listed = hive.listChannels(actor).map((c) => c.id).sort();
       const allowed = hive.listChannels(human).filter((c) => hive.canSeeChannel(actor, c)).map((c) => c.id).sort();
@@ -149,27 +140,18 @@ for (const compact of [false, true]) {
     const { hive, human, project, other } = setup(t);
     const brain = hive.join({ role: "brain", project: project.slug }).agent;
     const room = hive.createChannel(brain, { name: "work", type: "private" });
-    hive.db.exec("UPDATE agents SET inbox_cursor = (SELECT MAX(seq) FROM messages)");
-    const insert = hive.db.prepare("INSERT INTO messages (id,channel_id,author_id,body,created_at) VALUES (?,?,?,?,1)");
-    const attachment = hive.db.prepare("INSERT INTO attachments VALUES (?,?,?,'text/plain',3,?,'human',1)");
-    const reaction = hive.db.prepare("INSERT INTO reactions VALUES (?,'human','👍',1)");
-    hive.db.exec("BEGIN");
-    try {
-      fillAgents(hive, project.id, 600, "author-");
-      for (let i = 0; i < 600; i++) {
-        const id = `mail-${i}`;
-        insert.run(id, room.id, i === 599 ? "deleted-author" : `author-${i}`, `body-${i}`);
-        attachment.run(`attachment-${i}`, id, `${i}.txt`, "f".repeat(64));
-        reaction.run(id);
-      }
-      fillAgents(hive, other.id, 1, "outsider-");
-      fillChannels(hive, other.id, "outsider-0", 1, "outside-room-");
-      for (let i = 0; i < 10_000; i++) insert.run(`outside-${i}`, "outside-room-0", "outsider-0", "not visible");
-      hive.db.exec("COMMIT");
-    } catch (error) {
-      hive.db.exec("ROLLBACK");
-      throw error;
-    }
+    markInboxRead(hive);
+    const mail = Array.from({ length: 600 }, (_, i) => i);
+    fillAgents(hive, project.id, 600, "author-");
+    seedMessages(hive, mail.map(i => ({ id: `mail-${i}`, channelId: room.id,
+      authorId: i === 599 ? "deleted-author" : `author-${i}`, body: `body-${i}`, createdAt: 1 })));
+    insertRows(hive, "attachments", mail.map(i => ({ id: `attachment-${i}`, message_id: `mail-${i}`, name: `${i}.txt`,
+      mime: "text/plain", bytes: 3, sha256: "f".repeat(64), created_by: "human", created_at: 1 })));
+    insertRows(hive, "reactions", mail.map(i => ({ message_id: `mail-${i}`, agent_id: "human", emoji: "👍", created_at: 1 })));
+    fillAgents(hive, other.id, 1, "outsider-");
+    fillChannels(hive, other.id, "outsider-0", 1, "outside-room-");
+    seedMessages(hive, Array.from({ length: 10_000 }, (_, i) => ({ id: `outside-${i}`, channelId: "outside-room-0",
+      authorId: "outsider-0", body: "not visible", createdAt: 1 })));
 
     const observed = record(t, hive);
     const receivedRaw: Message[] = [];

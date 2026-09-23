@@ -5,6 +5,7 @@ import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { test, type TestContext } from "node:test";
 import { Hive } from "./hive.ts";
+import { hasRow, insertRow, readValue } from "./test-fixtures.ts";
 import { TelegramBridge, startTelegram, telegramConfigKey, telegramRetryAfterMs, projectSlugForChat,
   readTelegramFile, writeTelegramFile, type TelegramConfig } from "./telegram.ts";
 import { enqueueTelegramPending } from "./telegram-outbox.ts";
@@ -50,7 +51,7 @@ test("per-chat HTTP Retry-After survives restart while another chat progresses",
   f.hive.postMessage(f.hive.getAgent("human"), { channel: other.id, body: "B" });
   await until(() => calls.length === 2);
   assert.deepEqual(calls, [-1001, -1002]);
-  assert.equal((f.hive.db.prepare("SELECT attempts FROM telegram_pending WHERE seq = ?").get(a.seq) as { attempts: number }).attempts, 1);
+  assert.equal(readValue(f.hive, "telegram_pending", "attempts", { seq: a.seq }), 1);
   t.mock.timers.tick(29_999); await flush(); assert.equal(calls.length, 2);
   t.mock.timers.tick(1); await until(() => calls.length === 3);
   assert.deepEqual(calls, [-1001, -1002, -1001]);
@@ -110,13 +111,14 @@ test("a newer reaction queued during an in-flight send is not deleted with the o
     return Response.json({ ok: true, result: true });
   });
   f.bridge = new TelegramBridge(f.hive, cfg);
-  f.hive.db.prepare("INSERT INTO telegram_out(bot_key,telegram_chat_id,telegram_message_id,seq,channel_id,thread_id) VALUES(?,?,?,?,?,NULL)")
-    .run(telegramConfigKey(cfg), -1001, 10, original.seq, original.channelId);
+  insertRow(f.hive, "telegram_out", {
+    bot_key: telegramConfigKey(cfg), telegram_chat_id: -1001, telegram_message_id: 10, seq: original.seq, channel_id: original.channelId, thread_id: null,
+  });
   f.bridge.start();
   f.hive.toggleReaction(human, original.seq, "👍"); await until(() => Boolean(release));
   f.hive.toggleReaction(human, original.seq, "👍"); f.hive.toggleReaction(human, original.seq, "👀");
   release(Response.json({ ok: true, result: true })); await flush();
-  assert.ok(f.hive.db.prepare("SELECT 1 FROM telegram_pending WHERE seq = ?").get(original.seq));
+  assert.ok(hasRow(f.hive, "telegram_pending", { seq: original.seq }));
   t.mock.timers.tick(1000); await until(() => sent.length === 2);
   assert.deepEqual(sent, ["👍", "👀"]);
 });
@@ -166,8 +168,8 @@ test("raw reload captures both messages and reactions while the old poller drain
     const reload = handle.reload(); await until(() => Boolean(oldSignal?.aborted));
     const m = f.hive.postMessage(human, { channel: "general", body: "during drain" });
     f.hive.toggleReaction(human, root.seq, "👍");
-    assert.ok(f.hive.db.prepare("SELECT 1 FROM telegram_pending WHERE seq = ? AND kind = 'message'").get(m.seq));
-    assert.ok(f.hive.db.prepare("SELECT 1 FROM telegram_pending WHERE seq = ? AND kind = 'reaction'").get(root.seq));
+    assert.ok(hasRow(f.hive, "telegram_pending", { seq: m.seq, kind: "message" }));
+    assert.ok(hasRow(f.hive, "telegram_pending", { seq: root.seq, kind: "reaction" }));
     release(Response.json({ ok: true, result: [] })); await reload;
     assert.equal(polls, 2);
   } finally { await handle.stop(); }

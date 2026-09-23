@@ -13,6 +13,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { Hive } from "../server/hive.ts";
 import { createApp } from "../server/app.ts";
+import { countRows } from "../server/test-fixtures.ts";
 
 // Actual CLI process restart, upload, HTTP after-commit loss and stdio tool calls.
 test("CLI and MCP preserve send keys and uploaded IDs across lost replies and process restarts", { timeout: 25_000 }, async t => {
@@ -71,10 +72,10 @@ test("CLI and MCP preserve send keys and uploaded IDs across lost replies and pr
   assert.equal(messages.length, 2);
   await call("react", { seq: a.seq, emoji: "👍" });
   await call("react", { seq: a.seq, emoji: "👍" });
-  assert.equal(hive.db.prepare("SELECT COUNT(*) AS n FROM reactions WHERE message_id=?").get(a.id)!.n, 1);
+  assert.equal(countRows(hive, "reactions", { message_id: a.id }), 1);
   await call("react", { seq: a.seq, emoji: "👍", present: false });
   await call("react", { seq: a.seq, emoji: "👍", present: false });
-  assert.equal(hive.db.prepare("SELECT COUNT(*) AS n FROM reactions WHERE message_id=?").get(a.id)!.n, 0);
+  assert.equal(countRows(hive, "reactions", { message_id: a.id }), 0);
   const attached = { channel: dm.id, path: file, body: "MCP file", requestId: "mcp-attachment" };
   const af = await call("attach", attached), bf = await call("attach", attached);
   assert.equal(af.id, bf.id); assert.equal(uploads, 2); assert.equal(messages.length, 3);

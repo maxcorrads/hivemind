@@ -5,6 +5,7 @@ import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { test } from "node:test";
 import { Hive } from "./hive.ts";
+import { countRows } from "./test-fixtures.ts";
 import { TelegramBridge } from "./telegram.ts";
 import { telegramRetryAfterMs, selectTelegramPendingJob } from "./telegram-rate-limit.ts";
 
@@ -88,7 +89,7 @@ test("multipart 429 preserves confirmed parts, serves another chat and resumes o
     await until(() => sent.length === 5);
     await flush();
     assert.deepEqual(sent, ["-1001:text", "-1001:a.txt", "-1001:b.txt", "-1002:text", "-1001:b.txt"]);
-    assert.equal((hive.db.prepare("SELECT COUNT(*) AS n FROM telegram_pending").get() as { n: number }).n, 0);
+    assert.equal(countRows(hive, "telegram_pending"), 0);
   } finally { await bridge.stop(); hive.db.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 

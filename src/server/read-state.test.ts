@@ -8,6 +8,7 @@ import type { Agent, Message } from "../shared/types.ts";
 import type { ReadSnapshot } from "../shared/read-state.ts";
 import { Hive } from "./hive.ts";
 import { createApp } from "./app.ts";
+import { countRows, deleteRows, failWrites, updateRows } from "./test-fixtures.ts";
 
 function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-read-state-"));
@@ -34,7 +35,7 @@ function fixture(t: TestContext) {
       db.close();
       hive = new Hive(dbPath);
     },
-    receipts: () => Number(hive.db.prepare("SELECT COUNT(*) AS n FROM message_reads").get()!.n),
+    receipts: () => countRows(hive, "message_reads"),
   };
 }
 
@@ -73,7 +74,7 @@ test("mention identity is exact and author/self messages never count as unread",
   const f = fixture(t);
   const ordinary = f.post("ordinary");
   const similar = f.post("ordinary");
-  f.hive.db.prepare("UPDATE messages SET mentions = ? WHERE id = ?").run('["human-extra"]', similar.id);
+  updateRows(f.hive, "messages", { mentions: '["human-extra"]' }, { id: similar.id });
   const own = f.post("@Human self", null, f.human);
   const mention = f.post();
   assertIds(f.hive.mentionInbox(f.human).messages, [mention]);
@@ -91,9 +92,9 @@ test("hidden channels and other projects cannot consume a visible actor's mentio
   const otherRoom = f.hive.getChannel("general", other.id);
   for (let n = 0; n < 40; n++) {
     const hidden = f.post("hidden", null, f.brain, secret.id);
-    f.hive.db.prepare("UPDATE messages SET mentions=? WHERE id=?").run(JSON.stringify([worker.id]), hidden.id);
+    updateRows(f.hive, "messages", { mentions: JSON.stringify([worker.id]) }, { id: hidden.id });
     const foreign = f.post("foreign", null, f.human, otherRoom.id);
-    f.hive.db.prepare("UPDATE messages SET mentions=? WHERE id=?").run(JSON.stringify([worker.id]), foreign.id);
+    updateRows(f.hive, "messages", { mentions: JSON.stringify([worker.id]) }, { id: foreign.id });
   }
   assertIds(f.hive.mentionInbox(worker, 1).messages, [visible]);
   assert.equal(f.hive.mentionInbox(worker, 1).hasMore, false);
@@ -181,8 +182,7 @@ test("invalid/mixed-scope receipts fail atomically and do not change the read re
   assert.equal(f.receipts(), 0);
   assert.equal(f.hive.readSnapshot(f.human).readRevision, prior.readRevision);
   // An actual mid-transaction SQLite fault rolls back both receipt and revision.
-  f.hive.db.exec(`CREATE TRIGGER reject_read BEFORE INSERT ON message_reads
-    WHEN NEW.message_id = '${other.id}' BEGIN SELECT RAISE(ABORT, 'injected read failure'); END`);
+  failWrites(f.hive, "message_reads", { when: `NEW.message_id = '${other.id}'`, message: "injected read failure", persistent: true });
   assert.throws(() => f.hive.markMessagesRead(f.human, f.room.id, [root.seq, other.seq]), /injected read failure/);
   assert.equal(f.receipts(), 0);
   assert.equal(f.hive.readSnapshot(f.human).readRevision, prior.readRevision);
@@ -225,12 +225,12 @@ test("project/message/agent deletion cleans receipts while other projects retain
   assertIds(f.hive.mentionInbox(f.human).messages, [unread]);
   assert.ok(f.hive.readSnapshot(f.human).readRevision > before.readRevision);
   assert.equal(f.hive.readSnapshot(f.human).readSeq, before.readSeq);
-  f.hive.db.prepare("DELETE FROM messages WHERE id=?").run(read.id);
+  deleteRows(f.hive, "messages", { id: read.id });
   assert.equal(f.receipts(), 0);
   f.hive.markMessagesRead(b, room.id, [unread.seq]);
-  f.hive.db.prepare("DELETE FROM agents WHERE id=?").run(b.id);
+  deleteRows(f.hive, "agents", { id: b.id });
   assert.equal(f.receipts(), 0);
-  assert.equal(f.hive.db.prepare("PRAGMA foreign_key_check").all().length, 0);
+  assert.equal(f.hive.db.prepare("PRAGMA foreign_key_check").all().length, 0); // schema-level assertion
 });
 
 test("mention cursors and numeric limits have deterministic inclusive/exclusive boundaries", (t) => {

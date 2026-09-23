@@ -10,6 +10,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { Hive } from "../server/hive.ts";
 import { startServer } from "../server/serve.ts";
+import { markInboxRead } from "../server/test-fixtures.ts";
 import { WAIT_MAX_BYTES, type DigestExpansionResult, type WaitResult } from "../shared/types.ts";
 
 test("real MCP and CLI send typed events, reply by root ID and expand the same digest after ACK", { timeout: 25_000 }, async () => {
@@ -22,7 +23,7 @@ test("real MCP and CLI send typed events, reply by root ID and expand the same d
   const worker = hive.join({ role: "worker", seniority: "mid" });
   const dm = hive.openDm(brain.agent, worker.agent.name);
   const room = hive.createChannel(brain.agent, { name: "other-task", type: "private", memberNames: [worker.agent.name] });
-  hive.db.prepare("UPDATE agents SET inbox_cursor = (SELECT MAX(seq) FROM messages)").run();
+  markInboxRead(hive);
   const clients: Array<{ client: Client; transport: StdioClientTransport }> = [];
   const env = (token: string) => ({ PATH: process.env.PATH ?? "", HIVEMIND_TOKEN: token,
     HIVEMIND_HOME: path.join(dir, "identities"), HIVEMIND_URL: `http://127.0.0.1:${port}` });

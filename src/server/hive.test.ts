@@ -4,6 +4,7 @@ import path from "node:path";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Hive } from "./hive.ts";
+import { countRows, findRow, insertRow, readValue, setAgentPresence } from "./test-fixtures.ts";
 
 function tempHive() {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-"));
@@ -297,14 +298,11 @@ test("sweep keeps waiters online and drops stale agents", async () => {
   const { hive, dir } = tempHive();
   const worker = hive.join({ role: "worker", seniority: "mid" });
   const sleeping = hive.wait(worker.agent, 4_000);
-  hive.db.prepare("UPDATE agents SET last_seen_at = ? WHERE id = ?").run(Date.now() - 60_000, worker.agent.id);
+  setAgentPresence(hive, worker.agent.id, { lastSeenAt: Date.now() - 60_000 });
   hive.sweepPresence(1_000);
   assert.equal(hive.getAgent(worker.agent.id).online, true);
   const idle = hive.join({ role: "worker", seniority: "junior" });
-  hive.db.prepare("UPDATE agents SET last_seen_at = ?, online = 1 WHERE id = ?").run(
-    Date.now() - 60_000,
-    idle.agent.id,
-  );
+  setAgentPresence(hive, idle.agent.id, { lastSeenAt: Date.now() - 60_000, online: true });
   hive.sweepPresence(1_000);
   assert.equal(hive.getAgent(idle.agent.id).online, false);
   hive.postMessage(hive.getAgent("human"), { channel: "general", body: `x @${worker.agent.name}` });
@@ -586,11 +584,9 @@ test("Human can delete an idle project but not one with online or waiting agents
   ac.abort();
   await pending;
   hive.setOffline(brain.agent.id);
-  hive.db.prepare(
-    "INSERT INTO telegram_hold (telegram_chat_id, telegram_message_id, telegram_thread_id, payload) VALUES (?, ?, ?, ?)",
-  ).run(-1003, 7, 2, "{}");
-  hive.db.prepare("INSERT INTO telegram_state (key, value) VALUES (?, ?)").run("mute:-1003", "1");
-  hive.db.prepare("INSERT INTO telegram_state (key, value) VALUES (?, ?)").run("offset", "9");
+  insertRow(hive, "telegram_hold", { telegram_chat_id: -1003, telegram_message_id: 7, telegram_thread_id: 2, payload: "{}" });
+  insertRow(hive, "telegram_state", { key: "mute:-1003", value: "1" });
+  insertRow(hive, "telegram_state", { key: "offset", value: "9" });
   const chapterGeneral = hive.getChannel("general", hive.getProjectBySlug("chapter").id);
   hive.postMessage(human, { channel: chapterGeneral.id, body: "chapter stays" });
   hive.deleteProject(human, "altro", { telegramChatId: -1003 });
@@ -599,11 +595,11 @@ test("Human can delete an idle project but not one with online or waiting agents
   assert.equal(hive.listProjects()[0]?.slug, "chapter");
   assert.ok(hive.getChannel("general", hive.listProjects()[0]!.id));
   assert.equal(
-    (hive.db.prepare("SELECT COUNT(*) AS n FROM telegram_hold WHERE telegram_chat_id = -1003").get() as { n: number }).n,
+    countRows(hive, "telegram_hold", { telegram_chat_id: -1003 }),
     0,
   );
-  assert.equal(hive.db.prepare("SELECT value FROM telegram_state WHERE key = 'mute:-1003'").get(), undefined);
-  assert.equal((hive.db.prepare("SELECT value FROM telegram_state WHERE key = 'offset'").get() as { value: string }).value, "9");
+  assert.equal(findRow(hive, "telegram_state", { key: "mute:-1003" }), undefined);
+  assert.equal(readValue(hive, "telegram_state", "value", { key: "offset" }), "9");
   assert.ok(hive.listMessages(human, chapterGeneral.id).messages.some((m) => /chapter stays/.test(m.body)));
   assert.equal(hive.findProjectBySlug("altro"), null);
   assert.equal(hive.findProjectBySlug("!!!"), null);

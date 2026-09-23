@@ -7,6 +7,7 @@ import { Hive } from './hive.ts';
 import { saveAdaptiveRouting } from './adaptive-config.ts';
 import { jevTopologyResponse } from './fixtures/jev-topology.ts';
 import type { AdaptiveTopology } from '../shared/adaptive-topology.ts';
+import { countRows } from './test-fixtures.ts';
 
 // Intentionally equal suffixes: key hints must never be used to fence a rotation.
 const originalKey = 'ts_prior_fixture_secret_same';
@@ -41,7 +42,7 @@ function fixture(t: TestContext) {
     choose: (topology: AdaptiveTopology) => { target = topology; },
     beforeReply: (work: () => void) => { hook = work; },
     view: () => hive.adaptiveTopology.view(human, dm.id),
-    messageCount: () => Number(hive.db.prepare('SELECT COUNT(*) AS n FROM messages').get()!.n),
+    messageCount: () => countRows(hive, 'messages'),
   };
 }
 

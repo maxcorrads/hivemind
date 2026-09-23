@@ -6,6 +6,7 @@ import { test, type TestContext } from "node:test";
 import { HUMAN_ID, HUMAN_NAME } from "../shared/types.ts";
 import { Hive } from "./hive.ts";
 import { AGENT_NAMES } from "./names.ts";
+import { updateRows } from "./test-fixtures.ts";
 
 function databaseFixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-names-"));
@@ -53,9 +54,7 @@ test("real joins reserve 500 identities across projects, offline state and resta
 
     if (index === 0) {
       // Model an existing database with a differently-cased stored identity.
-      hive.db.prepare("UPDATE agents SET name = ? WHERE id = ?").run(
-        result.agent.name.toUpperCase(), result.agent.id,
-      );
+      updateRows(hive, "agents", { name: result.agent.name.toUpperCase() }, { id: result.agent.id });
     }
     joined.push({ ...result, agent: hive.getAgent(result.agent.id) });
     hive.setOffline(result.agent.id);

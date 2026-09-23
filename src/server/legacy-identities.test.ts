@@ -55,6 +55,7 @@ test("startup drops the unused agent_credentials table and no longer creates it"
   const table = (db: DatabaseSync) =>
     db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_credentials'").get();
   assert.equal(table(first.db), undefined);
+  // schema-level assertion: recreate the legacy credentials table.
   first.db.exec("CREATE TABLE agent_credentials (agent_id TEXT PRIMARY KEY, revision INTEGER NOT NULL, revoked INTEGER NOT NULL)");
   first.db.close();
 

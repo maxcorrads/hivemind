@@ -10,12 +10,13 @@ import { readAdaptiveCapacity } from './adaptive-topology-capacity.ts';
 import { jevTopologyResponse } from './fixtures/jev-topology.ts';
 import { TelegramBridge, telegramConfigKey } from './telegram.ts';
 import type { AdaptiveTopology } from '../shared/adaptive-topology.ts';
+import { countRows, deleteRows, hasRow, insertRow, storedSnapshot, updateRows } from './test-fixtures.ts';
 
 type Stored = { completedAt?: number | null; supersededBy?: string | null; revision?: number };
 /** Draining executions are not listed in the Human panel view; read them where they live. */
 function stored(hive: Hive, executionId: string): Stored | undefined {
-  const row = hive.db.prepare('SELECT snapshot FROM adaptive_topology_executions WHERE execution_id=?').get(executionId);
-  return row ? JSON.parse(String(row.snapshot)) as Stored : undefined;
+  return hasRow(hive, 'adaptive_topology_executions', { execution_id: executionId })
+    ? storedSnapshot<Stored>(hive, 'adaptive_topology_executions', executionId) : undefined;
 }
 
 // Execution lifecycle: a new Human request never waits for, nor strands, the previous request's delegated work.
@@ -52,7 +53,7 @@ function fixture(t: TestContext) {
   const reply = (root: string, body: unknown) => post(`/api/agent/channels/${workerDm.id}/messages`,
     { body: 'Done.', threadId: root, requestId: `reply-${++serial}`, ...body as object }, workers[0]!.token);
   const execution = (executionId: string) => stored(hive, executionId);
-  const commitments = () => Number(hive.db.prepare('SELECT COUNT(*) AS n FROM adaptive_topology_messages').get()!.n);
+  const commitments = () => countRows(hive, 'adaptive_topology_messages');
   const settings = async (enabled: boolean) => {
     const response = await app.request('/api/ui/adaptive-routing', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled }) });
     assert.equal(response.status, 200, await response.clone().text());
@@ -66,11 +67,10 @@ test('capacity ignores free-form commitments of completed or deleted executions'
   await f.delegate(started.state.executionId);
   const other = { projectId: f.dm.projectId, executionId: 'execution-other' };
   assert.equal(readAdaptiveCapacity(f.hive, other).workers.busyOther, 1, 'a live execution keeps its worker');
-  const completed = { ...JSON.parse(String(f.hive.db.prepare('SELECT snapshot FROM adaptive_topology_executions WHERE execution_id=?')
-    .get(started.state.executionId)!.snapshot)), completedAt: Date.now() };
-  f.hive.db.prepare('UPDATE adaptive_topology_executions SET snapshot=? WHERE execution_id=?').run(JSON.stringify(completed), started.state.executionId);
+  const completed = { ...storedSnapshot(f.hive, 'adaptive_topology_executions', started.state.executionId), completedAt: Date.now() };
+  updateRows(f.hive, 'adaptive_topology_executions', { snapshot: JSON.stringify(completed) }, { execution_id: started.state.executionId });
   assert.equal(readAdaptiveCapacity(f.hive, other).workers.busyOther, 0, 'a completed execution releases its worker');
-  f.hive.db.prepare('DELETE FROM adaptive_topology_executions WHERE execution_id=?').run(started.state.executionId);
+  deleteRows(f.hive, 'adaptive_topology_executions', { execution_id: started.state.executionId });
   assert.equal(readAdaptiveCapacity(f.hive, other).workers.busyOther, 0, 'a missing execution releases its worker');
 });
 
@@ -192,7 +192,7 @@ test('a Telegram request to a brain with open delegation is delivered, not retri
   const dm = hive.openDm(human, brain.agent.name), workerDm = hive.openDm(brain.agent, worker.agent.name);
   const cfg = { botToken: 'fixture', botId: 77, allowUserIds: [1], groups: { chapter: -1001 } };
   const bridge = new TelegramBridge(hive, cfg);
-  hive.db.prepare('INSERT INTO telegram_topics(channel_id,telegram_thread_id,telegram_chat_id,bot_key) VALUES(?,?,?,?)').run(dm.id, 22, -1001, telegramConfigKey(cfg));
+  insertRow(hive, 'telegram_topics', { channel_id: dm.id, telegram_thread_id: 22, telegram_chat_id: -1001, bot_key: telegramConfigKey(cfg) });
   saveAdaptiveRouting(dir, { enabled: true, apiKey: 'fixture-key' });
   let polls = 0;
   t.mock.method(globalThis, 'fetch', async (url: unknown, init?: RequestInit) => {

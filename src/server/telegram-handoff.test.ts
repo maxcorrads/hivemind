@@ -5,6 +5,7 @@ import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { test, type TestContext } from "node:test";
 import { Hive } from "./hive.ts";
+import { countRows, failWrites, hasRow, listRows, telegramOffset } from "./test-fixtures.ts";
 import { startTelegram, writeTelegramFile } from "./telegram.ts";
 
 function blocked(signal?: AbortSignal | null): Promise<Response> {
@@ -45,7 +46,7 @@ function setup(t: TestContext) {
   });
   const handle = startTelegram(hive);
   t.after(async () => { await handle.stop(); hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
-  const receipts = () => (hive.db.prepare("SELECT COUNT(*) AS n FROM telegram_out WHERE telegram_message_id IN (101, 102)").get() as { n: number }).n;
+  const receipts = () => countRows(hive, "telegram_out", { telegram_message_id: 101 }) + countRows(hive, "telegram_out", { telegram_message_id: 102 });
   return { dir, hive, handle, calls, receipts };
 }
 
@@ -55,8 +56,8 @@ test("remap during an accepted batch preserves the original project of its entir
   await until(() => f.calls.files === 1);
   await f.handle.configure({ allowUserIds: [1], projects: { other: -1001 } });
   await until(() => f.calls.polls >= 2); await flush();
-  const rows = f.hive.db.prepare("SELECT project_id, update_id, state, invalidated FROM telegram_update_failures ORDER BY update_id").all();
-  assert.deepEqual(rows.map(row => ({ ...row })), [
+  const rows = listRows(f.hive, "telegram_update_failures", { columns: ["project_id", "update_id", "state", "invalidated"], orderBy: "update_id" });
+  assert.deepEqual(rows, [
     { project_id: originalProject, update_id: 1, state: "quarantined", invalidated: 1 },
     { project_id: originalProject, update_id: 2, state: "quarantined", invalidated: 1 },
   ]);
@@ -64,7 +65,7 @@ test("remap during an accepted batch preserves the original project of its entir
   t.mock.timers.tick(60_000); await flush();
   assert.equal(f.calls.files, 1);
   assert.equal(f.receipts(), 0);
-  assert.equal((f.hive.db.prepare("SELECT value FROM telegram_bot_state WHERE key = 'offset'").get() as { value: string }).value, "3");
+  assert.equal(telegramOffset(f.hive), "3");
 });
 
 test("same-route reload resumes an interrupted accepted batch once, without new traffic", async t => {
@@ -77,7 +78,7 @@ test("same-route reload resumes an interrupted accepted batch once, without new 
   t.mock.timers.tick(1);
   await until(() => f.receipts() === 2);
   assert.equal(f.calls.files, 2);
-  assert.equal((f.hive.db.prepare("SELECT COUNT(*) AS n FROM telegram_update_failures WHERE state = 'resolved'").get() as { n: number }).n, 2);
+  assert.equal(countRows(f.hive, "telegram_update_failures", { state: "resolved" }), 2);
   await f.handle.reload(); t.mock.timers.tick(10_000); await flush();
   assert.equal(f.receipts(), 2); assert.equal(f.calls.files, 2);
 });
@@ -86,15 +87,15 @@ test("failure on the second handoff record rolls back the whole batch and blocks
   const f = setup(t);
   await until(() => f.calls.files === 1);
   const original = readFileSync(path.join(f.dir, "telegram.json"), "utf8");
-  f.hive.db.exec("CREATE TEMP TRIGGER fail_handoff AFTER INSERT ON telegram_update_failures WHEN NEW.update_id = 2 BEGIN SELECT RAISE(ABORT, 'handoff storage failure'); END");
+  const restoreHandoff = failWrites(f.hive, "telegram_update_failures", { timing: "after", when: "NEW.update_id = 2", message: "handoff storage failure" });
   // Hold the replacement's next poll until the assertions have observed the rollback.
   f.calls.polls = 2;
   await assert.rejects(f.handle.configure({ allowUserIds: [1], projects: { other: -1001 } }), /drain could not persist/);
   assert.equal(readFileSync(path.join(f.dir, "telegram.json"), "utf8"), original);
-  assert.equal(f.hive.db.prepare("SELECT 1 FROM telegram_update_failures").get(), undefined);
-  assert.equal(f.hive.db.prepare("SELECT 1 FROM telegram_in").get(), undefined);
-  assert.equal(f.hive.db.prepare("SELECT 1 FROM telegram_bot_state WHERE key = 'offset'").get(), undefined);
+  assert.equal(hasRow(f.hive, "telegram_update_failures"), false);
+  assert.equal(hasRow(f.hive, "telegram_in"), false);
+  assert.equal(telegramOffset(f.hive), undefined);
   assert.equal(f.receipts(), 0);
   assert.equal(f.handle.running(), true);
-  f.hive.db.exec("DROP TRIGGER fail_handoff");
+  restoreHandoff();
 });

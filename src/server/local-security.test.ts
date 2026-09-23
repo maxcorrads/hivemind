@@ -7,6 +7,7 @@ import { test, type TestContext } from "node:test";
 import { WebSocket, type RawData } from "ws";
 import { createServer as createViteServer } from "vite";
 import { Hive } from "./hive.ts";
+import { listRows } from "./test-fixtures.ts";
 import { startServer } from "./serve.ts";
 
 type Event = { type: string; payload?: unknown };
@@ -140,7 +141,7 @@ test("browser join/resume cannot create identities or rotate tokens; native flow
     body: JSON.stringify({ role: "worker", seniority: "mid", project: "chapter" }),
   });
   assert.equal(native.status, 200);
-  const credentials = () => f.hive.db.prepare("SELECT id, token_hash FROM agents ORDER BY id").all();
+  const credentials = () => listRows(f.hive, "agents", { columns: ["id", "token_hash"], orderBy: "id" });
   const before = credentials();
   for (const origin of ["http://evil.example", "null", `${f.base}/invalid`]) {
     for (const body of [{ role: "brain" }, { resume: native.data.agent.name, project: "chapter" }]) {

@@ -4,20 +4,23 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { Hive } from "./hive.ts";
+import { failWrites, hasRow, listRows, readValue } from "./test-fixtures.ts";
 import type { Message } from "../shared/types.ts";
+
+const attachmentMessage = (hive: Hive, id: string) => readValue(hive, "attachments", "message_id", { id });
 
 function dbState(hive: Hive) {
   return {
-    messages: hive.db.prepare(
-      "SELECT id, seq, channel_id, thread_id, author_id, body, kind, control, mentions, created_at FROM messages ORDER BY seq",
-    ).all(),
-    threads: hive.db.prepare("SELECT id, channel_id, status FROM threads ORDER BY id").all(),
-    attachments: hive.db.prepare(
-      "SELECT id, message_id, created_by, name, mime, bytes, sha256 FROM attachments ORDER BY id",
-    ).all(),
-    memberships: hive.db.prepare(
-      "SELECT channel_id, agent_id FROM channel_members ORDER BY channel_id, agent_id",
-    ).all(),
+    messages: listRows(hive, "messages", {
+      columns: ["id", "seq", "channel_id", "thread_id", "author_id", "body", "kind", "control", "mentions", "created_at"],
+      orderBy: "seq",
+    }),
+    threads: listRows(hive, "threads", { columns: ["id", "channel_id", "status"], orderBy: "id" }),
+    attachments: listRows(hive, "attachments", {
+      columns: ["id", "message_id", "created_by", "name", "mime", "bytes", "sha256"],
+      orderBy: "id",
+    }),
+    memberships: listRows(hive, "channel_members", { columns: ["channel_id", "agent_id"], orderBy: ["channel_id", "agent_id"] }),
   };
 }
 
@@ -83,12 +86,8 @@ test("failed attachment sends are atomic and emit no recipient-visible side effe
     assert.deepEqual(dbState(hive), before, fixture.name);
     assert.equal(messageEvents.length, 0, `${fixture.name}: no message event`);
     assert.equal(queuedEvents.length, 0, `${fixture.name}: no recipient wake/queued event`);
-    const reusableRow = hive.db.prepare("SELECT message_id FROM attachments WHERE id = ?").get(reusable.id) as {
-      message_id: string | null;
-    };
-    assert.equal(reusableRow.message_id, null, `${fixture.name}: valid attachment stays reusable`);
-    const ghostThread = hive.db.prepare("SELECT 1 AS present FROM threads WHERE id = ?").get(root.id);
-    assert.equal(ghostThread, undefined, `${fixture.name}: no ghost thread`);
+    assert.equal(attachmentMessage(hive, reusable.id), null, `${fixture.name}: valid attachment stays reusable`);
+    assert.equal(hasRow(hive, "threads", { id: root.id }), false, `${fixture.name}: no ghost thread`);
   }
 
   messageEvents.length = 0;
@@ -96,11 +95,7 @@ test("failed attachment sends are atomic and emit no recipient-visible side effe
   let committedWasVisibleInsideEvent = false;
   const verifyCommit = (message: Message) => {
     if (message.body !== "committed send") return;
-    const messageRow = hive.db.prepare("SELECT id FROM messages WHERE id = ?").get(message.id);
-    const binding = hive.db.prepare("SELECT message_id FROM attachments WHERE id = ?").get(reusable.id) as {
-      message_id: string | null;
-    };
-    committedWasVisibleInsideEvent = Boolean(messageRow) && binding.message_id === message.id;
+    committedWasVisibleInsideEvent = hasRow(hive, "messages", { id: message.id }) && attachmentMessage(hive, reusable.id) === message.id;
   };
   hive.bus.on("message", verifyCommit);
 
@@ -115,12 +110,8 @@ test("failed attachment sends are atomic and emit no recipient-visible side effe
   assert.equal(messageEvents.filter((message) => message.id === sent.id).length, 1);
   assert.equal(committedWasVisibleInsideEvent, true, "message event fires only after committed DB state is visible");
   assert.equal(queuedEvents.length, 1, "successful DM wakes the sole recipient exactly once");
-  const binding = hive.db.prepare("SELECT message_id FROM attachments WHERE id = ?").get(reusable.id) as {
-    message_id: string | null;
-  };
-  assert.equal(binding.message_id, sent.id);
-  const thread = hive.db.prepare("SELECT id FROM threads WHERE id = ?").get(root.id) as { id: string } | undefined;
-  assert.equal(thread?.id, root.id);
+  assert.equal(attachmentMessage(hive, reusable.id), sent.id);
+  assert.ok(hasRow(hive, "threads", { id: root.id }));
 });
 
 
@@ -150,14 +141,12 @@ test("mid-transaction attachment failure rolls back message, thread, and earlier
   // Both attachments pass normal validation. The trigger fails only when the
   // second binding update executes, after the message insert and first binding.
   // This exercises SQLite rollback rather than an early validation return.
-  hive.db.exec(`
-    CREATE TRIGGER fixture_fail_second_bind
-    BEFORE UPDATE OF message_id ON attachments
-    WHEN OLD.id = '${second.id}' AND NEW.message_id IS NOT NULL
-    BEGIN
-      SELECT RAISE(ABORT, 'fixture bind failure');
-    END;
-  `);
+  failWrites(hive, "attachments", {
+    on: "update",
+    when: `OLD.id = '${second.id}' AND NEW.message_id IS NOT NULL`,
+    message: "fixture bind failure",
+    persistent: true,
+  });
 
   const messageEvents: Message[] = [];
   const queuedEvents: unknown[] = [];
@@ -179,15 +168,7 @@ test("mid-transaction attachment failure rolls back message, thread, and earlier
   assert.deepEqual(dbState(hive), before);
   assert.equal(messageEvents.length, 0);
   assert.equal(queuedEvents.length, 0);
-  assert.equal(
-    (hive.db.prepare("SELECT message_id FROM attachments WHERE id = ?").get(first.id) as { message_id: string | null })
-      .message_id,
-    null,
-  );
-  assert.equal(
-    (hive.db.prepare("SELECT message_id FROM attachments WHERE id = ?").get(second.id) as { message_id: string | null })
-      .message_id,
-    null,
-  );
-  assert.equal(hive.db.prepare("SELECT 1 FROM threads WHERE id = ?").get(root.id), undefined);
+  assert.equal(attachmentMessage(hive, first.id), null);
+  assert.equal(attachmentMessage(hive, second.id), null);
+  assert.equal(hasRow(hive, "threads", { id: root.id }), false);
 });

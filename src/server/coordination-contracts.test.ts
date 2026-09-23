@@ -10,6 +10,7 @@ import type { RoomView } from '../shared/rooms.ts';
 import type { Message } from '../shared/types.ts';
 import { Hive } from './hive.ts';
 import { startServer } from './serve.ts';
+import { countRows } from './test-fixtures.ts';
 
 type TaskReply = { task: TaskSnapshot; message: Message; duplicate: boolean };
 
@@ -125,7 +126,7 @@ test('HTTP rejects missing credentials, cross-project reads and forged coordinat
     { requestId: 'forged-actor', actorId: f.brain.agent.id, expectedRevision: 1, action: { type: 'accept' } });
   assert.equal(forgedActor.status, 400);
   assert.deepEqual(f.hive.tasks.get(f.worker.agent, assigned.task.id), assigned.task);
-  assert.equal(f.hive.db.prepare('SELECT count(*) AS n FROM task_events WHERE task_id=?').get(assigned.task.id)!.n, 1);
+  assert.equal(countRows(f.hive, 'task_events', { task_id: assigned.task.id }), 1);
   assert.equal(f.hive.rooms.peek(f.channel.id), null);
 });
 

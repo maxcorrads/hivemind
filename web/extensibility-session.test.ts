@@ -9,6 +9,7 @@ import { registerPlugin, projectPlugins } from "../src/server/plugins.ts";
 import { createHumanSession } from "./human-session.ts";
 import type { Agent, BotCredentialView, Message } from "../src/shared/types.ts";
 import type { ProjectPluginView } from "../src/shared/plugin-settings.ts";
+import { countRows, listRows } from "../src/server/test-fixtures.ts";
 
 // A real, deliberately installed local executable. Its persistent counter proves
 // absence of execution, not just an HTTP status or a mocked configure call.
@@ -57,10 +58,10 @@ process.stdin.on('end', () => {
   const executions = (project = a) => Number(file(path.join(profile(project).home, "executions")) ?? 0);
   // No assertions print real tokens, cookies, or raw database state on success.
   const state = () => JSON.stringify({
-    identities: hive.db.prepare("SELECT id, name, token_hash FROM agents ORDER BY id").all(),
-    credentials: hive.db.prepare("SELECT * FROM bot_credentials ORDER BY bot_id").all(),
-    members: hive.db.prepare("SELECT * FROM channel_members ORDER BY channel_id, agent_id").all(),
-    events: hive.db.prepare("SELECT * FROM bot_events ORDER BY message_id").all(),
+    identities: listRows(hive, "agents", { columns: ["id", "name", "token_hash"], orderBy: "id" }),
+    credentials: listRows(hive, "bot_credentials", { orderBy: "bot_id" }),
+    members: listRows(hive, "channel_members", { orderBy: ["channel_id", "agent_id"] }),
+    events: listRows(hive, "bot_events", { orderBy: "message_id" }),
     registry: file(path.join(home, "plugins.json")), bindings: file(path.join(home, "project-plugins.json")),
     profiles: [a, b].map(p => ({ config: file(path.join(profile(p).home, "config.json")), calls: executions(p) })),
   });
@@ -203,7 +204,7 @@ test("authorized HTTP retains bot scope, durable retries and credential history 
   const revoked = await json<BotCredentialView>(f.base, f.credentialPath, change({ action: "revoke", expectedRevision: 2 }, freshHeaders));
   assert.equal(revoked.status, 200); assert.equal(revoked.data.credential.revoked, true);
   assert.equal((await publish(rotated.data.token)).status, 401);
-  assert.equal(Number(f.hive.db.prepare("SELECT COUNT(*) AS n FROM bot_events").get()!.n), 1);
+  assert.equal(countRows(f.hive, "bot_events"), 1);
 });
 
 test("real session recovery replays rejected rotation and configure exactly once, preserving the other project", async t => {

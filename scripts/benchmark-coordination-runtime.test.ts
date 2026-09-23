@@ -8,6 +8,7 @@ import { Hive } from '../src/server/hive.ts';
 import { loadFixtures } from './benchmark-coordination.mjs';
 import type { Agent } from '../src/shared/types.ts';
 import type { TaskAction, TaskSnapshot } from '../src/shared/tasks.ts';
+import { countRows } from '../src/server/test-fixtures.ts';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixtures = new Map(loadFixtures(root).map(fixture => [fixture.id, fixture]));
@@ -84,7 +85,7 @@ test('benchmark coupled fixture traverses real room, dependencies and advisory c
     room: { contractVersion: roomVersion, actionKey: 'coupled-dependent' }, contract: contract('Dependent verification', ['tests/shared'], [first.id, second.id]) }).task;
   assert.deepEqual(f.hive.tasks.get(f.pool[2]!, dependent.id).coordination!.dependencies.map(item => item.status), ['accepted_complete', 'accepted_complete']);
   assert.equal(f.complete(dependent, f.pool[2]!).state, 'accepted_complete');
-  assert.ok(Number(f.hive.db.prepare('SELECT COUNT(*) AS n FROM room_events').get()!.n) >= 4);
+  assert.ok(countRows(f.hive, 'room_events') >= 4);
 });
 
 test('benchmark room fixture traverses real capability routing and keeps provider cost unknown', t => {
@@ -102,5 +103,5 @@ test('benchmark room fixture traverses real capability routing and keeps provide
   const suggestions = f.hive.routing.suggest(f.brain, task.id, { requiredCapabilities: ['api'], mode: 'implementation', category: 'coordination-benchmark' });
   assert.ok(suggestions.candidates.length > 0);
   assert.ok(suggestions.candidates.every(candidate => candidate.providerCost === null));
-  assert.equal(Number(f.hive.db.prepare('SELECT COUNT(*) AS n FROM worker_capabilities').get()!.n), 3);
+  assert.equal(countRows(f.hive, 'worker_capabilities'), 3);
 });
