@@ -116,6 +116,10 @@ test('a new Human request with open free-form delegation starts a new execution 
   assert.equal(retired?.state?.executionId, original.state.executionId, 'the draining execution publishes its own state');
   assert.equal(retired?.state?.current, false);
   assert.deepEqual(retired?.state?.openWork, { tasks: 0, delegations: 1 });
+  // Locks apply to the current request only; the draining one keeps the policy it already applied.
+  assert.throws(() => f.hive.adaptiveTopology.setLock(f.human, f.dm.id,
+    { scope: 'task', topology: 'single', expectedExecutionId: original.state.executionId }), /finishing older work/);
+  assert.equal(f.execution(original.state.executionId)?.revision, draining?.revision, 'the draining execution is unchanged');
   assert.ok(panel.events.some(event => event.executionId === original.state.executionId && event.reason === 'superseded_draining_delegated_work'));
   // Both executions bind the brain; the old executionId stays valid for its own work.
   assert.deepEqual(f.hive.adaptiveTopology.policiesFor(f.brain.agent).map(policy => policy.executionId).sort(),
