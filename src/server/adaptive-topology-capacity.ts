@@ -13,6 +13,18 @@ export function initAdaptiveCommitments(hive: Hive): void {
   `);
 }
 
+/**
+ * Free-form delegation is active until its thread is done or the worker reports it finished (the commitment row is
+ * then deleted). A completed or deleted execution holds no worker: its commitments are released with it.
+ */
+export function openDelegations(hive: Hive, of: { projectId: string } | { executionId: string }) {
+  const [column, value] = 'projectId' in of ? ['a.project_id', of.projectId] : ['a.execution_id', of.executionId];
+  return hive.db.prepare(`SELECT a.root_id,a.worker_id,a.execution_id,threads.status
+      FROM adaptive_topology_messages a LEFT JOIN threads ON threads.id=a.root_id
+      JOIN adaptive_topology_executions e ON e.execution_id=a.execution_id AND json_extract(e.snapshot,'$.completedAt') IS NULL
+      WHERE ${column}=? AND COALESCE(threads.status,'open')!='done'`).all(value);
+}
+
 type Work = { id: string; workerId: string; executionId: string | null; state: string; held: boolean; dependencies: string[] };
 export type ExecutionCapacityScope = { projectId: string; executionId: string };
 
@@ -33,10 +45,7 @@ export function readAdaptiveCapacity(hive: Hive, scope: ExecutionCapacityScope):
       state: String(row.state), held: row.claim_state === 'held',
       dependencies: row.dependencies ? JSON.parse(String(row.dependencies)) as string[] : [],
     } satisfies Work));
-  // Free-form delegation is active until its brain explicitly closes the thread.
-  const raw = hive.db.prepare(`SELECT a.root_id,a.worker_id,a.execution_id,threads.status
-      FROM adaptive_topology_messages a LEFT JOIN threads ON threads.id=a.root_id
-      WHERE a.project_id=? AND COALESCE(threads.status,'open')!='done'`).all(scope.projectId);
+  const raw = openDelegations(hive, { projectId: scope.projectId });
   const own = work.filter(task => task.executionId === scope.executionId);
   const ownRaw = raw.filter(row => row.execution_id === scope.executionId);
   const otherWorkers = new Set([

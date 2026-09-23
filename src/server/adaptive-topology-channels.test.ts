@@ -171,10 +171,39 @@ test('legacy channel-keyed executions and locks migrate to per-brain keys', asyn
   hive = new Hive(file);
   t.after(async () => { await hive.adaptiveTopology.stop(); hive.db.close(); });
   const keys = (table: string) => hive.db.prepare(`PRAGMA table_info(${table})`).all().filter(c => Number(c.pk) > 0).map(c => String(c.name));
-  assert.deepEqual(keys('adaptive_topology_executions'), ['channel_id', 'brain_id']);
+  assert.deepEqual(keys('adaptive_topology_executions'), ['execution_id']);
+  assert.equal(hive.db.prepare('SELECT current FROM adaptive_topology_executions WHERE execution_id=?').get('execution-legacy')?.current, 1);
   assert.deepEqual(keys('adaptive_topology_locks'), ['channel_id', 'brain_id']);
   assert.equal(hive.db.prepare('SELECT brain_id FROM adaptive_topology_locks WHERE channel_id=?').get(dm.id)?.brain_id, brain.agent.id);
   assert.equal(hive.adaptiveTopology.view(human, dm.id).state?.executionId, 'execution-legacy');
   assert.equal(hive.adaptiveTopology.forAgent(hive.getAgent(brain.agent.id))?.executionId, 'execution-legacy');
   assert.ok(hive.db.prepare("SELECT 1 FROM sqlite_master WHERE type='trigger' AND name='adaptive_channel_deleted'").get(), 'Deletion cleanup survives the migration');
+});
+
+test('per-brain executions migrate to execution keys and stay current', async t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-topology-migrate-v2-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'hive.db');
+  let hive = new Hive(file);
+  const human = hive.getAgent('human'), brain = hive.join({ role: 'brain', project: 'chapter' });
+  const dm = hive.openDm(human, brain.agent.name);
+  const root = hive.postMessage(human, { channel: dm.id, body: 'Per-brain request.' });
+  const snapshot = JSON.stringify({ executionId: 'execution-v2', channelId: dm.id, projectId: dm.projectId, brainId: brain.agent.id,
+    rootMessageId: root.id, currentTopology: 'single', workerBudget: 0, desiredTopology: null, desiredWorkers: null, lockScope: 'task',
+    lockedTopology: 'single', orchestratedOnly: false, providerAvailable: false, warning: null, recommendation: null, confirmations: 0,
+    confirmationTopology: null, confirmationWorkers: null, eventsSinceChange: 0, updatedAt: 1, recentEvents: [], revision: 1, completedAt: null });
+  hive.db.exec(`DROP TRIGGER adaptive_channel_deleted; DROP TABLE adaptive_topology_executions;
+    CREATE TABLE adaptive_topology_executions (channel_id TEXT NOT NULL, brain_id TEXT NOT NULL, execution_id TEXT NOT NULL UNIQUE,
+      project_id TEXT NOT NULL, root_message_id TEXT NOT NULL, snapshot TEXT NOT NULL, PRIMARY KEY(channel_id,brain_id));`);
+  hive.db.prepare('INSERT INTO adaptive_topology_executions VALUES(?,?,?,?,?,?)').run(dm.id, brain.agent.id, 'execution-v2', dm.projectId, root.id, snapshot);
+  await hive.adaptiveTopology.stop(); hive.db.close();
+
+  hive = new Hive(file);
+  t.after(async () => { await hive.adaptiveTopology.stop(); hive.db.close(); });
+  const keys = hive.db.prepare('PRAGMA table_info(adaptive_topology_executions)').all().filter(c => Number(c.pk) > 0).map(c => String(c.name));
+  assert.deepEqual(keys, ['execution_id']);
+  assert.equal(hive.adaptiveTopology.view(human, dm.id).state?.executionId, 'execution-v2');
+  assert.equal(hive.adaptiveTopology.forAgent(hive.getAgent(brain.agent.id))?.executionId, 'execution-v2');
+  assert.ok(hive.db.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_adaptive_topology_current'").get());
+  assert.ok(hive.db.prepare("SELECT 1 FROM sqlite_master WHERE type='trigger' AND name='adaptive_channel_deleted'").get());
 });
