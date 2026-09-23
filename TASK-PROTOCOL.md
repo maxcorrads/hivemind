@@ -109,9 +109,14 @@ Assignment (optional `channel` omitted for the ordinary worker DM):
     "worktree": "worktrees/parser",
     "branch": "fix/empty-input",
     "evidenceSeqs": []
-  }
+  },
+  "executionId": "EXECUTION_ID"
 }
 ```
+
+`executionId` is needed only while adaptive routing has an active execution for
+the assigning brain; see [Adaptive routing (Jev)](#adaptive-routing-jev). Omit it
+otherwise.
 
 Worker: `task_event` with `taskId`, a new `requestId`, `expectedRevision: 1` and
 `action: {"type":"accept"}`. On a blocker, use `{"type":"block","needed":"Which
@@ -122,6 +127,24 @@ with the current revision. The assigning brain reviews with
 `{"type":"review","decision":"accepted","summary":"Inspected the change and
 regression evidence","evidenceSeqs":[]}` or `changes_requested`.
 
+The assigning brain replaces the worker or contract with `revise`, which is a
+delegation and therefore carries `executionId` while an execution is active:
+
+```json
+{
+  "requestId": "parser-revise-1",
+  "expectedRevision": 3,
+  "action": {
+    "type": "revise",
+    "reason": "Also cover whitespace-only input",
+    "worker": "WorkerName",
+    "contract": { "objective": "Handle empty and whitespace-only input", "scope": ["Parser and regression test"],
+      "nonGoals": [], "acceptanceCriteria": ["Both inputs return an empty result"], "dependencies": [], "evidenceSeqs": [] }
+  },
+  "executionId": "EXECUTION_ID"
+}
+```
+
 CLI equivalents accept the same JSON (without `taskId`, which is a path argument):
 
 ```sh
@@ -129,6 +152,27 @@ hivemind task assign --input assignment.json
 hivemind task get --id TASK_ID
 hivemind task event --id TASK_ID --input event.json
 ```
+
+## Adaptive routing (Jev)
+
+When adaptive routing is enabled, every Human request addressed to a brain opens an
+*execution* for that brain in that channel, announced by a
+`[Hivemind adaptive topology · MODE · EXECUTION_ID]` directive delivered with the
+request. A brain can have several executions at once (one per channel). While it has
+at least one active execution, every delegation must declare the `executionId` of
+the request it serves:
+
+- `assign_task` and `task_event` with `action.type: "revise"` (this page);
+- `send`/`attach` to a worker, and `room_event` `configure`/`staff` (see
+  [rooms](ROOMS.md#adaptive-routing-jev)).
+
+Without it the request is rejected with 400, and the error lists the active
+executions. An `executionId` of another brain returns 403; an unknown one 404; a
+finished one 409. Take the ID from the directive, or from `adaptiveExecutions` in the
+`wait`/`whoami` response; never invent or reuse one for another request. Only brains
+pass `executionId`: workers never go through Jev, and a worker sending it gets 400.
+Other task events (accept, block, result, review) are attributed from the task link
+and need no `executionId`. See [adaptive orchestration routing](docs/adaptive-routing.md).
 
 ## Evaluation: do not mistake protocol tests for productivity measurements
 
