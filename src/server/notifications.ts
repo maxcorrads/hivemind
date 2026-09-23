@@ -17,10 +17,15 @@ export class NotificationStore {
     const channel = this.deps.channels.getChannel(parsed.data.channel, actor.projectId);
     if (!this.deps.channels.canSeeChannel(actor, channel)) throw new HiveError(403, 'Cannot subscribe outside channel access');
     if (parsed.data.threadId) {
-      const root = this.deps.storage.db.prepare('SELECT channel_id, thread_id FROM messages WHERE id = ?').get(parsed.data.threadId);
-      if (!root || root.channel_id !== channel.id || root.thread_id) throw new HiveError(400, 'Subscription requires a root in this channel');
+      const root = this.deps.messageQueries.messageRef(parsed.data.threadId);
+      if (!root || root.channelId !== channel.id || root.threadId) throw new HiveError(400, 'Subscription requires a root in this channel');
     }
     return { channel: channel.id, threadId: parsed.data.threadId };
+  }
+  /** The event types an agent subscribed to in a channel (thread rule first); undefined without a rule. */
+  subscribedEventTypes(agentId: string, channelId: string, rootId: string): string[] | undefined {
+    const rule = this.lookup.get(agentId, channelId, rootId) as { event_types: string } | undefined;
+    return rule ? JSON.parse(rule.event_types) as string[] : undefined;
   }
   list(actor: Agent): Subscription[] {
     if (actor.role !== 'brain' && actor.role !== 'worker') throw new HiveError(403, 'Only agents have wake subscriptions');

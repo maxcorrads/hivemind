@@ -21,6 +21,9 @@ import type { ChannelService } from "./channels.ts";
 import type { Core, MessageReader, ProjectDirectory } from "./ports.ts";
 import { batches, type MessageRow } from "./rows.ts";
 
+export type MessageRef = { id: string; channelId: string; threadId: string | null; createdAt: number };
+export type WakeHeader = Record<string, any>;
+
 export type MessageQueriesDeps = Core & {
   readonly channels: Pick<ChannelService, "getChannel" | "canSeeChannel" | "listChannels" | "visibleChannelScope">;
   readonly projects: { searchProject(actor: Agent, slug?: string | null): ReturnType<ProjectDirectory["getProject"]> };
@@ -400,6 +403,56 @@ export class MessageQueries implements MessageReader {
   threadStatus(threadId: string): string | null | undefined {
     const row = this.db.prepare("SELECT status FROM threads WHERE id=?").get(threadId) as { status: string | null } | undefined;
     return row?.status;
+  }
+
+  /** A message's identity and position, without decoration; undefined when it does not exist. */
+  messageRef(id: string): MessageRef | undefined {
+    const row = this.db.prepare("SELECT id, channel_id, thread_id, created_at FROM messages WHERE id = ?").get(id) as
+      { id: string; channel_id: string; thread_id: string | null; created_at: number } | undefined;
+    return row && { id: row.id, channelId: row.channel_id, threadId: row.thread_id, createdAt: row.created_at };
+  }
+
+  /** True when the thread has a message newer than `afterSeq` in the channel. */
+  hasNewerInThread(channelId: string, threadId: string, afterSeq: number): boolean {
+    return Boolean(this.db.prepare(
+      "SELECT 1 FROM messages WHERE channel_id = ? AND thread_id = ? AND seq > ? LIMIT 1",
+    ).get(channelId, threadId, afterSeq));
+  }
+
+  /** True when a bot posted the message. */
+  postedByBot(messageId: string): boolean {
+    return Boolean(this.db.prepare("SELECT 1 FROM bot_events WHERE message_id=?").get(messageId));
+  }
+
+  /** Seqs of the given messages (missing ids are skipped). */
+  seqsOf(ids: string[]): number[] {
+    return (this.db.prepare("SELECT seq FROM messages WHERE id IN (SELECT value FROM json_each(?))").all(JSON.stringify(ids)) as { seq: number }[])
+      .map((row) => row.seq);
+  }
+
+  /** The routing facts of one message that explain why an agent was woken (timeline wake reasons). */
+  wakeHeader(seq: number): WakeHeader | undefined {
+    return this.db.prepare(`SELECT m.id, m.seq, m.channel_id, COALESCE(m.thread_id,m.id) AS root_id,
+      m.author_id, m.kind, m.event_type, m.created_at, m.mentions, m.recipients,
+      c.type, c.project_id, a.role AS author_role,
+      EXISTS(SELECT 1 FROM task_events t WHERE t.message_id=m.id) AS task,
+      EXISTS(SELECT 1 FROM attachments f WHERE f.message_id=m.id) AS evidence
+      FROM messages m JOIN channels c ON c.id=m.channel_id LEFT JOIN agents a ON a.id=m.author_id
+      WHERE m.seq=?`).get(seq) as WakeHeader | undefined;
+  }
+
+  /**
+   * The messages of one trace in seq order: those whose recorded provenance names the trace, and
+   * those without provenance whose thread root is the trace id. Includes author and task envelope.
+   */
+  traceMessages(traceId: string, limit: number): Array<Record<string, any>> {
+    return this.db.prepare(`SELECT m.id,m.seq,m.channel_id,m.author_id,m.body,m.event_type,m.created_at,
+      a.name AS author_name,a.role AS author_role,p.trace_id,p.parent_message_id,p.cause_message_id,p.source,
+      te.envelope FROM messages m
+      LEFT JOIN message_provenance p ON p.message_id=m.id
+      LEFT JOIN agents a ON a.id=m.author_id LEFT JOIN task_events te ON te.message_id=m.id
+      WHERE COALESCE(p.trace_id,COALESCE(m.thread_id,m.id))=?
+      ORDER BY m.seq LIMIT ?`).all(traceId, limit) as Array<Record<string, any>>;
   }
 
   /** True when `messageId` is a message of `channelId`. */

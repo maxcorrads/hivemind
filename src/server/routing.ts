@@ -77,10 +77,14 @@ export class RoutingStore {
   suggest(actor: Agent, id: string, raw: unknown): RoutingSuggestions {
     const input = validated(suggestWorkersSchema, raw), requiredCapabilities = input.requiredCapabilities ?? [], task = this.task(actor, id);
     const channel = this.deps.channels.getChannel(task.channelId), project = channel.projectId;
-    const rows = this.db.prepare(`SELECT c.worker_id, c.revision, c.card, c.configuration, a.name FROM worker_capabilities c
-      JOIN agents a ON a.id = c.worker_id WHERE c.project_id = ? AND a.project_id = ? AND a.role = 'worker'
-      ORDER BY c.worker_id LIMIT ?`).all(project, project, ROUTING_LIMITS.cards + 1) as
-      Array<{ worker_id: string; revision: number; card: string; configuration: string; name: string }>;
+    const workers = JSON.stringify(project ? this.deps.identity.projectWorkerIds(project) : []);
+    const rows = this.db.prepare(`SELECT c.worker_id, c.revision, c.card, c.configuration FROM worker_capabilities c
+      WHERE c.project_id = ? AND c.worker_id IN (SELECT value FROM json_each(?))
+      ORDER BY c.worker_id LIMIT ?`).all(project, workers, ROUTING_LIMITS.cards + 1) as
+      Array<{ worker_id: string; revision: number; card: string; configuration: string }>;
+    // Caller-visible scope: Human sees every channel; others only channels they are a member of.
+    const memberOf = JSON.stringify(actor.role === 'human' ? [] : this.deps.channels.memberChannelIds(actor.id));
+    const visibleInProject = JSON.stringify(this.deps.channels.channelIdsIn(project, actor));
     if (rows.length > ROUTING_LIMITS.cards) throw new HiveError(429, 'Legacy capability roster exceeds budget');
     const candidates: WorkerSuggestion[] = [];
     for (const row of rows) {
@@ -93,20 +97,19 @@ export class RoutingStore {
         !this.deps.channels.canSeeChannel(worker, channel) || !this.deps.channels.canPost(worker, channel)) continue;
       // Caller-visible evidence only, not private task metadata or a cross-project score.
       const evidence = this.db.prepare(`SELECT o.accepted FROM routing_outcomes o JOIN task_records r ON r.id=o.task_id
-        JOIN channels c ON c.id=r.channel_id WHERE o.project_id=? AND o.worker_id=? AND o.category=? AND o.configuration=?
+        WHERE o.project_id=? AND o.worker_id=? AND o.category=? AND o.configuration=?
           AND r.worker_id=o.worker_id AND json_extract(r.snapshot,'$.revision')=o.review_revision
-          AND o.recorded_at>=? AND (?='human' OR EXISTS(SELECT 1 FROM channel_members m WHERE m.channel_id=c.id AND m.agent_id=?))
+          AND o.recorded_at>=? AND (?='human' OR r.channel_id IN (SELECT value FROM json_each(?)))
         ORDER BY o.recorded_at DESC, o.task_id LIMIT ?`).all(project, worker.id, input.category, row.configuration,
-          Date.now() - ROUTING_LIMITS.retentionMs, actor.role, actor.id, ROUTING_LIMITS.evidence) as Array<{ accepted: number }>;
+          Date.now() - ROUTING_LIMITS.retentionMs, actor.role, memberOf, ROUTING_LIMITS.evidence) as Array<{ accepted: number }>;
       const accepted = evidence.reduce((n, e) => n + e.accepted, 0), interval = outcomeInterval(accepted, evidence.length);
       if (evidence.length < (input.minReviewedResults ?? 0) ||
         (input.minimumAcceptedRate !== undefined && (!interval || interval[0] < input.minimumAcceptedRate))) continue;
-      const workload = this.db.prepare(`SELECT COUNT(*) AS n FROM task_records r JOIN channels c ON c.id=r.channel_id
-        WHERE c.project_id=? AND r.worker_id=? AND r.id!=? AND json_extract(r.snapshot,'$.state') NOT IN ('accepted_complete','rejected')
-          AND (?='human' OR EXISTS(SELECT 1 FROM channel_members m WHERE m.channel_id=c.id AND m.agent_id=?))`)
-        .get(project, worker.id, task.id, actor.role, actor.id) as { n: number };
+      const workload = this.db.prepare(`SELECT COUNT(*) AS n FROM task_records r
+        WHERE r.channel_id IN (SELECT value FROM json_each(?)) AND r.worker_id=? AND r.id!=? AND json_extract(r.snapshot,'$.state') NOT IN ('accepted_complete','rejected')`)
+        .get(visibleInProject, worker.id, task.id) as { n: number };
       if (workload.n >= card.maxInProgress) continue;
-      candidates.push({ workerId: worker.id, name: row.name, capabilityRevision: row.revision, card,
+      candidates.push({ workerId: worker.id, name: worker.name, capabilityRevision: row.revision, card,
         visibleInProgress: workload.n, workloadIncomplete: actor.role !== 'human', providerCost: null,
         evidence: { reviewed: evidence.length, accepted, acceptedRate: evidence.length ? accepted / evidence.length : null,
           interval95: interval, basis: 'Caller-visible, reviewer-classified outcomes for the declared configuration and category; not independent verification of runtime model or code quality.' },
