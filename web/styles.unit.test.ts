@@ -37,3 +37,12 @@ test("bot avatar initials keep readable contrast in light and dark themes", () =
   assert.ok(lightRatio >= 4.5, "light bot avatar contrast is only " + lightRatio.toFixed(2) + ":1");
   assert.ok(darkRatio >= 4.5, "dark bot avatar contrast is only " + darkRatio.toFixed(2) + ":1");
 });
+
+test("the UI shell self-hosts its fonts and references no third-party host", () => {
+  const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
+  for (const source of [html, css]) assert.doesNotMatch(source, /(?:https?:)?\/\/(?!127\.0\.0\.1|localhost)[a-z0-9-]+\.[a-z]/i);
+  const faces = css.match(/@font-face\s*{[^}]*}/g) ?? [];
+  assert.ok(faces.some(face => face.includes('"Figtree"')), "Figtree must be self-hosted");
+  assert.ok(faces.some(face => face.includes('"IBM Plex Mono"')), "IBM Plex Mono must be self-hosted");
+  for (const face of faces) assert.match(face, /url\("\.\/fonts\/[^"]+\.woff2"\)/);
+});

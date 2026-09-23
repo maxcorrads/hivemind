@@ -124,18 +124,21 @@ test("two joins without a token create two employees", () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("public chatter does not wake a waiting worker", async () => {
+test("public chatter does not wake a waiting worker", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.now() });
   const { hive, dir } = tempHive();
   const worker = hive.join({ role: "worker", seniority: "senior" });
   const brain = hive.join({ role: "brain" });
-  const started = Date.now();
-  const sleeping = hive.wait(worker.agent, 400);
-  await new Promise((r) => setTimeout(r, 40));
+  let settled = false;
+  const sleeping = hive.wait(worker.agent, 400).finally(() => { settled = true; });
   hive.postMessage(brain.agent, { channel: "general", body: "noise one" });
   hive.postMessage(brain.agent, { channel: "general", body: "noise two" });
+  t.mock.timers.tick(399);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(settled, false, "public chatter must not end the wait before its timeout");
+  t.mock.timers.tick(1);
   const result = await sleeping;
   assert.equal(result.idle, true);
-  assert.ok(Date.now() - started >= 300);
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -185,8 +188,8 @@ test("brains do not wake on #general unless mentioned", async () => {
 test("last wait wins and the old one is superseded", async () => {
   const { hive, dir } = tempHive();
   const worker = hive.join({ role: "worker", seniority: "senior" });
+  // wait() installs its waiter synchronously, so the next call supersedes it without any delay.
   const first = hive.wait(worker.agent, 8_000);
-  await new Promise((r) => setTimeout(r, 30));
   const second = hive.wait(worker.agent, 8_000);
   await assert.rejects(first, /superseded/);
   const brain = hive.join({ role: "brain" });
@@ -294,7 +297,6 @@ test("sweep keeps waiters online and drops stale agents", async () => {
   const { hive, dir } = tempHive();
   const worker = hive.join({ role: "worker", seniority: "mid" });
   const sleeping = hive.wait(worker.agent, 4_000);
-  await new Promise((r) => setTimeout(r, 20));
   hive.db.prepare("UPDATE agents SET last_seen_at = ? WHERE id = ?").run(Date.now() - 60_000, worker.agent.id);
   hive.sweepPresence(1_000);
   assert.equal(hive.getAgent(worker.agent.id).online, true);
@@ -376,7 +378,6 @@ test("aborted wait keeps the agent online and does not consume mail", async () =
   const dm = hive.openDm(brain.agent, worker.agent.name);
   const ac = new AbortController();
   const pending = hive.wait(worker.agent, 8_000, ac.signal);
-  await new Promise((r) => setTimeout(r, 30));
   ac.abort();
   const aborted = await pending;
   assert.equal(aborted.idle, true);
@@ -581,7 +582,6 @@ test("Human can delete an idle project but not one with online or waiting agents
   assert.throws(() => hive.deleteProject(human, "altro"), /still online or waiting/);
   const ac = new AbortController();
   const pending = hive.wait(brain.agent, 8_000, ac.signal);
-  await new Promise((r) => setTimeout(r, 30));
   assert.throws(() => hive.deleteProject(human, "altro"), new RegExp(brain.agent.name));
   ac.abort();
   await pending;
