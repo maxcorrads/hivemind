@@ -2,7 +2,7 @@
 // Behaviour is read from the JSON file named by FAKE_SEAT_CONTROL:
 //   { "behavior": "complete" | "wrong_result" | "hang" | "crash" | "no_usage" | "double_join", "tokens": 40, "version": "1.0.0-fake" }
 // double_join: every worker seat registers a second worker, so the initial capacity differs from the manifest.
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, lstatSync, readFileSync, readlinkSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -35,6 +35,17 @@ if ((control.lockFailAlways ?? []).includes(seatName) || ((control.lockFailOnce 
   process.exit(1);
 }
 if ((control.exitBeforeJoin ?? []).includes(seatName)) { process.stderr.write('Error: provider not configured\n'); process.exit(1); }
+// Isolated opencode data: record what this seat was given (paths only, never file contents).
+const dataHome = process.env.XDG_DATA_HOME ?? null, auth = dataHome ? path.join(dataHome, 'opencode', 'auth.json') : null;
+let authLink = null;
+try { authLink = auth && lstatSync(auth).isSymbolicLink() ? readlinkSync(auth) : auth && existsSync(auth) ? 'regular-file' : null; } catch { authLink = null; }
+appendFileSync(`${process.env.FAKE_SEAT_CONTROL}.seat-env`, JSON.stringify({ seat: seatName, trial: trialTag, dataHome,
+  stateHome: process.env.XDG_STATE_HOME ?? null, configHome: process.env.XDG_CONFIG_HOME ?? null, authLink }) + '\n');
+//   "idleHeartbeatMs": 200          idle workers print a text event periodically (as real seats do between tool calls)
+//   "stallOnce"/"stallAlways": ["brain"]  after the request the seat opens an LLM step and never emits again
+const heartbeat = () => { if (control.idleHeartbeatMs) console.log(JSON.stringify({ type: 'text', part: { text: 'idle' } })); };
+const stallMarker = `${process.env.FAKE_SEAT_CONTROL}.stalled-${seatName}`;
+const stalls = (control.stallAlways ?? []).includes(seatName) || ((control.stallOnce ?? []).includes(seatName) && !existsSync(stallMarker));
 
 async function call(route, body, token) {
   const response = await fetch(`${base}${route}`, { method: 'POST', body: JSON.stringify(body ?? {}),
@@ -50,7 +61,7 @@ if (control.rateLimited && role === 'brain') console.log(JSON.stringify({ type: 
 usage(Math.floor((control.tokens ?? 40) / 2));
 if (role === 'worker') {
   if (behavior === 'double_join') await call('/api/agent/join', { role, seniority: 'junior' });
-  for (;;) await delay(1_000);
+  for (;;) { heartbeat(); await delay(control.idleHeartbeatMs ?? 1_000); }
 }
 
 const { sessionId } = await call('/api/agent/inbox/session', { sessionId: randomUUID() }, joined.token);
@@ -59,6 +70,11 @@ while (!request) {
   const mail = await call('/api/agent/wait', { sessionId, timeoutMs: 500 }, joined.token);
   request = [...(mail.messages ?? []), ...(mail.mentions ?? [])]
     .find(m => m.authorRole === 'human' && !m.threadId && !String(m.body).startsWith('[Hivemind adaptive topology')) ?? null;
+}
+if (stalls) {
+  writeFileSync(stallMarker, '');
+  console.log(JSON.stringify({ type: 'step_start', part: { type: 'step-start' } }));
+  for (;;) await delay(1_000);
 }
 if (behavior === 'crash') process.exit(3);
 if (behavior === 'hang') { for (;;) await delay(1_000); }

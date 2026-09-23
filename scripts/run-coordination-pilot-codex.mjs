@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DatabaseSync } from 'node:sqlite';
+import { createSeatDataDir, sweepStaleSeatDataDirs } from './opencode-seat-data.mjs';
 import { loadFixtures } from './benchmark-coordination.mjs';
 import {
   REAL_AGENT_PROMPT_VERSION,
@@ -376,7 +377,7 @@ export function openCodeUsageAccumulator() {
   };
 }
 
-function startSeat({ binary, args, cwd, stdin, stdoutPath, stderrPath, env, timeoutMs }) {
+function startSeat({ binary, args, cwd, stdin, stdoutPath, stderrPath, env, timeoutMs, dataDir = null }) {
   mkdirSync(path.dirname(stdoutPath), { recursive: true });
   const stdoutFile = createWriteStream(stdoutPath, { flags: 'wx' });
   const stderrFile = createWriteStream(stderrPath, { flags: 'wx' });
@@ -404,6 +405,7 @@ function startSeat({ binary, args, cwd, stdin, stdoutPath, stderrPath, env, time
       clearTimeout(timer);
       stdoutFile.end();
       stderrFile.end();
+      if (dataDir) rmSync(dataDir, { recursive: true, force: true });
       resolve({
         code,
         signal,
@@ -463,6 +465,57 @@ async function stopServer(server) {
   const deadline = Date.now() + 5_000;
   while (server.child.exitCode === null && Date.now() < deadline) await delay(100);
   if (server.child.exitCode === null) server.child.kill('SIGKILL');
+}
+
+/** Agents of `role` registered in the trial hive (0 while the schema is still starting). */
+function joinedAgents(dbPath, role) {
+  if (!existsSync(dbPath)) return 0;
+  try {
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    try { return Number(db.prepare('SELECT COUNT(*) AS n FROM agents WHERE role = ?').get(role).n); } finally { db.close(); }
+  } catch { return 0; }
+}
+
+export const SEAT_LOCK_ERROR = /database is locked/i;
+
+/**
+ * Starts one seat and waits until it has joined. OpenCode processes started at the same instant can fail on opencode's
+ * local database lock, so seats start one at a time; a seat that exits on that lock before joining is retried once
+ * after a short backoff. Any other exit, a second lock failure or the timeout throws, as the parallel launch did.
+ * `start(retry)` returns a startSeat handle; `joined()` reports whether this seat has registered. Returns the joined
+ * seat plus the results of starts that failed on the lock; a seat that never joins is stopped before this throws.
+ */
+export async function launchUntilJoined({ label, start, joined, backoffMs = 2_000, timeoutMs = 45_000, pollMs = 200, log = [] }) {
+  const deadline = Date.now() + timeoutMs;
+  const entry = { seat: label, starts: 0, retries: [] };
+  log.push(entry);
+  const failedStarts = [];
+  for (let retry = 0; ; retry++) {
+    entry.starts++;
+    const seat = start(retry);
+    for (;;) {
+      if (joined()) return { seat, failedStarts };
+      if (seat.child.exitCode !== null || seat.child.signalCode !== null) {
+        const result = await seat.done;
+        if (retry === 0 && SEAT_LOCK_ERROR.test(result.stderrTail ?? '') && Date.now() + backoffMs < deadline) {
+          entry.retries.push({ reason: 'database_locked', exitCode: result.code });
+          failedStarts.push(result);
+          await delay(backoffMs);
+          break;
+        }
+        entry.failure = SEAT_LOCK_ERROR.test(result.stderrTail ?? '') ? 'database_locked' : 'exited_before_join';
+        throw new Error(`${label} process exited before joining (${entry.failure})`);
+      }
+      if (Date.now() >= deadline) {
+        entry.failure = 'join_timeout';
+        seat.child.kill('SIGTERM');
+        setTimeout(() => seat.child.kill('SIGKILL'), 2_000).unref();
+        await seat.done;
+        throw new Error(`Timed out waiting for ${label} to join`);
+      }
+      await delay(pollMs);
+    }
+  }
 }
 
 async function waitForWorkerJoins(dbPath, expected, seats, timeoutMs = 45_000) {
@@ -645,12 +698,38 @@ async function runTrial(options, trial, fixture, binary, binaryVersion) {
   let server = null;
   const runningSeats = [];
   const seatResults = [];
+  const seatLaunch = [];
   let startupError = null;
+  // OpenCode seats get private opencode data (database, logs, state) with auth.json symlinked, removed when the seat
+  // stops, instead of the Human's shared multi-GB store. Codex seats are unchanged.
+  const seatData = env => {
+    if (trial.versions.host !== 'opencode') return { env, dir: null };
+    const data = createSeatDataDir({ env: process.env });
+    return { env: { ...env, ...data.env }, dir: data.dir };
+  };
+  const launchSeat = ({ id, prompt, env, retry, withHivemind = true }) => {
+    const data = seatData(env);
+    const invocation = hostInvocation(trial, prompt, data.env, options.repoRoot, withHivemind, workspace);
+    const suffix = retry ? `.retry-${retry}` : '';
+    return startSeat({
+      binary,
+      args: invocation.args,
+      cwd: workspace,
+      stdin: invocation.stdin,
+      stdoutPath: path.join(attemptDir, `${id}${suffix}.stdout.txt`),
+      stderrPath: path.join(attemptDir, `${id}${suffix}.stderr.log`),
+      env: invocation.env,
+      timeoutMs: options.timeoutMs,
+      dataDir: data.dir,
+    });
+  };
   try {
     if (trial.trial.workflow === 'single_worker') {
       const prompt = buildSinglePrompt(trial, fixture);
-      const invocation = hostInvocation(trial, prompt, { ...process.env }, options.repoRoot, false, workspace);
+      const data = seatData({ ...process.env });
+      const invocation = hostInvocation(trial, prompt, data.env, options.repoRoot, false, workspace);
       const seat = startSeat({
+        dataDir: data.dir,
         binary,
         args: invocation.args,
         cwd: workspace,
@@ -676,28 +755,18 @@ async function runTrial(options, trial, fixture, binary, binaryVersion) {
         writeMeta(metaFile, meta);
       }
       const workers = plan.filter(seat => seat.role === 'worker');
+      const hiveDb = path.join(server.home, 'hive.db');
+      const seatEnv = { ...process.env, HIVEMIND_URL: `http://127.0.0.1:${BENCHMARK_PORT}`, HIVEMIND_HOME: path.join(attemptDir, 'agent-identities') };
+      // Workers start one at a time, each joined before the next starts: same prompts, order and final capacity.
       for (let index = 0; index < workers.length; index++) {
         const seat = workers[index];
         const prompt = buildWorkerPrompt(trial, fixture, seat.worker, index + 1);
-        const baseEnv = {
-          ...process.env,
-          HIVEMIND_URL: `http://127.0.0.1:${BENCHMARK_PORT}`,
-          HIVEMIND_HOME: path.join(attemptDir, 'agent-identities'),
-        };
-        const invocation = hostInvocation(trial, prompt, baseEnv, options.repoRoot, true, workspace);
-        const proc = startSeat({
-          binary,
-          args: invocation.args,
-          cwd: workspace,
-          stdin: invocation.stdin,
-          stdoutPath: path.join(attemptDir, `${seat.id}.stdout.txt`),
-          stderrPath: path.join(attemptDir, `${seat.id}.stderr.log`),
-          env: invocation.env,
-          timeoutMs: options.timeoutMs,
-        });
-        runningSeats.push({ id: seat.id, ...proc });
+        const launched = await launchUntilJoined({ label: seat.id, log: seatLaunch, joined: () => joinedAgents(hiveDb, 'worker') >= index + 1,
+          start: retry => launchSeat({ id: seat.id, prompt, env: seatEnv, retry }) });
+        for (const failed of launched.failedStarts) seatResults.push({ id: `${seat.id}.locked-start`, ...failed });
+        runningSeats.push({ id: seat.id, ...launched.seat });
       }
-      await waitForWorkerJoins(path.join(server.home, 'hive.db'), workers.length, runningSeats);
+      await waitForWorkerJoins(hiveDb, workers.length, runningSeats);
       const brainSeat = plan.find(seat => seat.role === 'brain');
       const brainPrompt = buildBrainPrompt(trial, fixture, workers.length, humanAuthority?.seq ?? null);
       const brainEnv = {
@@ -705,17 +774,10 @@ async function runTrial(options, trial, fixture, binary, binaryVersion) {
         HIVEMIND_URL: `http://127.0.0.1:${BENCHMARK_PORT}`,
         HIVEMIND_HOME: path.join(attemptDir, 'agent-identities'),
       };
-      const brainInvocation = hostInvocation(trial, brainPrompt, brainEnv, options.repoRoot, true, workspace);
-      const brain = startSeat({
-        binary,
-        args: brainInvocation.args,
-        cwd: workspace,
-        stdin: brainInvocation.stdin,
-        stdoutPath: path.join(attemptDir, 'brain.stdout.txt'),
-        stderrPath: path.join(attemptDir, 'brain.stderr.log'),
-        env: brainInvocation.env,
-        timeoutMs: options.timeoutMs,
-      });
+      const launchedBrain = await launchUntilJoined({ label: 'brain', log: seatLaunch, joined: () => joinedAgents(hiveDb, 'brain') >= 1,
+        start: retry => launchSeat({ id: 'brain', prompt: brainPrompt, env: brainEnv, retry }) });
+      for (const failed of launchedBrain.failedStarts) seatResults.push({ id: 'brain.locked-start', ...failed });
+      const brain = launchedBrain.seat;
       runningSeats.push({ id: brainSeat.id, ...brain });
       seatResults.push({ id: 'brain', ...(await brain.done) });
 
@@ -797,6 +859,7 @@ async function runTrial(options, trial, fixture, binary, binaryVersion) {
     (coordinationEvidence?.workerQuestions ?? 0) === 0) {
     meta.notes.push('Information-partitioned fixture produced no worker question events; treat this trial as non-discriminative coordination evidence even if artifact acceptance passed.');
   }
+  meta.seatLaunch = { sequential: true, isolatedOpencodeData: trial.versions.host === 'opencode', seats: seatLaunch };
   meta.seats = seatResults.map(result => ({
     id: result.id,
     exitCode: result.code,
@@ -815,6 +878,7 @@ export async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   const { manifest, trials, fixtures } = readCohort(options.input, options.repoRoot);
   const binary = hostExecutable(manifest.versions.host);
+  if (!options.dryRun && manifest.versions.host === 'opencode') sweepStaleSeatDataDirs(); // private seat data left by a crashed run
   const binaryVersion = options.dryRun ? null : commandVersion(binary);
   if (!options.dryRun && !binaryVersion) {
     const override = manifest.versions.host === 'opencode' ? 'OPENCODE_BIN' : 'CODEX_BIN';

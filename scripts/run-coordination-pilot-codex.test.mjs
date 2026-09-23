@@ -25,6 +25,7 @@ import {
   codexExecutable,
   hostExecutable,
   hostInvocation,
+  launchUntilJoined,
   opencodeArgs,
   openCodeUsageAccumulator,
   parseProviderTokens,
@@ -386,4 +387,43 @@ test('pilot dry-run plans all 24 trials without creating run metadata', async ()
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+/** A startSeat-like handle: exits (with stderr) after `exitAfterMs`, or runs until killed. */
+function fakeSeatHandle({ exitAfterMs = null, stderrTail = '', code = 1 } = {}) {
+  let resolveDone;
+  const child = { exitCode: null, signalCode: null, killed: false,
+    kill(signal) { if (child.exitCode === null && child.signalCode === null) { child.signalCode = signal; child.killed = true; resolveDone({ code: null, signal, stderrTail }); } } };
+  const done = new Promise(resolve => { resolveDone = resolve; });
+  if (exitAfterMs !== null) setTimeout(() => { child.exitCode = code; resolveDone({ code, signal: null, stderrTail }); }, exitAfterMs);
+  return { child, done };
+}
+
+test('clarification seats start one at a time; only an opencode database lock before joining is retried, once', async () => {
+  const locked = 'Error: Unexpected error\n\ndatabase is locked\n';
+  let joinedNow = false;
+  const log = [];
+  const starts = [];
+  const ok = await launchUntilJoined({ label: 'worker-1', log, backoffMs: 20, pollMs: 5, joined: () => joinedNow,
+    start: retry => {
+      starts.push(retry);
+      if (retry === 0) return fakeSeatHandle({ exitAfterMs: 10, stderrTail: locked });
+      setTimeout(() => { joinedNow = true; }, 20);
+      return fakeSeatHandle();
+    } });
+  assert.deepEqual(starts, [0, 1]);
+  assert.equal(ok.failedStarts.length, 1);
+  assert.match(ok.failedStarts[0].stderrTail, /database is locked/);
+  assert.deepEqual(log, [{ seat: 'worker-1', starts: 2, retries: [{ reason: 'database_locked', exitCode: 1 }] }]);
+
+  await assert.rejects(launchUntilJoined({ label: 'worker-2', backoffMs: 5, pollMs: 5, joined: () => false,
+    start: () => fakeSeatHandle({ exitAfterMs: 5, stderrTail: 'Error: provider not configured' }) }), /exited_before_join/);
+  const twice = [];
+  await assert.rejects(launchUntilJoined({ label: 'brain', log: twice, backoffMs: 5, pollMs: 5, joined: () => false,
+    start: () => fakeSeatHandle({ exitAfterMs: 5, stderrTail: locked }) }), /database_locked/);
+  assert.equal(twice[0].starts, 2, 'retried exactly once');
+  let hung;
+  await assert.rejects(launchUntilJoined({ label: 'worker-3', timeoutMs: 50, pollMs: 5, joined: () => false,
+    start: () => { hung = fakeSeatHandle(); return hung; } }), /Timed out waiting for worker-3/);
+  assert.equal(hung.child.killed, true, 'a seat that never joined is stopped, not leaked');
 });
