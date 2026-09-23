@@ -37,7 +37,7 @@ export type MessageServiceDeps = Core & {
   readonly tasks: Pick<TaskStore, "has">;
   readonly timeline: Pick<TimelineStore, "prepare" | "recordMessage" | "source">;
   readonly decisions: Pick<DecisionStore, "replyRecipientNames" | "captureHumanReply">;
-  readonly adaptiveTopology: Pick<AdaptiveTopologyRuntime, "humanMessageCommitted" | "threadStatusChange">;
+  readonly adaptiveTopology: Pick<AdaptiveTopologyRuntime, "humanMessageCommitted" | "threadStatusChange" | "store">;
 };
 
 /**
@@ -241,8 +241,7 @@ export class MessageService implements MessagePoster {
     }
     const ch = this.deps.channels.getChannel(row.channel_id);
     if (!this.deps.channels.canSeeChannel(actor, ch)) throw new HiveError(403, "Cannot access thread");
-    const commitments = this.db.prepare('SELECT execution_id FROM adaptive_topology_messages WHERE root_id=?').all(threadId);
-    if (commitments.length) {
+    if (this.deps.adaptiveTopology.store.hasDelegations(threadId)) {
       if (actor.role !== 'human' && actor.id !== this.deps.messageQueries.getMessageById(threadId).authorId)
         throw new HiveError(403, 'Only Human or the delegating brain can close adaptive delegated work');
       if (this.db.prepare('SELECT status FROM threads WHERE id=?').get(threadId)?.status === 'done' && status !== 'done')

@@ -209,6 +209,10 @@ export class RoomStore {
     }
     return { ...this.view(actor, ch.id), duplicate };
   }
+  /** True when the actor already used `requestId` for a room event. */
+  hasRequest(actorId: string, requestId: string): boolean {
+    return Boolean(this.db.prepare('SELECT 1 FROM room_events WHERE actor_id=? AND request_id=?').get(actorId, requestId));
+  }
   taskInfo(task: TaskSnapshot): RoomTask | undefined {
     const link = this.db.prepare('SELECT * FROM room_tasks WHERE task_id=?').get(task.id) as TaskLink | undefined;
     if (!link) return;

@@ -19,8 +19,7 @@ function event(actor: Agent, family: string, requestId: string,
     eventId: coordinationEventId(actor.id, family, `${requestId}:${payload}`) };
 }
 function taskRetry(deps: AdaptiveActionDeps, actor: Agent, requestId: string): boolean {
-  return Boolean(deps.storage.db.prepare('SELECT 1 FROM task_events WHERE actor_id=? AND request_id=?').get(actor.id, requestId) ||
-    deps.storage.db.prepare('SELECT 1 FROM task_request_aliases WHERE actor_id=? AND request_id=?').get(actor.id, requestId));
+  return deps.tasks.hasRequest(actor.id, requestId);
 }
 function authenticate(deps: AdaptiveActionDeps, actor: Agent, token?: string): void {
   if (token !== undefined && deps.identity.agentByToken(token).id !== actor.id) throw new HiveError(401, 'Authenticated identity changed');
@@ -91,11 +90,10 @@ export function sendAdaptiveAgentMessage(deps: AdaptiveActionDeps, actor: Agent,
     const bound = input.threadId && targets.length && deps.adaptiveTopology.hasActive(actor) &&
       deps.messageQueries.threadStatus(input.threadId) !== 'done'
       ? new Set(targets.map(worker => {
-        const row = deps.storage.db.prepare(`SELECT execution_id FROM adaptive_topology_messages WHERE root_id=? AND worker_id=?`).get(input.threadId!, worker.id) ??
-          deps.storage.db.prepare(`SELECT a.execution_id FROM adaptive_topology_tasks a JOIN task_records t ON t.id=a.task_id
-            WHERE a.task_id=? AND t.worker_id=? AND json_extract(t.snapshot,'$.state') NOT IN ('accepted_complete','rejected')`)
-            .get(input.threadId!, worker.id);
-        return row ? String(row.execution_id) : null;
+        const delegated = deps.adaptiveTopology.store.delegationExecution(input.threadId!, worker.id);
+        if (delegated !== undefined) return delegated;
+        const linked = deps.adaptiveTopology.store.taskExecution(input.threadId!);
+        return linked !== undefined && deps.tasks.isOpenFor(input.threadId!, worker.id) ? linked : null;
       })) : null;
     const threadExecution = bound?.size === 1 ? [...bound][0] : null;
     const continuing = Boolean(threadExecution && deps.adaptiveTopology.forAgent(actor, threadExecution) &&
@@ -179,7 +177,7 @@ export function mutateAdaptiveRoom(deps: AdaptiveActionDeps, actor: Agent, chann
     authenticate(deps, actor, token);
     const room = deps.rooms.view(actor, channelId).room;
     if (actor.role !== 'brain' && executionId) throw new HiveError(400, 'Only a brain declares an adaptive executionId');
-    if (deps.storage.db.prepare('SELECT 1 FROM room_events WHERE actor_id=? AND request_id=?').get(actor.id, input.requestId))
+    if (deps.rooms.hasRequest(actor.id, input.requestId))
       return { ...deps.rooms.event(actor, channelId, input), adaptiveRouting: deps.adaptiveTopology.forAgent(actor, executionId) };
     if (actor.role !== 'brain') return { ...deps.rooms.event(actor, channelId, input), adaptiveRouting: null };
     const participants = action.type === 'configure' ? action.contract.participants : action.type === 'staff' ? action.participants : null;

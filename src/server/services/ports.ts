@@ -94,8 +94,14 @@ type ChannelScopes<K extends "channelIdsIn" | "memberChannelIds" = "channelIdsIn
 };
 
 export type TaskCoordinationDeps = Core & Channels & ChannelScopes;
-export type CapacityDeps = Core & Agents<"listAgents">;
+/** Worker capacity of an adaptive execution: roster, structured work, free-form delegations. */
+export type CapacityDeps = Agents<"listAgents"> & {
+  readonly tasks: Pick<TaskStore, "capacityWork" | "completedAmong">;
+  readonly messageQueries: Pick<MessageQueries, "threadStatuses">;
+  readonly adaptiveTopology: Pick<AdaptiveTopologyRuntime, "store">;
+};
 export type AdmissionDeps = CapacityDeps & Channels & Agents & {
+  readonly messageQueries: Pick<MessageQueries, "threadStatus">;
   readonly rooms: Pick<RoomStore, "peek">;
   readonly adaptiveTopology: AdaptiveTopologyRuntime;
 };
@@ -133,7 +139,7 @@ export type DecisionDeps = Core & Channels & Agents & Messages & Poster<"postMes
 export type DiagnosticsDeps = { readonly home: string } & Agents<"getAgent">;
 
 /** What the adaptive topology runtime reads and writes outside its own tables. */
-export type AdaptiveRuntimeDeps = Core & {
+export type AdaptiveRuntimeDeps = Core & CapacityDeps & {
   readonly home: string;
   readonly identity: AgentDirectory & Pick<IdentityService, "sessionFingerprint">;
   readonly projects: Pick<ProjectDirectory, "getProject">;
@@ -149,6 +155,6 @@ export type AdaptiveActionDeps = AdmissionDeps & {
   readonly identity: AgentDirectory & Pick<IdentityService, "agentByToken" | "sessionFingerprint">;
   readonly messageQueries: Pick<MessageReader, "getMessageById"> & Pick<MessageQueries, "threadStatus">;
   readonly messages: Pick<MessageService, "postMessage" | "hasActiveSendRequest" | "setThreadStatus">;
-  readonly rooms: Pick<RoomStore, "peek" | "view" | "event">;
-  readonly tasks: Pick<TaskStore, "assign" | "event" | "get" | "has">;
+  readonly rooms: Pick<RoomStore, "peek" | "view" | "event" | "hasRequest">;
+  readonly tasks: Pick<TaskStore, "assign" | "event" | "get" | "has" | "hasRequest" | "isOpenFor">;
 };
