@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Agent } from "../src/shared/types.ts";
 import { AdaptiveRoutingPanel } from "./AdaptiveRoutingPanel.tsx";
 import { AdaptiveRoutingSettings } from "./AdaptiveRoutingSettings.tsx";
@@ -11,9 +11,12 @@ import { Inbox } from "./Inbox.tsx";
 import { JevLog } from "./JevLog.tsx";
 import { channelTitle } from "./labels.ts";
 import { LaunchSheet } from "./LaunchSheet.tsx";
+import { channelBack, mobileScreen, mobileTab, tabTarget, useMobile } from "./mobile-nav.ts";
+import { MobileDms, MobileTabs, projectDms } from "./MobileNav.tsx";
 import { ProjectPlugins } from "./ProjectPlugins.tsx";
 import { CreateProjectSheet, ProjectSettingsSheet } from "./ProjectSheets.tsx";
 import { SearchDesk } from "./SearchDesk.tsx";
+import { hashFor, type Sel } from "./selection.ts";
 import { Sidebar } from "./Sidebar.tsx";
 import { newerTelegramHealth } from "./telegram-health.ts";
 import { TelegramSheet } from "./TelegramSheet.tsx";
@@ -63,7 +66,7 @@ export function App() {
   ));
   const brainNames = Object.fromEntries((snap?.agents ?? []).filter(agent => agent.role === "brain").map(agent => [agent.id, agent.name]));
   const selectedProject =
-    sel.kind === "inbox" || sel.kind === "decisions" || sel.kind === "jev" ? sel.project : (activeChannel?.project ?? projects[0]?.slug ?? "chapter");
+    sel.kind !== "channel" ? sel.project : (activeChannel?.project ?? projects[0]?.slug ?? "chapter");
 
   const search = useSearch({ selectedProject, projects, setErr });
   const inbox = useInbox({ sel, selRef, projects, hive, setErr });
@@ -79,6 +82,20 @@ export function App() {
     reopenDm: dms.reopenDm, mergeMail, refreshRoutingView, onRoutingEvent, setErr,
   });
   useSelectionRepair(snap, sel, changeSelection);
+  // Phones show one screen at a time with bottom tabs (#223); the hash stays the single source of navigation.
+  const mobile = useMobile();
+  const screen = mobileScreen(sel, search.searching);
+  const lastList = useRef<Sel | null>(null);
+  useEffect(() => { if (sel.kind !== "channel") lastList.current = sel; }, [sel]);
+  useEffect(() => {
+    const replace = (next: Sel) => {
+      changeSelection(next);
+      history.replaceState(null, "", `#${hashFor(next)}`);
+    };
+    // A phone opened without a route starts on Home; the list screens have no desktop page and fall back to For you.
+    if (mobile && !location.hash.replace(/^#\/?/, "")) replace({ kind: "home", project: "" });
+    else if (!mobile && (sel.kind === "home" || sel.kind === "dms")) replace({ kind: "inbox", project: sel.project });
+  }, [mobile, sel, changeSelection]);
   const channelSheets = useChannelSheets();
   const projectSheets = useProjectSheets(snap, channelSheets);
 
@@ -145,7 +162,7 @@ export function App() {
   }
 
   return (
-    <div className="shell">
+    <div className="shell" data-m={screen}>
       <Sidebar snap={snap} sel={sel} go={go} live={live} theme={theme}
         onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
         query={search.query} setQuery={search.setQuery} onSearchNow={search.searchNow}
@@ -209,13 +226,16 @@ export function App() {
             onOlder={() => inbox.loadOlder(sel.project)}
             onMarkSeen={() => inbox.markAllSeen(sel.project)}
           />
-        ) : (
+        ) : sel.kind === "dms" ? (
+          <MobileDms snap={snap} project={sel.project} onOpen={id => go({ kind: "channel", id })} />
+        ) : sel.kind === "home" ? null : (
           <ChannelDesk channelId={sel.id} activeChannel={activeChannel} agents={snap.agents} roomAgents={roomAgents}
             channel={channelPane} threadPaneId={threadPane?.threadId} stickBottom={stickBottom}
             threadOpenAnchor={threadOpenAnchor} go={go} roomTick={roomTick} routingView={routingView}
             activeBrainChannel={activeBrainChannel} brainNames={brainNames}
             onOpenRouting={() => setRoutingPanelOpen(true)} onInvite={() => channelSheets.setInviteOpen(true)}
-            compose={compose} setErr={setErr} />
+            compose={compose} setErr={setErr}
+            onBack={() => go(channelBack(activeChannel, lastList.current, selectedProject))} />
         )}
         {routingError && activeBrainChannel && <div className="err" role="alert">Routing status unavailable: {routingError}</div>}
         {err && (
@@ -232,6 +252,14 @@ export function App() {
             else setThreadId(null);
           }}
           onDecisionAnswered={() => setDecisionTick(t => t + 1)} roomAgents={roomAgents} compose={compose} />
+      )}
+
+      {mobileTab(screen) && (
+        <MobileTabs active={mobileTab(screen)} onTab={tab => go(tabTarget(tab, selectedProject, inboxBox))}
+          badges={{
+            dms: projectDms(snap, selectedProject).withYou.reduce((sum, ch) => sum + (snap.unread[ch.id] ?? 0), 0),
+            activity: snap.mentionCounts[selectedProject] ?? 0,
+          }} />
       )}
 
       {channelSheets.creating && (

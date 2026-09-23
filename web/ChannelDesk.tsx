@@ -7,6 +7,7 @@ import { api } from "./api.ts";
 import { applyChannelMessage, recordChannelMessage } from "./channel-state.ts";
 import { Composer } from "./Composer.tsx";
 import { channelTitle, memberNames } from "./labels.ts";
+import { BackButton } from "./MobileNav.tsx";
 import { Msg } from "./Msg.tsx";
 import { holdLivePane, isReadingHistory } from "./pane-window.ts";
 import { RoomPanel } from './RoomPanel.tsx';
@@ -17,7 +18,7 @@ import type { ThreadOpenAnchor } from "./use-thread-scroll-anchor.ts";
 
 /** The selected channel: header, room panel, message stream, Jev advice strip and composer. */
 export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, channel, threadPaneId, stickBottom, threadOpenAnchor,
-  go, roomTick, routingView, activeBrainChannel, brainNames, onOpenRouting, onInvite, compose, setErr }: {
+  go, roomTick, routingView, activeBrainChannel, brainNames, onOpenRouting, onInvite, compose, setErr, onBack }: {
   channelId: string;
   activeChannel: Channel | undefined;
   agents: Agent[];
@@ -35,11 +36,14 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
   onInvite: () => void;
   compose: ReturnType<typeof useSend>;
   setErr: (error: string) => void;
+  /** Phones only: leaves the full-screen channel for the list it was opened from. */
+  onBack: () => void;
 }) {
   const { pane, setPane, channelStream, channelJournal, loadChannel } = channel;
   return (
     <>
       <header className="desk-h">
+        <BackButton label="Back" onBack={onBack} />
         <div>
           <h1>{activeChannel ? channelTitle(activeChannel) : channelId}</h1>
           {activeChannel?.topic && <p>{activeChannel.topic}</p>}
