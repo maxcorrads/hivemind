@@ -16,7 +16,7 @@ import type { EvidenceCollectorHealth } from '../shared/evidence-health.ts';
 
 const input = { topology: 'single', workers: 0, usableWorkers: 2, policyVersion: 'topology-policy-v2.1' };
 const scope = { executionId: 'e1', channelId: 'c1', projectId: 'p1', phase: 'initial' as const };
-const decision: AdaptiveTopologyDecision = { routeId: 'r1', contractVersion: 'adaptive-routing-v2', targetTopology: 'single',
+const decision: AdaptiveTopologyDecision = { routeId: 'r1', contractVersion: 'adaptive-routing-v3', targetTopology: 'single',
   targetWorkers: 0, confidence: 0.95, reason: 'fixture', providerStatus: 'ok', model: 'jev-fixture',
   latencyMs: 10, inputTokens: 40, outputTokens: 5, singleSufficient: true, needsOrchestration: false };
 const gap = (at = 1_000) => ({ missedBegins: 1, missedFinishes: 0, unattributed: 0, firstAt: at, lastAt: at });

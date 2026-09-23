@@ -7,6 +7,7 @@ import { Hive } from './hive.ts';
 import { createApp } from './app.ts';
 import { saveAdaptiveRouting } from './adaptive-config.ts';
 import type { AdaptiveTopology } from '../shared/adaptive-topology.ts';
+import { topologyPlanId } from '../shared/adaptive-topology-policy.ts';
 import type { AdaptiveCoordinationEvent } from './adaptive-topology.ts';
 import { countRows } from './test-fixtures.ts';
 
@@ -16,7 +17,7 @@ function choice(selected: string, options: string[], confidence: number) {
     probabilities: Object.fromEntries(options.map(option => [option, option === selected ? confidence : rest])) };
 }
 
-function payload(topology: AdaptiveTopology, confidence = 0.95, workers = 2) {
+function payload(topology: AdaptiveTopology, confidence = 0.95, workers = 2, offered: string[] = []) {
   const single = topology === 'single';
   const score = (value: number) => ({ type: 'score', score: value, confidence,
     probabilities: { '0': value < 1 ? 0.9 : 0.05, '1': 0.05, '2': value < 1 ? 0.05 : 0.9 } });
@@ -28,8 +29,7 @@ function payload(topology: AdaptiveTopology, confidence = 0.95, workers = 2) {
       complexity: score(single ? 0.2 : 1.8), parallelizability: score(single ? 0.2 : 1.8),
       coupling: score(topology === 'brain_multi_room' ? 1.8 : 0.2),
       specialization_need: score(single ? 0.2 : 1.8), coordination_need: score(single ? 0.2 : 1.8),
-      target_topology: choice(topology, ['single', 'brain_one_worker', 'brain_multi_dm', 'brain_multi_room'], confidence),
-      worker_budget: choice(`workers_${budget}`, ['workers_0', 'workers_1', 'workers_2'], confidence),
+      plan: choice(topologyPlanId({ topology, workers: budget }), offered, confidence),
     },
   };
 }
@@ -42,14 +42,15 @@ function fixture(t: TestContext) {
   const workers = [0, 1].map(() => hive.identity.join({ role: 'worker', seniority: 'senior', project: 'chapter' }));
   const dm = hive.channels.openDm(human, brain.agent.name);
   const app = createApp(hive);
-  let next = payload('single');
+  let next: [AdaptiveTopology, number] = ['single', 0.95];
   let unavailable = false;
   let calls = 0;
-  t.mock.method(globalThis, 'fetch', async (url: unknown) => {
+  t.mock.method(globalThis, 'fetch', async (url: unknown, init?: RequestInit) => {
     assert.equal(String(url), 'https://api.typesafe.ai/v1/systemone');
     calls++;
     if (unavailable) throw new Error('fixture offline');
-    return Response.json(next);
+    const offered = Object.keys(JSON.parse(String(init?.body)).questions.plan.criteria);
+    return Response.json(payload(next[0], next[1], 2, offered));
   });
   saveAdaptiveRouting(home, { enabled: true, apiKey: 'fixture-not-a-live-key' });
   t.after(() => {
@@ -62,7 +63,7 @@ function fixture(t: TestContext) {
     kind, actorId: brain.agent.id, actorRole: 'brain', channelId: dm.id,
     summary: `coordination checkpoint ${++eventNumber}`,
   });
-  const choose = (topology: AdaptiveTopology, confidence = 0.95) => { next = payload(topology, confidence); };
+  const choose = (topology: AdaptiveTopology, confidence = 0.95) => { next = [topology, confidence]; };
   const start = async (mode = 'auto', scope = 'none') => {
     const result = await hive.adaptiveTopology.routeHumanRequest(human,
       { channel: dm.id, body: 'Complete the bounded request.', requestId: `request-${eventNumber++}` }, mode, scope);

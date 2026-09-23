@@ -13,6 +13,9 @@ const digest = /^[a-f0-9]{64}$/;
 const key = /^[a-z0-9][a-z0-9._/-]{0,199}$/i;
 // Mirrors JEV_MODEL_PATTERN in src/shared/jev-model.ts.
 const jevModel = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?$/;
+// Jev contracts whose evidence a study can read. v2 asked for topology and worker budget separately; v3 (#207) asks for
+// one joint plan. They are different classifiers: a study reads either, never both pooled in one cohort.
+export const CONTRACT_VERSIONS = ['adaptive-routing-v2', 'adaptive-routing-v3'];
 const finite = n => typeof n === 'number' && Number.isFinite(n) && n >= 0;
 const count = n => Number.isSafeInteger(n) && n >= 0;
 function object(value, label) { assert.ok(value && typeof value === 'object' && !Array.isArray(value), `${label} must be an object`); return value; }
@@ -93,7 +96,9 @@ function validateCapture(c) {
 export function validateEvidence(e, policyVersion) {
   object(e, 'router evidence');
   assert.equal(e.schemaVersion, 1); assert.equal(e.evidenceClass, 'adaptive-evidence-v1');
-  assert.equal(e.contractVersion, 'adaptive-routing-v2'); assert.equal(e.policyVersion, policyVersion);
+  assert.ok(CONTRACT_VERSIONS.includes(e.contractVersion),
+    e.contractVersion === 'mixed' ? 'Router evidence mixes Jev contract versions; it cannot join a cohort' : 'Unsupported Jev contract version');
+  assert.equal(e.policyVersion, policyVersion);
   const c = object(e.coverage, 'coverage'), o = object(e.overhead, 'overhead');
   for (const k of ['attemptsStarted','attemptsFinished','pendingAttempts','retainedAttempts','prunedAttempts']) assert.ok(count(c[k]), `Invalid ${k}`);
   const aggregate = validateCapture(c);
@@ -137,7 +142,7 @@ export function validateStudy(study, { requireComplete = false } = {}) {
   const expected = prepareStudy(study.config);
   assert.equal(study.studyId, expected.studyId, 'Study configuration changed');
   assert.ok(Array.isArray(study.trials) && study.trials.length === expected.trials.length, 'Missing or extra trials');
-  let completed = 0; const modelVersions = new Set(), requestedVersions = new Set();
+  let completed = 0; const modelVersions = new Set(), requestedVersions = new Set(), contractVersions = new Set();
   for (let i = 0; i < study.trials.length; i++) {
     const trial = study.trials[i], wanted = expected.trials[i];
     exact(trial, ['id','workloadId','repeat','condition','observed'], 'trial');
@@ -169,6 +174,7 @@ export function validateStudy(study, { requireComplete = false } = {}) {
       if (o.routerEvidence === null) assert.equal(o.instrumentationHealthy, false, 'Missing router evidence is not zero overhead');
       else {
         validateEvidence(o.routerEvidence, study.config.versions.policyVersion); for (const m of o.routerEvidence.models) modelVersions.add(m);
+        contractVersions.add(o.routerEvidence.contractVersion);
         const requested = o.routerEvidence.requestedModels ?? null;
         if (study.config.versions.jevModel !== undefined) {
           assert.ok(requested !== null, 'Router evidence does not record the requested Jev model; it cannot join a pinned-model cohort');
@@ -184,10 +190,11 @@ export function validateStudy(study, { requireComplete = false } = {}) {
     }
     completed++;
   }
+  assert.ok(contractVersions.size <= 1, 'Jev contract versions differ; split the cohort instead of pooling versions');
   assert.ok(requestedVersions.size <= 1, 'Requested Jev models differ; split the cohort instead of pooling versions');
   assert.ok(modelVersions.size <= 1, 'Resolved Jev models differ; split the cohort instead of pooling versions');
   return { expected: study.trials.length, completed, pending: study.trials.length - completed,
-    requestedModels: [...requestedVersions], resolvedModels: [...modelVersions] };
+    requestedModels: [...requestedVersions], resolvedModels: [...modelVersions], contractVersions: [...contractVersions] };
 }
 
 function metric(values) {

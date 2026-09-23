@@ -54,7 +54,7 @@ Structured task ownership is linked to the execution in the same transaction tha
 
 Free-form DM assignments are also tracked as commitments. A commitment ends when its delegation thread is marked done, or when the worker reports the outcome in that thread with `eventType: 'decision'` (or an `acknowledgement` carrying attachments as evidence); a bare acknowledgement only confirms receipt, and there is no idle timeout. Until then an open delegated thread is not treated as a free worker merely because it lacks a structured task record. Commitments of a completed or deleted execution never keep a worker busy. Sender-declared `progress` and `decision` labels cannot bypass admission when a brain contacts a new worker. Known active assignment threads can continue during a drain; new assignments are still blocked. Completed delegation threads cannot be reopened or reused to evade Single.
 
-The classifier is offered only feasible topology choices and bounded worker-count choices. A contradictory or out-of-range response is rejected, not silently rewritten into a different Jev plan. If availability changes during classification, Hivemind refreshes capacity and re-evaluates. Repeated races preserve the existing mode rather than oversubscribing workers.
+The classifier is offered only feasible plans: each option fixes both the topology and the total worker count, so a topology/budget contradiction cannot be expressed (see [Question design](#question-design-contract-v3)). A response outside the offered options, or otherwise malformed, is rejected with a specific reason, not silently rewritten into a different Jev plan. If availability changes during classification, Hivemind refreshes capacity and re-evaluates. Repeated races preserve the existing mode rather than oversubscribing workers.
 
 When no worker is free but orchestration is needed, the brain can continue safe local work. Human sees **Orchestration needed · no workers available**. Capacity changes trigger further evaluation.
 
@@ -122,7 +122,43 @@ By default Hivemind requests the alias `jev-latest`, which TypeSafe may resolve 
 - The Routing log, the evidence export and the Human connection test use the configured identifier. Each call records the **requested** model and the **resolved** model the provider reports, separately; a difference is shown, never rewritten.
 - Changing the model is a settings change: it invalidates in-flight initial and ongoing classifications and connection-test revisions, just like key or fallback changes.
 
-The Phase 2 contract is `adaptive-routing-v2`. It includes atomic sufficiency, complexity, parallelizability, coupling, specialization and coordination signals, plus feasible topology and worker-budget choices. The provider contract is documented at <https://docs.typesafe.ai/api>.
+### Question design (contract v3)
+
+The routing contract is `adaptive-routing-v3` (#207). Every call asks the atomic signal questions (single-agent sufficiency, complexity, parallelizability, coupling, specialization and coordination) plus **one joint `plan` choice**. Contract `adaptive-routing-v2` asked for the topology (`target_topology`) and the worker budget (`worker_budget`) independently, so Jev could answer an impossible pair such as Brain + 1 with 2 workers; v3 makes that inexpressible. The provider contract is documented at <https://docs.typesafe.ai/api>.
+
+The `plan` options are built from the capacity usable by the execution at the time of the call (`usable`), each with human-readable criteria:
+
+| Option id | Plan | Offered when |
+| --- | --- | --- |
+| `single` | Single · 0 workers | Unless Human requires orchestration and a worker is usable |
+| `brain_one_worker` | Brain + 1 · 1 worker | `usable ≥ 1` |
+| `brain_multi_dm_<n>` | Multi-DM · n workers | `2 ≤ n ≤ min(usable, 8)` |
+| `brain_multi_room_<n>` | Multi-Room · n workers | `2 ≤ n ≤ min(usable, 8)` |
+| `capacity_blocked` | Orchestration needed but infeasible (keep safe local work) | `usable = 0`, or Human requires orchestration and only Brain + 1 fits |
+
+- **Cap (`MAX_PLAN_WORKERS = 8`).** Every option is sent and billed on every call and takes a share of Jev's probability mass, and one brain cannot usefully supervise more parallel workstreams. With the cap the question has at most 18 options, far below TypeSafe's 255-option Choice limit. When the execution already runs a multi-worker plan above the cap that is still feasible, that worker count stays offered (as Multi-DM and Multi-Room), so the cap alone never pushes a running execution down.
+- The chosen option alone gives the decision's topology and worker count; `capacity_blocked` maps to Single · 0 with `needsOrchestration`. `singleSufficient` comes from the sufficiency answer and `needsOrchestration` is `capacity_blocked` or "insufficient", as before.
+- Overall confidence is the lowest confidence among the plan and signal answers.
+- **Sufficiency cross-check.** A `single` plan together with "insufficient" while workers are usable is still rejected (`plan_contradicts_sufficiency`): "delegation materially helps" and "use no worker" cannot both be followed, and Hivemind never picks one reading for Jev. The reverse ("sufficient" with a delegating plan) is accepted: the brain could work alone, but delegation can still pay off.
+
+### Rejection reasons
+
+A call that does not produce a usable decision keeps the current mode (or uses the initial fallback) and records one specific failure class. When the response arrived and was read, its **resolved model and token usage are recorded even though the answer was rejected**, in the Routing log and in the evidence export (those tokens were spent).
+
+| Code | Meaning |
+| --- | --- |
+| `plan_not_offered` | Jev chose a plan that was not among the offered options |
+| `plan_contradicts_sufficiency` | Jev chose Single while saying the brain alone is not enough (workers usable) |
+| `malformed_answer:<question>` | An answer is missing or has the wrong type, confidence, choice or score |
+| `probabilities_invalid:<question>` | An answer's probability distribution is missing, has the wrong keys, does not sum to 1, or its choice is not the most likely option |
+| `model_missing` / `missing_usage` | The response does not name the resolved model / does not report token usage |
+| `malformed_response` | The body is empty, not JSON, or not a JSON object |
+| `response_too_large` / `request_too_large` | The response or the routing request exceeds its size bound |
+| `http_<status>` | TypeSafe answered with an HTTP error (for example `http_503`) |
+| `timeout` / `cancelled` / `network` | No answer in time / the call was cancelled at shutdown / TypeSafe could not be reached |
+| `invalid_model_setting` / `invalid_timeout` / `invalid_snapshot` / `internal_error` | Local problems; nothing (or nothing usable) was sent |
+
+The decision's `reason` is `response_rejected_preserve_current` when the response was read and rejected, `provider_timeout_preserve_current` on timeout, and `provider_unavailable_preserve_current` otherwise; the failure class is the decision's `error`. Calls logged before #207 keep their original text (for example "Invalid Jev response") and their v2 questions still render.
 
 The structured snapshot includes the original request, current and pending mode, capacity and available worker metadata, counts of active work/blockers/dependencies, recent coordination-event metadata, the triggering coordination summary, Human override, and the previous decision. It does not send repository files, diffs, attachment contents, full conversation history, agent credentials, or the TypeSafe key as classifier state. Telegram's sender-display prefix is excluded from the routing request; the original stored Telegram message remains unchanged.
 
@@ -139,7 +175,7 @@ Selecting a call shows:
 3. **Decision and result**: recommendation, overall confidence (the lowest answer confidence), reason, what Hivemind applied, requested and resolved model, latency and tokens.
 4. **Raw JSON**: the exact request body sent to TypeSafe and the parsed response.
 
-The full payloads are stored only in the local SQLite database (`jev_calls`), are served only on the authenticated Human API (`GET /api/ui/projects/:project/jev-calls` and `/jev-calls/:id`), and never include the TypeSafe key or provider error bodies. Failed calls keep what was sent and a local failure class (for example `timeout` or `http_503`). History is bounded to the latest 1,000 calls per project and is removed with its channel or project. New calls appear live through the Human `jev-call` websocket event.
+The full payloads are stored only in the local SQLite database (`jev_calls`), are served only on the authenticated Human API (`GET /api/ui/projects/:project/jev-calls` and `/jev-calls/:id`), and never include the TypeSafe key or provider error bodies. Failed calls keep what was sent and a local failure class (for example `timeout`, `http_503` or `plan_not_offered`), shown in plain words; a rejected answer is labelled **Answer rejected** (not "Jev unavailable") and still shows Jev's answers, the resolved model and the tokens it used. History is bounded to the latest 1,000 calls per project and is removed with its channel or project. New calls appear live through the Human `jev-call` websocket event.
 
 ## Human-only evaluation history
 

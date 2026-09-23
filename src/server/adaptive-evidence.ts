@@ -4,6 +4,7 @@ import type { AdaptiveTopologyDecision } from '../shared/adaptive-topology.ts';
 import { classifyCapture, type EvidenceCaptureReason, type EvidenceCaptureView } from '../shared/evidence-health.ts';
 import { Storage } from './storage.ts';
 import { validJevModel } from './adaptive-config.ts';
+import { ADAPTIVE_TOPOLOGY_CONTRACT_VERSION } from './adaptive-topology-provider.ts';
 
 export const EVIDENCE_VERSION = 'adaptive-evidence-v1';
 export const EVIDENCE_RUN_LIMIT = 50;
@@ -23,6 +24,8 @@ export type EvidenceAttempt = { ordinal: number; phase: EvidenceScope['phase']; 
 type RunState = { policyVersion: string; firstRecordedAt: number; lastRecordedAt: number; totals: Totals; models: string[]; modelsTruncated: boolean;
   /** Absent on runs recorded before #134: requested identifiers are then unknown, not empty. */
   requestedModels?: string[]; requestedModelsTruncated?: boolean;
+  /** Jev contract versions of the finished attempts (#207). Absent on runs recorded before it: those were all v2. */
+  contractVersions?: string[];
   /** Collector-health tracking (#135), kept inside the snapshot JSON (no DDL). Absent on records made before it existed. */
   capture?: CaptureState };
 /** Attempts known to be missing from this record: begins/finishes that failed, or failures that could not be attributed. */
@@ -90,7 +93,7 @@ export class AdaptiveEvidenceStore {
       if (existing && (existing.channel_id !== scope.channelId || existing.project_id !== scope.projectId)) throw new Error('Evidence scope conflict');
       const state: RunState = existing ? JSON.parse(String(existing.snapshot)) as RunState : {
         policyVersion: input.policyVersion, firstRecordedAt: Date.now(), lastRecordedAt: Date.now(), models: [], modelsTruncated: false,
-        requestedModels: [], requestedModelsTruncated: false,
+        requestedModels: [], requestedModelsTruncated: false, contractVersions: [],
         capture: newCapture(scope.phase),
         totals: { started: 0, finished: 0, ok: 0, unavailable: 0, usageObservations: 0,
           inputTokens: 0, outputTokens: 0, latencyMs: 0, latencyObservations: 0, prunedAttempts: 0 },
@@ -129,6 +132,10 @@ export class AdaptiveEvidenceStore {
       if (attempt.requestedModel && state.requestedModels && !state.requestedModels.includes(attempt.requestedModel)) {
         if (state.requestedModels.length < 16) state.requestedModels.push(attempt.requestedModel); else state.requestedModelsTruncated = true;
       }
+      // A run that straddles a contract change exports as `mixed`, so a study never pools the two contracts.
+      const contract = CONTRACT_VERSIONS.includes(decision.contractVersion) ? decision.contractVersion : 'unknown';
+      state.contractVersions ??= [LEGACY_CONTRACT_VERSION];
+      if (!state.contractVersions.includes(contract)) state.contractVersions.push(contract);
       attempt.targetTopology = modes.includes(decision.targetTopology) ? decision.targetTopology : null;
       attempt.targetWorkers = safeInt(decision.targetWorkers) ? decision.targetWorkers : null;
       attempt.confidence = typeof decision.confidence === 'number' && decision.confidence >= 0 && decision.confidence <= 1 ? decision.confidence : null;
@@ -163,7 +170,7 @@ export class AdaptiveEvidenceStore {
       if (existing && (existing.channel_id !== scope.channelId || existing.project_id !== scope.projectId)) return 'discarded';
       const state: RunState = existing ? JSON.parse(String(existing.snapshot)) as RunState : {
         policyVersion, firstRecordedAt: gap.firstAt, lastRecordedAt: gap.lastAt, models: [], modelsTruncated: false,
-        requestedModels: [], requestedModelsTruncated: false, capture: newCapture(null),
+        requestedModels: [], requestedModelsTruncated: false, contractVersions: [], capture: newCapture(null),
         totals: { started: 0, finished: 0, ok: 0, unavailable: 0, usageObservations: 0,
           inputTokens: 0, outputTokens: 0, latencyMs: 0, latencyObservations: 0, prunedAttempts: 0 },
       };
@@ -212,6 +219,16 @@ export function evidenceCapture(db: DatabaseSync, executionId: string, memoryGap
     first ? JSON.parse(String(first.snapshot)) as EvidenceAttempt : undefined, memoryGap));
 }
 
+const LEGACY_CONTRACT_VERSION = 'adaptive-routing-v2';
+const CONTRACT_VERSIONS: string[] = [LEGACY_CONTRACT_VERSION, ADAPTIVE_TOPOLOGY_CONTRACT_VERSION];
+/** One version for a homogeneous run; `mixed` when its attempts used different contracts. */
+function contractVersionOf(state: RunState): string {
+  const versions = state.contractVersions;
+  if (!versions) return LEGACY_CONTRACT_VERSION;
+  if (versions.length > 1) return 'mixed';
+  return versions[0] ?? ADAPTIVE_TOPOLOGY_CONTRACT_VERSION;
+}
+
 /** Read-only export for the local Human/operator. Call inside a read transaction for a live database. */
 export function exportAdaptiveEvidence(db: DatabaseSync, executionId: string) {
   if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='adaptive_evidence_runs'").get())
@@ -244,7 +261,7 @@ export function exportAdaptiveEvidence(db: DatabaseSync, executionId: string) {
   const aggregate = classifyCapture(reasons.filter(reason => reason !== 'history_truncated'));
   const usageComplete = t.usageObservations === t.started && aggregate.capture === 'complete';
   return {
-    schemaVersion: 1, evidenceClass: EVIDENCE_VERSION, contractVersion: 'adaptive-routing-v2', policyVersion: state.policyVersion,
+    schemaVersion: 1, evidenceClass: EVIDENCE_VERSION, contractVersion: contractVersionOf(state), policyVersion: state.policyVersion,
     executionAlias: 'execution-1', models: state.models, modelsTruncated: state.modelsTruncated,
     requestedModels: state.requestedModels ?? null, requestedModelsTruncated: state.requestedModelsTruncated ?? null,
     coverage: { startedAt: state.firstRecordedAt, endedAt: state.lastRecordedAt, attemptsStarted: t.started,

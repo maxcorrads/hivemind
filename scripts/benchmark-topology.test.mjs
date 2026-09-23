@@ -36,7 +36,7 @@ test('prepare is deterministic, balanced, version-pinned and does not fabricate 
   assert.equal(new Set(a.trials.map(t => t.id)).size, 10);
   for (const mode of CONDITIONS) assert.equal(a.trials.filter(t => t.condition === mode).length, 2);
   assert.ok(a.trials.every(t => t.observed === null));
-  assert.deepEqual(validateStudy(a), { expected: 10, completed: 0, pending: 10, requestedModels: [], resolvedModels: [] });
+  assert.deepEqual(validateStudy(a), { expected: 10, completed: 0, pending: 10, requestedModels: [], resolvedModels: [], contractVersions: [] });
   assert.notEqual(prepareStudy({ ...config, seed: 30 }).studyId, a.studyId);
 });
 
@@ -96,6 +96,19 @@ test('no pooling live/synthetic, model, policy, host configuration or initial ca
     o => { o.routerEvidence.contractVersion = 'adaptive-routing-v1'; },
     o => { o.routerEvidence.models = ['jev-other']; },
   ]) { const study = completed(); change(auto(study).observed); assert.throws(() => summarizeStudy(study)); }
+});
+
+test('Jev contract v3 evidence is accepted; v2 evidence stays readable as its own cohort and is never pooled with v3', () => {
+  const v3 = () => ({ ...evidence(), contractVersion: 'adaptive-routing-v3' });
+  assert.deepEqual(validateStudy(completed(config, v3)).contractVersions, ['adaptive-routing-v3']);
+  assert.ok(summarizeStudy(completed(config, v3)));
+  assert.deepEqual(validateStudy(completed()).contractVersions, ['adaptive-routing-v2']);
+  assert.ok(summarizeStudy(completed()));
+  let n = 0;
+  const alternating = () => (n++ % 2 ? v3() : evidence());
+  assert.throws(() => validateStudy(completed(config, alternating)), /Jev contract versions differ; split the cohort/);
+  assert.throws(() => validateStudy(completed(config, () => ({ ...evidence(), contractVersion: 'mixed' }))), /mixes Jev contract versions/);
+  assert.throws(() => validateStudy(completed(config, () => ({ ...evidence(), contractVersion: 'adaptive-routing-v4' }))), /Unsupported Jev contract version/);
 });
 
 test('pinned Jev model cohorts check requested identifiers separately from resolved models', () => {
@@ -205,7 +218,7 @@ test('CLI validates and summarizes the full supported cohort with retained expor
   const cli = new URL('./benchmark-topology.mjs', import.meta.url).pathname;
   const validated = spawnSync(process.execPath, [cli, 'validate', '--input', input], { encoding: 'utf8', env: childEnv() });
   assert.equal(validated.status, 0, validated.stderr);
-  assert.deepEqual(JSON.parse(validated.stdout), { expected: 500, completed: 500, pending: 0, requestedModels: [], resolvedModels: [model] });
+  assert.deepEqual(JSON.parse(validated.stdout), { expected: 500, completed: 500, pending: 0, requestedModels: [], resolvedModels: [model], contractVersions: ['adaptive-routing-v2'] });
   const summarized = spawnSync(process.execPath, [cli, 'summarize', '--input', input, '--output', output], { encoding: 'utf8', env: childEnv() });
   assert.equal(summarized.status, 0, summarized.stderr);
   const summary = JSON.parse(readFileSync(output, 'utf8'));

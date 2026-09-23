@@ -48,6 +48,20 @@ export function validTopologyTarget(target: TopologyTarget, usableWorkers: numbe
   if (target.topology === 'brain_one_worker') return target.workers === 1;
   return (target.topology === 'brain_multi_dm' || target.topology === 'brain_multi_room') && target.workers >= 2;
 }
+/** Plan option ids of the joint Jev question (contract v3): `single`, `brain_one_worker`, `brain_multi_dm_<n>`, `brain_multi_room_<n>`. */
+export function topologyPlanId(target: TopologyTarget): string {
+  return target.topology === 'brain_multi_dm' || target.topology === 'brain_multi_room' ? `${target.topology}_${target.workers}` : target.topology;
+}
+/** Inverse of `topologyPlanId`; also accepts `capacity_blocked`. Null for anything else (never repaired). */
+export function parseTopologyPlan(id: string): TopologyTarget | 'capacity_blocked' | null {
+  if (id === 'capacity_blocked') return id;
+  if (id === 'single') return { topology: 'single', workers: 0 };
+  if (id === 'brain_one_worker') return { topology: 'brain_one_worker', workers: 1 };
+  const match = /^(brain_multi_dm|brain_multi_room)_([1-9][0-9]{0,2})$/.exec(id);
+  if (!match) return null;
+  const workers = Number(match[2]);
+  return workers >= 2 ? { topology: match[1] as 'brain_multi_dm' | 'brain_multi_room', workers } : null;
+}
 export function topologyIsEscalation(from: TopologyTarget, to: TopologyTarget): boolean {
   const ranks: Record<AdaptiveTopology, number> = { single: 0, brain_one_worker: 1, brain_multi_dm: 2, brain_multi_room: 3 };
   return ranks[to.topology] > ranks[from.topology] ||

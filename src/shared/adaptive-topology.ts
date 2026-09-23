@@ -31,9 +31,15 @@ export type AdaptiveWorkerCapacity = {
   }>;
 };
 
+/**
+ * v2 asked Jev for a topology and a worker budget separately; v3 asks for one joint plan (#207).
+ * Decisions recorded under v2 stay readable (stored recommendations, the Routing log, exported evidence).
+ */
+export type AdaptiveTopologyContractVersion = "adaptive-routing-v2" | "adaptive-routing-v3";
+
 export type AdaptiveTopologyDecision = {
   routeId: string;
-  contractVersion: "adaptive-routing-v2";
+  contractVersion: AdaptiveTopologyContractVersion;
   targetTopology: AdaptiveTopology;
   targetWorkers: number;
   confidence: number | null;
@@ -48,6 +54,11 @@ export type AdaptiveTopologyDecision = {
   outputTokens: number | null;
   singleSufficient: boolean | null;
   needsOrchestration: boolean | null;
+  /**
+   * Specific failure class when the call did not produce a usable decision (for example `plan_not_offered`,
+   * `malformed_answer:<question>`, `http_503`, `timeout`). Absent or null on success and on decisions made before #207.
+   */
+  error?: string | null;
 };
 
 export type AdaptiveRoutingEvent = {

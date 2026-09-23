@@ -45,7 +45,7 @@ test('real exports carry capture state the paired-study scorer accepts and consu
   db.exec("PRAGMA foreign_keys=ON; CREATE TABLE channels(id TEXT PRIMARY KEY); INSERT INTO channels VALUES('c');");
   rerunMigration(db, 'adaptive_observations');
   const store = new AdaptiveEvidenceStore(db), policyVersion = 'topology-policy-v2.1';
-  const decision = { routeId: 'r', contractVersion: 'adaptive-routing-v2', targetTopology: 'single', targetWorkers: 0, confidence: 0.9,
+  const decision = { routeId: 'r', contractVersion: 'adaptive-routing-v3', targetTopology: 'single', targetWorkers: 0, confidence: 0.9,
     reason: 'fixture', providerStatus: 'ok', model: 'jev-fixture', latencyMs: 1, inputTokens: 3, outputTokens: 1, singleSufficient: true, needsOrchestration: false };
   const scope = executionId => ({ executionId, channelId: 'c', projectId: 'p' });
   for (const id of ['complete', 'gap']) store.finish(store.begin({ ...scope(id), phase: 'initial' }, { topology: null, workers: 0, usableWorkers: 1, policyVersion }), decision);

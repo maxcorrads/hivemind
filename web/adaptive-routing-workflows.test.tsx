@@ -110,7 +110,7 @@ test('panel labels disabled, pending, manual, locked, warning and completed stat
   const current = { ...state(), currentTopology: 'brain_multi_room' as const, workerBudget: 3,
     lockedTopology: 'brain_multi_room' as const, lockScope: 'conversation' as const,
     desiredTopology: 'single' as const, warning: 'Jev unavailable', recommendation: {
-      routeId: 'r', contractVersion: 'adaptive-routing-v2' as const, targetTopology: 'brain_one_worker' as const, targetWorkers: 1,
+      routeId: 'r', contractVersion: 'adaptive-routing-v3' as const, targetTopology: 'brain_one_worker' as const, targetWorkers: 1,
       confidence: 0.95, reason: 'fixture', providerStatus: 'ok' as const, model: 'fixture', latencyMs: 1,
       inputTokens: 1, outputTokens: 1, singleSufficient: false, needsOrchestration: true,
     } };
