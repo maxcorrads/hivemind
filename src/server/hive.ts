@@ -2,7 +2,7 @@ import { RoutingStore } from './routing.ts';
 import { DecisionStore } from './decisions.ts';
 import { TimelineStore } from './timeline.ts';
 import { UploadBudget, type UploadLimits } from "./upload-budget.ts";
-import { validated, waitDurationSchema, attachmentIdsSchema, memberNamesSchema } from "../shared/api-contract.ts";
+import { validated, attachmentIdsSchema, memberNamesSchema } from "../shared/api-contract.ts";
 import { SendRequests } from "./send-requests.ts";
 import { pruneTelegramUpdates, type TelegramUpdateScope } from "./telegram-inbox.ts";
 import { pruneTelegramFailures, type TelegramDestination } from "./telegram-outbox.ts";
@@ -10,9 +10,10 @@ import { TelegramAdminService } from "./services/telegram-admin.ts";
 import { FileService } from "./services/files.ts";
 import { ProjectService } from "./services/projects.ts";
 import { IdentityService, hashToken, newToken, type JoinInput } from "./services/identity.ts";
-import { Waiters, type Waiter } from "./services/waiters.ts";
+import { Waiters } from "./services/waiters.ts";
 import { ChannelService, channelLabel } from "./services/channels.ts";
 import { MessageQueries } from "./services/message-queries.ts";
+import { DeliveryService } from "./services/delivery.ts";
 import type { Core, MessagePoster } from "./services/ports.ts";
 import { Storage } from './storage.ts';
 import { mkdirSync } from "node:fs";
@@ -21,13 +22,11 @@ import { DatabaseSync } from "node:sqlite";
 import { HiveBus } from "./hive-events.ts";
 import {
   BODY_MAX,
-  DEFAULT_WAIT_MS,
   FILES_PER_MESSAGE,
   MESSAGE_EVENT_TYPES,
   REACTION_EMOJIS,
   HiveError,
   HUMAN_ID,
-  WAIT_SCAN_MAX,
   type Agent,
   type BotEvent,
   type BotCredentialView,
@@ -36,9 +35,6 @@ import {
   type Message,
   type Thread,
   type ThreadStatus,
-  type WaitResult,
-  type InboxStatus,
-  type QueueEstimate,
   } from "../shared/types.ts";
 import { ReadState } from "./read-state.ts";
 import { InboxDeliveryStore } from "./inbox-delivery.ts";
@@ -47,7 +43,6 @@ import type { MentionPage, ReadSnapshot } from "../shared/read-state.ts";
 import { hiveHome } from "./paths.ts";
 import { preparePrivateDatabase } from "./private-database.ts";
 import { removeLegacyIdentityDirs } from "./legacy-identities.ts";
-import { packWait } from "./wait-format.ts";
 import { botMessageSchema, createBotSchema, botCredentialSchema } from "../shared/bot-message.ts";
 import { applyMigrations, assertSupportedVersion } from "./migrations/index.ts";
 import { TaskStore } from './tasks.ts';
@@ -82,6 +77,14 @@ type ServiceRegistry = Core & {
   messages: MessagePoster;
   channels: ChannelService;
   reader: MessageQueries;
+  delivery: DeliveryService;
+  deliveries: InboxDeliveryStore;
+  inboxReader: InboxReader;
+  tasks: TaskStore;
+  rooms: RoomStore;
+  timeline: TimelineStore;
+  decisions: DecisionStore;
+  adaptiveTopology: AdaptiveTopologyRuntime;
   agents: IdentityService;
   waiters: Waiters;
 };
@@ -112,6 +115,7 @@ export class Hive {
   readonly identity!: IdentityService;
   readonly channels!: ChannelService;
   readonly messageQueries!: MessageQueries;
+  readonly delivery!: DeliveryService;
   /** The registry every service receives, typed down to its own dependencies (services/ports.ts). */
   private readonly services: ServiceRegistry;
 
@@ -142,19 +146,20 @@ export class Hive {
       this.identity = services.agents = new IdentityService(services);
       this.channels = services.channels = new ChannelService(services);
       this.messageQueries = services.reader = new MessageQueries(services);
+      this.delivery = services.delivery = new DeliveryService(services);
       this.transaction(() => this.bootstrap());
       this.transaction(() => { pruneTelegramUpdates(this.db); pruneTelegramFailures(this.db); });
       this.readState = new ReadState(this.db);
       this.sendRequests = new SendRequests(this.db);
-      this.tasks = new TaskStore(this);
-      this.rooms = new RoomStore(this);
+      this.tasks = services.tasks = new TaskStore(this);
+      this.rooms = services.rooms = new RoomStore(this);
       this.notifications = new NotificationStore(this);
       this.routing = new RoutingStore(this);
-      this.timeline = new TimelineStore(this);
-      this.decisions = new DecisionStore(this, work => this.transaction(work));
-      this.adaptiveTopology = new AdaptiveTopologyRuntime(this);
-      this.inbox = new InboxDeliveryStore(this.db);
-      this.inboxReader = new InboxReader(this.db, this.inbox, this.notifications, options.routineBatchMs ?? ROUTINE_BATCH_MS);
+      this.timeline = services.timeline = new TimelineStore(this);
+      this.decisions = services.decisions = new DecisionStore(this, work => this.transaction(work));
+      this.adaptiveTopology = services.adaptiveTopology = new AdaptiveTopologyRuntime(this);
+      this.inbox = services.deliveries = new InboxDeliveryStore(this.db);
+      this.inboxReader = services.inboxReader = new InboxReader(this.db, this.inbox, this.notifications, options.routineBatchMs ?? ROUTINE_BATCH_MS);
     } catch (error) {
       try { this.db.close(); } catch { /* preserve the initialization failure */ }
       throw error;
@@ -306,7 +311,7 @@ export class Hive {
     const message = this.messageQueries.getMessageById(messageId);
     if (!duplicate) {
       this.bus.emit("message", message);
-      this.wakeMembers(ch, message);
+      this.delivery.wakeMembers(ch, message);
     }
     return { message, duplicate };
   }
@@ -418,7 +423,7 @@ export class Hive {
         if (input.source === "telegram") this.telegramOrigin.add(msg.id);
         this.adaptiveTopology?.humanMessageCommitted(msg);
         this.bus.emit("message", msg);
-        this.wakeMembers(ch, msg);
+        this.delivery.wakeMembers(ch, msg);
         if (decision) this.bus.emit('decision', decision);
       });
       return msg;
@@ -594,182 +599,17 @@ export class Hive {
     });
   }
 
-  openInboxSession(actor: Agent, sessionId: string): string {
-    if (actor.role !== "brain" && actor.role !== "worker") throw new HiveError(403, "Only agents have inbox sessions");
-    const previous = this.inbox.currentSession(actor.id);
-    const current = this.inbox.openSession(actor.id, sessionId);
-    if (previous !== current) this.waiters.supersede(actor.id);
-    return current;
-  }
-
-  acknowledgeInbox(actor: Agent, sessionId: string, deliveryId: string) {
-    if (actor.role !== "brain" && actor.role !== "worker") throw new HiveError(403, "Only agents acknowledge inbox mail");
-    let changed: string[] = [];
-    const result = this.inbox.acknowledge(actor.id, sessionId, deliveryId,
-      (seqs, at) => { changed = this.tasks.recordReceipt(actor.id, seqs, at); });
-    this.timeline.recordAcknowledgement(actor, deliveryId, result.acknowledgedAt);
-    for (const id of changed) this.bus.emit('task', this.tasks.get(this.identity.getAgent(HUMAN_ID), id));
-    this.emitQueued(actor.id);
-    return result;
-  }
-
+  openInboxSession(actor: Agent, sessionId: string) { return this.delivery.openInboxSession(actor, sessionId); }
+  acknowledgeInbox(actor: Agent, sessionId: string, deliveryId: string) { return this.delivery.acknowledgeInbox(actor, sessionId, deliveryId); }
+  inboxStatuses() { return this.delivery.inboxStatuses(); }
+  queuedCounts() { return this.delivery.queuedCounts(); }
+  isFor(actor: Agent, msg: Message) { return this.delivery.isFor(actor, msg); }
+  wait(...args: Parameters<DeliveryService["wait"]>) { return this.delivery.wait(...args); }
+  cancelWaits() { this.delivery.cancelWaits(); }
   /** Publish only after the structured event and its message commit atomically. */
   publishTaskMessage(message: Message) {
     this.bus.emit('message', message);
-    this.wakeMembers(this.channels.getChannel(message.channelId), message);
-  }
-
-  inboxStatuses(): Record<string, InboxStatus> {
-    return Object.fromEntries(
-      this.identity.listAgents()
-        .filter((agent) => agent.role === "brain" || agent.role === "worker")
-        .map((agent) => [agent.id, { ...this.inbox.status(agent.id), queued: this.inboxReader.estimate(agent) }]),
-    );
-  }
-
-  private takeUnseen(actor: Agent, sessionId: string, compact: boolean, scanLimit: number): WaitResult {
-    const current = this.identity.getAgent(actor.id);
-    const result = this.inboxReader.take(current, sessionId, compact, scanLimit);
-    if (result.delivery) this.timeline.recordOffer(current, result.delivery);
-    this.emitQueued(actor.id, result.page!.remaining);
-    return result;
-  }
-
-  queuedCounts(): Record<string, number> {
-    const out: Record<string, number> = {};
-    for (const agent of this.identity.listAgents()) {
-      if (agent.role !== "brain" && agent.role !== "worker") continue;
-      out[agent.id] = this.inboxReader.estimate(agent).atLeast;
-    }
-    return out;
-  }
-
-  private emitQueued(agentId: string, estimate?: QueueEstimate) {
-    const agent = this.identity.getAgent(agentId);
-    if (agent.role !== "brain" && agent.role !== "worker") return;
-    const queued = estimate ?? this.inboxReader.estimate(agent);
-    this.bus.emit("queued", {
-      agentId,
-      n: queued.atLeast,
-      inbox: { ...this.inbox.status(agentId), queued },
-    });
-  }
-
-  /** Wait wakes agents only for mail addressed to them, not public chatter. */
-  isFor(actor: Agent, msg: Message): boolean {
-    return (actor.role === 'brain' || actor.role === 'worker') && this.inboxReader.isFor(actor, msg.seq);
-  }
-
-  private wakeMembers(ch: Channel, msg: Message) {
-    for (const id of new Set([...ch.memberIds, HUMAN_ID])) {
-      if (id === msg.authorId) continue;
-      const agent = this.identity.getAgent(id);
-      // The notification classifier rechecks current project, channel membership,
-      // role and routing in SQL. Do not hydrate the entire roster for every member.
-      if (!this.isFor(agent, msg)) continue;
-      this.waiters.wake(id);
-      this.emitQueued(id);
-    }
-  }
-
-  async wait(
-    actor: Agent,
-    timeoutMs: number,
-    signal?: AbortSignal,
-    opts: { compact?: boolean; sessionId?: string } = {},
-  ): Promise<WaitResult> {
-    validated(waitDurationSchema, timeoutMs);
-    const compact = Boolean(opts.compact);
-    const empty = () => packWait(this.identity.getAgent(actor.id), [], 0, compact, () => "");
-
-    // A cancelled request is observational only: it must not touch presence,
-    // install a waiter, advance inbox state, or consume already-queued mail.
-    if (actor.role === "bot") throw new HiveError(403, "Bots publish observations; they do not wait for work");
-
-    // No session/presence/cursor side effects for work cancelled before admission.
-    if (signal?.aborted) return empty();
-
-    const sessionId =
-      opts.sessionId ??
-      this.inbox.currentSession(actor.id) ??
-      this.openInboxSession(actor, crypto.randomUUID());
-    this.inbox.requireSession(actor.id, sessionId);
-    this.identity.touch(actor.id, true);
-
-    return new Promise((resolve, reject) => {
-      let done = false;
-      let scannedRows = 0;
-      let hydratedMessages = 0;
-      let acknowledgedThroughSeq: number | undefined;
-      let routineTimer: ReturnType<typeof setTimeout> | undefined;
-      const deadline = Date.now() + (Number.isFinite(timeoutMs) ? Math.max(1, timeoutMs) : DEFAULT_WAIT_MS);
-      const take = () => {
-        const batch = this.takeUnseen(actor, sessionId, compact, WAIT_SCAN_MAX - scannedRows);
-        const page = batch.page!;
-        scannedRows += page.scannedRows;
-        hydratedMessages += page.hydratedMessages;
-        acknowledgedThroughSeq ??= page.acknowledgedThroughSeq;
-        batch.page = { ...page, scannedRows, hydratedMessages, acknowledgedThroughSeq };
-        return batch;
-      };
-      let waiter: Waiter;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const cleanup = () => {
-        this.waiters.release(actor.id, waiter);
-        signal?.removeEventListener("abort", onAbort);
-        if (timer) clearTimeout(timer);
-        if (routineTimer) clearTimeout(routineTimer);
-      };
-      const deliver = (batch: WaitResult) => {
-        if (done) return;
-        done = true;
-        cleanup();
-        this.identity.touch(actor.id, true);
-        resolve(batch);
-      };
-      const finish = (consume: boolean) => {
-        if (done) return;
-        if (!consume || signal?.aborted) {
-          deliver(empty());
-          return;
-        }
-        try {
-          clearTimeout(routineTimer);
-          const batch = take();
-          if (batch.idle && batch.retryAfterMs && Date.now() < deadline && scannedRows < WAIT_SCAN_MAX) {
-            routineTimer = setTimeout(() => finish(true), Math.min(batch.retryAfterMs, deadline - Date.now()));
-          } else deliver(batch);
-        }
-        catch (error) { done = true; cleanup(); reject(error); }
-      };
-      waiter = {
-        wake: () => finish(true),
-        supersede: () => {
-          if (done) return;
-          done = true;
-          cleanup();
-          reject(new HiveError(409, "superseded"));
-        },
-      };
-      const onAbort = () => finish(false);
-      this.waiters.install(actor.id, waiter);
-      const ms = Number.isFinite(timeoutMs) ? Math.max(1, timeoutMs) : DEFAULT_WAIT_MS;
-      timer = setTimeout(() => finish(true), ms);
-      signal?.addEventListener("abort", onAbort, { once: true });
-      if (signal?.aborted) {
-        finish(false);
-        return;
-      }
-      try {
-        const first = take();
-        if (!first.idle || first.page!.continuation || scannedRows === WAIT_SCAN_MAX) deliver(first);
-        else if (first.retryAfterMs) routineTimer = setTimeout(() => finish(true), Math.min(first.retryAfterMs, ms));
-      } catch (error) { done = true; cleanup(); reject(error); }
-    });
-  }
-
-  cancelWaits() {
-    this.waiters.supersedeAll();
+    this.delivery.wakeMembers(this.channels.getChannel(message.channelId), message);
   }
 
   createFile(...args: Parameters<FileService["createFile"]>) { return this.files.createFile(...args); }
