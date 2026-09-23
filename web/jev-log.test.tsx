@@ -4,8 +4,8 @@ import { Window } from 'happy-dom';
 import { act } from 'react';
 import { JevLog } from './JevLog.tsx';
 import { api } from './api.ts';
-import { answerLabel, outcomeLabel, questionRows, triggerLabel } from './jev-log-view.ts';
-import type { JevCall, JevCallSummary } from '../src/shared/jev-calls.ts';
+import { answerLabel, appendOlderPage, mergeRefreshedPage, outcomeLabel, questionRows, triggerLabel } from './jev-log-view.ts';
+import type { JevCall, JevCallSummary, JevRequestGroup } from '../src/shared/jev-calls.ts';
 
 const window = new Window({ url: 'http://localhost/' });
 Object.assign(globalThis, { window, document: window.document, location: window.location,
@@ -45,12 +45,12 @@ test('labels explain triggers, answers and outcomes in plain words', () => {
   assert.deepEqual(questionRows(sent, null).map(row => row.answer), ['No answer', 'No answer', 'No answer'], 'Malformed or missing answers never crash');
 });
 
-test('the Jev section groups calls by request and shows the exact exchange of the selected call', async t => {
+test('the Routing log groups calls by request and shows the exact exchange of the selected call', async t => {
   const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
   t.after(async () => { await act(async () => root.unmount()); host.remove(); });
   const calls = [summary('first'), summary('second', { phase: 'continuous', trigger: { kind: 'brain_message', eventType: 'progress' }, createdAt: 2_000,
     outcome: { kind: 'evaluation', applied: false, appliedTopology: 'brain_one_worker', appliedWorkers: 1, warning: null } })];
-  t.mock.method(api, 'jevCalls', async () => ({ hasMore: false, requests: [{ executionId: 'exec-1', channelId: 'dm', brainId: 'brain-1',
+  t.mock.method(api, 'jevCalls', async () => ({ hasMore: false, nextCursor: null, requests: [{ executionId: 'exec-1', channelId: 'dm', brainId: 'brain-1',
     request: 'Refactor the parser.', firstAt: 1_000, lastAt: 2_000, callCount: 2, calls }] }));
   const detail: JevCall = { ...calls[0]!, sent, received };
   t.mock.method(api, 'jevCall', async () => ({ call: detail }));
@@ -58,6 +58,8 @@ test('the Jev section groups calls by request and shows the exact exchange of th
   await act(async () => root.render(<JevLog project="chapter" tick={0} channelLabel={() => 'Human, Atlas'}
     agentName={() => 'Atlas'} onOpenChannel={id => { opened = id; }} />));
   const text = () => host.textContent ?? '';
+  assert.equal(host.querySelector('h1')?.textContent, 'Routing log');
+  assert.match(text(), /Every request Hivemind sent to Jev \(TypeSafe\) and its answer\./);
   assert.match(text(), /1 request · 2 calls shown/);
   assert.match(text(), /Refactor the parser\./);
   assert.match(text(), /Your new request/);
@@ -75,4 +77,37 @@ test('the Jev section groups calls by request and shows the exact exchange of th
   const channel = Array.from(host.querySelectorAll('.jev-request button.text-btn')).find(item => item.textContent === 'Human, Atlas') as HTMLElement;
   await act(async () => channel.click());
   assert.equal(opened, 'dm');
+});
+
+const group = (executionId: string, lastAt: number): JevRequestGroup => ({ executionId, channelId: 'dm', brainId: 'brain-1',
+  request: `Request ${executionId}`, firstAt: lastAt, lastAt, callCount: 1, calls: [summary(executionId, { executionId, createdAt: lastAt })] });
+
+test('Older requests pages with the server cursor and keeps requests that share the boundary millisecond', async t => {
+  const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
+  t.mock.method(api, 'jevCalls', async (_project: string, cursor?: string | null) => cursor === '5000:tie-a'
+    ? { requests: [group('tie-b', 5_000), group('old', 1_000)], hasMore: false, nextCursor: null }
+    : { requests: [group('new', 9_000), group('tie-a', 5_000)], hasMore: true, nextCursor: '5000:tie-a' });
+  t.after(async () => { await act(async () => root.unmount()); host.remove(); });
+  await act(async () => root.render(<JevLog project="chapter" tick={0} channelLabel={() => 'dm'} agentName={() => 'Atlas'} onOpenChannel={() => {}} />));
+  const more = [...host.querySelectorAll('button')].find(button => button.textContent === 'Older requests') as HTMLElement;
+  assert.ok(more);
+  await act(async () => more.click());
+  const mock = (api.jevCalls as unknown as { mock: { calls: Array<{ arguments: unknown[] }> } }).mock;
+  assert.equal(mock.calls.at(-1)!.arguments[1], '5000:tie-a', 'The opaque nextCursor is sent back unchanged');
+  assert.deepEqual([...host.querySelectorAll('.jev-request-text')].map(item => item.textContent),
+    ['Request new', 'Request tie-a', 'Request tie-b', 'Request old']);
+  assert.equal([...host.querySelectorAll('button')].some(button => button.textContent === 'Older requests'), false);
+});
+
+test('live refresh keeps loaded older pages and their cursor, ordered like the server', () => {
+  const loaded = appendOlderPage({ requests: [group('a', 9_000), group('b', 5_000)], hasMore: true, nextCursor: '5000:b' },
+    { requests: [group('c', 5_000), group('d', 1_000)], hasMore: true, nextCursor: '1000:d' });
+  assert.deepEqual(loaded.requests.map(item => item.executionId), ['a', 'b', 'c', 'd']);
+  // A new request arrives: the first page shifts by one and `b` is its new tail.
+  const refreshed = mergeRefreshedPage(loaded, { requests: [group('z', 9_500), group('a', 9_000), group('b', 5_000)], hasMore: true, nextCursor: '5000:b' });
+  assert.deepEqual(refreshed.requests.map(item => item.executionId), ['z', 'a', 'b', 'c', 'd'], 'Same-millisecond `c` is kept after `b`');
+  assert.equal(refreshed.nextCursor, '1000:d', 'The cursor after the last loaded page is kept');
+  const firstOnly = mergeRefreshedPage({ requests: [group('a', 9_000)], hasMore: false, nextCursor: null },
+    { requests: [group('z', 9_500), group('a', 9_000)], hasMore: false, nextCursor: null });
+  assert.deepEqual(firstOnly.requests.map(item => item.executionId), ['z', 'a']);
 });

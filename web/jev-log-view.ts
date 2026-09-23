@@ -1,5 +1,5 @@
 import type { AdaptiveTopology } from '../src/shared/adaptive-topology.ts';
-import type { JevCallSummary, JevCallTrigger } from '../src/shared/jev-calls.ts';
+import type { JevCallLogView, JevCallSummary, JevCallTrigger, JevRequestGroup } from '../src/shared/jev-calls.ts';
 import { topologyLabel } from './AdaptiveRoutingPanel.tsx';
 
 export function workersLabel(n: number): string { return `${n} worker${n === 1 ? '' : 's'}`; }
@@ -122,4 +122,30 @@ export function contextRows(sent: unknown): Array<[string, string]> {
   if (execution?.orchestratedOnly) rows.push(['Your choice', 'Orchestration required']);
   if (trigger?.summary) rows.push(['Triggering message', trigger.summary]);
   return rows;
+}
+
+/** Page order of the Routing log: newest activity first, ties broken by execution id (same as the server cursor). */
+export function isOlderGroup(group: Pick<JevRequestGroup, 'lastAt' | 'executionId'>, than: Pick<JevRequestGroup, 'lastAt' | 'executionId'>): boolean {
+  return group.lastAt < than.lastAt || (group.lastAt === than.lastAt && group.executionId > than.executionId);
+}
+
+/**
+ * A live refresh replaces the newest page but keeps older pages already loaded. The older pages' cursor is kept
+ * only when some of them survive; otherwise the refreshed page's own cursor applies.
+ */
+export function mergeRefreshedPage(current: JevCallLogView | null, next: JevCallLogView): JevCallLogView {
+  if (!current) return next;
+  const seen = new Set(next.requests.map(group => group.executionId));
+  const boundary = next.requests.at(-1);
+  const kept = boundary ? current.requests.filter(group => !seen.has(group.executionId) && isOlderGroup(group, boundary)) : [];
+  if (!kept.length) return next;
+  return { requests: [...next.requests, ...kept], hasMore: current.hasMore, nextCursor: current.nextCursor };
+}
+
+/** Appends an older page, never duplicating a request already shown. */
+export function appendOlderPage(current: JevCallLogView | null, older: JevCallLogView): JevCallLogView {
+  if (!current) return older;
+  const seen = new Set(current.requests.map(group => group.executionId));
+  return { requests: [...current.requests, ...older.requests.filter(group => !seen.has(group.executionId))],
+    hasMore: older.hasMore, nextCursor: older.nextCursor };
 }

@@ -121,7 +121,7 @@ The key lives in `<HIVEMIND_HOME>/adaptive-routing.json`, written atomically wit
 
 ## Jev call history (Human-only)
 
-Each project has a **Jev** entry in the left sidebar, below Decisions. It lists every call Hivemind made to Jev, grouped by the Human request (execution) that caused it, newest activity first. Each call shows why it was made (your request, your thread reply, a brain message, a delegation attempt, a task review, a room change or a capacity change), Jev's answer in one line, and what Hivemind did with it: applied a new mode, confirmed the current one, kept it while waiting for confirmation, kept it because Jev was unavailable, recorded an observation only, or discarded the answer because routing state changed during the call.
+Each project has a **Routing log** entry in the left sidebar, below Decisions (`#/routing-log/<project>`; the older `#/jev/<project>` link still works). It lists every request Hivemind sent to Jev (TypeSafe) and its answer, grouped by the Human request (execution) that caused it, newest activity first. Each call shows why it was made (your request, your thread reply, a brain message, a delegation attempt, a task review, a room change or a capacity change), Jev's answer in one line, and what Hivemind did with it: applied a new mode, confirmed the current one, kept it while waiting for confirmation, kept it because Jev was unavailable, recorded an observation only, or discarded the answer because routing state changed during the call.
 
 Selecting a call shows:
 
