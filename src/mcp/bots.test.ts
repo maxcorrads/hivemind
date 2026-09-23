@@ -9,6 +9,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { Hive } from "../server/hive.ts";
 import { startServer } from "../server/serve.ts";
 import type { Agent, Message, WaitResult } from "../shared/types.ts";
+import { childEnv } from "../test-support/child-process.ts";
 
 test("direct bot HTTP → real stdio MCP delivers deduplicated context/files, then fetches on request", { timeout: 20_000 }, async () => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -21,7 +22,7 @@ test("direct bot HTTP → real stdio MCP delivers deduplicated context/files, th
     command: process.execPath,
     args: ["--import", path.join(root, "node_modules/tsx/dist/loader.mjs"), path.join(root, "src/cli.ts"), "mcp"],
     cwd: dir,
-    env: { PATH: process.env.PATH ?? "", HIVEMIND_HOME: path.join(dir, "identities"), HIVEMIND_URL: `http://127.0.0.1:${port}` },
+    env: childEnv({ PATH: process.env.PATH ?? "", HIVEMIND_HOME: path.join(dir, "identities"), HIVEMIND_URL: `http://127.0.0.1:${port}` }),
     stderr: "pipe",
   });
   const call = async <T>(name: string, args: Record<string, unknown> = {}): Promise<T> => {

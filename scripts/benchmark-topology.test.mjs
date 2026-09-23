@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { childEnv } from '../src/test-support/child-process.ts';
 import { test } from 'node:test';
 import { mkdtempSync, readFileSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -202,10 +203,10 @@ test('CLI validates and summarizes the full supported cohort with retained expor
   assert.ok(bytes > 8 * 1024 * 1024, 'Regression must exceed the former CLI bound');
   t.diagnostic(`Full exported-evidence cohort: ${bytes} bytes, 500 trials, 50,000 attempt details and 50,000 policy events`);
   const cli = new URL('./benchmark-topology.mjs', import.meta.url).pathname;
-  const validated = spawnSync(process.execPath, [cli, 'validate', '--input', input], { encoding: 'utf8' });
+  const validated = spawnSync(process.execPath, [cli, 'validate', '--input', input], { encoding: 'utf8', env: childEnv() });
   assert.equal(validated.status, 0, validated.stderr);
   assert.deepEqual(JSON.parse(validated.stdout), { expected: 500, completed: 500, pending: 0, requestedModels: [], resolvedModels: [model] });
-  const summarized = spawnSync(process.execPath, [cli, 'summarize', '--input', input, '--output', output], { encoding: 'utf8' });
+  const summarized = spawnSync(process.execPath, [cli, 'summarize', '--input', input, '--output', output], { encoding: 'utf8', env: childEnv() });
   assert.equal(summarized.status, 0, summarized.stderr);
   const summary = JSON.parse(readFileSync(output, 'utf8'));
   assert.equal(summary.evidenceClass, 'synthetic_topology_comparison');

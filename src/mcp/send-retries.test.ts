@@ -14,6 +14,7 @@ import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { Hive } from "../server/hive.ts";
 import { createApp } from "../server/app.ts";
 import { countRows } from "../server/test-fixtures.ts";
+import { childEnv } from "../test-support/child-process.ts";
 
 // Actual CLI process restart, upload, HTTP after-commit loss and stdio tool calls.
 test("CLI and MCP preserve send keys and uploaded IDs across lost replies and process restarts", { timeout: 25_000 }, async t => {
@@ -42,7 +43,7 @@ test("CLI and MCP preserve send keys and uploaded IDs across lost replies and pr
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
   const file = path.join(dir, "fixture.txt"); writeFileSync(file, "durable upload fixture");
-  const env = { ...process.env, HIVEMIND_HOME: path.join(dir, "client"), HIVEMIND_URL: url, HIVEMIND_TOKEN: brain.token };
+  const env = childEnv({ ...process.env, HIVEMIND_HOME: path.join(dir, "client"), HIVEMIND_URL: url, HIVEMIND_TOKEN: brain.token });
   const cli = (body = "CLI lost response") => promisify(execFile)(process.execPath,
     ["--import", "tsx", "src/cli.ts", "send", "--channel", dm.id, "--file", file, "--request-id", "cli-operation", "--body", body],
     { cwd: root, env, signal: t.signal });
@@ -58,7 +59,7 @@ test("CLI and MCP preserve send keys and uploaded IDs across lost replies and pr
 
   transport = new StdioClientTransport({ command: process.execPath,
     args: ["--import", path.join(root, "node_modules/tsx/dist/loader.mjs"), path.join(root, "src/cli.ts"), "mcp"], cwd: dir,
-    env: { PATH: process.env.PATH ?? "", HIVEMIND_HOME: env.HIVEMIND_HOME, HIVEMIND_URL: url, HIVEMIND_TOKEN: brain.token }, stderr: "pipe" });
+    env: childEnv({ PATH: process.env.PATH ?? "", HIVEMIND_HOME: env.HIVEMIND_HOME, HIVEMIND_URL: url, HIVEMIND_TOKEN: brain.token }), stderr: "pipe" });
   client = new Client({ name: "send-retry-fixture", version: "1" }); await client.connect(transport);
   const call = async (name: string, args: Record<string, unknown>) => {
     const result = CallToolResultSchema.parse(await client!.callTool({ name, arguments: args }, CallToolResultSchema, { timeout: 5000, signal: t.signal }));

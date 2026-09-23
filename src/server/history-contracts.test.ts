@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { childEnv, stopChild } from "../test-support/child-process.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -21,13 +22,13 @@ function runCli(args: string[], env: NodeJS.ProcessEnv): Promise<{ stdout: strin
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ["--import", "tsx", path.join(rootDir, "src/cli.ts"), ...args], {
       cwd: rootDir,
-      env,
+      env: childEnv(env),
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => {
-      child.kill("SIGKILL");
+      void stopChild(child);
       reject(new Error(`CLI timeout: ${stderr}`));
     }, 8_000);
     child.stdout.on("data", (chunk: Buffer) => {
@@ -179,7 +180,7 @@ test("HTTP, CLI, and real MCP stdio expose the same history cursor semantics", a
   let mcp: ChildProcessWithoutNullStreams | undefined;
 
   t.after(async () => {
-    if (mcp && !mcp.killed) mcp.kill("SIGTERM");
+    if (mcp) await stopChild(mcp);
     const closed = new Promise<void>((resolve) => started.server.once("close", () => resolve()));
     started.shutdown();
     await closed;
@@ -247,7 +248,7 @@ test("HTTP, CLI, and real MCP stdio expose the same history cursor semantics", a
 
   mcp = spawn(process.execPath, ["--import", "tsx", path.join(rootDir, "src/cli.ts"), "mcp"], {
     cwd: rootDir,
-    env,
+    env: childEnv(env),
     stdio: ["pipe", "pipe", "pipe"],
   });
   const init = await rpcRequest(mcp, 1, "initialize", {

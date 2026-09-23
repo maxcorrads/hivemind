@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { mkdtemp, mkdir, writeFile, rm, readFile } from "node:fs/promises";
 import { Readable } from "node:stream";
 import { execFile } from "node:child_process";
+import { childEnv } from "../src/test-support/child-process.ts";
 import { promisify } from "node:util";
 import os from "node:os";
 import path from "node:path";
@@ -37,7 +38,7 @@ test("retained failure logs are redacted and the command exit status remains fai
   t.after(() => rm(dir, { recursive: true, force: true }));
   const file = path.join(dir, "failure.log");
   await assert.rejects(promisify(execFile)(process.execPath,
-    ["scripts/run-logged.mjs", file, process.execPath, "-e", 'console.error("Authorization: Bearer fixture-secret"); process.exit(7)']),
+    ["scripts/run-logged.mjs", file, process.execPath, "-e", 'console.error("Authorization: Bearer fixture-secret"); process.exit(7)'], { env: childEnv() }),
     error => error.code === 7 && !String(error.stdout).includes("fixture-secret"));
   assert.match(await readFile(file, "utf8"), /REDACTED/);
   assert.ok(!(await readFile(file, "utf8")).includes("fixture-secret"));
@@ -59,7 +60,7 @@ test("logged command honors the retained size cap while draining all output and 
   t.after(() => rm(dir, { recursive: true, force: true }));
   const file = path.join(dir, "capped.log");
   const result = await promisify(execFile)(process.execPath, ["scripts/run-logged.mjs", file, process.execPath,
-    "-e", 'for(let i=0;i<5000;i++) console.log("x".repeat(1000)); console.log("drained-end");'], { maxBuffer: 8 * 1024 * 1024 });
+    "-e", 'for(let i=0;i<5000;i++) console.log("x".repeat(1000)); console.log("drained-end");'], { maxBuffer: 8 * 1024 * 1024, env: childEnv() });
   assert.match(result.stdout, /drained-end/);
   const retained = await readFile(file, "utf8");
   assert.match(retained, /LOG SIZE LIMIT/);

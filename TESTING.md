@@ -66,6 +66,29 @@ nine Chromium transport/reading regressions (#11/#21). Regression fixes and
 historical negative controls are documented on their PRs; no claim is made that
 all current tests run against every old checkout.
 
+## Child processes and coverage
+
+Under `--experimental-test-coverage` every test process writes V8 coverage JSON
+into one runner directory (`NODE_V8_COVERAGE`), and the runner parses every file
+there at the end. A descendant that inherits the variable and is killed or
+orphaned while writing leaves an empty or truncated file, and the whole coverage
+report fails although every test passed (#201). Two guards keep descendants out:
+
+- `scripts/run-tests.mjs` preloads `scripts/isolate-test-coverage.mjs`, which
+  removes the variable from each test process's environment after V8 has read
+  it. This covers children started by production code or scripts under test.
+- Every child a test starts takes its `env` from `childEnv()` in
+  `src/test-support/child-process.ts` (`env: childEnv()` inherits
+  `process.env`, `childEnv({ PATH })` builds a whitelist). Deleting the key is
+  not enough: `child_process` copies `NODE_V8_COVERAGE` into any `env` option
+  that lacks it. `src/test-support/child-process.unit.test.ts` fails a test that
+  spawns, `execFile`s or opens a `StdioClientTransport` without it; a spawn
+  that cannot see the runner's environment can say so with
+  `// child-env: exempt (<reason>)`.
+
+Stop children with `stopChild()` / `stopProcessGroup()` from the same module:
+SIGTERM, a grace period, and SIGKILL only for survivors.
+
 ## Retained diagnostics
 
 CI routes test stdout/stderr through scripts/run-logged.mjs **before** either

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { discoverTests, suiteOf } from "./test-suites.mjs";
 import { selectHistoricalShard } from "./test-shards.mjs";
 
@@ -35,7 +35,7 @@ if (shardArgs.length) {
 if (!files.length) throw new Error(`No ${suite ?? "discovered"} tests`);
 console.log(`Suite: ${suite ?? "all unit and integration"}; files: ${files.length}`);
 const child = spawn(process.execPath,
-  ["--import", "tsx", "--test", ...args.filter(arg =>
+  ["--import", "tsx", "--import", pathToFileURL(path.join(root, "scripts/isolate-test-coverage.mjs")).href, "--test", ...args.filter(arg =>
     !arg.startsWith("--suite=") && !arg.startsWith("--hivemind-shard=")), ...files],
   { cwd: root, stdio: "inherit", env: { ...process.env, TSX_TSCONFIG_PATH: path.join(root, "tsconfig.web.json") } });
 child.on("error", error => { console.error(error); process.exitCode = 1; });

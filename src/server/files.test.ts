@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { once, getEventListeners } from "node:events";
 import { spawn, spawnSync } from "node:child_process";
+import { childEnv, stopChild } from "../test-support/child-process.ts";
 import { closeSync, existsSync, mkdtempSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -177,7 +178,7 @@ test("metadata failures and GC commit failures never leave committed references 
 test("sweeps preserve old active uploads, expire dead owners, and never follow symlinks", async (t) => {
   const dir = temp(t);
   mkdirSync(filesDir(dir));
-  const dead = spawnSync(process.execPath, ["-e", ""], { encoding: "utf8" });
+  const dead = spawnSync(process.execPath, ["-e", ""], { encoding: "utf8", env: childEnv() });
   assert.equal(dead.status, 0);
   const alive = path.join(filesDir(dir), uploadTempName());
   const fd = openSync(alive, "wx");
@@ -241,8 +242,8 @@ test("a separate GC process cannot enter the publish-to-metadata window", { time
       process.send({id:att.id});
     } finally { hive.db.close(); process.disconnect(); }
   `);
-  const publisher = spawn(process.execPath, ["--import", "tsx", script, file], { stdio: ["pipe", "pipe", "pipe", "ipc"] });
-  t.after(() => publisher.kill("SIGKILL"));
+  const publisher = spawn(process.execPath, ["--import", "tsx", script, file], { stdio: ["pipe", "pipe", "pipe", "ipc"], env: childEnv() });
+  t.after(() => stopChild(publisher));
   let errors = "";
   publisher.stderr!.on("data", (data) => { errors += data; });
   const pubExit = once(publisher, "exit");
@@ -260,8 +261,8 @@ test("a separate GC process cannot enter the publish-to-metadata window", { time
     const hive = new Hive(process.argv[2]);
     try { process.send(hive.files.gcFiles()); } finally { hive.db.close(); process.disconnect(); }
   `);
-  const collector = spawn(process.execPath, ["--import", "tsx", gcScript, file], { stdio: ["ignore", "pipe", "pipe", "ipc"] });
-  t.after(() => collector.kill("SIGKILL"));
+  const collector = spawn(process.execPath, ["--import", "tsx", gcScript, file], { stdio: ["ignore", "pipe", "pipe", "ipc"], env: childEnv() });
+  t.after(() => stopChild(collector));
   collector.stderr!.on("data", (data) => { errors += data; });
   const gcExit = once(collector, "exit");
   assert.deepEqual((await once(collector, "message"))[0], { locked: true });
