@@ -5,7 +5,7 @@ import path from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { Hive } from './hive.ts';
 import { createApp } from './app.ts';
-import { saveAdaptiveRouting } from './adaptive-routing.ts';
+import { saveAdaptiveRouting } from './adaptive-config.ts';
 import type { AdaptiveTopology } from '../shared/adaptive-topology.ts';
 import type { AdaptiveCoordinationEvent } from './adaptive-topology.ts';
 
