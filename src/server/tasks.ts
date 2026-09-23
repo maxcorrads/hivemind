@@ -4,7 +4,7 @@ import { claimActionSchema, claimPreviewSchema, isClaimAction } from '../shared/
 import { validated } from '../shared/api-contract.ts';
 import { checkpointFreshness, type HandoffSummary } from '../shared/handoffs.ts';
 import { createHash, randomUUID } from 'node:crypto';
-import type { Hive } from './hive.ts';
+import type { TaskStoreHost } from './services/ports.ts';
 import { BODY_MAX, HiveError, type Agent, type Channel } from '../shared/types.ts';
 import { assignTaskSchema, taskEventSchema, taskBody, type TaskContract, type TaskEnvelope, type TaskSnapshot } from '../shared/tasks.ts';
 import { admitAdaptiveTask, linkAdaptiveTask } from './adaptive-topology-admission.ts';
@@ -14,10 +14,10 @@ type StoredEvent = { message_id: string; task_id: string; request_hash: string }
 
 export class TaskStore {
   private coordination: TaskCoordination;
-  constructor(private hive: Hive) {
+  constructor(private hive: TaskStoreHost) {
     this.coordination = new TaskCoordination(hive);
   }
-  private get db() { return this.hive.db; }
+  private get db() { return this.hive.storage.db; }
   private row(id: string): Row {
     const row = this.db.prepare('SELECT * FROM task_records WHERE id = ?').get(id) as Row | undefined;
     if (!row) throw new HiveError(404, 'Task not found');

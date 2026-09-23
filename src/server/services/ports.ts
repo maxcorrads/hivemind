@@ -1,6 +1,9 @@
 import type { Agent, Channel, ControlAction, Message, Project } from "../../shared/types.ts";
 import type { HiveBus } from "../hive-events.ts";
 import type { Storage } from "../storage.ts";
+import type { AdaptiveTopologyRuntime } from "../adaptive-topology.ts";
+import type { RoomStore } from "../rooms.ts";
+import type { TaskStore } from "../tasks.ts";
 
 /**
  * Narrow interfaces the domain services (and the sub-stores) depend on instead of
@@ -67,3 +70,32 @@ export interface WaiterRegistry {
   has(agentId: string): boolean;
   supersede(agentId: string): void;
 }
+
+/*
+ * Hosts of the coordination sub-stores (tasks, rooms, decisions, timeline, …).
+ * Hive still passes itself as their host, but each store is typed against only
+ * the slice it uses, so it cannot grow a dependency on the rest of the facade.
+ */
+
+export type TaskCoordinationHost = Core & ChannelAccess;
+export type CapacityHost = Core & Pick<AgentDirectory, "listAgents">;
+export type AdmissionHost = Core & ChannelAccess & AgentDirectory & {
+  readonly rooms: RoomStore;
+  readonly adaptiveTopology: AdaptiveTopologyRuntime;
+};
+export type TaskStoreHost = AdmissionHost & Pick<MessageReader, "getMessageById" | "getVisibleMessage"> &
+  Pick<MessagePoster, "publishTaskMessage"> & { openDm(actor: Agent, otherName: string): Channel };
+export type RoomStoreHost = Core & ChannelAccess & AgentDirectory & Pick<MessageReader, "getMessageById" | "getVisibleMessage"> &
+  Pick<MessagePoster, "publishTaskMessage"> & { readonly tasks: TaskStore };
+export type NotificationHost = Core & ChannelAccess & { readonly rooms: RoomStore };
+export type RoutingHost = Core & ChannelAccess & Pick<AgentDirectory, "getAgent"> & Pick<MessagePoster, "postMessage"> & {
+  readonly tasks: TaskStore;
+};
+export type TimelineHost = Core & ChannelAccess & Pick<MessageReader, "getMessageById"> & {
+  readonly rooms: RoomStore;
+  readonly tasks: TaskStore;
+};
+export type DecisionHost = Core & ChannelAccess & AgentDirectory & MessageReader & Pick<MessagePoster, "postMessage"> & {
+  readonly tasks: TaskStore;
+};
+export type DiagnosticsHost = { readonly home: string } & Pick<AgentDirectory, "getAgent">;

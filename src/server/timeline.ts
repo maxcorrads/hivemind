@@ -6,7 +6,7 @@ import {
   type TimelineMessageEvent, type TimelineView,
 } from '../shared/timeline.ts';
 import { HiveError } from '../shared/types.ts';
-import type { Hive } from './hive.ts';
+import type { TimelineHost } from './services/ports.ts';
 
 type ProvenanceRow = {
   message_id: string; trace_id: string; parent_message_id: string | null; cause_message_id: string | null;
@@ -18,7 +18,7 @@ type DeliveryRow = {
 };
 
 export class TimelineStore {
-  constructor(private hive: Hive) {
+  constructor(private hive: TimelineHost) {
     this.prune();
   }
 
@@ -36,11 +36,11 @@ export class TimelineStore {
   }
 
   recordMessage(messageId: string, input: { source?: 'hive' | 'telegram' | 'bot'; traceId?: string | null; causeMessageId?: string | null } = {}) {
-    const row = this.hive.db.prepare('SELECT id, thread_id, created_at FROM messages WHERE id = ?').get(messageId) as
+    const row = this.hive.storage.db.prepare('SELECT id, thread_id, created_at FROM messages WHERE id = ?').get(messageId) as
       { id: string; thread_id: string | null; created_at: number } | undefined;
     if (!row) throw new HiveError(404, 'Message not found');
     const traceId = input.traceId ?? row.thread_id ?? row.id;
-    this.hive.db.prepare(`INSERT INTO message_provenance(message_id, trace_id, parent_message_id, cause_message_id, source, created_at)
+    this.hive.storage.db.prepare(`INSERT INTO message_provenance(message_id, trace_id, parent_message_id, cause_message_id, source, created_at)
       VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(message_id) DO UPDATE SET
         trace_id=excluded.trace_id, parent_message_id=excluded.parent_message_id,
         cause_message_id=excluded.cause_message_id, source=excluded.source`)
@@ -48,7 +48,7 @@ export class TimelineStore {
   }
 
   private header(seq: number) {
-    return this.hive.db.prepare(`SELECT m.id, m.seq, m.channel_id, COALESCE(m.thread_id,m.id) AS root_id,
+    return this.hive.storage.db.prepare(`SELECT m.id, m.seq, m.channel_id, COALESCE(m.thread_id,m.id) AS root_id,
       m.author_id, m.kind, m.event_type, m.created_at, m.mentions, m.recipients,
       c.type, c.project_id, a.role AS author_role,
       EXISTS(SELECT 1 FROM task_events t WHERE t.message_id=m.id) AS task,
@@ -65,7 +65,7 @@ export class TimelineStore {
     if (mentions.includes(actor.id)) return 'mention';
     if (row.task) return 'task';
     const root = String(row.root_id), event = String(row.event_type ?? 'message');
-    const subscription = this.hive.db.prepare(`SELECT event_types FROM notification_subscriptions
+    const subscription = this.hive.storage.db.prepare(`SELECT event_types FROM notification_subscriptions
       WHERE agent_id=? AND channel_id=? AND thread_id IN ('',?) ORDER BY length(thread_id) DESC LIMIT 1`)
       .get(actor.id, row.channel_id, root) as { event_types: string } | undefined;
     if (subscription && (JSON.parse(subscription.event_types) as string[]).includes(event)) return 'subscription:' + event;
@@ -77,7 +77,7 @@ export class TimelineStore {
 
   recordOffer(actor: Agent, delivery: InboxDelivery) {
     for (const seq of delivery.messageSeqs) {
-      this.hive.db.prepare(`INSERT INTO timeline_deliveries
+      this.hive.storage.db.prepare(`INSERT INTO timeline_deliveries
         (delivery_id,agent_id,message_seq,wake_reason,offered_at,last_offered_at,acknowledged_at,attempt)
         VALUES (?,?,?,?,?,?,NULL,?) ON CONFLICT(delivery_id,agent_id,message_seq) DO UPDATE SET
           last_offered_at=excluded.last_offered_at, attempt=MAX(timeline_deliveries.attempt,excluded.attempt),
@@ -87,12 +87,12 @@ export class TimelineStore {
   }
 
   recordAcknowledgement(actor: Agent, deliveryId: string, at: number) {
-    this.hive.db.prepare(`UPDATE timeline_deliveries SET acknowledged_at=COALESCE(acknowledged_at,?)
+    this.hive.storage.db.prepare(`UPDATE timeline_deliveries SET acknowledged_at=COALESCE(acknowledged_at,?)
       WHERE delivery_id=? AND agent_id=?`).run(at, deliveryId, actor.id);
   }
 
   source(messageId: string): Message['source'] {
-    const row = this.hive.db.prepare('SELECT source FROM message_provenance WHERE message_id=?').get(messageId) as
+    const row = this.hive.storage.db.prepare('SELECT source FROM message_provenance WHERE message_id=?').get(messageId) as
       { source: 'hive'|'telegram'|'bot' } | undefined;
     return row?.source === 'hive' ? undefined : row?.source;
   }
@@ -119,7 +119,7 @@ export class TimelineStore {
 
   trace(actor: Agent, traceId: string, taskId: string | null = null): TimelineView {
     if (taskId) this.hive.tasks.get(actor, taskId);
-    const rows = this.hive.db.prepare(`SELECT m.id,m.seq,m.channel_id,m.author_id,m.body,m.event_type,m.created_at,
+    const rows = this.hive.storage.db.prepare(`SELECT m.id,m.seq,m.channel_id,m.author_id,m.body,m.event_type,m.created_at,
       a.name AS author_name,a.role AS author_role,p.trace_id,p.parent_message_id,p.cause_message_id,p.source,
       te.envelope FROM messages m
       LEFT JOIN message_provenance p ON p.message_id=m.id
@@ -137,13 +137,13 @@ export class TimelineStore {
       const messageEvent: TimelineMessageEvent = {
         kind:'message', id:'message:'+row.id, at:Number(row.created_at), traceId, messageId:String(row.id), seq:Number(row.seq),
         authorId:String(row.author_id), authorName:String(row.author_name ?? 'unknown'),
-        authorRole:String(row.author_role ?? 'unknown'), source:(provenance?.source ?? (this.hive.db.prepare('SELECT 1 FROM bot_events WHERE message_id=?').get(row.id) ? 'bot' : 'hive')) as any,
+        authorRole:String(row.author_role ?? 'unknown'), source:(provenance?.source ?? (this.hive.storage.db.prepare('SELECT 1 FROM bot_events WHERE message_id=?').get(row.id) ? 'bot' : 'hive')) as any,
         eventType:row.event_type ? String(row.event_type) : null, taskAction:this.taskAction(envelope),
         relation:cause ? { kind:'explicit', messageId:cause } : parent ? { kind:'inferred', messageId:parent } : null,
         bodyBytes:Buffer.byteLength(body), bodySha256:createHash('sha256').update(body).digest('hex'), references:this.references(envelope),
       };
       events.push(messageEvent);
-      const deliveries = this.hive.db.prepare(`SELECT d.*,a.name,a.role FROM timeline_deliveries d
+      const deliveries = this.hive.storage.db.prepare(`SELECT d.*,a.name,a.role FROM timeline_deliveries d
         JOIN agents a ON a.id=d.agent_id WHERE d.message_seq=? ORDER BY d.offered_at,d.agent_id`).all(row.seq) as Array<DeliveryRow & {name:string;role:string}>;
       for (const d of deliveries) {
         events.push({ kind:'delivery', id:`delivery:${d.delivery_id}:${row.seq}:${d.agent_id}:offered`,
@@ -177,14 +177,14 @@ export class TimelineStore {
     const cutoff=now-TIMELINE_RETENTION_MS;
     const active=`EXISTS (SELECT 1 FROM task_records t WHERE t.id=p.trace_id
       AND json_extract(t.snapshot,'$.state')!='accepted_complete')`;
-    const old=this.hive.db.prepare(`DELETE FROM message_provenance AS p WHERE created_at<? AND NOT ${active}`).run(cutoff).changes;
-    const deliveryOld=this.hive.db.prepare(`DELETE FROM timeline_deliveries WHERE last_offered_at<?
+    const old=this.hive.storage.db.prepare(`DELETE FROM message_provenance AS p WHERE created_at<? AND NOT ${active}`).run(cutoff).changes;
+    const deliveryOld=this.hive.storage.db.prepare(`DELETE FROM timeline_deliveries WHERE last_offered_at<?
       AND message_seq NOT IN (SELECT m.seq FROM messages m JOIN message_provenance p ON p.message_id=m.id WHERE ${active})`).run(cutoff).changes;
-    const provExcess=Number(this.hive.db.prepare('SELECT MAX(COUNT(*)-?,0) AS n FROM message_provenance').get(TIMELINE_MAX_PROVENANCE_ROWS)!.n);
-    if (provExcess>0) this.hive.db.prepare(`DELETE FROM message_provenance WHERE message_id IN (
+    const provExcess=Number(this.hive.storage.db.prepare('SELECT MAX(COUNT(*)-?,0) AS n FROM message_provenance').get(TIMELINE_MAX_PROVENANCE_ROWS)!.n);
+    if (provExcess>0) this.hive.storage.db.prepare(`DELETE FROM message_provenance WHERE message_id IN (
       SELECT p.message_id FROM message_provenance p WHERE NOT ${active} ORDER BY p.created_at LIMIT ?)`).run(provExcess);
-    const delExcess=Number(this.hive.db.prepare('SELECT MAX(COUNT(*)-?,0) AS n FROM timeline_deliveries').get(TIMELINE_MAX_DELIVERY_ROWS)!.n);
-    if (delExcess>0) this.hive.db.prepare(`DELETE FROM timeline_deliveries WHERE rowid IN (
+    const delExcess=Number(this.hive.storage.db.prepare('SELECT MAX(COUNT(*)-?,0) AS n FROM timeline_deliveries').get(TIMELINE_MAX_DELIVERY_ROWS)!.n);
+    if (delExcess>0) this.hive.storage.db.prepare(`DELETE FROM timeline_deliveries WHERE rowid IN (
       SELECT d.rowid FROM timeline_deliveries d LEFT JOIN messages m ON m.seq=d.message_seq
       LEFT JOIN message_provenance p ON p.message_id=m.id WHERE p.trace_id IS NULL OR NOT ${active}
       ORDER BY d.last_offered_at LIMIT ?)`).run(delExcess);
@@ -192,11 +192,11 @@ export class TimelineStore {
   }
 
   stats() {
-    const provenance=Number(this.hive.db.prepare('SELECT COUNT(*) AS n FROM message_provenance').get()!.n);
-    const deliveries=Number(this.hive.db.prepare('SELECT COUNT(*) AS n FROM timeline_deliveries').get()!.n);
-    const logicalBytes=Number(this.hive.db.prepare(`SELECT COALESCE(SUM(length(message_id)+length(trace_id)+
+    const provenance=Number(this.hive.storage.db.prepare('SELECT COUNT(*) AS n FROM message_provenance').get()!.n);
+    const deliveries=Number(this.hive.storage.db.prepare('SELECT COUNT(*) AS n FROM timeline_deliveries').get()!.n);
+    const logicalBytes=Number(this.hive.storage.db.prepare(`SELECT COALESCE(SUM(length(message_id)+length(trace_id)+
       COALESCE(length(parent_message_id),0)+COALESCE(length(cause_message_id),0)+length(source)+16),0) AS n FROM message_provenance`).get()!.n)
-      + Number(this.hive.db.prepare(`SELECT COALESCE(SUM(length(delivery_id)+length(agent_id)+length(wake_reason)+40),0) AS n FROM timeline_deliveries`).get()!.n);
+      + Number(this.hive.storage.db.prepare(`SELECT COALESCE(SUM(length(delivery_id)+length(agent_id)+length(wake_reason)+40),0) AS n FROM timeline_deliveries`).get()!.n);
     return { provenance, deliveries, logicalBytes, caps:{ provenance:TIMELINE_MAX_PROVENANCE_ROWS, deliveries:TIMELINE_MAX_DELIVERY_ROWS, eventsPerTrace:TIMELINE_EVENT_LIMIT } };
   }
 }
