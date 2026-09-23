@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import { getRequestListener } from "@hono/node-server";
 import { DEFAULT_PORT } from "../shared/types.ts";
@@ -15,9 +14,7 @@ import { LocalHumanAuth } from "./local-auth.ts";
 import { createStaticWeb } from "./static-web.ts";
 import { WS_HEARTBEAT_MS } from "../shared/realtime.ts";
 import { heartbeatClients, sendRealtime } from "./websocket-policy.ts";
-
-const here = path.dirname(fileURLToPath(import.meta.url));
-const packageRoot = path.resolve(here, "../..");
+import { packageRoot } from "../shared/package-root.ts";
 
 export function startServer(opts: { port?: number; hive?: Hive; telegram?: boolean; shutdownGraceMs?: number } = {}) {
   const port = integerArgument(String(opts.port ?? process.env.HIVEMIND_PORT ?? DEFAULT_PORT), 0, 65535);
@@ -30,7 +27,7 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
   });
 
   const humanAuth = new LocalHumanAuth();
-  const serveWeb = createStaticWeb(path.join(packageRoot, "dist/web"));
+  const serveWeb = createStaticWeb(path.join(packageRoot(), "dist/web"));
   let closing = false;
   const sockets = new Set<Socket>();
   const listener = getRequestListener(app.fetch);
