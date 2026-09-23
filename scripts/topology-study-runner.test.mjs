@@ -362,3 +362,91 @@ test('validate detects trials started out of the randomized order', async () => 
     assert.throws(() => validateRun({ runDir: ctx.runDir }), /randomized order/);
   } finally { ctx.cleanup(); }
 });
+
+/** Fake host whose trials take `ms`, tracking how many run at once and in which order they start/finish. */
+function slowHost({ ms = 40, behave } = {}) {
+  const base = fakeHost({ behave }), events = [];
+  let running = 0, peak = 0;
+  return { ...base, events, peak: () => peak,
+    async executeTrial(spec, signal) {
+      running++; peak = Math.max(peak, running); events.push(['start', spec.trialId, spec.index]);
+      const until = Date.now() + ms;
+      while (Date.now() < until && !signal?.aborted) await new Promise(resolve => setTimeout(resolve, 5));
+      running--; events.push(['end', spec.trialId, spec.index]);
+      if (signal?.aborted) return { ...(await base.executeTrial(spec)), outcome: 'interrupted', interruption: 'signal', acceptance: null };
+      return base.executeTrial(spec);
+    } };
+}
+const lots = 64 * 1024 ** 3;
+const startedRecord = (ctx, id) => readFileSync(path.join(ctx.runDir, 'trials', id, 'journal.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l)).find(r => r.type === 'started');
+
+test('--concurrency runs whole manifest blocks side by side and records the load of every trial', async () => {
+  const ctx = setup({ repeats: 3 });
+  try {
+    const host = slowHost();
+    assert.deepEqual(await authorized(ctx, host, { concurrency: 10, availableMemory: () => lots }), { status: 'complete', trialId: null, executed: 15 });
+    assert.equal(host.peak(), 10, 'two blocks of five at once');
+    const startIndex = host.events.filter(e => e[0] === 'start').map(e => e[2]);
+    assert.deepEqual(startIndex.slice(0, 10).sort((a, b) => a - b), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], 'blocks start in manifest order');
+    const firstEnd = host.events.findIndex(e => e[0] === 'end');
+    assert.ok(host.events.findIndex(e => e[0] === 'start' && e[2] >= 10) > firstEnd, 'the third block waits for a free block slot');
+    const { report } = exported(ctx);
+    assert.deepEqual(report.trials.map(t => t.load.blockIndex), [0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2]);
+    assert.ok(report.trials.every(t => t.load.concurrency === 10 && t.load.concurrentWith.length >= 4));
+    assert.equal(report.concurrency.maxObserved, 10);
+    assert.equal(startedRecord(ctx, ctx.study.trials[7].id).blockIndex, 1);
+    validateRun({ runDir: ctx.runDir });
+  } finally { ctx.cleanup(); }
+  const single = setup({ repeats: 2 });
+  try {
+    const host = slowHost();
+    await authorized(single, host, { concurrency: 7, availableMemory: () => lots });
+    assert.equal(host.peak(), 5, 'a concurrency below two blocks rounds down to one block');
+  } finally { single.cleanup(); }
+});
+
+test('concurrent resume continues mid-block and an ambiguous trial stops new blocks while running trials finish', async () => {
+  const ctx = setup({ repeats: 3 });
+  try {
+    const first = await authorized(ctx, slowHost(), { concurrency: 10, maxTrials: 7, availableMemory: () => lots });
+    assert.deepEqual([first.status, first.executed], ['paused', 7]);
+    assert.equal(exported(ctx).report.counts.completed, 7, 'block 0 and the first two trials of block 1');
+    const second = slowHost();
+    assert.equal((await authorized(ctx, second, { concurrency: 10, availableMemory: () => lots })).status, 'complete');
+    assert.deepEqual(second.events.filter(e => e[0] === 'start').map(e => e[2]).sort((a, b) => a - b), [7, 8, 9, 10, 11, 12, 13, 14]);
+    validateRun({ runDir: ctx.runDir });
+  } finally { ctx.cleanup(); }
+
+  const amb = setup({ repeats: 3 });
+  try {
+    const host = slowHost({ behave: (spec) => { if (spec.index === 1) throw new Error('lost'); return {}; } });
+    const result = await authorized(amb, host, { concurrency: 5, availableMemory: () => lots });
+    assert.deepEqual([result.status, result.trialId, result.reason], ['ambiguous', amb.study.trials[1].id, 'host_error']);
+    assert.deepEqual(host.events.filter(e => e[0] === 'start').map(e => e[2]).sort(), [0, 1, 2, 3, 4], 'no later block was scheduled');
+    assert.equal(host.events.filter(e => e[0] === 'end').length, 5, 'the running block finished');
+    const again = slowHost();
+    const refused = await authorized(amb, again, { concurrency: 10, availableMemory: () => lots });
+    assert.deepEqual([refused.status, refused.reason], ['ambiguous', 'awaiting_reconciliation']);
+    assert.equal(again.events.length, 0, 'later runs refuse past it');
+  } finally { amb.cleanup(); }
+});
+
+test('low available memory downgrades to one block; a Human interrupt stops every running trial', async () => {
+  const ctx = setup({ repeats: 2 });
+  try {
+    const host = slowHost();
+    await authorized(ctx, host, { concurrency: 10, availableMemory: () => 1024 ** 3, minFreeMemoryBytes: 3 * 1024 ** 3 });
+    assert.equal(host.peak(), 5);
+    const [downgrade] = exported(ctx).report.concurrency.downgrades;
+    assert.deepEqual([downgrade.reason, downgrade.from, downgrade.to, downgrade.availableBytes], ['low_memory', 10, 5, 1024 ** 3]);
+  } finally { ctx.cleanup(); }
+  const stop = setup({ repeats: 3 });
+  try {
+    const controller = new AbortController(), host = slowHost({ ms: 5_000 });
+    setTimeout(() => controller.abort(), 100);
+    const result = await authorized(stop, host, { concurrency: 10, signal: controller.signal, availableMemory: () => lots });
+    assert.equal(result.status, 'interrupted');
+    assert.equal(host.events.filter(e => e[0] === 'start').length, 10, 'no block starts after the interrupt');
+    assert.equal(exported(stop).study.trials.slice(0, 10).filter(t => t.observed?.outcome === 'interrupted').length, 10);
+  } finally { stop.cleanup(); }
+});

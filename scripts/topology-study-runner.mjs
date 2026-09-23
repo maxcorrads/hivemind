@@ -9,6 +9,7 @@ import {
   closeSync, copyFileSync, existsSync, fstatSync, fsyncSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, writeFileSync,
 } from 'node:fs';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CONDITIONS, readJson, routerCapture, validateEvidence, validateStudy } from './benchmark-topology.mjs';
@@ -171,9 +172,9 @@ const cohortFile = ctx => path.join(ctx.dir, 'cohort.jsonl');
 export function trialState(ctx, trialId) {
   const { records, torn } = readJournal(journalFile(ctx, trialId));
   let open = null, state = 'pending', attempts = 0, completed = null, reconciled = null;
-  const aborted = [], drift = [], ambiguous = [];
+  const aborted = [], drift = [], ambiguous = [], starts = [];
   for (const r of records) {
-    if (r.type === 'started') { attempts = Math.max(attempts, r.attempt); open = r.attempt; }
+    if (r.type === 'started') { attempts = Math.max(attempts, r.attempt); open = r.attempt; starts.push(r); }
     else if (r.type === 'preflight_drift') drift.push(r);
     else if (r.type === 'aborted_before_request') { aborted.push(r); if (open === r.attempt) open = null; }
     else if (r.type === 'ambiguous') { ambiguous.push(r); if (open === r.attempt) open = null; state = 'ambiguous'; }
@@ -181,7 +182,7 @@ export function trialState(ctx, trialId) {
     else if (r.type === 'reconciled') { reconciled = r; state = 'reconciled'; }
   }
   if (!['completed', 'reconciled'].includes(state) && open !== null) state = 'started_unresolved';
-  return { state, attempts, open, completed, reconciled, aborted, drift, ambiguous, torn };
+  return { state, attempts, open, completed, reconciled, aborted, drift, ambiguous, starts, torn };
 }
 
 function cohortPin(ctx) {
@@ -193,13 +194,14 @@ function cohortPin(ctx) {
 
 const RESULT_KEYS = ['phase', 'reason', 'drift', 'detail', 'observedFreeWorkers', 'jevEnabled', 'jevRequestedModel', 'jevAttempts',
   'initialTopology', 'routingOverrides', 'outcome', 'interruption', 'wallMs', 'seatUsage', 'resolvedWorkloadModels',
-  'acceptance', 'routerEvidence', 'collectorWarnings', 'artifacts'];
+  'acceptance', 'routerEvidence', 'collectorWarnings', 'artifacts', 'rateLimited'];
 
 /** Strict shape check. A result that fails this is treated as ambiguous, never guessed into an observation. */
 export function validateHostResult(r) {
   assert.ok(r && typeof r === 'object' && !Array.isArray(r), 'Host result must be an object');
   assert.ok(Object.keys(r).every(k => RESULT_KEYS.includes(k)), 'Host result contains an unknown field');
   assert.ok(['completed', 'aborted_before_request', 'ambiguous'].includes(r.phase), 'Unknown host result phase');
+  assert.ok(r.rateLimited === undefined || typeof r.rateLimited === 'boolean', 'rateLimited must be a boolean');
   if (r.phase !== 'completed') { assert.equal(typeof r.reason, 'string', 'Aborted/ambiguous results need a reason code'); return r; }
   assert.ok(r.observedFreeWorkers === null || count(r.observedFreeWorkers));
   assert.equal(typeof r.jevEnabled, 'boolean'); assert.ok(r.jevRequestedModel === null || typeof r.jevRequestedModel === 'string');
@@ -311,67 +313,177 @@ function specFor(ctx, trial, index, attempt, artifacts) {
     inputPath: artifacts.input, acceptancePath: artifacts.acceptance };
 }
 
+/** Trials per manifest block: one workload × repeat with every condition, in the manifest's randomized order. */
+export const BLOCK_SIZE = CONDITIONS.length;
+export const DEFAULT_MIN_FREE_MEMORY_BYTES = 3 * 1024 ** 3;
+
+/** Memory the OS can hand out now. macOS `os.freemem()` excludes reclaimable pages, so vm_stat is used there. */
+export function availableMemoryBytes() {
+  if (process.platform === 'darwin') {
+    const out = spawnSync('vm_stat', [], { encoding: 'utf8', timeout: 5_000 });
+    const page = Number(/page size of (\d+) bytes/.exec(out.stdout ?? '')?.[1]);
+    const pages = name => Number(new RegExp(`Pages ${name}:\\s+(\\d+)`).exec(out.stdout ?? '')?.[1] ?? 0);
+    if (out.status === 0 && page > 0) return (pages('free') + pages('inactive') + pages('speculative') + pages('purgeable')) * page;
+  }
+  return os.freemem();
+}
+
+/** Blocks of the manifest, in order: `{ index, trials: [{ trial, index }] }`. */
+export function manifestBlocks(study) {
+  const blocks = [];
+  study.trials.forEach((trial, index) => {
+    const b = Math.floor(index / BLOCK_SIZE);
+    (blocks[b] ??= { index: b, trials: [] }).trials.push({ trial, index });
+  });
+  return blocks;
+}
+
+/** `--concurrency N`: 1 keeps the one-trial-at-a-time runner; anything larger runs whole blocks (at least one). */
+export const blocksForConcurrency = concurrency => Math.max(1, Math.floor(concurrency / BLOCK_SIZE));
+
 /**
- * Executes pending trials strictly in manifest order. Stops (never skips ahead) on preflight drift, an ambiguous
- * result, configuration drift, an aborted attempt or a Human interruption, so a later invocation resumes from the
- * durable checkpoints without silently re-running or substituting a trial.
+ * Runs one pending trial end to end and journals it. Returns the halt status it implies (`completed` when the cohort
+ * may continue). `load` ({ concurrency, blockIndex, concurrentWith() }) is retained in the journal for analysis.
  */
-export async function runStudy({ runDir, host, authorization, maxTrials = Infinity, signal, secrets = [] }) {
+async function executeOne(ctx, { trial, index, host, signal, secrets, load, onRateLimited }) {
+  const journal = journalFile(ctx, trial.id), state = trialState(ctx, trial.id);
+  mkdirSync(path.dirname(journal), { recursive: true, mode: 0o700 });
+  loadRun(ctx.dir); // manifest bytes and identity are re-verified before every trial
+  const artifacts = verifyArtifacts(ctx, trial.workloadId);
+  const pre = await host.preflight({ condition: trial.condition, trialId: trial.id, versions: { ...ctx.study.config.versions } });
+  const drift = [...artifacts.drift, ...preflightDrift(ctx, trial, pre)];
+  if (drift.length) {
+    appendDurable(journal, { type: 'preflight_drift', drift });
+    return { status: 'preflight_drift', detail: { drift } };
+  }
+  const attempt = state.attempts + 1, spec = specFor(ctx, trial, index, attempt, artifacts);
+  mkdirSync(spec.attemptDir, { mode: 0o700 }); // throws if it exists: every attempt is fresh
+  mkdirSync(spec.home, { mode: 0o700 }); mkdirSync(spec.workspace, { mode: 0o700 });
+  const loadAtStart = { concurrency: load.concurrency, blockIndex: load.blockIndex, concurrentWith: load.concurrentWith() };
+  appendDurable(journal, { type: 'started', attempt, condition: trial.condition, routing: spec.routing, lockScope: spec.lockScope,
+    jevEnabled: spec.jevEnabled, freeWorkers: spec.freeWorkers, ...loadAtStart });
+  let result;
+  try { result = validateHostResult(await host.executeTrial(spec, signal)); }
+  catch (error) {
+    appendDurable(journal, { type: 'ambiguous', attempt, reason: 'host_error', detail: redact(error?.message, secrets), load: { ...loadAtStart, concurrentWith: load.concurrentWith() } });
+    return { status: 'ambiguous', detail: { reason: 'host_error' } };
+  }
+  // Everything below is synchronous, so concurrent trials never interleave between reading and appending the cohort pin.
+  const finalLoad = { ...loadAtStart, concurrentWith: load.concurrentWith() };
+  if (result.rateLimited) onRateLimited(trial);
+  if (result.phase === 'ambiguous') {
+    appendDurable(journal, { type: 'ambiguous', attempt, reason: result.reason, load: finalLoad });
+    return { status: 'ambiguous', detail: { reason: result.reason } };
+  }
+  if (result.phase === 'aborted_before_request') {
+    appendDurable(journal, { type: 'aborted_before_request', attempt, reason: result.reason, drift: result.drift ?? [],
+      detail: result.detail ? redact(result.detail, secrets) : null, load: finalLoad });
+    return { status: 'aborted_before_request', detail: { reason: result.reason } };
+  }
+  const mapped = observationFrom({ study: ctx.study, trial, result, attempt, pin: cohortPin(ctx), run: ctx.run });
+  appendDurable(journal, { type: 'completed', attempt, observation: mapped.observation, withheld: mapped.withheld,
+    exclusions: mapped.exclusions, notes: mapped.notes, budget: mapped.budget, artifacts: result.artifacts,
+    jevAttempts: result.jevAttempts, seatUsage: result.seatUsage, load: finalLoad, rateLimited: result.rateLimited === true });
+  if (mapped.newPin && !mapped.exclusions.length) appendDurable(cohortFile(ctx), { type: 'jev_resolved_model_pinned', model: mapped.newPin, trialId: trial.id });
+  if (mapped.exclusions.length) return { status: 'configuration_drift', executed: true, detail: { exclusions: mapped.exclusions } };
+  if (result.interruption === 'signal') return { status: 'interrupted', executed: true };
+  return { status: 'completed', executed: true };
+}
+
+/**
+ * Executes pending trials in manifest order. Stops (never skips ahead) on preflight drift, an ambiguous result,
+ * configuration drift, an aborted attempt or a Human interruption, so a later invocation resumes from the durable
+ * checkpoints without silently re-running or substituting a trial.
+ *
+ * `concurrency` 1 runs one trial at a time. A larger value runs whole manifest blocks side by side
+ * (`floor(concurrency / 5)` blocks, at least one), so the conditions compared within a block share the same load.
+ * A stop condition ends scheduling of new blocks while running trials finish. Provider rate limiting or low available
+ * memory reduces later scheduling to one block at a time; running trials are never killed for it.
+ */
+export async function runStudy({ runDir, host, authorization, maxTrials = Infinity, signal, secrets = [], concurrency = 1,
+  availableMemory = availableMemoryBytes, minFreeMemoryBytes = DEFAULT_MIN_FREE_MEMORY_BYTES }) {
   const ctx = loadRun(runDir);
   assert.equal(authorization, ctx.run.studyId, 'Paid execution requires --authorize-paid-run <studyId> for exactly this study');
   assert.equal(host?.evidenceKind, ctx.study.config.evidenceKind, 'Host evidence kind does not match the manifest; do not label fake or live runs otherwise');
+  assert.ok(Number.isSafeInteger(concurrency) && concurrency >= 1, 'concurrency must be a positive integer');
   let executed = 0;
   const halt = (status, trial, detail = {}) => ({ status, trialId: trial?.id ?? null, executed, ...detail });
-  for (const [index, trial] of ctx.study.trials.entries()) {
-    const journal = journalFile(ctx, trial.id);
-    const state = trialState(ctx, trial.id);
-    if (TERMINAL.has(state.state)) continue;
+  const blocking = (trial, state) => {
     if (state.state === 'started_unresolved') {
-      appendDurable(journal, { type: 'ambiguous', attempt: state.open, reason: 'runner_stopped_without_result' });
+      appendDurable(journalFile(ctx, trial.id), { type: 'ambiguous', attempt: state.open, reason: 'runner_stopped_without_result' });
       return halt('ambiguous', trial, { reason: 'runner_stopped_without_result' });
     }
-    if (state.state === 'ambiguous') return halt('ambiguous', trial, { reason: 'awaiting_reconciliation' });
-    if (executed >= maxTrials) return halt('paused', trial);
-    if (signal?.aborted) return halt('interrupted', trial);
-    mkdirSync(path.dirname(journal), { recursive: true, mode: 0o700 });
-    loadRun(runDir); // manifest bytes and identity are re-verified before every trial
-    const artifacts = verifyArtifacts(ctx, trial.workloadId);
-    const pre = await host.preflight({ condition: trial.condition, trialId: trial.id, versions: { ...ctx.study.config.versions } });
-    const drift = [...artifacts.drift, ...preflightDrift(ctx, trial, pre)];
-    if (drift.length) {
-      appendDurable(journal, { type: 'preflight_drift', drift });
-      return halt('preflight_drift', trial, { drift });
+    return state.state === 'ambiguous' ? halt('ambiguous', trial, { reason: 'awaiting_reconciliation' }) : null;
+  };
+
+  if (concurrency === 1) {
+    for (const [index, trial] of ctx.study.trials.entries()) {
+      const state = trialState(ctx, trial.id);
+      if (TERMINAL.has(state.state)) continue;
+      const stop = blocking(trial, state);
+      if (stop) return stop;
+      if (executed >= maxTrials) return halt('paused', trial);
+      if (signal?.aborted) return halt('interrupted', trial);
+      const outcome = await executeOne(ctx, { trial, index, host, signal, secrets, onRateLimited: () => undefined,
+        load: { concurrency: 1, blockIndex: Math.floor(index / BLOCK_SIZE), concurrentWith: () => [] } });
+      if (outcome.executed) executed++;
+      if (outcome.status !== 'completed') return halt(outcome.status, trial, outcome.detail);
     }
-    const attempt = state.attempts + 1, spec = specFor(ctx, trial, index, attempt, artifacts);
-    mkdirSync(spec.attemptDir, { mode: 0o700 }); // throws if it exists: every attempt is fresh
-    mkdirSync(spec.home, { mode: 0o700 }); mkdirSync(spec.workspace, { mode: 0o700 });
-    appendDurable(journal, { type: 'started', attempt, condition: trial.condition, routing: spec.routing, lockScope: spec.lockScope,
-      jevEnabled: spec.jevEnabled, freeWorkers: spec.freeWorkers });
-    let result;
-    try { result = validateHostResult(await host.executeTrial(spec, signal)); }
-    catch (error) {
-      appendDurable(journal, { type: 'ambiguous', attempt, reason: 'host_error', detail: redact(error?.message, secrets) });
-      return halt('ambiguous', trial, { reason: 'host_error' });
-    }
-    if (result.phase === 'ambiguous') {
-      appendDurable(journal, { type: 'ambiguous', attempt, reason: result.reason });
-      return halt('ambiguous', trial, { reason: result.reason });
-    }
-    if (result.phase === 'aborted_before_request') {
-      appendDurable(journal, { type: 'aborted_before_request', attempt, reason: result.reason, drift: result.drift ?? [],
-        detail: result.detail ? redact(result.detail, secrets) : null });
-      return halt('aborted_before_request', trial, { reason: result.reason });
-    }
-    const mapped = observationFrom({ study: ctx.study, trial, result, attempt, pin: cohortPin(ctx), run: ctx.run });
-    appendDurable(journal, { type: 'completed', attempt, observation: mapped.observation, withheld: mapped.withheld,
-      exclusions: mapped.exclusions, notes: mapped.notes, budget: mapped.budget, artifacts: result.artifacts,
-      jevAttempts: result.jevAttempts, seatUsage: result.seatUsage });
-    if (mapped.newPin && !mapped.exclusions.length) appendDurable(cohortFile(ctx), { type: 'jev_resolved_model_pinned', model: mapped.newPin, trialId: trial.id });
-    executed++;
-    if (mapped.exclusions.length) return halt('configuration_drift', trial, { exclusions: mapped.exclusions });
-    if (result.interruption === 'signal') return halt('interrupted', trial);
+    return { status: 'complete', trialId: null, executed };
   }
-  return { status: 'complete', trialId: null, executed };
+
+  let blocksAtOnce = blocksForConcurrency(concurrency);
+  const effective = () => blocksAtOnce * BLOCK_SIZE;
+  const downgrade = (reason, extra) => {
+    if (blocksAtOnce === 1) return;
+    appendDurable(cohortFile(ctx), { type: 'concurrency_downgraded', reason, from: effective(), to: BLOCK_SIZE, ...extra });
+    blocksAtOnce = 1;
+  };
+  const running = new Map(); // block index -> promise
+  const overlaps = new Map(); // trial id -> ids of every trial that ran at the same time
+  let stop = null, started = 0;
+  const note = (trial, outcome) => {
+    if (outcome.executed) executed++;
+    if (outcome.status !== 'completed' && !stop) stop = halt(outcome.status, trial, outcome.detail);
+  };
+  const runTrial = async ({ trial, index }, blockIndex) => {
+    const mine = new Set(overlaps.keys());
+    for (const other of mine) overlaps.get(other).add(trial.id);
+    overlaps.set(trial.id, mine);
+    try {
+      const outcome = await executeOne(ctx, { trial, index, host, signal, secrets,
+        onRateLimited: t => downgrade('rate_limited', { trialId: t.id }),
+        load: { concurrency: effective(), blockIndex, concurrentWith: () => [...mine].sort() } });
+      note(trial, outcome);
+    } catch (error) {
+      if (!stop) stop = halt('harness_error', trial, { reason: redact(error?.message, secrets) });
+    } finally { overlaps.delete(trial.id); }
+  };
+
+  for (const block of manifestBlocks(ctx.study)) {
+    const pending = block.trials.filter(({ trial }) => !TERMINAL.has(trialState(ctx, trial.id).state));
+    if (!pending.length) continue;
+    while (!stop && running.size >= blocksAtOnce) await Promise.race(running.values());
+    if (stop) break;
+    for (const { trial } of pending) { const blocked = blocking(trial, trialState(ctx, trial.id)); if (blocked) { stop = blocked; break; } }
+    if (stop) break;
+    if (started >= maxTrials) { stop = halt('paused', pending[0].trial); break; }
+    if (signal?.aborted) { stop = halt('interrupted', pending[0].trial); break; }
+    const free = availableMemory();
+    if (free < minFreeMemoryBytes) {
+      downgrade('low_memory', { availableBytes: free, thresholdBytes: minFreeMemoryBytes, blockIndex: block.index });
+      while (!stop && running.size >= blocksAtOnce) await Promise.race(running.values());
+      if (stop) break;
+    }
+    const take = pending.slice(0, Math.max(0, maxTrials - started));
+    started += take.length;
+    const done = Promise.all(take.map(entry => runTrial(entry, block.index))).then(() => { running.delete(block.index); });
+    running.set(block.index, done);
+  }
+  await Promise.all(running.values());
+  if (stop) return { ...stop, executed };
+  const next = ctx.study.trials.find(t => !TERMINAL.has(trialState(ctx, t.id).state));
+  return next ? halt('paused', next) : { status: 'complete', trialId: null, executed };
 }
 
 // ---------------------------------------------------------------- reconcile / export / validate / dry-run
@@ -396,6 +508,15 @@ export function reconcileTrial({ runDir, trialId, resolution, initialTopology = 
   return { trialId, resolution };
 }
 
+/** Load of the trial's latest attempt, as journalled: `{ concurrency, blockIndex, concurrentWith }` or null. */
+function loadOf(s) {
+  const last = s.starts.at(-1);
+  if (!last) return null;
+  const closing = [s.completed, ...s.aborted, ...s.ambiguous].find(r => r?.attempt === last.attempt && r.load);
+  if (closing) return closing.load;
+  return last.concurrency === undefined ? null : { concurrency: last.concurrency, blockIndex: last.blockIndex, concurrentWith: last.concurrentWith ?? [] };
+}
+
 export function exportRun({ runDir }) {
   const ctx = loadRun(runDir);
   const study = structuredClone(ctx.study), trials = [];
@@ -415,7 +536,8 @@ export function exportRun({ runDir }) {
       reconciliation: s.reconciled ? s.reconciled.resolution : null,
       ambiguousAttempts: s.ambiguous.map(a => ({ attempt: a.attempt, reason: a.reason })),
       abortedAttempts: s.aborted.map(a => ({ attempt: a.attempt, reason: a.reason, drift: (a.drift ?? []).map(d => d.field) })),
-      preflightDrift: s.drift.flatMap(d => d.drift.map(x => x.field)) });
+      preflightDrift: s.drift.flatMap(d => d.drift.map(x => x.field)),
+      load: loadOf(s) });
   }
   const coverage = validateStudy(study);
   const report = { schemaVersion: 1, reportVersion: REPORT_VERSION, runnerVersion: RUNNER_VERSION, studyId: ctx.run.studyId,
@@ -423,6 +545,11 @@ export function exportRun({ runDir }) {
     jev: { requestedModel: ctx.run.jev.requestedModel, resolvedModelPin: cohortPin(ctx) },
     independentReview: 'pending: automated runs are never marked independently reviewed; routingReview stays null',
     captureCompleteness: 'required: Auto instrumentation is healthy only when the router export states coverage.capture = complete (#135)',
+    concurrency: { blockSize: BLOCK_SIZE, maxObserved: Math.max(1, ...trials.map(t => t.load?.concurrency ?? 1)),
+      downgrades: readJournal(cohortFile(ctx)).records.filter(r => r.type === 'concurrency_downgraded')
+        .map(({ reason, from, to, trialId = null, blockIndex = null, availableBytes = null, thresholdBytes = null, at }) =>
+          ({ reason, from, to, trialId, blockIndex, availableBytes, thresholdBytes, at })),
+      note: 'load = concurrency (trials allowed at once), manifest blockIndex and ids of trials that overlapped this attempt' },
     trials };
   const serialized = JSON.stringify(report) + JSON.stringify(study);
   assert.ok(!serialized.includes(ctx.dir), 'Export must contain only redacted relative references');
@@ -434,14 +561,19 @@ export function validateRun({ runDir }) {
   for (const w of ctx.study.config.workloads) assert.deepEqual(verifyArtifacts(ctx, w.id).drift, [], `Artifact drift for ${w.id}`);
   const expected = new Set(ctx.study.trials.map(t => t.id));
   for (const name of readdirSync(path.join(ctx.dir, 'trials'))) assert.ok(expected.has(name), `Unexpected trial directory ${name}`);
-  let seenIncomplete = false;
+  // One-at-a-time runs: no trial starts before every earlier trial finished. Concurrent runs (--concurrency > 1) start
+  // whole blocks in manifest order: no trial starts while an earlier block still has a trial that never started.
+  let seenIncomplete = false, firstUnstartedBlock = null;
   const states = {};
-  for (const trial of ctx.study.trials) {
-    const s = trialState(ctx, trial.id);
+  for (const [index, trial] of ctx.study.trials.entries()) {
+    const s = trialState(ctx, trial.id), block = Math.floor(index / BLOCK_SIZE);
     states[s.state] = (states[s.state] ?? 0) + 1;
     const started = s.attempts > 0 || s.drift.length > 0;
-    assert.ok(!(seenIncomplete && started), 'A trial started before an earlier trial finished: randomized order was not followed');
+    if (started && s.starts.some(r => (r.concurrency ?? 1) > 1)) {
+      assert.ok(firstUnstartedBlock === null || firstUnstartedBlock >= block, 'A block started before an earlier block: randomized order was not followed');
+    } else assert.ok(!(seenIncomplete && started), 'A trial started before an earlier trial finished: randomized order was not followed');
     if (!TERMINAL.has(s.state)) seenIncomplete = true;
+    if (!started && firstUnstartedBlock === null) firstUnstartedBlock = block;
   }
   const exported = exportRun({ runDir });
   return { studyId: ctx.run.studyId, trials: ctx.study.trials.length, states, coverage: exported.report.coverage };
@@ -494,11 +626,11 @@ const USAGE = `Usage (all but run are credential-free and offline):
   prepare   --plan <plan.json> --run-dir <new dir>
   validate  --run-dir <dir>
   dry-run   --run-dir <dir>
-  run       --run-dir <dir> --authorize-paid-run <studyId> [--max-trials <n>] [--watch]
+  run       --run-dir <dir> --authorize-paid-run <studyId> [--max-trials <n>] [--concurrency <n>] [--min-free-memory-gb <gb>] [--watch]
   reconcile --run-dir <dir> --trial <id> --resolution interrupted|harness_failed [--initial-topology <t>] [--note <text>]
   export    --run-dir <dir> --output <new study.json> --report <new report.json>`;
 const FLAGS = { prepare: ['--plan', '--run-dir'], validate: ['--run-dir'], 'dry-run': ['--run-dir'],
-  run: ['--run-dir', '--authorize-paid-run', '--max-trials'], reconcile: ['--run-dir', '--trial', '--resolution', '--initial-topology', '--note'],
+  run: ['--run-dir', '--authorize-paid-run', '--max-trials', '--concurrency', '--min-free-memory-gb'], reconcile: ['--run-dir', '--trial', '--resolution', '--initial-topology', '--note'],
   export: ['--run-dir', '--output', '--report'] };
 const SWITCHES = { run: ['--watch'] };
 
@@ -538,6 +670,10 @@ export async function main(argv = process.argv.slice(2), { env = process.env, cr
   assert.equal(options['--authorize-paid-run'], ctx.run.studyId, 'Paid execution requires --authorize-paid-run <studyId> for exactly this study');
   assert.equal(ctx.run.evidenceKind, 'live', 'Only a live manifest can be executed by the live host; synthetic manifests stay offline');
   const maxTrials = options['--max-trials'] === undefined ? Infinity : Number(options['--max-trials']);
+  const concurrency = options['--concurrency'] === undefined ? 1 : Number(options['--concurrency']);
+  assert.ok(Number.isSafeInteger(concurrency) && concurrency >= 1, '--concurrency must be a positive integer');
+  const minFreeGb = options['--min-free-memory-gb'] === undefined ? DEFAULT_MIN_FREE_MEMORY_BYTES / 1024 ** 3 : Number(options['--min-free-memory-gb']);
+  assert.ok(Number.isFinite(minFreeGb) && minFreeGb >= 0, '--min-free-memory-gb must be a non-negative number');
   assert.ok(maxTrials === Infinity || (Number.isSafeInteger(maxTrials) && maxTrials >= 1), '--max-trials must be a positive integer');
   const pendingAuto = ctx.study.trials.some(t => t.condition === 'auto' && !TERMINAL.has(trialState(ctx, t.id).state));
   assert.ok(!pendingAuto || String(env.HIVEMIND_STUDY_TYPESAFE_KEY ?? '').trim(), 'Auto trials need HIVEMIND_STUDY_TYPESAFE_KEY; refusing before any paid trial starts');
@@ -549,6 +685,7 @@ export async function main(argv = process.argv.slice(2), { env = process.env, cr
   process.once('SIGINT', stop); process.once('SIGTERM', stop);
   try {
     return await runStudy({ runDir, host, authorization: options['--authorize-paid-run'], maxTrials, signal: controller.signal,
+      concurrency, minFreeMemoryBytes: minFreeGb * 1024 ** 3,
       secrets: [env.HIVEMIND_STUDY_TYPESAFE_KEY] });
   } finally { process.off('SIGINT', stop); process.off('SIGTERM', stop); }
 }

@@ -86,10 +86,10 @@ HIVEMIND_STUDY_TYPESAFE_KEY=<key> npm run benchmark:topology:study -- run \
 
 # full cohort; resumes after the smoke, skipping completed trials
 HIVEMIND_STUDY_TYPESAFE_KEY=<key> npm run benchmark:topology:study -- run \
-  --run-dir <run dir> --authorize-paid-run <studyId> --watch
+  --run-dir <run dir> --authorize-paid-run <studyId> --concurrency 10 --watch
 ```
 
-`--watch` is optional. It opens a read-only tmux view (`hivemind-study`) with one pane per seat and has no effect on trials ([runner doc](../../../docs/topology-study-runner.md#watching-a-run-live---watch)).
+`--concurrency 10` runs two manifest blocks (ten trials) side by side, with seat launches serialized; see [parallel blocks](../../../docs/topology-study-runner.md#parallel-blocks---concurrency-n). `--watch` is optional. It opens a read-only tmux view (`hivemind-study`) with one pane per seat and has no effect on trials ([runner doc](../../../docs/topology-study-runner.md#watching-a-run-live---watch)).
 
 Then run `export`, have the results reviewed independently, and run `summarize` ([runner doc](../../../docs/topology-study-runner.md#export-and-review)). The key is only required while Auto trials remain. It is never passed to seats and is scrubbed from retained homes.
 

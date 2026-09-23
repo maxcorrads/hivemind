@@ -66,6 +66,17 @@ Each attempt then gets a fresh `trials/<trialId>/attempt-NNN/` directory with it
 
 End-to-end `wallMs` runs from sending the Human request to completion. It already includes the initial classification wait, so summed Jev latency is never added. `workloadTokens` is the sum of provider-reported seat totals (Jev usage is only in the router evidence); one unknown seat makes the total `null` with `workloadUsageSource: unknown`.
 
+### Parallel blocks (`--concurrency N`)
+
+By default (`--concurrency 1`) trials run one at a time in manifest order. The manifest is a sequence of **blocks**: each block is one workload × repeat with all five conditions, in randomized order. `--concurrency N` runs whole blocks side by side: `floor(N / 5)` blocks, and at least one. All five conditions of a block start together, so the trials compared with each other share the same load. `10` means two blocks, or ten trials, at once.
+
+- **Order:** blocks start in manifest order and the next block starts when a running block has finished. `validate` checks that no block started while an earlier block still had a trial that never started.
+- **Journals and resume:** journals stay per trial and crash-safe. Resume skips completed trials and continues block by block, including a partly finished block. `--max-trials` limits how many trials are started; the last block may start only its first trials.
+- **Stops:** an ambiguous result, an aborted attempt, preflight or configuration drift, or a Human interrupt stops the scheduling of new blocks. Trials already running finish, apart from Ctrl-C, which interrupts every running trial. Later runs refuse to go past an ambiguous trial, as before.
+- **Seat launches:** these are serialized across the whole process. No two opencode processes start at the same instant, even in different trials. A seat holds the launch lock until it joins, exits or 5 s pass (`seatLaunchHoldMs`), and the per-seat lock retry still applies. Waiting for the lock counts toward `joinTimeoutMs`, which defaults to 10 min for the whole start-up of one trial.
+- **Downgrade to one block:** this happens when a seat reports provider throttling (an opencode `error` event or stderr matching 429, rate limit, too many requests or quota; agent text is never scanned), or when available memory is below `--min-free-memory-gb` (default 3) before a block starts. On macOS, available memory is read from `vm_stat` (free, inactive, speculative and purgeable pages), because `os.freemem()` leaves out reclaimable memory. Running trials are never killed for a downgrade. Each downgrade is recorded in `cohort.jsonl` and in the report under `concurrency.downgrades`.
+- **Load record:** every `started` journal record carries `concurrency` and `blockIndex`. The closing record (`completed`, `aborted_before_request` or `ambiguous`) carries `load: { concurrency, blockIndex, concurrentWith }`, where `concurrentWith` lists the ids of the trials that overlapped this attempt. The run report repeats `load` per trial. The #132 observation schema is unchanged, so analyses should join on the trial id.
+
 ### Watching a run live (`--watch`)
 
 `run --watch` (or `HIVEMIND_STUDY_WATCH=1`) opens a read-only live view in the tmux session `hivemind-study`. The runner uses `/opt/homebrew/bin/tmux` when present, otherwise `tmux` on `PATH`; `HIVEMIND_STUDY_TMUX` overrides both.
