@@ -15,7 +15,6 @@ import { ADAPTIVE_TOPOLOGY_CONTRACT_VERSION,
 import { AdaptiveObservationStores, observeTopologyEvaluation } from './adaptive-evidence-observer.ts';
 import { initAdaptiveCommitments, openDelegations, readAdaptiveCapacity } from './adaptive-topology-capacity.ts';
 import { AdaptiveAdmission, coordinationEventId } from './adaptive-topology-admission.ts';
-import { immediateTransaction } from './transaction.ts';
 import type { JevCallSummary } from '../shared/jev-calls.ts';
 
 export { evaluateAdaptiveTopology, ADAPTIVE_TOPOLOGY_CONTRACT_VERSION } from './adaptive-topology-provider.ts';
@@ -145,7 +144,7 @@ export class AdaptiveTopologyRuntime {
       const state = this.row(channel.id, brain.id);
       if (!state || state.completedAt || state.rootMessageId === message.id) continue;
       if (message.seq <= this.hive.getMessageById(state.rootMessageId).seq) continue;
-      const item = immediateTransaction(this.hive.db, () => this.retire(state, null));
+      const item = this.hive.storage.transaction(() => this.retire(state, null));
       if (item) this.publish(state, item);
     }
   }
@@ -172,7 +171,7 @@ export class AdaptiveTopologyRuntime {
   }
   constructor(private hive: Hive) {
     this.observations = new AdaptiveObservationStores(hive.db);
-    immediateTransaction(hive.db, () => this.migrateExecutionKeys());
+    hive.storage.transaction(() => this.migrateExecutionKeys());
     hive.db.exec(`${EXECUTIONS_SCHEMA.replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS')};
       CREATE UNIQUE INDEX IF NOT EXISTS idx_adaptive_topology_current ON adaptive_topology_executions(channel_id,brain_id) WHERE current=1;
       CREATE INDEX IF NOT EXISTS idx_adaptive_topology_brain ON adaptive_topology_executions(brain_id,project_id);
@@ -355,7 +354,7 @@ export class AdaptiveTopologyRuntime {
       (SELECT rowid FROM adaptive_topology_events WHERE channel_id=? ORDER BY rowid DESC LIMIT 500)`).run(event.channelId, event.channelId);
   }
   private commit(state: StoredExecution, event: AdaptiveRoutingEvent, evidenceId?: string) {
-    immediateTransaction(this.hive.db, () => {
+    this.hive.storage.transaction(() => {
       this.save(state); this.saveEvent(event);
       if (evidenceId) {
         this.hive.db.prepare('INSERT OR IGNORE INTO adaptive_topology_evaluated(execution_id,event_id) VALUES(?,?)').run(state.executionId, evidenceId);
@@ -620,7 +619,7 @@ export class AdaptiveTopologyRuntime {
     if (this.hive.db.prepare('SELECT status FROM threads WHERE id=?').get(threadId)?.status === 'done') {
       this.hive.setThreadStatus(human, threadId, 'open'); return;
     }
-    const published = immediateTransaction(this.hive.db, () => this.threadStatusChange(human, threadId, 'open'));
+    const published = this.hive.storage.transaction(() => this.threadStatusChange(human, threadId, 'open'));
     published?.();
   }
   /** No single owning brain: Jev still classifies the request, but nothing is enforced. */
@@ -643,7 +642,7 @@ export class AdaptiveTopologyRuntime {
       appliedTopology: 'single', targetWorkers: decision.targetWorkers, appliedWorkers: 0, confidence: decision.confidence,
       reason: decision.reason, providerStatus: decision.providerStatus, applied: false,
       warning: 'No single owning brain · recommendation only', routeId: decision.routeId };
-    immediateTransaction(this.hive.db, () => this.saveEvent(event));
+    this.hive.storage.transaction(() => this.saveEvent(event));
     this.hive.bus.emit('adaptive-routing', { channelId: channel.id, state: null, event });
   }
   private async planExecution(channel: Channel, brain: Agent, input: HumanMessageInput, mode: AdaptiveRoutingMode,
@@ -772,7 +771,7 @@ export class AdaptiveTopologyRuntime {
     this.save(state); this.saveEvent(item); return item;
   }
   private complete(state: StoredExecution, reason: string): void {
-    this.publish(state, immediateTransaction(this.hive.db, () => this.completeInside(state, reason)));
+    this.publish(state, this.hive.storage.transaction(() => this.completeInside(state, reason)));
   }
   /** Invoked inside Hive's thread transaction; returns a post-commit notification. */
   threadStatusChange(actor: Agent, threadId: string, status: ThreadStatus | null): (() => void) | null {
@@ -864,7 +863,7 @@ export class AdaptiveTopologyRuntime {
     state.updatedAt = Math.max(Date.now(), state.updatedAt + 1); state.revision = (state.revision ?? 0) + 1;
     const decision = { ...fallbackDecision(topology ?? state.currentTopology, state.desiredWorkers ?? state.workerBudget), reason: scope === 'none' ? 'human_unlock' : 'human_lock' };
     const item = this.record(state, decision, from, 'lock', from !== state.currentTopology);
-    immediateTransaction(this.hive.db, () => {
+    this.hive.storage.transaction(() => {
       if (scope === 'none' || scope === 'conversation') this.conversationLockWrite(state.channelId, state.brainId, scope === 'none' ? null : topology);
       this.save(state); this.saveEvent(item);
     });

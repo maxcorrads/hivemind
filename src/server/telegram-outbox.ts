@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { HiveError } from "../shared/types.ts";
+import { Storage } from "./storage.ts";
 
 export type TelegramDestination = { botKey: string; chatId: number };
 export type TelegramJob = { seq: number; kind: "message" | "reaction"; botKey: string | null; chatId: number | null; attempts?: number; firstAttemptAt?: number; revision?: number };
@@ -15,22 +16,10 @@ export function telegramBotKey(token: string, verifiedBotId?: number): string {
     : `credential:${createHash("sha256").update(token).digest("hex")}`;
 }
 
-export function outboxTransaction<T>(db: DatabaseSync, fn: () => T): T {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const value = fn();
-    db.exec("COMMIT");
-    return value;
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
-}
-
 export function initTelegramOutbox(db: DatabaseSync): void {
   const has = (table: string, name: string) =>
     (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some(row => row.name === name);
-  outboxTransaction(db, () => {
+  Storage.for(db).transaction(() => {
     for (const table of ["telegram_pending", "telegram_failures"]) {
       if (!has(table, "bot_key")) db.exec(`ALTER TABLE ${table} ADD COLUMN bot_key TEXT`);
     }
@@ -120,11 +109,11 @@ export function enqueueTelegramPending(
 ): void {
   if (!Number.isSafeInteger(cap) || cap < 1 || cap > TELEGRAM_PENDING_CAP) throw new HiveError(400, "Invalid Telegram queue capacity");
   if (destination && !validDestination(destination)) throw new HiveError(400, "Invalid Telegram destination");
-  outboxTransaction(db, () => enqueueInside(db, seq, kind, cap, destination));
+  Storage.for(db).transaction(() => enqueueInside(db, seq, kind, cap, destination));
 }
 
 export function failTelegramJob(db: DatabaseSync, job: TelegramJob, reason: string, attempts: number): void {
-  outboxTransaction(db, () => {
+  Storage.for(db).transaction(() => {
     recordTelegramFailure(db, job.seq, job.kind, reason, attempts, job.chatId ?? undefined, job.botKey ?? undefined);
     db.prepare("DELETE FROM telegram_pending WHERE seq = ? AND kind = ?").run(job.seq, job.kind);
   });
@@ -133,7 +122,7 @@ export function failTelegramJob(db: DatabaseSync, job: TelegramJob, reason: stri
 export function retryTelegramOutboxFailure(
   db: DatabaseSync, id: string, currentDestination: (seq: number) => TelegramDestination | undefined,
 ): void {
-  outboxTransaction(db, () => {
+  Storage.for(db).transaction(() => {
     const row = db.prepare(`SELECT seq, kind, bot_key AS botKey, telegram_chat_id AS chatId FROM telegram_failures
       WHERE id = ? AND resolved_at IS NULL`).get(id) as TelegramJob | undefined;
     if (!row) throw new HiveError(404, "Telegram failure not found");

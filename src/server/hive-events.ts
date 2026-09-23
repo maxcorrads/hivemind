@@ -5,6 +5,7 @@ import type { DecisionView } from "../shared/decisions.ts";
 import type { AdaptiveExecutionState, AdaptiveRoutingEvent } from "../shared/adaptive-topology.ts";
 import type { JevCallSummary } from "../shared/jev-calls.ts";
 import type { Hive } from "./hive.ts";
+import type { Storage } from "./storage.ts";
 
 /** Telegram delivery and polling health as published to the UI. */
 export type TelegramHealthEvent = ReturnType<Hive["telegramHealth"]>;
@@ -12,8 +13,9 @@ export type TelegramHealthEvent = ReturnType<Hive["telegramHealth"]>;
 /**
  * Every event published on `Hive.bus`, keyed by name, with its payload type.
  * Most are forwarded verbatim to the web UI's realtime stream by serve.ts; the
- * `telegram-*-wake` signals are server-internal. Publishers emit after the
- * owning transaction commits, so subscribers may read the database immediately.
+ * `telegram-*-wake` signals are server-internal. HiveBus defers every emit made
+ * inside a transaction until the outermost commit (see storage.ts), so
+ * subscribers may read the database immediately and never see rolled-back state.
  */
 export type HiveEvents = {
   /** A message (chat, system, control or structured task/room/decision event) was committed. */
@@ -108,5 +110,22 @@ export class TypedEmitter<Events extends EventMap> {
 export const HIVE_BUS_MAX_LISTENERS = 10;
 
 export class HiveBus extends TypedEmitter<HiveEvents> {
+  #storage: Storage | undefined;
   constructor() { super(HIVE_BUS_MAX_LISTENERS); }
+
+  /**
+   * Routes every emit through `storage.afterCommit`: inside a transaction the event
+   * waits for the outermost commit (and is dropped on rollback); outside one it is
+   * delivered synchronously as before. Hive binds its own storage at construction.
+   */
+  bindStorage(storage: Storage): void {
+    this.#storage = storage;
+  }
+
+  override emit<K extends keyof HiveEvents & string>(event: K, ...args: EventArgs<HiveEvents[K]>): boolean {
+    const storage = this.#storage;
+    if (!storage?.active) return super.emit(event, ...args);
+    storage.afterCommit(() => { super.emit(event, ...args); });
+    return this.listenerCount(event) > 0;
+  }
 }

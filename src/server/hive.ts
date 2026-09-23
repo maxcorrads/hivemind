@@ -6,7 +6,7 @@ import { joinInputSchema, validated, waitDurationSchema, cursorSchema, limitSche
 import { SendRequests } from "./send-requests.ts";
 import { initTelegramInbox, telegramQuarantine, retryTelegramUpdate, discardTelegramUpdate, type TelegramUpdateScope } from "./telegram-inbox.ts";
 import { initTelegramOutbox, retryTelegramOutboxFailure, pruneTelegramFailures, type TelegramDestination } from "./telegram-outbox.ts";
-import { immediateTransaction } from './transaction.ts';
+import { Storage } from './storage.ts';
 import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
@@ -163,14 +163,15 @@ export class Hive {
   private telegramOrigin = new Set<string>();
   readonly uploads!: UploadBudget;
   private readonly readState!: ReadState;
-  private transactionDepth = 0;
-  private committedEffects: Array<() => void> = [];
+  readonly storage: Storage;
 
   constructor(dbPath = path.join(hiveHome(), "hive.db"), options: { routineBatchMs?: number; uploadLimits?: Partial<UploadLimits> } = {}) {
     this.home = path.dirname(dbPath);
     mkdirSync(path.dirname(dbPath), { recursive: true, mode: 0o700 });
     preparePrivateDatabase(dbPath);
     this.db = new DatabaseSync(dbPath);
+    this.storage = Storage.for(this.db);
+    this.bus.bindStorage(this.storage);
     try {
       storageVersion(this.db);
       this.db.exec("PRAGMA journal_mode = WAL");
@@ -216,38 +217,13 @@ export class Hive {
     removeLegacyIdentityDirs(this.home);
   }
 
-  /** Synchronous transactions compose through savepoints. Effects wait for the outer commit. */
+  /** The shared unit of work (see storage.ts): savepoints nest, effects wait for the outer commit. */
   private transaction<T>(body: () => T): T {
-    const depth = this.transactionDepth;
-    const savepoint = `hive_${depth}`;
-    const effectCount = this.committedEffects.length;
-    this.db.exec(depth === 0 ? "BEGIN IMMEDIATE" : `SAVEPOINT ${savepoint}`);
-    this.transactionDepth += 1;
-    let result: T;
-    try {
-      result = body();
-      this.db.exec(depth === 0 ? "COMMIT" : `RELEASE ${savepoint}`);
-    } catch (error) {
-      this.committedEffects.length = effectCount;
-      try {
-        this.db.exec(depth === 0 ? "ROLLBACK" : `ROLLBACK TO ${savepoint}; RELEASE ${savepoint}`);
-      } catch {
-        // Preserve the original failure, including a failed COMMIT.
-      }
-      throw error;
-    } finally {
-      this.transactionDepth = depth;
-    }
-    if (depth === 0) {
-      const effects = this.committedEffects.splice(0);
-      for (const effect of effects) effect();
-    }
-    return result;
+    return this.storage.transaction(body);
   }
 
   private afterCommit(effect: () => void): void {
-    if (this.transactionDepth > 0) this.committedEffects.push(effect);
-    else effect();
+    this.storage.afterCommit(effect);
   }
 
   private tableSql(name: string): string {
@@ -516,8 +492,7 @@ export class Hive {
     if (actor.role !== "human") throw new HiveError(403, "Only Human can delete projects");
     const project = this.getProjectBySlug(slug);
 
-    try {
-      this.db.exec("BEGIN IMMEDIATE");
+    this.transaction(() => {
       const busy = this.projectBusyAgents(project.id);
       if (busy.length > 0) {
         const names = busy.map((agent) => agent.name).join(", ");
@@ -589,15 +564,7 @@ export class Hive {
       }
 
       this.db.prepare("DELETE FROM projects WHERE id = ?").run(project.id);
-      this.db.exec("COMMIT");
-    } catch (err) {
-      try {
-        this.db.exec("ROLLBACK");
-      } catch {
-        /* no open transaction */
-      }
-      throw err;
-    }
+    });
 
     try {
       this.collectUnusedBlobs();
@@ -1214,8 +1181,7 @@ export class Hive {
     if (actor.role !== 'human') throw new HiveError(403, 'Only Human can manage bot credentials');
     const parsed = botCredentialSchema.safeParse(raw);
     if (!parsed.success) throw new HiveError(400, 'Invalid credential operation: choose rotate/revoke and a positive expectedRevision');
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
+    return this.transaction(() => {
       const current = this.botCredential(actor, projectRef, botId);
       if (current.credential.revision !== parsed.data.expectedRevision)
         throw new HiveError(409, 'Bot credential changed; reload its state before a new operation');
@@ -1225,14 +1191,8 @@ export class Hive {
       this.db.prepare('UPDATE agents SET token_hash=? WHERE id=?').run(token ? hashToken(token) : '', botId);
       this.db.prepare(`INSERT INTO bot_credentials(bot_id,revision,revoked) VALUES(?,?,?)
         ON CONFLICT(bot_id) DO UPDATE SET revision=excluded.revision, revoked=excluded.revoked`).run(botId, revision, Number(revoked));
-      this.db.exec('COMMIT');
       return { bot: current.bot, credential: { revision, revoked }, ...(token ? { token } : {}) };
-    } catch (error) {
-      // isTransaction was added after our minimum supported Node 22.13.0.
-      // BEGIN succeeded before entering this try; SQLite can also auto-rollback.
-      try { this.db.exec("ROLLBACK"); } catch { /* already rolled back */ }
-      throw error;
-    }
+    });
   }
 
   postBotMessage(actor: Agent, channel: string, raw: unknown): { message: Message; duplicate: boolean } {
@@ -1252,7 +1212,7 @@ export class Hive {
     const event: BotEvent = { eventId: input.eventId, ...(input.origin ? { origin: input.origin } : {}) };
     const payloadHash = hashToken(JSON.stringify({ body: input.body, attachmentIds: input.attachmentIds, ...event,
       ...(input.eventType ? { eventType: input.eventType } : {}) }));
-    const { messageId, duplicate } = immediateTransaction(this.db, () => {
+    const { messageId, duplicate } = this.transaction(() => {
       const previous = this.db.prepare(`SELECT message_id, payload_hash FROM bot_events
         WHERE bot_id = ? AND channel_id = ? AND thread_id = ? AND event_id = ?`)
         .get(actor.id, ch.id, input.threadId ?? "", input.eventId) as { message_id: string; payload_hash: string } | undefined;
@@ -1857,14 +1817,14 @@ export class Hive {
   }
 
   mentionInbox(actor: Agent, limit = 30, beforeSeq?: number, projectId?: string): MentionPage {
-    return this.readState.atomic(() => {
+    return this.readState.snapshot(() => {
       const page = this.readState.page(actor.id, this.listChannels(actor).map((channel) => channel.id), limit, beforeSeq, projectId);
       return { messages: this.loadMessagesByIds(page.ids, actor.id), hasMore: page.hasMore, ...this.readState.stamp() };
     });
   }
 
   readSnapshot(actor: Agent): ReadSnapshot {
-    return this.readState.atomic(() => {
+    return this.readState.snapshot(() => {
       const channels = this.listChannels(actor);
       const ids = channels.map((channel) => channel.id);
       const page = this.readState.page(actor.id, ids);

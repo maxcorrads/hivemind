@@ -6,6 +6,7 @@
 // this module. Production code must never import this file.
 // See src/server/test-sql-budget.unit.test.ts for the enforced raw-SQL budget.
 import { DatabaseSync, type SQLInputValue, type SQLOutputValue, type StatementSync } from "node:sqlite";
+import { Storage } from "./storage.ts";
 
 /** Anything that owns a SQLite handle: a Hive, a store, or the database itself. */
 export type DbOwner = DatabaseSync | { db: DatabaseSync };
@@ -124,17 +125,8 @@ export function telegramOffset(owner: DbOwner): string | undefined {
 
 /** Runs `fn` inside one explicit transaction, rolling back on failure. */
 export function inTransaction<T>(owner: DbOwner, fn: () => T): T {
-  const db = dbOf(owner);
-  if (db.isTransaction) return fn(); // Nested helpers join the caller's transaction.
-  db.exec("BEGIN");
-  try {
-    const result = fn();
-    db.exec("COMMIT");
-    return result;
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  // The production unit of work: nested helpers become savepoints of the caller's transaction.
+  return Storage.for(dbOf(owner)).transaction(fn);
 }
 
 const insertStatements = new WeakMap<DatabaseSync, Map<string, StatementSync>>();

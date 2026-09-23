@@ -4,6 +4,7 @@ import { closeSync, lstatSync, mkdirSync, openSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { SEND_RETENTION_MS } from "../shared/mutation.ts";
+import { Storage } from "../server/storage.ts";
 
 export const LOCAL_SEND_LIMIT = 10_000;
 const idsSchema = z.array(z.string().uuid()).max(4);
@@ -41,8 +42,7 @@ export class SendJournal {
   close() { this.db.close(); }
   claim(scope: string, key: string, hash: string, ids: string[], now = Date.now()): { nonce: string; ids: string[] } {
     idsSchema.parse(ids);
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
+    return Storage.for(this.db).transaction(() => {
       const row = this.db.prepare("SELECT * FROM sends WHERE scope=? AND key=?").get(scope, key) as Row | undefined;
       if (row && row.hash !== hash) throw new Error("requestId belongs to another local payload");
       if (row && now - row.created >= SEND_RETENTION_MS) throw new Error("Outside the retry window; inspect history before a new operation");
@@ -61,9 +61,8 @@ export class SendJournal {
       this.db.prepare(`INSERT INTO sends VALUES(?,?,?,?,?,?,?)
         ON CONFLICT(scope,key) DO UPDATE SET owner=excluded.owner, nonce=excluded.nonce`)
         .run(scope, key, hash, JSON.stringify(saved), now, process.pid, nonce);
-      this.db.exec("COMMIT");
       return { nonce, ids: saved };
-    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    });
   }
   uploaded(scope: string, key: string, nonce: string, ids: string[]) {
     idsSchema.parse(ids);

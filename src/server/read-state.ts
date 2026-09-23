@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { HiveError } from "../shared/types.ts";
+import { Storage } from "./storage.ts";
 import type { ReadStamp } from "../shared/read-state.ts";
 
 /** Explicit seen-message receipts complement, but never reinterpret, legacy reads. */
@@ -40,16 +41,14 @@ export class ReadState {
     });
   }
 
+  /** Writes read receipts atomically (IMMEDIATE when outermost). */
   atomic<T>(run: () => T): T {
-    this.db.exec("SAVEPOINT ui_read_state");
-    try {
-      const value = run();
-      this.db.exec("RELEASE ui_read_state");
-      return value;
-    } catch (error) {
-      this.db.exec("ROLLBACK TO ui_read_state; RELEASE ui_read_state");
-      throw error;
-    }
+    return Storage.for(this.db).transaction(run);
+  }
+
+  /** One consistent read snapshot (DEFERRED when outermost: takes no write lock). */
+  snapshot<T>(run: () => T): T {
+    return Storage.for(this.db).transaction(run, { immediate: false });
   }
 
   stamp(): ReadStamp {

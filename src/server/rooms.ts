@@ -1,4 +1,3 @@
-import { immediateTransaction } from './transaction.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import type { Hive } from './hive.ts';
 import { HiveError, type Agent, type Channel } from '../shared/types.ts';
@@ -87,7 +86,7 @@ export class RoomStore {
     if (!parsed.success) throw new HiveError(400, 'Invalid room event: ' + parsed.error.message);
     const input = parsed.data, action = input.action, ch = this.channel(actor, channel);
     const hash = this.hash({ channel: ch.id, input }); const messages: ReturnType<Hive['getMessageById']>[] = [];
-    const duplicate = immediateTransaction(this.db, () => {
+    const duplicate = this.hive.storage.transaction(() => {
       const retry = this.db.prepare('SELECT * FROM room_events WHERE actor_id=? AND request_id=?').get(actor.id, input.requestId);
       if (retry) {
         if (retry.hash !== hash) throw new HiveError(409, 'Room requestId reused with different payload');
@@ -302,7 +301,7 @@ export class RoomStore {
     if (link.observed === p.data.observed && link.detail === p.data.detail) return link;
     const next = { ...link, ...p.data, updatedAt: Date.now() };
     const room = this.peek(ch.id); let message: ReturnType<Hive['getMessageById']> | undefined;
-    immediateTransaction(this.db, () => {
+    this.hive.storage.transaction(() => {
       this.saveLink(ch.id, next);
       if (room && (link.desired === 'paused' || ['failed', 'unsupported'].includes(next.observed))) {
         message = this.message(bot, ch, `Source lifecycle report · ${id} · generation ${link.generation}\nRequested ${link.desired}; plugin reports ${next.observed}.\nRead get_room for status. This is a plugin claim, not independent verification or new authority.`, [room.coordinatorId]);
