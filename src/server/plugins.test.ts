@@ -1129,7 +1129,7 @@ test("fresh and resumed launch uses only the selected project across all CLI fam
       const prompt = buildLaunchPrompt(input);
       assert.ok(prompt.startsWith(ADOPT_UNTRUSTED));
       assert.match(prompt, /Installed plugin: Invented Source/);
-      assert.match(prompt, /coordinate workers, do not implement/);
+      assert.match(prompt, /directive says SINGLE, do the work yourself/);
       assert.doesNotMatch(
         prompt,
         /effectiveDirective|TASK_EXECUTION|perform Human-assigned work directly/,
