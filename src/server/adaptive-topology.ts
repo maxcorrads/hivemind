@@ -481,9 +481,9 @@ export class AdaptiveTopologyRuntime {
   }
   async beforeBrainAction(actor: Agent, event: AdaptiveCoordinationEvent): Promise<AdaptiveAgentPolicy | null> {
     if (actor.role !== 'brain') return null;
-    const tokenHash = this.hive.db.prepare('SELECT token_hash FROM agents WHERE id=?').get(actor.id)?.token_hash;
+    const tokenHash = this.hive.identity.sessionFingerprint(actor.id);
     const policy = await this.revalidateForActor(actor, event);
-    if (tokenHash !== this.hive.db.prepare('SELECT token_hash FROM agents WHERE id=?').get(actor.id)?.token_hash) throw new HiveError(401, 'Credentials changed during routing; rejoin before retrying');
+    if (tokenHash !== this.hive.identity.sessionFingerprint(actor.id)) throw new HiveError(401, 'Credentials changed during routing; rejoin before retrying');
     if (!policy) return null;
     const current = this.byExecution(policy.executionId);
     if (current) this.assertDelegation(current, event);
@@ -598,7 +598,7 @@ export class AdaptiveTopologyRuntime {
   }
   /** Reopening follows the thread: a completed thread is reopened with its executions. */
   private reopen(human: Agent, threadId: string) {
-    if (this.hive.db.prepare('SELECT status FROM threads WHERE id=?').get(threadId)?.status === 'done') {
+    if (this.hive.messageQueries.threadStatus(threadId) === 'done') {
       this.hive.setThreadStatus(human, threadId, 'open'); return;
     }
     const published = this.hive.storage.transaction(() => this.threadStatusChange(human, threadId, 'open'));

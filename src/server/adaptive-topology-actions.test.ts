@@ -403,13 +403,12 @@ test('capacity revalidation runs other executions concurrently, bounded, and iso
     { execution_id: id, event_id: coordinationEventId(f.brain.agent.id, 'capacity', eventId) })).length;
   const latency = 200;
 
-  // Four other executions complete in about one Jev latency, not four.
-  let peak = f.delay(latency), started = performance.now();
+  // Four other executions are classified concurrently: all four Jev calls are in flight at once.
+  // Concurrency is proven by the in-flight peak, not wall-clock time, which is unreliable on CI runners.
+  let peak = f.delay(latency);
   await f.hive.adaptiveTopology.capacityChanged(f.brain.agent, 'four-at-once', ids[0]!);
-  const elapsed = performance.now() - started;
   assert.equal(evaluated('four-at-once'), 4);
-  assert.equal(peak(), 4);
-  assert.ok(elapsed < latency * 2, `four executions took ${Math.round(elapsed)}ms; sequential would be ${latency * 4}ms`);
+  assert.equal(peak(), 4, 'all four other executions call Jev concurrently; sequential would peak at 1');
 
   // Five executions never exceed the bound of four concurrent Jev calls.
   peak = f.delay(latency);

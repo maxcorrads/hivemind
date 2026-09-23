@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { Hive } from './hive.ts';
+import type { DecisionHost } from './services/ports.ts';
 import { HiveError, type Agent, type Message } from '../shared/types.ts';
 import {
   decisionAnswerSchema, decisionBody, decisionEventSchema, requestDecisionSchema,
@@ -10,18 +10,18 @@ type DecisionRow = { id: string; snapshot: string };
 type MutationRow = { decision_id: string; message_id: string | null; request_hash: string };
 
 export class DecisionStore {
-  constructor(private hive: Hive, private atomic: <T>(work: () => T) => T) {}
+  constructor(private hive: DecisionHost, private atomic: <T>(work: () => T) => T) {}
 
   private hash(value: unknown) { return createHash('sha256').update(JSON.stringify(value)).digest('hex'); }
   private row(id: string): DecisionRow {
-    const row = this.hive.db.prepare('SELECT id, snapshot FROM decision_requests WHERE id = ?').get(id) as DecisionRow | undefined;
+    const row = this.hive.storage.db.prepare('SELECT id, snapshot FROM decision_requests WHERE id = ?').get(id) as DecisionRow | undefined;
     if (!row) throw new HiveError(404, 'Decision request not found');
     return row;
   }
   private snapshot(id: string): DecisionSnapshot { return JSON.parse(this.row(id).snapshot) as DecisionSnapshot; }
-  has(id: string) { return Boolean(this.hive.db.prepare('SELECT 1 FROM decision_requests WHERE id = ?').get(id)); }
+  has(id: string) { return Boolean(this.hive.storage.db.prepare('SELECT 1 FROM decision_requests WHERE id = ?').get(id)); }
   private save(snapshot: DecisionSnapshot) {
-    this.hive.db.prepare('UPDATE decision_requests SET snapshot = ? WHERE id = ?').run(JSON.stringify(snapshot), snapshot.id);
+    this.hive.storage.db.prepare('UPDATE decision_requests SET snapshot = ? WHERE id = ?').run(JSON.stringify(snapshot), snapshot.id);
   }
   private visible(actor: Agent, snapshot: DecisionSnapshot) {
     if (actor.role === 'bot' || !this.hive.canSeeChannel(actor, this.hive.getChannel(snapshot.channelId)))
@@ -39,7 +39,7 @@ export class DecisionStore {
     return { state: 'awaiting_input' as const, currentTaskRevision: task.revision, staleReason: null };
   }
   private delivery(agentId: string, seq: number): DecisionDeliveryState {
-    const rows = this.hive.db.prepare(`SELECT acknowledged_at FROM inbox_deliveries d
+    const rows = this.hive.storage.db.prepare(`SELECT acknowledged_at FROM inbox_deliveries d
       WHERE d.agent_id = ? AND EXISTS (SELECT 1 FROM json_each(d.seqs) WHERE CAST(value AS INTEGER) = ?)
       ORDER BY acknowledged_at IS NOT NULL DESC LIMIT 1`).all(agentId, seq) as Array<{ acknowledged_at: number | null }>;
     if (!rows.length) return 'pending';
@@ -70,7 +70,7 @@ export class DecisionStore {
 
   forTask(actor: Agent, taskId: string) {
     this.hive.tasks.get(actor, taskId);
-    const rows = this.hive.db.prepare('SELECT id, snapshot FROM decision_requests WHERE task_id = ? ORDER BY created_at DESC LIMIT 20')
+    const rows = this.hive.storage.db.prepare('SELECT id, snapshot FROM decision_requests WHERE task_id = ? ORDER BY created_at DESC LIMIT 20')
       .all(taskId) as DecisionRow[];
     return rows.map(row => this.view(actor, JSON.parse(row.snapshot) as DecisionSnapshot));
   }
@@ -81,14 +81,14 @@ export class DecisionStore {
     const open = `json_extract(d.snapshot, '$.storedState') = 'awaiting_input'
       AND CAST(json_extract(d.snapshot, '$.taskRevision') AS INTEGER) = CAST(json_extract(t.snapshot, '$.revision') AS INTEGER)
       AND (json_extract(d.snapshot, '$.requestedByAt') IS NULL OR CAST(json_extract(d.snapshot, '$.requestedByAt') AS INTEGER) > ?)`;
-    const awaiting = Number(this.hive.db.prepare(`SELECT COUNT(*) AS n FROM decision_requests d
+    const awaiting = Number(this.hive.storage.db.prepare(`SELECT COUNT(*) AS n FROM decision_requests d
       JOIN task_records t ON t.id = d.task_id WHERE d.project_id = ? AND ${open}`).get(projectId, now)!.n);
-    const openRows = this.hive.db.prepare(`SELECT d.id, d.snapshot FROM decision_requests d
+    const openRows = this.hive.storage.db.prepare(`SELECT d.id, d.snapshot FROM decision_requests d
       JOIN task_records t ON t.id = d.task_id WHERE d.project_id = ? AND ${open}
       ORDER BY COALESCE(CAST(json_extract(d.snapshot, '$.requestedByAt') AS INTEGER), 9223372036854775807),
         d.created_at ASC LIMIT 100`).all(projectId, now) as DecisionRow[];
     const remaining = includeClosed ? Math.max(0, 100 - openRows.length) : 0;
-    const closedRows = remaining ? this.hive.db.prepare(`SELECT d.id, d.snapshot FROM decision_requests d
+    const closedRows = remaining ? this.hive.storage.db.prepare(`SELECT d.id, d.snapshot FROM decision_requests d
       JOIN task_records t ON t.id = d.task_id WHERE d.project_id = ? AND NOT (${open})
       ORDER BY CAST(json_extract(d.snapshot, '$.updatedAt') AS INTEGER) DESC, d.created_at DESC LIMIT ?`)
       .all(projectId, now, remaining) as DecisionRow[] : [];
@@ -108,7 +108,7 @@ export class DecisionStore {
     const parsed = requestDecisionSchema.safeParse(raw);
     if (!parsed.success) throw new HiveError(400, 'Invalid decision request: ' + parsed.error.message);
     const input = parsed.data, requestHash = this.hash(input);
-    const previous = this.hive.db.prepare('SELECT id, request_hash FROM decision_requests WHERE requester_id = ? AND request_id = ?')
+    const previous = this.hive.storage.db.prepare('SELECT id, request_hash FROM decision_requests WHERE requester_id = ? AND request_id = ?')
       .get(actor.id, input.requestId) as { id: string; request_hash: string } | undefined;
     if (previous) {
       if (previous.request_hash !== requestHash) throw new HiveError(409, 'requestId was already used for another decision request');
@@ -153,7 +153,7 @@ export class DecisionStore {
         supersedesDecisionId: input.supersedesDecisionId ?? null, supersededByDecisionId: null,
         rootSeq: root.seq, createdAt: now, updatedAt: now, answer: null, withdrawn: null,
       };
-      this.hive.db.prepare(`INSERT INTO decision_requests
+      this.hive.storage.db.prepare(`INSERT INTO decision_requests
         (id, project_id, channel_id, task_id, requester_id, request_id, request_hash, created_at, snapshot)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(created.id, created.projectId, created.channelId, created.taskId, actor.id, input.requestId, requestHash, now, JSON.stringify(created));
@@ -191,7 +191,7 @@ export class DecisionStore {
   }
 
   private retry(actor: Agent, requestId: string, hash: string) {
-    const old = this.hive.db.prepare('SELECT decision_id, message_id, request_hash FROM decision_mutations WHERE actor_id = ? AND request_id = ?')
+    const old = this.hive.storage.db.prepare('SELECT decision_id, message_id, request_hash FROM decision_mutations WHERE actor_id = ? AND request_id = ?')
       .get(actor.id, requestId) as MutationRow | undefined;
     if (!old) return null;
     if (old.request_hash !== hash) throw new HiveError(409, 'requestId was already used for another decision mutation');
@@ -212,7 +212,7 @@ export class DecisionStore {
       message = this.hive.postMessage(actor, { channel: decision.channelId, threadId: id, body: input.body, eventType: 'decision' });
       const applied = this.get(actor, id);
       if (applied.state !== 'answered' || applied.answer?.messageId !== message.id) throw new HiveError(409, 'Decision changed while answering');
-      this.hive.db.prepare('INSERT INTO decision_mutations VALUES (?, ?, ?, ?, ?)').run(actor.id, input.requestId, id, mutationHash, message.id);
+      this.hive.storage.db.prepare('INSERT INTO decision_mutations VALUES (?, ?, ?, ?, ?)').run(actor.id, input.requestId, id, mutationHash, message.id);
     });
     return { decision: this.get(actor, id), message, duplicate: false };
   }
@@ -234,7 +234,7 @@ export class DecisionStore {
       const snapshot = this.snapshot(id), now = Date.now();
       snapshot.storedState = 'withdrawn'; snapshot.revision += 1; snapshot.updatedAt = now;
       snapshot.withdrawn = { reason: input.action.reason, at: now }; this.save(snapshot);
-      this.hive.db.prepare('INSERT INTO decision_mutations VALUES (?, ?, ?, ?, ?)').run(actor.id, input.requestId, id, mutationHash, message.id);
+      this.hive.storage.db.prepare('INSERT INTO decision_mutations VALUES (?, ?, ?, ?, ?)').run(actor.id, input.requestId, id, mutationHash, message.id);
     });
     const decision = this.get(actor, id); this.hive.bus.emit('decision', decision);
     return { decision, message, duplicate: false };

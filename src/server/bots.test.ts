@@ -230,8 +230,8 @@ test("queue counts never scan bot history and still track brain and worker mail"
   const worker = hive.join({ role: "worker", seniority: "mid" });
   hive.invite(human, channel.id, [worker.agent.name]);
   hive.postMessage(human, { channel: channel.id, body: "Invented task" });
-  const listChannels = hive.listChannels.bind(hive);
-  t.mock.method(hive, "listChannels", (actor: Agent) => {
+  const listChannels = hive.channels.listChannels.bind(hive.channels);
+  t.mock.method(hive.channels, "listChannels", (actor: Agent) => {
     assert.ok(actor.role === "brain" || actor.role === "worker", "Only agents with mailboxes may scan queues");
     return listChannels(actor);
   });

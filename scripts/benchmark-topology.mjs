@@ -90,7 +90,7 @@ function validateCapture(c) {
   return c.aggregateCapture;
 }
 
-function validateEvidence(e, policyVersion) {
+export function validateEvidence(e, policyVersion) {
   object(e, 'router evidence');
   assert.equal(e.schemaVersion, 1); assert.equal(e.evidenceClass, 'adaptive-evidence-v1');
   assert.equal(e.contractVersion, 'adaptive-routing-v2'); assert.equal(e.policyVersion, policyVersion);
@@ -262,7 +262,7 @@ export function summarizeStudy(study) {
       'Routing mistake labels are independent reviewer inputs, not inferred from a recommendation or a mode switch.'] };
 }
 
-function readJson(file) {
+export function readJson(file) {
   const fd = openSync(file, 'r'), buffer = Buffer.alloc(64 * 1024), chunks = [];
   const withinLimit = bytes => assert.ok(bytes <= MAX_STUDY_BYTES, 'Study file exceeds 128 MiB');
   let bytes = 0;

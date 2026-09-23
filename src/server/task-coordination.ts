@@ -1,4 +1,4 @@
-import type { Hive } from './hive.ts';
+import type { TaskCoordinationHost } from './services/ports.ts';
 import { HiveError, type Agent } from '../shared/types.ts';
 import type { TaskContract, TaskSnapshot } from '../shared/tasks.ts';
 import { CLAIM_LIMITS, claimState, overlappingPaths, type ClaimAction, type TaskClaim, type TaskCoordinationView } from '../shared/task-claims.ts';
@@ -7,8 +7,8 @@ type ClaimRow = { id: string; claim: string; worker_id: string; contract_version
 
 /** Advisory metadata only. All mutations are called inside TaskStore's writer transaction. */
 export class TaskCoordination {
-  constructor(private hive: Hive) {}
-  private get db() { return this.hive.db; }
+  constructor(private hive: TaskCoordinationHost) {}
+  private get db() { return this.hive.storage.db; }
   private snapshot(id: string, projectId: string | null): TaskSnapshot | undefined {
     const row = this.db.prepare(`SELECT r.snapshot FROM task_records r JOIN channels c ON c.id = r.channel_id
       WHERE r.id = ? AND c.project_id = ?`).get(id, projectId) as { snapshot: string } | undefined;

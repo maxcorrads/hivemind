@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import type { Hive } from './hive.ts';
+import type { RoutingHost } from './services/ports.ts';
 import type { Agent } from '../shared/types.ts';
 import { HiveError } from '../shared/types.ts';
 import { validated } from '../shared/api-contract.ts';
@@ -9,8 +9,8 @@ import { ROUTING_LIMITS, setCapabilitiesSchema, suggestWorkersSchema, routingOut
 
 /** Opt-in declarations and limited, explicitly classified review evidence; never an assignment engine. */
 export class RoutingStore {
-  constructor(private hive: Hive) {}
-  private get db() { return this.hive.db; }
+  constructor(private hive: RoutingHost) {}
+  private get db() { return this.hive.storage.db; }
   private configuration(card: CapabilityCard) {
     return createHash('sha256').update(JSON.stringify([card.model, card.host,
       [...card.capabilities].sort(), [...card.modes].sort(), card.availableContext])).digest('hex');

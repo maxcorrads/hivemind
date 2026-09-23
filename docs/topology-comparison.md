@@ -1,6 +1,6 @@
 # Phase 2 matched topology comparison
 
-Related: #29, #33, #35 and #128/#129. `scripts/benchmark-topology.mjs` prepares an immutable randomized trial manifest, validates supplied observations and summarizes matched outcomes. **It does not launch agents, call Jev, collect Human timings, or execute paid trials.** The existing host runner is a separate execution boundary.
+Related: #29, #33, #35 and #128/#129. `scripts/benchmark-topology.mjs` prepares an immutable randomized trial manifest, validates supplied observations and summarizes matched outcomes. **It does not launch agents, call Jev, collect Human timings, or execute paid trials.** Execution is the separate [paired-study runner](topology-study-runner.md) (#136); the older fixed-workflow host runner is not part of this protocol.
 
 This protocol evaluates the continuous four-topology controller, not the old binary shadow predictor. Do not pool its observations with `pilot-v1` or `clarification-v1` results merely because some mode names resemble one another.
 
@@ -45,7 +45,7 @@ For a real study, create a separate configuration with:
 - one to ten repeats, a uint32 random seed, and the same initial free-worker count (2–254) for all conditions;
 - positive explicit `limits.wallMs` and `limits.workloadTokens`.
 
-The manifest pins the configuration digest and deterministic trial identities/order. The CLI does not dereference workload IDs, validate the real input files against the supplied hashes or enforce a host's runtime budget; the executor/reviewer must retain those artifacts. A future execution adapter must verify the hashes before starting and report overshoots without dropping failed trials.
+The manifest pins the configuration digest and deterministic trial identities/order. This CLI does not dereference workload IDs, validate the real input files against the supplied hashes or enforce a host's runtime budget. The [paired-study runner](topology-study-runner.md) does: it copies and re-hashes the artifacts before every trial, enforces the budgets, reports overshoots and retains failed, interrupted and ambiguous trials.
 
 The recorded Hivemind revision must include whatever recorder/runner was actually used. The example's revision is only a synthetic scaffold; do not reuse it as a claim about a different live checkout.
 
@@ -108,6 +108,6 @@ The summary reports `auto_minus_fixed` for each matched workload/repeat, then de
 
 ## Boundaries still requiring real execution
 
-This PR supplies the offline protocol and scorer, not a production host executor or ready-made real-agent result set. The example and unit tests use synthetic observations explicitly labelled as such. Actual workload execution, independent review and provider configuration remain separate. #34's Human study stays deferred; it is not replaced by this agent-topology experiment. #73 remains draft until Human authorizes a release.
+This document covers the offline protocol and scorer, not a ready-made real-agent result set; the [paired-study runner](topology-study-runner.md) is the execution adapter. The example and unit tests use synthetic observations explicitly labelled as such. Actual workload execution, independent review and provider configuration remain separate. #34's Human study stays deferred; it is not replaced by this agent-topology experiment. #73 remains draft until Human authorizes a release.
 
 Run `node --test scripts/benchmark-topology.test.mjs` for the focused local software contracts. The ordinary repository CI remains the full lint/typecheck/unit/integration/browser/coverage gate.
