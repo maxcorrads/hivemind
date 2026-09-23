@@ -221,9 +221,11 @@ export function adaptiveExecutionKeys(db: DatabaseSync): void {
 }
 
 export function adaptiveTopology(db: DatabaseSync): void {
-  db.exec(`${EXECUTIONS_SCHEMA.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS")};
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_adaptive_topology_current ON adaptive_topology_executions(channel_id,brain_id) WHERE current=1;
-      CREATE INDEX IF NOT EXISTS idx_adaptive_topology_brain ON adaptive_topology_executions(brain_id,project_id);
+  db.exec(`${EXECUTIONS_SCHEMA.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS")};`);
+  // A hive already upgraded by jev_advisory (#211) has no `current` column; that migration runs again after this one.
+  if (hasColumn(db, "adaptive_topology_executions", "current"))
+    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_adaptive_topology_current ON adaptive_topology_executions(channel_id,brain_id) WHERE current=1");
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_adaptive_topology_brain ON adaptive_topology_executions(brain_id,project_id);
       CREATE INDEX IF NOT EXISTS idx_adaptive_topology_root ON adaptive_topology_executions(root_message_id);
       CREATE TABLE IF NOT EXISTS adaptive_topology_events (
         id TEXT PRIMARY KEY, execution_id TEXT NOT NULL, channel_id TEXT NOT NULL,
