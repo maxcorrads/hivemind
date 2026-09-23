@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import WebSocket from 'ws';
 import { Hive } from './hive.ts';
 import { startServer } from './serve.ts';
-import { saveAdaptiveRouting } from './adaptive-routing.ts';
+import { saveAdaptiveRouting } from './adaptive-config.ts';
 import { jevTopologyResponse } from './fixtures/jev-topology.ts';
 import type { AdaptiveExecutionState, AdaptiveRoutingEvent, AdaptiveTopology } from '../shared/adaptive-topology.ts';
 
