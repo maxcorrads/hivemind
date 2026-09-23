@@ -5,6 +5,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { AdaptiveEvidenceStore, exportAdaptiveEvidence } from '../src/server/adaptive-evidence.ts';
+import { rerunMigration } from '../src/server/test-fixtures.ts';
 import { main } from './export-topology-evidence.mjs';
 import { prepareStudy, summarizeStudy } from './benchmark-topology.mjs';
 
@@ -13,6 +14,7 @@ test('offline export opens existing SQLite read-only and writes a new private fi
   const file = path.join(dir, 'hive.db'), output = path.join(dir, 'evidence.json');
   const db = new DatabaseSync(file);
   db.exec("PRAGMA foreign_keys=ON; CREATE TABLE channels(id TEXT PRIMARY KEY); INSERT INTO channels VALUES('c');");
+  rerunMigration(db, 'adaptive_observations');
   const store = new AdaptiveEvidenceStore(db);
   store.begin({ executionId: 'e', projectId: 'p', channelId: 'c', phase: 'initial' },
     { topology: null, workers: 0, usableWorkers: 2, policyVersion: 'topology-policy-v2.1' });
@@ -41,6 +43,7 @@ test('invalid CLI arguments, missing evidence and existing destinations fail wit
 test('real exports carry capture state the paired-study scorer accepts and consumes', t => {
   const db = new DatabaseSync(':memory:'); t.after(() => db.close());
   db.exec("PRAGMA foreign_keys=ON; CREATE TABLE channels(id TEXT PRIMARY KEY); INSERT INTO channels VALUES('c');");
+  rerunMigration(db, 'adaptive_observations');
   const store = new AdaptiveEvidenceStore(db), policyVersion = 'topology-policy-v2.1';
   const decision = { routeId: 'r', contractVersion: 'adaptive-routing-v2', targetTopology: 'single', targetWorkers: 0, confidence: 0.9,
     reason: 'fixture', providerStatus: 'ok', model: 'jev-fixture', latencyMs: 1, inputTokens: 3, outputTokens: 1, singleSufficient: true, needsOrchestration: false };

@@ -24,15 +24,7 @@ function requestOf(sent: unknown): string {
 
 /** Records every Jev exchange with the exact payloads; the API key is never part of either. */
 export class JevCallLog {
-  constructor(private readonly db: DatabaseSync) {
-    db.exec(`CREATE TABLE IF NOT EXISTS jev_calls (
-      id TEXT PRIMARY KEY, route_id TEXT NOT NULL UNIQUE, project_id TEXT NOT NULL,
-      channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
-      execution_id TEXT NOT NULL, created_at INTEGER NOT NULL,
-      summary TEXT NOT NULL, sent TEXT, received TEXT, outcome TEXT);
-      CREATE INDEX IF NOT EXISTS idx_jev_calls_project ON jev_calls(project_id, created_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_jev_calls_execution ON jev_calls(execution_id, created_at);`);
-  }
+  constructor(private readonly db: DatabaseSync) {}
 
   record(context: JevCallContext, exchange: JevExchange, decision: AdaptiveTopologyDecision): JevCallSummary {
     const summary: JevCallSummary = {

@@ -5,7 +5,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { Hive } from './hive.ts';
 import { createApp } from './app.ts';
-import { InboxDeliveryStore } from './inbox-delivery.ts';
 import type { RoomContract } from '../shared/rooms.ts';
 import { standingOrders } from '../shared/standing-orders.ts';
 import { countRows, failWrites, listRows, markInboxRead, seedAgedInboxReceipts, storedSnapshot, updateRows } from './test-fixtures.ts';
@@ -348,7 +347,6 @@ test('aged receipt totals remain atomic through room archive retries and source 
   const session = f.hive.openInboxSession(f.a.agent, crypto.randomUUID()), historical = 10_000;
   markInboxRead(f.hive, f.a.agent.id);
   seedAgedInboxReceipts(f.hive, f.a.agent.id, session, historical);
-  new InboxDeliveryStore(f.hive.db);
   const forbidAggregation = () => f.hive.db.function('json_array_length', () => { throw new Error('unexpected room-path aggregation'); });
   forbidAggregation();
   const task = f.assign().task;

@@ -15,21 +15,6 @@ type StoredEvent = { message_id: string; task_id: string; request_hash: string }
 export class TaskStore {
   private coordination: TaskCoordination;
   constructor(private hive: Hive) {
-    this.db.exec(`CREATE TABLE IF NOT EXISTS task_records (
-      id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, worker_id TEXT NOT NULL,
-      dispatch_seq INTEGER NOT NULL, received_at INTEGER, snapshot TEXT NOT NULL);
-      CREATE INDEX IF NOT EXISTS task_dispatch ON task_records(worker_id, dispatch_seq);
-      CREATE INDEX IF NOT EXISTS task_channel ON task_records(channel_id);
-      CREATE INDEX IF NOT EXISTS task_worker_handoff ON task_records(worker_id, id) WHERE json_extract(snapshot, '$.state') != 'accepted_complete';
-      CREATE INDEX IF NOT EXISTS task_assigner_handoff ON task_records(json_extract(snapshot, '$.assignerId'), id) WHERE json_extract(snapshot, '$.state') != 'accepted_complete';
-      CREATE TABLE IF NOT EXISTS task_events (
-        message_id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES task_records(id) ON DELETE CASCADE,
-        actor_id TEXT NOT NULL, request_id TEXT NOT NULL, request_hash TEXT NOT NULL, envelope TEXT NOT NULL,
-        UNIQUE(actor_id, request_id));
-      CREATE INDEX IF NOT EXISTS task_event_task ON task_events(task_id);
-      CREATE TABLE IF NOT EXISTS task_request_aliases (actor_id TEXT NOT NULL, request_id TEXT NOT NULL,
-        request_hash TEXT NOT NULL, task_id TEXT NOT NULL REFERENCES task_records(id) ON DELETE CASCADE,
-        PRIMARY KEY(actor_id, request_id));`);
     this.coordination = new TaskCoordination(hive);
   }
   private get db() { return this.hive.db; }

@@ -1,0 +1,680 @@
+[
+ {
+  "type": "index",
+  "name": "adaptive_evidence_channel",
+  "tbl": "adaptive_evidence_runs",
+  "sql": "CREATE INDEX adaptive_evidence_channel ON adaptive_evidence_runs(channel_id)"
+ },
+ {
+  "type": "index",
+  "name": "adaptive_evidence_execution",
+  "tbl": "adaptive_evidence_attempts",
+  "sql": "CREATE INDEX adaptive_evidence_execution ON adaptive_evidence_attempts(execution_id)"
+ },
+ {
+  "type": "index",
+  "name": "capabilities_project",
+  "tbl": "worker_capabilities",
+  "sql": "CREATE INDEX capabilities_project ON worker_capabilities(project_id, worker_id)"
+ },
+ {
+  "type": "index",
+  "name": "decision_project_created",
+  "tbl": "decision_requests",
+  "sql": "CREATE INDEX decision_project_created ON decision_requests(project_id, created_at DESC)"
+ },
+ {
+  "type": "index",
+  "name": "decision_task_created",
+  "tbl": "decision_requests",
+  "sql": "CREATE INDEX decision_task_created ON decision_requests(task_id, created_at DESC)"
+ },
+ {
+  "type": "index",
+  "name": "idx_adaptive_message_execution",
+  "tbl": "adaptive_topology_messages",
+  "sql": "CREATE INDEX idx_adaptive_message_execution ON adaptive_topology_messages(execution_id)"
+ },
+ {
+  "type": "index",
+  "name": "idx_adaptive_message_worker",
+  "tbl": "adaptive_topology_messages",
+  "sql": "CREATE INDEX idx_adaptive_message_worker ON adaptive_topology_messages(worker_id)"
+ },
+ {
+  "type": "index",
+  "name": "idx_adaptive_topology_brain",
+  "tbl": "adaptive_topology_executions",
+  "sql": "CREATE INDEX idx_adaptive_topology_brain ON adaptive_topology_executions(brain_id,project_id)"
+ },
+ {
+  "type": "index",
+  "name": "idx_adaptive_topology_current",
+  "tbl": "adaptive_topology_executions",
+  "sql": "CREATE UNIQUE INDEX idx_adaptive_topology_current ON adaptive_topology_executions(channel_id,brain_id) WHERE current=1"
+ },
+ {
+  "type": "index",
+  "name": "idx_adaptive_topology_events_channel",
+  "tbl": "adaptive_topology_events",
+  "sql": "CREATE INDEX idx_adaptive_topology_events_channel ON adaptive_topology_events(channel_id,created_at DESC)"
+ },
+ {
+  "type": "index",
+  "name": "idx_adaptive_topology_root",
+  "tbl": "adaptive_topology_executions",
+  "sql": "CREATE INDEX idx_adaptive_topology_root ON adaptive_topology_executions(root_message_id)"
+ },
+ {
+  "type": "index",
+  "name": "idx_adaptive_topology_tasks_execution",
+  "tbl": "adaptive_topology_tasks",
+  "sql": "CREATE INDEX idx_adaptive_topology_tasks_execution ON adaptive_topology_tasks(execution_id)"
+ },
+ {
+  "type": "index",
+  "name": "idx_agents_project_role",
+  "tbl": "agents",
+  "sql": "CREATE INDEX idx_agents_project_role ON agents(project_id, role)"
+ },
+ {
+  "type": "index",
+  "name": "idx_agents_role",
+  "tbl": "agents",
+  "sql": "CREATE INDEX idx_agents_role ON agents(role)"
+ },
+ {
+  "type": "index",
+  "name": "idx_attachments_message",
+  "tbl": "attachments",
+  "sql": "CREATE INDEX idx_attachments_message ON attachments(message_id)"
+ },
+ {
+  "type": "index",
+  "name": "idx_channel_members_agent_channel",
+  "tbl": "channel_members",
+  "sql": "CREATE INDEX idx_channel_members_agent_channel ON channel_members(agent_id, channel_id)"
+ },
+ {
+  "type": "index",
+  "name": "idx_channels_project_type_name",
+  "tbl": "channels",
+  "sql": "CREATE INDEX idx_channels_project_type_name ON channels(project_id, type, name)"
+ },
+ {
+  "type": "index",
+  "name": "idx_jev_calls_execution",
+  "tbl": "jev_calls",
+  "sql": "CREATE INDEX idx_jev_calls_execution ON jev_calls(execution_id, created_at)"
+ },
+ {
+  "type": "index",
+  "name": "idx_jev_calls_project",
+  "tbl": "jev_calls",
+  "sql": "CREATE INDEX idx_jev_calls_project ON jev_calls(project_id, created_at DESC)"
+ },
+ {
+  "type": "index",
+  "name": "idx_messages_channel_seq",
+  "tbl": "messages",
+  "sql": "CREATE INDEX idx_messages_channel_seq ON messages(channel_id, seq)"
+ },
+ {
+  "type": "index",
+  "name": "idx_messages_channel_thread_seq",
+  "tbl": "messages",
+  "sql": "CREATE INDEX idx_messages_channel_thread_seq ON messages(channel_id, thread_id, seq)"
+ },
+ {
+  "type": "index",
+  "name": "idx_messages_thread",
+  "tbl": "messages",
+  "sql": "CREATE INDEX idx_messages_thread ON messages(thread_id)"
+ },
+ {
+  "type": "index",
+  "name": "idx_telegram_failures_open",
+  "tbl": "telegram_failures",
+  "sql": "CREATE INDEX idx_telegram_failures_open ON telegram_failures(resolved_at, created_at)"
+ },
+ {
+  "type": "index",
+  "name": "idx_telegram_out_seq",
+  "tbl": "telegram_out",
+  "sql": "CREATE INDEX idx_telegram_out_seq ON telegram_out(seq)"
+ },
+ {
+  "type": "index",
+  "name": "idx_telegram_parts_seq",
+  "tbl": "telegram_delivery_parts",
+  "sql": "CREATE INDEX idx_telegram_parts_seq ON telegram_delivery_parts(seq)"
+ },
+ {
+  "type": "index",
+  "name": "idx_telegram_topics_namespace_topic",
+  "tbl": "telegram_topics",
+  "sql": "CREATE INDEX idx_telegram_topics_namespace_topic ON telegram_topics(bot_key, telegram_chat_id, telegram_thread_id)"
+ },
+ {
+  "type": "index",
+  "name": "idx_telegram_update_retry",
+  "tbl": "telegram_update_failures",
+  "sql": "CREATE INDEX idx_telegram_update_retry ON telegram_update_failures(bot_key, state, retry_at)"
+ },
+ {
+  "type": "index",
+  "name": "inbox_agent_receipts",
+  "tbl": "inbox_deliveries",
+  "sql": "CREATE INDEX inbox_agent_receipts ON inbox_deliveries(agent_id, acknowledged_at)"
+ },
+ {
+  "type": "index",
+  "name": "inbox_one_pending",
+  "tbl": "inbox_deliveries",
+  "sql": "CREATE UNIQUE INDEX inbox_one_pending ON inbox_deliveries(agent_id) WHERE acknowledged_at IS NULL AND superseded_by IS NULL"
+ },
+ {
+  "type": "index",
+  "name": "message_reads_message",
+  "tbl": "message_reads",
+  "sql": "CREATE INDEX message_reads_message ON message_reads(message_id)"
+ },
+ {
+  "type": "index",
+  "name": "routing_evidence",
+  "tbl": "routing_outcomes",
+  "sql": "CREATE INDEX routing_evidence ON routing_outcomes(worker_id, category, configuration, recorded_at DESC)"
+ },
+ {
+  "type": "index",
+  "name": "routing_project_retention",
+  "tbl": "routing_outcomes",
+  "sql": "CREATE INDEX routing_project_retention ON routing_outcomes(project_id, recorded_at)"
+ },
+ {
+  "type": "index",
+  "name": "send_actor_expiry",
+  "tbl": "send_requests",
+  "sql": "CREATE INDEX send_actor_expiry ON send_requests(actor_id,expires_at)"
+ },
+ {
+  "type": "index",
+  "name": "send_request_expiry",
+  "tbl": "send_requests",
+  "sql": "CREATE INDEX send_request_expiry ON send_requests(expires_at)"
+ },
+ {
+  "type": "index",
+  "name": "task_assigner_handoff",
+  "tbl": "task_records",
+  "sql": "CREATE INDEX task_assigner_handoff ON task_records(json_extract(snapshot, '$.assignerId'), id) WHERE json_extract(snapshot, '$.state') != 'accepted_complete'"
+ },
+ {
+  "type": "index",
+  "name": "task_channel",
+  "tbl": "task_records",
+  "sql": "CREATE INDEX task_channel ON task_records(channel_id)"
+ },
+ {
+  "type": "index",
+  "name": "task_dispatch",
+  "tbl": "task_records",
+  "sql": "CREATE INDEX task_dispatch ON task_records(worker_id, dispatch_seq)"
+ },
+ {
+  "type": "index",
+  "name": "task_event_task",
+  "tbl": "task_events",
+  "sql": "CREATE INDEX task_event_task ON task_events(task_id)"
+ },
+ {
+  "type": "index",
+  "name": "task_held_claims",
+  "tbl": "task_records",
+  "sql": "CREATE INDEX task_held_claims ON task_records(channel_id, id) WHERE json_extract(snapshot, '$.claim.state') = 'held'"
+ },
+ {
+  "type": "index",
+  "name": "task_worker_handoff",
+  "tbl": "task_records",
+  "sql": "CREATE INDEX task_worker_handoff ON task_records(worker_id, id) WHERE json_extract(snapshot, '$.state') != 'accepted_complete'"
+ },
+ {
+  "type": "index",
+  "name": "timeline_delivery_seq",
+  "tbl": "timeline_deliveries",
+  "sql": "CREATE INDEX timeline_delivery_seq ON timeline_deliveries(message_seq, offered_at)"
+ },
+ {
+  "type": "index",
+  "name": "timeline_trace_created",
+  "tbl": "message_provenance",
+  "sql": "CREATE INDEX timeline_trace_created ON message_provenance(trace_id, created_at, message_id)"
+ },
+ {
+  "type": "index",
+  "name": "upload_reservations_actor",
+  "tbl": "upload_reservations",
+  "sql": "CREATE INDEX upload_reservations_actor ON upload_reservations(actor_id)"
+ },
+ {
+  "type": "index",
+  "name": "upload_reservations_expiry",
+  "tbl": "upload_reservations",
+  "sql": "CREATE INDEX upload_reservations_expiry ON upload_reservations(expires_at)"
+ },
+ {
+  "type": "table",
+  "name": "adaptive_evidence_attempts",
+  "tbl": "adaptive_evidence_attempts",
+  "sql": "CREATE TABLE adaptive_evidence_attempts ( id TEXT PRIMARY KEY, execution_id TEXT NOT NULL REFERENCES adaptive_evidence_runs(execution_id) ON DELETE CASCADE, snapshot TEXT NOT NULL)"
+ },
+ {
+  "type": "table",
+  "name": "adaptive_evidence_runs",
+  "tbl": "adaptive_evidence_runs",
+  "sql": "CREATE TABLE adaptive_evidence_runs ( execution_id TEXT PRIMARY KEY, channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE, project_id TEXT NOT NULL, snapshot TEXT NOT NULL)"
+ },
+ {
+  "type": "table",
+  "name": "adaptive_topology_evaluated",
+  "tbl": "adaptive_topology_evaluated",
+  "sql": "CREATE TABLE adaptive_topology_evaluated (execution_id TEXT NOT NULL, event_id TEXT NOT NULL, PRIMARY KEY(execution_id,event_id))"
+ },
+ {
+  "type": "table",
+  "name": "adaptive_topology_events",
+  "tbl": "adaptive_topology_events",
+  "sql": "CREATE TABLE adaptive_topology_events ( id TEXT PRIMARY KEY, execution_id TEXT NOT NULL, channel_id TEXT NOT NULL, project_id TEXT NOT NULL, created_at INTEGER NOT NULL, snapshot TEXT NOT NULL)"
+ },
+ {
+  "type": "table",
+  "name": "adaptive_topology_executions",
+  "tbl": "adaptive_topology_executions",
+  "sql": "CREATE TABLE adaptive_topology_executions ( execution_id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, brain_id TEXT NOT NULL, project_id TEXT NOT NULL, root_message_id TEXT NOT NULL, snapshot TEXT NOT NULL, current INTEGER NOT NULL DEFAULT 1)"
+ },
+ {
+  "type": "table",
+  "name": "adaptive_topology_locks",
+  "tbl": "adaptive_topology_locks",
+  "sql": "CREATE TABLE adaptive_topology_locks (channel_id TEXT NOT NULL, brain_id TEXT NOT NULL, topology TEXT NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY(channel_id,brain_id))"
+ },
+ {
+  "type": "table",
+  "name": "adaptive_topology_messages",
+  "tbl": "adaptive_topology_messages",
+  "sql": "CREATE TABLE adaptive_topology_messages ( root_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE, worker_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, execution_id TEXT NOT NULL, project_id TEXT NOT NULL, PRIMARY KEY(root_id,worker_id))"
+ },
+ {
+  "type": "table",
+  "name": "adaptive_topology_tasks",
+  "tbl": "adaptive_topology_tasks",
+  "sql": "CREATE TABLE adaptive_topology_tasks ( task_id TEXT PRIMARY KEY REFERENCES task_records(id) ON DELETE CASCADE, execution_id TEXT NOT NULL)"
+ },
+ {
+  "type": "table",
+  "name": "agents",
+  "tbl": "agents",
+  "sql": "CREATE TABLE agents ( id TEXT PRIMARY KEY, name TEXT UNIQUE NOT NULL, role TEXT NOT NULL, seniority TEXT, focus TEXT, token_hash TEXT NOT NULL, online INTEGER NOT NULL DEFAULT 0, last_seen_at INTEGER NOT NULL, created_at INTEGER NOT NULL, inbox_cursor INTEGER NOT NULL DEFAULT 0 , project_id TEXT)"
+ },
+ {
+  "type": "table",
+  "name": "attachments",
+  "tbl": "attachments",
+  "sql": "CREATE TABLE attachments ( id TEXT PRIMARY KEY, message_id TEXT, name TEXT NOT NULL, mime TEXT NOT NULL, bytes INTEGER NOT NULL, sha256 TEXT NOT NULL, created_by TEXT NOT NULL, created_at INTEGER NOT NULL )"
+ },
+ {
+  "type": "table",
+  "name": "bot_credentials",
+  "tbl": "bot_credentials",
+  "sql": "CREATE TABLE bot_credentials ( bot_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE, revision INTEGER NOT NULL, revoked INTEGER NOT NULL )"
+ },
+ {
+  "type": "table",
+  "name": "bot_events",
+  "tbl": "bot_events",
+  "sql": "CREATE TABLE bot_events ( message_id TEXT PRIMARY KEY, bot_id TEXT NOT NULL, channel_id TEXT NOT NULL, thread_id TEXT NOT NULL DEFAULT '', event_id TEXT NOT NULL, metadata TEXT NOT NULL, payload_hash TEXT NOT NULL, UNIQUE (bot_id, channel_id, thread_id, event_id) )"
+ },
+ {
+  "type": "table",
+  "name": "channel_members",
+  "tbl": "channel_members",
+  "sql": "CREATE TABLE channel_members ( channel_id TEXT NOT NULL, agent_id TEXT NOT NULL, PRIMARY KEY (channel_id, agent_id) )"
+ },
+ {
+  "type": "table",
+  "name": "channels",
+  "tbl": "channels",
+  "sql": "CREATE TABLE channels ( id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL, topic TEXT, created_by TEXT NOT NULL, created_at INTEGER NOT NULL , project_id TEXT)"
+ },
+ {
+  "type": "table",
+  "name": "decision_mutations",
+  "tbl": "decision_mutations",
+  "sql": "CREATE TABLE decision_mutations ( actor_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, request_id TEXT NOT NULL, decision_id TEXT NOT NULL REFERENCES decision_requests(id) ON DELETE CASCADE, request_hash TEXT NOT NULL, message_id TEXT REFERENCES messages(id) ON DELETE SET NULL, PRIMARY KEY(actor_id, request_id) )"
+ },
+ {
+  "type": "table",
+  "name": "decision_requests",
+  "tbl": "decision_requests",
+  "sql": "CREATE TABLE decision_requests ( id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE, task_id TEXT NOT NULL REFERENCES task_records(id) ON DELETE CASCADE, requester_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, request_id TEXT NOT NULL, request_hash TEXT NOT NULL, created_at INTEGER NOT NULL, snapshot TEXT NOT NULL, UNIQUE(requester_id, request_id) )"
+ },
+ {
+  "type": "table",
+  "name": "inbox_deliveries",
+  "tbl": "inbox_deliveries",
+  "sql": "CREATE TABLE inbox_deliveries ( id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, session_id TEXT NOT NULL, through_seq INTEGER NOT NULL, seqs TEXT NOT NULL, attempts INTEGER NOT NULL, offered_at INTEGER NOT NULL, lease_until INTEGER NOT NULL, acknowledged_at INTEGER , superseded_by TEXT)"
+ },
+ {
+  "type": "table",
+  "name": "inbox_early_receipts",
+  "tbl": "inbox_early_receipts",
+  "sql": "CREATE TABLE inbox_early_receipts ( agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, seq INTEGER NOT NULL, PRIMARY KEY(agent_id, seq) )"
+ },
+ {
+  "type": "table",
+  "name": "inbox_receipt_totals",
+  "tbl": "inbox_receipt_totals",
+  "sql": "CREATE TABLE inbox_receipt_totals ( agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE, acknowledged_messages INTEGER NOT NULL, last_acknowledged_at INTEGER NOT NULL )"
+ },
+ {
+  "type": "table",
+  "name": "inbox_sessions",
+  "tbl": "inbox_sessions",
+  "sql": "CREATE TABLE inbox_sessions ( agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, session_id TEXT NOT NULL, generation INTEGER NOT NULL, PRIMARY KEY(agent_id, session_id), UNIQUE(agent_id, generation) )"
+ },
+ {
+  "type": "table",
+  "name": "jev_calls",
+  "tbl": "jev_calls",
+  "sql": "CREATE TABLE jev_calls ( id TEXT PRIMARY KEY, route_id TEXT NOT NULL UNIQUE, project_id TEXT NOT NULL, channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE, execution_id TEXT NOT NULL, created_at INTEGER NOT NULL, summary TEXT NOT NULL, sent TEXT, received TEXT, outcome TEXT)"
+ },
+ {
+  "type": "table",
+  "name": "message_provenance",
+  "tbl": "message_provenance",
+  "sql": "CREATE TABLE message_provenance ( message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE, trace_id TEXT NOT NULL, parent_message_id TEXT, cause_message_id TEXT, source TEXT NOT NULL CHECK(source IN ('hive','telegram','bot')), created_at INTEGER NOT NULL )"
+ },
+ {
+  "type": "table",
+  "name": "message_reads",
+  "tbl": "message_reads",
+  "sql": "CREATE TABLE message_reads ( agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE, PRIMARY KEY (agent_id, message_id) )"
+ },
+ {
+  "type": "table",
+  "name": "messages",
+  "tbl": "messages",
+  "sql": "CREATE TABLE messages ( seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL, channel_id TEXT NOT NULL, thread_id TEXT, author_id TEXT NOT NULL, body TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'chat', control TEXT, mentions TEXT NOT NULL DEFAULT '[]', created_at INTEGER NOT NULL , event_type TEXT, recipients TEXT NOT NULL DEFAULT '[]')"
+ },
+ {
+  "type": "table",
+  "name": "notification_subscriptions",
+  "tbl": "notification_subscriptions",
+  "sql": "CREATE TABLE notification_subscriptions ( agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, channel_id TEXT NOT NULL, thread_id TEXT NOT NULL DEFAULT '', event_types TEXT NOT NULL, PRIMARY KEY(agent_id, channel_id, thread_id))"
+ },
+ {
+  "type": "table",
+  "name": "projects",
+  "tbl": "projects",
+  "sql": "CREATE TABLE projects ( id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE, name TEXT NOT NULL, worktree TEXT, created_at INTEGER NOT NULL )"
+ },
+ {
+  "type": "table",
+  "name": "reactions",
+  "tbl": "reactions",
+  "sql": "CREATE TABLE reactions ( message_id TEXT NOT NULL, agent_id TEXT NOT NULL, emoji TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (message_id, agent_id, emoji) )"
+ },
+ {
+  "type": "table",
+  "name": "reads",
+  "tbl": "reads",
+  "sql": "CREATE TABLE reads ( agent_id TEXT NOT NULL, channel_id TEXT NOT NULL, last_read_seq INTEGER NOT NULL, PRIMARY KEY (agent_id, channel_id) )"
+ },
+ {
+  "type": "table",
+  "name": "room_acks",
+  "tbl": "room_acks",
+  "sql": "CREATE TABLE room_acks (channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE, actor_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, version INTEGER NOT NULL, PRIMARY KEY(channel_id, actor_id))"
+ },
+ {
+  "type": "table",
+  "name": "room_events",
+  "tbl": "room_events",
+  "sql": "CREATE TABLE room_events (actor_id TEXT NOT NULL, request_id TEXT NOT NULL, channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE, hash TEXT NOT NULL, message_id TEXT NOT NULL, revision INTEGER NOT NULL, snapshot TEXT NOT NULL, PRIMARY KEY(actor_id, request_id))"
+ },
+ {
+  "type": "table",
+  "name": "room_tasks",
+  "tbl": "room_tasks",
+  "sql": "CREATE TABLE room_tasks (task_id TEXT PRIMARY KEY REFERENCES task_records(id) ON DELETE CASCADE, channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE, version INTEGER NOT NULL, action_key TEXT NOT NULL, payload_hash TEXT NOT NULL, status TEXT NOT NULL, UNIQUE(channel_id, action_key))"
+ },
+ {
+  "type": "table",
+  "name": "rooms",
+  "tbl": "rooms",
+  "sql": "CREATE TABLE rooms (channel_id TEXT PRIMARY KEY REFERENCES channels(id) ON DELETE CASCADE, snapshot TEXT NOT NULL)"
+ },
+ {
+  "type": "table",
+  "name": "routing_outcomes",
+  "tbl": "routing_outcomes",
+  "sql": "CREATE TABLE routing_outcomes ( task_id TEXT PRIMARY KEY REFERENCES task_records(id) ON DELETE CASCADE, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, worker_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, review_revision INTEGER NOT NULL, category TEXT NOT NULL, configuration TEXT NOT NULL, accepted INTEGER NOT NULL, recorded_at INTEGER NOT NULL)"
+ },
+ {
+  "type": "table",
+  "name": "send_requests",
+  "tbl": "send_requests",
+  "sql": "CREATE TABLE send_requests ( actor_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, request_id TEXT NOT NULL, payload_hash TEXT NOT NULL, message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE, expires_at INTEGER NOT NULL, PRIMARY KEY(actor_id, project_id, request_id))"
+ },
+ {
+  "type": "table",
+  "name": "source_links",
+  "tbl": "source_links",
+  "sql": "CREATE TABLE source_links (channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE, bot_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, id TEXT NOT NULL, snapshot TEXT NOT NULL, PRIMARY KEY(channel_id, bot_id, id))"
+ },
+ {
+  "type": "table",
+  "name": "task_events",
+  "tbl": "task_events",
+  "sql": "CREATE TABLE task_events ( message_id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES task_records(id) ON DELETE CASCADE, actor_id TEXT NOT NULL, request_id TEXT NOT NULL, request_hash TEXT NOT NULL, envelope TEXT NOT NULL, UNIQUE(actor_id, request_id))"
+ },
+ {
+  "type": "table",
+  "name": "task_records",
+  "tbl": "task_records",
+  "sql": "CREATE TABLE task_records ( id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, worker_id TEXT NOT NULL, dispatch_seq INTEGER NOT NULL, received_at INTEGER, snapshot TEXT NOT NULL)"
+ },
+ {
+  "type": "table",
+  "name": "task_request_aliases",
+  "tbl": "task_request_aliases",
+  "sql": "CREATE TABLE task_request_aliases (actor_id TEXT NOT NULL, request_id TEXT NOT NULL, request_hash TEXT NOT NULL, task_id TEXT NOT NULL REFERENCES task_records(id) ON DELETE CASCADE, PRIMARY KEY(actor_id, request_id))"
+ },
+ {
+  "type": "table",
+  "name": "telegram_bot_identities",
+  "tbl": "telegram_bot_identities",
+  "sql": "CREATE TABLE telegram_bot_identities ( bot_id INTEGER PRIMARY KEY, namespace TEXT NOT NULL UNIQUE )"
+ },
+ {
+  "type": "table",
+  "name": "telegram_bot_state",
+  "tbl": "telegram_bot_state",
+  "sql": "CREATE TABLE telegram_bot_state ( bot_key TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(bot_key, key) )"
+ },
+ {
+  "type": "table",
+  "name": "telegram_delivery_parts",
+  "tbl": "telegram_delivery_parts",
+  "sql": "CREATE TABLE telegram_delivery_parts ( seq INTEGER NOT NULL, part_key TEXT NOT NULL, bot_key TEXT NOT NULL, telegram_chat_id INTEGER NOT NULL, telegram_message_id INTEGER NOT NULL, completed_at INTEGER NOT NULL, PRIMARY KEY (seq, part_key, bot_key, telegram_chat_id) )"
+ },
+ {
+  "type": "table",
+  "name": "telegram_failures",
+  "tbl": "telegram_failures",
+  "sql": "CREATE TABLE telegram_failures ( id TEXT PRIMARY KEY, seq INTEGER NOT NULL, kind TEXT NOT NULL, telegram_chat_id INTEGER, reason TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, resolved_at INTEGER, resolution TEXT , bot_key TEXT, destination_invalidated INTEGER NOT NULL DEFAULT 0)"
+ },
+ {
+  "type": "table",
+  "name": "telegram_hold",
+  "tbl": "telegram_hold",
+  "sql": "CREATE TABLE telegram_hold (bot_key TEXT NOT NULL, telegram_chat_id INTEGER NOT NULL, telegram_message_id INTEGER NOT NULL, telegram_thread_id INTEGER NOT NULL, payload TEXT NOT NULL, project_id TEXT, update_id INTEGER, PRIMARY KEY(bot_key, telegram_chat_id, telegram_message_id))"
+ },
+ {
+  "type": "table",
+  "name": "telegram_in",
+  "tbl": "telegram_in",
+  "sql": "CREATE TABLE telegram_in (bot_key TEXT NOT NULL, update_id INTEGER NOT NULL, PRIMARY KEY (bot_key, update_id))"
+ },
+ {
+  "type": "table",
+  "name": "telegram_out",
+  "tbl": "telegram_out",
+  "sql": "CREATE TABLE telegram_out (bot_key TEXT NOT NULL, telegram_chat_id INTEGER NOT NULL, telegram_message_id INTEGER NOT NULL, seq INTEGER NOT NULL, channel_id TEXT NOT NULL, thread_id TEXT, PRIMARY KEY(bot_key, telegram_chat_id, telegram_message_id))"
+ },
+ {
+  "type": "table",
+  "name": "telegram_pending",
+  "tbl": "telegram_pending",
+  "sql": "CREATE TABLE telegram_pending ( seq INTEGER NOT NULL, kind TEXT NOT NULL, bot_key TEXT, telegram_chat_id INTEGER, attempts INTEGER NOT NULL DEFAULT 0, first_attempt_at INTEGER NOT NULL DEFAULT 0, revision INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (seq, kind) )"
+ },
+ {
+  "type": "table",
+  "name": "telegram_routing_migrations",
+  "tbl": "telegram_routing_migrations",
+  "sql": "CREATE TABLE telegram_routing_migrations (version INTEGER PRIMARY KEY)"
+ },
+ {
+  "type": "table",
+  "name": "telegram_state",
+  "tbl": "telegram_state",
+  "sql": "CREATE TABLE telegram_state ( key TEXT PRIMARY KEY, value TEXT NOT NULL )"
+ },
+ {
+  "type": "table",
+  "name": "telegram_topics",
+  "tbl": "telegram_topics",
+  "sql": "CREATE TABLE telegram_topics (bot_key TEXT NOT NULL, channel_id TEXT NOT NULL, telegram_thread_id INTEGER NOT NULL, telegram_chat_id INTEGER, PRIMARY KEY(bot_key, channel_id))"
+ },
+ {
+  "type": "table",
+  "name": "telegram_update_failures",
+  "tbl": "telegram_update_failures",
+  "sql": "CREATE TABLE telegram_update_failures ( id TEXT PRIMARY KEY, bot_key TEXT NOT NULL, update_id INTEGER NOT NULL, telegram_chat_id INTEGER, project_id TEXT, payload TEXT, attempts INTEGER NOT NULL, last_error TEXT NOT NULL, state TEXT NOT NULL, retry_at INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, invalidated INTEGER NOT NULL DEFAULT 0, UNIQUE(bot_key, update_id) )"
+ },
+ {
+  "type": "table",
+  "name": "threads",
+  "tbl": "threads",
+  "sql": "CREATE TABLE threads ( id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, status TEXT )"
+ },
+ {
+  "type": "table",
+  "name": "timeline_deliveries",
+  "tbl": "timeline_deliveries",
+  "sql": "CREATE TABLE timeline_deliveries ( delivery_id TEXT NOT NULL, agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, message_seq INTEGER NOT NULL, wake_reason TEXT NOT NULL, offered_at INTEGER NOT NULL, last_offered_at INTEGER NOT NULL, acknowledged_at INTEGER, attempt INTEGER NOT NULL, PRIMARY KEY(delivery_id, agent_id, message_seq) )"
+ },
+ {
+  "type": "table",
+  "name": "ui_read_revision",
+  "tbl": "ui_read_revision",
+  "sql": "CREATE TABLE ui_read_revision ( singleton INTEGER PRIMARY KEY CHECK(singleton = 1), revision INTEGER NOT NULL DEFAULT 0 )"
+ },
+ {
+  "type": "table",
+  "name": "upload_reservations",
+  "tbl": "upload_reservations",
+  "sql": "CREATE TABLE upload_reservations ( id TEXT PRIMARY KEY, actor_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, bytes INTEGER NOT NULL, owner_pid INTEGER NOT NULL, expires_at INTEGER NOT NULL)"
+ },
+ {
+  "type": "table",
+  "name": "upload_usage",
+  "tbl": "upload_usage",
+  "sql": "CREATE TABLE upload_usage (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), bytes INTEGER NOT NULL)"
+ },
+ {
+  "type": "table",
+  "name": "worker_capabilities",
+  "tbl": "worker_capabilities",
+  "sql": "CREATE TABLE worker_capabilities ( worker_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, revision INTEGER NOT NULL, updated_at INTEGER NOT NULL, configuration TEXT NOT NULL, card TEXT NOT NULL)"
+ },
+ {
+  "type": "trigger",
+  "name": "adaptive_channel_deleted",
+  "tbl": "channels",
+  "sql": "CREATE TRIGGER adaptive_channel_deleted AFTER DELETE ON channels BEGIN DELETE FROM adaptive_topology_evaluated WHERE execution_id IN (SELECT execution_id FROM adaptive_topology_executions WHERE channel_id=OLD.id); DELETE FROM adaptive_topology_events WHERE channel_id=OLD.id; DELETE FROM adaptive_topology_locks WHERE channel_id=OLD.id; DELETE FROM adaptive_topology_executions WHERE channel_id=OLD.id; END"
+ },
+ {
+  "type": "trigger",
+  "name": "timeline_message_default",
+  "tbl": "messages",
+  "sql": "CREATE TRIGGER timeline_message_default AFTER INSERT ON messages BEGIN INSERT OR IGNORE INTO message_provenance(message_id, trace_id, parent_message_id, cause_message_id, source, created_at) VALUES (NEW.id, COALESCE(NEW.thread_id, NEW.id), NEW.thread_id, NULL, 'hive', NEW.created_at); END"
+ },
+ {
+  "type": "trigger",
+  "name": "ui_read_channels_delete",
+  "tbl": "channels",
+  "sql": "CREATE TRIGGER ui_read_channels_delete AFTER DELETE ON channels BEGIN UPDATE ui_read_revision SET revision = revision + 1 WHERE singleton = 1; END"
+ },
+ {
+  "type": "trigger",
+  "name": "ui_read_message_reads_delete",
+  "tbl": "message_reads",
+  "sql": "CREATE TRIGGER ui_read_message_reads_delete AFTER DELETE ON message_reads BEGIN UPDATE ui_read_revision SET revision = revision + 1 WHERE singleton = 1; END"
+ },
+ {
+  "type": "trigger",
+  "name": "ui_read_message_reads_insert",
+  "tbl": "message_reads",
+  "sql": "CREATE TRIGGER ui_read_message_reads_insert AFTER INSERT ON message_reads BEGIN UPDATE ui_read_revision SET revision = revision + 1 WHERE singleton = 1; END"
+ },
+ {
+  "type": "trigger",
+  "name": "ui_read_messages_delete",
+  "tbl": "messages",
+  "sql": "CREATE TRIGGER ui_read_messages_delete AFTER DELETE ON messages BEGIN UPDATE ui_read_revision SET revision = revision + 1 WHERE singleton = 1; END"
+ },
+ {
+  "type": "trigger",
+  "name": "ui_read_projects_delete",
+  "tbl": "projects",
+  "sql": "CREATE TRIGGER ui_read_projects_delete AFTER DELETE ON projects BEGIN UPDATE ui_read_revision SET revision = revision + 1 WHERE singleton = 1; END"
+ },
+ {
+  "type": "trigger",
+  "name": "ui_read_reads_delete",
+  "tbl": "reads",
+  "sql": "CREATE TRIGGER ui_read_reads_delete AFTER DELETE ON reads BEGIN UPDATE ui_read_revision SET revision = revision + 1 WHERE singleton = 1; END"
+ },
+ {
+  "type": "trigger",
+  "name": "ui_read_reads_insert",
+  "tbl": "reads",
+  "sql": "CREATE TRIGGER ui_read_reads_insert AFTER INSERT ON reads BEGIN UPDATE ui_read_revision SET revision = revision + 1 WHERE singleton = 1; END"
+ },
+ {
+  "type": "trigger",
+  "name": "ui_read_reads_update",
+  "tbl": "reads",
+  "sql": "CREATE TRIGGER ui_read_reads_update AFTER UPDATE ON reads BEGIN UPDATE ui_read_revision SET revision = revision + 1 WHERE singleton = 1; END"
+ },
+ {
+  "type": "trigger",
+  "name": "upload_usage_change",
+  "tbl": "attachments",
+  "sql": "CREATE TRIGGER upload_usage_change AFTER UPDATE OF bytes ON attachments BEGIN UPDATE upload_usage SET bytes = bytes + NEW.bytes - OLD.bytes WHERE singleton = 1; END"
+ },
+ {
+  "type": "trigger",
+  "name": "upload_usage_delete",
+  "tbl": "attachments",
+  "sql": "CREATE TRIGGER upload_usage_delete AFTER DELETE ON attachments BEGIN UPDATE upload_usage SET bytes = bytes - OLD.bytes WHERE singleton = 1; END"
+ },
+ {
+  "type": "trigger",
+  "name": "upload_usage_insert",
+  "tbl": "attachments",
+  "sql": "CREATE TRIGGER upload_usage_insert AFTER INSERT ON attachments BEGIN UPDATE upload_usage SET bytes = bytes + NEW.bytes WHERE singleton = 1; END"
+ }
+]

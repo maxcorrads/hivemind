@@ -8,7 +8,7 @@ import type { Agent, Message } from "../shared/types.ts";
 import type { ReadSnapshot } from "../shared/read-state.ts";
 import { Hive } from "./hive.ts";
 import { createApp } from "./app.ts";
-import { countRows, deleteRows, failWrites, updateRows } from "./test-fixtures.ts";
+import { countRows, deleteRows, failWrites, markLegacyStorage, updateRows } from "./test-fixtures.ts";
 
 function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-read-state-"));
@@ -32,6 +32,7 @@ function fixture(t: TestContext) {
         db.exec(`DROP TRIGGER "${row.name}"`);
       }
       db.exec("DROP TABLE message_reads; DROP TABLE ui_read_revision");
+      markLegacyStorage(db);
       db.close();
       hive = new Hive(dbPath);
     },

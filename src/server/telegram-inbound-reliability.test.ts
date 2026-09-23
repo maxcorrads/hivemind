@@ -5,11 +5,11 @@ import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { test, type TestContext } from "node:test";
 import { Hive } from "./hive.ts";
-import { countRows, failWrites, hasRow, insertRow, insertRows, deleteRows, rowsContaining, telegramOffset } from "./test-fixtures.ts";
+import { countRows, failWrites, hasRow, insertRow, insertRows, deleteRows, rerunMigration, rowsContaining, telegramOffset } from "./test-fixtures.ts";
 import { createApp } from "./app.ts";
 import { TelegramBridge, telegramConfigKey, writeTelegramFile, loadTelegramConfig, type TelegramConfig } from "./telegram.ts";
 import { initTelegramRouting } from "./telegram-routing.ts";
-import { recordTelegramUpdateFailure, finishTelegramUpdate, initTelegramInbox, pruneTelegramUpdates,
+import { recordTelegramUpdateFailure, finishTelegramUpdate, pruneTelegramUpdates,
   telegramPollBackoffMs, isTelegramTerminalPollError, TELEGRAM_UPDATE_CAP, TELEGRAM_UPDATE_BYTES, TELEGRAM_UPDATE_RETRY_CAP } from "./telegram-inbox.ts";
 
 function fixture(t: TestContext) {
@@ -239,7 +239,7 @@ test("bounded failure retention, legacy scope and monotone replay offsets remain
   // schema-level assertion: recreate the legacy failure table before migration.
   f.hive.db.exec("DROP TABLE telegram_update_failures; CREATE TABLE telegram_update_failures(update_id INTEGER PRIMARY KEY, payload TEXT, attempts INTEGER, last_error TEXT, state TEXT, updated_at INTEGER)");
   insertRow(f.hive, "telegram_update_failures", { update_id: 1, payload: JSON.stringify(message(1, "legacy")), attempts: 3, last_error: "failure", state: "retrying", updated_at: Date.now() });
-  initTelegramInbox(f.hive.db); initTelegramInbox(f.hive.db);
+  rerunMigration(f.hive, "telegram_update_failures"); rerunMigration(f.hive, "telegram_update_failures");
   const legacy = f.hive.telegramQuarantine()[0]!;
   assert.equal(legacy.lastError, "legacy_scope_unknown"); assert.equal(legacy.replayable, false);
   assert.throws(() => f.hive.retryTelegramUpdate(legacy.id, () => false), /original bot/);

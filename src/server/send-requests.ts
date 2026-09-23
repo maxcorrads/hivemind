@@ -5,16 +5,7 @@ import { requestIdSchema, SEND_RETENTION_MS, SEND_KEYS_PER_ACTOR, SEND_KEYS_TOTA
 
 /** Called INSIDE the message transaction; never publishes its own side effects. */
 export class SendRequests {
-  constructor(private db: DatabaseSync) {
-    db.exec(`CREATE TABLE IF NOT EXISTS send_requests (
-      actor_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-      request_id TEXT NOT NULL, payload_hash TEXT NOT NULL,
-      message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-      expires_at INTEGER NOT NULL, PRIMARY KEY(actor_id, project_id, request_id));
-      CREATE INDEX IF NOT EXISTS send_request_expiry ON send_requests(expires_at);
-      CREATE INDEX IF NOT EXISTS send_actor_expiry ON send_requests(actor_id,expires_at);`);
-  }
+  constructor(private db: DatabaseSync) {}
   run(actor: string, project: string, requestId: string, payload: unknown,
     create: () => Message, read: (id: string) => Message, now = Date.now()): Message {
     if (!requestIdSchema.safeParse(requestId).success) throw new HiveError(400, "Invalid requestId");

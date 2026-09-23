@@ -5,7 +5,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { Hive } from './hive.ts';
 import { createApp } from './app.ts';
-import { InboxDeliveryStore } from './inbox-delivery.ts';
 import { waitWireBytes } from './wait-format.ts';
 import { WAIT_MAX_BYTES, type Agent } from '../shared/types.ts';
 import type { TaskAction, TaskSnapshot } from '../shared/tasks.ts';
@@ -259,7 +258,6 @@ for (const historical of [0, 10_000]) test(`task receipt, cursor and totals roll
   const sessionId = f.hive.openInboxSession(f.worker.agent, crypto.randomUUID());
   if (historical) {
     seedAgedInboxReceipts(f.hive, f.worker.agent.id, sessionId, historical);
-    new InboxDeliveryStore(f.hive.db);
   }
   f.hive.db.function('json_array_length', () => { throw new Error('unexpected task-path aggregation'); });
   const task = f.assign().task;
