@@ -619,9 +619,11 @@ test("agent roster stays readable in a narrow sidebar and keeps actions scoped",
   const action = row.getByRole("button", { name: "Actions for LongWorkerNameForLayout", exact: true });
   await action.click();
   const menu = row.getByRole("menu");
-  await expect(menu.getByRole("menuitem", { name: "Manage credentials for LongWorkerNameForLayout" })).toBeFocused();
-  await page.keyboard.press("ArrowDown");
+  // Workers have no credentials to manage: the menu starts at Clear context.
+  await expect(menu.getByRole("menuitem", { name: "Manage credentials for LongWorkerNameForLayout" })).toHaveCount(0);
   await expect(menu.getByRole("menuitem", { name: "Clear context", exact: true })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(menu.getByRole("menuitem", { name: "Remove", exact: true })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(menu).toHaveCount(0);
   await expect(action).toBeFocused();

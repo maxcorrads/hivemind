@@ -1583,8 +1583,8 @@ export function App() {
       )}
 
       {credentialBot && snap.agents.some(a => a.id === credentialBot.id) && <Modal onClose={() => { if (!credentialBusy) setCredentialBot(null); }}>
-        <div className="sheet" role="dialog" aria-modal="true" aria-label={credentialBot.role === "bot" ? "Manage bot credentials" : "Manage agent credentials"}>
-          <h2>{credentialBot.role === "bot" ? "Bot credentials" : "Agent credentials"}</h2>
+        <div className="sheet" role="dialog" aria-modal="true" aria-label="Manage bot credentials">
+          <h2>Bot credentials</h2>
           <BotCredentials key={credentialBot.id} bot={credentialBot} onBusy={setCredentialBusy} />
           <div className="row"><button type="button" disabled={credentialBusy} onClick={() => setCredentialBot(null)}>Close</button></div>
         </div>
@@ -2530,7 +2530,6 @@ export function AgentList({
           agent={a}
           queued={queued[a.id] ?? 0}
           inbox={inbox[a.id]}
-          onManageCredential={onManageBot ? () => onManageBot(a) : undefined}
           onOpen={() => onOpen(a)}
           menuOpen={menu === a.name}
           onMenu={() => setMenu(menu === a.name ? null : a.name)}
@@ -2549,7 +2548,6 @@ export function AgentList({
           queued={queued[a.id] ?? 0}
           inbox={inbox[a.id]}
           onOpen={() => onOpen(a)}
-          onManageCredential={onManageBot ? () => onManageBot(a) : undefined}
           menuOpen={menu === a.name}
           onMenu={() => setMenu(menu === a.name ? null : a.name)}
           onCloseMenu={() => setMenu(null)}

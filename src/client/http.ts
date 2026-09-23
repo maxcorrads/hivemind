@@ -9,7 +9,7 @@ import path from "node:path";
 import { safeFileName } from "../server/files.ts";
 
 import { currentToken, identityOrigin } from "./identity.ts";
-export { identitiesDir, identityPath, saveIdentity, loadIdentityFile, loadIdentityByName, currentToken } from "./identity.ts";
+export { currentToken } from "./identity.ts";
 
 export function hiveUrl(): string {
   return identityOrigin();

@@ -58,7 +58,7 @@ test("project bots start without channels and keep private credentials across re
 test("bots cannot assume agent roles, receive assignments or perform agent operations", async (t) => {
   const { hive, human, bot, brain, channel } = setup(t);
   assert.throws(() => hive.join({ role: "brain", token: bot.token }), /cannot change/);
-  assert.throws(() => hive.join({ role: "worker", seniority: "mid", resumeName: bot.bot.name }), /valid token/);
+  assert.throws(() => hive.join({ role: "worker", seniority: "mid", resumeName: bot.bot.name }), /No brain or worker named/);
   assert.throws(() => hive.postMessage(bot.bot, { channel: channel.id, body: "do work" }), /cannot post/);
   assert.throws(() => hive.createChannel(bot.bot, { name: "New", type: "public" }), /cannot create/);
   assert.throws(() => hive.openDm(bot.bot, human.name), /Bots/);

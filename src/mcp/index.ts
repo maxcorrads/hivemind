@@ -9,7 +9,7 @@ import { z } from "zod";
 import { mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { agentDownloadToFile, agentRequest, loadIdentityByName, saveIdentity } from "../client/http.ts";
+import { agentDownloadToFile, agentRequest } from "../client/http.ts";
 import { imagePreview } from "../server/files.ts";
 import { guessMime } from "../shared/mime.ts";
 import { waitUntilMail } from "./wait-loop.ts";
@@ -20,7 +20,7 @@ import { decisionEventSchema, requestDecisionSchema } from '../shared/decisions.
 import { roomEventSchema } from '../shared/rooms.ts';
 import { subscriptionSchema, subscriptionScopeSchema } from '../shared/notifications.ts';
 import { MESSAGE_EVENT_TYPES } from "../shared/types.ts";
-import { DELIVERY_INSTRUCTIONS, MCP_HEARTBEAT_MS, MCP_WAIT_POLL_MS, WAIT_NEXT, type Agent, type Channel, type Identity, type WaitResult } from "../shared/types.ts";
+import { DELIVERY_INSTRUCTIONS, MCP_HEARTBEAT_MS, MCP_WAIT_POLL_MS, WAIT_NEXT, type Agent, type Channel, type WaitResult } from "../shared/types.ts";
 
 function text(data: unknown) {
   return { content: [{ type: "text" as const, text: typeof data === "string" ? data : JSON.stringify(data, null, 2) }] };
@@ -80,7 +80,7 @@ export async function startMcp() {
 
   server.tool(
     "join",
-    "Register this terminal as a Hivemind employee. Repeated join resumes this same process identity. To explicitly replace it, start a new MCP process. Lost credentials require Human recovery in the UI. Role cannot change later. Workers must pick seniority junior, mid, or senior. Use resume with your assigned name to come back to work. Join from the project worktree, or pass project. You cannot see other projects.",
+    "Register this terminal as a Hivemind employee. Repeated join resumes this same process identity. To explicitly replace it, start a new MCP process. No credentials are needed: resume with your assigned name to come back to work; this replaces any earlier session with that name. Role cannot change later. Workers must pick seniority junior, mid, or senior. Use resume with your assigned name to come back to work. Join from the project worktree, or pass project. You cannot see other projects.",
     {
       role: z.enum(["brain", "worker"]),
       seniority: senioritySchema.optional(),
@@ -91,7 +91,8 @@ export async function startMcp() {
     async ({ role, seniority, focus, resume, project }) => joinSerial(async () => {
       if (joinedName && resume && resume.toLowerCase() !== joinedName.toLowerCase())
         throw new Error("This process already has an identity; start a new MCP process to replace it");
-      const auth = sessionToken || (resume ? loadIdentityByName(resume, project)?.token : undefined);
+      // The session key lives only in this process; resuming by name needs nothing stored.
+      const auth = sessionToken;
       const result = await agentRequest<{
         agent: Agent;
         token: string;
@@ -116,20 +117,11 @@ export async function startMcp() {
       sessionToken = result.token;
       joinedName = result.agent.name;
       ensureHeartbeat();
-      saveIdentity({
-        id: result.agent.id,
-        name: result.agent.name,
-        role: result.agent.role,
-        seniority: result.agent.seniority,
-        focus: result.agent.focus,
-        token: result.token,
-        project: result.agent.project,
-      } satisfies Identity & { project: string | null });
       return text({
         name: result.agent.name,
         describe: result.describe,
         created: result.created,
-        credentials: "Retained privately by this MCP process; not returned to the model",
+        session: "Held privately by this MCP process; to come back later, join with resume set to your name",
         standingOrders: result.standingOrders,
         ordersRef: result.ordersRef,
         handoffs: result.handoffs,
