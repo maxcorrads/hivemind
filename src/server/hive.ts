@@ -14,6 +14,7 @@ import { Waiters } from "./services/waiters.ts";
 import { ChannelService, channelLabel } from "./services/channels.ts";
 import { MessageQueries } from "./services/message-queries.ts";
 import { DeliveryService } from "./services/delivery.ts";
+import { ReadService } from "./services/reads.ts";
 import type { Core, MessagePoster } from "./services/ports.ts";
 import { Storage } from './storage.ts';
 import { mkdirSync } from "node:fs";
@@ -39,7 +40,6 @@ import {
 import { ReadState } from "./read-state.ts";
 import { InboxDeliveryStore } from "./inbox-delivery.ts";
 import { InboxReader } from "./inbox-reader.ts";
-import type { MentionPage, ReadSnapshot } from "../shared/read-state.ts";
 import { hiveHome } from "./paths.ts";
 import { preparePrivateDatabase } from "./private-database.ts";
 import { removeLegacyIdentityDirs } from "./legacy-identities.ts";
@@ -78,6 +78,7 @@ type ServiceRegistry = Core & {
   channels: ChannelService;
   reader: MessageQueries;
   delivery: DeliveryService;
+  readState: ReadState;
   deliveries: InboxDeliveryStore;
   inboxReader: InboxReader;
   tasks: TaskStore;
@@ -116,6 +117,7 @@ export class Hive {
   readonly channels!: ChannelService;
   readonly messageQueries!: MessageQueries;
   readonly delivery!: DeliveryService;
+  readonly reads!: ReadService;
   /** The registry every service receives, typed down to its own dependencies (services/ports.ts). */
   private readonly services: ServiceRegistry;
 
@@ -147,9 +149,10 @@ export class Hive {
       this.channels = services.channels = new ChannelService(services);
       this.messageQueries = services.reader = new MessageQueries(services);
       this.delivery = services.delivery = new DeliveryService(services);
+      this.reads = new ReadService(services);
       this.transaction(() => this.bootstrap());
       this.transaction(() => { pruneTelegramUpdates(this.db); pruneTelegramFailures(this.db); });
-      this.readState = new ReadState(this.db);
+      this.readState = services.readState = new ReadState(this.db);
       this.sendRequests = new SendRequests(this.db);
       this.tasks = services.tasks = new TaskStore(this);
       this.rooms = services.rooms = new RoomStore(this);
@@ -525,66 +528,13 @@ export class Hive {
     });
   }
 
-  markRead(actor: Agent, channelId: string, seq: number) {
-    this.db.prepare(
-      `INSERT INTO reads (agent_id, channel_id, last_read_seq) VALUES (?, ?, ?)
-       ON CONFLICT(agent_id, channel_id) DO UPDATE SET last_read_seq = MAX(last_read_seq, excluded.last_read_seq)`,
-    ).run(actor.id, channelId, seq);
-  }
-
-  readsFor(actor: Agent): Record<string, number> {
-    const rows = this.db.prepare("SELECT channel_id, last_read_seq FROM reads WHERE agent_id = ?").all(actor.id) as {
-      channel_id: string;
-      last_read_seq: number;
-    }[];
-    return Object.fromEntries(rows.map((r) => [r.channel_id, r.last_read_seq]));
-  }
-
-  unreadCounts(actor: Agent): Record<string, number> {
-    return this.readState.counts(actor.id, this.channels.listChannels(actor).map((channel) => channel.id));
-  }
-
-  /** Explicit receipts for the rendered channel/thread page, not a global cursor. */
-  markMessagesRead(actor: Agent, channelId: string, seqs: number[], threadId: string | null = null) {
-    this.identity.getAgent(actor.id);
-    const channel = this.channels.getChannel(channelId, actor.projectId);
-    if (!this.channels.canSeeChannel(actor, channel)) throw new HiveError(403, "Cannot read this channel");
-    if (threadId !== null && (typeof threadId !== "string" || !threadId)) throw new HiveError(400, "Invalid thread ID");
-    if (threadId !== null) {
-      const root = this.db.prepare("SELECT channel_id, thread_id FROM messages WHERE id = ?").get(threadId) as
-        { channel_id: string; thread_id: string | null } | undefined;
-      if (!root || root.channel_id !== channel.id || root.thread_id !== null) throw new HiveError(400, "Thread must be a root in the selected channel");
-    }
-    this.readState.markMessages(actor.id, channel.id, seqs, threadId);
-  }
-
-  markMentionsSeen(actor: Agent, projectId?: string) {
-    this.readState.markMentions(actor.id, this.channels.listChannels(actor).map((channel) => channel.id), projectId);
-  }
-
-  mentionInbox(actor: Agent, limit = 30, beforeSeq?: number, projectId?: string): MentionPage {
-    return this.readState.snapshot(() => {
-      const page = this.readState.page(actor.id, this.channels.listChannels(actor).map((channel) => channel.id), limit, beforeSeq, projectId);
-      return { messages: this.messageQueries.loadMessagesByIds(page.ids, actor.id), hasMore: page.hasMore, ...this.readState.stamp() };
-    });
-  }
-
-  readSnapshot(actor: Agent): ReadSnapshot {
-    return this.readState.snapshot(() => {
-      const channels = this.channels.listChannels(actor);
-      const ids = channels.map((channel) => channel.id);
-      const page = this.readState.page(actor.id, ids);
-      const counts = this.readState.mentionCounts(actor.id, ids);
-      return {
-        ...this.readState.stamp(),
-        unread: this.readState.counts(actor.id, ids),
-        mentions: this.messageQueries.loadMessagesByIds(page.ids, actor.id),
-        mentionsHasMore: page.hasMore,
-        mentionCounts: Object.fromEntries(channels.map((channel) => [channel.project, counts[channel.projectId] ?? 0])),
-      };
-    });
-  }
-
+  markRead(actor: Agent, channelId: string, seq: number) { this.reads.markRead(actor, channelId, seq); }
+  readsFor(actor: Agent) { return this.reads.readsFor(actor); }
+  unreadCounts(actor: Agent) { return this.reads.unreadCounts(actor); }
+  markMessagesRead(...args: Parameters<ReadService["markMessagesRead"]>) { this.reads.markMessagesRead(...args); }
+  markMentionsSeen(actor: Agent, projectId?: string) { this.reads.markMentionsSeen(actor, projectId); }
+  mentionInbox(...args: Parameters<ReadService["mentionInbox"]>) { return this.reads.mentionInbox(...args); }
+  readSnapshot(actor: Agent) { return this.reads.readSnapshot(actor); }
   clearContext(actor: Agent, targetName: string): Message {
     if (actor.role === "worker") throw new HiveError(403, "Only a brain or Human can clear context");
     const target = this.identity.getAgentByName(targetName);
