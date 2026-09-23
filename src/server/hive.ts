@@ -2,7 +2,6 @@ import { RoutingStore } from './routing.ts';
 import { DecisionStore } from './decisions.ts';
 import { TimelineStore } from './timeline.ts';
 import { UploadBudget, type UploadLimits } from "./upload-budget.ts";
-import { validated, attachmentIdsSchema, memberNamesSchema } from "../shared/api-contract.ts";
 import { SendRequests } from "./send-requests.ts";
 import { pruneTelegramUpdates, type TelegramUpdateScope } from "./telegram-inbox.ts";
 import { pruneTelegramFailures, type TelegramDestination } from "./telegram-outbox.ts";
@@ -11,30 +10,24 @@ import { FileService } from "./services/files.ts";
 import { ProjectService } from "./services/projects.ts";
 import { IdentityService, hashToken, newToken, type JoinInput } from "./services/identity.ts";
 import { Waiters } from "./services/waiters.ts";
-import { ChannelService, channelLabel } from "./services/channels.ts";
+import { ChannelService } from "./services/channels.ts";
 import { MessageQueries } from "./services/message-queries.ts";
 import { DeliveryService } from "./services/delivery.ts";
 import { ReadService } from "./services/reads.ts";
-import type { Core, MessagePoster } from "./services/ports.ts";
+import { MessageService } from "./services/messages.ts";
+import type { Core, PostMessageInput } from "./services/ports.ts";
 import { Storage } from './storage.ts';
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { HiveBus } from "./hive-events.ts";
 import {
-  BODY_MAX,
-  FILES_PER_MESSAGE,
-  MESSAGE_EVENT_TYPES,
-  REACTION_EMOJIS,
   HiveError,
-  HUMAN_ID,
   type Agent,
   type BotEvent,
   type BotCredentialView,
   type Channel,
-  type ControlAction,
   type Message,
-  type Thread,
   type ThreadStatus,
   } from "../shared/types.ts";
 import { ReadState } from "./read-state.ts";
@@ -74,7 +67,8 @@ type ServiceRegistry = Core & {
   telegram: TelegramAdminService;
   files: FileService;
   projects: ProjectService;
-  messages: MessagePoster;
+  messages: MessageService;
+  sendRequests: SendRequests;
   channels: ChannelService;
   reader: MessageQueries;
   delivery: DeliveryService;
@@ -106,7 +100,6 @@ export class Hive {
   readonly timeline!: TimelineStore;
   readonly adaptiveTopology!: AdaptiveTopologyRuntime;
   private readonly waiters = new Waiters();
-  private telegramOrigin = new Set<string>();
   readonly uploads!: UploadBudget;
   private readonly readState!: ReadState;
   readonly storage: Storage;
@@ -117,6 +110,7 @@ export class Hive {
   readonly channels!: ChannelService;
   readonly messageQueries!: MessageQueries;
   readonly delivery!: DeliveryService;
+  readonly messages!: MessageService;
   readonly reads!: ReadService;
   /** The registry every service receives, typed down to its own dependencies (services/ports.ts). */
   private readonly services: ServiceRegistry;
@@ -128,7 +122,7 @@ export class Hive {
     this.db = new DatabaseSync(dbPath);
     this.storage = Storage.for(this.db);
     // Transitional: domains not yet extracted are served by Hive itself.
-    const registry: Partial<ServiceRegistry> = { storage: this.storage, bus: this.bus, home: this.home, messages: this, waiters: this.waiters };
+    const registry: Partial<ServiceRegistry> = { storage: this.storage, bus: this.bus, home: this.home, waiters: this.waiters };
     this.services = registry as ServiceRegistry;
     this.bus.bindStorage(this.storage);
     try {
@@ -149,11 +143,12 @@ export class Hive {
       this.channels = services.channels = new ChannelService(services);
       this.messageQueries = services.reader = new MessageQueries(services);
       this.delivery = services.delivery = new DeliveryService(services);
+      this.messages = services.messages = new MessageService(services);
       this.reads = new ReadService(services);
       this.transaction(() => this.bootstrap());
       this.transaction(() => { pruneTelegramUpdates(this.db); pruneTelegramFailures(this.db); });
       this.readState = services.readState = new ReadState(this.db);
-      this.sendRequests = new SendRequests(this.db);
+      this.sendRequests = services.sendRequests = new SendRequests(this.db);
       this.tasks = services.tasks = new TaskStore(this);
       this.rooms = services.rooms = new RoomStore(this);
       this.notifications = new NotificationStore(this);
@@ -319,176 +314,16 @@ export class Hive {
     return { message, duplicate };
   }
 
-  postMessage(
-    actor: Agent,
-    input: {
-      channel: string;
-      body: string;
-      requestId?: string;
-      threadId?: string | null;
-      kind?: Message["kind"];
-      eventType?: Message["eventType"];
-      control?: ControlAction | null;
-      source?: "hive" | "telegram";
-      traceId?: string;
-      causeMessageId?: string;
-      attachmentIds?: string[];
-      recipients?: string[];
-    },
-    persistReceipt?: (message: Message) => void,
-  ): Message {
-    if (input.attachmentIds !== undefined) validated(attachmentIdsSchema, input.attachmentIds);
-    const decisionRecipients = actor.role === 'human' ? this.decisions?.replyRecipientNames(input.threadId ?? null) ?? [] : [];
-    const recipientNames = [...new Set([...(input.recipients ?? []), ...decisionRecipients])];
-    if (recipientNames.length) validated(memberNamesSchema.min(1), recipientNames);
-    if (input.eventType !== undefined && !MESSAGE_EVENT_TYPES.includes(input.eventType))
-      throw new HiveError(400, "Unknown message eventType");
-    const ch = this.channels.getChannel(input.channel, actor.projectId);
-    if (!this.channels.canSeeChannel(actor, ch) || !this.channels.canPost(actor, ch)) {
-      throw new HiveError(403, `You cannot post to ${channelLabel(ch)}`);
-    }
-    if (actor.role !== 'human' && this.rooms.peek(ch.id)?.state === 'archived' &&
-      (!input.threadId || !this.tasks.has(input.threadId)))
-      throw new HiveError(409, 'Archived room: no new work or root messages; use an existing task thread for closure');
-    if (recipientNames.length > 32 || recipientNames.some(name => typeof name !== 'string')) throw new HiveError(400, 'Provide 1–32 recipient names');
-    const recipients = [...new Set(recipientNames.map(name => {
-      const target = this.identity.getAgentByName(name);
-      if (!target || target.role === 'bot' || !this.channels.canSeeChannel(target, ch) ||
-        (actor.role === 'worker' && target.role === 'human')) throw new HiveError(403, 'Recipient must be an accessible permitted person');
-      return target.id;
-    }))];
-    if (typeof input.body !== "string") throw new HiveError(400, "Expected a string body");
-    const body = input.body.trim();
-    const attachmentIds = input.attachmentIds ?? [];
-    if (attachmentIds.length > FILES_PER_MESSAGE) {
-      throw new HiveError(400, `At most ${FILES_PER_MESSAGE} files per message`);
-    }
-    if (!body && input.kind !== "control" && attachmentIds.length === 0) {
-      throw new HiveError(400, "Empty message");
-    }
-    if (input.kind !== "control" && body.length > BODY_MAX) {
-      throw new HiveError(400, `Message too long (${body.length} > ${BODY_MAX}). Split or use a thread.`);
-    }
-    const mentions = parseMentions(body, this.identity.listAgents(actor));
-    if (actor.role === "worker" && mentions.some((id) => id === HUMAN_ID)) {
-      throw new HiveError(403, "Workers cannot mention @Human. Ask a brain.");
-    }
-    if (input.threadId) {
-      const root = this.db.prepare("SELECT id, channel_id FROM messages WHERE id = ?").get(input.threadId) as
-        | { id: string; channel_id: string }
-        | undefined;
-      if (!root || root.channel_id !== ch.id) throw new HiveError(400, "Thread not in this channel");
-    }
-    const trace = this.timeline.prepare(actor, ch, { traceId: input.traceId, causeMessageId: input.causeMessageId }, input.threadId ?? null);
-    const id = crypto.randomUUID();
-    const t = now();
-    const kind = input.kind ?? "chat";
-    if (kind === "system" && actor.role !== "human") {
-      throw new HiveError(403, "Only Human can post system messages");
-    }
-    if (kind === "control") {
-      if (actor.role === "worker") throw new HiveError(403, "Only a brain or Human can send control");
-      if (input.control && input.control !== "clear_context") {
-        throw new HiveError(400, "Unknown control action");
-      }
-    }
-
-    // Validate the complete attachment set before any mutation. The transaction
-    // below then owns every remaining database write caused by the send.
-    return this.transaction(() => {
-      if (input.requestId !== undefined) return this.sendRequests.run(actor.id, ch.projectId, input.requestId,
-        [ch.id, body, input.threadId ?? null, kind, input.control ?? null, input.source ?? "hive",
-          input.eventType ?? null, attachmentIds, [...recipients].sort(), trace.traceId, trace.causeMessageId],
-        () => this.postMessage(actor, { ...input, requestId: undefined }, persistReceipt), id => this.messageQueries.getMessageById(id));
-      if (attachmentIds.length) this.files.validateAttachments(actor, attachmentIds);
-      if (actor.role === "human" && !ch.memberIds.includes(actor.id)) {
-        this.channels.addMember(ch.id, actor.id);
-        ch.memberIds.push(actor.id);
-      }
-      this.db.prepare(
-        `INSERT INTO messages (id, channel_id, thread_id, author_id, body, kind, control, mentions, created_at, event_type, recipients)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(id, ch.id, input.threadId ?? null, actor.id, body, kind,
-        input.control ?? null, JSON.stringify(mentions), t, input.eventType ?? null, JSON.stringify(recipients));
-      this.timeline.recordMessage(id, { source: input.source ?? 'hive', traceId: trace.traceId, causeMessageId: trace.causeMessageId });
-      if (input.threadId) {
-        this.db.prepare(
-          `INSERT OR IGNORE INTO threads (id, channel_id, status) VALUES (?, ?, 'open')`,
-        ).run(input.threadId, ch.id);
-      }
-      if (attachmentIds.length) this.files.bindAttachments(id, attachmentIds);
-      // Transport receipts participate in the same message/attachment transaction.
-      persistReceipt?.(this.messageQueries.getMessageById(id));
-      this.identity.touch(actor.id, true);
-      const msg = this.messageQueries.getMessageById(id);
-      const decision = actor.role === 'human' ? this.decisions?.captureHumanReply(actor, msg, input.source ?? 'hive') ?? null : null;
-      this.afterCommit(() => {
-        if (input.source === "telegram") this.telegramOrigin.add(msg.id);
-        this.adaptiveTopology?.humanMessageCommitted(msg);
-        this.bus.emit("message", msg);
-        this.delivery.wakeMembers(ch, msg);
-        if (decision) this.bus.emit('decision', decision);
-      });
-      return msg;
-    });
-  }
-
-  hasActiveSendRequest(actor: Agent, channelRef: string, requestId: string | undefined): boolean {
-    if (!requestId) return false;
-    const channel = this.channels.getChannel(channelRef, actor.projectId);
-    const row = this.db.prepare(`SELECT 1 AS found FROM send_requests
-      WHERE actor_id=? AND project_id=? AND request_id=? AND expires_at>?`)
-      .get(actor.id, channel.projectId, requestId, Date.now()) as { found: number } | undefined;
-    return Boolean(row?.found);
-  }
-
-  postAdaptiveRequest(
-    actor: Agent,
-    input: {
-      channel: string;
-      body: string;
-      requestId?: string;
-      threadId?: string | null;
-      eventType?: Message["eventType"];
-      traceId?: string;
-      causeMessageId?: string;
-      attachmentIds?: string[];
-      recipients?: string[];
-      source?: "hive" | "telegram";
-    },
-    directives: Array<{ body: string; requestId: string; recipients?: string[] }>,
-    persistReceipt?: (message: Message) => void,
-    persistRouting?: (message: Message) => void,
-  ): { message: Message; routingMessages: Message[] } {
-    return this.transaction(() => {
-      // One directive per owning brain, in the request's thread, immediately before the request.
-      const routingMessages = directives.map(directive => this.postMessage(actor, {
-        channel: input.channel,
-        body: directive.body,
-        requestId: directive.requestId,
-        threadId: input.threadId ?? null,
-        recipients: directive.recipients,
-        eventType: "assignment",
-      }));
-      const message = this.postMessage(actor, input, persistReceipt);
-      persistRouting?.(message);
-      return { message, routingMessages };
-    });
-  }
-
-  fromTelegram(messageId: string): boolean {
-    return this.telegramOrigin.has(messageId) || this.timeline.source(messageId) === 'telegram';
-  }
-
-  postSystem(channelId: string, body: string) {
-    const human = this.identity.getAgent(HUMAN_ID);
-    try {
-      this.postMessage(human, { channel: channelId, body, kind: "system" });
-    } catch {
-      // bootstrap edge
-    }
-  }
-
+  postMessage(actor: Agent, input: PostMessageInput, persistReceipt?: (message: Message) => void) { return this.messages.postMessage(actor, input, persistReceipt); }
+  postAdaptiveRequest(...args: Parameters<MessageService["postAdaptiveRequest"]>) { return this.messages.postAdaptiveRequest(...args); }
+  hasActiveSendRequest(actor: Agent, channelRef: string, requestId: string | undefined) { return this.messages.hasActiveSendRequest(actor, channelRef, requestId); }
+  fromTelegram(messageId: string) { return this.messages.fromTelegram(messageId); }
+  postSystem(channelId: string, body: string) { this.messages.postSystem(channelId, body); }
+  publishTaskMessage(message: Message) { this.messages.publishTaskMessage(message); }
+  setThreadStatus(actor: Agent, threadId: string, status: ThreadStatus | null) { return this.messages.setThreadStatus(actor, threadId, status); }
+  clearContext(actor: Agent, targetName: string) { return this.messages.clearContext(actor, targetName); }
+  toggleReaction(actor: Agent, seq: number, emoji: string) { return this.messages.toggleReaction(actor, seq, emoji); }
+  setReaction(...args: Parameters<MessageService["setReaction"]>) { return this.messages.setReaction(...args); }
   getVisibleMessage(actor: Agent, seq: number) { return this.messageQueries.getVisibleMessage(actor, seq); }
   getMessageBySeq(seq: number) { return this.messageQueries.getMessageBySeq(seq); }
   getMessageById(id: string) { return this.messageQueries.getMessageById(id); }
@@ -499,35 +334,6 @@ export class Hive {
   threadsInChannel(channelId: string) { return this.messageQueries.threadsInChannel(channelId); }
   replyCounts(channelId: string) { return this.messageQueries.replyCounts(channelId); }
   latestSeq(channelId: string) { return this.messageQueries.latestSeq(channelId); }
-  setThreadStatus(actor: Agent, threadId: string, status: ThreadStatus | null): Thread {
-    if (this.tasks.has(threadId)) throw new HiveError(409, 'Use structured task events; generic thread status cannot change a task');
-    if (actor.role === "bot") throw new HiveError(403, "Bots cannot change thread status");
-    const row = this.db.prepare(
-      `SELECT m.id, m.channel_id FROM messages m WHERE m.id = ?`,
-    ).get(threadId) as { id: string; channel_id: string } | undefined;
-    if (!row) throw new HiveError(404, "Thread not found");
-    if (status !== null && !["open", "in_progress", "blocked", "done"].includes(status)) {
-      throw new HiveError(400, "Invalid thread status");
-    }
-    const ch = this.channels.getChannel(row.channel_id);
-    if (!this.channels.canSeeChannel(actor, ch)) throw new HiveError(403, "Cannot access thread");
-    const commitments = this.db.prepare('SELECT execution_id FROM adaptive_topology_messages WHERE root_id=?').all(threadId);
-    if (commitments.length) {
-      if (actor.role !== 'human' && actor.id !== this.messageQueries.getMessageById(threadId).authorId)
-        throw new HiveError(403, 'Only Human or the delegating brain can close adaptive delegated work');
-      if (this.db.prepare('SELECT status FROM threads WHERE id=?').get(threadId)?.status === 'done' && status !== 'done')
-        throw new HiveError(409, 'Start a new guarded assignment instead of reopening completed adaptive work');
-    }
-    return this.transaction(() => {
-      const routingChanged = this.adaptiveTopology?.threadStatusChange(actor, threadId, status);
-      this.db.prepare(`INSERT INTO threads (id, channel_id, status) VALUES (?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET status = excluded.status`).run(threadId, row.channel_id, status);
-      const thread = this.db.prepare('SELECT id, channel_id AS channelId, status FROM threads WHERE id=?').get(threadId) as Thread;
-      this.afterCommit(() => { this.bus.emit('thread', thread); routingChanged?.(); });
-      return thread;
-    });
-  }
-
   markRead(actor: Agent, channelId: string, seq: number) { this.reads.markRead(actor, channelId, seq); }
   readsFor(actor: Agent) { return this.reads.readsFor(actor); }
   unreadCounts(actor: Agent) { return this.reads.unreadCounts(actor); }
@@ -535,20 +341,6 @@ export class Hive {
   markMentionsSeen(actor: Agent, projectId?: string) { this.reads.markMentionsSeen(actor, projectId); }
   mentionInbox(...args: Parameters<ReadService["mentionInbox"]>) { return this.reads.mentionInbox(...args); }
   readSnapshot(actor: Agent) { return this.reads.readSnapshot(actor); }
-  clearContext(actor: Agent, targetName: string): Message {
-    if (actor.role === "worker") throw new HiveError(403, "Only a brain or Human can clear context");
-    const target = this.identity.getAgentByName(targetName);
-    if (!target) throw new HiveError(404, `No agent named ${targetName}`);
-    if (target.role !== "worker") throw new HiveError(400, "clear_context is for workers");
-    const dm = this.channels.openDm(actor, target.name);
-    return this.postMessage(actor, {
-      channel: dm.id,
-      body: `CONTROL clear_context: before following this request, use get_handoffs and save a checkpoint for relevant active tasks where possible (task_event checkpoint with the current revision). Then discard prior task memory, keeping your Hivemind identity (${target.name}) and standing orders, and wait. This is an instruction only: Hivemind has not erased host context or stopped execution. Do not clear automatically after every result.`,
-      kind: "control",
-      control: "clear_context",
-    });
-  }
-
   openInboxSession(actor: Agent, sessionId: string) { return this.delivery.openInboxSession(actor, sessionId); }
   acknowledgeInbox(actor: Agent, sessionId: string, deliveryId: string) { return this.delivery.acknowledgeInbox(actor, sessionId, deliveryId); }
   inboxStatuses() { return this.delivery.inboxStatuses(); }
@@ -556,39 +348,10 @@ export class Hive {
   isFor(actor: Agent, msg: Message) { return this.delivery.isFor(actor, msg); }
   wait(...args: Parameters<DeliveryService["wait"]>) { return this.delivery.wait(...args); }
   cancelWaits() { this.delivery.cancelWaits(); }
-  /** Publish only after the structured event and its message commit atomically. */
-  publishTaskMessage(message: Message) {
-    this.bus.emit('message', message);
-    this.delivery.wakeMembers(this.channels.getChannel(message.channelId), message);
-  }
-
   createFile(...args: Parameters<FileService["createFile"]>) { return this.files.createFile(...args); }
   createFileFromBytes(...args: Parameters<FileService["createFileFromBytes"]>) { return this.files.createFileFromBytes(...args); }
   getAttachment(actor: Agent, id: string) { return this.files.getAttachment(actor, id); }
   openAttachment(actor: Agent, id: string) { return this.files.openAttachment(actor, id); }
   gcFiles() { return this.files.gcFiles(); }
-
-  toggleReaction(actor: Agent, seq: number, emoji: string): { message: Message; added: boolean } {
-    return this.setReaction(actor, seq, emoji);
-  }
-
-  /** Omitted present retains legacy toggle; retryable clients use explicit state. */
-  setReaction(actor: Agent, seq: number, emoji: string, present?: boolean): { message: Message; added: boolean } {
-    if (!Number.isSafeInteger(seq) || seq < 1 || !REACTION_EMOJIS.includes(emoji as (typeof REACTION_EMOJIS)[number]) ||
-      (present !== undefined && typeof present !== "boolean")) throw new HiveError(400, "Invalid reaction");
-    return this.transaction(() => {
-      const msg = this.messageQueries.getMessageBySeq(seq), ch = this.channels.getChannel(msg.channelId);
-      if (!this.channels.canSeeChannel(actor, ch) || !this.channels.canPost(actor, ch)) throw new HiveError(403, "Cannot react here");
-      const had = Boolean(this.db.prepare('SELECT 1 FROM reactions WHERE message_id=? AND agent_id=? AND emoji=?').get(msg.id, actor.id, emoji));
-      const wanted = present ?? !had;
-      if (had !== wanted) {
-        if (wanted) this.db.prepare('INSERT INTO reactions(message_id,agent_id,emoji,created_at) VALUES(?,?,?,?)').run(msg.id, actor.id, emoji, now());
-        else this.db.prepare('DELETE FROM reactions WHERE message_id=? AND agent_id=? AND emoji=?').run(msg.id, actor.id, emoji);
-        const forUi = this.messageQueries.decorate([msg], HUMAN_ID)[0]!;
-        this.afterCommit(() => this.bus.emit("reaction", { seq: msg.seq, message: forUi }));
-      }
-      return { message: this.messageQueries.decorate([msg], actor.id)[0]!, added: wanted };
-    });
-  }
 
 }
