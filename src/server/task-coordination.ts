@@ -10,9 +10,10 @@ export class TaskCoordination {
   constructor(private readonly deps: TaskCoordinationDeps) {}
   private get db() { return this.deps.storage.db; }
   private snapshot(id: string, projectId: string | null): TaskSnapshot | undefined {
-    const row = this.db.prepare(`SELECT r.snapshot FROM task_records r JOIN channels c ON c.id = r.channel_id
-      WHERE r.id = ? AND c.project_id = ?`).get(id, projectId) as { snapshot: string } | undefined;
-    return row ? JSON.parse(row.snapshot) as TaskSnapshot : undefined;
+    const row = this.db.prepare('SELECT channel_id, snapshot FROM task_records WHERE id = ?').get(id) as
+      { channel_id: string; snapshot: string } | undefined;
+    if (!row || projectId === null || this.deps.channels.getChannel(row.channel_id).projectId !== projectId) return undefined;
+    return JSON.parse(row.snapshot) as TaskSnapshot;
   }
   private visible(actor: Agent, task: TaskSnapshot | undefined): task is TaskSnapshot {
     return !!task && actor.role !== 'bot' && this.deps.channels.canSeeChannel(actor, this.deps.channels.getChannel(task.channelId));
@@ -40,12 +41,12 @@ export class TaskCoordination {
   }
   private visibleClaims(actor: Agent, task: TaskSnapshot): ClaimRow[] {
     const projectId = this.deps.channels.getChannel(task.channelId).projectId;
+    // Human sees every channel of the project; others their channels, and only brains the brains-type ones.
+    const channels = JSON.stringify(this.deps.channels.channelIdsIn(projectId, actor, true));
     return this.db.prepare(`SELECT r.id, r.worker_id, json_extract(r.snapshot, '$.contractVersion') AS contract_version, json_extract(r.snapshot, '$.claim') AS claim
-      FROM channels c JOIN task_records r ON r.channel_id = c.id
-      WHERE c.project_id = ? AND r.id != ? AND json_extract(r.snapshot, '$.claim.state') = 'held'
-        AND (? = 'human' OR (EXISTS (SELECT 1 FROM channel_members cm WHERE cm.channel_id = c.id AND cm.agent_id = ?)
-          AND (? = 'brain' OR c.type != 'brains')))
-      ORDER BY r.id LIMIT 257`).all(projectId, task.id, actor.role, actor.id, actor.role) as ClaimRow[];
+      FROM task_records r
+      WHERE r.channel_id IN (SELECT value FROM json_each(?)) AND r.id != ? AND json_extract(r.snapshot, '$.claim.state') = 'held'
+      ORDER BY r.id LIMIT 257`).all(channels, task.id) as ClaimRow[];
   }
   private overlaps(actor: Agent, task: TaskSnapshot, paths: string[], acks: TaskClaim['overlapAcknowledgements']) {
     const rows = paths.length ? this.visibleClaims(actor, task) : [];
@@ -114,9 +115,9 @@ export class TaskCoordination {
     const counts = this.db.prepare(`SELECT COUNT(*) AS total,
       COALESCE(SUM(json_extract(r.snapshot, '$.claim.coordinatorId') = ?), 0) AS coordinator,
       COALESCE(SUM(json_extract(r.snapshot, '$.claim.workerId') = ?), 0) AS worker
-      FROM channels c JOIN task_records r ON r.channel_id = c.id WHERE c.project_id = ? AND r.id != ?
+      FROM task_records r WHERE r.channel_id IN (SELECT value FROM json_each(?)) AND r.id != ?
         AND json_extract(r.snapshot, '$.claim.state') = 'held'`).get(actor.id, task.workerId,
-      this.deps.channels.getChannel(task.channelId).projectId, task.id) as { total: number; coordinator: number; worker: number };
+      JSON.stringify(this.deps.channels.channelIdsIn(this.deps.channels.getChannel(task.channelId).projectId)), task.id) as { total: number; coordinator: number; worker: number };
     if (counts.total >= CLAIM_LIMITS.project || counts.coordinator >= CLAIM_LIMITS.coordinator || counts.worker >= CLAIM_LIMITS.worker)
       throw new HiveError(429, 'Advisory claim capacity reached; explicitly release finished or uncertain claims');
     task.claim = { version: (old?.version ?? 0) + 1, coordinatorId: actor.id, coordinatorName: actor.name,

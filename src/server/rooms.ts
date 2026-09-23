@@ -53,11 +53,12 @@ export class RoomStore {
     this.db.prepare('INSERT INTO rooms(channel_id,snapshot) VALUES(?,?) ON CONFLICT(channel_id) DO UPDATE SET snapshot=excluded.snapshot')
       .run(room.channelId, JSON.stringify(room));
   }
-  private message(actor: Agent, channel: Channel, body: string, recipients: string[], threadId: string | null = null) {
+  private message(actor: Agent, channel: Channel, body: string, recipients: string[], threadId: string | null = null,
+    eventType: 'decision' | 'acknowledgement' = 'decision') {
     if (body.length > 4000) throw new HiveError(400, 'Room message too large');
     const id = randomUUID(), targets = JSON.stringify([...new Set(recipients)].filter(t => this.deps.channels.canSeeChannel(this.deps.identity.getAgent(t), channel)));
-    this.db.prepare(`INSERT INTO messages(id,channel_id,thread_id,author_id,body,kind,event_type,mentions,recipients,created_at)
-      VALUES(?,?,?,?,?,'chat','decision',?,?,?)`).run(id, channel.id, threadId, actor.id, body, targets, targets, Date.now());
+    this.deps.messages.insertCoordinationMessage({ id, channelId: channel.id, threadId, authorId: actor.id, body, eventType,
+      mentions: targets, recipients: targets, createdAt: Date.now() });
     return this.deps.messageQueries.getMessageById(id);
   }
   private instruction(actor: Agent, ch: Channel, seq: number | undefined, previous: number | null) {
@@ -187,8 +188,8 @@ export class RoomStore {
         [room.coordinatorId, ...room.participantIds, ...(previousCoordinator ? [previousCoordinator] : [])];
       const message = this.message(actor, ch, `Room ${action.type} · revision ${room.revision} / contract ${room.contractVersion}\n` +
         (action.type === 'acknowledge' ? 'Worker acknowledged the current room contract (not task completion).' :
-          `Read get_room for the effective rules and task fences. ${'reason' in action ? action.reason : ''}`), targets);
-      if (!notify) this.db.prepare("UPDATE messages SET event_type='acknowledgement' WHERE id=?").run(message.id);
+          `Read get_room for the effective rules and task fences. ${'reason' in action ? action.reason : ''}`), targets,
+        null, notify ? 'decision' : 'acknowledgement');
       room.lastEventSeq = message.seq;
       // Finite closure waives a fresh instruction for the brain, not the authority
       // boundary of a direct Human decision. Older requests must not undo it.

@@ -42,9 +42,7 @@ export class TaskStore {
     validated(z.string().uuid(), id);
     const task = this.get(actor, id);
     const checkpoint = task.checkpoint ?? null;
-    const newerMessages = checkpoint ? Boolean(this.db.prepare(
-      'SELECT 1 FROM messages WHERE channel_id = ? AND thread_id = ? AND seq > ? LIMIT 1',
-    ).get(task.channelId, task.id, checkpoint.messageSeq)) : false;
+    const newerMessages = checkpoint ? this.deps.messageQueries.hasNewerInThread(task.channelId, task.id, checkpoint.messageSeq) : false;
     const handoff = { taskId: task.id, channelId: task.channelId, workerId: task.workerId,
       objective: task.contract.objective, revision: task.revision, contractVersion: task.contractVersion,
       state: task.state, checkpoint, ...(task.claim ? { claim: task.claim, coordination: task.coordination } : {}), ...checkpointFreshness(task), newerMessages,
@@ -58,14 +56,13 @@ export class TaskStore {
     if (actor.role !== 'brain' && actor.role !== 'worker') throw new HiveError(403, 'Only task participants have a resume inbox');
     if (before !== undefined) validated(z.string().uuid(), before);
     const participant = actor.role === 'worker' ? 'r.worker_id' : "json_extract(r.snapshot, '$.assignerId')";
+    // Channels of the actor's project it is a member of; only brains see brains-type channels.
+    const channels = JSON.stringify(this.deps.channels.channelIdsIn(actor.projectId, actor, true));
     const rows = this.db.prepare(`SELECT r.id FROM task_records r
-      JOIN channels c ON c.id = r.channel_id
-      WHERE ${participant} = ? AND c.project_id = ?
-        AND EXISTS (SELECT 1 FROM channel_members cm WHERE cm.channel_id = r.channel_id AND cm.agent_id = ?)
-        AND (? = 'brain' OR c.type != 'brains')
+      WHERE ${participant} = ? AND r.channel_id IN (SELECT value FROM json_each(?))
         AND json_extract(r.snapshot, '$.state') != 'accepted_complete'
         ${before ? 'AND r.id < ?' : ''}
-      ORDER BY r.id DESC LIMIT 6`).all(actor.id, actor.projectId, actor.id, actor.role, ...(before ? [before] : [])) as { id: string }[];
+      ORDER BY r.id DESC LIMIT 6`).all(actor.id, channels, ...(before ? [before] : [])) as { id: string }[];
     const page = rows.slice(0, 5);
     const items: HandoffSummary[] = page.map(row => {
       const task = this.get(actor, row.id);
@@ -127,16 +124,14 @@ export class TaskStore {
     const now = Date.now();
     const recipients = JSON.stringify([...new Set([target, ...(envelope.previousWorkerId ? [envelope.previousWorkerId] : []),
       ...(isClaimAction(envelope.action.type) ? [task.assignerId, task.workerId] : [])])]);
-    this.db.prepare(`INSERT INTO messages(id, channel_id, thread_id, author_id, body, kind, event_type, mentions, created_at, recipients)
-      VALUES (?, ?, ?, ?, ?, 'chat', ?, ?, ?, ?)`)
-      .run(id, task.channelId, initial ? null : task.id, actor.id, body,
-        envelope.action.type === 'block' || envelope.action.type === 'reject' ? 'blocker' :
-          envelope.action.type === 'assign' || envelope.action.type === 'revise' ? 'assignment' :
-            envelope.action.type === 'review' ? 'decision' :
-              envelope.action.type === 'accept' ? 'acknowledgement' :
-                envelope.action.type === 'checkpoint' ? 'progress' : 'action_required',
-        recipients, now, recipients);
-    const seq = Number(this.db.prepare('SELECT seq FROM messages WHERE id = ?').get(id)!.seq);
+    const seq = this.deps.messages.insertCoordinationMessage({ id, channelId: task.channelId, threadId: initial ? null : task.id,
+      authorId: actor.id, body,
+      eventType: envelope.action.type === 'block' || envelope.action.type === 'reject' ? 'blocker' :
+        envelope.action.type === 'assign' || envelope.action.type === 'revise' ? 'assignment' :
+          envelope.action.type === 'review' ? 'decision' :
+            envelope.action.type === 'accept' ? 'acknowledgement' :
+              envelope.action.type === 'checkpoint' ? 'progress' : 'action_required',
+      mentions: recipients, createdAt: now, recipients });
     task.lastEventSeq = seq; task.updatedAt = now;
     if (envelope.action.type === 'checkpoint' && task.checkpoint) {
       task.checkpoint.messageId = id; task.checkpoint.messageSeq = seq;
@@ -149,7 +144,7 @@ export class TaskStore {
     linkAdaptiveTask(this.deps, task.id, adaptiveExecution);
     this.db.prepare('INSERT INTO task_events(message_id, task_id, actor_id, request_id, request_hash, envelope) VALUES (?, ?, ?, ?, ?, ?)')
       .run(id, task.id, actor.id, requestId, hash, JSON.stringify(envelope));
-    this.db.prepare('INSERT OR IGNORE INTO threads(id, channel_id, status) VALUES (?, ?, NULL)').run(task.id, task.channelId);
+    this.deps.messages.ensureThread(task.id, task.channelId);
     return id;
   }
   private record(task: TaskSnapshot) {
@@ -259,6 +254,11 @@ export class TaskStore {
         ...(task.claim ? { claimVersion: task.claim.version } : {}), action }, input.requestId, hash, false);
     });
     return duplicate! ?? this.published(actor, taskId, messageId);
+  }
+  /** The subset of `ids` that are tasks not yet accepted-complete. */
+  unfinished(ids: string[]): string[] {
+    return (this.db.prepare(`SELECT id FROM task_records WHERE id IN (SELECT value FROM json_each(?))
+      AND json_extract(snapshot,'$.state')!='accepted_complete'`).all(JSON.stringify(ids)) as { id: string }[]).map(row => row.id);
   }
   recordReceipt(workerId: string, seqs: number[], at: number): string[] {
     return (this.db.prepare(`UPDATE task_records SET received_at = ? WHERE worker_id = ? AND received_at IS NULL

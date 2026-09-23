@@ -201,6 +201,25 @@ export class MessageService implements MessagePoster {
     return this.telegramOrigin.has(messageId) || this.deps.timeline.source(messageId) === 'telegram';
   }
 
+  /**
+   * Inserts the message of a coordination record (task or room event) inside the caller's
+   * transaction and returns its seq; the caller publishes it after commit.
+   */
+  insertCoordinationMessage(input: {
+    id: string; channelId: string; threadId: string | null; authorId: string; body: string;
+    eventType: NonNullable<Message["eventType"]>; mentions: string; recipients: string; createdAt: number;
+  }): number {
+    this.db.prepare(`INSERT INTO messages(id, channel_id, thread_id, author_id, body, kind, event_type, mentions, created_at, recipients)
+      VALUES (?, ?, ?, ?, ?, 'chat', ?, ?, ?, ?)`)
+      .run(input.id, input.channelId, input.threadId, input.authorId, input.body, input.eventType, input.mentions, input.createdAt, input.recipients);
+    return Number((this.db.prepare("SELECT seq FROM messages WHERE id = ?").get(input.id) as { seq: number }).seq);
+  }
+
+  /** Registers a thread root (without a status) if it has none yet. */
+  ensureThread(threadId: string, channelId: string) {
+    this.db.prepare("INSERT OR IGNORE INTO threads(id, channel_id, status) VALUES (?, ?, NULL)").run(threadId, channelId);
+  }
+
   postSystem(channelId: string, body: string) {
     const human = this.deps.identity.getAgent(HUMAN_ID);
     try {

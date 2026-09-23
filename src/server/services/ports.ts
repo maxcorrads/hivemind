@@ -4,6 +4,9 @@ import type { Storage } from "../storage.ts";
 import type { AdaptiveTopologyRuntime } from "../adaptive-topology.ts";
 import type { RoomStore } from "../rooms.ts";
 import type { TaskStore } from "../tasks.ts";
+import type { InboxDeliveryStore } from "../inbox-delivery.ts";
+import type { NotificationStore } from "../notifications.ts";
+import type { ChannelService } from "./channels.ts";
 import type { IdentityService } from "./identity.ts";
 import type { MessageQueries } from "./message-queries.ts";
 import type { MessageService } from "./messages.ts";
@@ -85,26 +88,48 @@ type Agents<K extends keyof AgentDirectory = keyof AgentDirectory> = { readonly 
 type Messages<K extends keyof MessageReader = keyof MessageReader> = { readonly messageQueries: Pick<MessageReader, K> };
 type Poster<K extends keyof MessagePoster> = { readonly messages: Pick<MessagePoster, K> };
 
-export type TaskCoordinationDeps = Core & Channels;
+/** Channel id sets that coordination queries filter their own tables by. */
+type ChannelScopes<K extends "channelIdsIn" | "memberChannelIds" = "channelIdsIn"> = {
+  readonly channels: Pick<ChannelService, K>;
+};
+
+export type TaskCoordinationDeps = Core & Channels & ChannelScopes;
 export type CapacityDeps = Core & Agents<"listAgents">;
 export type AdmissionDeps = CapacityDeps & Channels & Agents & {
   readonly rooms: Pick<RoomStore, "peek">;
   readonly adaptiveTopology: AdaptiveTopologyRuntime;
 };
+/** Coordination records insert their own message (and thread root) inside their transaction. */
+type CoordinationWriter<K extends "insertCoordinationMessage" | "ensureThread"> = { readonly messages: Pick<MessageService, K> };
+
 export type TaskStoreDeps = AdmissionDeps & TaskCoordinationDeps & Messages<"getMessageById" | "getVisibleMessage"> &
-  Poster<"publishTaskMessage"> & {
+  Poster<"publishTaskMessage"> & CoordinationWriter<"insertCoordinationMessage" | "ensureThread"> & {
     readonly channels: { openDm(actor: Agent, otherName: string): Channel };
+    readonly messageQueries: Pick<MessageQueries, "hasNewerInThread">;
     readonly rooms: RoomStore;
   };
 export type RoomStoreDeps = Core & Channels & Agents & Messages<"getMessageById" | "getVisibleMessage"> &
-  Poster<"publishTaskMessage"> & { readonly tasks: Pick<TaskStore, "get"> };
-export type NotificationDeps = Core & Channels<"getChannel" | "canSeeChannel"> & { readonly rooms: Pick<RoomStore, "peek"> };
-export type RoutingDeps = Core & Channels & Agents<"getAgent"> & Poster<"postMessage"> & { readonly tasks: Pick<TaskStore, "get"> };
-export type TimelineDeps = Core & Channels<"getChannel" | "canSeeChannel"> & Messages<"getMessageById"> & {
+  Poster<"publishTaskMessage"> & CoordinationWriter<"insertCoordinationMessage"> & { readonly tasks: Pick<TaskStore, "get"> };
+export type NotificationDeps = Core & Channels<"getChannel" | "canSeeChannel"> & {
+  readonly messageQueries: Pick<MessageQueries, "messageRef">;
   readonly rooms: Pick<RoomStore, "peek">;
+};
+export type RoutingDeps = Core & Channels & ChannelScopes<"channelIdsIn" | "memberChannelIds"> & Agents<"getAgent"> &
+  Poster<"postMessage"> & {
+    readonly identity: Pick<IdentityService, "projectWorkerIds">;
+    readonly tasks: Pick<TaskStore, "get">;
+  };
+export type TimelineDeps = Core & Channels<"getChannel" | "canSeeChannel"> & Messages<"getMessageById"> & {
+  readonly messageQueries: Pick<MessageQueries, "messageRef" | "wakeHeader" | "traceMessages" | "postedByBot" | "seqsOf">;
+  readonly identity: Pick<IdentityService, "findAgent">;
+  readonly notifications: Pick<NotificationStore, "subscribedEventTypes">;
+  readonly rooms: Pick<RoomStore, "peek">;
+  readonly tasks: Pick<TaskStore, "get" | "unfinished">;
+};
+export type DecisionDeps = Core & Channels & Agents & Messages & Poster<"postMessage"> & {
+  readonly inbox: Pick<InboxDeliveryStore, "receiptState">;
   readonly tasks: Pick<TaskStore, "get">;
 };
-export type DecisionDeps = Core & Channels & Agents & Messages & Poster<"postMessage"> & { readonly tasks: Pick<TaskStore, "get"> };
 export type DiagnosticsDeps = { readonly home: string } & Agents<"getAgent">;
 
 /** What the adaptive topology runtime reads and writes outside its own tables. */

@@ -39,11 +39,7 @@ export class DecisionStore {
     return { state: 'awaiting_input' as const, currentTaskRevision: task.revision, staleReason: null };
   }
   private delivery(agentId: string, seq: number): DecisionDeliveryState {
-    const rows = this.deps.storage.db.prepare(`SELECT acknowledged_at FROM inbox_deliveries d
-      WHERE d.agent_id = ? AND EXISTS (SELECT 1 FROM json_each(d.seqs) WHERE CAST(value AS INTEGER) = ?)
-      ORDER BY acknowledged_at IS NOT NULL DESC LIMIT 1`).all(agentId, seq) as Array<{ acknowledged_at: number | null }>;
-    if (!rows.length) return 'pending';
-    return rows[0]!.acknowledged_at === null ? 'offered' : 'acknowledged';
+    return this.deps.inbox.receiptState(agentId, seq);
   }
   private view(actor: Agent, snapshot: DecisionSnapshot): DecisionView {
     this.visible(actor, snapshot);
