@@ -111,17 +111,62 @@ export function bindAdaptiveMessage(hive: Hive, actor: Agent, message: Message,
   }
 }
 
-/** Serializes the full await + synchronous mutation, rather than only the classifier call. */
+/** Post-commit routing that must not hold a brain's lane (e.g. project-wide revalidation after capacity changes). */
+export type DeferRouting = (label: string, task: () => Promise<unknown>) => void;
+const followUps = new WeakMap<Hive, Set<Promise<void>>>();
+function startFollowUps(hive: Hive, tasks: Array<[string, () => Promise<unknown>]>): void {
+  if (!tasks.length) return;
+  const running = followUps.get(hive) ?? new Set<Promise<void>>();
+  followUps.set(hive, running);
+  for (const [label, task] of tasks) {
+    const pending: Promise<void> = Promise.resolve().then(task).then(() => undefined, (error: unknown) => {
+      console.error(`Adaptive ${label} failed after commit`, error instanceof Error ? error.message : String(error));
+    }).finally(() => { running.delete(pending); });
+    running.add(pending);
+  }
+}
+/** Deterministic hook for tests and shutdown: resolves once every started post-commit routing task settled. */
+export async function settleAdaptiveFollowUps(hive: Hive): Promise<void> {
+  const running = followUps.get(hive);
+  while (running?.size) await Promise.all(running);
+}
+
+/**
+ * Serializes one brain's full Jev await + synchronous mutation, rather than only the classifier call.
+ *
+ * The lane is keyed by brain, not by project. The admission invariants still hold without a project-wide lane:
+ * - Permits are keyed by actor and are created and consumed synchronously (no await between
+ *   permitAdaptiveTask and the TaskStore write that admits it), so no other action can observe or replace them;
+ *   the per-brain lane additionally keeps one brain's own actions (and their retries) in submission order.
+ * - Worker budget, availability and execution revision are re-read inside the SQLite write transaction
+ *   (admitAdaptiveTask / bindAdaptiveMessage). A concurrent brain can only change capacity by committing its
+ *   own transaction first, which the later commit then observes and rejects with 409 — never over-admits.
+ * - Each execution's Jev revalidation is already serialized by AdaptiveTopologyRuntime and discards stale results
+ *   by revision, so parallel brains cannot interleave writes to one execution.
+ *
+ * Workers never go through Jev and their actions contain no await, so they bypass the lane entirely, as do
+ * brains without an active (enabled or locked) execution and no pending coordination of their own.
+ * Work registered through `defer` runs after the lane is released, fire-and-forget with error logging.
+ */
 const lanes = new WeakMap<Hive, Map<string, Promise<void>>>();
-export function coordinateMutation<T>(hive: Hive, actor: Agent, work: () => Promise<T>): Promise<T> {
+export function coordinateMutation<T>(hive: Hive, actor: Agent, work: (defer: DeferRouting) => Promise<T>): Promise<T> {
   const map = lanes.get(hive) ?? new Map<string, Promise<void>>();
   lanes.set(hive, map);
-  const key = actor.projectId ?? actor.id;
-  const result = (map.get(key) ?? Promise.resolve()).then(work);
-  const finished = result.then(() => undefined, () => undefined).finally(() => {
-    if (map.get(key) === finished) map.delete(key);
-  });
-  map.set(key, finished);
+  const deferred: Array<[string, () => Promise<unknown>]> = [];
+  const run = () => work((label, task) => { deferred.push([label, task]); });
+  const key = actor.id;
+  const bypass = actor.role !== 'brain' || (!map.has(key) && !hive.adaptiveTopology?.hasActive(actor));
+  let result: Promise<T>;
+  if (bypass) result = run();
+  else {
+    result = (map.get(key) ?? Promise.resolve()).then(run);
+    const finished = result.then(() => undefined, () => undefined).finally(() => {
+      if (map.get(key) === finished) map.delete(key);
+    });
+    map.set(key, finished);
+  }
+  // Deferred routing starts once this mutation settled, i.e. after it left its lane.
+  void result.then(() => undefined, () => undefined).finally(() => startFollowUps(hive, deferred));
   return result;
 }
 

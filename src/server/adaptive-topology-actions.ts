@@ -4,7 +4,8 @@ import { HiveError, type Agent, type ThreadStatus } from '../shared/types.ts';
 import { validated, sendInputSchema } from '../shared/api-contract.ts';
 import { assignTaskSchema, taskEventSchema } from '../shared/tasks.ts';
 import { roomEventSchema } from '../shared/rooms.ts';
-import { bindAdaptiveMessage, clearAdaptivePermit, coordinateMutation, coordinationEventId, permitAdaptiveTask } from './adaptive-topology-admission.ts';
+import { bindAdaptiveMessage, clearAdaptivePermit, coordinateMutation, coordinationEventId, permitAdaptiveTask,
+  type DeferRouting } from './adaptive-topology-admission.ts';
 import { readAdaptiveCapacity } from './adaptive-topology-capacity.ts';
 import type { AdaptiveAgentPolicy, AdaptiveCoordinationEvent } from './adaptive-topology.ts';
 
@@ -28,6 +29,24 @@ function reauthorize(hive: Hive, actor: Agent, before: unknown, token?: string):
   if (hive.db.prepare('SELECT token_hash FROM agents WHERE id=?').get(actor.id)?.token_hash !== before)
     throw new HiveError(401, 'Credentials changed while revalidating coordination');
 }
+/** Project-wide revalidation never holds the acting brain's lane; it runs once the mutation has left it. */
+function deferCapacityChange(hive: Hive, actor: Agent, defer: DeferRouting, eventId: string, exceptExecution?: string): void {
+  if (actor.role !== 'brain') return;
+  defer('capacity revalidation', () => hive.adaptiveTopology.capacityChanged(actor, eventId, exceptExecution));
+}
+type PostCommitRouting = { adaptiveRouting: AdaptiveAgentPolicy | null; routingWarning?: string };
+/**
+ * The mutation already committed: routing that follows it may degrade, but must never turn a committed
+ * mutation into a reported failure (a retry would find nothing left to evaluate).
+ */
+async function afterCommit(actor: Agent, evaluate: () => Promise<AdaptiveAgentPolicy | null>): Promise<PostCommitRouting> {
+  try { return { adaptiveRouting: await evaluate() }; } catch (error) {
+    console.error(`Adaptive routing after a committed action by ${actor.name} failed`, error instanceof Error ? error.message : String(error));
+    // Only public HiveError reasons reach the agent; anything else stays in the server log.
+    const reason = error instanceof HiveError ? error.message : 'internal routing error';
+    return { adaptiveRouting: null, routingWarning: `Committed; adaptive routing was not updated: ${reason}` };
+  }
+}
 
 export function sendAdaptiveAgentMessage(hive: Hive, actor: Agent, channelRef: string, raw: unknown, token?: string) {
   const { executionId, ...input } = validated(sendInputSchema, raw);
@@ -50,12 +69,16 @@ export function sendAdaptiveAgentMessage(hive: Hive, actor: Agent, channelRef: s
       return { ok: true, seq: message.seq, id: message.id };
     }
     const roster = hive.listAgents(actor);
-    const directed = new Set([
-      ...parseMentions(body, roster),
+    const mentioned = new Set(parseMentions(body, roster));
+    const explicit = new Set([
       ...(input.recipients ?? []).map(name => hive.getAgentByName(name)?.id).filter((id): id is string => Boolean(id)),
       ...(channel.type === 'dm' ? channel.memberIds : []),
     ]);
-    const targets = roster.filter(a => a.role === 'worker' && directed.has(a.id));
+    const directed = new Set([...mentioned, ...explicit]);
+    // An @mention delegates only to a worker who will actually receive this message; naming any other
+    // worker (e.g. reporting "@Worker finished" to the Human) is a plain reference, not new work.
+    const targets = roster.filter(a => a.role === 'worker' &&
+      (explicit.has(a.id) || (mentioned.has(a.id) && hive.canSeeChannel(a, channel) && hive.canPost(a, channel))));
     const room = hive.rooms.peek(channel.id);
     if (room && directed.size === 0) {
       for (const id of room.participantIds) { const worker = roster.find(a => a.id === id); if (worker) targets.push(worker); }
@@ -97,7 +120,7 @@ export function sendAdaptiveAgentMessage(hive: Hive, actor: Agent, channelRef: s
 export function assignAdaptiveTask(hive: Hive, actor: Agent, raw: unknown, token?: string) {
   if (actor.role !== 'brain') throw new HiveError(403, 'Only a brain assigns work');
   const { executionId, ...input } = validated(assignTaskSchema, raw);
-  return coordinateMutation(hive, actor, async () => {
+  return coordinateMutation(hive, actor, async defer => {
     authenticate(hive, actor, token);
     if (taskRetry(hive, actor, input.requestId)) return { ...hive.tasks.assign(actor, input), adaptiveRouting: hive.adaptiveTopology.forAgent(actor, executionId) };
     const coordination = event(actor, 'task', input.requestId, { kind: 'delegation_attempt', executionId,
@@ -105,17 +128,17 @@ export function assignAdaptiveTask(hive: Hive, actor: Agent, raw: unknown, token
     const policy = await hive.adaptiveTopology.beforeBrainAction(actor, coordination);
     authenticate(hive, actor, token);
     permitAdaptiveTask(hive, actor, input, policy);
-    try {
-      const result = hive.tasks.assign(actor, input);
-      await hive.adaptiveTopology.capacityChanged(actor, input.requestId, policy?.executionId);
-      return { ...result, adaptiveRouting: policy ? hive.adaptiveTopology.forAgent(actor, policy.executionId) : null };
-    } finally { clearAdaptivePermit(hive, actor.id); }
+    // The permit is created and consumed synchronously: nothing can interleave before it is cleared.
+    let result: ReturnType<Hive['tasks']['assign']>;
+    try { result = hive.tasks.assign(actor, input); } finally { clearAdaptivePermit(hive, actor.id); }
+    deferCapacityChange(hive, actor, defer, input.requestId, policy?.executionId);
+    return { ...result, adaptiveRouting: policy ? hive.adaptiveTopology.forAgent(actor, policy.executionId) : null };
   });
 }
 
 export function mutateAdaptiveTask(hive: Hive, actor: Agent, taskId: string, raw: unknown, token?: string) {
   const { executionId, ...input } = validated(taskEventSchema, raw), action = input.action;
-  return coordinateMutation(hive, actor, async () => {
+  return coordinateMutation(hive, actor, async defer => {
     authenticate(hive, actor, token);
     const task = hive.tasks.get(actor, taskId);
     // TaskStore owns claim permissions and revision conflicts; routing must not replace a 409 with its own 403.
@@ -137,13 +160,13 @@ export function mutateAdaptiveTask(hive: Hive, actor: Agent, taskId: string, raw
       permitAdaptiveTask(hive, actor, { requestId: input.requestId, worker: action.worker,
         channel: task.channelId, contract: action.contract }, policy);
     }
-    try {
-      const result = hive.tasks.event(actor, taskId, input);
-      // The brain's review is evaluated after the mutation reaches its safe checkpoint.
-      if (coordination && action.type !== 'revise') policy = await hive.adaptiveTopology.afterAgentAction(actor, coordination);
-      await hive.adaptiveTopology.capacityChanged(actor, input.requestId, policy?.executionId);
-      return { ...result, adaptiveRouting: policy };
-    } finally { clearAdaptivePermit(hive, actor.id); }
+    let result: ReturnType<Hive['tasks']['event']>;
+    try { result = hive.tasks.event(actor, taskId, input); } finally { clearAdaptivePermit(hive, actor.id); }
+    // Committed. The brain's review is evaluated after the mutation reaches its safe checkpoint.
+    const routing = coordination && action.type !== 'revise'
+      ? await afterCommit(actor, () => hive.adaptiveTopology.afterAgentAction(actor, coordination)) : { adaptiveRouting: policy };
+    deferCapacityChange(hive, actor, defer, input.requestId, routing.adaptiveRouting?.executionId);
+    return { ...result, ...routing };
   });
 }
 
@@ -172,25 +195,24 @@ export function mutateAdaptiveRoom(hive: Hive, actor: Agent, channelId: string, 
       }
     }
     const result = hive.rooms.event(actor, channelId, input);
-    if (!participants) policy = await hive.adaptiveTopology.afterAgentAction(actor, coordination);
-    return { ...result, adaptiveRouting: policy };
+    if (participants) return { ...result, adaptiveRouting: policy };
+    return { ...result, ...await afterCommit(actor, () => hive.adaptiveTopology.afterAgentAction(actor, coordination)) };
   });
 }
 
 export function setAdaptiveThreadStatus(hive: Hive, actor: Agent, threadId: string, status: ThreadStatus | null, token?: string) {
-  return coordinateMutation(hive, actor, async () => {
+  return coordinateMutation(hive, actor, async defer => {
     authenticate(hive, actor, token);
     const root = hive.getMessageById(threadId);
     const before = hive.db.prepare('SELECT status FROM threads WHERE id=?').get(threadId)?.status;
     const thread = hive.setThreadStatus(actor, threadId, status);
-    if (before !== status && actor.role === 'brain') {
-      const coordination = event(actor, 'thread-status', `${threadId}:${status}:${randomUUID()}`, {
-        kind: 'task_event', channelId: root.channelId, summary: `thread status ${status}`,
-        taskId: hive.tasks.has(threadId) ? threadId : undefined, threadId,
-      });
-      const policy = await hive.adaptiveTopology.afterAgentAction(actor, coordination);
-      await hive.adaptiveTopology.capacityChanged(actor, coordination.eventId!, policy?.executionId);
-    }
-    return thread;
+    if (before === status || actor.role !== 'brain') return { thread, adaptiveRouting: null } as { thread: typeof thread } & PostCommitRouting;
+    const coordination = event(actor, 'thread-status', `${threadId}:${status}:${randomUUID()}`, {
+      kind: 'task_event', channelId: root.channelId, summary: `thread status ${status}`,
+      taskId: hive.tasks.has(threadId) ? threadId : undefined, threadId,
+    });
+    const routing = await afterCommit(actor, () => hive.adaptiveTopology.afterAgentAction(actor, coordination));
+    deferCapacityChange(hive, actor, defer, coordination.eventId!, routing.adaptiveRouting?.executionId);
+    return { thread, ...routing };
   });
 }
