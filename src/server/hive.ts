@@ -2,16 +2,17 @@ import { RoutingStore } from './routing.ts';
 import { DecisionStore } from './decisions.ts';
 import { TimelineStore } from './timeline.ts';
 import { UploadBudget, type UploadLimits } from "./upload-budget.ts";
-import { joinInputSchema, validated, waitDurationSchema, cursorSchema, limitSchema, channelInputSchema, attachmentIdsSchema, memberNamesSchema } from "../shared/api-contract.ts";
+import { validated, waitDurationSchema, cursorSchema, limitSchema, channelInputSchema, attachmentIdsSchema, memberNamesSchema } from "../shared/api-contract.ts";
 import { SendRequests } from "./send-requests.ts";
 import { pruneTelegramUpdates, type TelegramUpdateScope } from "./telegram-inbox.ts";
 import { pruneTelegramFailures, type TelegramDestination } from "./telegram-outbox.ts";
 import { TelegramAdminService } from "./services/telegram-admin.ts";
 import { FileService } from "./services/files.ts";
 import { ProjectService } from "./services/projects.ts";
-import type { ChannelAccess, Core, MessageReader } from "./services/ports.ts";
+import { IdentityService, hashToken, newToken, type JoinInput } from "./services/identity.ts";
+import { Waiters, type Waiter } from "./services/waiters.ts";
+import type { ChannelAccess, Core, MessagePoster, MessageReader } from "./services/ports.ts";
 import { Storage } from './storage.ts';
-import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
@@ -22,12 +23,10 @@ import {
   FILES_PER_MESSAGE,
   MESSAGE_EVENT_TYPES,
   WAIT_MAX_BYTES,
-  PRESENCE_IDLE_MS,
   REACTION_EMOJIS,
   HiveError,
   DEFAULT_PROJECT_SLUG,
   HUMAN_ID,
-  HUMAN_NAME,
   WAIT_SCAN_MAX,
   type Agent,
   type BotEvent,
@@ -41,7 +40,6 @@ import {
   type SearchHit,
   type ReactionCount,
   type Role,
-  type Seniority,
   type Thread,
   type ThreadStatus,
   type WaitResult,
@@ -49,9 +47,7 @@ import {
   type QueueEstimate,
   type DigestExpansionResult,
 } from "../shared/types.ts";
-import { canonicalWorktree, resolveJoinProject } from "../shared/project.ts";
 import { clampSearchLimit, likeNeedle, parseSearchQuery, snippetAround } from "../shared/search-query.ts";
-import { pickName } from "./names.ts";
 import { ReadState } from "./read-state.ts";
 import { InboxDeliveryStore } from "./inbox-delivery.ts";
 import { InboxReader } from "./inbox-reader.ts";
@@ -71,23 +67,11 @@ import { AdaptiveTopologyRuntime } from './adaptive-topology.ts';
 import type { TaskEnvelope } from '../shared/tasks.ts';
 
 export { hiveHome } from "./paths.ts";
+export { hashToken, newToken, describeAgent } from "./services/identity.ts";
 import { parseMentions } from "../shared/mentions.ts";
 // Kept for callers that historically imported the helper from the Hive module.
 export { parseMentions };
 
-type AgentRow = {
-  id: string;
-  name: string;
-  role: Role;
-  seniority: Seniority | null;
-  focus: string | null;
-  token_hash: string;
-  online: number;
-  last_seen_at: number;
-  created_at: number;
-  inbox_cursor: number;
-  project_id: string | null;
-};
 
 type ChannelRow = {
   id: string;
@@ -123,14 +107,6 @@ type MessageRow = {
 };
 
 
-export function hashToken(token: string): string {
-  return createHash("sha256").update(token).digest("hex");
-}
-
-export function newToken(): string {
-  return `hm_${randomBytes(24).toString("hex")}`;
-}
-
 const HYDRATION_BATCH = 400;
 function* batches<T>(items: T[]): Generator<T[]> {
   for (let offset = 0; offset < items.length; offset += HYDRATION_BATCH) {
@@ -142,11 +118,6 @@ function now(): number {
   return Date.now();
 }
 
-type Waiter = {
-  wake: () => void;
-  supersede: () => void;
-};
-
 /** Every service's dependencies; filled in construction order, read by services at call time. */
 type ServiceRegistry = Core & {
   home: string;
@@ -154,9 +125,10 @@ type ServiceRegistry = Core & {
   telegram: TelegramAdminService;
   files: FileService;
   projects: ProjectService;
-  messages: MessageReader;
-  channels: ChannelAccess & { ensureBuiltinChannels(project: Project): void; addHumanToAllChannels(): void };
-  agents: { busyAgents(projectId: string): Agent[] };
+  messages: MessageReader & MessagePoster;
+  channels: ChannelAccess & Pick<Hive, "ensureBuiltinChannels" | "addHumanToAllChannels" | "addMember" | "channelsOfProject" | "generalChannelId">;
+  agents: IdentityService;
+  waiters: Waiters;
 };
 
 export class Hive {
@@ -174,7 +146,7 @@ export class Hive {
   readonly decisions!: DecisionStore;
   readonly timeline!: TimelineStore;
   readonly adaptiveTopology!: AdaptiveTopologyRuntime;
-  private waiters = new Map<string, Waiter>();
+  private readonly waiters = new Waiters();
   private telegramOrigin = new Set<string>();
   readonly uploads!: UploadBudget;
   private readonly readState!: ReadState;
@@ -182,6 +154,7 @@ export class Hive {
   readonly telegramAdmin!: TelegramAdminService;
   readonly files!: FileService;
   readonly projects!: ProjectService;
+  readonly identity!: IdentityService;
   /** The registry every service receives, typed down to its own dependencies (services/ports.ts). */
   private readonly services: ServiceRegistry;
 
@@ -192,7 +165,7 @@ export class Hive {
     this.db = new DatabaseSync(dbPath);
     this.storage = Storage.for(this.db);
     // Transitional: domains not yet extracted are served by Hive itself.
-    const registry: Partial<ServiceRegistry> = { storage: this.storage, bus: this.bus, home: this.home, messages: this, channels: this, agents: this };
+    const registry: Partial<ServiceRegistry> = { storage: this.storage, bus: this.bus, home: this.home, messages: this, channels: this, waiters: this.waiters };
     this.services = registry as ServiceRegistry;
     this.bus.bindStorage(this.storage);
     try {
@@ -209,6 +182,7 @@ export class Hive {
       this.telegramAdmin = services.telegram = new TelegramAdminService(services);
       this.files = services.files = new FileService(services);
       this.projects = services.projects = new ProjectService(services);
+      this.identity = services.agents = new IdentityService(services);
       this.transaction(() => this.bootstrap());
       this.transaction(() => { pruneTelegramUpdates(this.db); pruneTelegramFailures(this.db); });
       this.readState = new ReadState(this.db);
@@ -246,14 +220,27 @@ export class Hive {
   updateProject(...args: Parameters<ProjectService["updateProject"]>) { return this.projects.updateProject(...args); }
   deleteProject(...args: Parameters<ProjectService["deleteProject"]>) { this.projects.deleteProject(...args); }
 
-  /** Brains/workers of a project that are online or blocked in a wait. */
-  busyAgents(projectId: string): Agent[] {
-    const rows = this.db.prepare(
-      "SELECT * FROM agents WHERE project_id = ? AND id != ? AND role != 'human'",
-    ).all(projectId, HUMAN_ID) as AgentRow[];
-    return rows.map((row) => this.mapAgent(row)).filter((agent) => agent.online || this.waiters.has(agent.id));
+  touch(agentId: string, online?: boolean) { this.identity.touch(agentId, online); }
+  setOffline(agentId: string) { this.identity.setOffline(agentId); }
+  sweepPresence(maxIdleMs?: number) { this.identity.sweepPresence(maxIdleMs); }
+  removeAgent(actor: Agent, name: string) { return this.identity.removeAgent(actor, name); }
+  getAgent(id: string) { return this.identity.getAgent(id); }
+  getAgentByName(name: string) { return this.identity.getAgentByName(name); }
+  agentByToken(token: string) { return this.identity.agentByToken(token); }
+  listAgents(viewer?: Agent) { return this.identity.listAgents(viewer); }
+  join(input: JoinInput) { return this.identity.join(input); }
+
+  /** Channels of a project with their type (join adds a new agent to the ones its role may see). */
+  channelsOfProject(projectId: string): Array<{ id: string; type: ChannelType }> {
+    return this.db.prepare("SELECT id, type FROM channels WHERE project_id = ?").all(projectId) as Array<{ id: string; type: ChannelType }>;
   }
 
+  generalChannelId(projectId: string): string | null {
+    const general = this.db.prepare(
+      "SELECT id FROM channels WHERE project_id = ? AND lower(name) = 'general'",
+    ).get(projectId) as { id: string } | undefined;
+    return general?.id ?? null;
+  }
   telegramOutboxHealth() { return this.telegramAdmin.outboxHealth(); }
   telegramPollHealth() { return this.telegramAdmin.pollHealth(); }
   telegramHealth() { return this.telegramAdmin.health(); }
@@ -268,15 +255,7 @@ export class Hive {
   forgetTelegramChat(chatId: number) { this.telegramAdmin.forgetChat(chatId); }
 
   private bootstrap() {
-    const existing = this.db.prepare("SELECT id FROM agents WHERE id = ?").get(HUMAN_ID);
-    if (!existing) {
-      const t = now();
-      this.db.prepare(
-        `INSERT INTO agents (id, name, role, seniority, focus, token_hash, online, last_seen_at, created_at, inbox_cursor)
-         VALUES (?, ?, 'human', NULL, NULL, ?, 1, ?, ?, 0)`,
-      ).run(HUMAN_ID, HUMAN_NAME, hashToken("human-local"), t, t);
-    }
-
+    this.identity.ensureHuman();
     const home = this.projects.listProjects()[0];
     if (home) this.ensureBuiltinChannels(home);
     this.addHumanToAllChannels();
@@ -321,236 +300,6 @@ export class Hive {
     this.db.prepare(
       `INSERT OR IGNORE INTO channel_members (channel_id, agent_id) VALUES (?, ?)`,
     ).run(channelId, agentId);
-  }
-
-  touch(agentId: string, online = true) {
-    const current = this.db.prepare(
-      "SELECT online, last_seen_at AS lastSeenAt FROM agents WHERE id = ?",
-    ).get(agentId) as { online: number; lastSeenAt: number } | undefined;
-    if (!current) return;
-    const wanted = online ? 1 : 0;
-    const at = now();
-    const stateChanged = current.online !== wanted;
-    const needsHeartbeatWrite = online && at - current.lastSeenAt >= 15_000;
-    if (!stateChanged && !needsHeartbeatWrite) return;
-
-    this.db.prepare(
-      `UPDATE agents SET last_seen_at = ?, online = ? WHERE id = ?`,
-    ).run(at, wanted, agentId);
-    if (stateChanged) this.afterCommit(() => this.bus.emit("agent", this.getAgent(agentId)));
-  }
-
-  setOffline(agentId: string) {
-    if (agentId === HUMAN_ID) return;
-    this.touch(agentId, false);
-  }
-
-  removeAgent(actor: Agent, name: string): Agent {
-    if (actor.role !== "human") throw new HiveError(403, "Only Human can remove agents");
-    const target = this.getAgentByName(name);
-    if (!target) throw new HiveError(404, `No agent named ${name}`);
-    if (target.id === HUMAN_ID || target.role === "human") {
-      throw new HiveError(403, "Cannot remove Human");
-    }
-    const waiter = this.waiters.get(target.id);
-    if (waiter) waiter.supersede();
-    this.waiters.delete(target.id);
-    this.db.prepare("DELETE FROM channel_members WHERE agent_id = ?").run(target.id);
-    this.db.prepare("DELETE FROM reads WHERE agent_id = ?").run(target.id);
-    this.db.prepare("DELETE FROM reactions WHERE agent_id = ?").run(target.id);
-    this.files.deleteUnsentBy(target.id);
-    this.db.prepare("DELETE FROM agents WHERE id = ?").run(target.id);
-    if (target.projectId) {
-      const general = this.db.prepare(
-        "SELECT id FROM channels WHERE project_id = ? AND lower(name) = 'general'",
-      ).get(target.projectId) as { id: string } | undefined;
-      if (general) this.postSystem(general.id, `${actor.name} removed ${target.name} from the hive.`);
-    }
-    this.bus.emit("project", { removed: target.name });
-    return target;
-  }
-
-  getAgent(id: string): Agent {
-    const row = this.db.prepare("SELECT * FROM agents WHERE id = ?").get(id) as AgentRow | undefined;
-    if (!row) throw new HiveError(404, "Agent not found");
-    return this.mapAgent(row);
-  }
-
-  getAgentByName(name: string): Agent | null {
-    const row = this.db.prepare("SELECT * FROM agents WHERE lower(name) = lower(?)").get(name) as
-      | AgentRow
-      | undefined;
-    return row ? this.mapAgent(row) : null;
-  }
-
-  agentByToken(token: string): Agent {
-    const row = this.db.prepare("SELECT * FROM agents WHERE token_hash = ?").get(hashToken(token)) as
-      | AgentRow
-      | undefined;
-    if (!row) throw new HiveError(401, "Invalid token");
-    return this.mapAgent(row);
-  }
-
-  private agentFromRow(row: AgentRow, projectSlug: string | null): Agent {
-    return {
-      id: row.id,
-      name: row.name,
-      role: row.role,
-      seniority: row.seniority,
-      focus: row.focus,
-      online: row.id === HUMAN_ID ? true : Boolean(row.online),
-      lastSeenAt: row.last_seen_at,
-      createdAt: row.created_at,
-      projectId: row.project_id,
-      project: projectSlug,
-    };
-  }
-
-  private mapAgent(row: AgentRow): Agent {
-    const project = row.project_id
-      ? this.db.prepare("SELECT slug FROM projects WHERE id = ?").get(row.project_id) as { slug: string } | undefined
-      : undefined;
-    return this.agentFromRow(row, project?.slug ?? null);
-  }
-
-  listAgents(viewer?: Agent): Agent[] {
-    type Joined = AgentRow & { project_slug: string | null };
-    const scoped = viewer && viewer.role !== "human";
-    // Both OR arms have indexes. Without idx_agents_role SQLite scans all projects.
-    const rows = this.db.prepare(`
-      SELECT a.*, p.slug AS project_slug FROM agents a
-      LEFT JOIN projects p ON p.id = a.project_id
-      ${scoped ? "WHERE a.role = 'human' OR a.project_id = ?" : ""}
-      ORDER BY a.role, a.seniority, a.name
-    `).all(...(scoped ? [viewer.projectId] : [])) as Joined[];
-    return rows.map((row) => this.agentFromRow(row, row.project_slug));
-  }
-
-  private assertSameProject(agent: Agent, project: Project) {
-    if (agent.role === "human") return;
-    if (agent.project && agent.project !== project.slug) {
-      throw new HiveError(409, `${agent.name} is in ${agent.project}; project cannot change`);
-    }
-  }
-
-  join(input: {
-    role: "brain" | "worker";
-    seniority?: Seniority | null;
-    focus?: string | null;
-    token?: string | null;
-    resumeName?: string | null;
-    project?: string | null;
-    cwd?: string | null;
-  }): { agent: Agent; token: string; created: boolean } {
-    validated(joinInputSchema, input);
-    if (input.role !== "brain" && input.role !== "worker") {
-      throw new HiveError(400, "role must be brain or worker");
-    }
-    const assertResumable = (agent: Agent) => {
-      if (agent.role !== input.role) {
-        throw new HiveError(409, `${agent.name} is a ${agent.role}; role cannot change`);
-      }
-      if (input.role === "worker" && input.seniority && agent.seniority !== input.seniority) {
-        throw new HiveError(409, `${agent.name} is ${agent.seniority}; seniority cannot change`);
-      }
-      if (input.project) this.assertSameProject(agent, this.projects.getProjectBySlug(input.project));
-      else if (input.cwd) {
-        const cwd = canonicalWorktree(input.cwd);
-        const worktree = this.projects.listProjects().find(project => project.worktree && canonicalWorktree(project.worktree) === cwd);
-        if (worktree) this.assertSameProject(agent, worktree);
-      }
-    };
-    // The session key of a running process: a repeated join keeps its session.
-    const current = input.token
-      ? this.db.prepare("SELECT * FROM agents WHERE token_hash = ?").get(hashToken(input.token)) as AgentRow | undefined
-      : undefined;
-    if (current) {
-      const agent = this.mapAgent(current);
-      if (input.resumeName && agent.name.toLowerCase() !== input.resumeName.toLowerCase()) {
-        throw new HiveError(403, `This session is ${agent.name}, not ${input.resumeName}`);
-      }
-      assertResumable(agent);
-      this.touch(agent.id, true);
-      return { agent, token: input.token!, created: false };
-    }
-    // Brains and workers have no stored credentials: resuming by name opens a new session
-    // and supersedes the previous one, whose key stops working.
-    if (input.resumeName) {
-      const row = this.db.prepare("SELECT * FROM agents WHERE lower(name) = lower(?) AND role IN ('brain','worker')")
-        .get(input.resumeName) as AgentRow | undefined;
-      if (!row) throw new HiveError(404, `No brain or worker named ${input.resumeName}; join without resume to get a new name`);
-      const agent = this.mapAgent(row);
-      assertResumable(agent);
-      return this.transaction(() => {
-        const token = this.replaceAgentSession(agent.id);
-        this.touch(agent.id, true);
-        return { agent: this.getAgent(agent.id), token, created: false };
-      });
-    }
-    if (input.token) throw new HiveError(401, "This session key is no longer valid; join again with resume=YOUR_NAME");
-
-    if (input.role === "worker" && !input.seniority) {
-      throw new HiveError(400, "Workers need --seniority junior|mid|senior");
-    }
-    if (input.role === "brain" && input.seniority) {
-      throw new HiveError(400, "Brains have no seniority; only workers do");
-    }
-
-    const project = resolveJoinProject(this.projects.listProjects(), { project: input.project, cwd: input.cwd });
-    return this.transaction(() => {
-      const taken = new Set(
-        (this.db.prepare("SELECT lower(name) AS n FROM agents").all() as { n: string }[]).map((r) => r.n),
-      );
-      const name = pickName(input.role, taken);
-      const id = crypto.randomUUID();
-      const token = newToken();
-      const t = now();
-      this.db.prepare(
-        `INSERT INTO agents (id, name, role, seniority, focus, token_hash, online, last_seen_at, created_at, inbox_cursor, project_id)
-         VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, 0, ?)`,
-      ).run(
-        id,
-        name,
-        input.role,
-        input.role === "worker" ? (input.seniority ?? null) : null,
-        input.focus ?? null,
-        hashToken(token),
-        t,
-        t,
-        project.id,
-      );
-
-      for (const ch of this.db.prepare("SELECT id, type FROM channels WHERE project_id = ?").all(project.id) as {
-        id: string;
-        type: ChannelType;
-      }[]) {
-        if (ch.type === "public") this.addMember(ch.id, id);
-        if (ch.type === "brains" && input.role === "brain") this.addMember(ch.id, id);
-      }
-
-      const agent = this.getAgent(id);
-      const general = this.db.prepare(
-        "SELECT id FROM channels WHERE project_id = ? AND lower(name) = 'general'",
-      ).get(project.id) as { id: string } | undefined;
-      if (general) {
-        this.postMessage(this.getAgent(HUMAN_ID), { channel: general.id, body: `${agent.name} has joined as ${describeAgent(agent)}.`, kind: "system" });
-      }
-      const maxSeq = this.db.prepare("SELECT COALESCE(MAX(seq), 0) AS n FROM messages").get() as { n: number };
-      this.db.prepare("UPDATE agents SET inbox_cursor = ? WHERE id = ?").run(maxSeq.n, id);
-      this.afterCommit(() => this.bus.emit("agent", agent));
-      return { agent: this.getAgent(id), token, created: true };
-    });
-  }
-
-  /** Issues a new session key and fences the previous session's waits and receipts in the same commit. */
-  private replaceAgentSession(agentId: string): string {
-    const token = newToken();
-    this.db.prepare("UPDATE agents SET token_hash=? WHERE id=?").run(hashToken(token), agentId);
-    // Do not call the inbox store's top-level transaction from this transaction.
-    this.db.prepare(`INSERT INTO inbox_sessions(agent_id,session_id,generation)
-      SELECT ?,?,COALESCE(MAX(generation),0)+1 FROM inbox_sessions WHERE agent_id=?`).run(agentId, crypto.randomUUID(), agentId);
-    this.afterCommit(() => this.waiters.get(agentId)?.supersede());
-    return token;
   }
 
   /** Constant-parameter authorization scope, shared by lists and inbox reads. */
@@ -676,7 +425,7 @@ export class Hive {
         `INSERT INTO channels (id, name, type, topic, created_by, created_at, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       ).run(id, slug, input.type, input.topic ?? null, actor.id, now(), project.id);
       this.addMember(id, HUMAN_ID);
-      const roster = this.listAgents().filter((a) => a.role === "human" || a.projectId === project.id);
+      const roster = this.identity.listAgents().filter((a) => a.role === "human" || a.projectId === project.id);
       if (input.type === "public") {
         for (const a of roster) {
           if (a.role !== "human" && a.role !== "bot") this.addMember(id, a.id);
@@ -688,19 +437,19 @@ export class Hive {
       } else {
         this.addMember(id, actor.id);
         for (const name of input.memberNames ?? []) {
-          const m = this.getAgentByName(name);
+          const m = this.identity.getAgentByName(name);
           if (m && (m.role === "human" || m.projectId === project.id)) this.addMember(id, m.id);
         }
       }
       const ch = this.getChannel(id);
       this.afterCommit(() => this.bus.emit("channel", ch));
-      this.postMessage(this.getAgent(HUMAN_ID), { channel: id, body: `${actor.name} created #${slug}`, kind: "system" });
+      this.postMessage(this.identity.getAgent(HUMAN_ID), { channel: id, body: `${actor.name} created #${slug}`, kind: "system" });
       return this.getChannel(id);
     });
   }
 
   openDm(actor: Agent, otherName: string): Channel {
-    const other = this.getAgentByName(otherName);
+    const other = this.identity.getAgentByName(otherName);
     if (!other) throw new HiveError(404, `No agent named ${otherName}`);
     if (actor.role === "bot" || other.role === "bot") throw new HiveError(403, "Bots publish observations to explicitly linked channels, not DMs");
     if (other.id === actor.id) throw new HiveError(400, "Cannot DM yourself");
@@ -750,21 +499,21 @@ export class Hive {
     const parsed = createBotSchema.safeParse(raw);
     if (!parsed.success) throw new HiveError(400, "Bot name must be 1–40 letters, digits, underscores or dashes, starting with a letter");
     const { name } = parsed.data;
-    if (this.getAgentByName(name)) throw new HiveError(409, "This identity name is already in use");
+    if (this.identity.getAgentByName(name)) throw new HiveError(409, "This identity name is already in use");
     const id = crypto.randomUUID();
     const token = newToken();
     const t = now();
     this.db.prepare(`INSERT INTO agents
       (id, name, role, token_hash, online, last_seen_at, created_at, project_id)
       VALUES (?, ?, 'bot', ?, 0, ?, ?, ?)`).run(id, name, hashToken(token), t, t, project.id);
-    const bot = this.getAgent(id);
+    const bot = this.identity.getAgent(id);
     this.bus.emit("agent", bot);
     return { bot, token };
   }
 
   botCredential(actor: Agent, projectRef: string, botId: string): BotCredentialView {
     if (actor.role !== 'human') throw new HiveError(403, 'Only Human can manage bot credentials');
-    const project = this.projects.requireActorProject(actor, projectRef), bot = this.getAgent(botId);
+    const project = this.projects.requireActorProject(actor, projectRef), bot = this.identity.getAgent(botId);
     if (bot.role !== 'bot' || bot.projectId !== project.id) throw new HiveError(404, 'Bot not found in this project');
     const row = this.db.prepare('SELECT revision, revoked FROM bot_credentials WHERE bot_id=?').get(bot.id);
     return { bot, credential: { revision: row ? Number(row.revision) : 1, revoked: Boolean(row?.revoked) } };
@@ -869,7 +618,7 @@ export class Hive {
       throw new HiveError(409, 'Archived room: no new work or root messages; use an existing task thread for closure');
     if (recipientNames.length > 32 || recipientNames.some(name => typeof name !== 'string')) throw new HiveError(400, 'Provide 1–32 recipient names');
     const recipients = [...new Set(recipientNames.map(name => {
-      const target = this.getAgentByName(name);
+      const target = this.identity.getAgentByName(name);
       if (!target || target.role === 'bot' || !this.canSeeChannel(target, ch) ||
         (actor.role === 'worker' && target.role === 'human')) throw new HiveError(403, 'Recipient must be an accessible permitted person');
       return target.id;
@@ -886,7 +635,7 @@ export class Hive {
     if (input.kind !== "control" && body.length > BODY_MAX) {
       throw new HiveError(400, `Message too long (${body.length} > ${BODY_MAX}). Split or use a thread.`);
     }
-    const mentions = parseMentions(body, this.listAgents(actor));
+    const mentions = parseMentions(body, this.identity.listAgents(actor));
     if (actor.role === "worker" && mentions.some((id) => id === HUMAN_ID)) {
       throw new HiveError(403, "Workers cannot mention @Human. Ask a brain.");
     }
@@ -936,7 +685,7 @@ export class Hive {
       if (attachmentIds.length) this.files.bindAttachments(id, attachmentIds);
       // Transport receipts participate in the same message/attachment transaction.
       persistReceipt?.(this.getMessageById(id));
-      this.touch(actor.id, true);
+      this.identity.touch(actor.id, true);
       const msg = this.getMessageById(id);
       const decision = actor.role === 'human' ? this.decisions?.captureHumanReply(actor, msg, input.source ?? 'hive') ?? null : null;
       this.afterCommit(() => {
@@ -998,7 +747,7 @@ export class Hive {
   }
 
   postSystem(channelId: string, body: string) {
-    const human = this.getAgent(HUMAN_ID);
+    const human = this.identity.getAgent(HUMAN_ID);
     try {
       this.postMessage(human, { channel: channelId, body, kind: "system" });
     } catch {
@@ -1379,7 +1128,7 @@ export class Hive {
 
   /** Explicit receipts for the rendered channel/thread page, not a global cursor. */
   markMessagesRead(actor: Agent, channelId: string, seqs: number[], threadId: string | null = null) {
-    this.getAgent(actor.id);
+    this.identity.getAgent(actor.id);
     const channel = this.getChannel(channelId, actor.projectId);
     if (!this.canSeeChannel(actor, channel)) throw new HiveError(403, "Cannot read this channel");
     if (threadId !== null && (typeof threadId !== "string" || !threadId)) throw new HiveError(400, "Invalid thread ID");
@@ -1420,7 +1169,7 @@ export class Hive {
 
   clearContext(actor: Agent, targetName: string): Message {
     if (actor.role === "worker") throw new HiveError(403, "Only a brain or Human can clear context");
-    const target = this.getAgentByName(targetName);
+    const target = this.identity.getAgentByName(targetName);
     if (!target) throw new HiveError(404, `No agent named ${targetName}`);
     if (target.role !== "worker") throw new HiveError(400, "clear_context is for workers");
     const dm = this.openDm(actor, target.name);
@@ -1436,7 +1185,7 @@ export class Hive {
     if (actor.role !== "brain" && actor.role !== "worker") throw new HiveError(403, "Only agents have inbox sessions");
     const previous = this.inbox.currentSession(actor.id);
     const current = this.inbox.openSession(actor.id, sessionId);
-    if (previous !== current) this.waiters.get(actor.id)?.supersede();
+    if (previous !== current) this.waiters.supersede(actor.id);
     return current;
   }
 
@@ -1446,7 +1195,7 @@ export class Hive {
     const result = this.inbox.acknowledge(actor.id, sessionId, deliveryId,
       (seqs, at) => { changed = this.tasks.recordReceipt(actor.id, seqs, at); });
     this.timeline.recordAcknowledgement(actor, deliveryId, result.acknowledgedAt);
-    for (const id of changed) this.bus.emit('task', this.tasks.get(this.getAgent(HUMAN_ID), id));
+    for (const id of changed) this.bus.emit('task', this.tasks.get(this.identity.getAgent(HUMAN_ID), id));
     this.emitQueued(actor.id);
     return result;
   }
@@ -1459,14 +1208,14 @@ export class Hive {
 
   inboxStatuses(): Record<string, InboxStatus> {
     return Object.fromEntries(
-      this.listAgents()
+      this.identity.listAgents()
         .filter((agent) => agent.role === "brain" || agent.role === "worker")
         .map((agent) => [agent.id, { ...this.inbox.status(agent.id), queued: this.inboxReader.estimate(agent) }]),
     );
   }
 
   private takeUnseen(actor: Agent, sessionId: string, compact: boolean, scanLimit: number): WaitResult {
-    const current = this.getAgent(actor.id);
+    const current = this.identity.getAgent(actor.id);
     const result = this.inboxReader.take(current, sessionId, compact, scanLimit);
     if (result.delivery) this.timeline.recordOffer(current, result.delivery);
     this.emitQueued(actor.id, result.page!.remaining);
@@ -1475,7 +1224,7 @@ export class Hive {
 
   queuedCounts(): Record<string, number> {
     const out: Record<string, number> = {};
-    for (const agent of this.listAgents()) {
+    for (const agent of this.identity.listAgents()) {
       if (agent.role !== "brain" && agent.role !== "worker") continue;
       out[agent.id] = this.inboxReader.estimate(agent).atLeast;
     }
@@ -1491,7 +1240,7 @@ export class Hive {
   }
 
   private emitQueued(agentId: string, estimate?: QueueEstimate) {
-    const agent = this.getAgent(agentId);
+    const agent = this.identity.getAgent(agentId);
     if (agent.role !== "brain" && agent.role !== "worker") return;
     const queued = estimate ?? this.inboxReader.estimate(agent);
     this.bus.emit("queued", {
@@ -1515,7 +1264,7 @@ export class Hive {
     return this.transaction(() => {
       const added: string[] = [];
       for (const name of memberNames) {
-        const member = this.getAgentByName(name);
+        const member = this.identity.getAgentByName(name);
         if (!member) throw new HiveError(404, `No agent named ${name}`);
         if (member.role !== "human" && member.projectId !== ch.projectId) {
           throw new HiveError(403, `${member.name} is not in this project`);
@@ -1527,7 +1276,7 @@ export class Hive {
         added.push(member.name);
       }
       this.afterCommit(() => this.bus.emit("channel", this.getChannel(ch.id)));
-      this.postMessage(this.getAgent(HUMAN_ID), { channel: ch.id, body: `${actor.name} invited ${added.join(", ")}`, kind: "system" });
+      this.postMessage(this.identity.getAgent(HUMAN_ID), { channel: ch.id, body: `${actor.name} invited ${added.join(", ")}`, kind: "system" });
       return this.getChannel(ch.id);
     });
   }
@@ -1535,11 +1284,11 @@ export class Hive {
   private wakeMembers(ch: Channel, msg: Message) {
     for (const id of new Set([...ch.memberIds, HUMAN_ID])) {
       if (id === msg.authorId) continue;
-      const agent = this.getAgent(id);
+      const agent = this.identity.getAgent(id);
       // The notification classifier rechecks current project, channel membership,
       // role and routing in SQL. Do not hydrate the entire roster for every member.
       if (!this.isFor(agent, msg)) continue;
-      this.waiters.get(id)?.wake();
+      this.waiters.wake(id);
       this.emitQueued(id);
     }
   }
@@ -1552,7 +1301,7 @@ export class Hive {
   ): Promise<WaitResult> {
     validated(waitDurationSchema, timeoutMs);
     const compact = Boolean(opts.compact);
-    const empty = () => packWait(this.getAgent(actor.id), [], 0, compact, () => "");
+    const empty = () => packWait(this.identity.getAgent(actor.id), [], 0, compact, () => "");
 
     // A cancelled request is observational only: it must not touch presence,
     // install a waiter, advance inbox state, or consume already-queued mail.
@@ -1566,7 +1315,7 @@ export class Hive {
       this.inbox.currentSession(actor.id) ??
       this.openInboxSession(actor, crypto.randomUUID());
     this.inbox.requireSession(actor.id, sessionId);
-    this.touch(actor.id, true);
+    this.identity.touch(actor.id, true);
 
     return new Promise((resolve, reject) => {
       let done = false;
@@ -1587,7 +1336,7 @@ export class Hive {
       let waiter: Waiter;
       let timer: ReturnType<typeof setTimeout> | undefined;
       const cleanup = () => {
-        if (this.waiters.get(actor.id) === waiter) this.waiters.delete(actor.id);
+        this.waiters.release(actor.id, waiter);
         signal?.removeEventListener("abort", onAbort);
         if (timer) clearTimeout(timer);
         if (routineTimer) clearTimeout(routineTimer);
@@ -1596,7 +1345,7 @@ export class Hive {
         if (done) return;
         done = true;
         cleanup();
-        this.touch(actor.id, true);
+        this.identity.touch(actor.id, true);
         resolve(batch);
       };
       const finish = (consume: boolean) => {
@@ -1624,9 +1373,7 @@ export class Hive {
         },
       };
       const onAbort = () => finish(false);
-      const prev = this.waiters.get(actor.id);
-      if (prev) prev.supersede();
-      this.waiters.set(actor.id, waiter);
+      this.waiters.install(actor.id, waiter);
       const ms = Number.isFinite(timeoutMs) ? Math.max(1, timeoutMs) : DEFAULT_WAIT_MS;
       timer = setTimeout(() => finish(true), ms);
       signal?.addEventListener("abort", onAbort, { once: true });
@@ -1643,8 +1390,7 @@ export class Hive {
   }
 
   cancelWaits() {
-    for (const waiter of this.waiters.values()) waiter.supersede();
-    this.waiters.clear();
+    this.waiters.supersedeAll();
   }
 
   createFile(...args: Parameters<FileService["createFile"]>) { return this.files.createFile(...args); }
@@ -1714,27 +1460,6 @@ export class Hive {
     }));
   }
 
-  sweepPresence(maxIdleMs = PRESENCE_IDLE_MS) {
-    const cutoff = now() - maxIdleMs;
-    const rows = this.db.prepare(
-      `SELECT id FROM agents WHERE role != 'human' AND online = 1 AND last_seen_at < ?`,
-    ).all(cutoff) as { id: string }[];
-    for (const r of rows) {
-      if (this.waiters.has(r.id)) {
-        this.touch(r.id, true);
-        continue;
-      }
-      this.setOffline(r.id);
-    }
-  }
-}
-
-export function describeAgent(agent: Agent): string {
-  if (agent.role === "human") return "Human";
-  if (agent.role === "bot") return "bot (context only)";
-  if (agent.role === "brain") return agent.focus ? `brain (${agent.focus})` : "brain";
-  const sen = agent.seniority ?? "mid";
-  return agent.focus ? `${sen} worker (${agent.focus})` : `${sen} worker`;
 }
 
 export function channelLabel(ch: Channel): string {
