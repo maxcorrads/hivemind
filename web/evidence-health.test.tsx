@@ -18,15 +18,13 @@ after(() => window.happyDOM.close());
 const degraded: EvidenceCollectorHealth = { ...HEALTHY_EVIDENCE_COLLECTOR, status: 'degraded', failures: { begin: 1, finish: 0, marker: 2 },
   lastFailureAt: 5, pendingGaps: 1 };
 function state(evidence?: AdaptiveExecutionState['evidence']): AdaptiveExecutionState {
-  return { executionId: 'run', channelId: 'a', projectId: 'project', brainId: 'brain', rootMessageId: 'root', currentTopology: 'single',
-    workerBudget: 0, desiredTopology: null, desiredWorkers: null, lockScope: 'none', lockedTopology: null, orchestratedOnly: false,
-    providerAvailable: true, warning: null, recommendation: null, confirmations: 0, confirmationTopology: null,
-    confirmationWorkers: null, eventsSinceChange: 0, updatedAt: 1, revision: 1, monitoring: 'active', ...(evidence ? { evidence } : {}) };
+  return { executionId: 'run', channelId: 'a', projectId: 'project', brainId: 'brain', rootMessageId: 'root', recommendation: null,
+    updatedAt: 1, revision: 1, monitoring: 'active', ...(evidence ? { evidence } : {}) };
 }
 async function render(t: TestContext, view: AdaptiveRoutingView) {
   const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
   t.after(async () => { await act(async () => root.unmount()); host.remove(); });
-  await act(async () => root.render(createElement(AdaptiveRoutingPanel, { channelId: 'a', view, onChange: () => {}, onClose: () => {} })));
+  await act(async () => root.render(createElement(AdaptiveRoutingPanel, { channelId: 'a', view, onClose: () => {} })));
   return host;
 }
 

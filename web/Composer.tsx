@@ -1,7 +1,5 @@
 import { useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type { Agent } from "../src/shared/types.ts";
-import type { SendLockScope, SendRoutingMode } from "./api.ts";
-import { topologyLabel } from "./AdaptiveRoutingPanel.tsx";
 
 export function Composer({
   agents,
@@ -9,19 +7,12 @@ export function Composer({
   onChange,
   onSend,
   placeholder,
-  routing,
 }: {
   agents: Agent[];
   value: string;
   onChange: (v: string) => void;
   onSend: (files?: File[]) => void;
   placeholder: string;
-  routing?: {
-    value: SendRoutingMode;
-    onChange: (mode: SendRoutingMode) => void;
-    lockScope: SendLockScope;
-    onLockScopeChange: (scope: SendLockScope) => void;
-  };
 }) {
   const [hint, setHint] = useState<Agent[]>([]);
   const [files, setFiles] = useState<File[]>([]);
@@ -93,52 +84,6 @@ export function Composer({
           ))}
         </ul>
       )}
-        {routing && (
-          <details className="composer-routing">
-            <summary title="Choose how agents handle this message" aria-label="Message routing options">
-              <svg className="routing-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M3 6h13m-3-3 3 3-3 3M17 14H4m3-3-3 3 3 3" /></svg>
-              <span>{routing.value === "auto" ? "Auto · Jev" : routing.value === "orchestrated_auto" ? "Orchestrated Auto" : topologyLabel(routing.value)}</span>
-              {routing.lockScope !== "none" && <span className="routing-scope">{routing.lockScope} lock</span>}
-              <svg className="routing-chevron" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
-            </summary>
-            <div className="composer-routing-fields">
-            <label>Team
-            <select
-              className="routing-mode"
-              aria-label="Execution mode"
-              title="Execution mode for this request"
-              value={routing.value}
-              onChange={(e) => {
-                const mode = e.target.value as SendRoutingMode;
-                routing.onChange(mode);
-                if (mode === "auto" || mode === "orchestrated_auto") routing.onLockScopeChange("none");
-              }}
-            >
-              <option value="auto">Auto · Jev</option>
-              <option value="single">Single</option>
-              <option value="brain_one_worker">Brain + 1</option>
-              <option value="brain_multi_dm">Multi-DM</option>
-              <option value="brain_multi_room">Room</option>
-              <option value="orchestrated_auto">Orchestrated Auto</option>
-            </select>
-            </label>
-            <label>Apply to
-            <select
-              className="routing-lock-mode"
-              aria-label="Routing lock scope"
-              title="Apply an explicit topology once, to this task, or to this conversation"
-              value={routing.lockScope}
-              disabled={routing.value === "auto" || routing.value === "orchestrated_auto"}
-              onChange={(e) => routing.onLockScopeChange(e.target.value as SendLockScope)}
-            >
-              <option value="none">One request</option>
-              <option value="task">Lock task</option>
-              <option value="conversation">Lock conversation</option>
-            </select>
-            </label>
-            </div>
-          </details>
-        )}
       <div className="composer-box">
         <input
           ref={pick}

@@ -53,16 +53,16 @@ test("a retained expired operation fails visibly instead of silently choosing a 
 });
 
 
-test("routing mode participates in uncertain send identity", async () => {
-  const keys: string[] = [], modes: string[] = [];
+test("a send carries no topology mode or lock: only its content identifies an uncertain retry (#211)", async () => {
+  const keys: string[] = [], arities: number[] = [];
   const run = createSendOperations(async () => ({ id: "unused" }),
-    async (_channel, _body, _root, _ids, key, routing) => {
-      keys.push(key); modes.push(routing); throw new Error("uncertain");
+    async (...args: [string, string, string | null, string[], string]) => {
+      keys.push(args[4]); arities.push(args.length); throw new Error("uncertain");
     });
-  await assert.rejects(run("brain-dm", "same request", null, [], "single"), /uncertain/);
-  await assert.rejects(run("brain-dm", "same request", null, [], "single"), /uncertain/);
-  await assert.rejects(run("brain-dm", "same request", null, [], "orchestrated_auto"), /uncertain/);
+  await assert.rejects(run("brain-dm", "same request", null, []), /uncertain/);
+  await assert.rejects(run("brain-dm", "same request", null, []), /uncertain/);
+  await assert.rejects(run("brain-dm", "other request", null, []), /uncertain/);
   assert.equal(keys[0], keys[1]);
   assert.notEqual(keys[1], keys[2]);
-  assert.deepEqual(modes, ["single", "single", "orchestrated_auto"]);
+  assert.deepEqual(arities, [5, 5, 5]);
 });

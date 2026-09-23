@@ -488,32 +488,6 @@ html.dark .avatar.role-bot { color: var(--ink); }
   line-height: 1.4;
   outline: none;
 }
-.routing-mode {
-  flex: none;
-  align-self: center;
-  max-width: 8.5rem;
-  height: 2rem;
-  padding: 0 1.8rem 0 0.55rem;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--paper);
-  font-size: 0.75rem;
-}
-html.dark .routing-mode { background: var(--desk); }
-
-.routing-lock-mode {
-  flex: none;
-  align-self: center;
-  max-width: 8rem;
-  height: 2rem;
-  padding: 0 1.6rem 0 0.5rem;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--paper);
-  font-size: 0.72rem;
-}
-.routing-lock-mode:disabled { opacity: 0.45; }
-html.dark .routing-lock-mode { background: var(--desk); }
 
 .routing-strip {
   margin: 0.4rem 1rem 0;
@@ -561,13 +535,7 @@ html.dark .routing-lock-mode { background: var(--desk); }
   border-radius: 10px;
   background: color-mix(in srgb, var(--wax) 15%, transparent);
 }
-.routing-lock {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 0.55rem;
-  margin: 0.7rem 0;
-}
-.routing-lock .row { grid-column: 1 / -1; }
+
 .routing-events {
   max-height: min(50vh, 420px);
   overflow: auto;
@@ -582,7 +550,6 @@ html.dark .routing-lock-mode { background: var(--desk); }
   border-bottom: 1px solid var(--line);
   font-size: 0.76rem;
 }
-.routing-event.transition { font-weight: 700; }
 .routing-event.observation { font-style: italic; opacity: 0.8; }
 .routing-executions {
   display: flex;
@@ -600,29 +567,7 @@ html.dark .routing-lock-mode { background: var(--desk); }
   background: color-mix(in srgb, var(--moss) 14%, transparent);
   font-weight: 700;
 }
-.routing-draining { margin: 0.4rem 0 0.8rem; }
-.routing-draining ul {
-  display: grid;
-  gap: 0.35rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.routing-draining li {
-  display: grid;
-  gap: 0.15rem;
-  padding: 0.4rem 0.55rem;
-  border: 1px dashed var(--line);
-  border-radius: 10px;
-  font-size: 0.76rem;
-}
-.routing-draining q {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-style: italic;
-}
-.routing-draining span { opacity: 0.75; }
+
 .routing-event.warning { background: color-mix(in srgb, var(--wax) 10%, transparent); }
 .routing-event time { flex: none; opacity: 0.6; }
 .send {
@@ -1139,8 +1084,6 @@ html.dark .primary { background: var(--wax); color: #1b2017; }
 .timeline-list time { opacity: .7; font-size: 11px; }
 .timeline-list small { grid-column: 2; opacity: .72; overflow-wrap: anywhere; }
 
-.routing-inline { margin: 0.4rem 1rem; padding: 0.5rem 0.7rem; border-left: 2px solid var(--line); font-size: 0.78rem; opacity: 0.85; }
-
 /* Navigation, reading and configuration share the existing hive palette. */
 .rail { min-width: 0; overflow-x: hidden; }
 .brand { min-width: 0; }
@@ -1183,18 +1126,7 @@ html.dark .primary { background: var(--wax); color: #1b2017; }
 .sheet-body > * { flex-shrink: 0; }
 .sheet .launch-pre { max-height: 18rem; overflow: auto; }
 .composer textarea { min-width: 0; flex: 1; }
-.composer-routing { position: relative; width: fit-content; max-width: 100%; margin: 0 0 0.4rem 0.4rem; }
-.composer-routing > summary { display: flex; align-items: center; gap: 0.4rem; width: fit-content; max-width: 100%; padding: 0.35rem 0.6rem; border: 1px solid var(--line); border-radius: 999px; color: var(--mute); background: var(--desk); cursor: pointer; list-style: none; font-size: 0.75rem; font-weight: 600; line-height: 1.2; }
-.composer-routing > summary::-webkit-details-marker { display: none; }
-.composer-routing > summary:hover, .composer-routing[open] > summary { color: var(--ink); background: var(--paper); }
-.composer-routing svg { flex: none; width: 14px; height: 14px; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
-.composer-routing .routing-icon { color: var(--wax); }
-.composer-routing .routing-chevron { width: 12px; height: 12px; opacity: 0.6; }
-.composer-routing[open] .routing-chevron { transform: rotate(180deg); }
-.routing-scope { font-weight: 400; opacity: 0.8; }
-.composer-routing-fields { position: absolute; bottom: calc(100% + 8px); left: 0; width: min(310px, calc(100vw - 3rem)); display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0.65rem; padding: 0.85rem; background: var(--desk); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); z-index: 9; }
-.composer-routing-fields label { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.72rem; color: var(--mute); }
-.composer-routing-fields select { width: 100%; max-width: none; font-size: 0.76rem; }
+
 summary:focus-visible, .tool-action:focus-visible { outline: 2px solid var(--wax); outline-offset: 2px; }
 @media (max-width: 960px) {
   .rail { display: block; max-height: 30dvh; overflow-x: hidden; overflow-y: auto; }

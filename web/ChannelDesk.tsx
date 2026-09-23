@@ -1,8 +1,8 @@
 import type { MutableRefObject } from "react";
 import type { AdaptiveRoutingView } from "../src/shared/adaptive-topology.ts";
 import type { Agent, Channel } from "../src/shared/types.ts";
-import { routingEventLabel, topologyLabel } from "./AdaptiveRoutingPanel.tsx";
-import { routingStreamEntries } from "./adaptive-routing-view.ts";
+import { adviceSummary } from "./AdaptiveRoutingPanel.tsx";
+import { adviceStrip } from "./adaptive-routing-view.ts";
 import { api } from "./api.ts";
 import { applyChannelMessage, recordChannelMessage } from "./channel-state.ts";
 import { Composer } from "./Composer.tsx";
@@ -15,9 +15,9 @@ import type { ChannelPane } from "./use-channel-pane.ts";
 import type { useSend } from "./use-send.ts";
 import type { ThreadOpenAnchor } from "./use-thread-scroll-anchor.ts";
 
-/** The selected channel: header, room panel, message stream with inline routing events, routing strip and composer. */
+/** The selected channel: header, room panel, message stream, Jev advice strip and composer. */
 export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, channel, threadPaneId, stickBottom, threadOpenAnchor,
-  go, roomTick, routingView, activeBrainChannel, activeExecutions, finishingExecutions, brainNames, onOpenRouting, onInvite, compose, setErr }: {
+  go, roomTick, routingView, activeBrainChannel, brainNames, onOpenRouting, onInvite, compose, setErr }: {
   channelId: string;
   activeChannel: Channel | undefined;
   agents: Agent[];
@@ -30,9 +30,6 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
   roomTick: number;
   routingView: AdaptiveRoutingView | null;
   activeBrainChannel: boolean;
-  activeExecutions: number;
-  /** Superseded executions still draining in this channel. */
-  finishingExecutions: number;
   brainNames: Record<string, string>;
   onOpenRouting: () => void;
   onInvite: () => void;
@@ -87,12 +84,7 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
             Load older
           </button>
         )}
-        {routingStreamEntries(pane?.channel.id === channelId ? pane.messages : [],
-          routingView?.events ?? [], channelId).map(entry => entry.kind === "routing" ? (
-          <div key={entry.event.id} className="routing-inline" data-human-only="routing">
-            {routingEventLabel(entry.event)}
-          </div>
-        ) : ((m) => (
+        {(pane?.channel.id === channelId ? pane.messages : []).map((m) => (
           <Msg
             key={m.id}
             m={m}
@@ -113,12 +105,11 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
               setPane((p) => applyChannelMessage(p, r.message, false));
             })}
           />
-        ))(entry.message))}
+        ))}
         <div />
       </div>
       {activeBrainChannel && routingView && (
-        <RoutingStrip view={routingView} channelId={activeChannel?.id} activeExecutions={activeExecutions}
-          finishingExecutions={finishingExecutions} brainNames={brainNames} onOpen={onOpenRouting} />
+        <RoutingStrip view={routingView} channelId={activeChannel?.id} brainNames={brainNames} onOpen={onOpenRouting} />
       )}
       <Composer
         agents={roomAgents}
@@ -129,12 +120,6 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
             ? `Message ${channelTitle(activeChannel)}`
             : "Write…"
         }
-        routing={activeBrainChannel ? {
-          value: compose.routingMode,
-          onChange: compose.setRoutingMode,
-          lockScope: compose.routingLockScope,
-          onLockScopeChange: compose.setRoutingLockScope,
-        } : undefined}
         onSend={compose.sendChannel}
       />
     </>
@@ -142,43 +127,28 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
 }
 
 /**
- * The compact routing summary above the composer: the primary execution, how many brains run here and how many
- * older requests are still finishing. It also shows when only draining executions remain (no current one).
+ * Informational strip above the composer (#211): Jev's latest advice for the primary request in this channel, e.g.
+ * "Jev suggests: Multi-DM · 2 workers (72%)", or its state. Nothing is applied; it opens the Routing panel.
  */
-export function RoutingStrip({ view, channelId, activeExecutions, finishingExecutions, brainNames, onOpen }: {
+export function RoutingStrip({ view, channelId, brainNames, onOpen }: {
   view: AdaptiveRoutingView;
   channelId: string | undefined;
-  activeExecutions: number;
-  finishingExecutions: number;
   brainNames: Record<string, string>;
   onOpen: () => void;
 }) {
-  const state = view.state && view.state.channelId === channelId ? view.state : null;
-  if (!state && finishingExecutions === 0) return null;
-  const finishing = finishingExecutions > 0 ? `+${finishingExecutions} finishing` : "";
+  const { state, brains } = adviceStrip(view, channelId);
+  if (!state) return null;
+  const unsure = state.advice && state.advice.state !== "ok";
   return (
-    <div className={`routing-strip ${state?.warning ? "warning" : ""}`}>
+    <div className={`routing-strip ${unsure ? "warning" : ""}`}>
       <button type="button" onClick={onOpen}>
-        {state ? (
-          <>
-            <strong>{topologyLabel(state.currentTopology)}</strong>
-            {state.workerBudget > 0 ? ` · ${state.workerBudget} worker${state.workerBudget === 1 ? "" : "s"}` : ""}
-            {state.lockScope !== "none" ? ` · locked ${state.lockScope}` : ""}
-            {activeExecutions > 1 ? ` · ${brainNames[state.brainId] ?? "brain"} · ${activeExecutions} brains` : ""}
-            {finishing ? ` · ${finishing}` : ""}
-          </>
-        ) : <strong>{finishing}</strong>}
+        <strong>{state.recommendation ? adviceSummary(state.recommendation) : "Jev has not advised yet"}</strong>
+        {brains > 1 ? ` · ${brainNames[state.brainId] ?? "brain"} · ${brains} brains` : ""}
       </button>
       <span>
-        {!state ? "Earlier requests are finishing their delegated work"
-          : state.monitoring === "completed" ? "Execution completed" : state.monitoring === "disabled"
-          ? "Jev disabled · automatic verification is off" : state.monitoring === "pending"
-          ? "Jev enabled · awaiting next coordination event" : state.warning
-          ? `⚠ ${state.warning}`
-          : (() => {
-              const last = [...view.events].reverse().find(event => event.kind === "transition");
-              return last ? routingEventLabel(last) : "Jev continuous routing active";
-            })()}
+        {state.monitoring === "completed" ? "Request closed · no further advice"
+          : state.monitoring === "disabled" ? "Jev disabled · brains get no advice"
+          : "Advisory only · the brain decides"}
       </span>
     </div>
   );
