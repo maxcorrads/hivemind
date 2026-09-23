@@ -1,10 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
-import { initTelegramRouting, namespaceForVerifiedBot } from "./telegram-routing.ts";
 import { TelegramRateLimitError, telegramRetryAfterMs, selectTelegramPendingJob } from "./telegram-rate-limit.ts";
 export { TelegramRateLimitError, telegramRetryAfterMs, selectTelegramPendingJob } from "./telegram-rate-limit.ts";
-import { enqueueTelegramPending, failTelegramJob, telegramBotKey, telegramPartDelivered, sameTelegramDestination, type TelegramDestination, type TelegramJob } from "./telegram-outbox.ts";
+import { telegramBotKey, sameTelegramDestination, type TelegramDestination, type TelegramJob } from "./telegram-outbox.ts";
 export { enqueueTelegramPending, recordTelegramFailure, telegramPartDelivered, TELEGRAM_PENDING_CAP } from "./telegram-outbox.ts";
-import { handoffTelegramUpdates, recordTelegramUpdateFailure, finishTelegramUpdate, acknowledgeTelegramUpdate, dueTelegramUpdate, nextTelegramUpdateRetry,
+import {
   telegramPollBackoffMs, isTelegramTerminalPollError, TelegramPermanentUpdateError, validTelegramUpdateId,
   type TelegramUpdate, type TelegramUpdateScope } from "./telegram-inbox.ts";
 export { telegramPollBackoffMs, isTelegramTerminalPollError } from "./telegram-inbox.ts";
@@ -18,6 +17,7 @@ import { resolveUploadMime } from "../shared/mime.ts";
 import { Hive, channelLabel } from "./hive.ts";
 import { hiveHome } from "./paths.ts";
 import { filePathForHash, safeFileName } from "./files.ts";
+import { TelegramStore } from "./telegram-store.ts";
 
 export type TelegramConfig = {
   botToken: string;
@@ -343,6 +343,7 @@ export type TelegramHandle = {
 };
 
 export function startTelegram(hive: Hive, enabled = true): TelegramHandle {
+  const store = new TelegramStore(hive.storage);
   let bridge: TelegramBridge | null = null;
   let lifecycle: Promise<void> = Promise.resolve();
   const stopped = new AbortController();
@@ -352,13 +353,12 @@ export function startTelegram(hive: Hive, enabled = true): TelegramHandle {
     if (!cfg) return false;
     try {
       bridge = new TelegramBridge(hive, cfg);
-      hive.db.prepare("DELETE FROM telegram_state WHERE key = 'inbound:configuration_error'").run();
+      store.clearConfigurationError();
       bridge.start(); return true;
     } catch (error) {
       bridge = null;
       if (!(error instanceof HiveError)) throw error;
-      hive.db.prepare("INSERT INTO telegram_state(key, value) VALUES('inbound:configuration_error', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-        .run("Invalid Telegram project configuration; edit Telegram settings to recover");
+      store.setConfigurationError("Invalid Telegram project configuration; edit Telegram settings to recover");
       hive.publishTelegramHealth();
       return false;
     }
@@ -389,7 +389,7 @@ export function startTelegram(hive: Hive, enabled = true): TelegramHandle {
       const botId = await verifyBot(next.botToken, stopped.signal);
       stopped.signal.throwIfAborted();
       const previous = loadTelegramConfig(hive.home);
-      initTelegramRouting(hive.db, previous ? telegramConfigKey(previous) : `bot:${botId}`);
+      store.initRouting(previous ? telegramConfigKey(previous) : `bot:${botId}`);
       const current = bridge; bridge = null;
       const detach = current?.captureDuringDrain();
       const draining = current?.stop(); // removes old event admission synchronously
@@ -399,7 +399,7 @@ export function startTelegram(hive: Hive, enabled = true): TelegramHandle {
         // Registering the verified ID is additive: failure before file publication cannot invalidate old jobs.
         const preferred = previous?.botToken === next.botToken || previous?.botId === botId ? telegramConfigKey(previous!) : undefined;
         next.botId = botId;
-        next.botNamespace = namespaceForVerifiedBot(hive.db, botId, preferred);
+        next.botNamespace = store.namespaceForVerifiedBot(botId, preferred);
         persistTelegramFile(next, hive.home);
       } finally {
         detach?.();
@@ -429,6 +429,7 @@ export class TelegramBridge {
   private skipChatUntil = new Map<number, number>();
   private cooldownTimer: ReturnType<typeof setTimeout> | undefined;
   private cooldownWakeAt: number | undefined;
+  private readonly store: TelegramStore;
 
   constructor(
     private hive: Hive,
@@ -441,7 +442,8 @@ export class TelegramBridge {
       throw new HiveError(400, "Invalid or ambiguous Telegram configuration");
     }
     this.cfg = { ...cfg, groups: { ...cfg.groups }, allowUserIds: [...cfg.allowUserIds] };
-    initTelegramRouting(hive.db, telegramConfigKey(cfg));
+    this.store = new TelegramStore(hive.storage);
+    this.store.initRouting(telegramConfigKey(cfg));
     this.reconcileRoutes();
     this.inboundRetries = new CoalescingPump(() => this.replayFailedUpdates(), error => {
       if (!this.stopped) { console.error("telegram replay", this.safeError(error)); this.scheduleRetry(Date.now() + 2_000); }
@@ -454,27 +456,23 @@ export class TelegramBridge {
   private reconcileRoutes() {
     // Cancel stale work at the transition, not only when a later pump happens to visit it.
     // Cancellation is sticky: A -> B -> A must not revive old historical jobs.
-    const jobs = this.hive.db.prepare("SELECT seq, kind, bot_key AS botKey, telegram_chat_id AS chatId FROM telegram_pending").all() as TelegramJob[];
+    const jobs = this.store.allPendingJobs();
     for (const job of jobs) if (!sameTelegramDestination(job, telegramDestinationForSeq(this.hive, job.seq, this.cfg))) {
-      failTelegramJob(this.hive.db, job, "destination_changed_or_unknown", 0);
+      this.store.failJob(job, "destination_changed_or_unknown", 0);
     }
-    const failures = this.hive.db.prepare("SELECT id, seq, kind, bot_key AS botKey, telegram_chat_id AS chatId FROM telegram_failures WHERE resolved_at IS NULL AND destination_invalidated = 0")
-      .all() as Array<TelegramJob & { id: string }>;
+    const failures = this.store.openFailures();
     for (const row of failures) if (!sameTelegramDestination(row, telegramDestinationForSeq(this.hive, row.seq, this.cfg))) {
-      this.hive.db.prepare("UPDATE telegram_failures SET destination_invalidated = 1 WHERE id = ?").run(row.id);
+      this.store.invalidateFailureDestination(row.id);
     }
     const botKey = telegramConfigKey(this.cfg);
-    const inbound = this.hive.db.prepare("SELECT id, bot_key AS botKey, telegram_chat_id AS chatId, project_id AS projectId FROM telegram_update_failures WHERE bot_key = ? AND state IN ('retry', 'quarantined')")
-      .all(botKey) as Array<TelegramUpdateScope & { id: string }>;
-    for (const row of inbound) if (!this.scopeMatches(row)) this.hive.db.prepare(
-      "UPDATE telegram_update_failures SET invalidated = 1, state = 'quarantined', last_error = 'destination_changed', updated_at = ? WHERE id = ?",
-    ).run(Date.now(), row.id);
-    for (const table of ["telegram_topics", "telegram_out"]) {
-      const rows = this.hive.db.prepare(`SELECT rowid AS rowId, channel_id AS channelId, telegram_chat_id AS chatId FROM ${table} WHERE bot_key = ?`).all(botKey) as { rowId: number; channelId: string; chatId: number }[];
+    const inbound = this.store.openUpdateFailures(botKey);
+    for (const row of inbound) if (!this.scopeMatches(row)) this.store.invalidateUpdateFailure(row.id);
+    for (const table of ["telegram_topics", "telegram_out"] as const) {
+      const rows = this.store.channelRoutes(table, botKey);
       for (const row of rows) {
         let matches = false;
         try { matches = this.cfg.groups[this.hive.getChannel(row.channelId).project] === row.chatId; } catch { /* deleted channel */ }
-        if (!matches) this.hive.db.prepare(`DELETE FROM ${table} WHERE rowid = ?`).run(row.rowId);
+        if (!matches) this.store.deleteChannelRoute(table, row.rowId);
       }
     }
   }
@@ -482,7 +480,7 @@ export class TelegramBridge {
   captureDuringDrain(): () => void {
     const capture = (seq: number, kind: "message" | "reaction") => {
       const destination = telegramDestinationForSeq(this.hive, seq, this.cfg);
-      if (destination) enqueueTelegramPending(this.hive.db, seq, kind, undefined, destination);
+      if (destination) this.store.enqueuePending(seq, kind, destination);
     };
     const message = (msg: Message) => {
       if (msg.kind === "chat" && !this.hive.fromTelegram(msg.id)) capture(msg.seq, "message");
@@ -503,8 +501,7 @@ export class TelegramBridge {
   start() {
     if (this.started || this.stopped) return;
     this.started = true;
-    this.hive.db.prepare("INSERT INTO telegram_state(key, value) VALUES('inbound:active_bot', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-      .run(telegramConfigKey(this.cfg));
+    this.store.setActiveBot(telegramConfigKey(this.cfg));
     this.hive.bus.on("telegram-inbox-wake", this.onInboxWake);
     this.inboundRetries.wake();
     this.hive.bus.on("message", this.onHiveMessage);
@@ -563,15 +560,11 @@ export class TelegramBridge {
   private async ensureTopic(ch: Channel): Promise<number | null> {
     const chatId = this.chatForChannel(ch);
     if (chatId == null) return null;
-    const row = this.hive.db.prepare("SELECT telegram_thread_id AS id FROM telegram_topics WHERE channel_id = ? AND bot_key = ? AND telegram_chat_id = ?").get(
-      ch.id, telegramConfigKey(this.cfg), chatId,
-    ) as { id: number } | undefined;
-    if (row) return row.id;
+    const row = this.store.topicFor(ch.id, telegramConfigKey(this.cfg), chatId);
+    if (row !== undefined) return row;
     const generalThread = telegramGeneralThreadId(ch);
     if (generalThread != null) {
-      this.hive.db.prepare(
-        "INSERT OR REPLACE INTO telegram_topics (channel_id, telegram_thread_id, telegram_chat_id, bot_key) VALUES (?, ?, ?, ?)",
-      ).run(ch.id, generalThread, chatId, telegramConfigKey(this.cfg));
+      this.store.saveTopic(ch.id, generalThread, chatId, telegramConfigKey(this.cfg));
       await this.flushHolds(chatId, generalThread);
       return generalThread;
     }
@@ -597,10 +590,8 @@ export class TelegramBridge {
   private async createTopic(ch: Channel): Promise<number | null> {
     const chatId = this.chatForChannel(ch);
     if (chatId == null) return null;
-    const again = this.hive.db.prepare("SELECT telegram_thread_id AS id FROM telegram_topics WHERE channel_id = ? AND bot_key = ? AND telegram_chat_id = ?").get(
-      ch.id, telegramConfigKey(this.cfg), chatId,
-    ) as { id: number } | undefined;
-    if (again) return again.id;
+    const again = this.store.topicFor(ch.id, telegramConfigKey(this.cfg), chatId);
+    if (again !== undefined) return again;
     const name = channelLabel(ch).slice(0, 128);
     const created = await this.api("createForumTopic", { chat_id: chatId, name });
     this.ensureActive();
@@ -615,9 +606,7 @@ export class TelegramBridge {
       return null;
     }
     if (!this.hive.channels.exists(ch.id)) return null;
-    this.hive.db.prepare(
-      "INSERT OR REPLACE INTO telegram_topics (channel_id, telegram_thread_id, telegram_chat_id, bot_key) VALUES (?, ?, ?, ?)",
-    ).run(ch.id, result.message_thread_id, chatId, telegramConfigKey(this.cfg));
+    this.store.saveTopic(ch.id, result.message_thread_id, chatId, telegramConfigKey(this.cfg));
     await this.flushHolds(chatId, result.message_thread_id);
     return result.message_thread_id;
   }
@@ -667,7 +656,7 @@ export class TelegramBridge {
   private recordUpdateError(scope: TelegramUpdateScope, update: TelegramUpdate, error: unknown) {
     this.ensureActive();
     if (error instanceof TelegramRateLimitError && scope.chatId !== null) this.coolDown(scope.chatId, error.retryAt);
-    recordTelegramUpdateFailure(this.hive.db, scope, update, this.safeError(error), {
+    this.store.recordUpdateFailure(scope, update, this.safeError(error), {
       permanent: error instanceof TelegramPermanentUpdateError,
       retryAt: error instanceof TelegramRateLimitError ? error.retryAt : undefined,
     });
@@ -703,14 +692,14 @@ export class TelegramBridge {
           for (; index < accepted.length; index++) {
             const { update, scope } = accepted[index]!;
             await this.serializeInbound(async () => {
-              if (this.seen(update.update_id)) { acknowledgeTelegramUpdate(this.hive.db, scope.botKey, update.update_id); return; }
+              if (this.seen(update.update_id)) { this.store.acknowledgeUpdate(scope.botKey, update.update_id); return; }
               const allowed = () => scope.projectId === null || this.scopeMatches(scope);
               try {
                 if (!allowed()) throw new TelegramPermanentUpdateError("destination_changed");
                 await this.processUpdate(update, allowed);
                 this.ensureActive();
                 if (!allowed()) throw new TelegramPermanentUpdateError("destination_changed");
-                finishTelegramUpdate(this.hive.db, scope.botKey, update.update_id);
+                this.store.finishUpdate(scope.botKey, update.update_id);
               } catch (error) {
                 if (this.stopped) throw error;
                 this.recordUpdateError(scope, update, error);
@@ -719,7 +708,7 @@ export class TelegramBridge {
           }
         } finally {
           if (this.stopped && index < accepted.length) {
-            try { handoffTelegramUpdates(this.hive.db, accepted.slice(index)); }
+            try { this.store.handoffUpdates(accepted.slice(index)); }
             catch (error) {
               // A failed handoff must prevent configure() from publishing a new audience.
               this.handoffError = new Error(`Telegram drain could not persist accepted updates: ${this.safeError(error)}`);
@@ -758,18 +747,17 @@ export class TelegramBridge {
 
   private async replayFailedUpdates() {
     while (!this.stopped) {
-      const row = dueTelegramUpdate(this.hive.db, telegramConfigKey(this.cfg));
+      const row = this.store.dueUpdate(telegramConfigKey(this.cfg));
       if (!row) {
-        const at = nextTelegramUpdateRetry(this.hive.db, telegramConfigKey(this.cfg));
+        const at = this.store.nextUpdateRetry(telegramConfigKey(this.cfg));
         if (at !== undefined) this.scheduleRetry(at);
         return;
       }
       await this.serializeInbound(async () => {
-        const allowed = () => Boolean(this.hive.db.prepare("SELECT 1 FROM telegram_update_failures WHERE id = ? AND state = 'retry'").get(row.id));
+        const allowed = () => this.store.isRetryingUpdate(row.id);
         if (!allowed()) return;
         if (row.invalidated || !this.scopeMatches(row)) {
-          this.hive.db.prepare("UPDATE telegram_update_failures SET state = 'quarantined', invalidated = 1, last_error = 'destination_changed', updated_at = ? WHERE id = ?")
-            .run(Date.now(), row.id);
+          this.store.quarantineChangedUpdate(row.id);
           this.hive.publishTelegramHealth();
           return;
         }
@@ -778,15 +766,14 @@ export class TelegramBridge {
           update = JSON.parse(row.payload ?? "null") as TelegramUpdate;
           if (!update || update.update_id !== row.updateId) throw new Error("Invalid stored update");
         } catch {
-          this.hive.db.prepare("UPDATE telegram_update_failures SET state = 'quarantined', last_error = 'invalid_stored_payload', updated_at = ? WHERE id = ?")
-            .run(Date.now(), row.id);
+          this.store.quarantineInvalidPayload(row.id);
           this.hive.publishTelegramHealth();
           return;
         }
         try {
           await this.processUpdate(update, allowed);
           this.ensureActive();
-          if (allowed()) finishTelegramUpdate(this.hive.db, row.botKey, row.updateId);
+          if (allowed()) this.store.finishUpdate(row.botKey, row.updateId);
         } catch (error) {
           if (this.stopped) throw error;
           if (allowed()) this.recordUpdateError(row, update, error);
@@ -799,9 +786,7 @@ export class TelegramBridge {
   private async onTelegramMessage(message: TelegramMessage, allowed: () => boolean = () => true, updateId?: number) {
     if (!projectSlugForChat(this.cfg, Number(message.chat?.id))) return;
     const chatId = Number(message.chat?.id);
-    const already = this.hive.db.prepare(
-      "SELECT seq FROM telegram_out WHERE telegram_message_id = ? AND telegram_chat_id = ? AND bot_key = ?",
-    ).get(message.message_id, chatId, telegramConfigKey(this.cfg));
+    const already = this.store.inboundSeq(message.message_id, chatId, telegramConfigKey(this.cfg));
     if (already) return;
     const fromId = Number(message.from?.id);
     if (!Number.isFinite(fromId) || !this.cfg.allowUserIds.includes(fromId)) return;
@@ -828,9 +813,7 @@ export class TelegramBridge {
     let threadId: string | null = null;
     const replyId = message.reply_to_message?.message_id;
     if (replyId) {
-      const mapped = this.hive.db.prepare(
-        "SELECT seq, channel_id AS channelId, thread_id AS threadId FROM telegram_out WHERE telegram_message_id = ? AND telegram_chat_id = ? AND bot_key = ?",
-      ).get(replyId, chatId, telegramConfigKey(this.cfg)) as { seq: number; channelId: string; threadId: string | null } | undefined;
+      const mapped = this.store.mappedMessage(replyId, chatId, telegramConfigKey(this.cfg));
       let original: Message | null = null;
       if (mapped) {
         try { original = this.hive.getMessageBySeq(mapped.seq); } catch { /* stale mapping */ }
@@ -839,8 +822,7 @@ export class TelegramBridge {
       if (threadId && !this.hive.messageQueries.isInChannel(threadId, channelId)) threadId = null;
     }
     this.ensureActive();
-    if (this.hive.db.prepare("SELECT 1 FROM telegram_out WHERE bot_key = ? AND telegram_chat_id = ? AND telegram_message_id = ?")
-      .get(telegramConfigKey(this.cfg), chatId, message.message_id)) {
+    if (this.store.isMapped(telegramConfigKey(this.cfg), chatId, message.message_id)) {
       this.discardUnboundAttachments(attachmentIds);
       return;
     }
@@ -849,9 +831,7 @@ export class TelegramBridge {
     const body = inboundPostBody(message.from?.first_name, routingText, attachmentIds.length > 0);
     const human = this.hive.getAgent(HUMAN_ID);
     const persistReceipt = (posted: Message) => {
-      this.hive.db.prepare(`INSERT OR REPLACE INTO telegram_out
-        (telegram_chat_id, telegram_message_id, seq, channel_id, thread_id, bot_key) VALUES (?, ?, ?, ?, ?, ?)`)
-        .run(chatId, message.message_id, posted.seq, posted.channelId, posted.threadId, telegramConfigKey(this.cfg));
+      this.store.saveInboundMapping(chatId, message.message_id, posted.seq, posted.channelId, posted.threadId, telegramConfigKey(this.cfg));
     };
     try {
       // Same policy as the Human UI: every message addressed to a brain passes through Jev first.
@@ -874,9 +854,7 @@ export class TelegramBridge {
     const fromId = Number(update.user?.id);
     if (!Number.isFinite(fromId) || !this.cfg.allowUserIds.includes(fromId)) return;
     if (update.user?.is_bot) return;
-    const mapped = this.hive.db.prepare(
-      "SELECT seq FROM telegram_out WHERE telegram_message_id = ? AND telegram_chat_id = ? AND bot_key = ?",
-    ).get(update.message_id, Number(update.chat?.id), telegramConfigKey(this.cfg)) as { seq: number } | undefined;
+    const mapped = this.store.inboundSeq(update.message_id, Number(update.chat?.id), telegramConfigKey(this.cfg));
     if (!mapped) return;
     try {
       const original = this.hive.getMessageBySeq(mapped.seq);
@@ -955,9 +933,7 @@ export class TelegramBridge {
     );
     if (!ch) return null;
     if (!this.hive.channels.exists(ch.id)) return null;
-    this.hive.db.prepare(
-      "INSERT OR REPLACE INTO telegram_topics (channel_id, telegram_thread_id, telegram_chat_id, bot_key) VALUES (?, ?, ?, ?)",
-    ).run(ch.id, message.message_thread_id, chatId, telegramConfigKey(this.cfg));
+    this.store.saveTopic(ch.id, message.message_thread_id, chatId, telegramConfigKey(this.cfg));
     await this.flushHolds(chatId, message.message_thread_id);
     return ch.id;
   }
@@ -966,15 +942,11 @@ export class TelegramBridge {
     const thread = message.message_thread_id;
     const chatId = Number(message.chat?.id);
     if (thread == null || !Number.isFinite(chatId)) return;
-    this.hive.db.prepare(
-      "INSERT OR REPLACE INTO telegram_hold (telegram_chat_id, telegram_message_id, telegram_thread_id, payload, bot_key, project_id, update_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    ).run(chatId, message.message_id, thread, JSON.stringify(message), telegramConfigKey(this.cfg), this.hive.findProjectBySlug(projectSlugForChat(this.cfg, chatId) ?? "")?.id ?? null, updateId ?? null);
+    this.store.holdMessage(chatId, message.message_id, thread, JSON.stringify(message), telegramConfigKey(this.cfg), this.hive.findProjectBySlug(projectSlugForChat(this.cfg, chatId) ?? "")?.id ?? null, updateId ?? null);
   }
 
   private async flushHolds(chatId: number, telegramThreadId: number) {
-    const rows = this.hive.db.prepare(
-      "SELECT payload, update_id AS updateId, telegram_message_id AS messageId FROM telegram_hold WHERE telegram_thread_id = ? AND telegram_chat_id = ? AND bot_key = ? AND project_id = ?",
-    ).all(telegramThreadId, chatId, telegramConfigKey(this.cfg), this.hive.findProjectBySlug(projectSlugForChat(this.cfg, chatId) ?? "")?.id ?? null) as { payload: string; updateId: number | null; messageId: number }[];
+    const rows = this.store.heldMessages(telegramThreadId, chatId, telegramConfigKey(this.cfg), this.hive.findProjectBySlug(projectSlugForChat(this.cfg, chatId) ?? "")?.id ?? null);
     for (const row of rows) {
       try {
         const message = JSON.parse(row.payload) as TelegramMessage;
@@ -995,8 +967,7 @@ export class TelegramBridge {
         }
       }
       this.ensureActive();
-      this.hive.db.prepare("DELETE FROM telegram_hold WHERE bot_key = ? AND telegram_chat_id = ? AND telegram_message_id = ?")
-        .run(telegramConfigKey(this.cfg), chatId, row.messageId);
+      this.store.releaseHeld(telegramConfigKey(this.cfg), chatId, row.messageId);
     }
 
   }
@@ -1012,12 +983,10 @@ export class TelegramBridge {
       );
       return general?.id ?? null;
     }
-    const row = this.hive.db.prepare(
-      "SELECT channel_id AS id FROM telegram_topics WHERE telegram_thread_id = ? AND telegram_chat_id = ? AND bot_key = ?",
-    ).get(threadId, chatId, telegramConfigKey(this.cfg)) as { id: string } | undefined;
-    if (!row) return null;
+    const row = this.store.channelForTopic(threadId, chatId, telegramConfigKey(this.cfg));
+    if (row === undefined) return null;
     try {
-      const ch = this.hive.getChannel(row.id);
+      const ch = this.hive.getChannel(row);
       return ch.projectId === project.id ? ch.id : null;
     } catch {
       return null;
@@ -1025,7 +994,7 @@ export class TelegramBridge {
   }
 
   private seen(updateId: number): boolean {
-    return Boolean(this.hive.db.prepare("SELECT update_id FROM telegram_in WHERE update_id = ? AND bot_key = ?").get(updateId, telegramConfigKey(this.cfg)));
+    return this.store.seenUpdate(updateId, telegramConfigKey(this.cfg));
   }
 
   private pruneIgnoreReactions() {
@@ -1036,21 +1005,18 @@ export class TelegramBridge {
   }
 
   private state(key: string): string | undefined {
-    const row = this.hive.db.prepare("SELECT value FROM telegram_bot_state WHERE key = ? AND bot_key = ?").get(key, telegramConfigKey(this.cfg)) as { value: string } | undefined;
-    return row?.value;
+    return this.store.botState(key, telegramConfigKey(this.cfg));
   }
 
   private setState(key: string, value: string) {
-    this.hive.db.prepare(
-      "INSERT INTO telegram_bot_state (key, value, bot_key) VALUES (?, ?, ?) ON CONFLICT(bot_key, key) DO UPDATE SET value = excluded.value",
-    ).run(key, value, telegramConfigKey(this.cfg));
+    this.store.setBotState(key, value, telegramConfigKey(this.cfg));
   }
 
   private queuePending(seq: number, kind: "message" | "reaction") {
     if (this.stopped) return;
     const destination = telegramDestinationForSeq(this.hive, seq, this.cfg);
     if (!destination) return;
-    enqueueTelegramPending(this.hive.db, seq, kind, undefined, destination);
+    this.store.enqueuePending(seq, kind, destination);
     this.hive.publishTelegramHealth();
     this.kickPump();
   }
@@ -1064,9 +1030,7 @@ export class TelegramBridge {
   }
 
   private pendingSelection() {
-    const jobs = this.hive.db.prepare(
-      "SELECT seq, kind, bot_key AS botKey, telegram_chat_id AS chatId, attempts, first_attempt_at AS firstAttemptAt, revision FROM telegram_pending ORDER BY seq ASC, kind ASC",
-    ).all() as TelegramJob[];
+    const jobs = this.store.pendingJobs();
     const expiredOrStale = jobs.find(job =>
       !sameTelegramDestination(job, telegramDestinationForSeq(this.hive, job.seq, this.cfg)) ||
       Boolean(job.firstAttemptAt && Date.now() >= job.firstAttemptAt + 86_400_000));
@@ -1107,7 +1071,7 @@ export class TelegramBridge {
   }
 
   private clearPending(job: TelegramJob) {
-    this.hive.db.prepare("DELETE FROM telegram_pending WHERE seq = ? AND kind = ? AND revision = ?").run(job.seq, job.kind, job.revision ?? 0);
+    this.store.clearPending(job);
   }
 
   private safeError(error: unknown): string {
@@ -1125,19 +1089,18 @@ export class TelegramBridge {
       this.lastServedChat = this.chatForSeq(job.seq);
       try {
         if (job.firstAttemptAt && Date.now() >= job.firstAttemptAt + 86_400_000) {
-          failTelegramJob(this.hive.db, job, "delivery_retry_age_exhausted", job.attempts ?? 0);
+          this.store.failJob(job, "delivery_retry_age_exhausted", job.attempts ?? 0);
           this.hive.publishTelegramHealth();
           continue;
         }
         const destination = telegramDestinationForSeq(this.hive, job.seq, this.cfg);
         if (!sameTelegramDestination(job, destination)) {
-          failTelegramJob(this.hive.db, job, "destination_changed_or_unknown", 0);
+          this.store.failJob(job, "destination_changed_or_unknown", 0);
           this.hive.publishTelegramHealth();
           continue;
         }
-        const legacyParts = this.hive.db.prepare("SELECT 1 FROM telegram_delivery_parts WHERE seq = ? AND bot_key = '' LIMIT 1").get(job.seq);
-        if (legacyParts) {
-          failTelegramJob(this.hive.db, job, "legacy_part_destination_unknown", 0);
+        if (this.store.hasLegacyParts(job.seq)) {
+          this.store.failJob(job, "legacy_part_destination_unknown", 0);
           this.hive.publishTelegramHealth();
           continue;
         }
@@ -1149,18 +1112,17 @@ export class TelegramBridge {
         if (this.stopped || this.abort.signal.aborted) break;
         console.error("telegram out", this.safeError(err));
         const chat = this.chatForSeq(job.seq);
-        const current = this.hive.db.prepare("SELECT revision FROM telegram_pending WHERE seq = ? AND kind = ?").get(job.seq, job.kind) as { revision: number } | undefined;
+        const current = this.store.pendingRevision(job.seq, job.kind);
         if (!current) continue;
         if (err instanceof TelegramRateLimitError && chat !== undefined) this.coolDown(chat, err.retryAt);
         // A newer desired reaction supersedes the failed old request; never delete the new job.
         if (current.revision !== (job.revision ?? 0)) continue;
         const attempts = (job.attempts ?? 0) + 1;
         const firstAttemptAt = job.firstAttemptAt || Date.now();
-        this.hive.db.prepare("UPDATE telegram_pending SET attempts = ?, first_attempt_at = ? WHERE seq = ? AND kind = ?")
-          .run(attempts, firstAttemptAt, job.seq, job.kind);
+        this.store.recordAttempt(job.seq, job.kind, attempts, firstAttemptAt);
         const limit = err instanceof TelegramRateLimitError ? 20 : TELEGRAM_PENDING_GIVE_UP;
         if (isTelegramPermanentOutError(err) || attempts >= limit) {
-          failTelegramJob(this.hive.db, job, this.safeError(err), attempts);
+          this.store.failJob(job, this.safeError(err), attempts);
           this.hive.publishTelegramHealth();
           continue;
         }
@@ -1196,7 +1158,7 @@ export class TelegramBridge {
 
     if (atts.length === 0) {
       const partKey = "text";
-      if (telegramPartDelivered(this.hive.db, msg.seq, partKey, chatId, telegramConfigKey(this.cfg))) return;
+      if (this.store.partDelivered(msg.seq, partKey, chatId, telegramConfigKey(this.cfg))) return;
       const sent = requireTelegramOk(
         await this.api("sendMessage", {
           chat_id: chatId,
@@ -1210,7 +1172,7 @@ export class TelegramBridge {
       return;
     }
 
-    if (text.length > 1000 && !telegramPartDelivered(this.hive.db, msg.seq, "text", chatId, telegramConfigKey(this.cfg))) {
+    if (text.length > 1000 && !this.store.partDelivered(msg.seq, "text", chatId, telegramConfigKey(this.cfg))) {
       const sent = requireTelegramOk(
         await this.api("sendMessage", {
           chat_id: chatId,
@@ -1227,7 +1189,7 @@ export class TelegramBridge {
     for (let i = 0; i < atts.length; i += 1) {
       const att = atts[i]!;
       const partKey = `attachment:${att.id}`;
-      if (telegramPartDelivered(this.hive.db, msg.seq, partKey, chatId, telegramConfigKey(this.cfg))) continue;
+      if (this.store.partDelivered(msg.seq, partKey, chatId, telegramConfigKey(this.cfg))) continue;
       const opened = this.hive.getAttachment(human, att.id);
       const disk = filePathForHash(opened.sha256, this.hive.home);
       const caption = text.length <= 1000 && i === 0 ? text : `${msg.authorName} · ${att.name}`;
@@ -1250,9 +1212,7 @@ export class TelegramBridge {
     }
     const chatId = this.chatForChannel(ch);
     if (chatId == null) return;
-    const rows = this.hive.db.prepare(
-      "SELECT telegram_message_id AS id FROM telegram_out WHERE seq = ? AND telegram_chat_id = ? AND bot_key = ?",
-    ).all(seq, chatId, telegramConfigKey(this.cfg)) as { id: number }[];
+    const rows = this.store.deliveredMessageIds(seq, chatId, telegramConfigKey(this.cfg));
     if (rows.length === 0) return;
     const reaction = telegramOutboundReactionPayload((msg.reactions ?? []).map((r) => r.emoji));
     const emojis = reaction.map((r) => r.emoji);
@@ -1275,18 +1235,7 @@ export class TelegramBridge {
     const result = sent.result as { message_id?: number } | undefined;
     if (!sent.ok || !Number.isSafeInteger(result?.message_id)) throw new Error("Telegram response has no message ID; delivery outcome is unknown");
     const messageId = result!.message_id!;
-    this.hive.storage.transaction(() => {
-      this.hive.db.prepare(
-        `INSERT OR REPLACE INTO telegram_out
-          (telegram_chat_id, telegram_message_id, seq, channel_id, thread_id, bot_key)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      ).run(chatId, messageId, msg.seq, msg.channelId, msg.threadId, telegramConfigKey(this.cfg));
-      this.hive.db.prepare(
-        `INSERT OR REPLACE INTO telegram_delivery_parts
-          (seq, part_key, telegram_chat_id, telegram_message_id, completed_at, bot_key)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      ).run(msg.seq, partKey, chatId, messageId, Date.now(), telegramConfigKey(this.cfg));
-    });
+    this.store.recordDeliveredPart(chatId, messageId, msg.seq, msg.channelId, msg.threadId, partKey, telegramConfigKey(this.cfg));
   }
 
   private async sendFile(
