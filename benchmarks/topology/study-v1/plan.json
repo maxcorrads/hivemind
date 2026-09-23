@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "manifest": "study.json",
+  "workloads": [
+    { "id": "small-duration", "input": "workloads/small-duration/request.txt", "acceptance": "workloads/small-duration/acceptance.mjs" },
+    { "id": "medium-csv", "input": "workloads/medium-csv/request.txt", "acceptance": "workloads/medium-csv/acceptance.mjs" },
+    { "id": "large-parallel-toolkit", "input": "workloads/large-parallel-toolkit/request.txt", "acceptance": "workloads/large-parallel-toolkit/acceptance.mjs" },
+    { "id": "large-coupled-invoicing", "input": "workloads/large-coupled-invoicing/request.txt", "acceptance": "workloads/large-coupled-invoicing/acceptance.mjs" }
+  ],
+  "host": { "name": "opencode", "binaryVersion": "1.18.31" },
+  "jev": { "expectedResolvedModel": null }
+}

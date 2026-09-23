@@ -1,0 +1,27 @@
+Build a small duration parser in the current working directory. It is the project workspace and starts empty; create every file inside it and do not read or write anything outside it.
+
+Runtime and constraints:
+- Plain Node.js 22 or newer, ECMAScript modules only. Every source and test file uses the `.mjs` extension with `import`/`export` syntax.
+- Use only Node.js built-in modules. No npm packages, no package.json dependencies, no network access, no build step.
+- Write tests with `node:test` and `node:assert/strict` in files under `test/` named `*.test.mjs`. Running `node --test test/*.test.mjs` from the workspace root must pass.
+- The result is checked by an automated hidden test suite that imports the exact file path and named export below and by running your tests. Follow the names, error types and edge cases exactly.
+
+Deliverable: `src/duration.mjs` exporting a named function `parseDuration(input)` that converts a human duration string into a whole number of milliseconds, plus tests in `test/duration.test.mjs`.
+
+Rules:
+1. `input` must be a string; for any other type throw a `TypeError`.
+2. Leading and trailing whitespace is ignored. After trimming, the string consists of one or more components, optionally separated by whitespace. A component is a number immediately followed by a unit, with no space between them.
+3. A number is one or more ASCII digits, optionally followed by `.` and one or more ASCII digits (for example `2`, `0.5`, `10.25`). There is no sign, no exponent and no leading or trailing `.`.
+4. Units are case-sensitive: `d` = 86400000 ms, `h` = 3600000 ms, `m` = 60000 ms, `s` = 1000 ms, `ms` = 1 ms. Note that `ms` is milliseconds, not minutes followed by seconds.
+5. Each unit may appear at most once, and units must appear in strictly descending size order: d, h, m, s, ms. `1h30m` is valid; `30m1h` and `1m1m` are invalid.
+6. The result is the sum of all components, rounded to the nearest integer with `Math.round`.
+7. Any string that violates rules 2 to 5, including an empty or whitespace-only string, throws a `RangeError`.
+
+Examples:
+- `parseDuration("1h30m")` returns `5400000`
+- `parseDuration(" 2d 4h ")` returns `187200000`
+- `parseDuration("1.5s")` returns `1500`
+- `parseDuration("250ms")` returns `250`
+- `parseDuration("1m 0.5s")` returns `60500`
+- `parseDuration("1h 30")`, `parseDuration("1 h")` and `parseDuration("-1s")` throw a `RangeError`
+- `parseDuration(5)` throws a `TypeError`

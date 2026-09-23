@@ -1,0 +1,3 @@
+# Generated per checkout: they pin the commit that contains this folder, so they cannot be committed with it.
+/config.json
+/study.json

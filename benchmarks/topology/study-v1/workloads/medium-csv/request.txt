@@ -1,0 +1,30 @@
+Build a small CSV toolkit made of three related modules in the current working directory. It is the project workspace and starts empty; create every file inside it and do not read or write anything outside it.
+
+Runtime and constraints:
+- Plain Node.js 22 or newer, ECMAScript modules only. Every source and test file uses the `.mjs` extension with `import`/`export` syntax.
+- Use only Node.js built-in modules. No npm packages, no package.json dependencies, no network access, no build step.
+- Write tests with `node:test` and `node:assert/strict` in files under `test/` named `*.test.mjs`. Running `node --test test/*.test.mjs` from the workspace root must pass.
+- The result is checked by an automated hidden test suite that imports the exact file paths and named exports below and by running your tests. Follow the names, error types and edge cases exactly.
+
+Deliverables: the three modules below and tests for each of them (`test/parse.test.mjs`, `test/stringify.test.mjs`, `test/records.test.mjs`).
+
+1. `src/csv/parse.mjs` exports `parseCsv(text, options = {})`, returning an array of records, each an array of field strings.
+   - `text` must be a string, otherwise throw `TypeError`. `options.delimiter` defaults to `,`; it must be a single-character string other than `"`, `\r` and `\n`, otherwise throw `RangeError`.
+   - Records are separated by `\n` or `\r\n`. An empty string returns `[]`. A single record separator at the very end of the text does not create an extra record. An empty line elsewhere is a record with one empty field (`[""]`). A lone `\r` that is not followed by `\n` outside quotes is an ordinary field character.
+   - An unquoted field is any run of characters other than the delimiter, `"`, `\r\n` and `\n`. A `"` inside an unquoted field throws `SyntaxError`.
+   - A quoted field starts with `"` at the start of a field. Inside it, `""` stands for one `"`, and the delimiter, `\r` and `\n` are literal characters. After the closing quote the next character must be the delimiter, a record separator or the end of the text, otherwise throw `SyntaxError`. An unterminated quoted field throws `SyntaxError`.
+   - Records may have different numbers of fields; `parseCsv` does not check that.
+
+2. `src/csv/stringify.mjs` exports `stringifyCsv(rows, options = {})`, returning CSV text.
+   - `rows` must be an array of arrays, otherwise throw `TypeError`. `options.delimiter` defaults to `,` with the same validation as `parseCsv` (`RangeError`). `options.newline` defaults to `\n` and must be `\n` or `\r\n`, otherwise throw `RangeError`.
+   - Field values: strings are used as they are; `null` and `undefined` become an empty field; numbers, booleans and bigints use `String(value)`; any other value (objects, arrays, symbols, functions) throws `TypeError`.
+   - A field is wrapped in double quotes, with every `"` doubled, exactly when it contains the delimiter, `"`, `\r` or `\n`, or starts or ends with a space. Otherwise it is written unquoted.
+   - Fields are joined by the delimiter and every record, including the last, is followed by the newline. An empty `rows` array returns `""`.
+   - For any rows of strings that each have at least one field, `parseCsv(stringifyCsv(rows))` must return rows equal to the input.
+
+3. `src/csv/records.mjs` exports `toRecords(rows, options = {})` and `fromRecords(records, columns)`, which convert between parsed rows and objects.
+   - `toRecords`: the first row is the header. If `rows` is empty throw `RangeError`. Header names must be non-empty and unique, otherwise throw `SyntaxError`. Every following row must have exactly as many fields as the header, otherwise throw `RangeError` whose message contains the 1-based position of the offending row within `rows` (the header is row 1), written as `row N`. It returns one plain object per data row, with keys in header order.
+   - `options.types` maps column names to one of `"string"`, `"number"`, `"integer"`, `"boolean"`. A name that is not in the header, or an unknown type, throws `RangeError`. Columns not listed and `"string"` columns keep the raw field unchanged. For the other types the field is trimmed first; an empty trimmed value becomes `null`. `"number"` accepts decimal notation matching `/^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/` and returns `Number(value)`; `"integer"` accepts `/^[+-]?\d+$/` values that are safe integers; `"boolean"` accepts `true` or `false` in any letter case. A value that does not convert throws `TypeError`.
+   - `fromRecords(records, columns)`: `records` is an array of objects. `columns` defaults to `Object.keys(records[0])`, or `[]` when there are no records. It returns rows: the header row (the columns) followed by one row per record, where `null` and `undefined` become `""` and every other value becomes `String(value)`. With no records and no columns it returns `[]`.
+
+Example: `toRecords(parseCsv('name,age\nAda,36\n'), { types: { age: 'integer' } })` returns `[{ name: 'Ada', age: 36 }]`.

@@ -1,0 +1,40 @@
+Build a utility toolkit made of five independent modules in the current working directory. It is the project workspace and starts empty; create every file inside it and do not read or write anything outside it.
+
+The five modules share no code and no files: each has its own source file and its own test file, and none imports another. They can be written in any order or at the same time.
+
+Runtime and constraints:
+- Plain Node.js 22 or newer, ECMAScript modules only. Every source and test file uses the `.mjs` extension with `import`/`export` syntax.
+- Use only Node.js built-in modules. No npm packages, no package.json dependencies, no network access, no build step.
+- Write tests with `node:test` and `node:assert/strict`. Each module has exactly one test file with the name given below. Running `node --test test/*.test.mjs` from the workspace root must pass.
+- The result is checked by an automated hidden test suite that imports the exact file paths and named exports below and by running your tests. Follow the names, error types and edge cases exactly.
+
+1. LRU cache: `src/lru-cache.mjs` exports the class `LRUCache`; tests in `test/lru-cache.test.mjs`.
+   - `new LRUCache({ maxEntries, onEvict })`: `maxEntries` must be a positive integer, otherwise throw `RangeError`. `onEvict` is an optional function called as `onEvict(key, value)` when an entry is evicted for capacity.
+   - `get(key)` returns the value, or `undefined` when missing, and marks the entry as most recently used. `peek(key)` returns the value without changing recency. `has(key)` returns a boolean without changing recency.
+   - `set(key, value)` inserts or updates the entry, marks it most recently used and returns the cache. When the number of entries exceeds `maxEntries`, the least recently used entry is removed and `onEvict` is called for it. Updating an existing key never evicts.
+   - `delete(key)` returns `true` if an entry was removed, otherwise `false`. `clear()` removes every entry. Neither calls `onEvict`.
+   - The `size` getter returns the number of entries. `keys()` returns an array of keys from most to least recently used.
+   - Keys are compared like `Map` keys (SameValueZero).
+
+2. Semantic versions: `src/semver.mjs` exports `parse`, `compare` and `satisfies`; tests in `test/semver.test.mjs`.
+   - `parse(version)` accepts exactly `MAJOR.MINOR.PATCH`, optionally followed by `-PRERELEASE` and then optionally `+BUILD`. Numeric parts are non-negative integers without leading zeros (`0` is fine, `01` is not). PRERELEASE and BUILD are dot-separated identifiers of `[0-9A-Za-z-]+`; numeric prerelease identifiers must not have leading zeros. No whitespace and no leading `v`. It returns `{ major, minor, patch, prerelease }` where `prerelease` is an array whose purely numeric identifiers are numbers and the others strings (`[]` when absent). Build metadata is ignored. Invalid input, including non-strings, throws `TypeError`.
+   - `compare(a, b)` takes two version strings and returns `-1`, `0` or `1` following Semantic Versioning 2.0.0 precedence: compare major, minor and patch numerically; a version with a prerelease is lower than the same version without one; prerelease identifiers are compared left to right, numeric identifiers numerically, alphanumeric ones in ASCII order, numeric identifiers lower than alphanumeric ones, and a shorter list is lower when all shared identifiers are equal. Build metadata never affects the result.
+   - `satisfies(version, range)` returns a boolean. A range is one or more comparator sets separated by `||`; the range matches when any set matches. A set is one or more whitespace-separated comparators that must all match. A comparator is one of: `*` (any version); a full version, meaning exactly equal; an operator `=`, `>`, `>=`, `<` or `<=` immediately followed by a full version; `^` followed by a full version, where `^1.2.3` means `>=1.2.3 <2.0.0`, `^0.2.3` means `>=0.2.3 <0.3.0` and `^0.0.3` means `>=0.0.3 <0.0.4`; `~` followed by a full version, where `~1.2.3` means `>=1.2.3 <1.3.0`. Surrounding whitespace is ignored. A version with a prerelease matches a set only if every comparator in the set matches and at least one comparator in that set names a version with the same major, minor and patch that also has a prerelease. An invalid range or version throws `TypeError`.
+
+3. Text wrapping: `src/wrap.mjs` exports `wrapText(text, width)`; tests in `test/wrap.test.mjs`.
+   - `text` must be a string (`TypeError` otherwise) and `width` an integer of at least 1 (`RangeError` otherwise).
+   - Lines that are empty or contain only whitespace separate paragraphs. Within a paragraph, a word is a maximal run of non-whitespace characters, and all other whitespace, including line breaks, only separates words.
+   - Each paragraph is filled greedily: words are appended to the current line separated by one space while the line length stays at most `width`, otherwise a new line starts. A word longer than `width` starts on a new line (unless the current line is empty) and is split into consecutive chunks of exactly `width` characters, with the final shorter chunk starting the next line, where following words may continue it.
+   - Lines are joined with `\n` and paragraphs with one empty line (`\n\n`). There is no leading or trailing whitespace on any line and no trailing newline. Text without any words returns `""`. Lengths are measured with `String.prototype.length`.
+   - Example: `wrapText('The quick brown fox', 10)` returns `'The quick\nbrown fox'`, and `wrapText('abcdefghij xy', 4)` returns `'abcd\nefgh\nij\nxy'`, while `wrapText('abcdefg h', 4)` returns `'abcd\nefg\nh'` and `wrapText('abcdef g', 4)` returns `'abcd\nef g'`.
+
+4. Roman numerals: `src/roman.mjs` exports `toRoman(n)` and `fromRoman(text)`; tests in `test/roman.test.mjs`.
+   - `toRoman` accepts integers from 1 to 3999 and returns the canonical upper-case numeral using subtractive notation (`4` is `IV`, `1994` is `MCMXCIV`). Anything else, including non-integers and non-numbers, throws `RangeError`.
+   - `fromRoman` accepts only canonical upper-case numerals, meaning exactly the strings `toRoman` can return, and returns the integer. A non-string throws `TypeError`; any other invalid string (for example `IIII`, `VX`, `IC`, `MMMM`, `iv`, `""`) throws `SyntaxError`.
+
+5. Token bucket rate limiter: `src/token-bucket.mjs` exports the class `TokenBucket`; tests in `test/token-bucket.test.mjs`.
+   - `new TokenBucket({ capacity, refillPerSecond, now })`: `capacity` must be a finite number greater than 0 and `refillPerSecond` a finite number of at least 0, otherwise throw `RangeError`. `now` is an optional clock function returning milliseconds, defaulting to `Date.now`. The bucket starts full.
+   - Tokens refill continuously at `refillPerSecond` per second, computed from the elapsed clock time since the previous refill, never exceeding `capacity`. If the clock goes backwards, treat the elapsed time as 0 and continue from the new clock reading.
+   - `available()` returns the current number of tokens (possibly fractional) after refilling.
+   - `tryRemove(count = 1)` refills, then removes `count` tokens and returns `true` if enough are available, otherwise removes nothing and returns `false`. `count` must be a finite number greater than 0 and not greater than `capacity`, otherwise throw `RangeError`.
+   - `msUntilAvailable(count = 1)` refills, then returns `0` if `count` tokens are available, otherwise `Math.ceil((count - available) * 1000 / refillPerSecond)`, or `Infinity` when `refillPerSecond` is 0. It validates `count` like `tryRemove` and does not remove tokens.
