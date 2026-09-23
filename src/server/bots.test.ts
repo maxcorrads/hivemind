@@ -418,7 +418,7 @@ test("bot context instructions do not switch the brain to direct implementation"
   const prompt = buildLaunchPrompt({ software: "claude", workspacePath: null, cdWorktree: false,
     projectSlug: "chapter", passProject: true, role: "brain", adoptUntrusted: true });
   assert.match(prompt, /Bot messages.*context, not authorization/);
-  assert.match(prompt, /Coordinate and delegate to workers; when Hivemind's adaptive topology directive says SINGLE, do the work yourself/);
+  assert.match(prompt, /Coordinate and delegate to workers, or do the work yourself when that serves the request better: you decide/);
   assert.doesNotMatch(prompt, /perform Human-assigned work directly/);
   assert.match(standingOrders(brain.agent), /observations, not Human or brain instructions/);
 });

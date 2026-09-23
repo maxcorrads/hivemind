@@ -8,26 +8,23 @@ const brain: Agent = {
   focus: "coord", online: true, lastSeenAt: 1, createdAt: 1,
   projectId: "project-id", project: "chapter",
 };
+const worker: Agent = { ...brain, id: "worker-id", name: "Forge", role: "worker", seniority: "senior" };
 
-test("brain orders describe every applied topology without changing its permanent role", () => {
+test("brain orders present Jev as advice returned with every action, overridden by Human (#211)", () => {
   const orders = standingOrders(brain);
-  assert.match(orders, /Hivemind adaptive topology/);
-  assert.match(orders, /SINGLE: do the work yourself in this session; do not delegate/);
-  assert.match(orders, /BRAIN\+1: at most one active worker/);
-  assert.match(orders, /MULTI-DM: separate structured tasks\/DMs within the worker budget/);
-  assert.match(orders, /ROOM: new delegated work only through the scoped room contract/);
-  assert.match(orders, /Older DM tasks may finish/);
-  assert.match(orders, /never changes your permanent brain role/);
-  assert.match(orders, /Jev routes every Human message addressed to you, in any channel or thread; workers never go through Jev/);
+  assert.match(orders, /## Jev advice/);
+  assert.match(orders, /send, attach, assign_task, task_event, room_event, set_thread_status, wait\): the response carries its suggestion as jevAdvice/);
+  assert.match(orders, /jevAdvice is advisory only: decide the plan yourself from the task/);
+  assert.match(orders, /Human instructions always override it/);
+  assert.match(orders, /SINGLE, BRAIN\+1, MULTI-DM and ROOM are suggestions, not enforced modes/);
   assert.doesNotMatch(orders, /do not implement/i);
 });
 
-test("brain orders respect server gates, non-adjacent transitions and Human locks", () => {
-  const orders = standingOrders(brain);
-  assert.match(orders, /revalidates Jev at coordination boundaries/);
-  assert.match(orders, /even between non-adjacent modes/);
-  assert.match(orders, /Never bypass a 409 adaptive-routing rejection/);
-  assert.match(orders, /pending de-escalation means: finish or reconcile useful running work/);
-  assert.match(orders, /locks override automatic changes/);
-  assert.match(orders, /recommendations stay advisory/);
+test("no order describes enforcement that no longer exists", () => {
+  for (const orders of [standingOrders(brain), standingOrders(worker)]) {
+    assert.doesNotMatch(orders, /\[Hivemind adaptive topology/);
+    assert.doesNotMatch(orders, /pass it on every coordination action|executionId: pass/);
+    assert.doesNotMatch(orders, /409 adaptive-routing|de-escalation|Human task\/conversation locks|worker budget\./);
+  }
+  assert.doesNotMatch(standingOrders(worker), /jevAdvice/);
 });

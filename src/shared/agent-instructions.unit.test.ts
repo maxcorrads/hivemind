@@ -159,8 +159,8 @@ const COVERAGE: Record<AgentRuleId, readonly Evidence[]> = {
   "worker.room-ack": [{ where: "orders", phrase: "In a room, read get_task/get_room and room_event acknowledge the current contractVersion before continuing (concurrent acknowledgements are safe)." }],
   "worker.peer-clarify": [{ where: "orders", phrase: "Clarify directly with addressed peers, but replying to a peer does not finish your own assigned task: continue it and submit its result before idling." }],
   "worker.stop-request": [{ where: "orders", phrase: "On a room stop request, stop incompatible activity and send room_event stopped, not a result. Hivemind cannot interrupt external tools for you." }],
-  "brain.coordinate": [{ where: "orders", phrase: "Coordinate and delegate to workers; when Hivemind's adaptive topology directive says SINGLE, do the work yourself." },
-    { where: "launch", phrase: "Coordinate and delegate to workers; when Hivemind's adaptive topology directive says SINGLE, do the work yourself." }],
+  "brain.coordinate": [{ where: "orders", phrase: "Coordinate and delegate to workers, or do the work yourself when that serves the request better: you decide." },
+    { where: "launch", phrase: "Coordinate and delegate to workers, or do the work yourself when that serves the request better: you decide." }],
   "brain.talk": [{ where: "orders", phrase: "Talk with Human, brains (#brains) and workers; post progress publicly when the hive should see it." }],
   "brain.assign": [{ where: "orders", phrase: "Delegate by choosing a specific worker (you pick seniority) in a DM thread or an authorized scoped room: one task = one thread." }],
   "brain.offline-worker": [{ where: "orders", phrase: "If the worker is offline, leave the message there; do not try to wake it." }],
@@ -173,19 +173,10 @@ const COVERAGE: Record<AgentRuleId, readonly Evidence[]> = {
     { where: "set_thread_status", phrase: "Set an optional status on a free-form thread" }],
   "brain.clear-context": [{ where: "orders", phrase: "Send clear_context only to a worker stuck in a long session, never automatically at done or after a report." }],
   "brain.human-admin": [{ where: "orders", phrase: "Human (admin) sees every conversation; treat DMs as private from workers' point of view." }],
-  "topology.directive": [{ where: "orders", phrase: "Its \"[Hivemind adaptive topology · ...]\" directive is the server-enforced mode for that one request and never changes your permanent brain role." }],
-  "topology.jev-routing": [{ where: "orders", phrase: "Jev routes every Human message addressed to you, in any channel or thread; workers never go through Jev." }],
-  "topology.concurrent": [{ where: "orders", phrase: "Several requests may run at once, each with its own executionId" }],
-  "topology.execution-id": [{ where: "orders", phrase: "pass it on every coordination action for that request. Delegation (send/attach to a worker, assign_task, task_event revise, room_event configure/staff) without it is rejected while you have an active execution. Never reuse or invent one." },
-    { where: "param", phrase: "Brain: the served request's executionId (standing orders)." }],
-  "topology.single": [{ where: "orders", phrase: "SINGLE: do the work yourself in this session; do not delegate." }],
-  "topology.brain-plus-one": [{ where: "orders", phrase: "BRAIN+1: at most one active worker." }],
-  "topology.multi-dm": [{ where: "orders", phrase: "MULTI-DM: separate structured tasks/DMs within the worker budget; no new room work." }],
-  "topology.room": [{ where: "orders", phrase: "ROOM: new delegated work only through the scoped room contract, within the worker budget. Older DM tasks may finish, but start no new or replacement DM work." }],
-  "topology.revalidation": [{ where: "orders", phrase: "Hivemind revalidates Jev at coordination boundaries and may switch mode, even between non-adjacent modes." }],
-  "topology.409": [{ where: "orders", phrase: "Never bypass a 409 adaptive-routing rejection: retry only after the routing state or a Human lock changes." }],
-  "topology.de-escalation": [{ where: "orders", phrase: "A pending de-escalation means: finish or reconcile useful running work, start no new delegation." }],
-  "topology.locks": [{ where: "orders", phrase: "Human task/conversation locks override automatic changes; Jev recommendations stay advisory until the lock is removed." }],
+  "jev.advice": [{ where: "orders", phrase: "Jev advises you on every Human message addressed to you and on each of your actions (send, attach, assign_task, task_event, room_event, set_thread_status, wait): the response carries its suggestion as jevAdvice. Workers never get Jev advice." }],
+  "jev.advisory": [{ where: "orders", phrase: "jevAdvice is advisory only: decide the plan yourself from the task. Human instructions always override it, and Hivemind never blocks or reshapes an action because of it." }],
+  "jev.not-enforced": [{ where: "orders", phrase: "SINGLE, BRAIN+1, MULTI-DM and ROOM are suggestions, not enforced modes: there is no worker budget, lock or executionId. Treat an uncertain, incoherent, unavailable or rejected jevAdvice as no advice." },
+    { where: "param", phrase: "Deprecated and ignored (#211); accepted only for older clients." }],
   "task.optional": [{ where: "orders", phrase: "Tasks are optional; free-form chat never changes task state." },
     { where: "set_thread_status", phrase: "Structured tasks change state only through task_event." }],
   "task.revision": [{ where: "orders", phrase: "get_task is authoritative: pass its revision as expectedRevision." },
@@ -307,9 +298,10 @@ test("every registered MCP tool takes its description from TOOL_DESCRIPTIONS", (
   assert.deepEqual(registered.map(match => match[1]).sort(), Object.keys(TOOL_DESCRIPTIONS).sort());
 });
 
-test("brain launch prompts carry the SINGLE exception and nothing forbids implementing (#149)", () => {
+test("brain launch prompts let the brain do the work itself and nothing forbids implementing (#149, #211)", () => {
   for (const prompt of launch.brain) {
-    assert.match(prompt, /when Hivemind's adaptive topology directive says SINGLE, do the work yourself/);
+    assert.match(prompt, /or do the work yourself when that serves the request better: you decide/);
+    assert.doesNotMatch(prompt, /executionId|adaptive topology directive/);
   }
   for (const text of [...launch.brain, ...launch.worker, orders.brain, orders.worker, ...Object.values(TOOL_DESCRIPTIONS), ...params, WAIT_NEXT]) {
     assert.doesNotMatch(text, /do not implement|don't implement|never implement/i);

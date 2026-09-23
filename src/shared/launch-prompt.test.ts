@@ -48,7 +48,7 @@ test("launch prompt adopts untrusted hive mail first", () => {
   assert.match(text, /read your standing orders \(a first join returns them; otherwise call standing_orders\)/);
   assert.match(text, /output no text/);
   assert.equal(text.includes("Do not call wait in a loop"), false);
-  assert.match(text, /Coordinate and delegate to workers; when Hivemind's adaptive topology directive says SINGLE, do the work yourself/);
+  assert.match(text, /Coordinate and delegate to workers, or do the work yourself when that serves the request better: you decide/);
   assert.doesNotMatch(text, /do not implement/i);
   assert.match(text, /call ack_delivery with that exact ID before acting/);
   assert.match(text, /inbox session was superseded, stop waiting/);
