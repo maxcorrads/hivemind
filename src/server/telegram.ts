@@ -614,7 +614,7 @@ export class TelegramBridge {
       }
       return null;
     }
-    if (!this.hive.db.prepare("SELECT id FROM channels WHERE id = ?").get(ch.id)) return null;
+    if (!this.hive.channels.exists(ch.id)) return null;
     this.hive.db.prepare(
       "INSERT OR REPLACE INTO telegram_topics (channel_id, telegram_thread_id, telegram_chat_id, bot_key) VALUES (?, ?, ?, ?)",
     ).run(ch.id, result.message_thread_id, chatId, telegramConfigKey(this.cfg));
@@ -836,7 +836,7 @@ export class TelegramBridge {
         try { original = this.hive.getMessageBySeq(mapped.seq); } catch { /* stale mapping */ }
       }
       threadId = telegramReplyThreadId(mapped, original, channelId);
-      if (threadId && !this.hive.db.prepare("SELECT 1 FROM messages WHERE id = ? AND channel_id = ?").get(threadId, channelId)) threadId = null;
+      if (threadId && !this.hive.messageQueries.isInChannel(threadId, channelId)) threadId = null;
     }
     this.ensureActive();
     if (this.hive.db.prepare("SELECT 1 FROM telegram_out WHERE bot_key = ? AND telegram_chat_id = ? AND telegram_message_id = ?")
@@ -954,7 +954,7 @@ export class TelegramBridge {
         (channelLabel(c) === name || c.name === name || `#${c.name}` === name),
     );
     if (!ch) return null;
-    if (!this.hive.db.prepare("SELECT id FROM channels WHERE id = ?").get(ch.id)) return null;
+    if (!this.hive.channels.exists(ch.id)) return null;
     this.hive.db.prepare(
       "INSERT OR REPLACE INTO telegram_topics (channel_id, telegram_thread_id, telegram_chat_id, bot_key) VALUES (?, ?, ?, ?)",
     ).run(ch.id, message.message_thread_id, chatId, telegramConfigKey(this.cfg));
@@ -1320,7 +1320,7 @@ export class TelegramBridge {
   }
 
   private discardUnboundAttachments(ids: string[]) {
-    for (const id of ids) this.hive.db.prepare("DELETE FROM attachments WHERE id = ? AND message_id IS NULL").run(id);
+    for (const id of ids) this.hive.files.discardUnsent(id);
   }
 
   private async filesFromMessage(message: TelegramMessage): Promise<string[]> {

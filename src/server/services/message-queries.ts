@@ -396,6 +396,17 @@ export class MessageQueries implements MessageReader {
     return Object.fromEntries(rows.map((r) => [r.id, r.n]));
   }
 
+  /** A thread's stored status: undefined when it has none, null when it was cleared. */
+  threadStatus(threadId: string): string | null | undefined {
+    const row = this.db.prepare("SELECT status FROM threads WHERE id=?").get(threadId) as { status: string | null } | undefined;
+    return row?.status;
+  }
+
+  /** True when `messageId` is a message of `channelId`. */
+  isInChannel(messageId: string, channelId: string): boolean {
+    return Boolean(this.db.prepare("SELECT 1 FROM messages WHERE id = ? AND channel_id = ?").get(messageId, channelId));
+  }
+
   latestSeq(channelId: string): number {
     const row = this.db.prepare("SELECT COALESCE(MAX(seq), 0) AS n FROM messages WHERE channel_id = ?").get(
       channelId,

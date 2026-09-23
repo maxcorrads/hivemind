@@ -82,6 +82,11 @@ export class IdentityService implements AgentDirectory {
     return row ? this.mapAgent(row) : null;
   }
 
+  /** The current session-key hash: it changes when the agent resumes or a bot credential rotates. */
+  sessionFingerprint(agentId: string): string | undefined {
+    return (this.db.prepare("SELECT token_hash FROM agents WHERE id=?").get(agentId) as { token_hash: string } | undefined)?.token_hash;
+  }
+
   agentByToken(token: string): Agent {
     const row = this.db.prepare("SELECT * FROM agents WHERE token_hash = ?").get(hashToken(token)) as
       | AgentRow
