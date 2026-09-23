@@ -1,14 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { Hive } from './hive.ts';
-import { HiveError, type Agent, type Channel } from '../shared/types.ts';
+import type { RoomStoreHost } from './services/ports.ts';
+import { HiveError, type Agent, type Channel, type Message } from '../shared/types.ts';
 import { roomEventSchema, sourceLinkSchema, sourceReportSchema, type Room, type RoomTask, type RoomView, type SourceLink } from '../shared/rooms.ts';
 import type { TaskSnapshot } from '../shared/tasks.ts';
 
 type TaskLink = { task_id: string; channel_id: string; version: number; action_key: string; payload_hash: string; status: 'active' | 'stop_requested' | 'stopped' };
 const finished = (t: TaskSnapshot) => ['accepted_complete', 'rejected'].includes(t.state);
 export class RoomStore {
-  constructor(private hive: Hive) {}
-  private get db() { return this.hive.db; }
+  constructor(private hive: RoomStoreHost) {}
+  private get db() { return this.hive.storage.db; }
   private hash(v: unknown) { return createHash('sha256').update(JSON.stringify(v)).digest('hex'); }
   peek(channel: string): Room | null {
     const row = this.db.prepare('SELECT snapshot FROM rooms WHERE channel_id=?').get(channel);
@@ -74,7 +74,7 @@ export class RoomStore {
     const parsed = roomEventSchema.safeParse(raw);
     if (!parsed.success) throw new HiveError(400, 'Invalid room event: ' + parsed.error.message);
     const input = parsed.data, action = input.action, ch = this.channel(actor, channel);
-    const hash = this.hash({ channel: ch.id, input }); const messages: ReturnType<Hive['getMessageById']>[] = [];
+    const hash = this.hash({ channel: ch.id, input }); const messages: Message[] = [];
     const duplicate = this.hive.storage.transaction(() => {
       const retry = this.db.prepare('SELECT * FROM room_events WHERE actor_id=? AND request_id=?').get(actor.id, input.requestId);
       if (retry) {
@@ -289,7 +289,7 @@ export class RoomStore {
     if (['running', 'paused'].includes(p.data.observed) && p.data.observed !== link.desired) throw new HiveError(409, 'Report does not match the requested state');
     if (link.observed === p.data.observed && link.detail === p.data.detail) return link;
     const next = { ...link, ...p.data, updatedAt: Date.now() };
-    const room = this.peek(ch.id); let message: ReturnType<Hive['getMessageById']> | undefined;
+    const room = this.peek(ch.id); let message: Message | undefined;
     this.hive.storage.transaction(() => {
       this.saveLink(ch.id, next);
       if (room && (link.desired === 'paused' || ['failed', 'unsupported'].includes(next.observed))) {

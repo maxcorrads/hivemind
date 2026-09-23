@@ -1,14 +1,14 @@
 import { statSync } from 'node:fs';
 import path from 'node:path';
 import type { Hono } from 'hono';
-import type { Hive } from './hive.ts';
+import type { DiagnosticsHost } from './services/ports.ts';
 import { HiveError } from '../shared/types.ts';
 import { CREDENTIAL_JSON_BYTES, readLimitedJson } from './ingress.ts';
 import { loadAdaptiveRouting, TYPESAFE_ENDPOINT, TYPESAFE_MODEL } from './adaptive-config.ts';
 import { JevConnectionDiagnostics } from './jev-diagnostics.ts';
 
 /** Mount only after the local Human UI middleware; the serving layer also authenticates the Human session. */
-export function installJevDiagnostics(ui: Hono, hive: Hive, fetchImpl: typeof fetch = fetch): JevConnectionDiagnostics {
+export function installJevDiagnostics(ui: Hono, hive: DiagnosticsHost, fetchImpl: typeof fetch = fetch): JevConnectionDiagnostics {
   const diagnostics = new JevConnectionDiagnostics(() => {
     try {
       const config = loadAdaptiveRouting(hive.home);
