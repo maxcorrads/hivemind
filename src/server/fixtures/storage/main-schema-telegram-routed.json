@@ -31,27 +31,9 @@
  },
  {
   "type": "index",
-  "name": "idx_adaptive_message_execution",
-  "tbl": "adaptive_topology_messages",
-  "sql": "CREATE INDEX idx_adaptive_message_execution ON adaptive_topology_messages(execution_id)"
- },
- {
-  "type": "index",
-  "name": "idx_adaptive_message_worker",
-  "tbl": "adaptive_topology_messages",
-  "sql": "CREATE INDEX idx_adaptive_message_worker ON adaptive_topology_messages(worker_id)"
- },
- {
-  "type": "index",
   "name": "idx_adaptive_topology_brain",
   "tbl": "adaptive_topology_executions",
   "sql": "CREATE INDEX idx_adaptive_topology_brain ON adaptive_topology_executions(brain_id,project_id)"
- },
- {
-  "type": "index",
-  "name": "idx_adaptive_topology_current",
-  "tbl": "adaptive_topology_executions",
-  "sql": "CREATE UNIQUE INDEX idx_adaptive_topology_current ON adaptive_topology_executions(channel_id,brain_id) WHERE current=1"
  },
  {
   "type": "index",
@@ -64,12 +46,6 @@
   "name": "idx_adaptive_topology_root",
   "tbl": "adaptive_topology_executions",
   "sql": "CREATE INDEX idx_adaptive_topology_root ON adaptive_topology_executions(root_message_id)"
- },
- {
-  "type": "index",
-  "name": "idx_adaptive_topology_tasks_execution",
-  "tbl": "adaptive_topology_tasks",
-  "sql": "CREATE INDEX idx_adaptive_topology_tasks_execution ON adaptive_topology_tasks(execution_id)"
  },
  {
   "type": "index",
@@ -277,12 +253,6 @@
  },
  {
   "type": "table",
-  "name": "adaptive_topology_evaluated",
-  "tbl": "adaptive_topology_evaluated",
-  "sql": "CREATE TABLE adaptive_topology_evaluated (execution_id TEXT NOT NULL, event_id TEXT NOT NULL, PRIMARY KEY(execution_id,event_id))"
- },
- {
-  "type": "table",
   "name": "adaptive_topology_events",
   "tbl": "adaptive_topology_events",
   "sql": "CREATE TABLE adaptive_topology_events ( id TEXT PRIMARY KEY, execution_id TEXT NOT NULL, channel_id TEXT NOT NULL, project_id TEXT NOT NULL, created_at INTEGER NOT NULL, snapshot TEXT NOT NULL)"
@@ -291,25 +261,7 @@
   "type": "table",
   "name": "adaptive_topology_executions",
   "tbl": "adaptive_topology_executions",
-  "sql": "CREATE TABLE adaptive_topology_executions ( execution_id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, brain_id TEXT NOT NULL, project_id TEXT NOT NULL, root_message_id TEXT NOT NULL, snapshot TEXT NOT NULL, current INTEGER NOT NULL DEFAULT 1)"
- },
- {
-  "type": "table",
-  "name": "adaptive_topology_locks",
-  "tbl": "adaptive_topology_locks",
-  "sql": "CREATE TABLE adaptive_topology_locks (channel_id TEXT NOT NULL, brain_id TEXT NOT NULL, topology TEXT NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY(channel_id,brain_id))"
- },
- {
-  "type": "table",
-  "name": "adaptive_topology_messages",
-  "tbl": "adaptive_topology_messages",
-  "sql": "CREATE TABLE adaptive_topology_messages ( root_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE, worker_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, execution_id TEXT NOT NULL, project_id TEXT NOT NULL, PRIMARY KEY(root_id,worker_id))"
- },
- {
-  "type": "table",
-  "name": "adaptive_topology_tasks",
-  "tbl": "adaptive_topology_tasks",
-  "sql": "CREATE TABLE adaptive_topology_tasks ( task_id TEXT PRIMARY KEY REFERENCES task_records(id) ON DELETE CASCADE, execution_id TEXT NOT NULL)"
+  "sql": "CREATE TABLE \"adaptive_topology_executions\" (execution_id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, brain_id TEXT NOT NULL, project_id TEXT NOT NULL, root_message_id TEXT NOT NULL, snapshot TEXT NOT NULL, UNIQUE(channel_id,brain_id))"
  },
  {
   "type": "table",
@@ -603,7 +555,7 @@
   "type": "trigger",
   "name": "adaptive_channel_deleted",
   "tbl": "channels",
-  "sql": "CREATE TRIGGER adaptive_channel_deleted AFTER DELETE ON channels BEGIN DELETE FROM adaptive_topology_evaluated WHERE execution_id IN (SELECT execution_id FROM adaptive_topology_executions WHERE channel_id=OLD.id); DELETE FROM adaptive_topology_events WHERE channel_id=OLD.id; DELETE FROM adaptive_topology_locks WHERE channel_id=OLD.id; DELETE FROM adaptive_topology_executions WHERE channel_id=OLD.id; END"
+  "sql": "CREATE TRIGGER adaptive_channel_deleted AFTER DELETE ON channels BEGIN DELETE FROM adaptive_topology_events WHERE channel_id=OLD.id; DELETE FROM adaptive_topology_executions WHERE channel_id=OLD.id; END"
  },
  {
   "type": "trigger",

@@ -3,6 +3,7 @@ import { Storage } from "../storage.ts";
 import * as core from "./baseline-core.ts";
 import * as features from "./baseline-features.ts";
 import * as telegram from "./baseline-telegram.ts";
+import { jevAdvisory } from "./jev-advisory.ts";
 import { schemaShape, validateCoreStorage, validateSchema, type SchemaShape } from "./validate.ts";
 
 /**
@@ -52,7 +53,12 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 24, name: "inbox_superseded_by", up: features.inboxSupersededBy },
   { version: 25, name: "inbox_receipt_totals", up: features.inboxReceiptTotals },
   { version: 26, name: "adaptive_observations", up: features.adaptiveObservations },
+  // After the baseline: each runs exactly once (a legacy database runs it after the whole baseline).
+  { version: 27, name: "jev_advisory", up: jevAdvisory },
 ];
+
+/** The last idempotent baseline migration; later migrations may assume its schema. */
+export const BASELINE_VERSION = 26;
 
 export const LATEST_VERSION = MIGRATIONS.at(-1)!.version;
 
