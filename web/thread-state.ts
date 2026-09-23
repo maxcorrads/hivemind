@@ -3,6 +3,7 @@ import type { TaskSnapshot } from '../src/shared/tasks.ts';
 import type { ChannelPayload } from './api.ts';
 import { retainNewest } from '../src/shared/realtime.ts';
 import { boundLivePane } from './pane-window.ts';
+import { mergeConfirmations } from './message-confirmations.ts';
 
 /** Only the selected thread is retained; live events can precede its first HTTP response. */
 export type ThreadView = {
@@ -12,7 +13,10 @@ export type ThreadView = {
   pendingMessages: Message[];
   pendingTask?: TaskSnapshot;
   historyTruncated?: boolean;
-  pendingLoad?: { id: number; liveMessages: Message[]; liveThread?: Thread; truncated?: boolean; returnToLive?: boolean };
+  // Navigation intent outlives a single GET (replacement, reconnect or failure).
+  returnToLive?: boolean;
+  confirmations?: Message[];
+  pendingLoad?: { id: number; liveMessages: Message[]; liveThread?: Thread; truncated?: boolean };
 };
 
 export function selectThread(view: ThreadView | null, channelId: string, threadId: string): ThreadView {
@@ -20,8 +24,19 @@ export function selectThread(view: ThreadView | null, channelId: string, threadI
     { channelId, threadId, pane: null, pendingMessages: [] };
 }
 
-export function beginThreadLoad(view: ThreadView | null, channelId: string, threadId: string, requestId: number, returnToLive = false): ThreadView {
-  return { ...selectThread(view, channelId, threadId), pendingLoad: { id: requestId, liveMessages: [], returnToLive } };
+export function beginThreadLoad(
+  view: ThreadView | null, channelId: string, threadId: string, requestId: number,
+  returnToLive = false, confirmations: Message[] = [],
+): ThreadView {
+  let current = selectThread(view, channelId, threadId);
+  for (const message of confirmations) current = receiveThreadConfirmation(current, message);
+  return { ...current, returnToLive: returnToLive || current.returnToLive,
+    pendingLoad: { id: requestId, liveMessages: [] } };
+}
+
+/** Explicit history navigation cancels automatic return-to-live, not retained ACKs. */
+export function cancelThreadLoad(view: ThreadView | null): ThreadView | null {
+  return view ? { ...view, pendingLoad: undefined, returnToLive: undefined } : view;
 }
 
 export function failThreadLoad(view: ThreadView | null, requestId: number): ThreadView | null {
@@ -55,6 +70,19 @@ function mergeMessages(earlier: Message[], later: Message[]): Message[] {
   return [...byId.values()].sort((a, b) => a.seq - b.seq);
 }
 
+/** Preserve fresher displayed metadata; ACKs never enter the in-flight live journal. */
+export function receiveThreadConfirmation(view: ThreadView, message: Message): ThreadView {
+  if (!belongs(view, message)) return view;
+  const confirmations = mergeConfirmations(view.confirmations ?? [], [message]);
+  if (!view.pane) {
+    const pending = retainNewest(mergeMessages([message], view.pendingMessages));
+    return { ...view, confirmations, pendingMessages: pending.items,
+      historyTruncated: view.historyTruncated || pending.truncated };
+  }
+  return { ...view, confirmations,
+    pane: boundLivePane({ ...view.pane, messages: mergeMessages([message], view.pane.messages) }) };
+}
+
 export function receiveThreadMessage(view: ThreadView, message: Message): ThreadView {
   if (!belongs(view, message)) return view;
   const live = view.pendingLoad && retainNewest(mergeMessages(view.pendingLoad.liveMessages, [message]));
@@ -85,16 +113,19 @@ export function receiveThreadTask(view: ThreadView, task: TaskSnapshot): ThreadV
 
 export function receiveThreadSnapshot(view: ThreadView | null, threadId: string, data: ChannelPayload, requestId: number): ThreadView | null {
   if (!view || view.channelId !== data.channel.id || view.threadId !== threadId || view.pendingLoad?.id !== requestId) return view;
-  const returnToLive = view.pendingLoad.returnToLive;
+  const returnToLive = view.returnToLive;
   const currentMessages = returnToLive ? [] : view.pane?.messages ?? view.pendingMessages;
   // HTTP refreshes pre-request metadata (including missed reactions while offline).
   // Only live updates received during THIS request take precedence over its snapshot.
-  const messages = mergeMessages(mergeMessages(currentMessages, data.messages), view.pendingLoad.liveMessages);
+  const messages = mergeMessages(
+    mergeMessages(mergeMessages(view.confirmations ?? [], currentMessages), data.messages),
+    view.pendingLoad.liveMessages,
+  );
   const liveThread = view.pendingLoad.liveThread;
   const threads = liveThread ? [...data.threads.filter(thread => thread.id !== liveThread.id), liveThread] : data.threads;
   return {
     ...view, pendingMessages: [], pendingTask: undefined, pendingLoad: undefined,
-    historyTruncated: undefined,
+    historyTruncated: undefined, returnToLive: undefined, confirmations: undefined,
     pane: boundLivePane({ ...data, threads, historyThrough: returnToLive ? undefined : view.pane?.historyThrough,
       deferredLive: returnToLive ? undefined : view.pane?.deferredLive, messages: messages.filter(message => belongs(view, message)),
       hasOlder: data.hasOlder || (!returnToLive && view.historyTruncated) || view.pendingLoad.truncated,
