@@ -2,6 +2,15 @@
 
 Hivemind's optional TypeSafe Jev integration is configured from **⇄ Adaptive routing** in the Human UI. The Phase 2 implementation in #128/#129 extends Phase 1 (#120/#126) from a one-time `single | orchestrated` recommendation to continuously evaluated execution topology.
 
+## Which messages are routed
+
+Jev decides how a **brain** handles a Human request: work alone, or delegate. Workers never go through Jev.
+
+- **Every top-level Human message addressed to a brain**, from the Human UI or Telegram, in any channel: DMs, group channels and rooms. The message waits for the classification before it is delivered.
+- **Owning brain**, in order: the room coordinator, then the @mentioned brains (one execution and one classification each), then the only brain in the channel. When several brains share a channel and none is mentioned, Jev still classifies the request and records an **observation** in the Routing panel, but nothing is enforced. An explicit mode needs a named owner.
+- **Human thread replies** are a `human_message` coordination event: they revalidate the execution of their thread (or the brain's active execution in that channel) before delivery, with the usual anti-flapping rules. A reply in the thread of a completed execution reopens it together with its thread; a reply where the brain has no execution starts a new one rooted at that thread.
+- **Not routed**: messages in channels without a brain (for example a Human DM with a worker), messages between brains, and all worker activity: messages, task lifecycle events, room acknowledgements and presence changes.
+
 The feature remains opt-in. Disabling Jev stops external classification and releases automatic routing enforcement. Explicit Human overrides remain authoritative. Hivemind does not launch external Codex/Claude/Cursor sessions: the Human starts agents, and routing uses the workers that actually joined the hive.
 
 ## Execution modes
@@ -21,7 +30,7 @@ Jev selects the topology and total worker budget. It does not choose particular 
 
 The settings panel exposes the Jev toggle, TypeSafe API key, initial strategy fallback, and orchestrated topology fallback. The default orchestrated fallback is **Brain + 1**. Fallback selection is constrained by available capacity.
 
-The Human-to-brain composer exposes:
+The composer of any channel with a brain exposes:
 
 - **Auto · Jev**: Jev chooses between all feasible modes.
 - **Single**, **Brain + 1**, **Multi-DM**, **Room**: an explicit Human mode for this request.
@@ -30,6 +39,12 @@ The Human-to-brain composer exposes:
 A manual choice can apply to this request, be locked to the current task/execution, or be locked to the conversation. A conversation lock survives the next Human request until explicitly removed. The composer resetting to Auto after sending does **not** release the one-request override on work already underway.
 
 With Jev enabled, manual overrides do not suppress classification: recommendations continue for Human review, but cannot automatically replace the locked mode. With Jev disabled, manual choices do not make an external request.
+
+## Parallel executions and attribution
+
+An execution belongs to one brain in one channel. A brain can coordinate several Human requests at once, in different channels, each with its own topology and worker budget. In the same channel, a new request to the same brain replaces that brain's previous execution (other brains in the channel keep theirs); if the previous one still has delegated work, the request is rejected with 409 as before.
+
+Each directive names its brain and executionId and, outside DMs, is addressed only to that brain, so workers in a group channel are not woken by it. While a brain has at least one active execution, every **delegation** (send to a worker, attach, `assign_task`, `task_event` revise, `room_event` configure/staff) must declare `executionId`; otherwise it is rejected with 400 listing the active executions. An executionId of another brain is 403, an unknown or finished one is 404/409. Other brain coordination may pass `executionId` too; without it, it is attributed only from explicit structure (task link, request or delegation thread, request channel) and is otherwise not evaluated. Agent responses include `adaptiveRouting` only when exactly one execution is active, and always list `adaptiveExecutions`.
 
 ## Capacity is execution-scoped
 
@@ -47,9 +62,9 @@ A new top-level request cannot silently take ownership of outstanding delegated 
 
 ## Coordination boundaries
 
-Jev is evaluated on brain coordination messages, delegation attempts, task/claim/dependency mutations, worker result/accept/block/checkpoint events, room operations, and relevant capacity changes. Ordinary file reads, searches, uploads, receipt acknowledgements and heartbeats do not themselves require classification.
+Jev is evaluated on Human messages addressed to a brain, brain coordination messages, delegation attempts, the assigning brain's task reviews and thread changes, brain room operations, and capacity changes caused by brain actions. Worker messages, worker task/room events and worker presence never trigger an evaluation, so a pending drain completes at the next brain or Human event. Ordinary file reads, searches, uploads, receipt acknowledgements and heartbeats do not themselves require classification.
 
-Delegation is evaluated **before** committing the new assignment, including when the current mode is Single. Results and reviews are evaluated **after** their mutation commits, so the classifier and safe-checkpoint check see the work that has just finished.
+Delegation is evaluated **before** committing the new assignment, including when the current mode is Single. The assigning brain's reviews are evaluated **after** their mutation commits, so the classifier and safe-checkpoint check see the work that has just finished. A worker submitting a result is not itself evaluated.
 
 The same mutation is not counted twice merely because both pre- and post-action hooks exist. Stable event identities distinguish independent evidence from a retry. Retrying a committed send or task event reuses the existing operation and does not add another confidence vote.
 
@@ -106,7 +121,7 @@ The key lives in `<HIVEMIND_HOME>/adaptive-routing.json`, written atomically wit
 
 ## Human-only evaluation history
 
-Phase 2 audit records live in separate SQLite routing tables and are broadcast on the authenticated Human `adaptive-routing` websocket topic. They do not create ordinary chat messages, inbox items, mentions or agent notifications. The Routing panel shows retained evaluations and recommendations; applied transitions are exposed separately for the Human UI.
+Phase 2 audit records live in separate SQLite routing tables and are broadcast on the authenticated Human `adaptive-routing` websocket topic. They do not create ordinary chat messages, inbox items, mentions or agent notifications. The Routing panel shows retained evaluations, recommendations and observations, with one tab per brain when several brains have executions in the channel; a lock applies to the selected brain's execution. Applied transitions are exposed separately for the Human UI.
 
 A single initial applied-policy directive accompanies the original Human request. It is operational instruction, not the evaluation history. Agent API responses expose only the compact applied policy: execution ID, current topology, worker budget, whether delegation is paused and whether Human has locked the mode. Confidence votes, model/usage metrics and recommendations are not returned as agent context.
 
@@ -114,7 +129,7 @@ The Human view currently returns the latest 100 retained events, with bounded st
 
 HTTP snapshots and websocket updates merge using a monotonically increasing channel revision, not arrival order. Navigation and reconnect fence earlier requests; a delayed lock response cannot edit another execution. Lock writes from the UI include the execution ID and revision they were based on. The monitoring indicator distinguishes **active**, **waiting for the next check**, **disabled**, **unavailable**, and **completed** rather than showing a stale green status after Jev is switched off.
 
-The brain or Human completes an execution by marking the original request thread done, after delegated work and claims have been reconciled. Closing/reopening the execution and the thread is one transaction. Closed executions are not continuously reclassified; one-request/task overrides expire, while conversation locks remain available for the next request. Replacing a legacy request while Jev is disabled does not resurrect an old execution on re-enable. Channel/project deletion removes routing state, locks and audit in the same database transaction. Routing-vote deduplication is bounded to 5,000 entries per live execution; committed operations retain their own independent retry ledgers.
+The brain or Human completes an execution by marking the original request thread done, after delegated work and claims have been reconciled. Human closes every brain's execution rooted at that thread; a brain closes only its own. Conversation locks are kept per brain and channel; databases from earlier releases are migrated from channel-only keys on startup. Closing/reopening the execution and the thread is one transaction. Closed executions are not continuously reclassified; one-request/task overrides expire, while conversation locks remain available for the next request. Replacing a legacy request while Jev is disabled does not resurrect an old execution on re-enable. Channel/project deletion removes routing state, locks and audit in the same database transaction. Routing-vote deduplication is bounded to 5,000 entries per live execution; committed operations retain their own independent retry ledgers.
 
 
 ## Tests and validation

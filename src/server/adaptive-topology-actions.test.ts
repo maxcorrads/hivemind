@@ -40,22 +40,26 @@ async function fixture(t: TestContext) {
   const post = (token: string, endpoint: string, body: unknown) => app.request(`/api/agent${endpoint}`, {
     method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(body),
   });
+  // Delegation must name the Human request it serves: the brain copies executionId from its directive.
+  const executions = new Map<string, string>();
+  const exec = (which = brain) => executions.get(which.agent.id);
   const start = async (which = brain, channel = dm) => {
     const routed = await hive.adaptiveTopology.routeHumanRequest(human, {
       channel: channel.id, body: 'Execute the fixture request.', requestId: `human-${which.agent.id}`,
     }, 'auto', 'none');
     assert.ok(routed);
     assert.equal(routed.routing.providerStatus, 'ok');
+    executions.set(which.agent.id, routed.state.executionId);
     return routed.state;
   };
   const assign = (key: string, which = brain, worker = workers[0]!) => post(which.token, '/tasks', {
-    requestId: key, worker: worker.agent.name, contract,
+    requestId: key, worker: worker.agent.name, contract, executionId: exec(which),
   });
   const taskEvent = (task: TaskSnapshot, token: string, key: string, action: unknown) => post(token, `/tasks/${task.id}/events`, {
     requestId: key, expectedRevision: hive.tasks.get(human, task.id).revision, action,
   });
   const state = () => hive.adaptiveTopology.view(human, dm.id).state!;
-  return { hive, human, brain, otherBrain, workers, dm, otherDm, workerDm, app, post, start, assign, taskEvent,
+  return { hive, human, brain, otherBrain, workers, dm, otherDm, workerDm, app, post, start, assign, taskEvent, exec,
     state, calls: () => calls, choose: (mode: AdaptiveTopology) => { target = mode; } };
 }
 
@@ -102,6 +106,13 @@ test('de-escalation drains an accepted task and reaches Single only after the br
   assert.equal(accepted.status, 200, await accepted.clone().text());
   const submitted = await f.taskEvent(task, f.workers[0]!.token, 'result', { type: 'result', result });
   assert.equal(submitted.status, 200, await submitted.clone().text());
+  assert.equal(f.state().desiredTopology, null, 'Worker lifecycle events never drive Jev');
+  for (const requestId of ['drain-check-a', 'drain-check-b']) {
+    const checkpoint = await f.post(f.brain.token, `/channels/${f.dm.id}/messages`, {
+      body: 'Result received; reviewing it locally.', eventType: 'progress', requestId,
+    });
+    assert.equal(checkpoint.status, 200, await checkpoint.clone().text());
+  }
   assert.equal(f.state().currentTopology, 'brain_one_worker');
   assert.equal(f.state().desiredTopology, 'single');
   const blocked = await f.assign('new-work-during-drain', f.brain, f.workers[1]!);
@@ -120,7 +131,7 @@ test('free-form DM assignments consume capacity until the coordinating brain clo
   const f = await fixture(t);
   f.choose('brain_one_worker'); await f.start();
   const sent = await f.post(f.brain.token, `/channels/${f.workerDm.id}/messages`, {
-    body: 'Complete this delegated fixture.', eventType: 'assignment', requestId: 'raw-delegation',
+    body: 'Complete this delegated fixture.', eventType: 'assignment', requestId: 'raw-delegation', executionId: f.exec(),
   });
   assert.equal(sent.status, 200, await sent.clone().text());
   const message = await sent.json() as { id: string };
@@ -174,13 +185,13 @@ test('sender progress and decision labels cannot smuggle a new delegation past S
   for (const eventType of ['progress', 'decision', 'question', 'assignment']) {
     const before = f.calls();
     const attempted = await f.post(f.brain.token, `/channels/${f.workerDm.id}/messages`, {
-      body: 'Start this independent task.', eventType, requestId: `typed-${eventType}`,
+      body: 'Start this independent task.', eventType, requestId: `typed-${eventType}`, executionId: f.exec(),
     });
     assert.equal(attempted.status, 409, await attempted.clone().text());
     assert.equal(f.calls(), before + 1);
   }
   const unaddressed = await f.post(f.brain.token, '/channels/general/messages', {
-    body: 'Start new work.', eventType: 'assignment', requestId: 'broadcast-assignment',
+    body: 'Start new work.', eventType: 'assignment', requestId: 'broadcast-assignment', executionId: f.exec(),
   });
   assert.equal(unaddressed.status, 409);
   assert.equal(readAdaptiveCapacity(f.hive, f.state()).activeWorkers, 0);
@@ -189,7 +200,7 @@ test('sender progress and decision labels cannot smuggle a new delegation past S
 test('an existing delegation can finish its conversation during drain without reserving a new worker', async t => {
   const f = await fixture(t); f.choose('brain_one_worker'); await f.start();
   const assigned = await f.post(f.brain.token, `/channels/${f.workerDm.id}/messages`, {
-    body: 'Complete the task.', requestId: 'raw-assignment', eventType: 'assignment',
+    body: 'Complete the task.', requestId: 'raw-assignment', eventType: 'assignment', executionId: f.exec(),
   });
   assert.equal(assigned.status, 200); const root = (await assigned.json() as { id: string }).id;
   f.choose('single');
@@ -202,8 +213,42 @@ test('an existing delegation can finish its conversation during drain without re
   });
   assert.equal(reply.status, 200, await reply.clone().text());
   assert.equal(readAdaptiveCapacity(f.hive, f.state()).activeWorkers, 1);
+  const unnamed = await f.post(f.brain.token, `/channels/${f.workerDm.id}/messages`, {
+    body: 'Also take this new assignment.', threadId: root, eventType: 'assignment', requestId: 'unnamed-assignment',
+  });
+  assert.equal(unnamed.status, 400, 'New delegation must name its execution');
   const another = await f.post(f.brain.token, `/channels/${f.workerDm.id}/messages`, {
-    body: 'Also take this new assignment.', threadId: root, eventType: 'assignment', requestId: 'new-assignment',
+    body: 'Also take this new assignment.', threadId: root, eventType: 'assignment', requestId: 'new-assignment', executionId: f.exec(),
   });
   assert.equal(another.status, 409);
+});
+
+test('delegation must name one of the brain\'s active executions; parallel requests keep separate policies', async t => {
+  const f = await fixture(t);
+  f.choose('brain_one_worker');
+  const direct = await f.start();
+  const group = f.hive.createChannel(f.human, { name: 'planning', type: 'private', project: 'chapter', memberNames: [f.brain.agent.name, f.workers[0]!.agent.name, f.workers[1]!.agent.name] });
+  f.choose('single');
+  const parallel = await f.hive.adaptiveTopology.routeHumanRequest(f.human, {
+    channel: group.id, body: 'Answer this quickly yourself.', requestId: 'group-request',
+  }, 'auto', 'none');
+  assert.ok(parallel);
+  assert.notEqual(parallel.state.executionId, direct.executionId, 'A request in another channel runs in parallel');
+  assert.equal(f.hive.adaptiveTopology.policiesFor(f.brain.agent).length, 2);
+  assert.equal(f.hive.adaptiveTopology.forAgent(f.brain.agent), null, 'No implicit execution when several are active');
+  const unnamed = await f.post(f.brain.token, '/tasks', { requestId: 'unnamed', worker: f.workers[0]!.agent.name, contract });
+  assert.equal(unnamed.status, 400);
+  assert.match(await unnamed.text(), /executionId is required/);
+  const foreign = await f.post(f.otherBrain.token, '/tasks', {
+    requestId: 'foreign', worker: f.workers[0]!.agent.name, contract, executionId: direct.executionId });
+  assert.equal(foreign.status, 403, 'An execution belongs to one brain');
+  const blocked = await f.post(f.brain.token, '/tasks', {
+    requestId: 'group-task', worker: f.workers[0]!.agent.name, contract, executionId: parallel.state.executionId });
+  assert.equal(blocked.status, 409, 'The Single request cannot delegate');
+  const allowed = await f.post(f.brain.token, '/tasks', {
+    requestId: 'direct-task', worker: f.workers[0]!.agent.name, contract, executionId: direct.executionId });
+  assert.equal(allowed.status, 200, await allowed.clone().text());
+  const task = (await allowed.json() as { task: TaskSnapshot }).task;
+  const linked = f.hive.db.prepare('SELECT execution_id FROM adaptive_topology_tasks WHERE task_id=?').get(task.id);
+  assert.equal(linked?.execution_id, direct.executionId);
 });

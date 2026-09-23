@@ -9,7 +9,7 @@ import { FILE_MAX_BYTES } from "../shared/types.ts";
 import { SendJournal } from "./send-journal.ts";
 
 type Input = { channel: string; body: string; threadId?: string | null; attachmentIds?: string[];
-  eventType?: string; recipients?: string[]; traceId?: string; causeMessageId?: string;
+  eventType?: string; recipients?: string[]; traceId?: string; causeMessageId?: string; executionId?: string;
   file?: { path: string; mime: string; name: string } };
 async function fileFingerprint(file: NonNullable<Input["file"]>) {
   const before = statSync(file.path);
@@ -25,7 +25,7 @@ async function fileFingerprint(file: NonNullable<Input["file"]>) {
 export async function sendOperation(input: Input, token: string, key: string = randomUUID()) {
   validated(sendInputSchema, { body: input.body, threadId: input.threadId, attachmentIds: input.attachmentIds,
     eventType: input.eventType, recipients: input.recipients, traceId: input.traceId,
-    causeMessageId: input.causeMessageId, requestId: key });
+    causeMessageId: input.causeMessageId, executionId: input.executionId, requestId: key });
   requestIdSchema.parse(key);
   const scope = createHash("sha256").update(hiveUrl()).update("\0").update(token).digest("hex");
   let journal: SendJournal | undefined, nonce: string | undefined;
@@ -33,7 +33,8 @@ export async function sendOperation(input: Input, token: string, key: string = r
     const fingerprint = input.file ? await fileFingerprint(input.file) : null;
     const hash = createHash("sha256").update(JSON.stringify([input.channel, input.body, input.threadId ?? null,
       input.attachmentIds ?? [], input.eventType ?? null, [...input.recipients ?? []].sort(),
-      input.traceId ?? null, input.causeMessageId ?? null, fingerprint])).digest("hex");
+      input.traceId ?? null, input.causeMessageId ?? null, fingerprint,
+      ...(input.executionId ? [input.executionId] : [])])).digest("hex");
     journal = new SendJournal(hiveHome());
     const claim = journal.claim(scope, key, hash, input.attachmentIds ?? []);
     nonce = claim.nonce;
@@ -49,7 +50,7 @@ export async function sendOperation(input: Input, token: string, key: string = r
       `/api/agent/channels/${encodeURIComponent(input.channel)}/messages`,
       { body: input.body, threadId: input.threadId ?? null, attachmentIds: ids,
         eventType: input.eventType, recipients: input.recipients, traceId: input.traceId,
-        causeMessageId: input.causeMessageId, requestId: key }, token);
+        causeMessageId: input.causeMessageId, executionId: input.executionId, requestId: key }, token);
     return { ...result, requestId: key };
   } catch (error) {
     throw new Error(`Send ${key} failed: ${error instanceof Error ? error.message : "unknown outcome"}. Retry the same input with requestId/--request-id ${key}; do not choose a new key.`, { cause: error });

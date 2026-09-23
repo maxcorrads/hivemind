@@ -112,7 +112,7 @@ export function AdaptiveRoutingSettings({ onClose, onSaved }: { onClose: () => v
         <p className="help-p">Model: <code>{settings?.model ?? "jev-latest"}</code>. Manual routing can apply once or stay locked to a task or conversation.</p>
         </details>
         <details className="settings-disclosure"><summary>What data is sent to Jev?</summary>
-        <p className="help-p">New brain DMs send your request and project name/slug to TypeSafe. Ongoing checks send the current topology, worker capacity, task/dependency/blocker counts, recent coordination events, locks and the previous decision.</p>
+        <p className="help-p">Every message you address to a brain — in any channel, thread or via Telegram — sends that request and the project name/slug to TypeSafe before delivery. Messages without a brain and worker activity are never sent. Ongoing checks send the current topology, worker capacity, task/dependency/blocker counts, recent coordination events, locks and the previous decision.</p>
         <p className="help-p">Repository contents, full message history and Hivemind credentials are not sent. Thread replies and channel coordination events can trigger ongoing checks, but do not start a new routed Human request.</p>
         </details>
         {error && <p className="err">{error}</p>}

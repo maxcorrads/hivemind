@@ -79,7 +79,7 @@ test('the first high-confidence escalation can jump directly from Single to Room
   await f.start();
   f.choose('brain_multi_room');
   const result = await f.hive.adaptiveTopology.beforeBrainAction(f.brain.agent, {
-    ...f.event('delegation_attempt'), usesRoom: true, workerName: f.workers[0]!.agent.name,
+    ...f.event('delegation_attempt'), usesRoom: true, workerName: f.workers[0]!.agent.name, executionId: f.view().state!.executionId,
   });
   assert.equal(result?.currentTopology, 'brain_multi_room');
   assert.equal(result?.workerBudget, 2);

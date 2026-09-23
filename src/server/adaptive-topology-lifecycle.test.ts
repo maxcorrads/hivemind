@@ -127,8 +127,8 @@ test('invalid lock requests and non-Human readers cannot change authority', asyn
 });
 
 test('a completed delegation cannot be reused or reopened to bypass Single; workers cannot release their own commitment', async t => {
-  const f = fixture(t); f.choose('brain_one_worker'); await f.start();
-  const sent = await f.post(`/api/agent/channels/${f.workerDm.id}/messages`, { body: 'Implement this.', eventType: 'assignment', requestId: 'delegated' }, f.brain.token);
+  const f = fixture(t); f.choose('brain_one_worker'); const executionId = (await f.start()).state.executionId;
+  const sent = await f.post(`/api/agent/channels/${f.workerDm.id}/messages`, { body: 'Implement this.', eventType: 'assignment', requestId: 'delegated', executionId }, f.brain.token);
   assert.equal(sent.status, 200); const root = (await sent.json() as { id: string }).id;
   assert.throws(() => f.hive.setThreadStatus(f.workers[0]!.agent, root, 'done'), /delegating brain/);
   const continued = await f.post(`/api/agent/channels/${f.workerDm.id}/messages`, { body: 'Include this case.', threadId: root, requestId: 'same-thread' }, f.brain.token);
@@ -138,16 +138,16 @@ test('a completed delegation cannot be reused or reopened to bypass Single; work
   const closed = await f.post(`/api/agent/threads/${root}/status`, { status: 'done' }, f.brain.token);
   assert.equal(closed.status, 200); assert.equal(f.view().state?.currentTopology, 'single');
   assert.throws(() => f.hive.setThreadStatus(f.brain.agent, root, 'open'), /guarded assignment/);
-  const escaped = await f.post(`/api/agent/channels/${f.workerDm.id}/messages`, { body: 'Start more work.', threadId: root, requestId: 'closed-work' }, f.brain.token);
+  const escaped = await f.post(`/api/agent/channels/${f.workerDm.id}/messages`, { body: 'Start more work.', threadId: root, requestId: 'closed-work', executionId }, f.brain.token);
   assert.equal(escaped.status, 409);
   f.choose('brain_one_worker');
-  const alsoClosed = await f.post(`/api/agent/channels/${f.workerDm.id}/messages`, { body: 'Start more work.', threadId: root, requestId: 'closed-work-2' }, f.brain.token);
+  const alsoClosed = await f.post(`/api/agent/channels/${f.workerDm.id}/messages`, { body: 'Start more work.', threadId: root, requestId: 'closed-work-2', executionId }, f.brain.token);
   assert.equal(alsoClosed.status, 409);
 });
 
 test('manual Single drain can complete while Jev is disabled; task completion cannot be faked with thread status', async t => {
   const f = fixture(t); f.choose('brain_one_worker'); const started = await f.start();
-  const response = await f.post('/api/agent/tasks', { requestId: 'task', worker: f.workers[0]!.agent.name, contract }, f.brain.token);
+  const response = await f.post('/api/agent/tasks', { requestId: 'task', worker: f.workers[0]!.agent.name, contract, executionId: started.state.executionId }, f.brain.token);
   assert.equal(response.status, 200); const task = (await response.json() as { task: TaskSnapshot }).task;
   assert.throws(() => f.hive.setThreadStatus(f.human, started.message.id, 'done'), /Finish delegated/);
   f.hive.adaptiveTopology.setLock(f.human, f.dm.id, { scope: 'task', topology: 'single' });
@@ -155,6 +155,9 @@ test('manual Single drain can complete while Jev is disabled; task completion ca
   const calls = f.calls();
   const rejected = await f.post(`/api/agent/tasks/${task.id}/events`, { requestId: 'reject', expectedRevision: task.revision, action: { type: 'reject', reason: 'Not needed.' } }, f.workers[0]!.token);
   assert.equal(rejected.status, 200, await rejected.clone().text());
+  assert.equal(f.view().state?.currentTopology, 'brain_one_worker', 'Worker events never drive routing, even a drain');
+  const checkpoint = await f.post(`/api/agent/channels/${f.dm.id}/messages`, { body: 'The worker declined; continuing locally.', eventType: 'progress', requestId: 'drain-checkpoint' }, f.brain.token);
+  assert.equal(checkpoint.status, 200, await checkpoint.clone().text());
   assert.equal(f.view().state?.currentTopology, 'single'); assert.equal(f.calls(), calls);
   f.hive.setThreadStatus(f.human, started.message.id, 'done'); assert.equal(f.view().state?.monitoring, 'completed');
 });
@@ -186,18 +189,18 @@ test('Room can be selected immediately, actual room tasks are admitted, and stop
     coordinator: f.brain.agent.name, participants: f.workers.slice(0, 2).map(w => ({ name: w.agent.name, boundary: 'One independent workstream.' })),
     completion: ['All subtasks accepted.'], originTaskId: null };
   const configured = await f.post(`/api/agent/channels/${channel.id}/room`, { requestId: 'configure', expectedRevision: 0,
-    humanInstructionSeq: started.message.seq, action: { type: 'configure', contract: roomContract, reason: 'Human request.' } }, f.brain.token);
+    humanInstructionSeq: started.message.seq, action: { type: 'configure', contract: roomContract, reason: 'Human request.' }, executionId: started.state.executionId }, f.brain.token);
   assert.equal(configured.status, 200, await configured.clone().text());
   const version = f.hive.rooms.peek(channel.id)!.contractVersion;
   const response = await f.post('/api/agent/tasks', { requestId: 'room-task', worker: f.workers[0]!.agent.name, channel: channel.id,
-    contract, room: { contractVersion: version, actionKey: 'work' } }, f.brain.token);
+    contract, room: { contractVersion: version, actionKey: 'work' }, executionId: started.state.executionId }, f.brain.token);
   assert.equal(response.status, 200, await response.clone().text());
   const task = (await response.json() as { task: TaskSnapshot }).task;
   assert.equal(task.room?.channelId, channel.id); assert.equal(readAdaptiveCapacity(f.hive, f.view().state!).activeWorkers, 1);
   f.choose('single');
   const instruction = f.hive.postMessage(f.human, { channel: channel.id, body: 'Stop this distributed work.' });
   const archive = await f.post(`/api/agent/channels/${channel.id}/room`, { requestId: 'archive', expectedRevision: f.hive.rooms.peek(channel.id)!.revision,
-    humanInstructionSeq: instruction.seq, action: { type: 'archive', running: 'stop', reason: 'No longer needed.' } }, f.brain.token);
+    humanInstructionSeq: instruction.seq, action: { type: 'archive', running: 'stop', reason: 'No longer needed.' }, executionId: started.state.executionId }, f.brain.token);
   assert.equal(archive.status, 200, await archive.clone().text());
   const stopped = await f.post(`/api/agent/channels/${channel.id}/room`, { requestId: 'stopped', expectedRevision: f.hive.rooms.peek(channel.id)!.revision,
     action: { type: 'stopped', taskId: task.id, reason: 'Stopped safely.' } }, f.workers[0]!.token);

@@ -51,7 +51,8 @@ export type AdaptiveRoutingEvent = {
   channelId: string;
   projectId: string;
   createdAt: number;
-  kind: "evaluation" | "transition" | "warning" | "lock" | "status";
+  /** observation: Jev classified a request without a single owning brain; nothing was enforced. */
+  kind: "evaluation" | "transition" | "warning" | "lock" | "status" | "observation";
   fromTopology: AdaptiveTopology;
   targetTopology: AdaptiveTopology;
   appliedTopology: AdaptiveTopology;
@@ -104,6 +105,9 @@ export type AdaptiveAgentPolicy = {
 };
 
 export type AdaptiveRoutingView = {
+  /** Primary execution in the channel: the most recently updated one still running. */
   state: AdaptiveExecutionState | null;
+  /** One execution per brain that owns a request in this channel. */
+  executions?: AdaptiveExecutionState[];
   events: AdaptiveRoutingEvent[];
 };

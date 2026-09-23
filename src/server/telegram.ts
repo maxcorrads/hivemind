@@ -18,7 +18,6 @@ import { resolveUploadMime } from "../shared/mime.ts";
 import { Hive, channelLabel } from "./hive.ts";
 import { hiveHome } from "./paths.ts";
 import { filePathForHash, safeFileName } from "./files.ts";
-import { shouldRouteHumanMessage } from "./adaptive-routing.ts";
 
 export type TelegramConfig = {
   botToken: string;
@@ -855,27 +854,18 @@ export class TelegramBridge {
         .run(chatId, message.message_id, posted.seq, posted.channelId, posted.threadId, telegramConfigKey(this.cfg));
     };
     try {
-      const channel = this.hive.getChannel(channelId);
-      const brainIds = new Set(this.hive.listAgents(human)
-        .filter(agent => agent.role === "brain" && agent.project === channel.project)
-        .map(agent => agent.id));
-      if (shouldRouteHumanMessage(channel, routingText, threadId, brainIds)) {
-        const routed = await this.hive.adaptiveTopology.routeHumanRequest(
-          human,
-          { channel: channelId, body, threadId, source: "telegram", attachmentIds },
-          "auto",
-          "none",
-          persistReceipt,
-          routingText,
-        );
-        if (!routed) this.hive.postMessage(human, {
-          channel: channelId, body, threadId, source: "telegram", attachmentIds,
-        }, persistReceipt);
-      } else {
-        this.hive.postMessage(human, {
-          channel: channelId, body, threadId, source: "telegram", attachmentIds,
-        }, persistReceipt);
-      }
+      // Same policy as the Human UI: every message addressed to a brain passes through Jev first.
+      const routed = await this.hive.adaptiveTopology.routeHumanRequest(
+        human,
+        { channel: channelId, body, threadId, source: "telegram", attachmentIds },
+        "auto",
+        "none",
+        persistReceipt,
+        routingText,
+      );
+      if (!routed) this.hive.postMessage(human, {
+        channel: channelId, body, threadId, source: "telegram", attachmentIds,
+      }, persistReceipt);
     } catch (error) { this.discardUnboundAttachments(attachmentIds); throw error; }
   }
 
