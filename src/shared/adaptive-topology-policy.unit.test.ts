@@ -16,6 +16,20 @@ function step(state: TopologyPolicyState, target: TopologyTarget, confidence = 0
   return advanceTopologyPolicy(state, { target, confidence, available: true }, safety);
 }
 
+test('an incoherent answer is never a vote for a change, whatever confidence Jev reported (#209)', () => {
+  let state = initialTopologyPolicy(room);
+  for (let i = 0; i < 4; i++) {
+    const result = advanceTopologyPolicy(state, { target: single, confidence: 0.99, available: true, incoherent: true }, safe);
+    assert.equal(result.cause, 'low_confidence');
+    assert.equal(result.changed, false);
+    assert.equal(result.confirmation.count, 0);
+    state = result;
+  }
+  assert.equal(state.applied.topology, 'brain_multi_room');
+  // A coherent answer resumes the ordinary confirmation rules.
+  assert.equal(step(step(state, single, 0.95), single, 0.95).applied.topology, 'single');
+});
+
 test('every topology can jump directly to every other topology without intermediate states', () => {
   for (const source of ADAPTIVE_TOPOLOGIES) for (const destination of ADAPTIVE_TOPOLOGIES) {
     if (source === destination) continue;

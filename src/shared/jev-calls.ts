@@ -1,4 +1,4 @@
-import type { AdaptiveRoutingEvent, AdaptiveTopology, AdaptiveTopologyDecision } from "./adaptive-topology.ts";
+import type { AdaptiveIncoherence, AdaptiveRoutingEvent, AdaptiveTopology, AdaptiveTopologyDecision } from "./adaptive-topology.ts";
 
 /** Why Hivemind asked Jev: the initial request, a Human reply, or a brain coordination boundary. */
 export type JevCallTrigger = {
@@ -33,6 +33,8 @@ export type JevCallSummary = {
   confidence: number | null;
   reason: string;
   error: string | null;
+  /** Jev's valid answers contradicted each other: kept as an uncertain answer, never acted on (#209). */
+  incoherent?: AdaptiveIncoherence | null;
   /** Identifier Hivemind requested. Absent on calls recorded before #134 (their sent payload still has it). */
   requestedModel?: string | null;
   /** Model the provider reported it resolved to. */

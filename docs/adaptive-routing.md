@@ -78,6 +78,7 @@ The policy is versioned in `src/shared/adaptive-topology-policy.ts`.
 
 - High confidence is **0.90**, inclusive.
 - Values below **0.60** do not authorize a mode transition, even after repetition.
+- An **incoherent** answer (see *Sufficiency cross-check*) never authorizes a transition either, whatever confidence Jev reported: the policy treats it exactly like one below 0.60 and it resets the confirmation streak.
 - High-confidence escalation can apply on the first independent event.
 - Medium-confidence escalation requires two consecutive matching targets.
 - De-escalation to a non-Single target requires two consecutive matching targets.
@@ -101,6 +102,20 @@ During ongoing execution, timeout, network failure, malformed response or unstab
 
 The initial request has no previous mode, so it uses the configured feasible fallback when classification is unavailable or too uncertain. This initial fallback is separate from ongoing preserve-current behavior.
 
+### Why Jev's answer was not used (#209)
+
+Hivemind never says "Jev unavailable" when an answer arrived. Every call falls in exactly one case (`jevAnswerState` in `src/shared/jev-outcome.ts`), and the routing warning, panel, strip and Routing log name it together with the mode that was used instead:
+
+| Case | When | `providerAvailable` | Evidence | Example warning (initial / ongoing) |
+| --- | --- | --- | --- | --- |
+| Unavailable | No response: timeout, network error, HTTP error, or a request that was never sent | false | `unavailable` | `Jev unavailable (timeout) · used fallback Brain + 1` / `Jev unavailable (http_503) · current mode kept, not revalidated` |
+| Answer rejected | A response arrived but could not be used (malformed, a plan that was not offered) | false | `unavailable` | `Jev answer rejected (plan_not_offered) · used fallback Brain + 1` / `… · current mode kept, not revalidated` |
+| Uncertain | A valid answer below 0.60 | true | `ok`, counted in `uncertainAttempts` | `Jev uncertain (17%) · used fallback Brain + 1` / no warning: the mode is kept |
+| Incoherent | A valid answer whose parts contradict each other | true | `ok`, counted in `uncertainAttempts` and `incoherentAttempts` | `Jev uncertain (incoherent: plan contradicts sufficiency) · used fallback Brain + 1` / no warning: the mode is kept |
+| Capacity changed | Jev answered, but worker capacity changed during the call | false | `ok` (the call itself succeeded) | `Capacity changed during the Jev call · used fallback …` |
+
+With a Human lock, an uncertain answer is irrelevant and produces no warning; a failed call is surfaced as `… · your <mode> lock applies`. Ongoing uncertain and incoherent evaluations are listed in the Routing panel as `Jev uncertain (…) · would choose <mode> · kept <mode>`. Warnings recorded before #209 keep their original text.
+
 The HTTP adapter uses a bounded timeout, rejects redirects, and caps both the routing request and streamed response. Errors are represented by sanitized failure classes rather than provider response bodies or credentials. Owned-server shutdown cancels and drains routing activity before closing SQLite; callers injecting their own Hive own its runtime/database lifecycle.
 
 ## TypeSafe API and privacy
@@ -120,6 +135,7 @@ By default Hivemind requests the alias `jev-latest`, which TypeSafe may resolve 
 - Configuration files saved before this setting have no `model` field and keep using the alias. Reading them never enables Jev or contacts TypeSafe, and the alias is not written back to the file.
 - Hivemind does not list models or prices and does not verify that an identifier exists or is immutable. An unavailable identifier makes the call fail (`http_<status>` in the Routing log); ongoing work preserves its current topology and the initial request uses its fallback, exactly as for any other provider failure. Hivemind never retries with a different model.
 - The Routing log, the evidence export and the Human connection test use the configured identifier. Each call records the **requested** model and the **resolved** model the provider reports, separately; a difference is shown, never rewritten.
+- The requested alias resolving to a concrete version is normal and is shown as information (`jev-latest → jev-1.13.0`). Only a **pinned** identifier that resolves to something else is flagged (*differs from the pinned model*).
 - Changing the model is a settings change: it invalidates in-flight initial and ongoing classifications and connection-test revisions, just like key or fallback changes.
 
 ### Question design (contract v3)
@@ -139,7 +155,7 @@ The `plan` options are built from the capacity usable by the execution at the ti
 - **Cap (`MAX_PLAN_WORKERS = 8`).** Every option is sent and billed on every call and takes a share of Jev's probability mass, and one brain cannot usefully supervise more parallel workstreams. With the cap the question has at most 18 options, far below TypeSafe's 255-option Choice limit. When the execution already runs a multi-worker plan above the cap that is still feasible, that worker count stays offered (as Multi-DM and Multi-Room), so the cap alone never pushes a running execution down.
 - The chosen option alone gives the decision's topology and worker count; `capacity_blocked` maps to Single · 0 with `needsOrchestration`. `singleSufficient` comes from the sufficiency answer and `needsOrchestration` is `capacity_blocked` or "insufficient", as before.
 - Overall confidence is the lowest confidence among the plan and signal answers.
-- **Sufficiency cross-check.** A `single` plan together with "insufficient" while workers are usable is still rejected (`plan_contradicts_sufficiency`): "delegation materially helps" and "use no worker" cannot both be followed, and Hivemind never picks one reading for Jev. The reverse ("sufficient" with a delegating plan) is accepted: the brain could work alone, but delegation can still pay off.
+- **Sufficiency cross-check.** A `single` plan together with "insufficient" while workers are usable is **incoherent**: "delegation materially helps" and "use no worker" cannot both be followed, and Hivemind never picks one reading for Jev. Since #209 such an answer is no longer rejected: it is a valid call (`providerStatus: ok`, Jev stays available, its tokens and answers are recorded) flagged `incoherent: "plan_vs_sufficiency"` with reason `incoherent_plan_vs_sufficiency`, in the decision, the routing event, the Routing log and the evidence export. Jev's reported confidence is kept unchanged for transparency, but the answer is uncertain by definition: initial routing uses the fallback, and ongoing routing keeps the current mode without counting a provider failure. Hivemind chose a flag over lowering the stored confidence so the log shows what Jev actually said, and every place that could act on an answer goes through one check (`jevDecisionActionable`, and `incoherent` in the policy evidence). The reverse ("sufficient" with a delegating plan) is coherent and used normally: the brain could work alone, but delegation can still pay off.
 
 ### Rejection reasons
 
@@ -148,7 +164,7 @@ A call that does not produce a usable decision keeps the current mode (or uses t
 | Code | Meaning |
 | --- | --- |
 | `plan_not_offered` | Jev chose a plan that was not among the offered options |
-| `plan_contradicts_sufficiency` | Jev chose Single while saying the brain alone is not enough (workers usable) |
+| `plan_contradicts_sufficiency` | Before #209 only: Jev chose Single while saying the brain alone is not enough. Now accepted as an incoherent (uncertain) answer; older calls keep this code |
 | `malformed_answer:<question>` | An answer is missing or has the wrong type, confidence, choice or score |
 | `probabilities_invalid:<question>` | An answer's probability distribution is missing, has the wrong keys, does not sum to 1, or its choice is not the most likely option |
 | `model_missing` / `missing_usage` | The response does not name the resolved model / does not report token usage |
@@ -166,7 +182,7 @@ The key lives in `<HIVEMIND_HOME>/adaptive-routing.json`, written atomically wit
 
 ## Jev call history (Human-only)
 
-Each project has a **Routing log** entry in the left sidebar, below Decisions (`#/routing-log/<project>`; the older `#/jev/<project>` link still works). It lists every request Hivemind sent to Jev (TypeSafe) and its answer, grouped by the Human request (execution) that caused it, newest activity first. Each call shows why it was made (your request, your thread reply, a brain message, a delegation attempt, a task review, a room change or a capacity change), Jev's answer in one line, and what Hivemind did with it: applied a new mode, confirmed the current one, kept it while waiting for confirmation, kept it because Jev was unavailable, recorded an observation only, or discarded the answer because routing state changed during the call.
+Each project has a **Routing log** entry in the left sidebar, below Decisions (`#/routing-log/<project>`; the older `#/jev/<project>` link still works). It lists every request Hivemind sent to Jev (TypeSafe) and its answer, grouped by the Human request (execution) that caused it, newest activity first. Each call shows why it was made (your request, your thread reply, a brain message, a delegation attempt, a task review, a room change or a capacity change), Jev's answer in one line, and what Hivemind did with it: applied a new mode, confirmed the current one, kept it while waiting for confirmation, kept it or used the fallback because Jev was unavailable, rejected, uncertain or incoherent, recorded an observation only, or discarded the answer because routing state changed during the call.
 
 Selecting a call shows:
 
@@ -175,7 +191,7 @@ Selecting a call shows:
 3. **Decision and result**: recommendation, overall confidence (the lowest answer confidence), reason, what Hivemind applied, requested and resolved model, latency and tokens.
 4. **Raw JSON**: the exact request body sent to TypeSafe and the parsed response.
 
-The full payloads are stored only in the local SQLite database (`jev_calls`), are served only on the authenticated Human API (`GET /api/ui/projects/:project/jev-calls` and `/jev-calls/:id`), and never include the TypeSafe key or provider error bodies. Failed calls keep what was sent and a local failure class (for example `timeout`, `http_503` or `plan_not_offered`), shown in plain words; a rejected answer is labelled **Answer rejected** (not "Jev unavailable") and still shows Jev's answers, the resolved model and the tokens it used. History is bounded to the latest 1,000 calls per project and is removed with its channel or project. New calls appear live through the Human `jev-call` websocket event.
+The full payloads are stored only in the local SQLite database (`jev_calls`), are served only on the authenticated Human API (`GET /api/ui/projects/:project/jev-calls` and `/jev-calls/:id`), and never include the TypeSafe key or provider error bodies. Failed calls keep what was sent and a local failure class (for example `timeout`, `http_503` or `plan_not_offered`), shown in plain words; a rejected answer is labelled **Answer rejected** (not "Jev unavailable") and still shows Jev's answers, the resolved model and the tokens it used. An uncertain answer is labelled `· uncertain`, and an incoherent one `· uncertain · incoherent: plan contradicts sufficiency`, with a note that Hivemind did not act on it. History is bounded to the latest 1,000 calls per project and is removed with its channel or project. New calls appear live through the Human `jev-call` websocket event.
 
 ## Human-only evaluation history
 

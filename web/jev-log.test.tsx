@@ -4,8 +4,10 @@ import { Window } from 'happy-dom';
 import { act } from 'react';
 import { JevLog } from './JevLog.tsx';
 import { api } from './api.ts';
-import { answerLabel, appendOlderPage, errorLabel, mergeRefreshedPage, outcomeLabel, questionRows, requestedModel, triggerLabel } from './jev-log-view.ts';
+import { answerLabel, appendOlderPage, errorLabel, mergeRefreshedPage, modelLabel, outcomeLabel, questionRows, requestedModel, triggerLabel } from './jev-log-view.ts';
+import { routingEventLabel } from './AdaptiveRoutingPanel.tsx';
 import type { JevCall, JevCallSummary, JevRequestGroup } from '../src/shared/jev-calls.ts';
+import type { AdaptiveRoutingEvent } from '../src/shared/adaptive-topology.ts';
 
 const window = new Window({ url: 'http://localhost/' });
 Object.assign(globalThis, { window, document: window.document, location: window.location,
@@ -102,6 +104,58 @@ test('a rejected call shows its specific reason with the resolved model and toke
   assert.match(text(), /jev-1\.13\.0/);
   assert.match(text(), /2851 in \/ 248 out/);
   assert.match(text(), /Plan for the next phase/);
+});
+
+test('uncertain and incoherent answers are labelled as such, and the default alias resolving is information only (#209)', async t => {
+  assert.equal(answerLabel(summary('low', { confidence: 0.17 })), 'Brain + 1 · 1 worker · 17% · uncertain');
+  const incoherent = summary('incoherent', { targetTopology: 'single', targetWorkers: 0, confidence: 0.39, incoherent: 'plan_vs_sufficiency',
+    reason: 'incoherent_plan_vs_sufficiency', model: 'jev-1.13.0', requestedModel: 'jev-latest',
+    outcome: { kind: 'warning', applied: false, appliedTopology: 'brain_one_worker', appliedWorkers: 1,
+      warning: 'Jev uncertain (incoherent: plan contradicts sufficiency) · used fallback Brain + 1' } });
+  assert.equal(answerLabel(incoherent), 'Single · 39% · uncertain · incoherent: plan contradicts sufficiency');
+  assert.deepEqual(modelLabel({ ...incoherent, sent: null, received: null }), { text: 'jev-latest → jev-1.13.0', mismatch: false });
+  assert.deepEqual(modelLabel({ ...incoherent, requestedModel: 'jev-2026-09-01', sent: null, received: null }),
+    { text: 'jev-2026-09-01 → jev-1.13.0', mismatch: true });
+
+  const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
+  t.after(async () => { await act(async () => root.unmount()); host.remove(); });
+  let detail: JevCall = { ...incoherent, sent, received };
+  t.mock.method(api, 'jevCalls', async () => ({ hasMore: false, nextCursor: null, requests: [{ executionId: 'exec-1', channelId: 'dm', brainId: 'brain-1',
+    request: 'Una volta terminati questi passaggi quale è il piano?', firstAt: 1_000, lastAt: 1_000, callCount: 1, calls: [incoherent] }] }));
+  t.mock.method(api, 'jevCall', async () => ({ call: detail }));
+  const render = async () => {
+    await act(async () => root.render(<JevLog project="chapter" tick={0} channelLabel={() => 'dm'} agentName={() => 'Atlas'} onOpenChannel={() => {}} />));
+    await act(async () => (host.querySelector('button.jev-call') as HTMLElement).click());
+  };
+  await render();
+  const text = () => host.textContent ?? '';
+  assert.doesNotMatch(text(), /Jev unavailable|Answer rejected|differs/);
+  assert.match(text(), /Jev uncertain \(incoherent: plan contradicts sufficiency\) · used fallback Brain \+ 1/);
+  assert.match(text(), /Jev's answers contradict each other \(plan contradicts sufficiency\)\. Hivemind kept the answer as uncertain and did not act on it\./);
+  assert.match(text(), /uncertain · incoherent: plan contradicts sufficiency: not acted on/);
+  assert.match(text(), /jev-latest → jev-1\.13\.0/);
+  assert.match(text(), /ReasonJev chose Single while saying delegation helps \(incoherent\)/);
+  // A pinned identifier that resolves to something else is still flagged.
+  await act(async () => root.unmount());
+  const pinnedRoot = createRoot(host);
+  t.after(async () => { await act(async () => pinnedRoot.unmount()); });
+  detail = { ...detail, requestedModel: 'jev-2026-09-01' };
+  await act(async () => pinnedRoot.render(<JevLog project="chapter" tick={1} channelLabel={() => 'dm'} agentName={() => 'Atlas'} onOpenChannel={() => {}} />));
+  await act(async () => (host.querySelector('button.jev-call') as HTMLElement).click());
+  assert.match(text(), /jev-2026-09-01 → jev-1\.13\.0 \(differs from the pinned model\)/);
+});
+
+test('routing events say whether Jev was unavailable, rejected, uncertain or incoherent, and which mode was used', () => {
+  const base: AdaptiveRoutingEvent = { id: 'e', executionId: 'x', channelId: 'dm', projectId: 'p', createdAt: 1, kind: 'evaluation',
+    fromTopology: 'brain_multi_room', targetTopology: 'single', appliedTopology: 'brain_multi_room', targetWorkers: 0, appliedWorkers: 2,
+    confidence: 0.39, reason: 'single_sufficient', providerStatus: 'ok', applied: false, warning: null };
+  assert.equal(routingEventLabel(base), 'Jev uncertain (39%) · would choose Single · kept Room');
+  assert.equal(routingEventLabel({ ...base, confidence: 0.99, incoherent: 'plan_vs_sufficiency', reason: 'incoherent_plan_vs_sufficiency' }),
+    'Jev uncertain (incoherent: plan contradicts sufficiency) · would choose Single · kept Room');
+  assert.equal(routingEventLabel({ ...base, confidence: 0.95 }), 'Jev recommends Single · 95% · single_sufficient');
+  for (const warning of ['Jev unavailable (timeout) · current mode kept, not revalidated',
+    'Jev answer rejected (plan_not_offered) · used fallback Brain + 1', 'Jev uncertain (17%) · used fallback Brain + 1'])
+    assert.equal(routingEventLabel({ ...base, kind: 'warning', warning }), `⚠ ${warning}`);
 });
 
 test('requested model comes from the summary, or from the exact sent payload for calls recorded before pinning', () => {
