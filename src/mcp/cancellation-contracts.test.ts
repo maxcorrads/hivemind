@@ -21,18 +21,13 @@ function mail(): WaitResult {
 }
 
 test("cancellation propagates into an in-flight HTTP fetch without retrying", async (t) => {
-  const originalFetch = globalThis.fetch;
-  t.after(() => {
-    globalThis.fetch = originalFetch;
-  });
-
   let calls = 0;
   let requestStarted!: () => void;
   const started = new Promise<void>((resolve) => {
     requestStarted = resolve;
   });
 
-  globalThis.fetch = ((_url: string | URL | Request, init?: RequestInit) => {
+  t.mock.method(globalThis, "fetch", (_url: string | URL | Request, init?: RequestInit) => {
     calls += 1;
     requestStarted();
     return new Promise<Response>((_resolve, reject) => {
@@ -45,7 +40,7 @@ test("cancellation propagates into an in-flight HTTP fetch without retrying", as
       if (signal.aborted) onAbort();
       else signal.addEventListener("abort", onAbort, { once: true });
     });
-  }) as typeof fetch;
+  });
 
   const ac = new AbortController();
   const pending = waitUntilMail(

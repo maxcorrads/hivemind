@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route, type WebSocketRoute } from "@playwright/test";
+import { expect, test, type Page, type Route, type WebSocketRoute } from "./fixtures.ts";
 
 import type { Agent, Channel, Message, Project, Thread } from "../../src/shared/types.ts";
 import type { ChannelPayload, Snapshot } from "../../web/api.ts";
@@ -809,3 +809,40 @@ for (const reading of ["live", "held-bottom", "held-middle"] as const) {
     await expect(page.locator("main").getByRole("button", { name: "Return to live", exact: true })).toHaveCount(reading === "live" ? 0 : 1);
   });
 }
+
+test("opening a side thread keeps the main chat anchored when web fonts swap in late", async ({ page }) => {
+  const alpha = project("alpha", "Alpha Hive"), a = channel("a", "Alpha", alpha);
+  const messages = Array.from({ length: 20 }, (_, index) => message(`root-${index}`, index + 1, a.id,
+    `Message ${index}. ${"Text that wraps into more lines when the side thread opens. ".repeat(12)}`));
+  const last = messages[10]!;
+  const threads: Thread[] = [{ id: last.id, channelId: a.id, status: "open" }];
+  const fonts = deferred();
+  await page.route("**/*.woff2", async route => {
+    await fonts.promise;
+    await route.continue();
+  });
+  await installSnapshot(page, () => snapshot([alpha], [a]));
+  await installSocketHarness(page);
+  await installMessages(page, async (route, _id, threadId) => fulfillJson(route,
+    { ...payload(a, threadId ? [last] : messages, threads), threadId, replyCounts: { [last.id]: 1 } }));
+  await page.setViewportSize({ width: 1440, height: 800 });
+  await page.goto("/#/c/a");
+  const stream = page.locator("main .stream");
+  await expect(page.locator("main .msg")).toHaveCount(20);
+  await stream.evaluate(el => { el.scrollTop = 0; });
+  await expect(page.locator("main").getByRole("button", { name: "Return to live", exact: true })).toBeVisible();
+  const reply = page.locator("main .msg").filter({ has: page.getByText(last.body, { exact: true }) }).getByRole("button", { name: "1 reply", exact: true });
+  await reply.evaluate(el => el.scrollIntoView({ block: "center" }));
+  const replyBottom = await reply.evaluate(el => el.getBoundingClientRect().bottom);
+  await reply.click();
+  await expect(page.locator("aside.thread")).toBeVisible();
+  await expect.poll(async () => Math.abs(await reply.evaluate(el => el.getBoundingClientRect().bottom) - replyBottom)).toBeLessThan(3);
+  expect(await page.evaluate(() => document.fonts.check('16px "Figtree"'))).toBe(false);
+  const fallbackHeight = await stream.evaluate(el => el.scrollHeight);
+
+  // The swap re-wraps every message after the first anchor correction.
+  fonts.resolve();
+  await expect.poll(() => page.evaluate(() => document.fonts.check('16px "Figtree"'))).toBe(true);
+  await expect.poll(() => stream.evaluate(el => el.scrollHeight)).not.toBe(fallbackHeight);
+  await expect.poll(async () => Math.abs(await reply.evaluate(el => el.getBoundingClientRect().bottom) - replyBottom)).toBeLessThan(3);
+});

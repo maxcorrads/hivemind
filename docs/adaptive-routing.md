@@ -1,6 +1,6 @@
 # Adaptive orchestration routing
 
-Hivemind's optional TypeSafe Jev integration is configured from **⇄ Adaptive routing** in the Human UI. The Phase 2 implementation in #128/#129 extends Phase 1 (#120/#126) from a one-time `single | orchestrated` recommendation to continuously evaluated execution topology.
+Hivemind's optional TypeSafe Jev integration is configured from **Settings → Adaptive routing** in the Human UI. The Phase 2 implementation in #128/#129 extends Phase 1 (#120/#126) from a one-time `single | orchestrated` recommendation to continuously evaluated execution topology.
 
 ## Which messages are routed
 
@@ -68,7 +68,7 @@ Delegation is evaluated **before** committing the new assignment, including when
 
 The same mutation is not counted twice merely because both pre- and post-action hooks exist. Stable event identities distinguish independent evidence from a retry. Retrying a committed send or task event reuses the existing operation and does not add another confidence vote.
 
-Agent mutation controllers serialize the classifier check and mutation boundary. Credentials are revalidated after asynchronous waits; a credential rotation cannot authorize a pending write through an old identity.
+Agent mutation controllers serialize the classifier check and mutation boundary. The agent's session key is revalidated after asynchronous waits; a session superseded by a resume cannot complete a pending write.
 
 This is execution policy, not a replacement for task, claim, channel or room authorization. In particular, existing claim conflict/revision semantics remain owned by TaskStore. Free-form messages still depend on accurate event/thread semantics; Hivemind cannot infer arbitrary off-platform tool use or work performed outside its coordination APIs.
 
@@ -121,7 +121,7 @@ The key lives in `<HIVEMIND_HOME>/adaptive-routing.json`, written atomically wit
 
 ## Jev call history (Human-only)
 
-Each project has a **Jev** entry in the left sidebar, below Decisions. It lists every call Hivemind made to Jev, grouped by the Human request (execution) that caused it, newest activity first. Each call shows why it was made (your request, your thread reply, a brain message, a delegation attempt, a task review, a room change or a capacity change), Jev's answer in one line, and what Hivemind did with it: applied a new mode, confirmed the current one, kept it while waiting for confirmation, kept it because Jev was unavailable, recorded an observation only, or discarded the answer because routing state changed during the call.
+Each project has a **Routing log** entry in the left sidebar, below Decisions (`#/routing-log/<project>`; the older `#/jev/<project>` link still works). It lists every request Hivemind sent to Jev (TypeSafe) and its answer, grouped by the Human request (execution) that caused it, newest activity first. Each call shows why it was made (your request, your thread reply, a brain message, a delegation attempt, a task review, a room change or a capacity change), Jev's answer in one line, and what Hivemind did with it: applied a new mode, confirmed the current one, kept it while waiting for confirmation, kept it because Jev was unavailable, recorded an observation only, or discarded the answer because routing state changed during the call.
 
 Selecting a call shows:
 
@@ -152,21 +152,3 @@ The tests use fake TypeSafe responses with real local SQLite, HTTP and UI bounda
 Focused coverage includes authenticated real websocket delivery, stale UI snapshots and reconnect, lifecycle/lock races, malformed and oversized provider replies, destination-aware hysteresis, direct jumps, the inclusive 0.90 threshold, retry identity, Human override precedence, provider failure/recovery, audit/context isolation, actual task admission/link atomicity, free-form commitments, capacity ownership and delayed Single transitions after accepted results.
 
 Run the repository's standard lint, typecheck, unit, integration, browser and coverage jobs before merge. A green fixture suite establishes the implementation contract, not calibrated routing quality on real workloads.
-
-## Benchmark evaluation retained
-
-Phase 1's shadow tooling remains a separate offline evaluation path for #29/#125, not the live runtime switch. It uses `TYPESAFE_API_KEY` from its command-line environment rather than the server UI's private settings.
-
-```sh
-npm run benchmark:coordination:routing -- shadow \
-  --input /tmp/hivemind-pilot-v1 \
-  --provider typesafe \
-  --decisions /tmp/hivemind-pilot-v1/routing-shadow-v1.jsonl \
-  --output /tmp/hivemind-pilot-v1/routing-shadow-v1-summary.json
-
-npm run benchmark:coordination:routing -- score \
-  --decisions /tmp/hivemind-pilot-v1/routing-shadow-v1.jsonl \
-  --output /tmp/hivemind-pilot-v1/routing-shadow-v1-rescore.json
-```
-
-That v1 replay reports binary-routing quality, regret and under-orchestration; it must not be presented as empirical validation of Phase 2's continuous four-topology controller. Retained real-agent traces are still needed to calibrate the new policy and assess net cost, latency and quality.

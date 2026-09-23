@@ -46,7 +46,8 @@ and cancellation release the writable file handle, owned temporary file and
 reservation without awaiting an uncooperative producer's cancel promise. Each
 write observes backpressure and holds a bounded stream chunk, not the full file.
 Credentials are rechecked after a JSON body or file upload finishes, so a Human
-rotation during the request cannot authorize its later mutation with an old token.
+bot-credential rotation, or an agent session superseded by a resume, during the
+request cannot authorize its later mutation with an old key.
 
 ## Compatibility and evidence
 

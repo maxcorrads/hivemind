@@ -71,7 +71,7 @@ and evidence before acting, especially after reassignment or a later decision.
 Storage tests cover revisions, retry conflicts, transaction rollback, older-history
 retention, stale contracts, access/evidence boundaries, capped discovery and restart.
 Real HTTP/stdio/CLI tests recover the same report after a fresh session and verify
-that raw credentials are not exposed to the model. UI tests preserve the highest
+that session keys are not exposed to the model. UI tests preserve the highest
 revision and label outdated reports and unverified checks explicitly.
 
 These are transport/state tests, not measurements of model recovery quality or

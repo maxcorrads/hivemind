@@ -57,7 +57,7 @@ These are scheduling weights, not claims that they capture every millisecond in 
 - Node 24: unit and four timing-balanced integration shards run independently on Ubuntu.
 - Node 22.13.0: the same full unit/integration scope is retained on Ubuntu and integration is split into four timing-balanced shards. Compatibility coverage is **not** reduced to a smoke subset; the earlier two-shard compromise was only necessary while the fan-out competed for scarce macOS runners.
 - One focused `macOS compatibility` job runs the launch/plugin shell contracts with native macOS zsh. Linux uses bash for the cross-platform shell argument contracts and does not install zsh on every ephemeral runner; zsh-only syntax validation remains native to macOS.
-- The historical required gates `Tests / Node 24` and `Tests / Node 22.13.0` remain. `Tests / Node 24` aggregates its unit/integration producers **and** the native macOS compatibility job, so branch protection cannot silently omit the platform check.
+- The historical required gates `Tests / Node 24` and `Tests / Node 22.13.0` remain. `Tests / Node 24` aggregates its unit/integration producers, the native macOS compatibility job **and** `Browser / Chromium`, so branch protection cannot silently omit the platform or browser checks.
 - Normal Node 24 unit/integration jobs collect LCOV alongside their ordinary redacted logs. A lightweight `Coverage` aggregator merges those artifacts and enforces the unchanged 80% line / 75% branch / 75% function thresholds. There is no third full test execution in CI.
 - Playwright browser downloads are cached by OS + lockfile and installed only on a cache miss. Ubuntu installs the required Chromium system dependencies explicitly.
 - setup-node's npm download cache is enabled; `node_modules` is not cached.
@@ -84,3 +84,13 @@ Do not infer the target from the topology alone. Record successful attempt-1 run
 Two successful Ubuntu attempt-1 runs of the four-shard Node 24 plan measured materially different shard runtimes from the original scheduling signal. A trial that immediately rescaled and reassigned files improved balance, but also changed the merged LCOV branch universe enough to produce **74.9968%** raw branch coverage (displayed as 75.00%), correctly failing the unchanged 75% threshold. The threshold was not rounded down or weakened.
 
 The final topology therefore keeps the previously validated Node 24 assignment while retaining the measured Ubuntu timings as evidence for a follow-up adaptive balancer coupled to coverage-stable source identity. Node 22 still moves from two to **four** Ubuntu shards because that cuts its critical path without affecting the Node 24 coverage producer partition.
+
+## Node version lanes and minimum-version plan
+
+Issue #160 adds a `22.x` lane next to the `22.13.0` floor: the Node 22 unit job and its four integration shards run as a `node × shard` matrix, so CI tests 22.13.0 (the `engines` minimum), the latest Node 22 release and Node 24. Storage relies on `node:sqlite` (`DatabaseSync`), which is still experimental in Node 22; the latest lane surfaces behaviour changes in newer 22 minors before users hit them. Both Node 22 lanes feed the historical required check `Tests / Node 22.13.0`, whose name is kept for branch protection. The extra lane adds five short Ubuntu jobs that run in parallel with the existing ones: more runner-minutes, no extra critical-path latency.
+
+Node 22 reaches end of life in **April 2027**. Plan:
+
+- Until then, keep `engines.node` at `>=22.13.0` and keep both the floor and the `22.x` lane.
+- At Node 22 EOL, raise `engines.node` to the tested Node 24 floor, replace the Node 22 lanes with that floor plus a `24.x` latest lane, add the next LTS line as the current lane, and update the required status checks in the `main` ruleset in the same change.
+- Dependabot (`.github/dependabot.yml`) opens weekly grouped patch/minor PRs for runtime and development npm dependencies, plus GitHub Actions updates; major updates arrive as individual PRs.
