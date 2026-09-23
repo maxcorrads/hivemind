@@ -1,6 +1,13 @@
 import type { AdaptiveTopology } from '../src/shared/adaptive-topology.ts';
-import type { JevCallLogView, JevCallSummary, JevCallTrigger, JevRequestGroup } from '../src/shared/jev-calls.ts';
+import type { JevCall, JevCallLogView, JevCallSummary, JevCallTrigger, JevRequestGroup } from '../src/shared/jev-calls.ts';
 import { topologyLabel } from './AdaptiveRoutingPanel.tsx';
+
+/** The identifier Hivemind asked for; calls recorded before #134 only have it in the exact sent payload. */
+export function requestedModel(call: JevCall): string | null {
+  if (call.requestedModel !== undefined) return call.requestedModel;
+  const model = (call.sent as { model?: unknown } | null)?.model;
+  return typeof model === 'string' ? model : null;
+}
 
 export function workersLabel(n: number): string { return `${n} worker${n === 1 ? '' : 's'}`; }
 export function percent(value: number | null | undefined): string { return value == null ? '—' : `${Math.round(value * 100)}%`; }

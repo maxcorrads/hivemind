@@ -51,7 +51,11 @@ export type AdaptiveRoutingSettings = {
   enabled: boolean;
   apiKeySet: boolean;
   apiKeyHint: string | null;
+  /** The identifier Hivemind requests from TypeSafe. */
   model: string;
+  /** The provider alias used when nothing is pinned. */
+  defaultModel: string;
+  modelPinned: boolean;
   fallback: "single" | "orchestrated";
   topologyFallback: Exclude<AdaptiveTopology, "single">;
 };
@@ -94,6 +98,8 @@ export const api = {
     apiKey?: string | null;
     fallback: "single" | "orchestrated";
     topologyFallback: Exclude<AdaptiveTopology, "single">;
+    /** A bounded identifier to pin, or null for the default alias. */
+    model?: string | null;
   }) =>
     req<AdaptiveRoutingSettings>("/api/ui/adaptive-routing", {
       method: "PUT",

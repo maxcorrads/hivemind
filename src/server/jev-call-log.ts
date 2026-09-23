@@ -40,7 +40,7 @@ export class JevCallLog {
       executionId: context.executionId, brainId: context.brainId, createdAt: Date.now(), phase: context.phase,
       trigger: context.trigger, request: requestOf(exchange.sent), status: decision.providerStatus,
       targetTopology: decision.targetTopology, targetWorkers: decision.targetWorkers, confidence: decision.confidence,
-      reason: decision.reason, error: exchange.error, model: decision.model, latencyMs: decision.latencyMs,
+      reason: decision.reason, error: exchange.error, requestedModel: decision.requestedModel ?? null, model: decision.model, latencyMs: decision.latencyMs,
       inputTokens: decision.inputTokens, outputTokens: decision.outputTokens, outcome: null,
     };
     this.db.prepare(`INSERT INTO jev_calls(id,route_id,project_id,channel_id,execution_id,created_at,summary,sent,received)

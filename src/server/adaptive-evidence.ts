@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import type { AdaptiveTopologyDecision } from '../shared/adaptive-topology.ts';
 import { Storage } from './storage.ts';
+import { validJevModel } from './adaptive-config.ts';
 
 export const EVIDENCE_VERSION = 'adaptive-evidence-v1';
 export const EVIDENCE_RUN_LIMIT = 50;
@@ -15,8 +16,12 @@ type Totals = { started: number; finished: number; ok: number; unavailable: numb
 export type EvidenceAttempt = { ordinal: number; phase: EvidenceScope['phase']; status: 'pending' | 'ok' | 'unavailable';
   currentTopology: string | null; currentWorkers: number; usableWorkers: number;
   targetTopology: string | null; targetWorkers: number | null; confidence: number | null;
-  latencyMs: number | null; inputTokens: number | null; outputTokens: number | null; model: string | null };
-type RunState = { policyVersion: string; firstRecordedAt: number; lastRecordedAt: number; totals: Totals; models: string[]; modelsTruncated: boolean };
+  latencyMs: number | null; inputTokens: number | null; outputTokens: number | null; model: string | null;
+  /** Requested Jev identifier (alias or pinned), kept apart from the resolved `model`. Absent before #134. */
+  requestedModel?: string | null };
+type RunState = { policyVersion: string; firstRecordedAt: number; lastRecordedAt: number; totals: Totals; models: string[]; modelsTruncated: boolean;
+  /** Absent on runs recorded before #134: requested identifiers are then unknown, not empty. */
+  requestedModels?: string[]; requestedModelsTruncated?: boolean };
 function pruneAttempts(db: DatabaseSync, executionId: string): number {
   return Number(db.prepare(`DELETE FROM adaptive_evidence_attempts WHERE execution_id=? AND id NOT IN
     (SELECT id FROM adaptive_evidence_attempts WHERE execution_id=? ORDER BY rowid DESC LIMIT ?)`)
@@ -66,6 +71,7 @@ export class AdaptiveEvidenceStore {
       if (existing && (existing.channel_id !== scope.channelId || existing.project_id !== scope.projectId)) throw new Error('Evidence scope conflict');
       const state: RunState = existing ? JSON.parse(String(existing.snapshot)) as RunState : {
         policyVersion: input.policyVersion, firstRecordedAt: Date.now(), lastRecordedAt: Date.now(), models: [], modelsTruncated: false,
+        requestedModels: [], requestedModelsTruncated: false,
         totals: { started: 0, finished: 0, ok: 0, unavailable: 0, usageObservations: 0,
           inputTokens: 0, outputTokens: 0, latencyMs: 0, latencyObservations: 0, prunedAttempts: 0 },
       };
@@ -98,6 +104,10 @@ export class AdaptiveEvidenceStore {
       attempt.model = typeof decision.model === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(decision.model) ? decision.model : null;
       if (attempt.model && !state.models.includes(attempt.model)) {
         if (state.models.length < 16) state.models.push(attempt.model); else state.modelsTruncated = true;
+      }
+      attempt.requestedModel = validJevModel(decision.requestedModel) ? decision.requestedModel : null;
+      if (attempt.requestedModel && state.requestedModels && !state.requestedModels.includes(attempt.requestedModel)) {
+        if (state.requestedModels.length < 16) state.requestedModels.push(attempt.requestedModel); else state.requestedModelsTruncated = true;
       }
       attempt.targetTopology = modes.includes(decision.targetTopology) ? decision.targetTopology : null;
       attempt.targetWorkers = safeInt(decision.targetWorkers) ? decision.targetWorkers : null;
@@ -136,7 +146,7 @@ export function exportAdaptiveEvidence(db: DatabaseSync, executionId: string) {
       return { ordinal: a.ordinal, phase: a.phase, status: a.status, currentTopology: a.currentTopology,
         currentWorkers: a.currentWorkers, usableWorkers: a.usableWorkers, targetTopology: a.targetTopology,
         targetWorkers: a.targetWorkers, confidence: a.confidence, latencyMs: a.latencyMs,
-        inputTokens: a.inputTokens, outputTokens: a.outputTokens, model: a.model };
+        inputTokens: a.inputTokens, outputTokens: a.outputTokens, requestedModel: a.requestedModel ?? null, model: a.model };
     });
   const hasPolicyEvents = Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='adaptive_topology_events'").get());
   const policyEvents = hasPolicyEvents ? db.prepare('SELECT snapshot FROM adaptive_topology_events WHERE execution_id=? ORDER BY rowid LIMIT 500')
@@ -153,6 +163,7 @@ export function exportAdaptiveEvidence(db: DatabaseSync, executionId: string) {
   return {
     schemaVersion: 1, evidenceClass: EVIDENCE_VERSION, contractVersion: 'adaptive-routing-v2', policyVersion: state.policyVersion,
     executionAlias: 'execution-1', models: state.models, modelsTruncated: state.modelsTruncated,
+    requestedModels: state.requestedModels ?? null, requestedModelsTruncated: state.requestedModelsTruncated ?? null,
     coverage: { startedAt: state.firstRecordedAt, endedAt: state.lastRecordedAt, attemptsStarted: t.started,
       attemptsFinished: t.finished, pendingAttempts: t.started - t.finished, retainedAttempts: attempts.length,
       prunedAttempts: t.prunedAttempts, historyComplete: t.prunedAttempts === 0 &&
@@ -168,6 +179,7 @@ export function exportAdaptiveEvidence(db: DatabaseSync, executionId: string) {
     limitations: ['No prompt, API key, project/worker name, raw provider response or stable execution identifier is exported.',
       'Classification attempts include capacity retries and responses later discarded as stale; they are not applied-transition counts.',
       'Summed classifier latency is overhead, not elapsed execution wall time. Do not add it to end-to-end wall time.',
-      'No historical backfill, provider billing reconciliation, quality assessment or counterfactual savings is inferred.'],
+      'No historical backfill, provider billing reconciliation, quality assessment or counterfactual savings is inferred.',
+      'requestedModels is what Hivemind asked for; models is what the provider reported. Even a pinned identifier is not assumed immutable.'],
   };
 }
