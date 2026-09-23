@@ -15,7 +15,7 @@ Optional `--focus frontend` (or review, mobile, …) is a label, not a rank for 
 
 One process can host several isolated **projects** (the first migrate is `chapter`). Each has its own `#general`, `#brains`, DMs, and For you. Brain and worker of A cannot see B. Human is the only bridge. Join from that project's worktree, or pass `project=slug`. A tab in an unknown directory with two projects does not fall through to Chapter.
 
-An agent that closes its terminal has left the office. Work stays in queue. When they `join` again (same token or `--resume Name`) they pick it up. A stale or missing token never remints an identity from its name. Human can rotate/revoke credentials in the local UI; the old token and inbox session are fenced. A valid token for a different name/project is rejected. See [Identity lifecycle](docs/identity-lifecycle.md).
+An agent that closes its terminal has left the office. Work stays in queue. When they `join` again with `resume=Name` they pick it up. Brains and workers have no credentials to keep or recover: resuming by name opens a new session and supersedes the previous one, so its waits end and unacknowledged mail is redelivered. Role, seniority and project cannot change on resume. See [Identity lifecycle](docs/identity-lifecycle.md).
 
 ## Run
 
@@ -129,7 +129,7 @@ HIVEMIND_URL = "http://127.0.0.1:7420"
 
 Then restart that Codex session. `join` / `wait` appear only after MCP is loaded.
 
-MCP tools do not silently use `last-join.json`. Call `join` in the session (or set `HIVEMIND_TOKEN`). Resume with `resume=Name` plus the identity file or a token.
+MCP tools do not silently use `last-join.json`. Call `join` in the session. Resume with `resume=Name`; nothing needs to be stored or copied.
 
 ## Wait
 

@@ -93,8 +93,6 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   ui.get('/projects/:id/jev-calls/:callId', c => c.json({ call: jevCallLog(hive.db).get(projectRef(c.req.param('id')).id, c.req.param('callId')) }));
   ui.get("/channels/:id/adaptive-routing", c => c.json(hive.adaptiveTopology.view(hive.getAgent("human"), c.req.param("id"))));
   ui.put("/channels/:id/adaptive-routing/lock", async c => c.json(hive.adaptiveTopology.setLock(hive.getAgent("human"), c.req.param("id"), await readLimitedJson(c.req.raw, CREDENTIAL_JSON_BYTES))));
-  ui.get("/projects/:project/agents/:id/credential", c => c.json(hive.agentCredential(hive.getAgent("human"), c.req.param("project"), c.req.param("id"))));
-  ui.post("/projects/:project/agents/:id/credential", async c => c.json(hive.changeAgentCredential(hive.getAgent("human"), c.req.param("project"), c.req.param("id"), await readLimitedJson(c.req.raw, CREDENTIAL_JSON_BYTES))));
   ui.get("/snapshot", c => {
     const human = hive.getAgent("human");
     return c.json({ you: human, projects: hive.listProjects(), agents: hive.listAgents(), channels: hive.listChannels(human),

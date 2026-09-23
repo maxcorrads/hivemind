@@ -11,11 +11,8 @@ import {
   agentRequest,
   currentToken,
   hiveUrl,
-  identitiesDir,
-  loadIdentityByName,
-  saveIdentity,
 } from "./client/http.ts";
-import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import type { Agent, Channel, Message, WaitResult } from "./shared/types.ts";
 import { parseJoinArgs } from "./shared/join-args.ts";
 
@@ -57,7 +54,6 @@ function help() {
   hivemind standing-orders
   hivemind clear-context --agent NAME
   hivemind invite --channel NAME --member NAME
-  hivemind identities
   hivemind doctor
   hivemind leave
   hivemind mcp
@@ -141,10 +137,8 @@ async function main() {
     const seniority = parsed.seniority;
     const focus = parsed.focus ?? arg(argv, "--focus") ?? null;
     const resume = parsed.resume;
-    const token =
-      parsed.token ??
-      (resume ? loadIdentityByName(resume, parsed.project)?.token : undefined) ??
-      (resume ? undefined : process.env.HIVEMIND_TOKEN);
+    // Resuming by name needs no stored credential; an explicit session key keeps that shell's session.
+    const token = parsed.token ?? (resume ? undefined : process.env.HIVEMIND_TOKEN);
     const result = await agentRequest<{
       agent: Agent;
       token: string;
@@ -159,15 +153,6 @@ async function main() {
       project: parsed.project,
       cwd: process.cwd(),
     }, token ?? null);
-    saveIdentity({
-      id: result.agent.id,
-      name: result.agent.name,
-      role: result.agent.role,
-      seniority: result.agent.seniority,
-      focus: result.agent.focus,
-      token: result.token,
-      project: result.agent.project,
-    });
     console.log(`${result.created ? "Joined" : "Back"} as ${result.agent.name} · ${result.describe}`);
     console.log(`export HIVEMIND_TOKEN=${result.token}`);
     if (result.standingOrders) {
@@ -183,18 +168,6 @@ async function main() {
     const res = await fetch(`${hiveUrl()}/api/health`);
     if (!res.ok) throw new Error(`server not healthy (${res.status})`);
     console.log(`ok ${hiveUrl()}`);
-    return;
-  }
-
-  if (cmd === "identities") {
-    const dir = identitiesDir();
-    if (!existsSync(dir)) {
-      console.log("no saved identities");
-      return;
-    }
-    for (const file of readdirSync(dir).filter((f) => f.endsWith(".json"))) {
-      console.log(file.replace(/\.json$/, ""));
-    }
     return;
   }
 

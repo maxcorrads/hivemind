@@ -900,34 +900,48 @@ export class Hive {
     if (input.role !== "brain" && input.role !== "worker") {
       throw new HiveError(400, "role must be brain or worker");
     }
-    if (input.token) {
-      const row = this.db.prepare("SELECT * FROM agents WHERE token_hash = ?").get(hashToken(input.token)) as
-        | AgentRow
-        | undefined;
-      if (row) {
-        const agent = this.mapAgent(row);
-        if (input.resumeName && agent.name.toLowerCase() !== input.resumeName.toLowerCase()) {
-          throw new HiveError(403, `Token is for ${agent.name}, not ${input.resumeName}`);
-        }
-        if (agent.role !== input.role) {
-          throw new HiveError(409, `${agent.name} is a ${agent.role}; role cannot change`);
-        }
-        if (input.role === "worker" && input.seniority && agent.seniority !== input.seniority) {
-          throw new HiveError(409, `${agent.name} is ${agent.seniority}; seniority cannot change`);
-        }
-        if (input.project) this.assertSameProject(agent, this.getProjectBySlug(input.project));
-        else if (input.cwd) {
-          const cwd = canonicalWorktree(input.cwd);
-          const worktree = this.listProjects().find(project => project.worktree && canonicalWorktree(project.worktree) === cwd);
-          if (worktree) this.assertSameProject(agent, worktree);
-        }
-        this.touch(agent.id, true);
-        return { agent, token: input.token, created: false };
+    const assertResumable = (agent: Agent) => {
+      if (agent.role !== input.role) {
+        throw new HiveError(409, `${agent.name} is a ${agent.role}; role cannot change`);
       }
-      throw new HiveError(401, "Invalid token. Lost credentials require Human-authorized recovery.");
+      if (input.role === "worker" && input.seniority && agent.seniority !== input.seniority) {
+        throw new HiveError(409, `${agent.name} is ${agent.seniority}; seniority cannot change`);
+      }
+      if (input.project) this.assertSameProject(agent, this.getProjectBySlug(input.project));
+      else if (input.cwd) {
+        const cwd = canonicalWorktree(input.cwd);
+        const worktree = this.listProjects().find(project => project.worktree && canonicalWorktree(project.worktree) === cwd);
+        if (worktree) this.assertSameProject(agent, worktree);
+      }
+    };
+    // The session key of a running process: a repeated join keeps its session.
+    const current = input.token
+      ? this.db.prepare("SELECT * FROM agents WHERE token_hash = ?").get(hashToken(input.token)) as AgentRow | undefined
+      : undefined;
+    if (current) {
+      const agent = this.mapAgent(current);
+      if (input.resumeName && agent.name.toLowerCase() !== input.resumeName.toLowerCase()) {
+        throw new HiveError(403, `This session is ${agent.name}, not ${input.resumeName}`);
+      }
+      assertResumable(agent);
+      this.touch(agent.id, true);
+      return { agent, token: input.token!, created: false };
     }
-
-    if (input.resumeName) throw new HiveError(401, "Resume requires a valid token. Recover lost credentials through Human in the local UI.");
+    // Brains and workers have no stored credentials: resuming by name opens a new session
+    // and supersedes the previous one, whose key stops working.
+    if (input.resumeName) {
+      const row = this.db.prepare("SELECT * FROM agents WHERE lower(name) = lower(?) AND role IN ('brain','worker')")
+        .get(input.resumeName) as AgentRow | undefined;
+      if (!row) throw new HiveError(404, `No brain or worker named ${input.resumeName}; join without resume to get a new name`);
+      const agent = this.mapAgent(row);
+      assertResumable(agent);
+      return this.transaction(() => {
+        const token = this.replaceAgentSession(agent.id);
+        this.touch(agent.id, true);
+        return { agent: this.getAgent(agent.id), token, created: false };
+      });
+    }
+    if (input.token) throw new HiveError(401, "This session key is no longer valid; join again with resume=YOUR_NAME");
 
     if (input.role === "worker" && !input.seniority) {
       throw new HiveError(400, "Workers need --seniority junior|mid|senior");
@@ -982,33 +996,15 @@ export class Hive {
     });
   }
 
-  agentCredential(actor: Agent, projectRef: string, agentId: string) {
-    if (actor.role !== "human") throw new HiveError(403, "Only Human can recover agent credentials");
-    const project = this.requireActorProject(actor, projectRef), agent = this.getAgent(agentId);
-    if (!["brain", "worker"].includes(agent.role) || agent.projectId !== project.id) throw new HiveError(404, "Agent not found in this project");
-    const row = this.db.prepare("SELECT revision, revoked FROM agent_credentials WHERE agent_id=?").get(agent.id);
-    return { agent, credential: { revision: row ? Number(row.revision) : 1, revoked: Boolean(row?.revoked) } };
-  }
-
-  changeAgentCredential(actor: Agent, projectRef: string, agentId: string, raw: unknown) {
-    if (actor.role !== "human") throw new HiveError(403, "Only Human can recover agent credentials");
-    const parsed = botCredentialSchema.safeParse(raw);
-    if (!parsed.success) throw new HiveError(400, "Expected rotate/revoke and positive expectedRevision");
-    return this.transaction(() => {
-      const current = this.agentCredential(actor, projectRef, agentId);
-      if (current.credential.revision !== parsed.data.expectedRevision) throw new HiveError(409, "Credential changed; reload before retrying");
-      const revoked = parsed.data.action === "revoke", revision = current.credential.revision + 1;
-      const token = revoked ? undefined : newToken();
-      this.db.prepare("UPDATE agents SET token_hash=? WHERE id=?").run(token ? hashToken(token) : "", agentId);
-      this.db.prepare(`INSERT INTO agent_credentials(agent_id,revision,revoked) VALUES(?,?,?)
-        ON CONFLICT(agent_id) DO UPDATE SET revision=excluded.revision,revoked=excluded.revoked`).run(agentId, revision, Number(revoked));
-      // Fence pending authenticated waits and old receipts in the SAME commit.
-      // Do not call the inbox store's top-level transaction from this transaction.
-      this.db.prepare(`INSERT INTO inbox_sessions(agent_id,session_id,generation)
-        SELECT ?,?,COALESCE(MAX(generation),0)+1 FROM inbox_sessions WHERE agent_id=?`).run(agentId, crypto.randomUUID(), agentId);
-      this.afterCommit(() => this.waiters.get(agentId)?.supersede());
-      return { agent: current.agent, credential: { revision, revoked }, ...(token ? { token } : {}) };
-    });
+  /** Issues a new session key and fences the previous session's waits and receipts in the same commit. */
+  private replaceAgentSession(agentId: string): string {
+    const token = newToken();
+    this.db.prepare("UPDATE agents SET token_hash=? WHERE id=?").run(hashToken(token), agentId);
+    // Do not call the inbox store's top-level transaction from this transaction.
+    this.db.prepare(`INSERT INTO inbox_sessions(agent_id,session_id,generation)
+      SELECT ?,?,COALESCE(MAX(generation),0)+1 FROM inbox_sessions WHERE agent_id=?`).run(agentId, crypto.randomUUID(), agentId);
+    this.afterCommit(() => this.waiters.get(agentId)?.supersede());
+    return token;
   }
 
   /** Constant-parameter authorization scope, shared by lists and inbox reads. */

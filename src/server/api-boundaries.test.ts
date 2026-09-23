@@ -178,13 +178,12 @@ test('upload deadline does not await an uncooperative producer cancel promise', 
   assert.deepEqual(readdirSync(filesDir(f.dir)), []);
 });
 
-test('a credential rotated during upload cannot authorize its final commit', async t => {
+test('a session replaced by a resume during upload cannot authorize its final commit', async t => {
   const f = fixture(t), joined = f.hive.join({ role: 'brain' });
   const stream = paused();
   const upload = f.hive.createFile(joined.agent, { name: 'old-token', mime: 'text/plain', body: stream.stream,
     declaredBytes: 1, authorize: () => f.hive.agentByToken(joined.token) });
-  const current = f.hive.agentCredential(f.human, joined.agent.project!, joined.agent.id);
-  f.hive.changeAgentCredential(f.human, joined.agent.project!, joined.agent.id, { action: 'rotate', expectedRevision: current.credential.revision });
+  f.hive.join({ role: 'brain', resumeName: joined.agent.name });
   stream.finish(); await assert.rejects(upload, /token/i);
   assert.equal(f.hive.db.prepare('SELECT count(*) AS n FROM attachments').get()!.n, 0);
   assert.equal(f.hive.db.prepare('SELECT count(*) AS n FROM upload_reservations').get()!.n, 0);

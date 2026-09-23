@@ -94,11 +94,13 @@ test("role is sticky and offline work waits", async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("stale token plus resume name requires Human recovery", () => {
+test("a stale session key plus resume name resumes by name and supersedes the old session", () => {
   const { hive, dir } = tempHive();
   const first = hive.join({ role: "brain" });
-  assert.throws(() => hive.join({ role: "brain", token: "dead-token", resumeName: first.agent.name }), /Human-authorized recovery/);
-  assert.equal(hive.agentByToken(first.token).id, first.agent.id);
+  const resumed = hive.join({ role: "brain", token: "dead-token", resumeName: first.agent.name });
+  assert.equal(resumed.agent.id, first.agent.id);
+  assert.equal(hive.agentByToken(resumed.token).id, first.agent.id);
+  assert.throws(() => hive.agentByToken(first.token), /Invalid token/);
   rmSync(dir, { recursive: true, force: true });
 });
 
