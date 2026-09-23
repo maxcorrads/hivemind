@@ -7,7 +7,7 @@ Opening settings, saving, starting Hivemind and ordinary CI do not run a test.
 The button makes one small synthetic TypeSafe request using the **saved** key and
 current model alias. It can consume provider usage. It sends no project name,
 request, repository content, history, task or coordination event. It does not
-create messages, alter topology or locks, wake workers, or append routing evidence.
+create messages, give any brain advice, wake workers, or append routing evidence.
 A successful connection is not evidence of model quality or routing calibration.
 
 The local Human API provides `GET /api/ui/adaptive-routing/connection-test` for an
@@ -43,10 +43,10 @@ requires another explicit click. No live smoke test is performed by these tests.
 
 ## Routing is separate
 
-Initial routing classifies a new top-level Human request to a brain. Continuous
-revalidation can also be triggered by thread replies and coordination events. The
-connection test does neither. Failures in normal routing still preserve the active
-topology; the agreed confidence policy and Human lock authority are unchanged.
+Normal Jev calls classify a Human request addressed to a brain and each brain action,
+and return advice to the brain (see [Jev advice](adaptive-routing.md)). The
+connection test does neither. A failed normal call only gives the brain
+`unavailable` advice; nothing is enforced either way.
 
 ## Verification
 
