@@ -2,17 +2,6 @@ import type { Hive } from './hive.ts';
 import { PRESENCE_IDLE_MS } from '../shared/types.ts';
 import type { TopologyCapacitySnapshot } from './adaptive-topology-provider.ts';
 
-export function initAdaptiveCommitments(hive: Hive): void {
-  hive.db.exec(`CREATE TABLE IF NOT EXISTS adaptive_topology_messages (
-    root_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-    worker_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-    execution_id TEXT NOT NULL, project_id TEXT NOT NULL,
-    PRIMARY KEY(root_id,worker_id));
-    CREATE INDEX IF NOT EXISTS idx_adaptive_message_execution ON adaptive_topology_messages(execution_id);
-    CREATE INDEX IF NOT EXISTS idx_adaptive_message_worker ON adaptive_topology_messages(worker_id);
-  `);
-}
-
 /**
  * Free-form delegation is active until its thread is done or the worker reports it finished (the commitment row is
  * then deleted). A completed or deleted execution holds no worker: its commitments are released with it.

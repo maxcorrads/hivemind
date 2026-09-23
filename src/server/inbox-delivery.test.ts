@@ -10,7 +10,7 @@ import { Hive } from "./hive.ts";
 import { createApp } from "./app.ts";
 import { INBOX_BATCH_MAX, InboxDeliveryStore } from "./inbox-delivery.ts";
 import { waitUntilMail } from "../mcp/wait-loop.ts";
-import { backdate, countRows, inboxCursor } from "./test-fixtures.ts";
+import { backdate, countRows, inboxCursor, rerunMigration } from "./test-fixtures.ts";
 
 function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-receipt-"));
@@ -198,6 +198,7 @@ test("receipt totals backfill once, survive restart and preserve old duplicate A
   historicalReceipt(db, f.worker.agent.id, f.sessionId, [13, 14], null);
   let parsed = 0;
   db.function("json_array_length", value => { parsed++; return (JSON.parse(String(value)) as unknown[]).length; });
+  rerunMigration(db, "inbox_receipt_totals");
   const migrated = new InboxDeliveryStore(db);
   assert.equal(parsed, 3, "only confirmed legacy batches are backfilled");
   assert.deepEqual(migrated.status(f.worker.agent.id), { awaitingReceipt: 2, acknowledgedMessages: 3, lastAcknowledgedAt: 300 });
@@ -210,6 +211,7 @@ test("receipt totals backfill once, survive restart and preserve old duplicate A
   const reopened = new DatabaseSync(f.file); t.after(() => reopened.close());
   reopened.exec("PRAGMA foreign_keys = ON");
   reopened.function("json_array_length", () => { throw new Error("backfill repeated"); });
+  rerunMigration(reopened, "inbox_receipt_totals");
   const restarted = new InboxDeliveryStore(reopened);
   assert.deepEqual(restarted.status(f.worker.agent.id), { awaitingReceipt: 2, acknowledgedMessages: 3, lastAcknowledgedAt: 300 });
   assert.equal(restarted.acknowledge(f.worker.agent.id, f.sessionId, old).duplicate, true);
@@ -234,10 +236,11 @@ test("failed receipt backfill rolls back its marker and totals so a restart can 
     if (++parsed === 2) return null;
     return (JSON.parse(String(value)) as unknown[]).length;
   });
-  assert.throws(() => new InboxDeliveryStore(db));
+  assert.throws(() => rerunMigration(db, "inbox_receipt_totals"));
   assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name = 'inbox_receipt_totals'").get(), undefined);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM inbox_deliveries").get()!.n, 2);
   db.function("json_array_length", value => (JSON.parse(String(value)) as unknown[]).length);
+  rerunMigration(db, "inbox_receipt_totals");
   const retried = new InboxDeliveryStore(db);
   assert.equal(retried.status(f.worker.agent.id).acknowledgedMessages, 2);
   assert.equal(retried.status(f.brain.agent.id).acknowledgedMessages, 1);
@@ -286,7 +289,7 @@ for (const historySize of [1_000, 10_000, 100_000]) {
       INSERT INTO inbox_deliveries(id, agent_id, session_id, through_seq, seqs, attempts, offered_at, lease_until, acknowledged_at)
       SELECT 'history-' || i, ?, ?, ?, ?, 1, 1, 2, 100 FROM n`)
       .run(historySize, f.worker.agent.id, f.sessionId, past.seq, JSON.stringify([past.seq]));
-    new InboxDeliveryStore(db);
+    rerunMigration(db, "inbox_receipt_totals");
     let parsed = 0;
     db.function("json_array_length", value => { parsed++; return (JSON.parse(String(value)) as unknown[]).length; });
     const queries: string[] = [];
