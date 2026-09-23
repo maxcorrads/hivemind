@@ -600,6 +600,29 @@ html.dark .routing-lock-mode { background: var(--desk); }
   background: color-mix(in srgb, var(--moss) 14%, transparent);
   font-weight: 700;
 }
+.routing-draining { margin: 0.4rem 0 0.8rem; }
+.routing-draining ul {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.routing-draining li {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  font-size: 0.76rem;
+}
+.routing-draining q {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-style: italic;
+}
+.routing-draining span { opacity: 0.75; }
 .routing-event.warning { background: color-mix(in srgb, var(--wax) 10%, transparent); }
 .routing-event time { flex: none; opacity: 0.6; }
 .send {

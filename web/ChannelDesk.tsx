@@ -17,7 +17,7 @@ import type { ThreadOpenAnchor } from "./use-thread-scroll-anchor.ts";
 
 /** The selected channel: header, room panel, message stream with inline routing events, routing strip and composer. */
 export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, channel, threadPaneId, stickBottom, threadOpenAnchor,
-  go, roomTick, routingView, activeBrainChannel, activeExecutions, brainNames, onOpenRouting, onInvite, compose, setErr }: {
+  go, roomTick, routingView, activeBrainChannel, activeExecutions, finishingExecutions, brainNames, onOpenRouting, onInvite, compose, setErr }: {
   channelId: string;
   activeChannel: Channel | undefined;
   agents: Agent[];
@@ -31,6 +31,8 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
   routingView: AdaptiveRoutingView | null;
   activeBrainChannel: boolean;
   activeExecutions: number;
+  /** Superseded executions still draining in this channel. */
+  finishingExecutions: number;
   brainNames: Record<string, string>;
   onOpenRouting: () => void;
   onInvite: () => void;
@@ -123,6 +125,7 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
               : ""}
             {routingView.state.lockScope !== "none" ? ` · locked ${routingView.state.lockScope}` : ""}
             {activeExecutions > 1 ? ` · ${brainNames[routingView.state.brainId] ?? "brain"} · ${activeExecutions} brains` : ""}
+            {finishingExecutions > 0 ? ` · +${finishingExecutions} finishing` : ""}
           </button>
           <span>
             {routingView.state.monitoring === "completed" ? "Execution completed" : routingView.state.monitoring === "disabled"

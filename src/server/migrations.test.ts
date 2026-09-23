@@ -184,7 +184,7 @@ test("project, channel, DM, join and invitation failures roll back all rows and 
   const worker = hive.join({ role: "worker", seniority: "mid" }).agent;
   const room = hive.createChannel(brain, { name: "private", type: "private" });
   const events: string[] = [];
-  for (const event of ["agent", "channel", "message", "queued"]) hive.bus.on(event, () => events.push(event));
+  for (const event of ["agent", "channel", "message", "queued"] as const) hive.bus.on(event, () => events.push(event));
   const check = (operation: () => unknown, pattern: RegExp) => {
     const before = snapshot(file);
     events.length = 0;

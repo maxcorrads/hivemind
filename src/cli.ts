@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { integerArgument, MAX_WAIT_MS, sendInputSchema, validated } from "./shared/api-contract.ts";
 import { sendOperation } from "./client/send-operation.ts";
-import { resolve, dirname, basename, resolve as resolvePath } from "node:path";
+import { resolve, basename, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { DEFAULT_PORT, DEFAULT_WAIT_MS, MCP_HEARTBEAT_MS, MESSAGE_EVENT_TYPES, type MessageEventType } from "./shared/types.ts";
@@ -15,6 +15,7 @@ import {
 import { mkdirSync, readFileSync, realpathSync } from "node:fs";
 import type { Agent, Channel, Message, WaitResult } from "./shared/types.ts";
 import { parseJoinArgs } from "./shared/join-args.ts";
+import { COMPILED_CLI, packageRoot, runningCompiled } from "./shared/package-root.ts";
 
 function help() {
   console.log(`hivemind — local hive for Human, brains, and workers
@@ -111,13 +112,10 @@ export async function runCli(argv: string[]): Promise<void> {
   }
 
   if (cmd === "mcp-config") {
-    const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-    const entry = resolve(root, "src/cli.ts");
     const config = {
       mcpServers: {
         hivemind: {
-          command: "npx",
-          args: ["tsx", entry, "mcp"],
+          ...mcpLauncher(),
           env: {
             HIVEMIND_URL: hiveUrl(),
           },
@@ -126,7 +124,9 @@ export async function runCli(argv: string[]): Promise<void> {
       },
     };
     console.log(JSON.stringify(config, null, 2));
-    console.error("This repo already has .cursor/mcp.json and .mcp.json. For Codex, paste the JSON above.");
+    console.error(runningCompiled
+      ? "Paste the JSON above into your agent's MCP configuration."
+      : "This repo already has .cursor/mcp.json and .mcp.json. For Codex, paste the JSON above.");
     console.error(`Then in the agent: join as worker or brain. Server must be running at ${hiveUrl()}`);
     return;
   }
@@ -462,7 +462,17 @@ export async function runCli(argv: string[]): Promise<void> {
   throw new Error(`unknown command ${cmd}`);
 }
 
-/** True only when this module is the process entrypoint (`tsx src/cli.ts …`), not when imported. */
+/**
+ * MCP server launcher for `mcp-config`: an installed package runs its compiled
+ * CLI with plain node; a source checkout keeps running TypeScript through tsx.
+ */
+export function mcpLauncher(compiled = runningCompiled, root = packageRoot()): { command: string; args: string[] } {
+  return compiled
+    ? { command: "node", args: [resolve(root, COMPILED_CLI), "mcp"] }
+    : { command: "npx", args: ["tsx", resolve(root, "src/cli.ts"), "mcp"] };
+}
+
+/** True only when this module is the process entrypoint (`node dist/node/cli.js …` or `tsx src/cli.ts …`), not when imported. */
 export function isCliEntrypoint(entry = process.argv[1], self = fileURLToPath(import.meta.url)): boolean {
   if (!entry) return false;
   try {

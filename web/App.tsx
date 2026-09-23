@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { Agent } from "../src/shared/types.ts";
 import { AdaptiveRoutingPanel } from "./AdaptiveRoutingPanel.tsx";
 import { AdaptiveRoutingSettings } from "./AdaptiveRoutingSettings.tsx";
+import { routingStripCounts } from "./adaptive-routing-view.ts";
 import { api } from "./api.ts";
 import { ChannelDesk } from "./ChannelDesk.tsx";
 import { CreateChannelSheet, InviteSheet } from "./ChannelSheets.tsx";
@@ -62,7 +63,7 @@ export function App() {
     id => snap?.agents.some(agent => agent.id === id && agent.role === "brain"),
   ));
   const brainNames = Object.fromEntries((snap?.agents ?? []).filter(agent => agent.role === "brain").map(agent => [agent.id, agent.name]));
-  const activeExecutions = (routingView?.executions ?? []).filter(item => item.channelId === activeChannel?.id && !item.completedAt).length;
+  const { brains: activeExecutions, finishing: finishingExecutions } = routingStripCounts(routingView, activeChannel?.id);
   const selectedProject =
     sel.kind === "inbox" || sel.kind === "decisions" || sel.kind === "jev" ? sel.project : (activeChannel?.project ?? projects[0]?.slug ?? "chapter");
 
@@ -214,7 +215,7 @@ export function App() {
           <ChannelDesk channelId={sel.id} activeChannel={activeChannel} agents={snap.agents} roomAgents={roomAgents}
             channel={channelPane} threadPaneId={threadPane?.threadId} stickBottom={stickBottom}
             threadOpenAnchor={threadOpenAnchor} go={go} roomTick={roomTick} routingView={routingView}
-            activeBrainChannel={activeBrainChannel} activeExecutions={activeExecutions} brainNames={brainNames}
+            activeBrainChannel={activeBrainChannel} activeExecutions={activeExecutions} finishingExecutions={finishingExecutions} brainNames={brainNames}
             onOpenRouting={() => setRoutingPanelOpen(true)} onInvite={() => channelSheets.setInviteOpen(true)}
             compose={compose} setErr={setErr} />
         )}

@@ -8,7 +8,7 @@ Run the same core checks used by CI before opening a PR:
 npm run check
 ```
 
-That command lints the codebase, typechecks the server and web app, discovers and runs all TypeScript tests, and builds the production UI. CI additionally tests the real minimum runtime (Node 22.13.0) and the current Node 24 line on macOS, reviews dependency changes, audits production dependencies, collects coverage, and runs CodeQL. See [Reproducible checks](../TESTING.md) for `npm run check:all` and the CI topology.
+That command lints the codebase, typechecks the server and web app, discovers and runs all TypeScript tests, and builds the production UI plus the compiled CLI, server and MCP (`dist/node`, via esbuild) that the npm package runs without `tsx`. CI additionally tests the real minimum runtime (Node 22.13.0) and the current Node 24 line on macOS, reviews dependency changes, audits production dependencies, collects coverage, and runs CodeQL. See [Reproducible checks](../TESTING.md) for `npm run check:all` and the CI topology.
 
 PR titles use Conventional Commit syntax because release versioning is derived from them. Examples: `fix: handle reconnect races`, `feat(mcp): add a new tool`, `feat!: change the wire contract`.
 

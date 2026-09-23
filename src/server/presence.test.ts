@@ -155,7 +155,7 @@ test("real WebSocket connections share one ordered stream and hello gives the re
   assert.equal(second.hello.streamId, first.hello.streamId);
   assert.equal(second.hello.sequence, 1);
   const both = [once(first.ws, "message"), once(second.ws, "message")];
-  f.hive.bus.emit("queued", { agentId: "human", n: 3 });
+  f.hive.bus.emit("queued", { agentId: "human", n: 3, inbox: { awaitingReceipt: 0, acknowledgedMessages: 0, lastAcknowledgedAt: null, queued: { atLeast: 3, exact: true } } });
   const events = (await Promise.all(both)).map(([raw]) => JSON.parse(String(raw)));
   assert.deepEqual(events[0], events[1]);
   assert.equal(events[0].sequence, 2);
