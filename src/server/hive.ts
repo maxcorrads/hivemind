@@ -1106,7 +1106,7 @@ export class Hive {
     });
   }
 
-  openDm(actor: Agent, otherName: string, silent = false): Channel {
+  openDm(actor: Agent, otherName: string): Channel {
     const other = this.getAgentByName(otherName);
     if (!other) throw new HiveError(404, `No agent named ${otherName}`);
     if (actor.role === "bot" || other.role === "bot") throw new HiveError(403, "Bots publish observations to explicitly linked channels, not DMs");
@@ -1135,11 +1135,11 @@ export class Hive {
       this.addMember(id, actor.id);
       this.addMember(id, other.id);
       const ch = this.getChannel(id);
-      if (!silent) this.afterCommit(() => this.bus.emit("channel", ch));
+      this.afterCommit(() => this.bus.emit("channel", ch));
       return ch;
     };
-    // TaskStore owns the surrounding transaction when silent is requested.
-    return silent ? create() : this.transaction(create);
+    // Nests as a savepoint inside a caller's transaction (e.g. TaskStore.assign); the event waits for its commit.
+    return this.transaction(create);
   }
 
   findDm(a: string, b: string): Channel | null {
