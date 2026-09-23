@@ -16,6 +16,7 @@ import { CONDITIONS, readJson, routerCapture, validateEvidence, validateStudy } 
 import { TOPOLOGY_POLICY_VERSION } from '../src/shared/adaptive-topology-policy.ts';
 import { TYPESAFE_MODEL } from '../src/server/adaptive-config.ts';
 import { validJevModel } from '../src/shared/jev-model.ts';
+import { BODY_MAX } from '../src/shared/types.ts';
 
 export const RUNNER_VERSION = 'topology-study-runner-v1';
 export const REPORT_VERSION = 'topology-study-run-report-v1';
@@ -95,7 +96,22 @@ function planObject(raw) {
 }
 
 /** Copies the manifest and workload artifacts into a fresh run directory after verifying their exact bytes. */
-export function prepareRun({ planPath, runDir }) {
+/**
+ * The Human request is posted verbatim as one message, so it must fit this checkout's message body limit (the same
+ * character and UTF-8 budgets the server enforces). Returns null when it fits, otherwise the reason.
+ */
+export function requestTooLong(text, bodyMax = BODY_MAX) {
+  const chars = text.length, bytes = Buffer.byteLength(text, 'utf8');
+  if (chars > bodyMax) return `request is ${chars} characters; this checkout's message body limit (BODY_MAX) is ${bodyMax}`;
+  if (bytes > bodyMax * 4) return `request is ${bytes} UTF-8 bytes; this checkout's limit is ${bodyMax * 4}`;
+  return null;
+}
+const requestChecks = (ctx, bodyMax) => ctx.study.config.workloads.map(w => {
+  const reason = requestTooLong(readFileSync(path.join(ctx.dir, 'workloads', ctx.run.workloads[w.id].dir, 'input'), 'utf8'), bodyMax);
+  return { name: `request.${w.id}`, ok: reason === null, detail: reason };
+});
+
+export function prepareRun({ planPath, runDir, bodyMax = BODY_MAX }) {
   const planFile = path.resolve(planPath), base = path.dirname(planFile);
   const plan = planObject(readJson(planFile));
   const manifestFile = path.resolve(base, plan.manifest);
@@ -115,6 +131,8 @@ export function prepareRun({ planPath, runDir }) {
     assert.ok(entry && Object.keys(entry).every(k => ['id', 'input', 'acceptance'].includes(k)), `Plan is missing workload ${w.id}`);
     const input = path.resolve(base, entry.input), acceptance = path.resolve(base, entry.acceptance);
     assert.equal(sha256(readFileSync(input)), w.inputDigest, `Input artifact hash mismatch for ${w.id}`);
+    const tooLong = requestTooLong(readFileSync(input, 'utf8'), bodyMax);
+    assert.ok(tooLong === null, `Workload ${w.id}: ${tooLong}. The brain would reject it (request_rejected); raise the limit or shorten the request`);
     assert.equal(sha256(readFileSync(acceptance)), w.acceptanceDigest, `Acceptance artifact hash mismatch for ${w.id}`);
     workloads[w.id] = { dir: workloadDir(w.id), inputSha256: w.inputDigest, acceptanceSha256: w.acceptanceDigest };
     copies.push([input, acceptance, workloadDir(w.id)]);
@@ -421,12 +439,14 @@ async function executeAttempt(ctx, { trial, index, host, signal, secrets, load, 
  * A stop condition ends scheduling of new blocks while running trials finish. Provider rate limiting or low available
  * memory reduces later scheduling to one block at a time; running trials are never killed for it.
  */
-export async function runStudy({ runDir, host, authorization, maxTrials = Infinity, signal, secrets = [], concurrency = 1,
+export async function runStudy({ runDir, host, authorization, maxTrials = Infinity, signal, secrets = [], concurrency = 1, bodyMax = BODY_MAX,
   availableMemory = availableMemoryBytes, minFreeMemoryBytes = DEFAULT_MIN_FREE_MEMORY_BYTES }) {
   const ctx = loadRun(runDir);
   assert.equal(authorization, ctx.run.studyId, 'Paid execution requires --authorize-paid-run <studyId> for exactly this study');
   assert.equal(host?.evidenceKind, ctx.study.config.evidenceKind, 'Host evidence kind does not match the manifest; do not label fake or live runs otherwise');
   assert.ok(Number.isSafeInteger(concurrency) && concurrency >= 1, 'concurrency must be a positive integer');
+  const oversized = requestChecks(ctx, bodyMax).filter(c => !c.ok);
+  assert.equal(oversized.length, 0, `Refusing before any trial: ${oversized.map(c => `${c.name}: ${c.detail}`).join('; ')}`);
   let executed = 0;
   const halt = (status, trial, detail = {}) => ({ status, trialId: trial?.id ?? null, executed, ...detail });
   const blocking = (trial, state) => {
@@ -622,7 +642,7 @@ export async function withoutNetwork(fn) {
 }
 
 /** Shows what `run` would do for the next pending trials without creating attempts, spawning hosts or reading credentials. */
-export async function dryRun({ runDir, repoRoot = root, limit = 5 }) {
+export async function dryRun({ runDir, repoRoot = root, limit = 5, bodyMax = BODY_MAX }) {
   return withoutNetwork(async () => {
     const validation = validateRun({ runDir });
     const ctx = loadRun(runDir), v = ctx.study.config.versions, checkout = checkoutOf(repoRoot);
@@ -632,6 +652,7 @@ export async function dryRun({ runDir, repoRoot = root, limit = 5 }) {
       { name: 'versions.policyVersion', ok: TOPOLOGY_POLICY_VERSION === v.policyVersion, detail: TOPOLOGY_POLICY_VERSION },
       { name: 'jev.requestedModel', ok: validJevModel(ctx.run.jev.requestedModel), detail: ctx.run.jev.pinned ? ctx.run.jev.requestedModel : `${TYPESAFE_MODEL} (unpinned alias)` },
       { name: 'versions.host', ok: v.host === `${ctx.run.host.name}/${ctx.run.host.binaryVersion}`, detail: `${ctx.run.host.name}/${ctx.run.host.binaryVersion}` },
+      ...requestChecks(ctx, bodyMax),
     ];
     const next = [];
     for (const [index, trial] of ctx.study.trials.entries()) {

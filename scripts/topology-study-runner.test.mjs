@@ -4,8 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { CONDITIONS, prepareStudy, summarizeStudy, validateStudy } from './benchmark-topology.mjs';
+import { BODY_MAX } from '../src/shared/types.ts';
 import {
-  appendDurable, dryRun, exportRun, loadRun, main, prepareRun, reconcileTrial, runStudy, sha256, trialState, validateRun, withoutNetwork,
+  appendDurable, dryRun, exportRun, loadRun, main, prepareRun, reconcileTrial, requestTooLong, runStudy, sha256, trialState, validateRun, withoutNetwork,
 } from './topology-study-runner.mjs';
 
 const REVISION = 'a'.repeat(40);
@@ -449,4 +450,27 @@ test('low available memory downgrades to one block; a Human interrupt stops ever
     assert.equal(host.events.filter(e => e[0] === 'start').length, 10, 'no block starts after the interrupt');
     assert.equal(exported(stop).study.trials.slice(0, 10).filter(t => t.observed?.outcome === 'interrupted').length, 10);
   } finally { stop.cleanup(); }
+});
+
+test('requests that exceed the checkout message body limit are refused by prepare, dry-run and run', async () => {
+  assert.equal(requestTooLong('x'.repeat(BODY_MAX)), null);
+  assert.match(requestTooLong('x'.repeat(BODY_MAX + 1)), new RegExp(`${BODY_MAX + 1} characters; this checkout's message body limit \\(BODY_MAX\\) is ${BODY_MAX}`));
+  assert.match(requestTooLong('界'.repeat(10), 5), /10 characters/);
+  const ctx = setup({ repeats: 1 });
+  try {
+    writeFileSync(path.join(ctx.dir, 'input.txt'), 'y'.repeat(BODY_MAX + 1));
+    const study = prepareStudy({ ...ctx.study.config, workloads: [{ ...ctx.study.config.workloads[0], inputDigest: sha256(readFileSync(path.join(ctx.dir, 'input.txt'))) }] });
+    writeFileSync(path.join(ctx.dir, 'manifest.json'), JSON.stringify(study, null, 2));
+    assert.throws(() => prepareRun({ planPath: path.join(ctx.dir, 'plan.json'), runDir: path.join(ctx.dir, 'too-long') }),
+      /Workload fixture-work: request is \d+ characters; this checkout's message body limit \(BODY_MAX\)/);
+    assert.ok(!existsSync(path.join(ctx.dir, 'too-long')), 'nothing is prepared');
+
+    const dry = await dryRun({ runDir: ctx.runDir });
+    assert.deepEqual(dry.checks.find(c => c.name === 'request.fixture-work'), { name: 'request.fixture-work', ok: true, detail: null });
+    const strict = await dryRun({ runDir: ctx.runDir, bodyMax: 5 });
+    assert.ok(strict.wouldRefuse.includes('request.fixture-work') && !dry.wouldRefuse.includes('request.fixture-work'));
+    const host = fakeHost();
+    await assert.rejects(authorized(ctx, host, { bodyMax: 5 }), /Refusing before any trial: request\.fixture-work: request is 16 characters/);
+    assert.equal(host.calls.length, 0);
+  } finally { ctx.cleanup(); }
 });

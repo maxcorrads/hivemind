@@ -425,7 +425,7 @@ export function createHivemindHost({ repoRoot, plan, env, seatCommand, serverImp
           requestId: `study-${spec.trialId}-${spec.attempt}-${randomUUID()}`, body, routing: spec.routing, lockScope: spec.lockScope });
       } catch (error) {
         // A rejected request (4xx) never started; anything else may have reached the server: reconcile, never resend.
-        if (error instanceof HttpError && error.status >= 400 && error.status < 500) return aborted('request_rejected');
+        if (error instanceof HttpError && error.status >= 400 && error.status < 500) return aborted('request_rejected', [], `HTTP ${error.status}: ${error.detail}`);
         return { phase: 'ambiguous', reason: 'lost_request_response' };
       }
       const executionId = sent.adaptiveState?.executionId ?? null;

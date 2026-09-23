@@ -32,9 +32,9 @@ function seedStartingWith(config, first) {
   throw new Error('no seed');
 }
 
-function setup({ wallMs = 20_000, expectedResolvedModel = null, first = null, repeats = 1 } = {}) {
+function setup({ wallMs = 20_000, expectedResolvedModel = null, first = null, repeats = 1, input = 'sort 3 1 2\n', bodyMax } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hivemind-study-host-'));
-  writeFileSync(path.join(dir, 'input.txt'), 'sort 3 1 2\n');
+  writeFileSync(path.join(dir, 'input.txt'), input);
   mkdirSync(path.join(dir, '.local/share/opencode'), { recursive: true });
   writeFileSync(path.join(dir, '.local/share/opencode/auth.json'), '{"fixture":"not-a-credential"}\n');
   writeFileSync(path.join(dir, 'acceptance.mjs'), ACCEPTANCE);
@@ -49,7 +49,7 @@ function setup({ wallMs = 20_000, expectedResolvedModel = null, first = null, re
     workloads: [{ id: 'sort-fixture', input: 'input.txt', acceptance: 'acceptance.mjs' }],
     host: { name: 'opencode', binaryVersion: '1.0.0-fake' }, jev: { expectedResolvedModel } }));
   const runDir = path.join(dir, 'run');
-  prepareRun({ planPath: path.join(dir, 'plan.json'), runDir });
+  prepareRun({ planPath: path.join(dir, 'plan.json'), runDir, bodyMax });
   const control = path.join(dir, 'seat-control.json');
   const setBehavior = (behavior, tokens = 40, extra = {}) => writeFileSync(control, JSON.stringify({ behavior, tokens, ...extra }));
   setBehavior('complete');
@@ -61,7 +61,7 @@ function setup({ wallMs = 20_000, expectedResolvedModel = null, first = null, re
     seatEnv: { FAKE_SEAT_CONTROL: control }, probeCheckout: () => ({ revision: REVISION, clean: true }),
     joinTimeoutMs: 20_000, pollMs: 100, acceptanceTimeoutMs: 10_000, seatRetryBackoffMs: 200 });
   const execute = (options = {}) => runStudy({ runDir, host: host(options.serverEnv, options.hostOptions), authorization: study.studyId, maxTrials: options.maxTrials ?? Infinity,
-    concurrency: options.concurrency ?? 1, availableMemory: options.availableMemory ?? (() => 64 * 1024 ** 3) });
+    concurrency: options.concurrency ?? 1, bodyMax: options.bodyMax, availableMemory: options.availableMemory ?? (() => 64 * 1024 ** 3) });
   return { dir, runDir, study, setBehavior, execute, control, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
@@ -356,4 +356,15 @@ test('every seat gets private opencode data with auth.json symlinked (never copi
     assert.ok(existsSync(path.join(ctx.dir, '.local/share/opencode/auth.json')), 'the real credentials file is untouched');
   } finally { ctx.cleanup(); rmSync(live, { recursive: true, force: true }); rmSync(stale, { recursive: true, force: true }); }
   assert.deepEqual(sweepStaleSeatDataDirs(path.join(os.tmpdir(), 'no-such-dir-for-sweep')), []);
+});
+
+test('a request the server rejects is retained with the HTTP status and reason, not a guess', { timeout: 60_000 }, async () => {
+  // Bypass the runner's own length refusal (bodyMax: Infinity) so the trial server itself rejects the oversized post.
+  const ctx = setup({ input: 'z'.repeat(20_001), bodyMax: Infinity });
+  try {
+    const result = await ctx.execute({ bodyMax: Infinity });
+    assert.deepEqual([result.status, result.reason], ['aborted_before_request', 'request_rejected']);
+    const aborted = journalRecords(ctx, ctx.study.trials[0].id).find(r => r.type === 'aborted_before_request');
+    assert.match(aborted.detail, /^HTTP 400: .*body/);
+  } finally { ctx.cleanup(); }
 });
