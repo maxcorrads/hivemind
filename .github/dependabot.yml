@@ -8,10 +8,16 @@ updates:
       time: "08:00"
       timezone: Europe/Rome
     open-pull-requests-limit: 5
+    # Patch/minor updates are batched into at most two PRs per week (runtime
+    # vs. tooling); major updates still arrive as individual PRs for review.
     groups:
-      npm-non-major:
-        patterns:
-          - "*"
+      npm-production:
+        dependency-type: production
+        update-types:
+          - minor
+          - patch
+      npm-development:
+        dependency-type: development
         update-types:
           - minor
           - patch

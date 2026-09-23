@@ -16,10 +16,7 @@ function mail(): WaitResult {
 }
 
 test("real HTTP failures keep stable status/code across the client → MCP wait boundary", async (t) => {
-  const originalFetch = globalThis.fetch;
-  t.after(() => {
-    globalThis.fetch = originalFetch;
-  });
+  const fetchMock = t.mock.method(globalThis, "fetch", async () => new Response(null, { status: 500 }));
 
   const bodies = [
     { name: "json-code", value: JSON.stringify({ error: "Denied by fixture", code: "fixture_denied" }) },
@@ -32,13 +29,13 @@ test("real HTTP failures keep stable status/code across the client → MCP wait 
   for (const status of [401, 403, 404, 409, 429, 500, 503]) {
     for (const body of bodies) {
       let calls = 0;
-      globalThis.fetch = (async () => {
+      fetchMock.mock.mockImplementation(async () => {
         calls += 1;
         return new Response(body.value, {
           status,
           headers: body.name.startsWith("json") ? { "content-type": "application/json" } : undefined,
         });
-      }) as typeof fetch;
+      });
 
       const fatal = [401, 403, 404, 409].includes(status);
       const expectedCalls = fatal ? 1 : 3;
@@ -69,20 +66,15 @@ test("real HTTP failures keep stable status/code across the client → MCP wait 
 });
 
 test("network failures retry by policy and recovery still returns mail", async (t) => {
-  const originalFetch = globalThis.fetch;
-  t.after(() => {
-    globalThis.fetch = originalFetch;
-  });
-
   let calls = 0;
-  globalThis.fetch = (async () => {
+  t.mock.method(globalThis, "fetch", async () => {
     calls += 1;
     if (calls < 3) throw new TypeError("fetch failed");
     return new Response(JSON.stringify(mail()), {
       status: 200,
       headers: { "content-type": "application/json" },
     });
-  }) as typeof fetch;
+  });
 
   const result = await waitUntilMail(
     () => agentRequest<WaitResult>("POST", "/api/agent/wait", {}, "fixture-token"),
@@ -93,11 +85,7 @@ test("network failures retry by policy and recovery still returns mail", async (
 });
 
 test("malformed successful JSON remains a protocol error, not an HttpError", async (t) => {
-  const originalFetch = globalThis.fetch;
-  t.after(() => {
-    globalThis.fetch = originalFetch;
-  });
-  globalThis.fetch = (async () => new Response("{broken", { status: 200 })) as typeof fetch;
+  t.mock.method(globalThis, "fetch", async () => new Response("{broken", { status: 200 }));
 
   await assert.rejects(
     () => agentRequest("GET", "/fixture", undefined, "fixture-token"),
