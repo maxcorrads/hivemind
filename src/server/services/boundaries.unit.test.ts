@@ -10,7 +10,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const HIVE_LINE_BUDGET = 600;
 
 const services = readdirSync(here)
-  .filter(name => name.endsWith(".ts") && !/\.test\.ts$/.test(name))
+  .filter(name => name.endsWith(".ts") && !name.endsWith(".test.ts"))
   .map(name => [name, readFileSync(path.join(here, name), "utf8")] as const);
 
 const IMPORT = /^\s*(?:import|export)\b[^;]*?\bfrom\s*["']([^"']+)["']/gm;
