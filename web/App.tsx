@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import type { Agent } from "../src/shared/types.ts";
 import { AdaptiveRoutingPanel } from "./AdaptiveRoutingPanel.tsx";
 import { AdaptiveRoutingSettings } from "./AdaptiveRoutingSettings.tsx";
-import { routingStripCounts } from "./adaptive-routing-view.ts";
 import { api } from "./api.ts";
 import { ChannelDesk } from "./ChannelDesk.tsx";
 import { CreateChannelSheet, InviteSheet } from "./ChannelSheets.tsx";
@@ -44,11 +43,11 @@ export function App() {
   const { sel, threadId, setThreadId, selRef } = selection;
   const hive = useHiveSnapshot(setErr);
   const { snap, setSnap, refreshSnap, latestTelegramHealth } = hive;
-  // Jev routes every Human message addressed to a brain, so any channel with a brain has routing state.
+  // Jev advises on every Human message addressed to a brain, so any channel with a brain has advice state.
   const routingChannelId = sel.kind === "channel" && snap?.channels.some(channel => channel.id === sel.id &&
     channel.memberIds.some(id => snap.agents.some(agent => agent.id === id && agent.role === "brain"))) ? sel.id : null;
   const { view: routingView, error: routingError, refresh: refreshRoutingView,
-    onEvent: onRoutingEvent, onChange: changeRoutingView } = useAdaptiveRouting(routingChannelId);
+    onEvent: onRoutingEvent } = useAdaptiveRouting(routingChannelId);
   const [routingPanelOpen, setRoutingPanelOpen] = useState(false);
   const channelPane = useChannelPane(selRef);
   const threadState = useThreadPane(selection, setErr);
@@ -63,7 +62,6 @@ export function App() {
     id => snap?.agents.some(agent => agent.id === id && agent.role === "brain"),
   ));
   const brainNames = Object.fromEntries((snap?.agents ?? []).filter(agent => agent.role === "brain").map(agent => [agent.id, agent.name]));
-  const { brains: activeExecutions, finishing: finishingExecutions } = routingStripCounts(routingView, activeChannel?.id);
   const selectedProject =
     sel.kind === "inbox" || sel.kind === "decisions" || sel.kind === "jev" ? sel.project : (activeChannel?.project ?? projects[0]?.slug ?? "chapter");
 
@@ -215,7 +213,7 @@ export function App() {
           <ChannelDesk channelId={sel.id} activeChannel={activeChannel} agents={snap.agents} roomAgents={roomAgents}
             channel={channelPane} threadPaneId={threadPane?.threadId} stickBottom={stickBottom}
             threadOpenAnchor={threadOpenAnchor} go={go} roomTick={roomTick} routingView={routingView}
-            activeBrainChannel={activeBrainChannel} activeExecutions={activeExecutions} finishingExecutions={finishingExecutions} brainNames={brainNames}
+            activeBrainChannel={activeBrainChannel} brainNames={brainNames}
             onOpenRouting={() => setRoutingPanelOpen(true)} onInvite={() => channelSheets.setInviteOpen(true)}
             compose={compose} setErr={setErr} />
         )}
@@ -288,7 +286,6 @@ export function App() {
           channelId={activeChannel.id}
           view={routingView}
           brainNames={brainNames}
-          onChange={changeRoutingView}
           onClose={() => setRoutingPanelOpen(false)}
         />
       )}

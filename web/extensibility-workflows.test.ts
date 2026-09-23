@@ -252,28 +252,23 @@ test("private-channel UI grants a bot access only after an explicit same-project
   assert.throws(() => f.hive.bots.postBotMessage(f.botB.bot, channel.id, input), /channel|Channel|access/);
 });
 
-test("brain DMs expose per-request routing and show the committed directive without websocket echo", async t => {
+test("brain DMs have no routing selector and post only the Human message (#211)", async t => {
   const f = await fixture(t);
   await act(async () => f.root.render(createElement(App)));
   const brainButton = Array.from(f.host.querySelectorAll<HTMLButtonElement>(".person-main"))
     .find(button => button.querySelector(".pn")?.textContent === f.brainA.name);
   assert.ok(brainButton);
   await f.click(brainButton);
-  const mode = f.host.querySelector<HTMLSelectElement>('[aria-label="Execution mode"]');
-  assert.ok(mode, "brain DM should expose execution mode");
-  assert.equal(mode.value, "auto");
-  await f.change(mode, "single");
+  assert.equal(f.host.querySelector('[aria-label="Execution mode"], [aria-label="Routing lock scope"], .composer-routing'), null,
+    "the composer has no mode or lock selector");
   const composer = f.host.querySelector<HTMLTextAreaElement>(".composer textarea")!;
   await f.change(composer, "Handle this directly");
   await f.click(f.button("Send"));
-  assert.equal(mode.value, "auto", "explicit mode is one-request only");
-  assert.match(f.host.textContent!, /Hivemind adaptive topology · SINGLE/);
   assert.match(f.host.textContent!, /Handle this directly/);
+  assert.doesNotMatch(f.host.textContent!, /Hivemind adaptive topology/);
   const sent = listRows(f.hive, "messages", { where: { author_id: "human", channel_id: f.hive.channels.findDm(f.human.id, f.brainA.id)!.id },
-    columns: "body", orderBy: "seq" }).reverse() as Array<{ body: string }>;
-  assert.equal(sent[0]!.body, "Handle this directly");
-  assert.match(sent[1]!.body, /adaptive topology · SINGLE/);
-  assert.equal(f.hive.adaptiveTopology.view(f.human, f.hive.channels.findDm(f.human.id, f.brainA.id)!.id).state?.lockedTopology, "single");
+    columns: "body", orderBy: "seq" }) as Array<{ body: string }>;
+  assert.deepEqual(sent.map(row => row.body), ["Handle this directly"]);
 });
 
 test("observation threads support Human replies and reactions without granting bot workflow authority", async t => {
