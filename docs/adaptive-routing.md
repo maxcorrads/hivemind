@@ -152,21 +152,3 @@ The tests use fake TypeSafe responses with real local SQLite, HTTP and UI bounda
 Focused coverage includes authenticated real websocket delivery, stale UI snapshots and reconnect, lifecycle/lock races, malformed and oversized provider replies, destination-aware hysteresis, direct jumps, the inclusive 0.90 threshold, retry identity, Human override precedence, provider failure/recovery, audit/context isolation, actual task admission/link atomicity, free-form commitments, capacity ownership and delayed Single transitions after accepted results.
 
 Run the repository's standard lint, typecheck, unit, integration, browser and coverage jobs before merge. A green fixture suite establishes the implementation contract, not calibrated routing quality on real workloads.
-
-## Benchmark evaluation retained
-
-Phase 1's shadow tooling remains a separate offline evaluation path for #29/#125, not the live runtime switch. It uses `TYPESAFE_API_KEY` from its command-line environment rather than the server UI's private settings.
-
-```sh
-npm run benchmark:coordination:routing -- shadow \
-  --input /tmp/hivemind-pilot-v1 \
-  --provider typesafe \
-  --decisions /tmp/hivemind-pilot-v1/routing-shadow-v1.jsonl \
-  --output /tmp/hivemind-pilot-v1/routing-shadow-v1-summary.json
-
-npm run benchmark:coordination:routing -- score \
-  --decisions /tmp/hivemind-pilot-v1/routing-shadow-v1.jsonl \
-  --output /tmp/hivemind-pilot-v1/routing-shadow-v1-rescore.json
-```
-
-That v1 replay reports binary-routing quality, regret and under-orchestration; it must not be presented as empirical validation of Phase 2's continuous four-topology controller. Retained real-agent traces are still needed to calibrate the new policy and assess net cost, latency and quality.
