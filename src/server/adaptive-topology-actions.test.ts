@@ -5,7 +5,7 @@ import path from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { Hive } from './hive.ts';
 import { createApp } from './app.ts';
-import { saveAdaptiveRouting } from './adaptive-routing.ts';
+import { saveAdaptiveRouting } from './adaptive-config.ts';
 import { jevTopologyResponse } from './fixtures/jev-topology.ts';
 import { readAdaptiveCapacity } from './adaptive-topology-capacity.ts';
 import { coordinationEventId, settleAdaptiveFollowUps } from './adaptive-topology-admission.ts';

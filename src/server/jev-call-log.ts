@@ -1,13 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import type { AdaptiveRoutingEvent, AdaptiveTopologyDecision } from '../shared/adaptive-topology.ts';
+import { encodeJevCallCursor, type JevCallCursor } from '../shared/jev-calls.ts';
 import type { JevCall, JevCallLogView, JevCallOutcome, JevCallSummary, JevCallTrigger, JevRequestGroup } from '../shared/jev-calls.ts';
 import { HiveError } from '../shared/types.ts';
 
 /** Human-only local history; the oldest calls of a project are pruned beyond this bound. */
 export const JEV_CALLS_PER_PROJECT = 1000;
 const REQUEST_EXCERPT = 280;
-const GROUPS_PER_PAGE = 50;
+/** Exported for tests that build a page boundary. */
+export const GROUPS_PER_PAGE = 50;
 
 export type JevExchange = { sent: unknown | null; received: unknown | null; error: string | null };
 export type JevCallContext = {
@@ -74,20 +76,30 @@ export class JevCallLog {
     return { ...summary, outcome: row.outcome ? JSON.parse(String(row.outcome)) as JevCallOutcome : null };
   }
 
-  /** Requests (executions) with the newest activity first, each with its calls in order. */
-  view(projectId: string, before?: number): JevCallLogView {
+  /**
+   * Requests (executions) with the newest activity first, each with its calls in order.
+   * Pages are keyed by the compound cursor (lastAt, executionId) of the last group returned, so groups
+   * sharing the boundary millisecond are neither skipped nor repeated.
+   */
+  view(projectId: string, cursor?: JevCallCursor | null): JevCallLogView {
+    const lastAt = cursor?.lastAt ?? Number.MAX_SAFE_INTEGER;
+    // Without an execution id (legacy `before=<ms>`), the boundary millisecond is excluded as before.
+    const after = cursor?.executionId ?? null;
     const groups = this.db.prepare(`SELECT execution_id, MIN(created_at) AS first_at, MAX(created_at) AS last_at, COUNT(*) AS n
-      FROM jev_calls WHERE project_id=? GROUP BY execution_id HAVING MAX(created_at) < ?
-      ORDER BY last_at DESC, execution_id LIMIT ?`).all(projectId, before ?? Number.MAX_SAFE_INTEGER, GROUPS_PER_PAGE + 1);
+      FROM jev_calls WHERE project_id=? GROUP BY execution_id
+      HAVING MAX(created_at) < ? OR (? IS NOT NULL AND MAX(created_at) = ? AND execution_id > ?)
+      ORDER BY last_at DESC, execution_id LIMIT ?`).all(projectId, lastAt, after, lastAt, after ?? '', GROUPS_PER_PAGE + 1);
     const requests: JevRequestGroup[] = groups.slice(0, GROUPS_PER_PAGE).map(group => {
       const calls = this.db.prepare('SELECT summary,outcome FROM jev_calls WHERE execution_id=? ORDER BY created_at, rowid')
         .all(String(group.execution_id)).map(row => this.summaryOf(row));
       const first = calls[0]!;
-      return { executionId: first.executionId, channelId: first.channelId, brainId: first.brainId,
+      return { executionId: String(group.execution_id), channelId: first.channelId, brainId: first.brainId,
         request: calls.find(call => call.request)?.request ?? '', firstAt: Number(group.first_at), lastAt: Number(group.last_at),
         callCount: Number(group.n), calls };
     });
-    return { requests, hasMore: groups.length > GROUPS_PER_PAGE };
+    const hasMore = groups.length > GROUPS_PER_PAGE;
+    const last = requests.at(-1);
+    return { requests, hasMore, nextCursor: hasMore && last ? encodeJevCallCursor({ lastAt: last.lastAt, executionId: last.executionId }) : null };
   }
 
   get(projectId: string, id: string): JevCall {

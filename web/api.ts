@@ -112,8 +112,9 @@ export const api = {
     req<{ fixture: TimelineExport }>(`/api/ui/tasks/${encodeURIComponent(id)}/timeline/export`, { signal }),
   decisions: (project: string, includeClosed = true, signal?: AbortSignal) =>
     req<DecisionPage>('/api/ui/decisions?project=' + encodeURIComponent(project) + '&includeClosed=' + (includeClosed ? '1' : '0'), { signal }),
-  jevCalls: (project: string, before?: number, signal?: AbortSignal) =>
-    req<JevCallLogView>(`/api/ui/projects/${encodeURIComponent(project)}/jev-calls${before ? `?before=${before}` : ''}`, { signal }),
+  /** `cursor` is the previous page's opaque `nextCursor`; omit it for the newest page. */
+  jevCalls: (project: string, cursor?: string | null, signal?: AbortSignal) =>
+    req<JevCallLogView>(`/api/ui/projects/${encodeURIComponent(project)}/jev-calls${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`, { signal }),
   jevCall: (project: string, id: string, signal?: AbortSignal) =>
     req<{ call: JevCall }>(`/api/ui/projects/${encodeURIComponent(project)}/jev-calls/${encodeURIComponent(id)}`, { signal }),
   answerDecision: (id: string, body: { requestId: string; expectedRevision: number; body: string }, signal?: AbortSignal) =>
