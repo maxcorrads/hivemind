@@ -31,33 +31,6 @@ export function validTelegramUpdateId(id: unknown): id is number {
   return Number.isSafeInteger(id) && Number(id) >= 0 && Number(id) < Number.MAX_SAFE_INTEGER;
 }
 
-export function initTelegramInbox(db: DatabaseSync): void {
-  Storage.for(db).transaction(() => {
-    const columns = db.prepare("PRAGMA table_info(telegram_update_failures)").all() as { name: string }[];
-    const legacy = columns.length > 0 && !columns.some(c => c.name === "bot_key");
-    if (legacy) db.exec("ALTER TABLE telegram_update_failures RENAME TO telegram_update_failures_legacy");
-    db.exec(`CREATE TABLE IF NOT EXISTS telegram_update_failures (
-      id TEXT PRIMARY KEY, bot_key TEXT NOT NULL, update_id INTEGER NOT NULL,
-      telegram_chat_id INTEGER, project_id TEXT, payload TEXT,
-      attempts INTEGER NOT NULL, last_error TEXT NOT NULL, state TEXT NOT NULL,
-      retry_at INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
-      invalidated INTEGER NOT NULL DEFAULT 0,
-      UNIQUE(bot_key, update_id)
-    );
-    CREATE INDEX IF NOT EXISTS idx_telegram_update_retry ON telegram_update_failures(bot_key, state, retry_at);`);
-    if (legacy) {
-      // A legacy payload has no provable bot/project provenance. Keep it visible, never replay it automatically.
-      db.exec(`INSERT INTO telegram_update_failures
-        SELECT 'legacy:' || update_id, '', update_id, NULL, NULL,
-          CASE WHEN length(CAST(payload AS BLOB)) <= ${TELEGRAM_UPDATE_BYTES} THEN payload ELSE NULL END,
-          attempts, 'legacy_scope_unknown', 'quarantined', 0, updated_at, updated_at, 1
-        FROM telegram_update_failures_legacy;
-        DROP TABLE telegram_update_failures_legacy;`);
-    }
-    pruneTelegramUpdates(db);
-  });
-}
-
 export function pruneTelegramUpdates(db: DatabaseSync, at = Date.now()): void {
   const expired = Number(db.prepare("DELETE FROM telegram_update_failures WHERE updated_at < ?").run(at - RETENTION_MS).changes);
   const excess = Number(db.prepare(`DELETE FROM telegram_update_failures WHERE id IN (

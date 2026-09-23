@@ -5,11 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { Hive } from './hive.ts';
 import { createApp } from './app.ts';
-import { InboxDeliveryStore } from './inbox-delivery.ts';
 import { ROUTINE_BATCH_MS } from '../shared/notifications.ts';
 import { WAIT_SCAN_MAX, type WaitResult, type Message } from '../shared/types.ts';
 import { waitUntilMail } from '../mcp/wait-loop.ts';
-import { countRows, markInboxRead, removeChannelMember, seedAgedInboxReceipts, setAgentPresence } from './test-fixtures.ts';
+import { countRows, markInboxRead, markLegacyStorage, removeChannelMember, seedAgedInboxReceipts, setAgentPresence } from './test-fixtures.ts';
 
 function fixture(t: TestContext, fakeClock = false) {
   if (fakeClock) t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1_000_000 });
@@ -87,7 +86,6 @@ test('pending receipts replay unchanged across subscription edits and restart; r
 test('aged receipt totals survive progress batching, mute, session replacement and pending replay', async t => {
   const f = fixture(t, true), historical = 10_000;
   seedAgedInboxReceipts(f.hive, f.brain.agent.id, f.session, historical);
-  new InboxDeliveryStore(f.hive.db);
   const forbidAggregation = () => f.hive.db.function('json_array_length', () => { throw new Error('unexpected notification aggregation'); });
   forbidAggregation();
   let returned = false;
@@ -120,7 +118,7 @@ test('aged receipt totals survive progress batching, mute, session replacement a
 test('upgrade adds routing storage without reclassifying legacy chat or losing an offered receipt', async t => {
   const f = fixture(t); const original = f.send('Legacy chat'); const before = await f.wait();
   f.hive.db.exec('DROP TABLE notification_subscriptions; ALTER TABLE messages DROP COLUMN recipients'); // schema-level assertion
-  f.reopen(); const replay = await f.wait();
+  markLegacyStorage(f.hive); f.reopen(); const replay = await f.wait();
   assert.equal(replay.delivery!.id, before.delivery!.id);
   assert.deepEqual(replay.delivery!.messageSeqs, [original.seq]);
   assert.equal(replay.mail![0].body, original.body);

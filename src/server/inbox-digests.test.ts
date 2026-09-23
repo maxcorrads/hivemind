@@ -6,7 +6,7 @@ import path from "node:path";
 import { Hive } from "./hive.ts";
 import { createApp } from "./app.ts";
 import { waitWireBytes } from "./wait-format.ts";
-import { markInboxRead, updateRows } from "./test-fixtures.ts";
+import { markInboxRead, markLegacyStorage, updateRows } from "./test-fixtures.ts";
 import { WAIT_MAX_BYTES, type DigestExpansionResult, type Message, type WaitResult } from "../shared/types.ts";
 
 function fixture(t: TestContext) {
@@ -242,7 +242,7 @@ test("an existing schema migrates without classifying legacy messages or breakin
   const message = f.send("Unclassified blocker after upgrade"); f.other();
   const batch = await f.wait();
   f.hive.db.exec("ALTER TABLE messages DROP COLUMN event_type"); // schema-level assertion
-  f.reopen();
+  markLegacyStorage(f.hive); f.reopen();
   const replay = await f.wait();
   assert.equal(replay.delivery!.id, batch.delivery!.id);
   assert.equal(replay.mail!.find(m => m.seq === message.seq)!.body, message.body);

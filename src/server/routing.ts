@@ -9,21 +9,7 @@ import { ROUTING_LIMITS, setCapabilitiesSchema, suggestWorkersSchema, routingOut
 
 /** Opt-in declarations and limited, explicitly classified review evidence; never an assignment engine. */
 export class RoutingStore {
-  constructor(private hive: Hive) {
-    hive.db.exec(`CREATE TABLE IF NOT EXISTS worker_capabilities (
-      worker_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
-      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-      revision INTEGER NOT NULL, updated_at INTEGER NOT NULL, configuration TEXT NOT NULL, card TEXT NOT NULL);
-      CREATE INDEX IF NOT EXISTS capabilities_project ON worker_capabilities(project_id, worker_id);
-      CREATE TABLE IF NOT EXISTS routing_outcomes (
-        task_id TEXT PRIMARY KEY REFERENCES task_records(id) ON DELETE CASCADE,
-        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-        worker_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-        review_revision INTEGER NOT NULL, category TEXT NOT NULL, configuration TEXT NOT NULL,
-        accepted INTEGER NOT NULL, recorded_at INTEGER NOT NULL);
-      CREATE INDEX IF NOT EXISTS routing_evidence ON routing_outcomes(worker_id, category, configuration, recorded_at DESC);
-      CREATE INDEX IF NOT EXISTS routing_project_retention ON routing_outcomes(project_id, recorded_at);`);
-  }
+  constructor(private hive: Hive) {}
   private get db() { return this.hive.db; }
   private configuration(card: CapabilityCard) {
     return createHash('sha256').update(JSON.stringify([card.model, card.host,
