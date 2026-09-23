@@ -392,8 +392,8 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   });
   agent.post('/threads/:id/status', async c => {
     const body = await requestJson(c.req.raw);
-    const thread = await setAdaptiveThreadStatus(hive, c.get('me'), c.req.param('id'), body.status ?? null, c.get('token'));
-    return c.json({ thread: threadResponseSchema.parse(thread) });
+    const { thread, ...routing } = await setAdaptiveThreadStatus(hive, c.get('me'), c.req.param('id'), body.status ?? null, c.get('token'));
+    return c.json({ thread: threadResponseSchema.parse(thread), ...routing });
   });
   agent.post('/channels/:id/invite', async c => {
     const body = await requestJson(c.req.raw);

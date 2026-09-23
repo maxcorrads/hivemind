@@ -4,15 +4,14 @@ import { executionIdSchema } from './mutation.ts';
 import { claimActions, isClaimAction, type TaskClaim, type TaskCoordinationView } from './task-claims.ts';
 
 const text = z.string().trim().min(1).max(700)
-  .describe('Required concise text, 1-700 characters.');
-const line = z.string().trim().min(1).max(240)
-  .describe('One concise item, 1-240 characters. Split longer material across items instead of exceeding this limit.');
+  .describe('Concise text, 1-700 characters.');
+const line = z.string().trim().min(1).max(240);
 const lines = z.array(line).max(8)
-  .describe('At most 8 concise items; use [] when there are none.');
+  .describe('Up to 8 items; [] when none.');
 const ids = z.array(z.string().uuid()).max(12).refine(v => new Set(v).size === v.length, "Duplicate IDs")
-  .describe('Existing task UUIDs only; use [] when there are none.');
+  .describe('Existing task UUIDs; [] when none.');
 const seqs = z.array(z.number().int().positive().safe()).max(12).refine(v => new Set(v).size === v.length, "Duplicate sequences")
-  .describe('Visible message sequence numbers only; use [] when none are needed.');
+  .describe('Visible message seqs; [] when none.');
 const hasControl = (value: string) => [...value].some(char => {
   const code = char.charCodeAt(0);
   return code < 32 || code === 127;
@@ -26,24 +25,24 @@ const artifact = z.string().min(1).max(500).refine(v => {
 }, "Use a relative artifact reference or HTTP(S) URL without credentials");
 
 export const taskContractSchema = z.object({
-  objective: text.describe('Compact objective, max 700 characters. Put long exact inputs/material here only if they fit; otherwise split concise details across scope items.'),
-  scope: lines.describe('0-8 scope items, each max 240 characters. Keep exact long material split across multiple items.'),
-  nonGoals: lines.describe('0-8 non-goals, each max 240 characters.'),
-  acceptanceCriteria: lines.min(1).describe('1-8 acceptance criteria, each max 240 characters.'),
-  dependencies: ids.describe('Existing task UUIDs only, not descriptions or message sequence numbers. Use [] when there are no task dependencies; put prose in scope.'),
-  worktree: relative.optional().describe('Optional relative worktree reference. Omit this field entirely when unused; never send an empty string.'),
+  objective: text.describe('Max 700 characters; split longer material into scope items.'),
+  scope: lines,
+  nonGoals: lines,
+  acceptanceCriteria: lines.min(1),
+  dependencies: ids.describe('Task UUIDs this depends on (not seqs or prose); [] when none.'),
+  worktree: relative.optional().describe('Relative worktree; omit when unused, never send an empty string.'),
   branch: z.string().trim().min(1).max(200).refine(v => !/\s/.test(v) && !hasControl(v), 'Use a branch reference without whitespace or control characters').optional()
-    .describe('Optional branch reference without whitespace. Omit this field entirely when unused; never send an empty string.'),
-  evidenceSeqs: seqs.describe('Evidence messages that both assigner and assignee can already read. Use [] if visibility is uncertain; references never grant access.'),
+    .describe('Branch without whitespace; omit when unused, never send an empty string.'),
+  evidenceSeqs: seqs.describe('Evidence seqs both assigner and worker can already read; [] if unsure. References never grant access.'),
 }).strict();
 export const taskResultSchema = z.object({
   summary: text.describe('Result summary, 1-700 characters.'),
-  artifacts: z.array(artifact).max(8).describe('0-8 relative artifact references or HTTP(S) URLs.'),
+  artifacts: z.array(artifact).max(8).describe('0-8 relative paths or HTTP(S) URLs.'),
   checks: z.array(z.object({ name: z.string().trim().min(1).max(240),
     outcome: z.enum(['passed', 'failed', 'not_run']), evidenceSeqs: seqs }).strict()).max(8)
-    .describe('0-8 reported checks. These are claims, not independently verified by Hivemind.'),
-  gaps: lines.describe('0-8 known gaps. Use [] when none are known.'),
-  evidenceSeqs: seqs.describe('Visible evidence messages supporting the result. Use [] when none are needed.'),
+    .describe('0-8 checks you actually ran; Hivemind does not verify them.'),
+  gaps: lines.describe('Known gaps; [] when none.'),
+  evidenceSeqs: seqs.describe('Visible evidence seqs for the result; [] when none.'),
 }).strict();
 /** A checkpoint is a report about work, not a new contract or a completion. */
 export const taskCheckpointInputSchema = z.object({
@@ -71,19 +70,19 @@ export const taskActionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('review'), decision: z.enum(['accepted', 'changes_requested']),
     summary: text, evidenceSeqs: seqs }).strict(),
   z.object({ type: z.literal('revise'), reason: text, worker: z.string().min(1).max(100), contract: taskContractSchema }).strict(),
-]).describe('Action MUST be a JSON object with a literal type field. Examples: {type:"accept"}; {type:"result",result:{summary,artifacts,checks,gaps,evidenceSeqs}}; {type:"review",decision:"accepted",summary:"...",evidenceSeqs:[]}. Never omit type and never put serialized JSON inside action.type.');
+]).describe('Object with a literal type, e.g. {type:"accept"} or {type:"result",result:{summary,artifacts,checks,gaps,evidenceSeqs}}; never omit type or put JSON inside it.');
 const requestId = z.string().min(1).max(100).regex(/^[A-Za-z0-9._-]+$/);
 export const assignTaskSchema = z.object({
-  requestId: requestId.describe('Stable idempotency key. Reuse the exact same key and payload on retry.'),
-  worker: z.string().min(1).max(100).describe('Exact Hivemind worker name in this project.'),
-  channel: z.string().min(1).max(200).optional().describe('Optional existing channel name/UUID. Omit for the default task DM.'),
-  contract: taskContractSchema.describe('Required structured contract object; never pass contract as a string.'),
-  room: roomTaskSchema.optional().describe('Only for a channel that already has a room contract; copy current contractVersion from get_room and choose a stable actionKey. Omit outside a room.'),
+  requestId: requestId.describe('Idempotency key: reuse the same key and payload on retry.'),
+  worker: z.string().min(1).max(100).describe('Exact worker name in this project.'),
+  channel: z.string().min(1).max(200).optional().describe('Existing channel UUID or name; omit for the default task DM.'),
+  contract: taskContractSchema.describe('Contract object, never a string.'),
+  room: roomTaskSchema.optional().describe('Only in a channel with a room contract: current contractVersion from get_room and a stable actionKey.'),
   executionId: executionIdSchema.optional(),
 }).strict();
 export const taskEventSchema = z.object({
-  requestId: requestId.describe('Stable idempotency key. Reuse the exact same key and payload on retry.'),
-  expectedRevision: z.number().int().positive().safe().describe('Copy the current task.revision from get_task or the latest task event.'),
+  requestId: requestId.describe('Idempotency key: reuse the same key and payload on retry.'),
+  expectedRevision: z.number().int().positive().safe().describe('Current task.revision from get_task or the latest task event.'),
   action: taskActionSchema,
   executionId: executionIdSchema.optional(),
 }).strict();
