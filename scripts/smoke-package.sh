@@ -29,6 +29,39 @@ fi
 
 "$hivemind" --help | grep -q "hivemind"
 
+# The installed package runs compiled JavaScript: no TypeScript sources and no
+# tsx loader, and the printed MCP launcher uses plain node on dist/node/cli.js.
+package_root="$install_root/node_modules/hivemind"
+if [[ ! -f "$package_root/dist/node/cli.js" || -e "$package_root/src" || -e "$install_root/node_modules/tsx" ]]; then
+  echo "Packaged hivemind must ship dist/node/cli.js without src/ or a tsx dependency" >&2
+  exit 1
+fi
+"$hivemind" mcp-config 2>/dev/null | grep -q "dist/node/cli.js"
+
+# One MCP process per agent: the compiled server must answer initialize over stdio.
+PACKAGE_ROOT="$package_root" HIVEMIND_HOME="$home_root" node --input-type=module <<'NODE'
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import path from "node:path";
+const child = spawn(process.execPath, [path.join(process.env.PACKAGE_ROOT, "dist/node/cli.js"), "mcp"], {
+  stdio: ["pipe", "pipe", "inherit"],
+  env: { ...process.env, HIVEMIND_URL: "http://127.0.0.1:1" },
+});
+const reply = await new Promise((resolve, reject) => {
+  const timer = setTimeout(() => reject(new Error("MCP initialize timed out")), 10000);
+  let buffer = "";
+  child.stdout.on("data", (chunk) => {
+    buffer += chunk;
+    const line = buffer.split("\n").find((entry) => entry.includes('"id":1'));
+    if (line) { clearTimeout(timer); resolve(JSON.parse(line)); }
+  });
+  child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "smoke", version: "1" } } }) + "\n");
+});
+child.kill();
+assert.equal(reply.result?.serverInfo?.name, "hivemind");
+console.log("Compiled MCP server answered initialize");
+NODE
+
 port=17420
 server_log="$workdir/server.log"
 HIVEMIND_HOME="$home_root" "$hivemind" serve --port "$port" >"$server_log" 2>&1 &

@@ -10,7 +10,9 @@
   "scripts": {
     "dev": "concurrently -k -n hive,ui -c yellow,cyan \"tsx watch src/cli.ts serve\" \"vite\"",
     "start": "tsx src/cli.ts serve",
-    "build": "vite build",
+    "build": "npm run build:web && npm run build:server",
+    "build:web": "vite build",
+    "build:server": "node scripts/build-server.mjs",
     "mcp": "tsx src/mcp/index.ts",
     "hivemind": "tsx src/cli.ts",
     "test": "node scripts/run-tests.mjs",
@@ -47,7 +49,6 @@
     "@hono/node-server": "^2.1.1",
     "@modelcontextprotocol/sdk": "^1.20.2",
     "hono": "^4.13.8",
-    "tsx": "^4.23.15",
     "ws": "^8.18.3",
     "zod": "^4.6.5"
   },
@@ -59,16 +60,18 @@
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^6.1.1",
     "concurrently": "^10.0.5",
+    "esbuild": "^0.28.2",
     "happy-dom": "20.14.5",
     "oxlint": "1.85.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
+    "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.3.0"
   },
   "files": [
     "bin",
-    "src",
+    "dist/node",
     "dist/web",
     "README.md",
     "BOT-PROTOCOL.md",

@@ -94,6 +94,15 @@ export type AdaptiveExecutionState = {
   confirmationWorkers: number | null;
   eventsSinceChange: number;
   updatedAt: number;
+  /**
+   * False once a newer Human request to the same brain replaced this execution: it is draining its delegated work
+   * (or has finished draining). Absent or true for the brain's current execution in the channel.
+   */
+  current?: boolean;
+  /** Draining executions only: an excerpt of the Human request they serve. */
+  requestExcerpt?: string;
+  /** Draining executions only: delegated work still open (structured tasks and free-form delegations). */
+  openWork?: { tasks: number; delegations: number };
 };
 
 export type AdaptiveAgentPolicy = {
@@ -107,9 +116,12 @@ export type AdaptiveAgentPolicy = {
 };
 
 export type AdaptiveRoutingView = {
-  /** Primary execution in the channel: the most recently updated one still running. */
+  /** Primary execution in the channel: the most recently updated current one still running. */
   state: AdaptiveExecutionState | null;
-  /** One execution per brain that owns a request in this channel. */
+  /**
+   * Every execution in this channel: the current one per brain that owns a request, plus older ones replaced by a
+   * newer request (`current: false`) that are still draining their delegated work or finished draining.
+   */
   executions?: AdaptiveExecutionState[];
   events: AdaptiveRoutingEvent[];
 };

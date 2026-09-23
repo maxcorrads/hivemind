@@ -106,7 +106,7 @@ test("real authenticated sockets isolate backpressure and heartbeat, and shutdow
   const slow = await connect(), healthy = await connect(), unresponsive = await connect(false);
   Object.defineProperty(serverClients[0]!, "bufferedAmount", { configurable: true, get: () => WS_MAX_BUFFERED_BYTES });
   const slowClosed = once(slow, "close"), healthyEvent = once(healthy, "message");
-  hive.bus.emit("queued", { agentId: "human", n: 1 });
+  hive.bus.emit("queued", { agentId: "human", n: 1, inbox: { awaitingReceipt: 0, acknowledgedMessages: 0, lastAcknowledgedAt: null, queued: { atLeast: 1, exact: true } } });
   const [code] = await slowClosed;
   assert.equal(code, 1013);
   assert.equal(JSON.parse(String((await healthyEvent)[0])).type, "queued");

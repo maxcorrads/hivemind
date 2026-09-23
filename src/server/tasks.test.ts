@@ -158,7 +158,7 @@ for (const source of ['private', 'brains'] as const) {
     const membership = () => listRows(f.hive, 'channel_members', { orderBy: ['channel_id', 'agent_id'] });
     const beforeMembership = membership();
     const notifications: string[] = [];
-    for (const name of ['message', 'task', 'channel', 'queued']) f.hive.bus.on(name, () => notifications.push(name));
+    for (const name of ['message', 'task', 'channel', 'queued'] as const) f.hive.bus.on(name, () => notifications.push(name));
     const input = { requestId: 'review-evidence', expectedRevision: before.revision,
       action: { type: 'review', decision: 'changes_requested', summary: 'Add a parser regression', evidenceSeqs: [evidence.seq, privateEvidence.seq] } };
     const app = createApp(f.hive);
@@ -226,7 +226,7 @@ test('accepted review evidence remains reviewer-visible and grants no worker acc
 
 test('assignment failure rolls back the message, task, DM and all notifications', t => {
   const f = fixture(t); const events: string[] = [];
-  for (const name of ['message', 'channel', 'task']) f.hive.bus.on(name, () => events.push(name));
+  for (const name of ['message', 'channel', 'task'] as const) f.hive.bus.on(name, () => events.push(name));
   const before = countRows(f.hive, 'messages');
   failWrites(f.hive, 'task_events', { message: 'fixture failure', persistent: true });
   assert.throws(() => f.assign(), /fixture failure/);
