@@ -4,8 +4,9 @@ import { TimelineStore } from './timeline.ts';
 import { UploadBudget, type UploadLimits } from "./upload-budget.ts";
 import { joinInputSchema, validated, waitDurationSchema, cursorSchema, limitSchema, channelInputSchema, attachmentIdsSchema, memberNamesSchema } from "../shared/api-contract.ts";
 import { SendRequests } from "./send-requests.ts";
-import { pruneTelegramUpdates, telegramQuarantine, retryTelegramUpdate, discardTelegramUpdate, type TelegramUpdateScope } from "./telegram-inbox.ts";
-import { retryTelegramOutboxFailure, pruneTelegramFailures, type TelegramDestination } from "./telegram-outbox.ts";
+import { pruneTelegramUpdates, type TelegramUpdateScope } from "./telegram-inbox.ts";
+import { pruneTelegramFailures, type TelegramDestination } from "./telegram-outbox.ts";
+import { TelegramAdminService } from "./services/telegram-admin.ts";
 import { Storage } from './storage.ts';
 import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync } from "node:fs";
@@ -164,6 +165,7 @@ export class Hive {
   readonly uploads!: UploadBudget;
   private readonly readState!: ReadState;
   readonly storage: Storage;
+  readonly telegramAdmin!: TelegramAdminService;
 
   constructor(dbPath = path.join(hiveHome(), "hive.db"), options: { routineBatchMs?: number; uploadLimits?: Partial<UploadLimits> } = {}) {
     this.home = path.dirname(dbPath);
@@ -182,6 +184,7 @@ export class Hive {
       applyMigrations(this.db);
       this.transaction(() => this.bootstrap());
       this.transaction(() => { pruneTelegramUpdates(this.db); pruneTelegramFailures(this.db); });
+      this.telegramAdmin = new TelegramAdminService({ storage: this.storage, bus: this.bus });
       this.readState = new ReadState(this.db);
       this.sendRequests = new SendRequests(this.db);
       this.uploads = new UploadBudget({ db: this.db, transaction: work => this.transaction(work) }, options.uploadLimits);
@@ -208,13 +211,6 @@ export class Hive {
 
   private afterCommit(effect: () => void): void {
     this.storage.afterCommit(effect);
-  }
-
-  private tableSql(name: string): string {
-    const row = this.db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) as
-      | { sql: string }
-      | undefined;
-    return row?.sql ?? "";
   }
 
   private mapProject(row: ProjectRow): Project {
@@ -340,59 +336,30 @@ export class Hive {
         throw new HiveError(409, `Cannot delete ${project.slug}: ${names} ${verb} still online or waiting`);
       }
 
-      this.db.prepare("DELETE FROM telegram_update_failures WHERE project_id = ?").run(project.id);
-      this.db.prepare("DELETE FROM telegram_update_failures WHERE project_id = ?").run(project.id);
       const channels = this.db.prepare("SELECT id FROM channels WHERE project_id = ?").all(project.id) as { id: string }[];
       const channelIds = channels.map((row) => row.id);
       const goneAgents = this.db.prepare("SELECT id FROM agents WHERE project_id = ? AND id != ?").all(
         project.id,
         HUMAN_ID,
       ) as { id: string }[];
-      const chatIds = new Set<number>();
-      if (opts.telegramChatId != null && Number.isFinite(opts.telegramChatId)) chatIds.add(Number(opts.telegramChatId));
+      this.telegramAdmin.purgeProject(project.id, channelIds, opts.telegramChatId);
 
       if (channelIds.length > 0) {
         const ph = channelIds.map(() => "?").join(",");
-        const chatRows = this.db.prepare(
-          `SELECT telegram_chat_id AS id FROM telegram_out WHERE channel_id IN (${ph})
-           UNION
-           SELECT telegram_chat_id AS id FROM telegram_topics WHERE channel_id IN (${ph})`,
-        ).all(...channelIds, ...channelIds) as { id: number | null }[];
-        for (const row of chatRows) {
-          if (row.id != null) chatIds.add(row.id);
-        }
         this.db.prepare(
           `DELETE FROM reactions WHERE message_id IN (SELECT id FROM messages WHERE channel_id IN (${ph}))`,
         ).run(...channelIds);
         this.db.prepare(
           `DELETE FROM attachments WHERE message_id IN (SELECT id FROM messages WHERE channel_id IN (${ph}))`,
         ).run(...channelIds);
-        this.db.prepare(
-          `DELETE FROM telegram_pending WHERE seq IN (SELECT seq FROM messages WHERE channel_id IN (${ph}))`,
-        ).run(...channelIds);
-        this.db.prepare(`DELETE FROM telegram_out WHERE channel_id IN (${ph})`).run(...channelIds);
-        this.db.prepare(`DELETE FROM telegram_topics WHERE channel_id IN (${ph})`).run(...channelIds);
         this.db.prepare(`DELETE FROM task_records WHERE channel_id IN (${ph})`).run(...channelIds);
         this.db.prepare(`DELETE FROM notification_subscriptions WHERE channel_id IN (${ph})`).run(...channelIds);
         this.db.prepare(`DELETE FROM threads WHERE channel_id IN (${ph})`).run(...channelIds);
         this.db.prepare(`DELETE FROM bot_events WHERE channel_id IN (${ph})`).run(...channelIds);
         this.db.prepare(`DELETE FROM reads WHERE channel_id IN (${ph})`).run(...channelIds);
         this.db.prepare(`DELETE FROM channel_members WHERE channel_id IN (${ph})`).run(...channelIds);
-        for (const table of ["telegram_failures", "telegram_delivery_parts"]) {
-          this.db.prepare(`DELETE FROM ${table} WHERE seq IN (
-            SELECT seq FROM messages WHERE channel_id IN (SELECT id FROM channels WHERE project_id = ?)
-          )`).run(project.id);
-        }
         this.db.prepare(`DELETE FROM messages WHERE channel_id IN (${ph})`).run(...channelIds);
         this.db.prepare(`DELETE FROM channels WHERE id IN (${ph})`).run(...channelIds);
-      }
-
-      const scopedHolds = this.tableSql("telegram_hold").includes("project_id");
-      if (scopedHolds) this.db.prepare("DELETE FROM telegram_hold WHERE project_id = ?").run(project.id);
-      for (const chatId of chatIds) {
-        if (!scopedHolds) this.db.prepare("DELETE FROM telegram_hold WHERE telegram_chat_id = ?").run(chatId);
-        this.db.prepare("DELETE FROM telegram_state WHERE key = ?").run(`mute:${chatId}`);
-        if (this.tableSql("telegram_bot_state")) this.db.prepare("DELETE FROM telegram_bot_state WHERE key = ?").run(`mute:${chatId}`);
       }
 
       for (const agent of goneAgents) {
@@ -414,107 +381,18 @@ export class Hive {
     this.bus.emit("project", { deleted: project.slug });
   }
 
-  private telegramHealthSignature = "";
-
-  telegramOutboxHealth() {
-    return {
-      failures: this.telegramFailureCount(),
-      diagnosticsPruned: Number((this.db.prepare("SELECT value FROM telegram_state WHERE key = 'outbox:diagnostics_pruned'").get() as { value: string } | undefined)?.value ?? 0),
-    };
-  }
-
-  telegramPollHealth() {
-    const bot = (this.db.prepare("SELECT value FROM telegram_state WHERE key = 'inbound:active_bot'").get() as { value: string } | undefined)?.value;
-    const read = (key: string) => bot && this.tableSql("telegram_bot_state")
-      ? (this.db.prepare("SELECT value FROM telegram_bot_state WHERE bot_key = ? AND key = ?").get(bot, key) as { value: string } | undefined)?.value
-      : undefined;
-    return {
-      lastSuccessAt: Number(read("poll:last_success")) || null,
-      lastError: (this.db.prepare("SELECT value FROM telegram_state WHERE key = 'inbound:configuration_error'").get() as { value: string } | undefined)?.value || read("poll:last_error") || null,
-      quarantined: (this.db.prepare("SELECT COUNT(*) AS n FROM telegram_update_failures WHERE state = 'quarantined'").get() as { n: number }).n,
-      retrying: (this.db.prepare("SELECT COUNT(*) AS n FROM telegram_update_failures WHERE state = 'retry'").get() as { n: number }).n,
-      inboundDiagnosticsPruned: Number((this.db.prepare("SELECT value FROM telegram_state WHERE key = 'inbound:diagnostics_pruned'").get() as { value: string } | undefined)?.value ?? 0),
-    };
-  }
-
-  telegramHealth() {
-    const revision = Number((this.db.prepare("SELECT value FROM telegram_state WHERE key = 'health:revision'").get() as { value: string } | undefined)?.value ?? 0);
-    return { ...this.telegramOutboxHealth(), ...this.telegramPollHealth(), revision };
-  }
-
-  publishTelegramHealth() {
-    const health = this.telegramHealth();
-    // Successful poll timestamps are stored, but do not broadcast an otherwise unchanged status.
-    const { lastSuccessAt: _lastSuccessAt, revision: _revision, ...status } = health;
-    const signature = JSON.stringify(status);
-    if (signature === this.telegramHealthSignature) return;
-    this.telegramHealthSignature = signature;
-    const revision = health.revision + 1;
-    this.db.prepare("INSERT INTO telegram_state(key, value) VALUES('health:revision', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(revision));
-    this.bus.emit("telegram-health", { ...health, revision });
-  }
-
-  telegramQuarantine(limit = 50) { return telegramQuarantine(this.db, limit); }
-  retryTelegramUpdate(id: string, matchesScope: (scope: TelegramUpdateScope) => boolean) {
-    retryTelegramUpdate(this.db, id, matchesScope);
-    this.bus.emit("telegram-inbox-wake");
-    this.publishTelegramHealth();
-  }
-  discardTelegramUpdate(id: string) {
-    discardTelegramUpdate(this.db, id);
-    this.bus.emit("telegram-inbox-wake");
-    this.publishTelegramHealth();
-  }
-
-  telegramFailureCount(): number {
-    return (this.db.prepare("SELECT COUNT(*) AS n FROM telegram_failures WHERE resolved_at IS NULL").get() as { n: number }).n;
-  }
-
-  telegramFailures(limit = 50): Array<{
-    id: string;
-    seq: number;
-    kind: string;
-    telegramChatId: number | null;
-    reason: string;
-    attempts: number;
-    createdAt: number;
-  }> {
-    const rows = this.db.prepare(
-      `SELECT id, seq, kind, telegram_chat_id AS telegramChatId, reason, attempts, created_at AS createdAt
-       FROM telegram_failures WHERE resolved_at IS NULL ORDER BY created_at DESC LIMIT ?`,
-    ).all(Number.isSafeInteger(limit) ? Math.min(Math.max(1, limit), 200) : 50) as Array<{
-      id: string;
-      seq: number;
-      kind: string;
-      telegramChatId: number | null;
-      reason: string;
-      attempts: number;
-      createdAt: number;
-    }>;
-    return rows;
-  }
-
-  retryTelegramFailure(id: string, destination: (seq: number) => TelegramDestination | undefined): void {
-    retryTelegramOutboxFailure(this.db, id, destination);
-    // Retry is durable before its dispatcher is woken.
-    this.bus.emit("telegram-outbox-wake");
-    this.publishTelegramHealth();
-  }
-
-  discardTelegramFailure(id: string): void {
-    const changed = this.db.prepare(
-      "UPDATE telegram_failures SET resolved_at = ?, resolution = 'discarded' WHERE id = ? AND resolved_at IS NULL",
-    ).run(now(), id).changes;
-    if (!changed) throw new HiveError(404, "Telegram failure not found");
-    this.publishTelegramHealth();
-  }
-
-  forgetTelegramChat(chatId: number) {
-    if (!Number.isFinite(chatId)) return;
-    this.db.prepare("DELETE FROM telegram_hold WHERE telegram_chat_id = ?").run(chatId);
-    this.db.prepare("DELETE FROM telegram_state WHERE key = ?").run(`mute:${chatId}`);
-        if (this.tableSql("telegram_bot_state")) this.db.prepare("DELETE FROM telegram_bot_state WHERE key = ?").run(`mute:${chatId}`);
-  }
+  telegramOutboxHealth() { return this.telegramAdmin.outboxHealth(); }
+  telegramPollHealth() { return this.telegramAdmin.pollHealth(); }
+  telegramHealth() { return this.telegramAdmin.health(); }
+  publishTelegramHealth() { this.telegramAdmin.publishHealth(); }
+  telegramQuarantine(limit?: number) { return this.telegramAdmin.quarantine(limit); }
+  retryTelegramUpdate(id: string, matchesScope: (scope: TelegramUpdateScope) => boolean) { this.telegramAdmin.retryUpdate(id, matchesScope); }
+  discardTelegramUpdate(id: string) { this.telegramAdmin.discardUpdate(id); }
+  telegramFailureCount(): number { return this.telegramAdmin.failureCount(); }
+  telegramFailures(limit?: number) { return this.telegramAdmin.failures(limit); }
+  retryTelegramFailure(id: string, destination: (seq: number) => TelegramDestination | undefined): void { this.telegramAdmin.retryFailure(id, destination); }
+  discardTelegramFailure(id: string): void { this.telegramAdmin.discardFailure(id); }
+  forgetTelegramChat(chatId: number) { this.telegramAdmin.forgetChat(chatId); }
 
   private bootstrap() {
     const existing = this.db.prepare("SELECT id FROM agents WHERE id = ?").get(HUMAN_ID);

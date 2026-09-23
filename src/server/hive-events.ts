@@ -4,11 +4,11 @@ import type { TaskSnapshot } from "../shared/tasks.ts";
 import type { DecisionView } from "../shared/decisions.ts";
 import type { AdaptiveExecutionState, AdaptiveRoutingEvent } from "../shared/adaptive-topology.ts";
 import type { JevCallSummary } from "../shared/jev-calls.ts";
-import type { Hive } from "./hive.ts";
+import type { TelegramAdminService } from "./services/telegram-admin.ts";
 import type { Storage } from "./storage.ts";
 
 /** Telegram delivery and polling health as published to the UI. */
-export type TelegramHealthEvent = ReturnType<Hive["telegramHealth"]>;
+export type TelegramHealthEvent = ReturnType<TelegramAdminService["health"]>;
 
 /**
  * Every event published on `Hive.bus`, keyed by name, with its payload type.
