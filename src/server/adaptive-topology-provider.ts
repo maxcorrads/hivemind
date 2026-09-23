@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { TYPESAFE_ENDPOINT, TYPESAFE_MODEL } from './adaptive-routing.ts';
+import { TYPESAFE_ENDPOINT, TYPESAFE_MODEL } from './adaptive-config.ts';
 import type { AdaptiveTopology, AdaptiveTopologyDecision, AdaptiveWorkerCapacity, AdaptiveLockScope } from '../shared/adaptive-topology.ts';
 import { validTopologyTarget } from '../shared/adaptive-topology-policy.ts';
 

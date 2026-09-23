@@ -1,6 +1,6 @@
 # Reproducible checks
 
-Primary PR CI runs on Ubuntu with Node 22.13.0 and Node 24, plus one focused
+Primary PR CI runs on Ubuntu with Node 22.13.0, the latest Node 22.x and Node 24, plus one focused
 macOS compatibility job for the native zsh/Terminal-launch shell contracts. For a
 full local check, install the Node version under test, npm, zsh and Chromium, then:
 
@@ -23,6 +23,7 @@ its effective scope:
   the much smaller hosted macOS concurrency pool.
 - Node 24 unit and four historically timing-balanced integration shards run independently.
 - Node 22.13.0 runs the same full unit/integration scope with four timing-balanced integration shards; Ubuntu concurrency now makes the full 4-way split useful without the former macOS queue penalty.
+- The same Node 22 unit/integration matrix also runs on `22.x` (latest Node 22 release) next to the 22.13.0 engines floor, so changes to the still-experimental `node:sqlite` in newer Node 22 minors surface in CI. Both lanes feed the `Tests / Node 22.13.0` gate.
 - The existing required gate names `Tests / Node 24` and `Tests / Node 22.13.0`
   are aggregation jobs over all corresponding shards. `Tests / Node 24` also
   requires `Browser / Chromium`, so a failing browser contract blocks merging
