@@ -118,15 +118,19 @@ async function responseJson(response: Response): Promise<unknown> {
 export async function evaluateAdaptiveTopology(
   snapshot: TopologyEvaluationSnapshot,
   config: { apiKey: string },
-  options: { fetchImpl?: typeof fetch; timeoutMs?: number; signal?: AbortSignal } = {},
+  options: { fetchImpl?: typeof fetch; timeoutMs?: number; signal?: AbortSignal;
+    /** Receives the exact request body (never the key) and the parsed response, for the Human-only call log. */
+    onExchange?: (exchange: { sent: unknown | null; received: unknown | null; error: string | null }) => void } = {},
 ): Promise<AdaptiveTopologyDecision> {
   const routeId = `route-${randomUUID()}`;
   const started = Date.now();
+  let sent: unknown | null = null, received: unknown | null = null;
   try {
     const timeout = options.timeoutMs ?? 2_000;
     ensure(Number.isSafeInteger(timeout) && timeout >= 1 && timeout <= 10_000);
     const { questions, topologies, budgets, usable } = topologyQuestions(snapshot);
-    const body = JSON.stringify({ state: snapshot, model: TYPESAFE_MODEL, questions });
+    sent = { state: snapshot, model: TYPESAFE_MODEL, questions };
+    const body = JSON.stringify(sent);
     ensure(Buffer.byteLength(body) <= 64 * 1024, 'Routing snapshot exceeds budget');
     const deadline = AbortSignal.timeout(timeout);
     const response = await (options.fetchImpl ?? fetch)(TYPESAFE_ENDPOINT, {
@@ -136,6 +140,7 @@ export async function evaluateAdaptiveTopology(
     });
     if (!response.ok) { await response.body?.cancel().catch(() => undefined); throw new Error(`http_${response.status}`); }
     const raw = await responseJson(response);
+    received = raw;
     ensure(raw && typeof raw === 'object' && !Array.isArray(raw));
     const envelope = raw as { model?: unknown; answers?: Record<string, unknown>; usage?: { input_tokens?: unknown; output_tokens?: unknown } };
     ensure(typeof envelope.model === 'string' && envelope.model.length > 0 && envelope.model.length <= 200);
@@ -155,6 +160,7 @@ export async function evaluateAdaptiveTopology(
     const singleSufficient = sufficiency.choice === 'sufficient';
     ensure(blocked || targetTopology !== 'single' || singleSufficient || usable === 0, 'Contradictory Single decision');
     const confidence = Math.min(sufficiency.confidence, topology.confidence, ...scores.map(s => s.confidence), ...(budget ? [budget.confidence] : []));
+    options.onExchange?.({ sent, received, error: null });
     return {
       routeId, contractVersion: ADAPTIVE_TOPOLOGY_CONTRACT_VERSION,
       targetTopology, targetWorkers, confidence,
@@ -167,6 +173,8 @@ export async function evaluateAdaptiveTopology(
     };
   } catch (error) {
     const timeout = error instanceof Error && ['AbortError', 'TimeoutError'].includes(error.name);
+    // Only local failure classes are kept: never a provider error body or header.
+    options.onExchange?.({ sent, received, error: timeout ? 'timeout' : error instanceof Error ? error.message.slice(0, 200) : 'unknown' });
     return {
       routeId, contractVersion: ADAPTIVE_TOPOLOGY_CONTRACT_VERSION,
       targetTopology: snapshot.current?.topology ?? 'single', targetWorkers: snapshot.current?.workerBudget ?? 0,
