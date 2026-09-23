@@ -1,6 +1,7 @@
 import { expect, test, type Page, type Route, type WebSocketRoute } from '@playwright/test';
 import type { Agent, Channel, Message, Project } from '../../src/shared/types.ts';
 import type { TaskSnapshot } from '../../src/shared/tasks.ts';
+import type { TimelineView } from '../../src/shared/timeline.ts';
 import type { ChannelPayload, Snapshot } from '../../web/api.ts';
 
 function deferred() {
@@ -96,6 +97,11 @@ async function fixture(page: Page, inThread: boolean) {
   await page.route('**/api/ui/mentions?*', route => json(route, { ...snap(), messages: [], hasMore: false }));
   await page.route('**/api/ui/channels/*/room', route => json(route, { room: null, tasks: [], activeTaskCount: 0,
     tasksHasMore: false, nextTaskCursor: null, links: [], unmanagedBots: [] }));
+  // Mounting TaskCard also mounts its timeline. Keep this expected read local;
+  // the catch-all above must still fail any genuinely unexpected API request.
+  const timeline: TimelineView = { traceId: root.id, taskId: root.id,
+    truncated: false, warning: 'Synthetic fixture timeline', events: [] };
+  await page.route('**/api/ui/tasks/root/timeline', route => json(route, { timeline }));
   await page.route('**/api/ui/channels/*/messages*', async route => {
     const url = new URL(route.request().url());
     if (url.pathname.includes('/channels/b/')) return json(route, data([{ ...message('beta', 200, null, 'Other conversation'), channelId: b.id }], null, b));
