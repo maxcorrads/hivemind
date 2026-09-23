@@ -12,7 +12,7 @@ import { telegramDestinationForSeq, loadTelegramConfig, telegramConfigKey, publi
 import { parseProjectSlug } from "../shared/project.ts";
 import { launchContext, projectPlugins, saveProjectPlugin, setProjectPluginAvailability, pluginErrorMessage } from "./plugins.ts";
 import { BotIngressBudget, readLimitedJson, assertLocalHumanRequest, BOT_JSON_BYTES, PLUGIN_REQUEST_BYTES, CREDENTIAL_JSON_BYTES } from "./ingress.ts";
-import { adaptiveRoutingPublic, saveAdaptiveRouting, shouldRouteHumanMessage } from "./adaptive-routing.ts";
+import { adaptiveRoutingPublic, saveAdaptiveRouting } from "./adaptive-routing.ts";
 import { installJevDiagnostics } from './adaptive-routing-diagnostics.ts';
 import { assignAdaptiveTask, mutateAdaptiveTask, mutateAdaptiveRoom, sendAdaptiveAgentMessage, setAdaptiveThreadStatus } from './adaptive-topology-actions.ts';
 
@@ -225,14 +225,12 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       attachmentIds: Array.isArray(body.attachmentIds) ? body.attachmentIds.map(String) : undefined };
     if (hive.hasActiveSendRequest(human, channel.id, body.requestId))
       return c.json({ message: hive.postMessage(human, messageInput), routing: null, adaptiveState: null });
-    const brainIds = new Set(hive.listAgents(human).filter(agent => agent.role === 'brain' && agent.project === channel.project).map(agent => agent.id));
-    const candidate = shouldRouteHumanMessage(channel, originalBody, threadId, brainIds);
-    const mode = String(body.routing ?? 'auto'), scope = String(body.lockScope ?? 'none');
-    if ((mode !== 'auto' || scope !== 'none') && !candidate) throw new HiveError(400, 'Explicit routing is only valid for a top-level Human-to-brain DM');
-    if (!candidate) return c.json({ message: hive.postMessage(human, messageInput), routing: null, adaptiveState: null });
-    const routed = await hive.adaptiveTopology.routeHumanRequest(human, messageInput, mode, scope);
+    // Every Human message addressed to a brain, in any channel or thread, passes through Jev first.
+    const routed = await hive.adaptiveTopology.routeHumanRequest(human, messageInput,
+      String(body.routing ?? 'auto'), String(body.lockScope ?? 'none'));
     if (!routed) return c.json({ message: hive.postMessage(human, messageInput), routing: null, adaptiveState: null });
-    return c.json({ message: routed.message, routing: routed.routing, routingMessage: routed.routingMessage, adaptiveState: routed.state });
+    return c.json({ message: routed.message, routing: routed.routing, routingMessage: routed.routingMessage,
+      routingMessages: routed.routingMessages, adaptiveState: routed.state, adaptiveStates: routed.states });
   });
   ui.post('/files', async c => {
     const human = hive.getAgent('human'), name = c.req.header('x-file-name') || 'paste.png';
@@ -310,9 +308,10 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   });
   agent.get('/me', c => {
     const me = c.get('me'), adaptiveRouting = hive.adaptiveTopology.forAgent(me) ?? undefined;
-    if (c.req.query('orders') === '1') return c.json({ you: me, standingOrders: standingOrders(me), adaptiveRouting });
+    const executions = hive.adaptiveTopology.policiesFor(me), adaptiveExecutions = executions.length ? executions : undefined;
+    if (c.req.query('orders') === '1') return c.json({ you: me, standingOrders: standingOrders(me), adaptiveRouting, adaptiveExecutions });
     return c.json({ you: { name: me.name, role: me.role, seniority: me.seniority, focus: me.focus, online: me.online, project: me.project },
-      ordersRef: 'unchanged', adaptiveRouting });
+      ordersRef: 'unchanged', adaptiveRouting, adaptiveExecutions });
   });
   agent.get('/agents', c => c.json({ agents: hive.listAgents(c.get('me')).map(({ createdAt: _c, ...a }) => a) }));
   agent.get('/search', c => {
@@ -403,7 +402,9 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     if (body?.sessionId == null) throw new HiveError(409, 'HTTP 409: Inbox delivery protocol changed. Restart the Hivemind MCP client and rejoin. HTTP/CLI clients must open an inbox session and include sessionId in wait. Do not retry this wait unchanged.');
     if (typeof body.sessionId !== 'string') throw new HiveError(400, 'Expected sessionId');
     const result = await hive.wait(me, Number(body.timeoutMs ?? DEFAULT_WAIT_MS), c.req.raw.signal, { compact: Boolean(body.compact), sessionId: body.sessionId });
-    return c.json({ ...result, adaptiveRouting: hive.adaptiveTopology.forAgent(me) ?? undefined });
+    const executions = hive.adaptiveTopology.policiesFor(me);
+    return c.json({ ...result, adaptiveRouting: hive.adaptiveTopology.forAgent(me) ?? undefined,
+      adaptiveExecutions: executions.length ? executions : undefined });
   });
   agent.post('/inbox/session', async c => {
     const body = await requestJson(c.req.raw);

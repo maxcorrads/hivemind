@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { BODY_MAX, DEFAULT_WAIT_MS, FILE_MAX_BYTES, HiveError, MESSAGE_EVENT_TYPES } from "./types.ts";
-import { requestIdSchema } from "./mutation.ts";
+import { executionIdSchema, requestIdSchema } from "./mutation.ts";
 
 export const API_JSON_BYTES = 128 * 1024;
 export const MAX_WAIT_MS = DEFAULT_WAIT_MS; // Preserve the existing 25-minute long poll.
@@ -32,8 +32,9 @@ export const sendInputSchema = z.object({
   threadId: z.string().uuid().nullish(), eventType: z.enum(MESSAGE_EVENT_TYPES).optional(),
   traceId: z.string().uuid().optional(), causeMessageId: z.string().uuid().optional(),
   recipients: memberNamesSchema.min(1).optional(), attachmentIds: attachmentIdsSchema.optional(),
+  executionId: executionIdSchema.optional(),
 }).strict();
-export const humanSendInputSchema = sendInputSchema.extend({
+export const humanSendInputSchema = sendInputSchema.omit({ executionId: true }).extend({
   routing: z.enum([
     "auto",
     "single",

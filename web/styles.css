@@ -531,6 +531,23 @@ html.dark .routing-lock-mode { background: var(--desk); }
   font-size: 0.76rem;
 }
 .routing-event.transition { font-weight: 700; }
+.routing-event.observation { font-style: italic; opacity: 0.8; }
+.routing-executions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0 1rem;
+}
+.routing-executions button {
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 0.75rem;
+}
+.routing-executions button[aria-selected="true"] {
+  background: color-mix(in srgb, var(--moss) 14%, transparent);
+  font-weight: 700;
+}
 .routing-event.warning { background: color-mix(in srgb, var(--wax) 10%, transparent); }
 .routing-event time { flex: none; opacity: 0.6; }
 .send {

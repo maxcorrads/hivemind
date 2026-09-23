@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { HiveError, type Channel } from "../shared/types.ts";
+import { HiveError } from "../shared/types.ts";
 import type { AdaptiveTopology } from "../shared/adaptive-topology.ts";
 
 export const ADAPTIVE_ROUTING_CONFIG_VERSION = 1;
@@ -440,11 +440,6 @@ export function adaptiveDirective(decision: AdaptiveRoutingDecision): string {
     "Coordinate this Human request and delegate to workers when useful. Preserve normal Hivemind task/room authority.",
     decision.fallbackUsed ? `The router used its conservative fallback (${decision.reason}).` : "",
   ].filter(Boolean).join("\n");
-}
-
-export function shouldRouteHumanMessage(channel: Channel, _body: string, threadId: string | null, brainIds: Set<string>): boolean {
-  if (threadId !== null || channel.type !== "dm") return false;
-  return channel.memberIds.some(id => brainIds.has(id));
 }
 
 function telemetryRecord(decision: AdaptiveRoutingDecision, body: string, project: { id: string; slug: string }) {

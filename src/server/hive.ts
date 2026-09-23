@@ -1438,21 +1438,23 @@ export class Hive {
       recipients?: string[];
       source?: "hive" | "telegram";
     },
-    directive: string,
-    directiveRequestId: string,
+    directives: Array<{ body: string; requestId: string; recipients?: string[] }>,
     persistReceipt?: (message: Message) => void,
-    persistRouting?: (message: Message, routingMessage: Message) => void,
-  ): { message: Message; routingMessage: Message } {
+    persistRouting?: (message: Message) => void,
+  ): { message: Message; routingMessages: Message[] } {
     return this.transaction(() => {
-      const routingMessage = this.postMessage(actor, {
+      // One directive per owning brain, in the request's thread, immediately before the request.
+      const routingMessages = directives.map(directive => this.postMessage(actor, {
         channel: input.channel,
-        body: directive,
-        requestId: directiveRequestId,
+        body: directive.body,
+        requestId: directive.requestId,
+        threadId: input.threadId ?? null,
+        recipients: directive.recipients,
         eventType: "assignment",
-      });
+      }));
       const message = this.postMessage(actor, input, persistReceipt);
-      persistRouting?.(message, routingMessage);
-      return { message, routingMessage };
+      persistRouting?.(message);
+      return { message, routingMessages };
     });
   }
 

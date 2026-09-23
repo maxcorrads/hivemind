@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { roomTaskSchema, type RoomTask } from './rooms.ts';
+import { executionIdSchema } from './mutation.ts';
 import { claimActions, isClaimAction, type TaskClaim, type TaskCoordinationView } from './task-claims.ts';
 
 const text = z.string().trim().min(1).max(700)
@@ -78,11 +79,13 @@ export const assignTaskSchema = z.object({
   channel: z.string().min(1).max(200).optional().describe('Optional existing channel name/UUID. Omit for the default task DM.'),
   contract: taskContractSchema.describe('Required structured contract object; never pass contract as a string.'),
   room: roomTaskSchema.optional().describe('Only for a channel that already has a room contract; copy current contractVersion from get_room and choose a stable actionKey. Omit outside a room.'),
+  executionId: executionIdSchema.optional(),
 }).strict();
 export const taskEventSchema = z.object({
   requestId: requestId.describe('Stable idempotency key. Reuse the exact same key and payload on retry.'),
   expectedRevision: z.number().int().positive().safe().describe('Copy the current task.revision from get_task or the latest task event.'),
   action: taskActionSchema,
+  executionId: executionIdSchema.optional(),
 }).strict();
 export type TaskContract = z.infer<typeof taskContractSchema>;
 export type TaskResult = z.infer<typeof taskResultSchema>;

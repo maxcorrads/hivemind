@@ -36,12 +36,13 @@ export function useAdaptiveRouting(channelId: string | null) {
     return () => { generation.current++; request.current?.abort(); };
   }, [channelId, refresh]);
 
-  const onEvent = useCallback((payload: { channelId: string; event: AdaptiveRoutingEvent; state: AdaptiveExecutionState }) => {
-    if (payload.state.channelId !== payload.channelId || payload.event.channelId !== payload.channelId) return;
+  // Observations (no single owning brain) carry an audit event without an execution state.
+  const onEvent = useCallback((payload: { channelId: string; event: AdaptiveRoutingEvent; state: AdaptiveExecutionState | null }) => {
+    if ((payload.state && payload.state.channelId !== payload.channelId) || payload.event.channelId !== payload.channelId) return;
     merge({ state: payload.state, events: [payload.event] }, payload.channelId);
   }, [merge]);
   const onChange = useCallback((next: AdaptiveRoutingView) => {
-    const target = next.state?.channelId;
+    const target = next.state?.channelId ?? next.executions?.[0]?.channelId;
     if (target) merge(next, target);
   }, [merge]);
   return { view: stored?.channelId === channelId ? stored.view : null, error, refresh, onEvent, onChange };

@@ -73,12 +73,12 @@ test("production MCP schemas and calls retain their observable contracts", { tim
       channels: [[], { unread: "boolean" }],
       search: [["q"], { q: "string", channel: "string", limit: "integer", before: "integer" }],
       history: [["channel"], { channel: "string", threadId: "string", limit: "integer", since: "integer", before: "integer", meta: "boolean" }],
-      send: [["body"], { requestId: "string", body: "string", channel: "string", to: "string", threadId: "string", attachmentIds: "array", recipients: "array", eventType: "string", traceId: "string", causeMessageId: "string" }],
+      send: [["body"], { requestId: "string", body: "string", channel: "string", to: "string", threadId: "string", attachmentIds: "array", recipients: "array", eventType: "string", traceId: "string", causeMessageId: "string", executionId: "string" }],
       create_channel: [["name"], { name: "string", type: "string", topic: "string", members: "array" }],
       set_thread_status: [["threadId", "status"], { threadId: "string", status: "string" }],
       invite: [["channel", "members"], { channel: "string", members: "array" }],
       clear_context: [["agent"], { agent: "string" }],
-      attach: [["path"], { requestId: "string", path: "string", body: "string", channel: "string", to: "string", threadId: "string", mime: "string", recipients: "array", eventType: "string", traceId: "string", causeMessageId: "string" }],
+      attach: [["path"], { requestId: "string", path: "string", body: "string", channel: "string", to: "string", threadId: "string", mime: "string", recipients: "array", eventType: "string", traceId: "string", causeMessageId: "string", executionId: "string" }],
       fetch_file: [[], { id: "string", seq: "integer", index: "integer" }],
       react: [["seq", "emoji"], { seq: "integer", emoji: "string", present: "boolean" }],
       ack_delivery: [["deliveryId"], { deliveryId: "string" }],
@@ -88,9 +88,9 @@ test("production MCP schemas and calls retain their observable contracts", { tim
       reset_subscription: [["channel"], { channel: "string", threadId: "string" }],
       get_room: [["channel"], { channel: "string", history: "boolean", beforeRevision: "integer", beforeTask: "string" }],
       room_event: [["channel", "requestId", "expectedRevision", "action"], {
-        channel: "string", requestId: "string", expectedRevision: "integer", humanInstructionSeq: "integer", action: "union",
+        channel: "string", requestId: "string", expectedRevision: "integer", humanInstructionSeq: "integer", action: "union", executionId: "string",
       }],
-      assign_task: [["requestId", "worker", "contract"], { requestId: "string", worker: "string", channel: "string", contract: "object", room: "object" }],
+      assign_task: [["requestId", "worker", "contract"], { requestId: "string", worker: "string", channel: "string", contract: "object", room: "object", executionId: "string" }],
       request_human_decision: [["requestId", "taskId", "expectedTaskRevision", "question", "options", "recommendation", "evidenceSeqs", "artifacts", "affectedWorkers", "relatedDecisionIds"], {
         requestId: "string", taskId: "string", expectedTaskRevision: "integer", question: "string",
         options: "array-object", recommendation: "union", evidenceSeqs: "array-integer", artifacts: "array",
@@ -107,7 +107,7 @@ test("production MCP schemas and calls retain their observable contracts", { tim
       get_handoff: [["taskId"], { taskId: "string" }],
       get_handoffs: [[], { beforeTask: "string" }],
       preview_task_claim: [["taskId", "paths"], { taskId: "string", paths: "array" }],
-      task_event: [["taskId", "requestId", "expectedRevision", "action"], { taskId: "string", requestId: "string", expectedRevision: "integer", action: "union" }],
+      task_event: [["taskId", "requestId", "expectedRevision", "action"], { taskId: "string", requestId: "string", expectedRevision: "integer", action: "union", executionId: "string" }],
     };
     assert.deepEqual(tools.map((tool) => tool.name).sort(), Object.keys(expected).sort());
     for (const tool of tools) {

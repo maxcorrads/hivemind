@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { executionIdSchema } from './mutation.ts';
 
 const short = z.string().trim().min(1).max(700);
 const lines = z.array(z.string().trim().min(1).max(240)).max(8);
@@ -22,7 +23,7 @@ export const roomActionSchema = z.discriminatedUnion('type', [
 ]);
 export const roomEventSchema = z.object({ requestId: roomRequestId,
   expectedRevision: z.number().int().nonnegative().safe(), humanInstructionSeq: z.number().int().positive().safe().optional(),
-  action: roomActionSchema }).strict();
+  action: roomActionSchema, executionId: executionIdSchema.optional() }).strict();
 export const roomTaskSchema = z.object({ contractVersion: z.number().int().positive().safe(), actionKey: roomRequestId }).strict();
 export type RoomContract = z.infer<typeof roomContractSchema>;
 export type RoomTask = { channelId: string; contractVersion: number; currentVersion: number; roomRevision: number; actionKey: string;

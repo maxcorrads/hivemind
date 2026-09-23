@@ -9,9 +9,9 @@ import { jevTopologyResponse } from "./fixtures/jev-topology.ts";
 import {
   adaptiveDirective, adaptiveRoutingPublic, appendAdaptiveTelemetry,
   decideAdaptiveStrategy, evaluateAdaptiveRequest, loadAdaptiveRouting,
-  saveAdaptiveRouting, shouldRouteHumanMessage,
+  saveAdaptiveRouting,
 } from "./adaptive-routing.ts";
-import type { Channel, Message } from "../shared/types.ts";
+import type { Message } from "../shared/types.ts";
 import type { AdaptiveTopologyDecision, AdaptiveExecutionState } from "../shared/adaptive-topology.ts";
 
 function score(value: number, confidence = 0.9) {
@@ -99,16 +99,6 @@ test("v1 evaluator retains configurable failure fallback", async () => {
   assert.match(adaptiveDirective(single), /SINGLE/);
 });
 
-test("only new top-level Human messages in a brain DM start adaptive execution", () => {
-  const channel: Channel = { id: "dm", name: "Human, Brain", type: "dm", topic: null,
-    memberIds: ["human", "brain-id"], projectId: "project-id", project: "chapter", createdBy: "human", createdAt: 1 };
-  const brains = new Set(["brain-id"]);
-  assert.equal(shouldRouteHumanMessage(channel, "Do this", null, brains), true);
-  assert.equal(shouldRouteHumanMessage(channel, "Do this", "thread-id", brains), false);
-  assert.equal(shouldRouteHumanMessage(channel, "   ", null, brains), true);
-  assert.equal(shouldRouteHumanMessage({ ...channel, type: "public" }, "Do this", null, brains), false);
-});
-
 test("enabled topology routing changes real Human delivery while disabled Auto and send retries preserve legacy mail", async t => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-routing-http-"));
   const hive = new Hive(path.join(dir, "hive.db"));
@@ -180,7 +170,17 @@ test("enabled topology routing changes real Human delivery while disabled Auto a
   assert.equal(calls, 1, "A committed send retry must not reclassify");
   const reply = await send({ body: "Thread clarification", threadId: activeJson.message.id, requestId: "reply-request" });
   assert.equal(reply.status, 200);
-  assert.equal(calls, 1, "A Human reply must not start a second execution");
+  const replied = await reply.json() as { routing: unknown; message: Message };
+  assert.equal(replied.routing, null, "A Human reply revalidates in place instead of starting a second execution");
+  assert.equal(replied.message.threadId, activeJson.message.id);
+  assert.equal(calls, 2, "A Human reply is evaluated by Jev before delivery");
+  const view = hive.adaptiveTopology.view(human, dm.id);
+  assert.equal(view.executions?.length, 1);
+  assert.equal(view.state?.executionId, activeJson.adaptiveState.executionId);
+  assert.equal(view.events.at(-1)?.kind, "evaluation");
+  const replayed = await send({ body: "Thread clarification", threadId: activeJson.message.id, requestId: "reply-request" });
+  assert.equal(replayed.status, 200);
+  assert.equal(calls, 2, "A committed reply retry must not reclassify");
 });
 
 test("public settings and private telemetry never expose the saved key or duplicate request text", () => {

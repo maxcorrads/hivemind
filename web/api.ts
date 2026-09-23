@@ -205,7 +205,9 @@ export const api = {
       message: Message;
       routing: AdaptiveTopologyDecision | null;
       routingMessage?: Message;
+      routingMessages?: Message[];
       adaptiveState?: AdaptiveExecutionState | null;
+      adaptiveStates?: AdaptiveExecutionState[];
     }>(`/api/ui/channels/${encodeURIComponent(id)}/messages`, {
       method: "POST",
       body: JSON.stringify({ body, threadId: threadId ?? null, attachmentIds, requestId, routing, lockScope }),

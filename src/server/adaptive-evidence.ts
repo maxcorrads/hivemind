@@ -24,13 +24,14 @@ function pruneAttempts(db: DatabaseSync, executionId: string): number {
 function pruneRuns(db: DatabaseSync, scope: EvidenceScope): void {
   const hasExecutions = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='adaptive_topology_executions'").get();
   const active = hasExecutions ? db.prepare(`SELECT execution_id FROM adaptive_topology_executions
-    WHERE channel_id=? AND json_extract(snapshot, '$.completedAt') IS NULL`).get(scope.channelId) : undefined;
-  // Rejected initial requests must not evict the execution that still owns the channel.
-  // Both it and the attempt being recorded count toward the hard per-channel limit.
+    WHERE channel_id=? AND json_extract(snapshot, '$.completedAt') IS NULL`).all(scope.channelId).map(row => String(row.execution_id)) : [];
+  // Rejected initial requests must not evict the executions that still own the channel (one per brain).
+  // They and the attempt being recorded count toward the hard per-channel limit.
   db.prepare(`DELETE FROM adaptive_evidence_runs WHERE channel_id=? AND execution_id NOT IN
     (SELECT execution_id FROM adaptive_evidence_runs WHERE channel_id=?
-      ORDER BY (execution_id IN (?,?)) DESC, json_extract(snapshot, '$.lastRecordedAt') DESC, rowid DESC LIMIT ?)`)
-    .run(scope.channelId, scope.channelId, String(active?.execution_id ?? ''), scope.executionId, EVIDENCE_RUN_LIMIT);
+      ORDER BY (execution_id=? OR execution_id IN (SELECT value FROM json_each(?))) DESC,
+        json_extract(snapshot, '$.lastRecordedAt') DESC, rowid DESC LIMIT ?)`)
+    .run(scope.channelId, scope.channelId, scope.executionId, JSON.stringify(active), EVIDENCE_RUN_LIMIT);
 }
 const safeInt = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) >= 0;
 const duration = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0;

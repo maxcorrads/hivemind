@@ -1,5 +1,5 @@
 import { Modal } from "./Modal.tsx";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "./api.ts";
 import type {
   AdaptiveExecutionState, AdaptiveLockScope, AdaptiveRoutingEvent,
@@ -20,25 +20,40 @@ export function routingEventLabel(event: AdaptiveRoutingEvent): string {
   if (event.kind === "warning") return `⚠ ${event.warning ?? event.reason}`;
   if (event.kind === "status") return `Hivemind · ${event.reason.replaceAll("_", " ")}`;
   if (event.kind === "lock") return `Human · ${event.reason} · ${topologyLabel(event.appliedTopology)}`;
+  if (event.kind === "observation")
+    return `Jev observed · no single owning brain · would choose ${topologyLabel(event.targetTopology)}${workers}${confidence} · not enforced`;
   if (event.providerStatus === "bypassed") return `Manual · ${topologyLabel(event.appliedTopology)} · Jev not called`;
   return `Jev recommends ${topologyLabel(event.targetTopology)}${workers}${confidence} · ${event.reason}`;
 }
 
 type PanelProps = {
   channelId: string; view: AdaptiveRoutingView;
+  /** Display names for brains, keyed by agent ID. */
+  brainNames?: Record<string, string>;
   onChange: (view: AdaptiveRoutingView) => void; onClose: () => void;
 };
 
 export function AdaptiveRoutingPanel(props: PanelProps) {
-  const state = props.view.state?.channelId === props.channelId ? props.view.state : null;
-  const events = props.view.events.filter(event => event.channelId === props.channelId);
+  const executions = (props.view.executions?.length ? props.view.executions : props.view.state ? [props.view.state] : [])
+    .filter(item => item.channelId === props.channelId);
+  const [brainId, setBrainId] = useState<string | null>(null);
+  const primary = props.view.state?.channelId === props.channelId ? props.view.state : null;
+  // Each brain in a channel owns its own execution; the lock applies to the one selected here.
+  const state = executions.find(item => item.brainId === brainId) ?? primary;
+  const events = props.view.events.filter(event => event.channelId === props.channelId &&
+    (executions.length < 2 || !state || event.executionId === state.executionId || event.kind === "observation"));
+  const name = (id: string) => props.brainNames?.[id] ?? "Brain";
+  const tabs = executions.length > 1 ? <div className="routing-executions" role="tablist" aria-label="Brain executions">
+    {executions.map(item => <button key={item.executionId} type="button" role="tab" aria-selected={item.executionId === state?.executionId}
+      onClick={() => setBrainId(item.brainId)}>{name(item.brainId)} · {topologyLabel(item.currentTopology)}</button>)}
+  </div> : null;
   // Never retain an editor or its asynchronous response when navigating to another execution.
   return <RoutingPanelContent key={`${props.channelId}:${state?.executionId ?? "none"}`}
-    {...props} state={state} events={events} />;
+    {...props} state={state} events={events} tabs={tabs} />;
 }
 
-function RoutingPanelContent({ channelId, state, events, onChange, onClose }: PanelProps & {
-  state: AdaptiveExecutionState | null; events: AdaptiveRoutingEvent[];
+function RoutingPanelContent({ channelId, state, events, tabs, onChange, onClose }: PanelProps & {
+  state: AdaptiveExecutionState | null; events: AdaptiveRoutingEvent[]; tabs: ReactNode;
 }) {
   const [scope, setScope] = useState<Exclude<AdaptiveLockScope, "none">>(
     state?.lockScope === "conversation" ? "conversation" : "task",
@@ -65,8 +80,9 @@ function RoutingPanelContent({ channelId, state, events, onChange, onClose }: Pa
       <div className="sheet routing-sheet" role="dialog" aria-modal="true" aria-label="Adaptive routing timeline"
         onClick={event => event.stopPropagation()}>
         <h2>Routing · Jev</h2>
+        {tabs}
         <div className="sheet-body">
-        {!state ? <p className="help-p">No adaptive execution has started in this brain DM yet.</p> : <>
+        {!state ? <p className="help-p">No adaptive execution has started in this channel yet. Every Human message addressed to a brain here is routed through Jev.</p> : <>
           <div className="routing-summary">
             <strong>{topologyLabel(state.currentTopology)}</strong>
             {state.workerBudget > 0 && <span>{state.workerBudget} worker{state.workerBudget === 1 ? "" : "s"}</span>}

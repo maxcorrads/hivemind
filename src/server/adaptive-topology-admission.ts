@@ -64,10 +64,11 @@ export function assertAdaptiveWorkerAdmission(hive: Hive, actor: Agent, channel:
 
 /** Called inside TaskStore's existing write transaction, before any task/message row is inserted. */
 export function admitAdaptiveTask(hive: Hive, actor: Agent, task: TaskSnapshot, requestId: string): string | null {
-  const policy = hive.adaptiveTopology?.forAgent(actor);
-  if (!policy) return null;
+  if (!hive.adaptiveTopology?.hasActive(actor)) return null;
   const permit = permits.get(hive)?.get(actor.id);
-  if (!permit || permit.expiresAt < Date.now() || permit.executionId !== policy.executionId ||
+  // The permit names the execution this assignment was verified against.
+  const policy = permit ? hive.adaptiveTopology.forAgent(actor, permit.executionId) : null;
+  if (!permit || !policy || permit.expiresAt < Date.now() ||
     permit.revision !== stateRevision(hive, policy.executionId) || permit.requestId !== requestId ||
     permit.workerId !== task.workerId || permit.contractHash !== contractHash(task.contract) ||
     (permit.channelId !== null && permit.channelId !== task.channelId))
@@ -91,7 +92,7 @@ export function linkAdaptiveTask(hive: Hive, taskId: string, executionId: string
 export function bindAdaptiveMessage(hive: Hive, actor: Agent, message: Message,
   workerIds: string[], expected: AdaptiveAgentPolicy | null): void {
   if (!expected || workerIds.length === 0) return;
-  const current = hive.adaptiveTopology.forAgent(actor);
+  const current = hive.adaptiveTopology.forAgent(actor, expected.executionId);
   if (!current || current.executionId !== expected.executionId || current.currentTopology !== expected.currentTopology ||
     current.workerBudget !== expected.workerBudget)
     throw new HiveError(409, 'Adaptive policy changed before message delivery');

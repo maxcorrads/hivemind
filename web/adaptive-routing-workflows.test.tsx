@@ -134,3 +134,29 @@ test('settings save resets the secret input and refreshes monitoring without ret
   await act(async () => f.host.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }) as unknown as Event));
   assert.equal(saved, 1); assert.equal(notified, 1); assert.equal(f.host.querySelector<HTMLInputElement>('input[type=password]')?.value, '');
 });
+
+test('a channel keeps one execution per brain, shows observations and locks the selected brain', async t => {
+  const a = { ...state('a', 5, 'run-a'), brainId: 'brain-a' }, b = { ...state('a', 7, 'run-b'), brainId: 'brain-b' };
+  const merged = mergeRoutingView({ state: a, executions: [a], events: [] }, { state: b, events: [event(b, 'b-1')] }, 'a');
+  assert.deepEqual(merged.executions?.map(item => item.executionId).sort(), ['run-a', 'run-b']);
+  assert.equal(merged.state?.executionId, 'run-b', 'The most recently updated running execution is primary');
+  const replaced = mergeRoutingView(merged, { state: { ...a, executionId: 'run-a2', updatedAt: 9, revision: 9 }, events: [] }, 'a');
+  assert.deepEqual(replaced.executions?.map(item => item.executionId).sort(), ['run-a2', 'run-b'], 'A new request replaces only its own brain');
+  const completed = mergeRoutingView(replaced, { state: { ...b, updatedAt: 20, revision: 20, completedAt: 20 }, events: [] }, 'a');
+  assert.equal(completed.state?.executionId, 'run-a2', 'A running execution stays primary over a completed one');
+
+  const observation = { ...event(a, 'observed', 'observation'), targetTopology: 'brain_one_worker' as const, targetWorkers: 1 };
+  assert.match(routingEventLabel(observation), /no single owning brain/);
+  assert.match(routingEventLabel(observation), /not enforced/);
+
+  const f = mounted(t); const bodies: unknown[] = [];
+  t.mock.method(api, 'setAdaptiveRoutingLock', (_channel: string, body: unknown) => { bodies.push(body); return new Promise<AdaptiveRoutingView>(() => {}); });
+  await f.render(<AdaptiveRoutingPanel channelId="a" view={{ ...merged, events: [...merged.events, observation] }}
+    brainNames={{ 'brain-a': 'Ada', 'brain-b': 'Bea' }} onChange={() => {}} onClose={() => {}} />);
+  assert.match(f.host.textContent!, /no single owning brain/);
+  const tab = Array.from(f.host.querySelectorAll('[role="tab"]')).find(item => item.textContent?.startsWith('Ada')) as HTMLElement | undefined;
+  assert.ok(tab);
+  await act(async () => tab.click());
+  await act(async () => f.button('Apply lock').click());
+  assert.equal((bodies[0] as { expectedExecutionId: string }).expectedExecutionId, 'run-a');
+});

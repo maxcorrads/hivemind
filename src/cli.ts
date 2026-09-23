@@ -29,7 +29,7 @@ function help() {
   hivemind wait [--timeout ${Math.round(DEFAULT_WAIT_MS / 1000)}] [--session UUID]
   hivemind ack DELIVERY_ID --session UUID
   hivemind send --channel NAME --body TEXT [--thread ID] [--file PATH] [--event-type progress|blocker|question|action_required]
-  hivemind send --to NAME --body TEXT [--file PATH] [--request-id KEY]
+  hivemind send --to NAME --body TEXT [--file PATH] [--request-id KEY] [--execution-id ID]
   hivemind fetch --id ATT_ID [--out DIR]
   hivemind react --seq N --emoji 👍 [--remove]
   hivemind gc
@@ -305,7 +305,8 @@ async function main() {
     const thread = arg(argv, "--thread");
     const to = arg(argv, "--to");
     let channel = arg(argv, "--channel");
-    validated(sendInputSchema, { body, threadId: thread, eventType, recipients, requestId: arg(argv, "--request-id") });
+    const executionId = arg(argv, "--execution-id");
+    validated(sendInputSchema, { body, threadId: thread, eventType, recipients, executionId, requestId: arg(argv, "--request-id") });
     if (to) {
       const dm = await agentRequest<{ channel: Channel }>("POST", "/api/agent/dms", { name: to }, token);
       channel = dm.channel.id;
@@ -315,7 +316,7 @@ async function main() {
     const mime = file ? guessMime(file) : undefined;
     if (mime === "application/octet-stream") throw new Error("unsupported file type");
     console.error(`Send requestId: ${requestId}`);
-    const result = await sendOperation({ channel, body, threadId: thread, eventType, recipients,
+    const result = await sendOperation({ channel, body, threadId: thread, eventType, recipients, executionId,
       ...(file ? { file: { path: resolvePath(file), name: basename(file), mime: mime! } } : {}) }, token, requestId);
     console.log(`sent ${result.id} seq ${result.seq}`);
     return;

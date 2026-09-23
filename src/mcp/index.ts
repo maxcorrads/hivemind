@@ -2,7 +2,7 @@ import { setCapabilitiesSchema, suggestWorkersSchema, routingOutcomeSchema, rout
 import { attachmentIdsSchema, cursorSchema, limitSchema, memberNamesSchema, messageBodySchema, nameSchema, referenceSchema, senioritySchema, sequenceSchema } from "../shared/api-contract.ts";
 import type { HandoffList } from '../shared/handoffs.ts';
 import { sendOperation } from "../client/send-operation.ts";
-import { requestIdSchema } from "../shared/mutation.ts";
+import { executionIdSchema, requestIdSchema } from "../shared/mutation.ts";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -242,15 +242,16 @@ export async function startMcp() {
       eventType: z.enum(MESSAGE_EVENT_TYPES).optional().describe("Declare assignment/decision/blocker/question/action_required when applicable. Non-actionable progress is batched/summarized. acknowledgement is history-only for agents unless it carries task evidence/files. Omit when unsure. No type grants authority or changes task state."),
       traceId: z.string().uuid().optional().describe('Optional observability trace UUID. Task messages already use their task/root ID. This does not grant authority.'),
       causeMessageId: z.string().uuid().optional().describe('Optional explicit causal message reference visible in the same project. The timeline labels this explicit; thread parentage remains inferred.'),
+      executionId: executionIdSchema.optional(),
     },
-    async ({ body, channel, to, threadId, attachmentIds, eventType, recipients, traceId, causeMessageId, requestId }) => {
+    async ({ body, channel, to, threadId, attachmentIds, eventType, recipients, traceId, causeMessageId, requestId, executionId }) => {
       let channelId = channel ? normalizeChannelReference(channel) : channel;
       if (to) {
         const dm = await agentRequest<{ channel: Channel }>("POST", "/api/agent/dms", { name: to }, token());
         channelId = dm.channel.id;
       }
       if (!channelId) throw new Error("Provide channel or to");
-      return text(await sendOperation({ channel: channelId, body, threadId, attachmentIds, eventType, recipients, traceId, causeMessageId }, token(), requestId));
+      return text(await sendOperation({ channel: channelId, body, threadId, attachmentIds, eventType, recipients, traceId, causeMessageId, executionId }, token(), requestId));
     },
   );
 
@@ -455,8 +456,9 @@ export async function startMcp() {
       recipients: memberNamesSchema.min(1).optional(),
       traceId: z.string().uuid().optional(),
       causeMessageId: z.string().uuid().optional(),
+      executionId: executionIdSchema.optional(),
     },
-    async ({ path: filePath, body, channel, to, threadId, mime, eventType, recipients, traceId, causeMessageId, requestId }) => {
+    async ({ path: filePath, body, channel, to, threadId, mime, eventType, recipients, traceId, causeMessageId, requestId, executionId }) => {
       const resolved = path.resolve(filePath);
       if (!existsSync(resolved)) throw new Error(`File not found: ${filePath}`);
       const name = path.basename(resolved);
@@ -467,7 +469,7 @@ export async function startMcp() {
         channelId = dm.channel.id;
       }
       if (!channelId) throw new Error("Provide channel or to");
-      return text(await sendOperation({ channel: channelId, body: body ?? "", threadId, eventType, recipients, traceId, causeMessageId,
+      return text(await sendOperation({ channel: channelId, body: body ?? "", threadId, eventType, recipients, traceId, causeMessageId, executionId,
         file: { path: resolved, name, mime: guessed } }, token(), requestId));
     },
   );
