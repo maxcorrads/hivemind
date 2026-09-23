@@ -33,6 +33,8 @@ export type Snapshot = ReadSnapshot & {
   projects: Project[];
   agents: Agent[];
   channels: Channel[];
+  /** Room lifecycle metadata; all channels remain addressable, including archived ones. */
+  archivedChannelIds?: string[];
   queued: Record<string, number>;
   inbox?: Record<string, InboxStatus>;
   telegram?: { running: boolean; configured: boolean } & TelegramHealth;

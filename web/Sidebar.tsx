@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef } from "react";
 import { isLiveSearchQuery } from "../src/shared/search-query.ts";
 import type { Agent, Channel, Project } from "../src/shared/types.ts";
 import { AgentList } from "./AgentList.tsx";
@@ -168,6 +169,17 @@ function ProjectSection({ project, snap, sel, go, query, open, onToggle, onSetti
       (c.type === "public" || c.type === "brains" || c.type === "private") &&
       match(c.name),
   );
+  const archivedIds = new Set(snap.archivedChannelIds ?? []);
+  const activeChannels = publics.filter(ch => !archivedIds.has(ch.id));
+  const archivedChannels = publics.filter(ch => archivedIds.has(ch.id));
+  const selectedArchived = sel.kind === "channel" && archivedChannels.some(ch => ch.id === sel.id) ? sel.id : null;
+  const archivedSection = useRef<HTMLDetailsElement>(null);
+  const hasArchived = archivedChannels.length > 0;
+  // Keep native disclosure state (including manual toggles) in the DOM. Reveal
+  // a new search/selection or remounted section, but never collapse it for the Human.
+  useLayoutEffect(() => {
+    if (archivedSection.current && (q || selectedArchived)) archivedSection.current.open = true;
+  }, [q, selectedArchived, open, hasArchived]);
   const projectDms = channels.filter((c) => c.project === project.slug && c.type === "dm" && match(c.name));
   const openDms = projectDms
     .filter((c) => !closedDms.includes(c.id))
@@ -186,6 +198,15 @@ function ProjectSection({ project, snap, sel, go, query, open, onToggle, onSetti
     (a) => a.role === "human" || a.project === project.slug,
   ).filter((a) => !q || match(a.name) || match(a.focus ?? "") || match(a.role));
   const n = snap.mentionCounts[project.slug] ?? 0;
+  const channelRow = (ch: Channel) => (
+    <ChannelItem
+      key={ch.id}
+      ch={ch}
+      unread={snap.unread[ch.id] ?? 0}
+      active={sel.kind === "channel" && sel.id === ch.id}
+      onClick={() => go({ kind: "channel", id: ch.id })}
+    />
+  );
   const dmRow = (ch: Channel) => (
     <DmRow
       key={ch.id}
@@ -254,15 +275,13 @@ function ProjectSection({ project, snap, sel, go, query, open, onToggle, onSetti
                 +
               </button>
             </div>
-            {publics.map((ch) => (
-              <ChannelItem
-                key={ch.id}
-                ch={ch}
-                unread={snap.unread[ch.id] ?? 0}
-                active={sel.kind === "channel" && sel.id === ch.id}
-                onClick={() => go({ kind: "channel", id: ch.id })}
-              />
-            ))}
+            {activeChannels.map(channelRow)}
+            {archivedChannels.length > 0 && (
+              <details className="archived-channels" ref={archivedSection}>
+                <summary>Archived <span>{archivedChannels.length}</span></summary>
+                {archivedChannels.map(channelRow)}
+              </details>
+            )}
           </div>
           <div className="group">
             <div className="group-h">

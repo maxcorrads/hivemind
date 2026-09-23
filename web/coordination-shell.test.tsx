@@ -31,6 +31,69 @@ class BrowserSocket {
   close() { this.closed = true; this.onclose?.(); }
 }
 
+test('a delayed room refresh preserves a newer live channel and its selection', async t => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'archived-navigation-'));
+  const hive = new Hive(path.join(dir, 'hive.db'));
+  const human = hive.identity.getAgent('human'), brain = hive.identity.join({ role: 'brain' }).agent;
+  const room = hive.channels.createChannel(brain, { name: 'existing-room', type: 'private' });
+  hive.rooms.event(human, room.id, { requestId: 'configure', expectedRevision: 0,
+    action: { type: 'configure', reason: 'Fixture', contract: { mode: 'ongoing', purpose: 'Navigation fixture',
+      rules: ['Fixture only'], limits: ['No external writes'], coordinator: brain.name, participants: [],
+      completion: ['Human archives'], originTaskId: null } } });
+  window.happyDOM.setURL(`http://localhost/#/c/${room.id}`);
+  const app = createApp(hive);
+  let hold = false;
+  let signalStarted!: () => void, release!: () => void;
+  const started = new Promise<void>(resolve => { signalStarted = resolve; });
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  t.mock.method(globalThis, 'fetch', async (url: string, init?: RequestInit) => {
+    if (url === '/api/ui/session') return Response.json({ ok: true });
+    const response = await app.request(url, init);
+    if (hold && url === '/api/ui/snapshot') {
+      hold = false; signalStarted(); await pending;
+    }
+    return response;
+  });
+  const originalSocket = globalThis.WebSocket;
+  globalThis.WebSocket = BrowserSocket as unknown as typeof WebSocket;
+  const host = document.createElement('div'); document.body.append(host);
+  const root = createRoot(host);
+  const events = ['message', 'room', 'agent', 'channel', 'queued'] as const;
+  const listeners = events.map(type => {
+    const listener = (payload: unknown) => BrowserSocket.current.event(type, payload);
+    hive.bus.on(type, listener); return listener;
+  });
+  t.after(async () => {
+    release();
+    await act(async () => root.unmount());
+    events.forEach((type, i) => hive.bus.off(type, listeners[i]!));
+    globalThis.WebSocket = originalSocket; host.remove(); hive.db.close(); rmSync(dir, { recursive: true, force: true });
+  });
+  await act(async () => root.render(<App />));
+  hold = true;
+  await act(async () => {
+    hive.rooms.event(human, room.id, { requestId: 'archive', expectedRevision: 1, action: { type: 'archive', reason: 'Done' } });
+    await started;
+  });
+  let newer!: ReturnType<typeof hive.channels.createChannel>;
+  await act(async () => { newer = hive.channels.createChannel(brain, { name: 'new-live-channel', type: 'public' }); });
+  const find = () => [...host.querySelectorAll('button')].find(button => button.textContent?.includes('# new-live-channel'));
+  assert.ok(find(), 'new channel arrived over WebSocket');
+  await act(async () => find()!.click());
+  assert.equal(window.location.hash, `#/c/${newer.id}`);
+  await act(async () => release());
+  assert.ok(find(), 'the late room response must not erase the newer live channel');
+  assert.equal(window.location.hash, `#/c/${newer.id}`, 'the late room response must not navigate away');
+  assert.ok(host.querySelector('.archived-channels'), 'archive metadata still updates');
+  const archived = () => host.querySelector<HTMLDetailsElement>('.archived-channels')!;
+  const archivedButton = [...archived().querySelectorAll('button')].find(button => button.textContent?.includes('# existing-room'))!;
+  await act(async () => archivedButton.click());
+  assert.equal(archived().open, true, 'selecting an archived room reveals the section');
+  await act(async () => find()!.click());
+  assert.equal(window.location.hash, `#/c/${newer.id}`);
+  assert.equal(archived().open, true, 'leaving an archived room must not collapse the section');
+});
+
 test('mounted Human App follows task review and contract history without offering generic task status edits', async t => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'coordination-app-'));
   const hive = new Hive(path.join(dir, 'hive.db'));

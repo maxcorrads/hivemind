@@ -14,6 +14,12 @@ export class RoomStore {
     const row = this.db.prepare('SELECT snapshot FROM rooms WHERE channel_id=?').get(channel);
     return row ? JSON.parse(String(row.snapshot)) : null;
   }
+  /** Sidebar projection only: retain channels and their history in every other view. */
+  archivedChannelIds(visibleChannels: readonly Channel[]): string[] {
+    const visible = new Set(visibleChannels.map(channel => channel.id));
+    return this.db.prepare("SELECT channel_id FROM rooms WHERE json_extract(snapshot,'$.state')='archived' ORDER BY channel_id")
+      .all().map(row => String(row.channel_id)).filter(id => visible.has(id));
+  }
   private channel(actor: Agent, channel: string) {
     const ch = this.deps.channels.getChannel(channel, actor.projectId);
     if (!this.deps.channels.canSeeChannel(actor, ch)) throw new HiveError(403, 'Cannot access this room');

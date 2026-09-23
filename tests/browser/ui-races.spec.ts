@@ -226,6 +226,147 @@ test("slow channel A cannot overwrite channel B after navigation", async ({ page
   await expect(page.getByRole("button", { name: "# Beta" })).toHaveClass(/active/);
 });
 
+test("archived channels are consultable, searchable and project-scoped without marking them read on expansion", async ({ page }, testInfo) => {
+  const alpha = project("alpha", "Alpha Hive"), beta = project("beta", "Beta Hive");
+  const a = channel("a", "General", alpha), old = channel("old", "review-closed", alpha);
+  const other = channel("other", "other-closed", beta);
+  const snap = { ...snapshot([alpha, beta], [a, old, other]), archivedChannelIds: [old.id, other.id], unread: { old: 7 } };
+  await installSnapshot(page, () => snap);
+  await installSocketHarness(page);
+  await installMessages(page, async (route, id) => fulfillJson(route, payload(id === old.id ? old : a, [])));
+  await page.route("**/api/ui/search?*", route => fulfillJson(route, { hits: [], hasMore: false }));
+  await page.goto("/#/c/a");
+  const section = page.locator(".project-sec").filter({ hasText: "Alpha Hive" });
+  const archived = section.locator(".archived-channels");
+  const oldRow = archived.getByRole("button", { name: "# review-closed 7", exact: true });
+  await expect(archived).not.toHaveAttribute("open", "");
+  await expect(oldRow).toBeHidden();
+  await expect(section.locator(".group > button.nav")).toHaveText(["# General"]);
+  const summary = archived.locator("summary");
+  await expect(summary).toHaveText("Archived 1");
+  await summary.focus();
+  await page.keyboard.press("Enter");
+  await expect(oldRow).toBeVisible();
+  await expect(archived.getByText("# other-closed", { exact: true })).toHaveCount(0);
+  expect(harnesses.get(page)!.receipts).toEqual([]);
+  await expect(page).toHaveURL(/#\/c\/a$/);
+  for (const dark of [false, true]) {
+    await page.evaluate(dark => document.documentElement.classList.toggle("dark", dark), dark);
+    await section.screenshot({ path: testInfo.outputPath(`archived-${dark ? "dark" : "light"}.png`) });
+  }
+  await page.setViewportSize({ width: 390, height: 700 });
+  await summary.scrollIntoViewIfNeeded();
+  const bounds = await summary.boundingBox();
+  expect(bounds!.x).toBeGreaterThanOrEqual(0);
+  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
+  await page.screenshot({ path: testInfo.outputPath("archived-mobile.png") });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await summary.click();
+  await expect(oldRow).toBeHidden();
+  await page.getByRole("textbox", { name: "Search projects and messages" }).fill("review-closed");
+  await expect(oldRow).toBeVisible();
+  await oldRow.click();
+  await expect(page).toHaveURL(/#\/c\/old$/);
+  await page.reload();
+  await expect(oldRow).toBeVisible();
+  await expect(oldRow).toHaveClass(/active/);
+  expect(harnesses.get(page)!.receipts).toEqual([]);
+});
+
+for (const scenario of ["selected-search", "new-search", "direct-link", "remount"] as const) {
+  test(`archived navigation reveals a new target after manual collapse (${scenario})`, async ({ page }) => {
+    const alpha = project("alpha", "Alpha Hive"), a = channel("a", "General", alpha);
+    const first = channel("first", "review-one", alpha), second = channel("second", "review-two", alpha);
+    const channels = [a, first, second];
+    const snap = { ...snapshot([alpha], channels), archivedChannelIds: [first.id, second.id], unread: { first: 7, second: 9 } };
+    await installSnapshot(page, () => snap);
+    const sockets = await installSocketHarness(page);
+    await installMessages(page, (route, id) => fulfillJson(route, payload(channels.find(ch => ch.id === id)!, [])));
+    await page.route("**/api/ui/search?*", route => fulfillJson(route, { hits: [], hasMore: false }));
+    await page.goto(scenario === "new-search" ? "/#/c/a" : "/#/c/first");
+    const archived = page.locator(".archived-channels");
+    const search = page.getByRole("textbox", { name: "Search projects and messages" });
+    if (scenario === "new-search") await search.fill("review");
+    await expect(archived).toHaveAttribute("open", "");
+    const summary = archived.locator("summary");
+    await summary.focus();
+    await page.keyboard.press(scenario === "new-search" ? "Space" : "Enter");
+    await expect(archived).not.toHaveAttribute("open", "");
+    // Roster traffic must not override a deliberate collapse of this target.
+    await expect.poll(() => sockets.length).toBe(1);
+    sockets[0]!.send(JSON.stringify({ type: "agent", payload: { ...human, lastSeenAt: 2 } }));
+    await expect(archived).not.toHaveAttribute("open", "");
+    if (scenario === "direct-link") await page.evaluate(() => { location.hash = "#/c/second"; });
+    else if (scenario === "remount") {
+      const projectToggle = page.locator(".project-sec .twist");
+      await projectToggle.click();
+      await expect(archived).toHaveCount(0);
+      await projectToggle.click();
+    } else await search.fill(scenario === "selected-search" ? "review-one" : "review-two");
+    const target = scenario === "selected-search" || scenario === "remount" ? "# review-one 7" : "# review-two 9";
+    await expect(archived.getByRole("button", { name: target, exact: true })).toBeVisible();
+    if (scenario === "direct-link") await expect(archived.getByRole("button", { name: target, exact: true })).toHaveClass(/active/);
+    expect(harnesses.get(page)!.receipts).toEqual([]);
+  });
+}
+
+test("archive and reopen update other channels live and preserve a selected channel thread", async ({ page }) => {
+  const alpha = project("alpha", "Alpha Hive"), a = channel("a", "General", alpha), b = channel("b", "Review", alpha);
+  let snap: Snapshot = { ...snapshot([alpha], [a, b]), archivedChannelIds: [] };
+  const root = message("root", 1, b.id, "Review thread");
+  await installSnapshot(page, () => snap);
+  const sockets = await installSocketHarness(page);
+  await installMessages(page, async (route, id, threadId) => {
+    const ch = id === b.id ? b : a;
+    const body = payload(ch, id === b.id ? [root] : []);
+    await fulfillJson(route, { ...body, threadId, ...(threadId ? { root } : {}) });
+  });
+  await page.goto("/#/c/a");
+  const rail = page.locator(".rail");
+  const row = rail.getByRole("button", { name: "# Review", exact: true });
+  await expect(row).toBeVisible();
+  await expect.poll(() => sockets.length).toBe(1);
+  snap = { ...snap, archivedChannelIds: [b.id] };
+  sockets[0]!.send(JSON.stringify({ type: "room", payload: { channelId: b.id } }));
+  await expect(rail.locator(".archived-channels")).toHaveCount(1);
+  await expect(row).toBeHidden();
+  await expect(page).toHaveURL(/#\/c\/a$/);
+  // An incoming message cannot undo the room lifecycle state.
+  sockets[0]!.send(JSON.stringify({ type: "message", payload: message("late", 2, b.id, "Late observation") }));
+  await expect(row).toBeHidden();
+  await page.goto("/#/c/b/t/root");
+  await expect(row).toBeVisible();
+  await expect(page.locator("aside.thread")).toBeVisible();
+  snap = { ...snap, archivedChannelIds: [] };
+  sockets.at(-1)!.send(JSON.stringify({ type: "room", payload: { channelId: b.id } }));
+  await expect(rail.locator(".archived-channels")).toHaveCount(0);
+  await expect(row).toBeVisible();
+  await expect(page.locator("aside.thread")).toBeVisible();
+  await expect(page).toHaveURL(/#\/c\/b\/t\/root$/);
+  snap = { ...snap, archivedChannelIds: [b.id] };
+  sockets.at(-1)!.send(JSON.stringify({ type: "room", payload: { channelId: b.id } }));
+  await expect(rail.locator(".archived-channels[open]")).toHaveCount(1);
+  await expect(row).toBeVisible();
+  await expect(page.locator("aside.thread")).toBeVisible();
+  await expect(page).toHaveURL(/#\/c\/b\/t\/root$/);
+  // Reconnect reconciles changes missed while disconnected.
+  snap = { ...snap, archivedChannelIds: [] };
+  const connectionCount = sockets.length;
+  await sockets.at(-1)!.close({ code: 1013, reason: "controlled archive resync" });
+  await expect.poll(() => sockets.length).toBe(connectionCount + 1);
+  await expect(rail.locator(".archived-channels")).toHaveCount(0);
+});
+
+test("snapshots without archive metadata keep ordinary channels visible", async ({ page }) => {
+  const alpha = project("alpha", "Alpha Hive"), a = channel("a", "General", alpha);
+  await installSnapshot(page, () => snapshot([alpha], [a]));
+  await installSocketHarness(page);
+  await installMessages(page, route => fulfillJson(route, payload(a, [])));
+  await page.goto("/#/c/a");
+  await expect(page.locator(".rail").getByRole("button", { name: "# General", exact: true })).toBeVisible();
+  await expect(page.locator(".archived-channels")).toHaveCount(0);
+});
+
 test("slow thread response cannot overwrite a newer thread selection", async ({ page }) => {
   const alpha = project("alpha", "Alpha Hive");
   const a = channel("a", "Alpha", alpha);

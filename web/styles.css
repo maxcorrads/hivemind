@@ -1098,9 +1098,9 @@ html.dark .primary { background: var(--wax); color: #1b2017; }
 .dm-row .nav { min-width: 0; flex: 1; }
 .nav > span { min-width: 0; }
 .nav em { flex: none; }
-.between-agents .nav em, .group > .nav em { background: var(--pill); color: var(--rail-ink); }
-.agent-conversations > summary { cursor: pointer; color: var(--rail-mute); font-size: 0.78rem; padding: 0.6rem 0.45rem; }
-.agent-conversations > summary span { float: right; font-variant-numeric: tabular-nums; }
+.between-agents .nav em, .group > .nav em, .archived-channels > .nav em { background: var(--pill); color: var(--rail-ink); }
+.agent-conversations > summary, .archived-channels > summary { cursor: pointer; color: var(--rail-mute); font-size: 0.78rem; padding: 0.6rem 0.45rem; }
+.agent-conversations > summary span, .archived-channels > summary span { float: right; font-variant-numeric: tabular-nums; }
 .msg > div { min-width: 0; }
 .msg-b { max-width: 76ch; }
 .msg-h { flex-wrap: wrap; }

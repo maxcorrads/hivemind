@@ -36,8 +36,8 @@ export function useRealtime({ selection, hive, channel, thread, inboxLoad, chang
   setErr: (error: string) => void;
 }) {
   const { selRef, threadIdRef, viewingThread } = selection;
-  const { setSnap, latestTelegramHealth, readFence, readRefresh, channelReads, threadReads, snapshotLoad,
-    setReconnectTick, refreshSnap } = hive;
+  const { setSnap, latestTelegramHealth, readFence, readRefresh, channelReads, threadReads, snapshotLoad, archivedLoad,
+    setReconnectTick, refreshSnap, refreshArchivedChannels } = hive;
   const { setPane, channelStream, channelLoad, channelJournal, loadChannel } = channel;
   const { setThreadView, setThreadPane, threadLoad, loadThread, onThreadMessage } = thread;
   const [live, setLive] = useState(false);
@@ -169,6 +169,8 @@ export function useRealtime({ selection, hive, channel, thread, inboxLoad, chang
       }
       if (ev.type === 'room') {
         const payload = ev.payload as { channelId: string };
+        // Archive/reopen also changes navigation for rooms that are not currently selected.
+        refreshArchivedChannels().catch(error => { if (error?.name !== "AbortError") setErr(String(error.message || error)); });
         if (selRef.current.kind === 'channel' && selRef.current.id === payload.channelId) {
           setRoomTick(t => t + 1);
           if (threadIdRef.current) loadThread(payload.channelId, threadIdRef.current).catch(() => undefined);
@@ -188,10 +190,11 @@ export function useRealtime({ selection, hive, channel, thread, inboxLoad, chang
       channelJournal.current = null;
       threadLoad.current.cancel();
       snapshotLoad.current.cancel();
+      archivedLoad.current.cancel();
       inboxLoad.current.cancel();
       window.removeEventListener("hashchange", onHash);
     };
-  }, [loadChannel, refreshSnap, resetReadConnection, changeSelection, onThreadMessage, viewingThread, loadThread, setThreadPane]);
+  }, [loadChannel, refreshSnap, refreshArchivedChannels, resetReadConnection, changeSelection, onThreadMessage, viewingThread, loadThread, setThreadPane]);
 
   return { live, roomTick, setRoomTick, decisionTick, setDecisionTick, jevTick };
 }

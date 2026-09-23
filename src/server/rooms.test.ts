@@ -47,6 +47,43 @@ test('room rules, provenance, history and acknowledgements persist after restart
   assert.equal(f.hive.rooms.history(f.human, f.channel.id).length, 2);
 });
 
+test('sidebar archive metadata is read-only, visibility-scoped and survives restart without removing history', async t => {
+  const f = fixture(t); f.configure();
+  const bot = f.hive.bots.createBot(f.human, f.channel.projectId, { name: 'SidebarFeed' }).bot;
+  f.hive.channels.invite(f.human, f.channel.id, [bot.name]);
+  f.hive.rooms.registerLink(bot, f.channel.id, { id: 'fixture', label: 'Synthetic events', suspendSupported: true });
+  const plain = f.hive.channels.createChannel(f.brain.agent, { name: 'no-room', type: 'public' });
+  const snap = async () => {
+    const response = await createApp(f.hive).request('/api/ui/snapshot');
+    assert.equal(response.status, 200);
+    return await response.json() as { archivedChannelIds: string[]; channels: { id: string }[] };
+  };
+  assert.deepEqual((await snap()).archivedChannelIds, []);
+  f.event({ type: 'archive', reason: 'End fixture' }, f.human);
+  const before = {
+    read: f.hive.reads.readSnapshot(f.human), room: f.hive.rooms.view(f.human, f.channel.id),
+    inbox: f.hive.delivery.inboxStatuses(), channels: f.hive.channels.listChannels(f.human),
+  };
+  const archived = await snap();
+  assert.deepEqual(archived.archivedChannelIds, [f.channel.id]);
+  assert.ok(archived.channels.some(ch => ch.id === f.channel.id));
+  assert.ok(archived.channels.some(ch => ch.id === plain.id));
+  assert.deepEqual(f.hive.rooms.archivedChannelIds([plain]), [], 'do not expose rooms outside supplied visible channels');
+  assert.deepEqual(f.hive.rooms.archivedChannelIds([]), []);
+  const response = await createApp(f.hive).request(`/api/ui/channels/${f.channel.id}/messages`);
+  assert.equal(response.status, 200);
+  assert.ok((await response.json() as { messages: unknown[] }).messages.length > 0, 'archived history remains accessible');
+  assert.deepEqual(f.hive.reads.readSnapshot(f.human), before.read, 'snapshot/history reads do not mark messages read');
+  assert.deepEqual(f.hive.delivery.inboxStatuses(), before.inbox, 'no agent ACKs');
+  assert.deepEqual(f.hive.channels.listChannels(f.human), before.channels);
+  assert.deepEqual(f.hive.rooms.view(f.human, f.channel.id), before.room, 'no source/contract/task mutations');
+  f.reopen();
+  assert.deepEqual((await snap()).archivedChannelIds, [f.channel.id]);
+  f.event({ type: 'reopen', reason: 'Consult and continue', resumeSources: false }, f.human);
+  assert.deepEqual((await snap()).archivedChannelIds, []);
+  assert.equal(f.hive.rooms.botLinks(bot, f.channel.id)[0]!.desired, 'paused', 'sidebar does not resume a monitor');
+});
+
 test('Human can edit directly; bots, workers, other brains and quoted authority cannot change scope', t => {
   const f = fixture(t); f.configure(); const other = f.hive.identity.join({ role: 'brain' }).agent;
   f.hive.channels.invite(f.human, f.channel.id, [other.name]);
