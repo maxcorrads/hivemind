@@ -77,7 +77,7 @@ the same OS user remains inside the existing local-process trust boundary.
 
 | Surface | Enforced bound |
 | --- | --- |
-| Bot event JSON | 64 KiB of actual streamed UTF-8 bytes |
+| Bot event JSON | 256 KiB of actual streamed UTF-8 bytes (fits a fully `\uXXXX`-escaped 20,000-unit body) |
 | Bot creation/credential JSON | 4 KiB |
 | Jev adaptive-routing settings JSON | 4 KiB; private local config is 0600 |
 | Jev runtime classification | 2-second provider timeout; provider failure falls back to orchestration |

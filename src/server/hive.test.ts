@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Hive } from "./hive.ts";
 import { countRows, findRow, insertRow, readValue, setAgentPresence } from "./test-fixtures.ts";
+import { BODY_MAX } from "../shared/types.ts";
 
 function tempHive() {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-"));
@@ -334,11 +335,11 @@ test("attachments and reactions stay on the message", async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("body longer than 4k is rejected", () => {
+test("body longer than BODY_MAX (20,000) is rejected", () => {
   const { hive, dir } = tempHive();
   const brain = hive.identity.join({ role: "brain" });
   assert.throws(
-    () => hive.messages.postMessage(brain.agent, { channel: "general", body: "x".repeat(4001) }),
+    () => hive.messages.postMessage(brain.agent, { channel: "general", body: "x".repeat(BODY_MAX + 1) }),
     /too long/,
   );
   rmSync(dir, { recursive: true, force: true });

@@ -10,7 +10,7 @@ export { telegramPollBackoffMs, isTelegramTerminalPollError } from "./telegram-i
 import { CoalescingPump } from "./coalescing-pump.ts";
 import { existsSync, mkdirSync, openAsBlob, readFileSync, writeFileSync, renameSync, unlinkSync, openSync, closeSync, fsyncSync } from "node:fs";
 import path from "node:path";
-import { DEFAULT_PROJECT_SLUG, FILE_MAX_BYTES, HiveError, HUMAN_ID, REACTION_EMOJIS, type Channel, type Message } from "../shared/types.ts";
+import { BODY_MAX, DEFAULT_PROJECT_SLUG, FILE_MAX_BYTES, HiveError, HUMAN_ID, REACTION_EMOJIS, type Channel, type Message } from "../shared/types.ts";
 import { parseProjectSlug } from "../shared/project.ts";
 import { isDirectRecipient } from '../shared/message-target.ts';
 import { resolveUploadMime } from "../shared/mime.ts";
@@ -210,9 +210,47 @@ export function shouldNotify(msg: Message, ch: Channel, muted: boolean): boolean
   return false;
 }
 
-export function formatOutbound(msg: Message): string {
-  const body = msg.body.slice(0, 4000);
-  return `${msg.authorName}\n${body}`.slice(0, 4096);
+/** Telegram's sendMessage text limit. Counting UTF-16 units never undercounts it. */
+export const TELEGRAM_TEXT_MAX = 4096;
+
+/** Split at a newline or space in the second half of the window; never inside a surrogate pair. */
+function splitTelegramText(text: string, limit: number): string[] {
+  const parts: string[] = [];
+  let rest = text;
+  while (rest.length > limit) {
+    let cut = limit;
+    if (/[\uD800-\uDBFF]/.test(rest[cut - 1]!)) cut -= 1;
+    const window = rest.slice(0, cut);
+    const newline = window.lastIndexOf("\n"), space = window.lastIndexOf(" ");
+    if (newline >= limit / 2) cut = newline + 1;
+    else if (space >= limit / 2) cut = space + 1;
+    parts.push(rest.slice(0, cut));
+    rest = rest.slice(cut);
+  }
+  parts.push(rest);
+  return parts;
+}
+
+/**
+ * Mirror the whole body, in order. A body that fits one Telegram message keeps
+ * the historical `Author\nbody` shape; a longer one becomes numbered parts
+ * `Author (i/n)\n…`, each at most TELEGRAM_TEXT_MAX UTF-16 units.
+ */
+export function formatOutboundParts(msg: Message): string[] {
+  const author = msg.authorName.slice(0, 200);
+  const single = `${author}\n${msg.body}`;
+  if (single.length <= TELEGRAM_TEXT_MAX) return [single];
+  for (let digits = 1; ; digits++) {
+    const widest = "9".repeat(digits);
+    const chunks = splitTelegramText(msg.body, TELEGRAM_TEXT_MAX - `${author} (${widest}/${widest})\n`.length);
+    if (String(chunks.length).length > digits) continue;
+    return chunks.map((chunk, i) => `${author} (${i + 1}/${chunks.length})\n${chunk}`);
+  }
+}
+
+/** Stable per-part delivery keys; the first keeps the historical single-part key. */
+export function outboundPartKey(index: number): string {
+  return index === 0 ? "text" : `text:${index + 1}`;
 }
 
 export function reactionIgnoreKey(chatId: number, telegramMessageId: number, emojis: string[]): string {
@@ -232,7 +270,7 @@ export function telegramReplyThreadId(
 export function inboundBody(firstName: string | undefined, text: string): string {
   const name = (firstName ?? "Human").replaceAll("[", "").replaceAll("]", "").slice(0, 40);
   const trimmed = text.trim();
-  return (trimmed ? `[${name}] ${trimmed}` : `[${name}]`).slice(0, 4000);
+  return (trimmed ? `[${name}] ${trimmed}` : `[${name}]`).slice(0, BODY_MAX);
 }
 
 export function inboundPostBody(firstName: string | undefined, text: string, hasFiles: boolean): string {
@@ -1154,36 +1192,28 @@ export class TelegramBridge {
     const muted = this.state(`mute:${chatId}`) === "1" || this.state("mute") === "1";
     const silent = !shouldNotify(msg, ch, muted);
     const atts = msg.attachments ?? [];
-    const text = formatOutbound(msg);
+    const parts = formatOutboundParts(msg);
+    const inlineCaption = atts.length > 0 && parts.length === 1 && parts[0]!.length <= 1000;
 
-    if (atts.length === 0) {
-      const partKey = "text";
-      if (this.store.partDelivered(msg.seq, partKey, chatId, telegramConfigKey(this.cfg))) return;
-      const sent = requireTelegramOk(
-        await this.api("sendMessage", {
-          chat_id: chatId,
-          message_thread_id: thread,
-          text,
-          disable_notification: silent,
-        }),
-        "sendMessage",
-      );
-      this.recordOut(sent, msg, chatId, partKey);
-      return;
+    // Parts go strictly in order and each is recorded before the next is sent,
+    // so a retry resumes at the first undelivered part without duplicates.
+    if (!inlineCaption) {
+      for (let i = 0; i < parts.length; i += 1) {
+        const partKey = outboundPartKey(i);
+        if (this.store.partDelivered(msg.seq, partKey, chatId, telegramConfigKey(this.cfg))) continue;
+        const sent = requireTelegramOk(
+          await this.api("sendMessage", {
+            chat_id: chatId,
+            message_thread_id: thread,
+            text: parts[i],
+            disable_notification: silent,
+          }),
+          "sendMessage",
+        );
+        this.recordOut(sent, msg, chatId, partKey);
+      }
     }
-
-    if (text.length > 1000 && !this.store.partDelivered(msg.seq, "text", chatId, telegramConfigKey(this.cfg))) {
-      const sent = requireTelegramOk(
-        await this.api("sendMessage", {
-          chat_id: chatId,
-          message_thread_id: thread,
-          text,
-          disable_notification: silent,
-        }),
-        "sendMessage",
-      );
-      this.recordOut(sent, msg, chatId, "text");
-    }
+    if (atts.length === 0) return;
 
     const human = this.hive.identity.getAgent(HUMAN_ID);
     for (let i = 0; i < atts.length; i += 1) {
@@ -1192,7 +1222,7 @@ export class TelegramBridge {
       if (this.store.partDelivered(msg.seq, partKey, chatId, telegramConfigKey(this.cfg))) continue;
       const opened = this.hive.files.getAttachment(human, att.id);
       const disk = filePathForHash(opened.sha256, this.hive.home);
-      const caption = text.length <= 1000 && i === 0 ? text : `${msg.authorName} · ${att.name}`;
+      const caption = inlineCaption && i === 0 ? parts[0]! : `${msg.authorName} · ${att.name}`;
       const sent = requireTelegramOk(
         await this.sendFile(chatId, thread, att.mime, att.name, disk, caption, silent),
         "sendFile",

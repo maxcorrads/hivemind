@@ -5,7 +5,7 @@ import { validated } from '../shared/api-contract.ts';
 import { checkpointFreshness, type HandoffSummary } from '../shared/handoffs.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import type { TaskStoreDeps } from './services/ports.ts';
-import { BODY_MAX, HiveError, type Agent, type Channel } from '../shared/types.ts';
+import { HiveError, TASK_BODY_MAX, type Agent, type Channel } from '../shared/types.ts';
 import { assignTaskSchema, taskEventSchema, taskBody, type TaskContract, type TaskEnvelope, type TaskSnapshot } from '../shared/tasks.ts';
 import { admitAdaptiveTask, linkAdaptiveTask } from './adaptive-topology-admission.ts';
 
@@ -117,7 +117,7 @@ export class TaskStore {
     const adaptiveExecution = envelope.action.type === 'assign' || envelope.action.type === 'revise'
       ? admitAdaptiveTask(this.deps, actor, task, requestId) : null;
     const body = taskBody(envelope);
-    if (body.length > BODY_MAX || Buffer.byteLength(JSON.stringify(envelope)) > 16000)
+    if (body.length > TASK_BODY_MAX || Buffer.byteLength(JSON.stringify(envelope)) > 16000)
       throw new HiveError(400, 'Task envelope is too large; use a compact contract and evidence references');
     const id = initial ? task.id : randomUUID();
     const target = ['assign', 'revise', 'review'].includes(envelope.action.type) ? task.workerId : task.assignerId;

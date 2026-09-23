@@ -2,7 +2,8 @@ import { z } from "zod";
 import { BODY_MAX, DEFAULT_WAIT_MS, FILE_MAX_BYTES, HiveError, MESSAGE_EVENT_TYPES } from "./types.ts";
 import { executionIdSchema, requestIdSchema } from "./mutation.ts";
 
-export const API_JSON_BYTES = 128 * 1024;
+/** Fits a worst-case JSON-escaped BODY_MAX body (6 bytes per unit) plus request metadata. */
+export const API_JSON_BYTES = 256 * 1024;
 export const MAX_WAIT_MS = DEFAULT_WAIT_MS; // Preserve the existing 25-minute long poll.
 export const REQUEST_BODY_MS = 120_000;
 export const REQUEST_HEADER_MS = 15_000;

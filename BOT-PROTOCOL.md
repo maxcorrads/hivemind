@@ -104,7 +104,7 @@ Content-Type: application/json
 }
 ```
 
-Required: a nonempty `eventId` (max 240 characters) and either body (max 4,000 characters)
+Required: a nonempty `eventId` (max 240 characters) and either body (max 20,000 characters)
 or attachments. Set optional `threadId` to an existing root message in that same channel.
 Every origin field is optional. `occurredAt` is Unix milliseconds. URLs must be HTTP(S)
 without embedded credentials; Hivemind does not fetch them. UI messages show the origin,
@@ -178,7 +178,7 @@ rendering; they do not replace a native-browser test. No external source or mode
 
 ## Ingress resource and security limits
 
-JSON event requests are limited to 64 KiB of actual UTF-8 bytes, credential/create
+JSON event requests are limited to 256 KiB of actual UTF-8 bytes (a fully escaped 20,000-character body plus metadata), credential/create
 requests to 4 KiB, and JSON reading to 10 seconds. Malformed input is rejected
 without echoing source fragments. JSON ingress checks the credential again after
 reading the body. Admission permits a burst of 60 requests per bot with 10/second

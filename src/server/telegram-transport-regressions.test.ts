@@ -5,7 +5,8 @@ import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { test, type TestContext } from "node:test";
 import { Hive } from "./hive.ts";
-import { hasRow, insertRow, readValue } from "./test-fixtures.ts";
+import { hasRow, insertRow, listRows, readValue } from "./test-fixtures.ts";
+import { BODY_MAX } from "../shared/types.ts";
 import { TelegramBridge, startTelegram, telegramConfigKey, telegramRetryAfterMs, projectSlugForChat,
   readTelegramFile, writeTelegramFile, type TelegramConfig } from "./telegram.ts";
 import { enqueueTelegramPending } from "./telegram-outbox.ts";
@@ -200,4 +201,31 @@ test("Retry-After accepts seconds and HTTP dates, rejects malformed fields and n
   assert.equal(telegramRetryAfterMs(429, { parameters: { retry_after: 60 } }, 2000, "30"), 60_000);
   for (const raw of [null, false, {}, -1, Infinity]) assert.equal(telegramRetryAfterMs(429, { parameters: { retry_after: raw } }), 2000);
   assert.equal(telegramRetryAfterMs(429, { parameters: { retry_after: 0 } }), 1000);
+});
+
+test("a maximum-length body is mirrored as ordered parts and a failed part resumes without duplicates", async t => {
+  const f = fixture(t); const human = f.hive.identity.getAgent("human");
+  const texts: string[] = [];
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async (url: unknown, init?: RequestInit) => {
+    if (String(url).endsWith("getUpdates")) return blocked(init?.signal);
+    // The third part fails once, after two parts were already delivered.
+    if (++calls === 3) return Response.json({ ok: false, description: "temporary failure" });
+    texts.push(JSON.parse(String(init?.body)).text as string);
+    return Response.json({ ok: true, result: { message_id: 100 + texts.length } });
+  });
+  f.bridge = new TelegramBridge(f.hive, cfg); f.bridge.start();
+  const body = Array.from({ length: BODY_MAX / 20 }, (_, i) => `line ${String(i).padStart(4, "0")} ${"-".repeat(9)}\n`).join("").replace(/\n$/, "!");
+  assert.equal(body.length, BODY_MAX);
+  const sent = f.hive.messages.postMessage(human, { channel: "general", body });
+  await until(() => calls === 3); await flush();
+  assert.equal(texts.length, 2);
+  t.mock.timers.tick(2000);
+  await until(() => !hasRow(f.hive, "telegram_pending", { seq: sent.seq }));
+  assert.ok(texts.length >= 5, `${texts.length} parts`);
+  const headers = texts.map((_, i) => `Human (${i + 1}/${texts.length})\n`);
+  texts.forEach((text, i) => { assert.ok(text.length <= 4096); assert.ok(text.startsWith(headers[i]!)); });
+  assert.equal(texts.map((text, i) => text.slice(headers[i]!.length)).join(""), body);
+  const parts = listRows(f.hive, "telegram_delivery_parts", { where: { seq: sent.seq }, columns: "part_key", orderBy: "telegram_message_id" });
+  assert.deepEqual(parts.map(p => p.part_key), texts.map((_, i) => i === 0 ? "text" : `text:${i + 1}`));
 });
