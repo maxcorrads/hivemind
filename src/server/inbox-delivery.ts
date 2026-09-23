@@ -45,6 +45,15 @@ export class InboxDeliveryStore {
       throw new HiveError(409, "Inbox session superseded or missing; explicitly join/open a new session");
   }
 
+  /** Whether the agent was offered the message, and acknowledged it (an acknowledged delivery wins). */
+  receiptState(agentId: string, seq: number): "pending" | "offered" | "acknowledged" {
+    const rows = this.db.prepare(`SELECT acknowledged_at FROM inbox_deliveries d
+      WHERE d.agent_id = ? AND EXISTS (SELECT 1 FROM json_each(d.seqs) WHERE CAST(value AS INTEGER) = ?)
+      ORDER BY acknowledged_at IS NOT NULL DESC LIMIT 1`).all(agentId, seq) as Array<{ acknowledged_at: number | null }>;
+    if (!rows.length) return "pending";
+    return rows[0]!.acknowledged_at === null ? "offered" : "acknowledged";
+  }
+
   pending(agentId: string): DeliveryRow | undefined {
     return this.db.prepare("SELECT * FROM inbox_deliveries WHERE agent_id = ? AND acknowledged_at IS NULL AND superseded_by IS NULL")
       .get(agentId) as DeliveryRow | undefined;

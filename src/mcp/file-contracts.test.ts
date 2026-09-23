@@ -41,13 +41,13 @@ test("real MCP fetch_file reads large image headers rather than a synthetic plac
   const server = startServer({ port: 0, hive, telegram: false });
   const port = await server.ready;
   t.after(async () => { const closed = once(server.server, "close"); server.shutdown(); server.server.closeAllConnections(); await closed; });
-  const joined = hive.join({ role: "worker", seniority: "mid" });
+  const joined = hive.identity.join({ role: "worker", seniority: "mid" });
   const oversized = Buffer.alloc(1_600_000);
   PNG.copy(oversized);
   oversized.writeUInt32BE(50_000, 16);
   oversized.writeUInt32BE(50_000, 20);
   PNG.subarray(-12).copy(oversized, oversized.length - 12);
-  const att = await hive.createFileFromBytes(joined.agent, { name: "oversized.png", mime: "image/png", bytes: oversized });
+  const att = await hive.files.createFileFromBytes(joined.agent, { name: "oversized.png", mime: "image/png", bytes: oversized });
   const mcp = await client(t, dir, `http://127.0.0.1:${port}`, joined.token);
   const result = await mcp.callTool({ name: "fetch_file", arguments: { id: att.id } });
   assert.equal(result.isError, undefined);

@@ -18,13 +18,13 @@ export function measureTimelineOverhead({ rows = TIMELINE_EVENT_LIMIT, samples =
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-timeline-bench-'));
   const hive = new Hive(path.join(dir, 'hive.db'));
   try {
-    const brain = hive.join({ role: 'brain' }), worker = hive.join({ role: 'worker', seniority: 'mid' });
-    const channel = hive.createChannel(brain.agent, { name: 'timeline-bench', type: 'private', memberNames: [worker.agent.name] });
+    const brain = hive.identity.join({ role: 'brain' }), worker = hive.identity.join({ role: 'worker', seniority: 'mid' });
+    const channel = hive.channels.createChannel(brain.agent, { name: 'timeline-bench', type: 'private', memberNames: [worker.agent.name] });
     const traceId = randomUUID();
     const writeStart = performance.now();
-    const root = hive.postMessage(brain.agent, { channel: channel.id, body: 'benchmark root', traceId });
+    const root = hive.messages.postMessage(brain.agent, { channel: channel.id, body: 'benchmark root', traceId });
     for (let index = 1; index < rows; index++)
-      hive.postMessage(brain.agent, { channel: channel.id, threadId: root.id, body: `progress ${index}`, eventType: 'progress', traceId });
+      hive.messages.postMessage(brain.agent, { channel: channel.id, threadId: root.id, body: `progress ${index}`, eventType: 'progress', traceId });
     const writeTotal = performance.now() - writeStart;
 
     for (let index = 0; index < 10; index++) hive.timeline.trace(brain.agent, traceId);

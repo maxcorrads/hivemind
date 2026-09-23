@@ -8,7 +8,7 @@ export type FileServiceDeps = Core & {
   /** The hive directory; blobs live under it. */
   readonly home: string;
   readonly uploads: UploadBudget;
-  readonly reader: MessageReader;
+  readonly messageQueries: MessageReader;
   readonly channels: ChannelAccess;
 };
 
@@ -90,7 +90,7 @@ export class FileService {
     const row = this.db.prepare("SELECT * FROM attachments WHERE id = ?").get(id) as AttachmentRow | undefined;
     if (!row) throw new HiveError(404, "Attachment not found");
     if (row.message_id) {
-      const { reader, channels } = this.deps;
+      const { messageQueries: reader, channels } = this.deps;
       const msg = reader.getMessageById(row.message_id);
       const ch = channels.getChannel(msg.channelId);
       if (!channels.canSeeChannel(actor, ch)) throw new HiveError(403, "Cannot access file");

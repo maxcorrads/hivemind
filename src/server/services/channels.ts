@@ -19,7 +19,7 @@ function dmLabel(a: Agent, b: Agent): string {
 
 export type ChannelServiceDeps = Core & {
   readonly projects: Pick<ProjectDirectory, "requireActorProject"> & { slugOf(projectId: string): string | null };
-  readonly agents: AgentDirectory;
+  readonly identity: AgentDirectory;
   readonly messages: Pick<MessagePoster, "postMessage">;
 };
 
@@ -123,6 +123,26 @@ export class ChannelService implements ChannelAccess {
     }));
   }
 
+  /**
+   * Ids of a project's channels. With a viewer, only those it may list coordination work from:
+   * Human sees all; anyone else needs membership, and with `brainsByRole` only brains see
+   * brains-type channels. A null project has no channels.
+   */
+  channelIdsIn(projectId: string | null, viewer?: Agent, brainsByRole = false): string[] {
+    const role = viewer?.role ?? "human";
+    const rows = this.db.prepare(`SELECT c.id FROM channels c WHERE c.project_id = ?
+      AND (? = 'human' OR (EXISTS (SELECT 1 FROM channel_members cm WHERE cm.channel_id = c.id AND cm.agent_id = ?)
+        AND (? = 0 OR ? = 'brain' OR c.type != 'brains')))`)
+      .all(projectId, role, viewer?.id ?? null, brainsByRole ? 1 : 0, role) as { id: string }[];
+    return rows.map((row) => row.id);
+  }
+
+  /** Ids of every channel (in any project) the agent is a member of. */
+  memberChannelIds(agentId: string): string[] {
+    return (this.db.prepare("SELECT channel_id FROM channel_members WHERE agent_id = ?").all(agentId) as { channel_id: string }[])
+      .map((row) => row.channel_id);
+  }
+
   getChannel(idOrName: string, projectId?: string | null): Channel {
     if (projectId) {
       const scoped = this.db.prepare(
@@ -190,7 +210,7 @@ export class ChannelService implements ChannelAccess {
     if (input.type === "brains" && actor.role !== "human") {
       throw new HiveError(403, "Only Human can create brains channels");
     }
-    const { storage, bus, agents, messages } = this.deps;
+    const { storage, bus, identity: agents, messages } = this.deps;
     const project = this.deps.projects.requireActorProject(actor, input.project);
     const slug = slugify(input.name);
     if (!slug) throw new HiveError(400, "Invalid channel name");
@@ -228,7 +248,7 @@ export class ChannelService implements ChannelAccess {
   }
 
   openDm(actor: Agent, otherName: string): Channel {
-    const other = this.deps.agents.getAgentByName(otherName);
+    const other = this.deps.identity.getAgentByName(otherName);
     if (!other) throw new HiveError(404, `No agent named ${otherName}`);
     if (actor.role === "bot" || other.role === "bot") throw new HiveError(403, "Bots publish observations to explicitly linked channels, not DMs");
     if (other.id === actor.id) throw new HiveError(400, "Cannot DM yourself");
@@ -282,7 +302,7 @@ export class ChannelService implements ChannelAccess {
     const ch = this.getChannel(channelRef, actor.projectId);
     if (!this.canSeeChannel(actor, ch)) throw new HiveError(403, "Cannot access channel");
     if (ch.type === "dm") throw new HiveError(400, "Cannot invite to a DM");
-    const { storage, bus, agents, messages } = this.deps;
+    const { storage, bus, identity: agents, messages } = this.deps;
     return storage.transaction(() => {
       const added: string[] = [];
       for (const name of memberNames) {

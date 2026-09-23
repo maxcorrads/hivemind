@@ -204,11 +204,11 @@ test('coordination evidence counts worker questions without retaining message bo
   const file = path.join(dir, 'hive.db');
   const hive = new Hive(file);
   t.after(() => { hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
-  const brain = hive.join({ role: 'brain' }).agent;
-  const a = hive.join({ role: 'worker', seniority: 'mid' }).agent;
-  const b = hive.join({ role: 'worker', seniority: 'mid' }).agent;
-  const roomChannel = hive.createChannel(brain, { name: 'clarification-evidence', type: 'private', memberNames: [a.name, b.name] });
-  hive.postMessage(a, { channel: roomChannel.id, body: 'Need the peer fact', recipients: [b.name], eventType: 'question' });
+  const brain = hive.identity.join({ role: 'brain' }).agent;
+  const a = hive.identity.join({ role: 'worker', seniority: 'mid' }).agent;
+  const b = hive.identity.join({ role: 'worker', seniority: 'mid' }).agent;
+  const roomChannel = hive.channels.createChannel(brain, { name: 'clarification-evidence', type: 'private', memberNames: [a.name, b.name] });
+  hive.messages.postMessage(a, { channel: roomChannel.id, body: 'Need the peer fact', recipients: [b.name], eventType: 'question' });
   const evidence = readCoordinationEvidence(file);
   assert.deepEqual(evidence, {
     questionMessages: 1,

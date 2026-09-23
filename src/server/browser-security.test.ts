@@ -153,9 +153,9 @@ process.stdin.on('end', () => {
   return {
     base, port, page: `http://127.0.0.1:${address.port}/__human_security_test__`,
     get hive() { return hive; },
-    profile() { return projectPlugins(home, hive.listProjects()[0]!)[0]!; },
+    profile() { return projectPlugins(home, hive.projects.listProjects()[0]!)[0]!; },
     executions() {
-      const file = path.join(projectPlugins(home, hive.listProjects()[0]!)[0]!.home, "executions");
+      const file = path.join(projectPlugins(home, hive.projects.listProjects()[0]!)[0]!.home, "executions");
       return existsSync(file) ? Number(readFileSync(file, "utf8")) : 0;
     },
     async restart() {
@@ -212,9 +212,9 @@ test("Chrome: real cookies isolate tabs/instances, reject cross-origin attacks, 
   assert.ok(cookies.every(cookie => cookie.httpOnly && cookie.sameSite === "Strict"));
 
   await chrome.select(tabB);
-  const native = a.hive.join({ role: "worker", seniority: "mid" });
+  const native = a.hive.identity.join({ role: "worker", seniority: "mid" });
   const identities = () => listRows(a.hive, "agents", { columns: ["id", "token_hash"], orderBy: "id" });
-  const victim = a.hive.createBot(a.hive.getAgent("human"), "chapter", { name: "BrowserVictim" });
+  const victim = a.hive.bots.createBot(a.hive.identity.getAgent("human"), "chapter", { name: "BrowserVictim" });
   const before = identities();
   const victimPath = `/api/ui/projects/chapter/bots/${victim.bot.id}/credential`;
   for (const action of ["rotate", "revoke"]) {
@@ -227,7 +227,7 @@ test("Chrome: real cookies isolate tabs/instances, reject cross-origin attacks, 
       return true;
     `);
     assert.equal(JSON.stringify(identities()) === JSON.stringify(before), true);
-    assert.equal(a.hive.botCredential(a.hive.getAgent("human"), "chapter", victim.bot.id).credential.revision, 1);
+    assert.equal(a.hive.bots.botCredential(a.hive.identity.getAgent("human"), "chapter", victim.bot.id).credential.revision, 1);
   }
   await chrome.evaluate(`
     await fetch(${JSON.stringify(`${a.base}/api/ui/projects/chapter/plugins/browser-fixture`)}, {
@@ -288,9 +288,9 @@ test("Chrome: real cookies isolate tabs/instances, reject cross-origin attacks, 
     await window.untilLive(2);
     return (await window.client.api.snapshot()).you.name;
   `), "Human");
-  assert.equal(a.hive.listProjects().filter(project => project.slug === "after-restart").length, 1);
-  const browserBot = a.hive.listAgents(a.hive.getAgent("human")).find(agent => agent.name === "BrowserFeed")!;
-  assert.deepEqual(a.hive.botCredential(a.hive.getAgent("human"), "chapter", browserBot.id).credential, { revision: 3, revoked: true });
+  assert.equal(a.hive.projects.listProjects().filter(project => project.slug === "after-restart").length, 1);
+  const browserBot = a.hive.identity.listAgents(a.hive.identity.getAgent("human")).find(agent => agent.name === "BrowserFeed")!;
+  assert.deepEqual(a.hive.bots.botCredential(a.hive.identity.getAgent("human"), "chapter", browserBot.id).credential, { revision: 3, revoked: true });
   assert.equal(a.executions(), 2); assert.equal(a.profile().revision, 2);
   assert.equal(a.profile().values.host, "browser-after-restart");
   assert.equal(b.executions(), 0); assert.equal(b.profile().revision, 0);

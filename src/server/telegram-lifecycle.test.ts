@@ -69,7 +69,7 @@ test("real bridge sends a job queued in the same turn as empty startup", async t
   });
   const bridge = new TelegramBridge(hive, { botToken: "fixture", allowUserIds: [1], groups: { chapter: -1001 } });
   bridge.start();
-  const message = hive.postMessage(hive.getAgent("human"), { channel: "general", body: "startup work" });
+  const message = hive.messages.postMessage(hive.identity.getAgent("human"), { channel: "general", body: "startup work" });
   try {
     await until(() => hasRow(hive, "telegram_out", { seq: message.seq }));
     assert.equal(calls, 1);
@@ -79,8 +79,8 @@ test("real bridge sends a job queued in the same turn as empty startup", async t
 
 test("stop drains a delayed old topic response without restoring a mapping or consuming its job", async t => {
   const { hive } = fixture(t);
-  const human = hive.getAgent("human");
-  const channel = hive.createChannel(human, { name: "delayed", type: "private", project: "chapter" });
+  const human = hive.identity.getAgent("human");
+  const channel = hive.channels.createChannel(human, { name: "delayed", type: "private", project: "chapter" });
   let release!: (response: Response) => void;
   let topicStarted = false;
   t.mock.method(globalThis, "fetch", async (url: unknown, init?: RequestInit) => {
@@ -91,7 +91,7 @@ test("stop drains a delayed old topic response without restoring a mapping or co
   });
   const bridge = new TelegramBridge(hive, { botToken: "fixture", allowUserIds: [1], groups: { chapter: -1001 } });
   bridge.start();
-  const message = hive.postMessage(human, { channel: channel.id, body: "pending" });
+  const message = hive.messages.postMessage(human, { channel: channel.id, body: "pending" });
   await until(() => topicStarted);
   const stopped = bridge.stop();
   release(Response.json({ ok: true, result: { message_thread_id: 17 } }));
@@ -126,7 +126,7 @@ test("shutdown fences new admission and keeps a caller-owned Hive usable", async
   assert.equal(shuttingDown, duplicate);
   await shuttingDown;
   await assert.rejects(() => fetch(`http://127.0.0.1:${port}/api/ui/snapshot`));
-  assert.equal(hive.getAgent("human").role, "human");
+  assert.equal(hive.identity.getAgent("human").role, "human");
 });
 
 test("shutdown deadline bounds an abort-ignoring bridge and closes remaining sockets", async t => {
@@ -156,7 +156,7 @@ test("shutdown deadline bounds an abort-ignoring bridge and closes remaining soc
     t.mock.timers.tick(1);
     await rejected;
     await closed;
-    assert.equal(hive.getAgent("human").role, "human");
+    assert.equal(hive.identity.getAgent("human").role, "human");
   } finally {
     release(Response.json({ ok: true, result: [] }));
     socket.destroy();

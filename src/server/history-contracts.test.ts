@@ -100,23 +100,23 @@ test("storage history visits 200+ eligible messages exactly once through sequenc
     hive.db.close();
     rmSync(dir, { recursive: true, force: true });
   });
-  const human = hive.getAgent("human");
-  const worker = hive.join({ role: "worker", seniority: "mid" }).agent;
-  const dm = hive.openDm(human, worker.name);
+  const human = hive.identity.getAgent("human");
+  const worker = hive.identity.join({ role: "worker", seniority: "mid" }).agent;
+  const dm = hive.channels.openDm(human, worker.name);
 
-  const root = hive.postMessage(human, { channel: "general", body: "thread root" });
+  const root = hive.messages.postMessage(human, { channel: "general", body: "thread root" });
   const expectedThread = [root.seq];
   for (let i = 0; i < 215; i += 1) {
     expectedThread.push(
-      hive.postMessage(human, { channel: "general", threadId: root.id, body: `reply ${i}` }).seq,
+      hive.messages.postMessage(human, { channel: "general", threadId: root.id, body: `reply ${i}` }).seq,
     );
-    hive.postMessage(human, { channel: dm.id, body: `global gap ${i}` });
+    hive.messages.postMessage(human, { channel: dm.id, body: `global gap ${i}` });
   }
 
   const forward: number[] = [];
   let after: number | undefined;
   for (;;) {
-    const page = hive.listMessages(human, "general", { threadId: root.id, afterSeq: after, limit: 17 });
+    const page = hive.messageQueries.listMessages(human, "general", { threadId: root.id, afterSeq: after, limit: 17 });
     forward.push(...page.messages.map((message) => message.seq));
     if (!page.hasNewer) break;
     assert.ok(page.cursors.after !== undefined);
@@ -128,7 +128,7 @@ test("storage history visits 200+ eligible messages exactly once through sequenc
   const backward: number[] = [];
   let before = Number.MAX_SAFE_INTEGER;
   for (;;) {
-    const page = hive.listMessages(human, "general", { threadId: root.id, beforeSeq: before, limit: 19 });
+    const page = hive.messageQueries.listMessages(human, "general", { threadId: root.id, beforeSeq: before, limit: 19 });
     backward.unshift(...page.messages.map((message) => message.seq));
     if (!page.hasOlder) break;
     assert.ok(page.cursors.before !== undefined);
@@ -137,7 +137,7 @@ test("storage history visits 200+ eligible messages exactly once through sequenc
   assert.deepEqual(backward, expectedThread);
   assert.equal(new Set(backward).size, expectedThread.length);
 
-  const final = hive.listMessages(human, "general", {
+  const final = hive.messageQueries.listMessages(human, "general", {
     threadId: root.id,
     afterSeq: expectedThread.at(-1),
     limit: 20,
@@ -146,12 +146,12 @@ test("storage history visits 200+ eligible messages exactly once through sequenc
   assert.equal(final.hasNewer, false);
 
   assert.throws(
-    () => hive.listMessages(human, "general", { afterSeq: 1, beforeSeq: 2 }),
+    () => hive.messageQueries.listMessages(human, "general", { afterSeq: 1, beforeSeq: 2 }),
     /either afterSeq or beforeSeq/,
   );
   for (const cursor of [NaN, -1, 0.5, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
     assert.throws(
-      () => hive.listMessages(human, "general", { afterSeq: cursor }),
+      () => hive.messageQueries.listMessages(human, "general", { afterSeq: cursor }),
       /nonnegative safe integer/,
     );
   }
@@ -160,19 +160,19 @@ test("storage history visits 200+ eligible messages exactly once through sequenc
 test("HTTP, CLI, and real MCP stdio expose the same history cursor semantics", async (t) => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-history-contract-"));
   const hive = new Hive(path.join(dir, "hive.db"));
-  const human = hive.getAgent("human");
-  const gapWorker = hive.join({ role: "worker", seniority: "junior", focus: "gap" });
-  const dm = hive.openDm(human, gapWorker.agent.name);
-  const reader = hive.join({ role: "brain", focus: "history-reader" });
+  const human = hive.identity.getAgent("human");
+  const gapWorker = hive.identity.join({ role: "worker", seniority: "junior", focus: "gap" });
+  const dm = hive.channels.openDm(human, gapWorker.agent.name);
+  const reader = hive.identity.join({ role: "brain", focus: "history-reader" });
   // Joins may create visible system history. Establish the cursor only after all
   // participants exist so the fixture's expected set contains only messages
   // intentionally created below.
-  const startSeq = hive.latestSeq("general");
+  const startSeq = hive.messageQueries.latestSeq("general");
   const expected: number[] = [];
 
   for (let i = 0; i < 225; i += 1) {
-    expected.push(hive.postMessage(human, { channel: "general", body: `root ${i}` }).seq);
-    if (i % 4 === 0) hive.postMessage(human, { channel: dm.id, body: `interleaved ${i}` });
+    expected.push(hive.messages.postMessage(human, { channel: "general", body: `root ${i}` }).seq);
+    if (i % 4 === 0) hive.messages.postMessage(human, { channel: dm.id, body: `interleaved ${i}` });
   }
   const started = startServer({ port: 0, hive, telegram: false });
   const port = await started.ready;

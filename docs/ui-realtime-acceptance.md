@@ -7,7 +7,7 @@ remaining acceptance cases below are implemented and verified.
 
 ## Included
 
-- Preserve the reviewed `Hive.touch` policy: unchanged online heartbeats write
+- Preserve the reviewed `IdentityService.touch` (`hive.identity.touch`) policy: unchanged online heartbeats write
   at most once per 15 seconds per agent; online/offline changes write and emit
   immediately; missing/deleted agents are no-ops. Liveness remains separate
   from visible presence broadcasts.

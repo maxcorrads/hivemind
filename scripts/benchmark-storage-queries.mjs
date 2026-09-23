@@ -5,13 +5,21 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 const source = process.argv[2] ? pathToFileURL(path.resolve(process.argv[2])) : new URL("../src/server/hive.ts", import.meta.url);
+/**
+ * A Hive operation, bound: on its owning service in current checkouts (hive.identity.getAgent) and on the
+ * Hive itself in older ones compared by this benchmark. Undefined when neither has it.
+ */
+function op(hive, service, method) {
+  const owner = typeof hive[service]?.[method] === 'function' ? hive[service] : hive;
+  return owner[method]?.bind(owner);
+}
 const { Hive } = await import(source.href);
 const home = mkdtempSync(path.join(os.tmpdir(), "hive-query-benchmark-"));
 const hive = new Hive(path.join(home, "hive.db"));
 try {
-  const human = hive.getAgent("human");
-  const worker = hive.join({ role: "worker", seniority: "mid" }).agent;
-  const other = hive.createProject(human, { name: "Benchmark B", slug: "benchmark-b" });
+  const human = op(hive, 'identity', 'getAgent')("human");
+  const worker = op(hive, 'identity', 'join')({ role: "worker", seniority: "mid" }).agent;
+  const other = op(hive, 'projects', 'createProject')(human, { name: "Benchmark B", slug: "benchmark-b" });
   const agent = hive.db.prepare(`INSERT INTO agents
     (id,name,role,seniority,token_hash,online,last_seen_at,created_at,inbox_cursor,project_id)
     VALUES (?,?,'worker','mid','fixture',0,1,1,0,?)`);
@@ -39,7 +47,7 @@ try {
     return statement;
   };
   const result = {};
-  for (const [name, operation] of [["listAgents", () => hive.listAgents(worker)], ["listChannels", () => hive.listChannels(worker)]]) {
+  for (const [name, operation] of [["listAgents", () => op(hive, 'identity', 'listAgents')(worker)], ["listChannels", () => op(hive, 'channels', 'listChannels')(worker)]]) {
     statements = 0; returnedRows = 0;
     const rows = operation();
     result[name] = { statements, returnedHydrationRows: returnedRows, visibleResults: rows.length };

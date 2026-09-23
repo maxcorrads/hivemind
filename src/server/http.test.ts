@@ -183,7 +183,7 @@ test("HTTP protocol: join, isolate, wait, Human admin", async () => {
     const seen = await json(base, "POST", "/api/ui/mentions/seen");
     assert.equal(seen.status, 200);
     assert.equal(seen.data.messages.length, 0);
-    const remaining = hive.listMessages(hive.getAgent("human"), "general", { limit: 200 }).messages
+    const remaining = hive.messageQueries.listMessages(hive.identity.getAgent("human"), "general", { limit: 200 }).messages
       .filter((message) => message.authorId !== "human" && !message.mentions.includes("human"));
     assert.equal(seen.data.unread.general ?? 0, remaining.length);
     assert.ok(remaining.length > 0);
@@ -260,7 +260,7 @@ test("Human Telegram UI saves settings and never returns the bot token", async t
     assert.equal(stillMapped.data.projects.altro, -1003);
     const badSlug = await json(base, "DELETE", "/api/ui/projects/NOPE!");
     assert.equal(badSlug.status, 400);
-    hive.setOffline(live.data.agent.id);
+    hive.identity.setOffline(live.data.agent.id);
     const gone = await json(base, "DELETE", "/api/ui/projects/altro");
     assert.equal(gone.status, 200);
     const snap = await json(base, "GET", "/api/ui/snapshot");

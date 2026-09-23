@@ -49,6 +49,14 @@ function instrument(db) {
   // db.exec are not inferred from this wrapper or mislabeled as scanned rows.
   return { reset, sample: () => ({ ...state }), restore: () => { db.prepare = prepare; } };
 }
+/**
+ * A Hive operation, bound: on its owning service in current checkouts (hive.identity.getAgent) and on the
+ * Hive itself in older ones compared by this benchmark. Undefined when neither has it.
+ */
+function op(hive, service, method) {
+  const owner = typeof hive[service]?.[method] === 'function' ? hive[service] : hive;
+  return owner[method]?.bind(owner);
+}
 export async function measureFixture(Hive, createApp, fixture, samples = 12) {
   assert.ok(Number.isSafeInteger(samples) && samples >= 1 && samples <= 30);
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-storage-matrix-'));
@@ -56,14 +64,14 @@ export async function measureFixture(Hive, createApp, fixture, samples = 12) {
   const delay = monitorEventLoopDelay({ resolution: 10 });
   let measurements;
   try {
-    const human = hive.getAgent('human');
-    const sender = hive.join({ role: 'worker', seniority: 'mid' }).agent;
+    const human = op(hive, 'identity', 'getAgent')('human');
+    const sender = op(hive, 'identity', 'join')({ role: 'worker', seniority: 'mid' }).agent;
     const readers = Array.from({ length: fixture.agents }, () => {
-      const agent = hive.join({ role: 'brain' }).agent;
-      return { agent, channel: hive.openDm(agent, sender.name).id,
-        sessionId: hive.openInboxSession?.(agent, randomUUID()) };
+      const agent = op(hive, 'identity', 'join')({ role: 'brain' }).agent;
+      return { agent, channel: op(hive, 'channels', 'openDm')(agent, sender.name).id,
+        sessionId: op(hive, 'delivery', 'openInboxSession')?.(agent, randomUUID()) };
     });
-    const projects = Array.from({ length: fixture.foreignProjects }, (_, i) => hive.createProject(human, { name: `Foreign ${i}`, slug: `foreign-${i}` }));
+    const projects = Array.from({ length: fixture.foreignProjects }, (_, i) => op(hive, 'projects', 'createProject')(human, { name: `Foreign ${i}`, slug: `foreign-${i}` }));
     const createAgent = hive.db.prepare(`INSERT INTO agents
       (id,name,role,seniority,token_hash,online,last_seen_at,created_at,inbox_cursor,project_id)
       VALUES (?,?,'worker','mid',?,0,1,1,0,?)`);
@@ -119,15 +127,15 @@ export async function measureFixture(Hive, createApp, fixture, samples = 12) {
     };
     delay.enable(); await new Promise(resolve => setTimeout(resolve, 20));
     await run('projectRoster', () => {
-      const roster = hive.listAgents(readers[0].agent);
+      const roster = op(hive, 'identity', 'listAgents')(readers[0].agent);
       assert.ok(roster.every(a => a.role === 'human' || a.projectId === readers[0].agent.projectId)); return roster;
     });
     await run('projectChannels', () => {
-      const channels = hive.listChannels(readers[0].agent);
+      const channels = op(hive, 'channels', 'listChannels')(readers[0].agent);
       assert.ok(channels.every(c => c.projectId === readers[0].agent.projectId)); return channels;
     });
     await run('history', () => {
-      const result = hive.listMessages(readers[0].agent, readers[0].channel, { limit: 20 });
+      const result = op(hive, 'messageQueries', 'listMessages')(readers[0].agent, readers[0].channel, { limit: 20 });
       assert.ok(result.messages.every(m => m.channelId === readers[0].channel)); return result;
     });
     // A Human snapshot is deliberately global, not a project-A query. Bound
@@ -150,10 +158,10 @@ export async function measureFixture(Hive, createApp, fixture, samples = 12) {
         for (let attempts = 0; received.length < expected[index].length; attempts++) {
           assert.ok(attempts < 1000, 'Drain stalled or exceeded the bounded benchmark budget');
           const before = performance.now();
-          const result = await hive.wait(reader.agent, 1, undefined, { compact: false, sessionId: reader.sessionId });
+          const result = await op(hive, 'delivery', 'wait')(reader.agent, 1, undefined, { compact: false, sessionId: reader.sessionId });
           waits.push(performance.now() - before); sizes.push(Buffer.byteLength(JSON.stringify(result)));
           received.push(...result.messages.map(message => message.id));
-          if (result.delivery) hive.acknowledgeInbox(reader.agent, result.delivery.sessionId, result.delivery.id);
+          if (result.delivery) op(hive, 'delivery', 'acknowledgeInbox')(reader.agent, result.delivery.sessionId, result.delivery.id);
         }
         assert.deepEqual(received, expected[index], 'Loss, duplication or cross-project leakage');
       }));

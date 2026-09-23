@@ -19,9 +19,9 @@ after(() => window.happyDOM.close());
 
 async function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'room-ui-retry-'));
-  const hive = new Hive(path.join(dir, 'hive.db')), human = hive.getAgent('human');
-  const brain = hive.join({ role: 'brain' }).agent;
-  const channel = hive.createChannel(brain, { name: 'synthetic-room', type: 'private' });
+  const hive = new Hive(path.join(dir, 'hive.db')), human = hive.identity.getAgent('human');
+  const brain = hive.identity.join({ role: 'brain' }).agent;
+  const channel = hive.channels.createChannel(brain, { name: 'synthetic-room', type: 'private' });
   const contract = { mode: 'ongoing', purpose: 'Synthetic observations', rules: ['Inspect only'], limits: [],
     coordinator: brain.name, participants: [], completion: ['Human ends the fixture'], originTaskId: null };
   hive.rooms.event(human, channel.id, { requestId: 'initial', expectedRevision: 0,

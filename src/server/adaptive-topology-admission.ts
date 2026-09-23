@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { AdmissionHost } from './services/ports.ts';
+import type { AdmissionDeps } from './services/ports.ts';
 import { HiveError, type Agent, type Channel, type Message } from '../shared/types.ts';
 import type { TaskContract, TaskSnapshot } from '../shared/tasks.ts';
 import type { AdaptiveAgentPolicy, AdaptiveCoordinationEvent } from './adaptive-topology.ts';
@@ -13,7 +13,7 @@ type Permit = { executionId: string; revision: number; workerId: string; channel
   requestId: string; contractHash: string; expiresAt: number };
 
 /**
- * In-memory admission state of one AdaptiveTopologyRuntime (`hive.adaptiveTopology.admission`):
+ * In-memory admission state of one AdaptiveTopologyRuntime (`deps.adaptiveTopology.admission`):
  * - `permits`: the short-lived pre-action capability per brain (see permitAdaptiveTask);
  * - `lanes`: each brain's serialized coordination tail (see coordinateMutation);
  * - `followUps`: post-commit routing tasks still running (see settleAdaptiveFollowUps).
@@ -28,44 +28,43 @@ export class AdaptiveAdmission {
 function contractHash(contract: TaskContract): string {
   return createHash('sha256').update(JSON.stringify(contract)).digest('hex');
 }
-function stateRevision(hive: AdmissionHost, executionId: string): number {
-  const row = hive.storage.db.prepare("SELECT COALESCE(json_extract(snapshot,'$.revision'),0) AS revision FROM adaptive_topology_executions WHERE execution_id=?")
-    .get(executionId);
-  if (!row) throw new HiveError(409, 'Adaptive execution changed');
-  return Number(row.revision);
+function stateRevision(deps: AdmissionDeps, executionId: string): number {
+  const revision = deps.adaptiveTopology.store.executionRevision(executionId);
+  if (revision === undefined) throw new HiveError(409, 'Adaptive execution changed');
+  return revision;
 }
 
 /** Only the pre-action controller can create this short-lived capability. Never accepted from request JSON. */
-export function permitAdaptiveTask(hive: AdmissionHost, actor: Agent, input: {
+export function permitAdaptiveTask(deps: AdmissionDeps, actor: Agent, input: {
   requestId: string; worker: string; channel?: string; contract: TaskContract;
 }, policy: AdaptiveAgentPolicy | null): void {
   if (!policy) return;
-  const worker = hive.getAgentByName(input.worker);
+  const worker = deps.identity.getAgentByName(input.worker);
   if (!worker || worker.role !== 'worker' || worker.projectId !== actor.projectId)
     throw new HiveError(400, 'Select a worker in this project');
-  hive.adaptiveTopology.admission.permits.set(actor.id, { executionId: policy.executionId, revision: stateRevision(hive, policy.executionId),
-    workerId: worker.id, channelId: input.channel ? hive.getChannel(input.channel, actor.projectId).id : null,
+  deps.adaptiveTopology.admission.permits.set(actor.id, { executionId: policy.executionId, revision: stateRevision(deps, policy.executionId),
+    workerId: worker.id, channelId: input.channel ? deps.channels.getChannel(input.channel, actor.projectId).id : null,
     requestId: input.requestId, contractHash: contractHash(input.contract), expiresAt: Date.now() + 10_000 });
 }
-export function clearAdaptivePermit(hive: AdmissionHost, actorId: string): void {
-  hive.adaptiveTopology?.admission.permits.delete(actorId);
+export function clearAdaptivePermit(deps: AdmissionDeps, actorId: string): void {
+  deps.adaptiveTopology?.admission.permits.delete(actorId);
 }
 
-export function assertAdaptiveWorkerAdmission(hive: AdmissionHost, actor: Agent, channel: Channel,
+export function assertAdaptiveWorkerAdmission(deps: AdmissionDeps, actor: Agent, channel: Channel,
   workerIds: string[], policy: AdaptiveAgentPolicy): void {
   if (policy.currentTopology === 'single') throw new HiveError(409, 'Adaptive routing retains Single; new delegation is blocked');
   if (policy.delegationPaused) throw new HiveError(409, 'Adaptive de-escalation pending; finish existing work first');
-  const usesRoom = Boolean(hive.rooms.peek(channel.id));
+  const usesRoom = Boolean(deps.rooms.peek(channel.id));
   if (usesRoom !== (policy.currentTopology === 'brain_multi_room'))
     throw new HiveError(409, usesRoom ? 'Applied topology does not permit new room work' : 'Applied topology is Room; new work must use its room contract');
-  const capacity = readAdaptiveCapacity(hive, { projectId: channel.projectId, executionId: policy.executionId });
+  const capacity = readAdaptiveCapacity(deps, { projectId: channel.projectId, executionId: policy.executionId });
   const chosen = [...new Set(workerIds)];
   let additional = 0;
   for (const id of chosen) {
-    const worker = hive.getAgent(id);
+    const worker = deps.identity.getAgent(id);
     const candidate = capacity.workers.available.find(item => item.id === id);
     if (worker.role !== 'worker' || worker.projectId !== actor.projectId || !candidate ||
-      !hive.canSeeChannel(worker, channel) || !hive.canPost(worker, channel))
+      !deps.channels.canSeeChannel(worker, channel) || !deps.channels.canPost(worker, channel))
       throw new HiveError(409, 'A selected worker is no longer available to this execution');
     if (!candidate.committed) additional++;
   }
@@ -74,59 +73,57 @@ export function assertAdaptiveWorkerAdmission(hive: AdmissionHost, actor: Agent,
 }
 
 /** Called inside TaskStore's existing write transaction, before any task/message row is inserted. */
-export function admitAdaptiveTask(hive: AdmissionHost, actor: Agent, task: TaskSnapshot, requestId: string): string | null {
-  if (!hive.adaptiveTopology?.hasActive(actor)) return null;
-  const permit = hive.adaptiveTopology.admission.permits.get(actor.id);
+export function admitAdaptiveTask(deps: AdmissionDeps, actor: Agent, task: TaskSnapshot, requestId: string): string | null {
+  if (!deps.adaptiveTopology?.hasActive(actor)) return null;
+  const permit = deps.adaptiveTopology.admission.permits.get(actor.id);
   // The permit names the execution this assignment was verified against.
-  const policy = permit ? hive.adaptiveTopology.forAgent(actor, permit.executionId) : null;
+  const policy = permit ? deps.adaptiveTopology.forAgent(actor, permit.executionId) : null;
   if (!permit || !policy || permit.expiresAt < Date.now() ||
-    permit.revision !== stateRevision(hive, policy.executionId) || permit.requestId !== requestId ||
+    permit.revision !== stateRevision(deps, policy.executionId) || permit.requestId !== requestId ||
     permit.workerId !== task.workerId || permit.contractHash !== contractHash(task.contract) ||
     (permit.channelId !== null && permit.channelId !== task.channelId))
     throw new HiveError(409, 'A fresh Jev coordination check is required before this assignment');
-  const channel = hive.getChannel(task.channelId, actor.projectId);
+  const channel = deps.channels.getChannel(task.channelId, actor.projectId);
   if (permit.channelId === null && channel.type !== 'dm')
     throw new HiveError(409, 'Adaptive assignment destination changed after verification');
-  assertAdaptiveWorkerAdmission(hive, actor, channel, [task.workerId], policy);
+  assertAdaptiveWorkerAdmission(deps, actor, channel, [task.workerId], policy);
   return policy.executionId;
 }
 
 /** Called after task_records is written but before the same transaction commits. */
-export function linkAdaptiveTask(hive: AdmissionHost, taskId: string, executionId: string | null): void {
+export function linkAdaptiveTask(deps: AdmissionDeps, taskId: string, executionId: string | null): void {
   if (!executionId) return;
-  const previous = hive.storage.db.prepare('SELECT execution_id FROM adaptive_topology_tasks WHERE task_id=?').get(taskId);
-  if (previous && previous.execution_id !== executionId) throw new HiveError(409, 'Task belongs to another adaptive execution');
-  hive.storage.db.prepare('INSERT OR IGNORE INTO adaptive_topology_tasks(task_id,execution_id) VALUES(?,?)').run(taskId, executionId);
+  const previous = deps.adaptiveTopology.store.taskExecution(taskId);
+  if (previous !== undefined && previous !== executionId) throw new HiveError(409, 'Task belongs to another adaptive execution');
+  deps.adaptiveTopology.store.linkTask(taskId, executionId);
 }
 
 /** postMessage's receipt callback runs inside its transaction: no post-commit reservation race. */
-export function bindAdaptiveMessage(hive: AdmissionHost, actor: Agent, message: Message,
+export function bindAdaptiveMessage(deps: AdmissionDeps, actor: Agent, message: Message,
   workerIds: string[], expected: AdaptiveAgentPolicy | null): void {
   if (!expected || workerIds.length === 0) return;
-  const current = hive.adaptiveTopology.forAgent(actor, expected.executionId);
+  const current = deps.adaptiveTopology.forAgent(actor, expected.executionId);
   if (!current || current.executionId !== expected.executionId || current.currentTopology !== expected.currentTopology ||
     current.workerBudget !== expected.workerBudget)
     throw new HiveError(409, 'Adaptive policy changed before message delivery');
-  const channel = hive.getChannel(message.channelId, actor.projectId);
-  if (hive.storage.db.prepare('SELECT status FROM threads WHERE id=?').get(message.threadId ?? message.id)?.status === 'done')
+  const channel = deps.channels.getChannel(message.channelId, actor.projectId);
+  if (deps.messageQueries.threadStatus(message.threadId ?? message.id) === 'done')
     throw new HiveError(409, 'Delegation thread is completed; start a new assignment instead of reusing closed work');
-  assertAdaptiveWorkerAdmission(hive, actor, channel, workerIds, current);
+  assertAdaptiveWorkerAdmission(deps, actor, channel, workerIds, current);
   for (const workerId of new Set(workerIds)) {
     const root = message.threadId ?? message.id;
-    const previous = hive.storage.db.prepare('SELECT execution_id FROM adaptive_topology_messages WHERE root_id=? AND worker_id=?').get(root, workerId);
-    if (previous && previous.execution_id !== current.executionId)
+    const previous = deps.adaptiveTopology.store.delegationExecution(root, workerId);
+    if (previous !== undefined && previous !== current.executionId)
       throw new HiveError(409, 'This delegation thread belongs to another execution');
-    hive.storage.db.prepare(`INSERT OR IGNORE INTO adaptive_topology_messages
-      (root_id,worker_id,execution_id,project_id) VALUES(?,?,?,?)`)
-      .run(root, workerId, current.executionId, channel.projectId);
+    deps.adaptiveTopology.store.bindDelegation(root, workerId, current.executionId, channel.projectId);
   }
 }
 
 /** Post-commit routing that must not hold a brain's lane (e.g. project-wide revalidation after capacity changes). */
 export type DeferRouting = (label: string, task: () => Promise<unknown>) => void;
-function startFollowUps(hive: AdmissionHost, tasks: Array<[string, () => Promise<unknown>]>): void {
+function startFollowUps(deps: AdmissionDeps, tasks: Array<[string, () => Promise<unknown>]>): void {
   if (!tasks.length) return;
-  const running = hive.adaptiveTopology.admission.followUps;
+  const running = deps.adaptiveTopology.admission.followUps;
   for (const [label, task] of tasks) {
     const pending: Promise<void> = Promise.resolve().then(task).then(() => undefined, (error: unknown) => {
       console.error(`Adaptive ${label} failed after commit`, error instanceof Error ? error.message : String(error));
@@ -135,8 +132,8 @@ function startFollowUps(hive: AdmissionHost, tasks: Array<[string, () => Promise
   }
 }
 /** Deterministic hook for tests and shutdown: resolves once every started post-commit routing task settled. */
-export async function settleAdaptiveFollowUps(hive: AdmissionHost): Promise<void> {
-  const running = hive.adaptiveTopology.admission.followUps;
+export async function settleAdaptiveFollowUps(deps: AdmissionDeps): Promise<void> {
+  const running = deps.adaptiveTopology.admission.followUps;
   while (running.size) await Promise.all(running);
 }
 
@@ -157,12 +154,12 @@ export async function settleAdaptiveFollowUps(hive: AdmissionHost): Promise<void
  * brains without an active (enabled or locked) execution and no pending coordination of their own.
  * Work registered through `defer` runs after the lane is released, fire-and-forget with error logging.
  */
-export function coordinateMutation<T>(hive: AdmissionHost, actor: Agent, work: (defer: DeferRouting) => Promise<T>): Promise<T> {
-  const map = hive.adaptiveTopology.admission.lanes;
+export function coordinateMutation<T>(deps: AdmissionDeps, actor: Agent, work: (defer: DeferRouting) => Promise<T>): Promise<T> {
+  const map = deps.adaptiveTopology.admission.lanes;
   const deferred: Array<[string, () => Promise<unknown>]> = [];
   const run = () => work((label, task) => { deferred.push([label, task]); });
   const key = actor.id;
-  const bypass = actor.role !== 'brain' || (!map.has(key) && !hive.adaptiveTopology.hasActive(actor));
+  const bypass = actor.role !== 'brain' || (!map.has(key) && !deps.adaptiveTopology.hasActive(actor));
   let result: Promise<T>;
   if (bypass) result = run();
   else {
@@ -173,7 +170,7 @@ export function coordinateMutation<T>(hive: AdmissionHost, actor: Agent, work: (
     map.set(key, finished);
   }
   // Deferred routing starts once this mutation settled, i.e. after it left its lane.
-  void result.then(() => undefined, () => undefined).finally(() => startFollowUps(hive, deferred));
+  void result.then(() => undefined, () => undefined).finally(() => startFollowUps(deps, deferred));
   return result;
 }
 

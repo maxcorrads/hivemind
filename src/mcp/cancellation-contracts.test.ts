@@ -106,44 +106,44 @@ test("cancelled and superseded Hive waits do not consume queued mail or leak sig
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const human = hive.getAgent("human");
-  const joined = hive.join({ role: "worker", seniority: "mid" });
+  const human = hive.identity.getAgent("human");
+  const joined = hive.identity.join({ role: "worker", seniority: "mid" });
   const worker = joined.agent;
-  const dm = hive.openDm(human, worker.name);
+  const dm = hive.channels.openDm(human, worker.name);
 
-  const alreadyQueued = hive.postMessage(human, { channel: dm.id, body: "already queued before cancellation" });
+  const alreadyQueued = hive.messages.postMessage(human, { channel: dm.id, body: "already queued before cancellation" });
   const pre = new AbortController();
   pre.abort(new DOMException("already cancelled", "AbortError"));
   const beforeCursor = inboxCursor(hive, worker.id);
-  const preResult = await hive.wait(worker, 60_000, pre.signal);
+  const preResult = await hive.delivery.wait(worker, 60_000, pre.signal);
   assert.equal(preResult.idle, true);
   assert.equal(getEventListeners(pre.signal, "abort").length, 0);
   const afterCursor = inboxCursor(hive, worker.id);
   assert.equal(afterCursor, beforeCursor);
-  const afterCancelled = await hive.wait(worker, 60_000);
+  const afterCancelled = await hive.delivery.wait(worker, 60_000);
   assert.equal(afterCancelled.messages.filter((message) => message.id === alreadyQueued.id).length, 1);
   assert.ok(afterCancelled.delivery);
-  hive.acknowledgeInbox(worker, afterCancelled.delivery.sessionId, afterCancelled.delivery.id);
+  hive.delivery.acknowledgeInbox(worker, afterCancelled.delivery.sessionId, afterCancelled.delivery.id);
 
   const active = new AbortController();
-  const cancelledWait = hive.wait(worker, 60_000, active.signal);
+  const cancelledWait = hive.delivery.wait(worker, 60_000, active.signal);
   assert.equal(getEventListeners(active.signal, "abort").length, 1);
   active.abort(new DOMException("cancel active wait", "AbortError"));
   const cancelled = await cancelledWait;
   assert.equal(cancelled.idle, true);
   assert.equal(getEventListeners(active.signal, "abort").length, 0);
 
-  const queued = hive.postMessage(human, { channel: dm.id, body: "survives cancellation" });
-  const next = await hive.wait(worker, 60_000);
+  const queued = hive.messages.postMessage(human, { channel: dm.id, body: "survives cancellation" });
+  const next = await hive.delivery.wait(worker, 60_000);
   assert.equal(next.idle, false);
   assert.equal(next.messages.filter((message) => message.id === queued.id).length, 1);
   assert.ok(next.delivery);
-  hive.acknowledgeInbox(worker, next.delivery.sessionId, next.delivery.id);
+  hive.delivery.acknowledgeInbox(worker, next.delivery.sessionId, next.delivery.id);
 
-  const first = hive.wait(worker, 60_000);
-  const replacement = hive.wait(worker, 60_000);
+  const first = hive.delivery.wait(worker, 60_000);
+  const replacement = hive.delivery.wait(worker, 60_000);
   await assert.rejects(first, /superseded/);
-  const replacementMail = hive.postMessage(human, { channel: dm.id, body: "replacement receives me" });
+  const replacementMail = hive.messages.postMessage(human, { channel: dm.id, body: "replacement receives me" });
   const replacementResult = await replacement;
   assert.equal(
     replacementResult.messages.filter((message) => message.id === replacementMail.id).length,

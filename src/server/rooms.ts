@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { RoomStoreHost } from './services/ports.ts';
+import type { RoomStoreDeps } from './services/ports.ts';
 import { HiveError, type Agent, type Channel, type Message } from '../shared/types.ts';
 import { roomEventSchema, sourceLinkSchema, sourceReportSchema, type Room, type RoomTask, type RoomView, type SourceLink } from '../shared/rooms.ts';
 import type { TaskSnapshot } from '../shared/tasks.ts';
@@ -7,16 +7,16 @@ import type { TaskSnapshot } from '../shared/tasks.ts';
 type TaskLink = { task_id: string; channel_id: string; version: number; action_key: string; payload_hash: string; status: 'active' | 'stop_requested' | 'stopped' };
 const finished = (t: TaskSnapshot) => ['accepted_complete', 'rejected'].includes(t.state);
 export class RoomStore {
-  constructor(private hive: RoomStoreHost) {}
-  private get db() { return this.hive.storage.db; }
+  constructor(private readonly deps: RoomStoreDeps) {}
+  private get db() { return this.deps.storage.db; }
   private hash(v: unknown) { return createHash('sha256').update(JSON.stringify(v)).digest('hex'); }
   peek(channel: string): Room | null {
     const row = this.db.prepare('SELECT snapshot FROM rooms WHERE channel_id=?').get(channel);
     return row ? JSON.parse(String(row.snapshot)) : null;
   }
   private channel(actor: Agent, channel: string) {
-    const ch = this.hive.getChannel(channel, actor.projectId);
-    if (!this.hive.canSeeChannel(actor, ch)) throw new HiveError(403, 'Cannot access this room');
+    const ch = this.deps.channels.getChannel(channel, actor.projectId);
+    if (!this.deps.channels.canSeeChannel(actor, ch)) throw new HiveError(403, 'Cannot access this room');
     return ch;
   }
   private tasks(channel: string, before = '~'): TaskSnapshot[] {
@@ -40,7 +40,7 @@ export class RoomStore {
     const tasks = this.tasks(ch.id, beforeTask), hasMore = tasks.length > 100;
     return { room: this.peek(ch.id), links, activeTaskCount: this.running(ch.id).length, tasksHasMore: hasMore, nextTaskCursor: hasMore ? tasks[99]!.id : null, tasks: tasks.slice(0, 100).flatMap(t => {
       const room = this.taskInfo(t); return room ? [{ id: t.id, worker: t.workerName, state: t.state, room }] : [];
-    }), unmanagedBots: ch.memberIds.map(id => this.hive.getAgent(id)).filter(a => a.role === 'bot' && !links.some(l => l.botId === a.id)).map(a => a.name) };
+    }), unmanagedBots: ch.memberIds.map(id => this.deps.identity.getAgent(id)).filter(a => a.role === 'bot' && !links.some(l => l.botId === a.id)).map(a => a.name) };
   }
   history(actor: Agent, channel: string, before = Number.MAX_SAFE_INTEGER) {
     if (!Number.isSafeInteger(before) || before < 1) throw new HiveError(400, 'before must be a positive revision');
@@ -53,18 +53,19 @@ export class RoomStore {
     this.db.prepare('INSERT INTO rooms(channel_id,snapshot) VALUES(?,?) ON CONFLICT(channel_id) DO UPDATE SET snapshot=excluded.snapshot')
       .run(room.channelId, JSON.stringify(room));
   }
-  private message(actor: Agent, channel: Channel, body: string, recipients: string[], threadId: string | null = null) {
+  private message(actor: Agent, channel: Channel, body: string, recipients: string[], threadId: string | null = null,
+    eventType: 'decision' | 'acknowledgement' = 'decision') {
     if (body.length > 4000) throw new HiveError(400, 'Room message too large');
-    const id = randomUUID(), targets = JSON.stringify([...new Set(recipients)].filter(t => this.hive.canSeeChannel(this.hive.getAgent(t), channel)));
-    this.db.prepare(`INSERT INTO messages(id,channel_id,thread_id,author_id,body,kind,event_type,mentions,recipients,created_at)
-      VALUES(?,?,?,?,?,'chat','decision',?,?,?)`).run(id, channel.id, threadId, actor.id, body, targets, targets, Date.now());
-    return this.hive.getMessageById(id);
+    const id = randomUUID(), targets = JSON.stringify([...new Set(recipients)].filter(t => this.deps.channels.canSeeChannel(this.deps.identity.getAgent(t), channel)));
+    this.deps.messages.insertCoordinationMessage({ id, channelId: channel.id, threadId, authorId: actor.id, body, eventType,
+      mentions: targets, recipients: targets, createdAt: Date.now() });
+    return this.deps.messageQueries.getMessageById(id);
   }
   private instruction(actor: Agent, ch: Channel, seq: number | undefined, previous: number | null) {
     if (actor.role === 'human') return seq ?? previous;
     if (!seq) throw new HiveError(403, 'A Human instruction sequence is required for this change');
-    const m = this.hive.getVisibleMessage(actor, seq);
-    if (m.authorRole !== 'human' || m.kind !== 'chat' || this.hive.getChannel(m.channelId).projectId !== ch.projectId)
+    const m = this.deps.messageQueries.getVisibleMessage(actor, seq);
+    if (m.authorRole !== 'human' || m.kind !== 'chat' || this.deps.channels.getChannel(m.channelId).projectId !== ch.projectId)
       throw new HiveError(403, 'Reference a real Human message in this project, not bot or quoted authority');
     if (previous !== null && seq <= previous) throw new HiveError(409, 'Use a new Human instruction for a new scope/lifecycle change');
     return seq;
@@ -75,7 +76,7 @@ export class RoomStore {
     if (!parsed.success) throw new HiveError(400, 'Invalid room event: ' + parsed.error.message);
     const input = parsed.data, action = input.action, ch = this.channel(actor, channel);
     const hash = this.hash({ channel: ch.id, input }); const messages: Message[] = [];
-    const duplicate = this.hive.storage.transaction(() => {
+    const duplicate = this.deps.storage.transaction(() => {
       const retry = this.db.prepare('SELECT * FROM room_events WHERE actor_id=? AND request_id=?').get(actor.id, input.requestId);
       if (retry) {
         if (retry.hash !== hash) throw new HiveError(409, 'Room requestId reused with different payload');
@@ -110,15 +111,15 @@ export class RoomStore {
           throw new HiveError(400, 'Finite rooms require a private channel; ongoing contracts require public/private channels');
         if (room?.state === 'archived') throw new HiveError(409, 'Reopen before editing the contract');
         if (!room && this.running(ch.id).length) throw new HiveError(409, 'Finish existing tasks before installing a room contract');
-        const brain = this.hive.getAgentByName(contract.coordinator);
-        if (!brain || brain.role !== 'brain' || brain.projectId !== ch.projectId || !this.hive.canSeeChannel(brain, ch))
+        const brain = this.deps.identity.getAgentByName(contract.coordinator);
+        if (!brain || brain.role !== 'brain' || brain.projectId !== ch.projectId || !this.deps.channels.canSeeChannel(brain, ch))
           throw new HiveError(400, 'Coordinator must be an invited brain in this project');
         if (actor.role === 'brain' && actor.id !== brain.id) throw new HiveError(403, 'Only Human changes the coordinator');
         if (room && room.coordinatorId !== brain.id && this.running(ch.id).length)
           throw new HiveError(409, 'Coordinator change requires no running tasks; existing task ownership is not transferred');
         const participants = contract.participants.map(p => {
-          const a = this.hive.getAgentByName(p.name);
-          if (!a || a.role !== 'worker' || a.projectId !== ch.projectId || !this.hive.canSeeChannel(a, ch))
+          const a = this.deps.identity.getAgentByName(p.name);
+          if (!a || a.role !== 'worker' || a.projectId !== ch.projectId || !this.deps.channels.canSeeChannel(a, ch))
             throw new HiveError(400, 'Each participant must be an invited worker in this project');
           return a.id;
         });
@@ -128,7 +129,7 @@ export class RoomStore {
         if (room && (room.contract.mode !== contract.mode || room.contract.originTaskId !== contract.originTaskId))
           throw new HiveError(409, 'Room mode and originating task are immutable; create another room');
         if (contract.originTaskId) {
-          const origin = this.hive.tasks.get(brain, contract.originTaskId);
+          const origin = this.deps.tasks.get(brain, contract.originTaskId);
           if ((!room && origin.assignerId !== brain.id) || origin.channelId === ch.id) throw new HiveError(403, 'Origin must be a task assigned by this brain outside the room');
         }
         room = { channelId: ch.id, revision: room?.revision ?? 0, contractVersion: (room?.contractVersion ?? 0) + 1,
@@ -157,7 +158,7 @@ export class RoomStore {
           this.db.prepare('INSERT INTO room_acks(channel_id,actor_id,version) VALUES(?,?,?) ON CONFLICT(channel_id,actor_id) DO UPDATE SET version=excluded.version')
             .run(ch.id, actor.id, action.contractVersion);
         } else if (action.type === 'reconcile' || action.type === 'stopped') {
-          const t = this.hive.tasks.get(actor, action.taskId), info = this.taskInfo(t);
+          const t = this.deps.tasks.get(actor, action.taskId), info = this.taskInfo(t);
           if (t.channelId !== ch.id || !info || finished(t)) throw new HiveError(409, 'Select running work in this room');
           if (action.type === 'stopped') {
             if (t.workerId !== actor.id || info.status !== 'stop_requested') throw new HiveError(403, 'Only the assigned worker confirms a requested stop');
@@ -174,8 +175,8 @@ export class RoomStore {
           if (actor.role !== 'brain' || actor.id !== room.coordinatorId) throw new HiveError(403, 'Coordinating brain publishes the reviewed summary');
           if (!room.contract.originTaskId) throw new HiveError(400, 'This room has no originating task');
           if (this.running(ch.id).length) throw new HiveError(409, 'Resolve running work before the final summary');
-          const origin = this.hive.tasks.get(actor, room.contract.originTaskId), target = this.channel(actor, origin.channelId);
-          if (!this.hive.canPost(actor, target)) throw new HiveError(403, 'Cannot publish to the originating task');
+          const origin = this.deps.tasks.get(actor, room.contract.originTaskId), target = this.channel(actor, origin.channelId);
+          if (!this.deps.channels.canPost(actor, target)) throw new HiveError(403, 'Cannot publish to the originating task');
           const msg = this.message(actor, target, `Room summary · ${ch.id}\n${action.summary}\nArtifacts: ${action.artifacts.join('; ') || 'none'}\nSummary is not acceptance of the originating task.`, [origin.workerId], origin.id);
           messages.push(msg); room.summarySeq = msg.seq;
         }
@@ -183,12 +184,12 @@ export class RoomStore {
       room.revision++; room.updatedAt = Date.now(); room.humanInstructionSeq = instruction;
       room.changedBy = { id: actor.id, name: actor.name, role: actor.role, reason: 'reason' in action ? action.reason : action.type };
       const notify = action.type !== 'acknowledge';
-      const targets = !notify ? [] : 'taskId' in action ? [room.coordinatorId, this.hive.tasks.get(actor, action.taskId).workerId] :
+      const targets = !notify ? [] : 'taskId' in action ? [room.coordinatorId, this.deps.tasks.get(actor, action.taskId).workerId] :
         [room.coordinatorId, ...room.participantIds, ...(previousCoordinator ? [previousCoordinator] : [])];
       const message = this.message(actor, ch, `Room ${action.type} · revision ${room.revision} / contract ${room.contractVersion}\n` +
         (action.type === 'acknowledge' ? 'Worker acknowledged the current room contract (not task completion).' :
-          `Read get_room for the effective rules and task fences. ${'reason' in action ? action.reason : ''}`), targets);
-      if (!notify) this.db.prepare("UPDATE messages SET event_type='acknowledgement' WHERE id=?").run(message.id);
+          `Read get_room for the effective rules and task fences. ${'reason' in action ? action.reason : ''}`), targets,
+        null, notify ? 'decision' : 'acknowledgement');
       room.lastEventSeq = message.seq;
       // Finite closure waives a fresh instruction for the brain, not the authority
       // boundary of a direct Human decision. Older requests must not undo it.
@@ -199,14 +200,18 @@ export class RoomStore {
       this.persist(room);
       this.db.prepare('INSERT INTO room_events(actor_id,request_id,channel_id,hash,message_id,revision,snapshot) VALUES(?,?,?,?,?,?,?)')
         .run(actor.id, input.requestId, ch.id, hash, message.id, room.revision, JSON.stringify(room));
-      messages.push(this.hive.getMessageById(message.id));
+      messages.push(this.deps.messageQueries.getMessageById(message.id));
       return false;
     });
     if (!duplicate) {
-      for (const message of messages) this.hive.publishTaskMessage(message);
-      this.hive.bus.emit('room', { channelId: ch.id });
+      for (const message of messages) this.deps.messages.publishTaskMessage(message);
+      this.deps.bus.emit('room', { channelId: ch.id });
     }
     return { ...this.view(actor, ch.id), duplicate };
+  }
+  /** True when the actor already used `requestId` for a room event. */
+  hasRequest(actorId: string, requestId: string): boolean {
+    return Boolean(this.db.prepare('SELECT 1 FROM room_events WHERE actor_id=? AND request_id=?').get(actorId, requestId));
   }
   taskInfo(task: TaskSnapshot): RoomTask | undefined {
     const link = this.db.prepare('SELECT * FROM room_tasks WHERE task_id=?').get(task.id) as TaskLink | undefined;
@@ -278,7 +283,7 @@ export class RoomStore {
     if (this.links(ch.id).length >= 64) throw new HiveError(400, 'Source link limit reached');
     const link: SourceLink = { ...p.data, botId: bot.id, desired: this.peek(ch.id)?.state === 'archived' ? 'paused' : 'running',
       generation: 1, observed: this.peek(ch.id)?.state === 'archived' && !p.data.suspendSupported ? 'unsupported' : 'pending', detail: '', updatedAt: Date.now() };
-    this.saveLink(ch.id, link); this.hive.bus.emit('room', { channelId: ch.id }); return link;
+    this.saveLink(ch.id, link); this.deps.bus.emit('room', { channelId: ch.id }); return link;
   }
   reportLink(bot: Agent, channel: string, id: string, raw: unknown) {
     const ch = this.botChannel(bot, channel), p = sourceReportSchema.safeParse(raw);
@@ -290,13 +295,13 @@ export class RoomStore {
     if (link.observed === p.data.observed && link.detail === p.data.detail) return link;
     const next = { ...link, ...p.data, updatedAt: Date.now() };
     const room = this.peek(ch.id); let message: Message | undefined;
-    this.hive.storage.transaction(() => {
+    this.deps.storage.transaction(() => {
       this.saveLink(ch.id, next);
       if (room && (link.desired === 'paused' || ['failed', 'unsupported'].includes(next.observed))) {
         message = this.message(bot, ch, `Source lifecycle report · ${id} · generation ${link.generation}\nRequested ${link.desired}; plugin reports ${next.observed}.\nRead get_room for status. This is a plugin claim, not independent verification or new authority.`, [room.coordinatorId]);
       }
     });
-    if (message) this.hive.publishTaskMessage(message);
-    this.hive.bus.emit('room', { channelId: ch.id }); return next;
+    if (message) this.deps.messages.publishTaskMessage(message);
+    this.deps.bus.emit('room', { channelId: ch.id }); return next;
   }
 }

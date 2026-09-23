@@ -23,10 +23,10 @@ function stored(hive: Hive, executionId: string): Stored | undefined {
 function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-topology-drain-'));
   const hive = new Hive(path.join(dir, 'hive.db'));
-  const human = hive.getAgent('human');
-  const brain = hive.join({ role: 'brain', project: 'chapter' });
-  const workers = [0, 1].map(() => hive.join({ role: 'worker', seniority: 'senior', project: 'chapter' }));
-  const dm = hive.openDm(human, brain.agent.name), workerDm = hive.openDm(brain.agent, workers[0]!.agent.name);
+  const human = hive.identity.getAgent('human');
+  const brain = hive.identity.join({ role: 'brain', project: 'chapter' });
+  const workers = [0, 1].map(() => hive.identity.join({ role: 'worker', seniority: 'senior', project: 'chapter' }));
+  const dm = hive.channels.openDm(human, brain.agent.name), workerDm = hive.channels.openDm(brain.agent, workers[0]!.agent.name);
   const app = createApp(hive);
   let target: AdaptiveTopology = 'brain_one_worker', serial = 0;
   t.mock.method(globalThis, 'fetch', async (url: unknown, init?: RequestInit) => {
@@ -149,7 +149,7 @@ test('an acknowledgement with evidence ends the delegation; a closed thread does
   const f = fixture(t); const original = await f.start();
   const first = await f.delegate(original.state.executionId);
   await f.start('Next request.');
-  const file = await f.hive.createFile(f.workers[0]!.agent, { name: 'report.txt', mime: 'text/plain',
+  const file = await f.hive.files.createFile(f.workers[0]!.agent, { name: 'report.txt', mime: 'text/plain',
     body: new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode('fixture evidence')); controller.close(); } }) });
   assert.equal((await f.reply(first, { eventType: 'acknowledgement', attachmentIds: [file.id] })).status, 200);
   assert.equal(f.commitments(), 0);
@@ -168,8 +168,8 @@ test('an acknowledgement with evidence ends the delegation; a closed thread does
 test('Human completes a request with open free-form delegation, releasing it with an audit warning', async t => {
   const f = fixture(t); const started = await f.start();
   await f.delegate(started.state.executionId);
-  assert.throws(() => f.hive.setThreadStatus(f.brain.agent, started.message.id, 'done'), /Finish delegated/, 'the brain still closes its own work first');
-  f.hive.setThreadStatus(f.human, started.message.id, 'done');
+  assert.throws(() => f.hive.messages.setThreadStatus(f.brain.agent, started.message.id, 'done'), /Finish delegated/, 'the brain still closes its own work first');
+  f.hive.messages.setThreadStatus(f.human, started.message.id, 'done');
   assert.ok(f.execution(started.state.executionId)?.completedAt);
   assert.equal(f.commitments(), 0);
   const events = f.hive.adaptiveTopology.view(f.human, f.dm.id).events;
@@ -180,9 +180,9 @@ test('Human completes a request with open free-form delegation, releasing it wit
 test('several owning brains are classified in parallel, for a new request and for a thread reply', async t => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-topology-parallel-'));
   const hive = new Hive(path.join(dir, 'hive.db'));
-  const human = hive.getAgent('human');
-  const brains = [0, 1].map(() => hive.join({ role: 'brain', project: 'chapter' }).agent);
-  const channel = hive.createChannel(human, { name: 'pair', type: 'private', project: 'chapter', memberNames: brains.map(brain => brain.name) });
+  const human = hive.identity.getAgent('human');
+  const brains = [0, 1].map(() => hive.identity.join({ role: 'brain', project: 'chapter' }).agent);
+  const channel = hive.channels.createChannel(human, { name: 'pair', type: 'private', project: 'chapter', memberNames: brains.map(brain => brain.name) });
   let inFlight = 0, peak = 0, calls = 0;
   t.mock.method(globalThis, 'fetch', async (_url: unknown, init?: RequestInit) => {
     calls++; peak = Math.max(peak, ++inFlight);
@@ -208,9 +208,9 @@ test('several owning brains are classified in parallel, for a new request and fo
 test('a Telegram request to a brain with open delegation is delivered, not retried into quarantine', async t => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-topology-telegram-'));
   const hive = new Hive(path.join(dir, 'hive.db'));
-  const human = hive.getAgent('human');
-  const brain = hive.join({ role: 'brain', project: 'chapter' }), worker = hive.join({ role: 'worker', seniority: 'senior', project: 'chapter' });
-  const dm = hive.openDm(human, brain.agent.name), workerDm = hive.openDm(brain.agent, worker.agent.name);
+  const human = hive.identity.getAgent('human');
+  const brain = hive.identity.join({ role: 'brain', project: 'chapter' }), worker = hive.identity.join({ role: 'worker', seniority: 'senior', project: 'chapter' });
+  const dm = hive.channels.openDm(human, brain.agent.name), workerDm = hive.channels.openDm(brain.agent, worker.agent.name);
   const cfg = { botToken: 'fixture', botId: 77, allowUserIds: [1], groups: { chapter: -1001 } };
   const bridge = new TelegramBridge(hive, cfg);
   insertRow(hive, 'telegram_topics', { channel_id: dm.id, telegram_thread_id: 22, telegram_chat_id: -1001, bot_key: telegramConfigKey(cfg) });
@@ -230,10 +230,10 @@ test('a Telegram request to a brain with open delegation is delivered, not retri
     body: JSON.stringify({ body: 'Investigate.', requestId: 'delegate', executionId: original!.state.executionId }) });
   assert.equal(sent.status, 200, await sent.clone().text());
   bridge.start();
-  const delivered = () => hive.listMessages(human, dm.id).messages.some(message => message.body.endsWith('New request from Telegram'));
+  const delivered = () => hive.messageQueries.listMessages(human, dm.id).messages.some(message => message.body.endsWith('New request from Telegram'));
   for (let i = 0; i < 5000 && !delivered(); i++) await new Promise(resolve => setImmediate(resolve));
   assert.ok(delivered());
-  assert.equal(hive.telegramFailureCount(), 0);
+  assert.equal(hive.telegramAdmin.failureCount(), 0);
   const view = hive.adaptiveTopology.view(human, dm.id);
   assert.notEqual(view.state?.executionId, original!.state.executionId);
   assert.equal(stored(hive, original!.state.executionId)?.completedAt, null);
@@ -247,5 +247,5 @@ test('structured task work still drains: the old execution stays alive while its
   const next = await f.start('Unrelated follow-up.');
   assert.equal(f.execution(original.state.executionId)?.completedAt, null);
   assert.equal(f.execution(original.state.executionId)?.supersededBy, next.state.executionId);
-  assert.throws(() => f.hive.setThreadStatus(f.human, original.message.id, 'done'), /Finish delegated/, 'structured tasks keep their own lifecycle');
+  assert.throws(() => f.hive.messages.setThreadStatus(f.human, original.message.id, 'done'), /Finish delegated/, 'structured tasks keep their own lifecycle');
 });

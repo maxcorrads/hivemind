@@ -34,9 +34,9 @@ class BrowserSocket {
 test('mounted Human App follows task review and contract history without offering generic task status edits', async t => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'coordination-app-'));
   const hive = new Hive(path.join(dir, 'hive.db'));
-  const human = hive.getAgent('human'), brain = hive.join({ role: 'brain' }).agent;
-  const worker = hive.join({ role: 'worker', seniority: 'mid' }).agent;
-  const channel = hive.createChannel(brain, { name: 'mounted-coordination', type: 'private', memberNames: [worker.name] });
+  const human = hive.identity.getAgent('human'), brain = hive.identity.join({ role: 'brain' }).agent;
+  const worker = hive.identity.join({ role: 'worker', seniority: 'mid' }).agent;
+  const channel = hive.channels.createChannel(brain, { name: 'mounted-coordination', type: 'private', memberNames: [worker.name] });
   hive.rooms.event(human, channel.id, { requestId: 'app-room', expectedRevision: 0, action: { type: 'configure', reason: 'Human fixture',
     contract: { mode: 'ongoing', purpose: 'A visible shared contract', rules: ['Fixture only'], limits: ['No external writes'],
       coordinator: brain.name, participants: [{ name: worker.name, boundary: 'Read the fixture' }],
@@ -106,19 +106,19 @@ test('mounted Human App follows task review and contract history without offerin
       { key: 'Enter', bubbles: true, cancelable: true }) as unknown as Event));
   };
   await type('aside.thread textarea', 'A plain reply after review.');
-  assert.ok(hive.listMessages(human, channel.id, { threadId: initial.id }).messages.some(message =>
+  assert.ok(hive.messageQueries.listMessages(human, channel.id, { threadId: initial.id }).messages.some(message =>
     message.body === 'A plain reply after review.' && message.authorId === 'human'));
   assert.equal(hive.tasks.get(brain, initial.id).revision, 4);
   const reaction = thread()!.querySelector<HTMLButtonElement>('.react-pick button[title="👍"]');
   assert.ok(reaction);
   await act(async () => reaction.click());
-  assert.ok(hive.getMessageById(initial.id).reactions!.some(value => value.emoji === '👍' && value.count === 1));
+  assert.ok(hive.messageQueries.getMessageById(initial.id).reactions!.some(value => value.emoji === '👍' && value.count === 1));
   const close = thread()!.querySelector<HTMLButtonElement>('.thread-tools button');
   assert.ok(close);
   await act(async () => close.click());
   assert.equal(thread(), null);
   await type('main.desk textarea', 'Ordinary channel chat still works.');
-  const ordinary = hive.listMessages(human, channel.id).messages.find(message => message.body === 'Ordinary channel chat still works.');
+  const ordinary = hive.messageQueries.listMessages(human, channel.id).messages.find(message => message.body === 'Ordinary channel chat still works.');
   assert.ok(ordinary); assert.equal(hive.tasks.has(ordinary.id), false);
   const rootMessage = [...host.querySelectorAll('main.desk article.msg')].find(element => element.textContent?.includes('Review the mounted fixture'));
   const reopen = rootMessage?.querySelector<HTMLButtonElement>('button.replies');

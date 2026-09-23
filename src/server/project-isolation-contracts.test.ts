@@ -37,44 +37,44 @@ test("project isolation covers channels, history, search, DMs, waits, mentions, 
     try { await started?.shutdown(); }
     finally { hive.db.close(); rmSync(dir, { recursive: true, force: true }); }
   });
-  const human = hive.getAgent("human");
-  hive.createProject(human, { name: "Beta", slug: "beta" });
+  const human = hive.identity.getAgent("human");
+  hive.projects.createProject(human, { name: "Beta", slug: "beta" });
 
-  const alphaBrain = hive.join({ role: "brain", project: "chapter", focus: "alpha" });
-  const alphaWorker = hive.join({ role: "worker", seniority: "mid", project: "chapter", focus: "alpha-worker" });
-  const betaBrain = hive.join({ role: "brain", project: "beta", focus: "beta" });
-  const betaWorker = hive.join({ role: "worker", seniority: "mid", project: "beta", focus: "beta-worker" });
+  const alphaBrain = hive.identity.join({ role: "brain", project: "chapter", focus: "alpha" });
+  const alphaWorker = hive.identity.join({ role: "worker", seniority: "mid", project: "chapter", focus: "alpha-worker" });
+  const betaBrain = hive.identity.join({ role: "brain", project: "beta", focus: "beta" });
+  const betaWorker = hive.identity.join({ role: "worker", seniority: "mid", project: "beta", focus: "beta-worker" });
 
-  const alphaGeneral = hive.getChannel("general", alphaBrain.agent.projectId);
-  const betaGeneral = hive.getChannel("general", betaBrain.agent.projectId);
+  const alphaGeneral = hive.channels.getChannel("general", alphaBrain.agent.projectId);
+  const betaGeneral = hive.channels.getChannel("general", betaBrain.agent.projectId);
   assert.notEqual(alphaGeneral.id, betaGeneral.id);
 
-  const alphaChannels = hive.listChannels(alphaBrain.agent);
+  const alphaChannels = hive.channels.listChannels(alphaBrain.agent);
   assert.ok(alphaChannels.every((channel) => channel.projectId === alphaBrain.agent.projectId));
   assert.equal(alphaChannels.some((channel) => channel.id === betaGeneral.id), false);
-  const betaChannels = hive.listChannels(betaBrain.agent);
+  const betaChannels = hive.channels.listChannels(betaBrain.agent);
   assert.ok(betaChannels.every((channel) => channel.projectId === betaBrain.agent.projectId));
   assert.equal(betaChannels.some((channel) => channel.id === alphaGeneral.id), false);
 
-  const alphaMessage = hive.postMessage(alphaBrain.agent, {
+  const alphaMessage = hive.messages.postMessage(alphaBrain.agent, {
     channel: alphaGeneral.id,
     body: "alpha-only-search-fixture",
   });
-  const betaRoot = hive.postMessage(betaBrain.agent, {
+  const betaRoot = hive.messages.postMessage(betaBrain.agent, {
     channel: betaGeneral.id,
     body: "beta-only-search-fixture",
   });
-  hive.postMessage(betaWorker.agent, {
+  hive.messages.postMessage(betaWorker.agent, {
     channel: betaGeneral.id,
     threadId: betaRoot.id,
     body: "beta-thread-reply",
   });
 
   assert.throws(
-    () => hive.listMessages(alphaBrain.agent, betaGeneral.id, { limit: 20 }),
+    () => hive.messageQueries.listMessages(alphaBrain.agent, betaGeneral.id, { limit: 20 }),
     /not found|Cannot read|project/i,
   );
-  const betaViaLegacyGeneralRef = hive.listMessages(betaBrain.agent, alphaGeneral.id, { limit: 20 });
+  const betaViaLegacyGeneralRef = hive.messageQueries.listMessages(betaBrain.agent, alphaGeneral.id, { limit: 20 });
   assert.ok(betaViaLegacyGeneralRef.messages.some((message) => message.id === betaRoot.id));
   assert.equal(
     betaViaLegacyGeneralRef.messages.some((message) => message.id === alphaMessage.id),
@@ -82,53 +82,53 @@ test("project isolation covers channels, history, search, DMs, waits, mentions, 
     "the legacy id/name alias 'general' must resolve inside the caller's project",
   );
 
-  const alphaSearch = hive.searchMessages(alphaBrain.agent, {
+  const alphaSearch = hive.messageQueries.searchMessages(alphaBrain.agent, {
     q: "search-fixture",
     project: "chapter",
   });
   assert.ok(alphaSearch.hits.some((hit) => hit.seq === alphaMessage.seq));
   assert.equal(alphaSearch.hits.some((hit) => /beta-only/.test(hit.body)), false);
   assert.throws(
-    () => hive.searchMessages(alphaBrain.agent, { q: "beta-only", project: "beta" }),
+    () => hive.messageQueries.searchMessages(alphaBrain.agent, { q: "beta-only", project: "beta" }),
     /cannot|other project/i,
   );
 
   assert.throws(
-    () => hive.openDm(alphaBrain.agent, betaWorker.agent.name),
+    () => hive.channels.openDm(alphaBrain.agent, betaWorker.agent.name),
     /not in your project/i,
   );
   assert.throws(
-    () => hive.openDm(betaBrain.agent, alphaWorker.agent.name),
+    () => hive.channels.openDm(betaBrain.agent, alphaWorker.agent.name),
     /not in your project/i,
   );
 
   // A project-B message cannot wake a project-A agent, even if the text happens
   // to contain the other project's display name.
-  hive.postMessage(betaBrain.agent, {
+  hive.messages.postMessage(betaBrain.agent, {
     channel: betaGeneral.id,
     body: `literal @${alphaWorker.agent.name} must not cross projects`,
   });
-  const alphaSession = hive.openInboxSession(alphaWorker.agent, randomUUID());
-  const betaSession = hive.openInboxSession(betaWorker.agent, randomUUID());
-  const alphaIdle = await hive.wait(alphaWorker.agent, 30, t.signal, { sessionId: alphaSession });
+  const alphaSession = hive.delivery.openInboxSession(alphaWorker.agent, randomUUID());
+  const betaSession = hive.delivery.openInboxSession(betaWorker.agent, randomUUID());
+  const alphaIdle = await hive.delivery.wait(alphaWorker.agent, 30, t.signal, { sessionId: alphaSession });
   assert.equal(alphaIdle.idle, true);
 
-  const betaMention = hive.postMessage(betaBrain.agent, {
+  const betaMention = hive.messages.postMessage(betaBrain.agent, {
     channel: betaGeneral.id,
     body: `please handle @${betaWorker.agent.name}`,
   });
-  const betaMail = await hive.wait(betaWorker.agent, 300, t.signal, { sessionId: betaSession });
+  const betaMail = await hive.delivery.wait(betaWorker.agent, 300, t.signal, { sessionId: betaSession });
   assert.ok(betaMail.delivery);
   assert.ok(betaMail.mentions.some((message) => message.id === betaMention.id));
-  hive.acknowledgeInbox(betaWorker.agent, betaSession, betaMail.delivery.id);
+  hive.delivery.acknowledgeInbox(betaWorker.agent, betaSession, betaMail.delivery.id);
 
-  const betaThread = hive.threadsInChannel(betaGeneral.id).find((thread) => thread.id === betaRoot.id);
+  const betaThread = hive.messageQueries.threadsInChannel(betaGeneral.id).find((thread) => thread.id === betaRoot.id);
   assert.ok(betaThread);
   assert.throws(
-    () => hive.setThreadStatus(alphaBrain.agent, betaRoot.id, "done"),
+    () => hive.messages.setThreadStatus(alphaBrain.agent, betaRoot.id, "done"),
     /Cannot access thread/,
   );
-  const unchanged = hive.threadsInChannel(betaGeneral.id).find((thread) => thread.id === betaRoot.id);
+  const unchanged = hive.messageQueries.threadsInChannel(betaGeneral.id).find((thread) => thread.id === betaRoot.id);
   assert.equal(unchanged?.status, "open");
 
   started = startServer({ port: 0, hive, telegram: false });

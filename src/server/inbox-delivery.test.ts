@@ -17,52 +17,52 @@ function fixture(t: TestContext) {
   const file = path.join(dir, "hive.db");
   const hive = new Hive(file);
   t.after(() => { try { hive.db.close(); } catch {} rmSync(dir, { recursive: true, force: true }); });
-  const brain = hive.join({ role: "brain" });
-  const worker = hive.join({ role: "worker", seniority: "mid" });
-  const dm = hive.openDm(brain.agent, worker.agent.name);
-  const sessionId = hive.openInboxSession(worker.agent, crypto.randomUUID());
-  const send = (body: string) => hive.postMessage(brain.agent, { channel: dm.id, body });
-  const wait = () => hive.wait(worker.agent, 2, undefined, { sessionId, compact: true });
+  const brain = hive.identity.join({ role: "brain" });
+  const worker = hive.identity.join({ role: "worker", seniority: "mid" });
+  const dm = hive.channels.openDm(brain.agent, worker.agent.name);
+  const sessionId = hive.delivery.openInboxSession(worker.agent, crypto.randomUUID());
+  const send = (body: string) => hive.messages.postMessage(brain.agent, { channel: dm.id, body });
+  const wait = () => hive.delivery.wait(worker.agent, 2, undefined, { sessionId, compact: true });
   const cursor = () => inboxCursor(hive, worker.agent.id);
   return { dir, file, hive, brain, worker, sessionId, send, wait, cursor };
 }
 
 test("receipt preserves the cursor and exact batch until an idempotent ACK; newer mail stays queued", async t => {
   const f = fixture(t); const message = f.send("invented assignment"); const before = f.cursor();
-  assert.equal(f.hive.queuedCounts()[f.worker.agent.id], 1);
+  assert.equal(f.hive.delivery.queuedCounts()[f.worker.agent.id], 1);
   const first = (await f.wait()).delivery!;
   assert.equal(f.cursor(), before);
   assert.deepEqual(first.messageSeqs, [message.seq]);
-  assert.equal(f.hive.inboxStatuses()[f.worker.agent.id].awaitingReceipt, 1);
-  assert.equal(f.hive.queuedCounts()[f.worker.agent.id], 0);
+  assert.equal(f.hive.delivery.inboxStatuses()[f.worker.agent.id].awaitingReceipt, 1);
+  assert.equal(f.hive.delivery.queuedCounts()[f.worker.agent.id], 0);
   f.send("new assignment");
   const replay = (await f.wait()).delivery!;
   assert.equal(replay.id, first.id); assert.equal(replay.redelivered, true);
   assert.deepEqual(replay.messageSeqs, first.messageSeqs);
-  assert.equal(f.hive.queuedCounts()[f.worker.agent.id], 1);
-  const ack = f.hive.acknowledgeInbox(f.worker.agent, f.sessionId, first.id);
+  assert.equal(f.hive.delivery.queuedCounts()[f.worker.agent.id], 1);
+  const ack = f.hive.delivery.acknowledgeInbox(f.worker.agent, f.sessionId, first.id);
   assert.equal(ack.duplicate, false); assert.equal(f.cursor(), message.seq);
-  assert.equal(f.hive.acknowledgeInbox(f.worker.agent, f.sessionId, first.id).duplicate, true);
+  assert.equal(f.hive.delivery.acknowledgeInbox(f.worker.agent, f.sessionId, first.id).duplicate, true);
   assert.deepEqual(f.hive.inbox.status(f.worker.agent.id), { awaitingReceipt: 0, acknowledgedMessages: 1, lastAcknowledgedAt: ack.acknowledgedAt });
   const second = (await f.wait()).delivery!; assert.notEqual(second.id, first.id);
-  f.hive.acknowledgeInbox(f.worker.agent, f.sessionId, second.id);
+  f.hive.delivery.acknowledgeInbox(f.worker.agent, f.sessionId, second.id);
   const advanced = f.cursor();
-  f.hive.acknowledgeInbox(f.worker.agent, f.sessionId, first.id);
+  f.hive.delivery.acknowledgeInbox(f.worker.agent, f.sessionId, first.id);
   assert.equal(f.cursor(), advanced); assert.equal((await f.wait()).idle, true);
 });
 
 test("session takeover fences old waits, acknowledgements and delayed session-open retries", async t => {
   const f = fixture(t); f.send("only one pending batch"); const first = (await f.wait()).delivery!;
-  const replacement = f.hive.openInboxSession(f.worker.agent, crypto.randomUUID());
-  assert.throws(() => f.hive.openInboxSession(f.worker.agent, f.sessionId), /superseded/);
+  const replacement = f.hive.delivery.openInboxSession(f.worker.agent, crypto.randomUUID());
+  assert.throws(() => f.hive.delivery.openInboxSession(f.worker.agent, f.sessionId), /superseded/);
   await assert.rejects(f.wait(), /superseded/);
-  assert.throws(() => f.hive.acknowledgeInbox(f.worker.agent, f.sessionId, first.id), /superseded/);
-  assert.throws(() => f.hive.acknowledgeInbox(f.worker.agent, replacement, first.id), /older session/);
-  const replay = await f.hive.wait(f.worker.agent, 1, undefined, { sessionId: replacement });
+  assert.throws(() => f.hive.delivery.acknowledgeInbox(f.worker.agent, f.sessionId, first.id), /superseded/);
+  assert.throws(() => f.hive.delivery.acknowledgeInbox(f.worker.agent, replacement, first.id), /older session/);
+  const replay = await f.hive.delivery.wait(f.worker.agent, 1, undefined, { sessionId: replacement });
   assert.equal(replay.delivery!.id, first.id);
-  assert.throws(() => f.hive.acknowledgeInbox(f.worker.agent, f.sessionId, first.id), /superseded/);
-  f.hive.acknowledgeInbox(f.worker.agent, replacement, first.id);
-  assert.equal(f.hive.openInboxSession(f.worker.agent, replacement), replacement);
+  assert.throws(() => f.hive.delivery.acknowledgeInbox(f.worker.agent, f.sessionId, first.id), /superseded/);
+  f.hive.delivery.acknowledgeInbox(f.worker.agent, replacement, first.id);
+  assert.equal(f.hive.delivery.openInboxSession(f.worker.agent, replacement), replacement);
 });
 
 test("pending delivery survives restart and expiry without becoming accepted or completed work", async t => {
@@ -71,37 +71,37 @@ test("pending delivery survives restart and expiry without becoming accepted or 
   f.hive.db.close();
   const restarted = new Hive(f.file); t.after(() => restarted.db.close());
   assert.equal(restarted.inbox.status(f.worker.agent.id).awaitingReceipt, 1);
-  const session = restarted.openInboxSession(f.worker.agent, crypto.randomUUID());
-  const replay = (await restarted.wait(f.worker.agent, 1, undefined, { sessionId: session })).delivery!;
+  const session = restarted.delivery.openInboxSession(f.worker.agent, crypto.randomUUID());
+  const replay = (await restarted.delivery.wait(f.worker.agent, 1, undefined, { sessionId: session })).delivery!;
   assert.equal(replay.id, first.id); assert.deepEqual(replay.messageSeqs, first.messageSeqs);
   assert.ok(replay.leaseExpiresAt > Date.now());
-  restarted.acknowledgeInbox(f.worker.agent, session, replay.id);
+  restarted.delivery.acknowledgeInbox(f.worker.agent, session, replay.id);
   assert.equal(countRows(restarted, "threads"), 0);
 });
 
 test("pre-aborted waits never reserve mail; a replacement session terminates an old sleeping wait", async t => {
   const f = fixture(t); const ac = new AbortController(); ac.abort(); f.send("do not consume");
-  const idle = await f.hive.wait(f.worker.agent, 1, ac.signal, { sessionId: f.sessionId });
+  const idle = await f.hive.delivery.wait(f.worker.agent, 1, ac.signal, { sessionId: f.sessionId });
   assert.equal(idle.idle, true); assert.equal(f.hive.inbox.pending(f.worker.agent.id), undefined);
   const received = (await f.wait()).delivery!;
-  f.hive.acknowledgeInbox(f.worker.agent, f.sessionId, received.id);
-  const sleeping = f.hive.wait(f.worker.agent, 10_000, undefined, { sessionId: f.sessionId });
+  f.hive.delivery.acknowledgeInbox(f.worker.agent, f.sessionId, received.id);
+  const sleeping = f.hive.delivery.wait(f.worker.agent, 10_000, undefined, { sessionId: f.sessionId });
   const rejected = assert.rejects(sleeping, /superseded/);
-  f.hive.openInboxSession(f.worker.agent, crypto.randomUUID()); await rejected;
+  f.hive.delivery.openInboxSession(f.worker.agent, crypto.randomUUID()); await rejected;
 });
 
 test("receipts cannot acknowledge another identity's batch and batches have a fixed maximum", async t => {
   const f = fixture(t); f.send("not for the brain"); const d = (await f.wait()).delivery!;
-  const bs = f.hive.openInboxSession(f.brain.agent, crypto.randomUUID());
-  assert.throws(() => f.hive.acknowledgeInbox(f.brain.agent, bs, d.id), /not found/);
-  assert.throws(() => f.hive.acknowledgeInbox(f.worker.agent, f.sessionId, crypto.randomUUID()), /not found/);
-  const dm = f.hive.openDm(f.brain.agent, f.worker.agent.name);
-  for (let n = 0; n < INBOX_BATCH_MAX + 5; n++) f.hive.postMessage(f.worker.agent, { channel: dm.id, body: `event ${n}` });
-  const batch = await f.hive.wait(f.brain.agent, 1, undefined, { sessionId: bs });
+  const bs = f.hive.delivery.openInboxSession(f.brain.agent, crypto.randomUUID());
+  assert.throws(() => f.hive.delivery.acknowledgeInbox(f.brain.agent, bs, d.id), /not found/);
+  assert.throws(() => f.hive.delivery.acknowledgeInbox(f.worker.agent, f.sessionId, crypto.randomUUID()), /not found/);
+  const dm = f.hive.channels.openDm(f.brain.agent, f.worker.agent.name);
+  for (let n = 0; n < INBOX_BATCH_MAX + 5; n++) f.hive.messages.postMessage(f.worker.agent, { channel: dm.id, body: `event ${n}` });
+  const batch = await f.hive.delivery.wait(f.brain.agent, 1, undefined, { sessionId: bs });
   assert.equal(batch.delivery!.messageSeqs.length, INBOX_BATCH_MAX);
   assert.ok((batch.more ?? 0) > 0);
-  f.hive.acknowledgeInbox(f.brain.agent, bs, batch.delivery!.id);
-  const rest = await f.hive.wait(f.brain.agent, 1, undefined, { sessionId: bs });
+  f.hive.delivery.acknowledgeInbox(f.brain.agent, bs, batch.delivery!.id);
+  const rest = await f.hive.delivery.wait(f.brain.agent, 1, undefined, { sessionId: bs });
   assert.equal(rest.delivery!.messageSeqs.length, 5);
 });
 
@@ -127,10 +127,10 @@ test("pre-receipt MCP clients stop on protocol upgrade and leave queued mail rec
   assert.equal(calls, 1); assert.equal(retryDelays, 0);
   assert.equal(f.cursor(), before);
   assert.equal(f.hive.inbox.pending(f.worker.agent.id), undefined);
-  assert.equal(f.hive.queuedCounts()[f.worker.agent.id], 1);
+  assert.equal(f.hive.delivery.queuedCounts()[f.worker.agent.id], 1);
   const recovered = (await f.wait()).delivery!;
   assert.deepEqual(recovered.messageSeqs, [message.seq]);
-  f.hive.acknowledgeInbox(f.worker.agent, f.sessionId, recovered.id);
+  f.hive.delivery.acknowledgeInbox(f.worker.agent, f.sessionId, recovered.id);
   assert.equal(f.hive.inbox.status(f.worker.agent.id).acknowledgedMessages, 1);
 });
 
@@ -252,27 +252,27 @@ test("counter failures roll back receipt and cursor; retries count once and last
   const first = (await f.wait()).delivery!, before = f.cursor();
   db.exec(`CREATE TEMP TRIGGER reject_counter_insert BEFORE INSERT ON inbox_receipt_totals
     BEGIN SELECT RAISE(ABORT, 'injected counter failure'); END`);
-  assert.throws(() => f.hive.acknowledgeInbox(f.worker.agent, f.sessionId, first.id), /injected counter failure/);
+  assert.throws(() => f.hive.delivery.acknowledgeInbox(f.worker.agent, f.sessionId, first.id), /injected counter failure/);
   assert.equal(f.cursor(), before);
   assert.equal(f.hive.inbox.pending(f.worker.agent.id)!.id, first.id);
   assert.deepEqual(f.hive.inbox.status(f.worker.agent.id), { awaitingReceipt: 1, acknowledgedMessages: 0, lastAcknowledgedAt: null });
   db.exec("DROP TRIGGER reject_counter_insert");
   const now = t.mock.method(Date, "now", () => 2000);
-  f.hive.acknowledgeInbox(f.worker.agent, f.sessionId, first.id);
+  f.hive.delivery.acknowledgeInbox(f.worker.agent, f.sessionId, first.id);
   f.send("second confirmed message");
   const second = (await f.wait()).delivery!, previousCursor = f.cursor();
   db.exec(`CREATE TEMP TRIGGER reject_counter_update BEFORE UPDATE ON inbox_receipt_totals
     BEGIN SELECT RAISE(ABORT, 'injected counter update failure'); END`);
-  assert.throws(() => f.hive.acknowledgeInbox(f.worker.agent, f.sessionId, second.id), /injected counter update failure/);
+  assert.throws(() => f.hive.delivery.acknowledgeInbox(f.worker.agent, f.sessionId, second.id), /injected counter update failure/);
   assert.equal(f.cursor(), previousCursor);
   assert.equal(f.hive.inbox.pending(f.worker.agent.id)!.id, second.id);
   assert.equal(f.hive.inbox.status(f.worker.agent.id).acknowledgedMessages, 1);
   db.exec("DROP TRIGGER reject_counter_update");
   now.mock.mockImplementation(() => 1000);
-  const ack = f.hive.acknowledgeInbox(f.worker.agent, f.sessionId, second.id);
+  const ack = f.hive.delivery.acknowledgeInbox(f.worker.agent, f.sessionId, second.id);
   assert.equal(ack.acknowledgedAt, 1000);
-  f.hive.acknowledgeInbox(f.worker.agent, f.sessionId, first.id);
-  f.hive.acknowledgeInbox(f.worker.agent, f.sessionId, second.id);
+  f.hive.delivery.acknowledgeInbox(f.worker.agent, f.sessionId, first.id);
+  f.hive.delivery.acknowledgeInbox(f.worker.agent, f.sessionId, second.id);
   assert.deepEqual(f.hive.inbox.status(f.worker.agent.id), { awaitingReceipt: 0, acknowledgedMessages: 2, lastAcknowledgedAt: 2000 });
 });
 
@@ -281,7 +281,7 @@ for (const historySize of [1_000, 10_000, 100_000]) {
     const f = fixture(t), db = f.hive.db;
     const past = f.send("fixed historical body");
     const first = (await f.wait()).delivery!;
-    f.hive.acknowledgeInbox(f.worker.agent, f.sessionId, first.id);
+    f.hive.delivery.acknowledgeInbox(f.worker.agent, f.sessionId, first.id);
     // Synthetic retained ledger: repeat a historical reference to grow only receipt
     // history, leaving message history and the active inbox identical at every size.
     db.exec("DROP TABLE IF EXISTS inbox_receipt_totals");
@@ -296,14 +296,14 @@ for (const historySize of [1_000, 10_000, 100_000]) {
     const prepare = db.prepare.bind(db);
     t.mock.method(db, "prepare", (sql: string) => { queries.push(sql); return prepare(sql); });
     assert.equal((await f.wait()).idle, true);
-    f.hive.inboxStatuses();
+    f.hive.delivery.inboxStatuses();
     const current = f.send("one active message independent of ledger size");
     const offered = (await f.wait()).delivery!;
     assert.deepEqual(offered.messageSeqs, [current.seq]);
     assert.equal((await f.wait()).delivery!.id, offered.id);
-    f.hive.acknowledgeInbox(f.worker.agent, f.sessionId, offered.id);
-    f.hive.acknowledgeInbox(f.worker.agent, f.sessionId, offered.id);
-    const status = f.hive.inboxStatuses()[f.worker.agent.id];
+    f.hive.delivery.acknowledgeInbox(f.worker.agent, f.sessionId, offered.id);
+    f.hive.delivery.acknowledgeInbox(f.worker.agent, f.sessionId, offered.id);
+    const status = f.hive.delivery.inboxStatuses()[f.worker.agent.id];
     assert.equal(status.acknowledgedMessages, historySize + 2);
     assert.equal(status.awaitingReceipt, 0);
     assert.equal((await f.wait()).idle, true);

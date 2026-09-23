@@ -16,9 +16,9 @@ function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-claims-')), file = path.join(dir, 'hive.db');
   let hive = new Hive(file), n = 0;
   t.after(() => { hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
-  const brain = hive.join({ role: 'brain' }), other = hive.join({ role: 'brain' });
-  const worker = hive.join({ role: 'worker', seniority: 'mid' });
-  const room = hive.createChannel(brain.agent, { name: 'advisory', type: 'private', memberNames: [other.agent.name, worker.agent.name] });
+  const brain = hive.identity.join({ role: 'brain' }), other = hive.identity.join({ role: 'brain' });
+  const worker = hive.identity.join({ role: 'worker', seniority: 'mid' });
+  const room = hive.channels.createChannel(brain.agent, { name: 'advisory', type: 'private', memberNames: [other.agent.name, worker.agent.name] });
   const contract: TaskContract = { objective: 'A synthetic advisory task', scope: [], nonGoals: ['No execution'], acceptanceCriteria: ['Reviewed'], dependencies: [], evidenceSeqs: [] };
   const assign = (dependencies: string[] = [], extra = {}) => hive.tasks.assign(brain.agent,
     { requestId: `a-${++n}`, worker: worker.agent.name, channel: room.id, contract: { ...contract, dependencies }, ...extra }).task;
@@ -105,14 +105,14 @@ test('safe paths, explainable overlaps, and exact version acknowledgements prese
 
 test('private and foreign claims never appear as path warnings or confer task authority', t => {
   const f = fixture(t), publicTask = f.assign();
-  const privateTask = f.assign([], { channel: f.hive.openDm(f.brain.agent, f.worker.agent.name).id });
+  const privateTask = f.assign([], { channel: f.hive.channels.openDm(f.brain.agent, f.worker.agent.name).id });
   f.event(privateTask, f.brain.agent, claim(['src/shared']));
   f.event(publicTask, f.other.agent, claim(['src/shared']));
   assert.deepEqual(f.hive.tasks.get(f.other.agent, publicTask.id).coordination!.overlaps, []);
   assert.equal(f.hive.tasks.get(f.brain.agent, publicTask.id).coordination!.overlaps.length, 1);
   assert.throws(() => f.event(publicTask, f.worker.agent, { type: 'release_claim', reason: 'Worker cannot grant authority' }), status(403));
-  f.hive.createProject(f.hive.getAgent('human'), { name: 'Foreign', slug: 'foreign' });
-  const foreign = f.hive.join({ role: 'brain', project: 'foreign' }).agent;
+  f.hive.projects.createProject(f.hive.identity.getAgent('human'), { name: 'Foreign', slug: 'foreign' });
+  const foreign = f.hive.identity.join({ role: 'brain', project: 'foreign' }).agent;
   assert.throws(() => f.hive.tasks.get(foreign, publicTask.id), status(403));
   assert.throws(() => f.hive.tasks.event(foreign, publicTask.id, { requestId: 'foreign', expectedRevision: 2, action: claim() }), status(403));
   assert.throws(() => f.event(publicTask, f.other.agent, { type: 'revise', reason: 'claim is not task authority', worker: f.worker.agent.name, contract: f.contract }), status(403));
@@ -162,7 +162,7 @@ test('dependency cycles reject atomically and only accepted review satisfies a p
 });
 
 test('dependency views mask inaccessible prerequisite state and bound legacy graph traversal', t => {
-  const f = fixture(t), privateTask = f.assign([], { channel: f.hive.openDm(f.brain.agent, f.worker.agent.name).id });
+  const f = fixture(t), privateTask = f.assign([], { channel: f.hive.channels.openDm(f.brain.agent, f.worker.agent.name).id });
   const dependent = f.assign([privateTask.id]);
   const otherView = f.hive.tasks.get(f.other.agent, dependent.id);
   assert.deepEqual(otherView.coordination!.dependencies, [{ taskId: privateTask.id, status: 'unavailable' }]);
@@ -200,8 +200,8 @@ test('a newly introduced transitive cycle is rejected before the task or message
 test('per-coordinator claim cap is independent of worker count', t => {
   const f = fixture(t); const tasks: TaskSnapshot[] = [];
   for (let i = 0; i <= CLAIM_LIMITS.coordinator; i++) {
-    const worker = f.hive.join({ role: 'worker', seniority: 'mid' }).agent;
-    f.hive.invite(f.brain.agent, f.room.id, [worker.name]);
+    const worker = f.hive.identity.join({ role: 'worker', seniority: 'mid' }).agent;
+    f.hive.channels.invite(f.brain.agent, f.room.id, [worker.name]);
     tasks.push(f.assign([], { worker: worker.name }));
   }
   for (const task of tasks.slice(0, CLAIM_LIMITS.coordinator)) f.event(task, f.brain.agent, claim());
@@ -212,7 +212,7 @@ test('per-coordinator claim cap is independent of worker count', t => {
 
 test('project-wide cap includes invisible claims but never reveals their metadata', t => {
   const f = fixture(t), task = f.assign(), seed = f.assign();
-  const privateChannel = f.hive.openDm(f.brain.agent, f.worker.agent.name);
+  const privateChannel = f.hive.channels.openDm(f.brain.agent, f.worker.agent.name);
   for (let i = 0; i < CLAIM_LIMITS.project; i++) {
     const id = randomUUID();
     // A controlled legacy fixture exceeds neither the project cap nor parser limits.
@@ -254,7 +254,7 @@ test('separate SQLite processes serialize the same claim revision with one expli
       }
       if (input?.type === 'arm') {
         try {
-          pending = { actor: hive.agentByToken(input.token), id: input.id, event: input.event };
+          pending = { actor: hive.identity.agentByToken(input.token), id: input.id, event: input.event };
           process.send({ phase: 'armed' });
         } catch (error) {
           finish({ phase: 'result', status: error.status ?? 500, error: String(error?.stack ?? error) });

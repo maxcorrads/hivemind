@@ -24,7 +24,7 @@ function fixture(t: TestContext) {
   const hive = new Hive(path.join(home, "hive.db"));
   t.after(() => { hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
   registerPlugin(home, manifest);
-  const project = hive.listProjects()[0]!;
+  const project = hive.projects.listProjects()[0]!;
   return { dir, home, pkg, tool, manifest, install, hive, project };
 }
 const goodConfigure = `const fs=require('node:fs'),path=require('node:path');let body='';process.stdin.on('data',d=>body+=d);process.stdin.on('end',()=>{const request=JSON.parse(body);fs.writeFileSync(path.join(process.argv[4],'config.json'),JSON.stringify(request.config));console.log(JSON.stringify({configured:true}));});`;
@@ -127,9 +127,9 @@ test("SQLite credentials and existing sidecars are private; symlink targets are 
 });
 
 test("new bot uploads create private files and never retain plaintext credentials", async t => {
-  const f = fixture(t), human = f.hive.getAgent("human");
-  const bot = f.hive.createBot(human, f.project.id, { name: "UploadSource" });
-  const file = await f.hive.createFile(bot.bot, { name: "source.txt", mime: "text/plain", body: new Blob(["ordinary source"]).stream() });
+  const f = fixture(t), human = f.hive.identity.getAgent("human");
+  const bot = f.hive.bots.createBot(human, f.project.id, { name: "UploadSource" });
+  const file = await f.hive.files.createFile(bot.bot, { name: "source.txt", mime: "text/plain", body: new Blob(["ordinary source"]).stream() });
   const sha256 = readValue(f.hive, "attachments", "sha256", { id: file.id });
   assert.equal(statSync(path.join(f.home, "files", String(sha256))).mode & 0o777, 0o600);
   assert.equal(JSON.stringify(file).includes(bot.token), false);

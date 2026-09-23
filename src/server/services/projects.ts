@@ -4,11 +4,11 @@ import type { Core } from "./ports.ts";
 import { now, type ProjectRow } from "./rows.ts";
 
 export type ProjectServiceDeps = Core & {
-  readonly telegram: { purgeProject(projectId: string, channelIds: string[], extraChatId?: number | null): void };
+  readonly telegramAdmin: { purgeProject(projectId: string, channelIds: string[], extraChatId?: number | null): void };
   readonly files: { deleteUnsentBy(agentId: string): void; collectUnusedBlobs(): number };
   readonly channels: { ensureBuiltinChannels(project: Project): void; addHumanToAllChannels(): void };
   /** Brains/workers of the project that are online or blocked in a wait. */
-  readonly agents: { busyAgents(projectId: string): Agent[] };
+  readonly identity: { busyAgents(projectId: string): Agent[] };
 };
 
 function mapProject(row: ProjectRow): Project {
@@ -140,7 +140,7 @@ export class ProjectService {
   deleteProject(actor: Agent, slug: string, opts: { telegramChatId?: number | null } = {}): void {
     if (actor.role !== "human") throw new HiveError(403, "Only Human can delete projects");
     const project = this.getProjectBySlug(slug);
-    const { storage, telegram, files, agents } = this.deps;
+    const { storage, telegramAdmin: telegram, files, identity: agents } = this.deps;
 
     storage.transaction(() => {
       const busy = agents.busyAgents(project.id);

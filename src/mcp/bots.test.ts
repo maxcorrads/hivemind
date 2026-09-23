@@ -38,13 +38,13 @@ test("direct bot HTTP → real stdio MCP delivers deduplicated context/files, th
     const tools = await client.listTools();
     assert.ok(!tools.tools.some(t => /credential|rotate_bot|revoke_bot/.test(t.name)), 'Credential management belongs to the Human UI, not MCP agents');
     await call("join", { role: "brain", project: "chapter" });
-    const brain = hive.listAgents().find((agent) => agent.role === "brain") as Agent;
+    const brain = hive.identity.listAgents().find((agent) => agent.role === "brain") as Agent;
     assert.ok(brain);
-    const human = hive.getAgent("human");
-    const channel = hive.createChannel(human, { name: "Local MCP test", project: "chapter", type: "private", memberNames: [brain.name] });
-    const thread = hive.postMessage(human, { channel: channel.id, body: "Invented problem" });
-    const bot = hive.createBot(human, channel.projectId, { name: "FixtureBot" });
-    hive.invite(human, channel.id, [bot.bot.name]);
+    const human = hive.identity.getAgent("human");
+    const channel = hive.channels.createChannel(human, { name: "Local MCP test", project: "chapter", type: "private", memberNames: [brain.name] });
+    const thread = hive.messages.postMessage(human, { channel: channel.id, body: "Invented problem" });
+    const bot = hive.bots.createBot(human, channel.projectId, { name: "FixtureBot" });
+    hive.channels.invite(human, channel.id, [bot.bot.name]);
     const url = `http://127.0.0.1:${port}`;
     const uploaded = await fetch(url + '/api/bot/files', {
       method: 'POST', headers: { Authorization: 'Bearer ' + bot.token, 'Content-Type': 'application/octet-stream', 'X-File-Name': 'notes.txt', 'X-File-Mime': 'text/plain' },

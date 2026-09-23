@@ -149,7 +149,7 @@ test("production MCP schemas and calls retain their observable contracts", { tim
   await t.test("omitted optionals, false booleans, empty arrays and handler defaults survive real calls", async () => {
     const joined = textResult(await call("join", { role: "brain" }));
     assert.equal(joined.created, true);
-    const actor = database.getAgentByName(String(joined.name))!;
+    const actor = database.identity.getAgentByName(String(joined.name))!;
     assert.equal(actor.role, "brain");
     assert.equal(actor.seniority, null);
     assert.equal(actor.focus, null);

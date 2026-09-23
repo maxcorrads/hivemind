@@ -19,8 +19,8 @@ test('real MCP and CLI configure the same scoped subscriptions and deliver targe
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-notification-clients-'));
   const hive = new Hive(path.join(dir, 'hive.db'));
   const server = startServer({ port: 0, hive, telegram: false }); const port = await server.ready;
-  const brain = hive.join({ role: 'brain' }), worker = hive.join({ role: 'worker', seniority: 'mid' });
-  const general = hive.getChannel('general', brain.agent.projectId);
+  const brain = hive.identity.join({ role: 'brain' }), worker = hive.identity.join({ role: 'worker', seniority: 'mid' });
+  const general = hive.channels.getChannel('general', brain.agent.projectId);
   markInboxRead(hive);
   const clients: Client[] = [];
   const env = (token: string) => childEnv({ PATH: process.env.PATH ?? '', HIVEMIND_TOKEN: token,

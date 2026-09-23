@@ -17,8 +17,8 @@ after(() => window.happyDOM.close());
 
 async function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'bot-credential-ui-'));
-  const hive = new Hive(path.join(dir, 'hive.db')), human = hive.getAgent('human');
-  const project = hive.listProjects()[0]!, bot = hive.createBot(human, project.id, { name: 'FixtureFeed' });
+  const hive = new Hive(path.join(dir, 'hive.db')), human = hive.identity.getAgent('human');
+  const project = hive.projects.listProjects()[0]!, bot = hive.bots.createBot(human, project.id, { name: 'FixtureFeed' });
   const app = createApp(hive); let lose = false, lostToken = '', posts = 0, refreshed = 0;
   t.mock.method(globalThis, 'fetch', async (url: string, init?: RequestInit) => {
     // Mounted component fixture uses the internal Hono router, not a network
@@ -45,7 +45,7 @@ async function fixture(t: TestContext) {
   t.after(async () => { await act(async () => root.unmount()); host.remove(); hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
   return { hive, human, project, bot, host, manage, click, button, lose: () => { lose = true; },
     secret: () => host.querySelector<HTMLInputElement>('input[aria-label="New bot token"]'),
-    status: () => hive.botCredential(human, project.id, bot.bot.id).credential,
+    status: () => hive.bots.botCredential(human, project.id, bot.bot.id).credential,
     posts: () => posts, lostToken: () => lostToken, refreshed: () => refreshed,
     create: async () => { await act(async () => root.render(<BotSetup project={project} onBusy={onBusy} onCreated={() => { refreshed++; }} />)); },
     name: async (value: string) => { await act(async () => {
@@ -60,8 +60,8 @@ test('mounted Human panel confirms rotate/revoke and never restores a hidden tok
   assert.equal(f.posts(), 0); await f.click('Cancel'); assert.equal(f.status().revision, 1);
   await f.click('Rotate token'); await f.click('Confirm rotation');
   const token = f.secret()!.value; assert.equal(f.secret()!.type, 'password');
-  assert.equal(f.hive.agentByToken(token).id, f.bot.bot.id);
-  assert.throws(() => f.hive.agentByToken(f.bot.token), /Invalid token/);
+  assert.equal(f.hive.identity.agentByToken(token).id, f.bot.bot.id);
+  assert.throws(() => f.hive.identity.agentByToken(f.bot.token), /Invalid token/);
   await f.click('Rotate token'); await f.click('Cancel');
   assert.equal(f.secret()?.value, token, 'Cancelling must not discard the still-valid one-time token');
   await f.click('Hide token'); assert.equal(f.secret(), null);
@@ -69,7 +69,7 @@ test('mounted Human panel confirms rotate/revoke and never restores a hidden tok
   assert.match(f.host.textContent!, /revision 2/);
   await f.click('Revoke token'); await f.click('Confirm revocation');
   assert.equal(f.secret(), null); assert.equal(f.status().revoked, true);
-  assert.throws(() => f.hive.agentByToken(token), /Invalid token/);
+  assert.throws(() => f.hive.identity.agentByToken(token), /Invalid token/);
   assert.ok(f.button('Revoke token')!.disabled);
   assert.equal(window.localStorage.length, 0); assert.equal(window.sessionStorage.length, 0);
 });
@@ -78,32 +78,32 @@ test('lost rotation response never automatically rotates again and requires relo
   const f = await fixture(t); await f.manage(); await f.click('Rotate token'); f.lose(); await f.click('Confirm rotation');
   assert.equal(f.posts(), 1); assert.equal(f.status().revision, 2); assert.equal(f.secret(), null);
   assert.match(f.host.textContent!, /outcome may be unknown/); assert.ok(f.button('Rotate token')!.disabled);
-  const lost = f.lostToken(); assert.equal(f.hive.agentByToken(lost).id, f.bot.bot.id);
+  const lost = f.lostToken(); assert.equal(f.hive.identity.agentByToken(lost).id, f.bot.bot.id);
   await f.click('Reload credential state'); assert.match(f.host.textContent!, /revision 2/);
   await f.click('Rotate token'); await f.click('Confirm rotation');
   assert.equal(f.posts(), 2); assert.equal(f.status().revision, 3);
-  assert.throws(() => f.hive.agentByToken(lost), /Invalid token/);
-  assert.equal(f.hive.agentByToken(f.secret()!.value).id, f.bot.bot.id);
+  assert.throws(() => f.hive.identity.agentByToken(lost), /Invalid token/);
+  assert.equal(f.hive.identity.agentByToken(f.secret()!.value).id, f.bot.bot.id);
 });
 
 test('lost creation response refreshes discovery and the same bot can be recovered', async t => {
   const f = await fixture(t); await f.create(); await f.name('RecoverableFeed'); f.lose(); await f.click('Create bot');
   assert.equal(f.refreshed(), 1); assert.match(f.host.textContent!, /open Credentials/);
-  const discovered = f.hive.listAgents(f.human).find(a => a.name === 'RecoverableFeed')!;
+  const discovered = f.hive.identity.listAgents(f.human).find(a => a.name === 'RecoverableFeed')!;
   assert.ok(discovered); const lost = f.lostToken();
   await f.manage(discovered); await f.click('Rotate token'); await f.click('Confirm rotation');
-  assert.equal(f.hive.agentByToken(f.secret()!.value).id, discovered.id);
-  assert.throws(() => f.hive.agentByToken(lost), /Invalid token/);
-  assert.equal(f.hive.listAgents(f.human).filter(a => a.name === 'RecoverableFeed').length, 1);
+  assert.equal(f.hive.identity.agentByToken(f.secret()!.value).id, discovered.id);
+  assert.throws(() => f.hive.identity.agentByToken(lost), /Invalid token/);
+  assert.equal(f.hive.identity.listAgents(f.human).filter(a => a.name === 'RecoverableFeed').length, 1);
 });
 
 test('a stale Human panel cannot revoke a newer credential', async t => {
   const f = await fixture(t); await f.manage(); await f.click('Revoke token');
-  const newer = f.hive.changeBotCredential(f.human, f.project.id, f.bot.bot.id, { action: 'rotate', expectedRevision: 1 });
+  const newer = f.hive.bots.changeBotCredential(f.human, f.project.id, f.bot.bot.id, { action: 'rotate', expectedRevision: 1 });
   await f.click('Confirm revocation');
-  assert.equal(f.hive.agentByToken(newer.token!).id, f.bot.bot.id);
+  assert.equal(f.hive.identity.agentByToken(newer.token!).id, f.bot.bot.id);
   assert.match(f.host.textContent!, /credential changed/); assert.ok(f.button('Revoke token')!.disabled);
   await f.click('Reload credential state'); await f.click('Revoke token'); await f.click('Confirm revocation');
-  assert.throws(() => f.hive.agentByToken(newer.token!), /Invalid token/);
+  assert.throws(() => f.hive.identity.agentByToken(newer.token!), /Invalid token/);
 });
 

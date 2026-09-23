@@ -42,9 +42,9 @@ test("enabled topology routing changes real Human delivery while disabled Auto a
     await hive.adaptiveTopology.stop();
     hive.db.close(); rmSync(dir, { recursive: true, force: true });
   });
-  const human = hive.getAgent("human");
-  const brain = hive.join({ role: "brain", project: "chapter" });
-  const dm = hive.openDm(human, brain.agent.name);
+  const human = hive.identity.getAgent("human");
+  const brain = hive.identity.join({ role: "brain", project: "chapter" });
+  const dm = hive.channels.openDm(human, brain.agent.name);
   const app = createApp(hive);
   let calls = 0;
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
