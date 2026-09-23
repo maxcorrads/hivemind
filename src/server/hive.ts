@@ -4,8 +4,8 @@ import { TimelineStore } from './timeline.ts';
 import { UploadBudget, type UploadLimits } from "./upload-budget.ts";
 import { joinInputSchema, validated, waitDurationSchema, cursorSchema, limitSchema, channelInputSchema, attachmentIdsSchema, memberNamesSchema } from "../shared/api-contract.ts";
 import { SendRequests } from "./send-requests.ts";
-import { initTelegramInbox, telegramQuarantine, retryTelegramUpdate, discardTelegramUpdate, type TelegramUpdateScope } from "./telegram-inbox.ts";
-import { initTelegramOutbox, retryTelegramOutboxFailure, pruneTelegramFailures, type TelegramDestination } from "./telegram-outbox.ts";
+import { pruneTelegramUpdates, telegramQuarantine, retryTelegramUpdate, discardTelegramUpdate, type TelegramUpdateScope } from "./telegram-inbox.ts";
+import { retryTelegramOutboxFailure, pruneTelegramFailures, type TelegramDestination } from "./telegram-outbox.ts";
 import { Storage } from './storage.ts';
 import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync } from "node:fs";
@@ -58,7 +58,7 @@ import { removeLegacyIdentityDirs } from "./legacy-identities.ts";
 import { packWait } from "./wait-format.ts";
 import { digestExpansionSchema } from "../shared/digest.ts";
 import { botMessageSchema, createBotSchema, botCredentialSchema } from "../shared/bot-message.ts";
-import { STORAGE_VERSION, storageVersion, validateCurrentStorage, migrateProjectStorage } from "./storage-migrations.ts";
+import { applyMigrations, assertSupportedVersion } from "./migrations/index.ts";
 import { assertAllowedMime, commitUpload, openBlob, removeOrphanBlobs, removeUploadTemp, streamUpload } from "./files.ts";
 import { TaskStore } from './tasks.ts';
 import { NotificationStore } from './notifications.ts';
@@ -173,34 +173,18 @@ export class Hive {
     this.storage = Storage.for(this.db);
     this.bus.bindStorage(this.storage);
     try {
-      storageVersion(this.db);
+      // Refuse a newer or unknown schema before anything (even the journal mode) writes to the file.
+      assertSupportedVersion(this.db);
       this.db.exec("PRAGMA journal_mode = WAL");
       this.db.exec("PRAGMA foreign_keys = ON");
       this.db.exec("PRAGMA busy_timeout = 5000");
-      this.transaction(() => {
-        const version = storageVersion(this.db);
-        // A versioned but partial schema must not be silently bootstrapped.
-        if (version === STORAGE_VERSION) validateCurrentStorage(this.db);
-        this.migrate();
-        migrateProjectStorage(this.db);
-        // Project columns exist only after migration; keep indexes in the same transaction.
-        this.db.exec(`
-          CREATE INDEX IF NOT EXISTS idx_agents_project_role ON agents(project_id, role);
-          CREATE INDEX IF NOT EXISTS idx_agents_role ON agents(role);
-          CREATE INDEX IF NOT EXISTS idx_channels_project_type_name ON channels(project_id, type, name);
-          CREATE INDEX IF NOT EXISTS idx_channel_members_agent_channel ON channel_members(agent_id, channel_id);
-        `);
-        this.bootstrap();
-        this.db.exec(`PRAGMA user_version = ${STORAGE_VERSION}`);
-      });
-      initTelegramOutbox(this.db);
-      initTelegramInbox(this.db);
-      pruneTelegramFailures(this.db);
+      // Every table, index and trigger comes from the versioned migrations; stores only prepare statements.
+      applyMigrations(this.db);
+      this.transaction(() => this.bootstrap());
+      this.transaction(() => { pruneTelegramUpdates(this.db); pruneTelegramFailures(this.db); });
       this.readState = new ReadState(this.db);
       this.sendRequests = new SendRequests(this.db);
       this.uploads = new UploadBudget({ db: this.db, transaction: work => this.transaction(work) }, options.uploadLimits);
-      // Agent credentials were removed in #144; drop the table left by older hives.
-      this.db.exec("DROP TABLE IF EXISTS agent_credentials");
       this.tasks = new TaskStore(this);
       this.rooms = new RoomStore(this);
       this.notifications = new NotificationStore(this);
@@ -231,150 +215,6 @@ export class Hive {
       | { sql: string }
       | undefined;
     return row?.sql ?? "";
-  }
-
-  private migrate() {
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS agents (
-        id TEXT PRIMARY KEY,
-        name TEXT UNIQUE NOT NULL,
-        role TEXT NOT NULL,
-        seniority TEXT,
-        focus TEXT,
-        token_hash TEXT NOT NULL,
-        online INTEGER NOT NULL DEFAULT 0,
-        last_seen_at INTEGER NOT NULL,
-        created_at INTEGER NOT NULL,
-        inbox_cursor INTEGER NOT NULL DEFAULT 0
-      );
-      CREATE TABLE IF NOT EXISTS channels (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        type TEXT NOT NULL,
-        topic TEXT,
-        created_by TEXT NOT NULL,
-        created_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS channel_members (
-        channel_id TEXT NOT NULL,
-        agent_id TEXT NOT NULL,
-        PRIMARY KEY (channel_id, agent_id)
-      );
-      CREATE TABLE IF NOT EXISTS messages (
-        seq INTEGER PRIMARY KEY AUTOINCREMENT,
-        id TEXT UNIQUE NOT NULL,
-        channel_id TEXT NOT NULL,
-        thread_id TEXT,
-        author_id TEXT NOT NULL,
-        body TEXT NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'chat',
-        control TEXT,
-        mentions TEXT NOT NULL DEFAULT '[]',
-        created_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS threads (
-        id TEXT PRIMARY KEY,
-        channel_id TEXT NOT NULL,
-        status TEXT
-      );
-      CREATE TABLE IF NOT EXISTS reads (
-        agent_id TEXT NOT NULL,
-        channel_id TEXT NOT NULL,
-        last_read_seq INTEGER NOT NULL,
-        PRIMARY KEY (agent_id, channel_id)
-      );
-      CREATE TABLE IF NOT EXISTS bot_events (
-        message_id TEXT PRIMARY KEY,
-        bot_id TEXT NOT NULL,
-        channel_id TEXT NOT NULL,
-        thread_id TEXT NOT NULL DEFAULT '',
-        event_id TEXT NOT NULL,
-        metadata TEXT NOT NULL,
-        payload_hash TEXT NOT NULL,
-        UNIQUE (bot_id, channel_id, thread_id, event_id)
-      );
-      CREATE INDEX IF NOT EXISTS idx_messages_channel_seq ON messages(channel_id, seq);
-      CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);\n      CREATE INDEX IF NOT EXISTS idx_messages_channel_thread_seq ON messages(channel_id, thread_id, seq);
-      CREATE TABLE IF NOT EXISTS telegram_topics (
-        channel_id TEXT PRIMARY KEY,
-        telegram_thread_id INTEGER NOT NULL UNIQUE
-      );
-      CREATE TABLE IF NOT EXISTS telegram_out (
-        telegram_message_id INTEGER PRIMARY KEY,
-        seq INTEGER NOT NULL,
-        channel_id TEXT NOT NULL,
-        thread_id TEXT
-      );
-      CREATE TABLE IF NOT EXISTS telegram_in (
-        update_id INTEGER PRIMARY KEY
-      );
-      CREATE TABLE IF NOT EXISTS telegram_state (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS attachments (
-        id TEXT PRIMARY KEY,
-        message_id TEXT,
-        name TEXT NOT NULL,
-        mime TEXT NOT NULL,
-        bytes INTEGER NOT NULL,
-        sha256 TEXT NOT NULL,
-        created_by TEXT NOT NULL,
-        created_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS reactions (
-        message_id TEXT NOT NULL,
-        agent_id TEXT NOT NULL,
-        emoji TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        PRIMARY KEY (message_id, agent_id, emoji)
-      );
-      CREATE INDEX IF NOT EXISTS idx_attachments_message ON attachments(message_id);
-      CREATE INDEX IF NOT EXISTS idx_telegram_out_seq ON telegram_out(seq);
-      CREATE TABLE IF NOT EXISTS telegram_pending (
-        seq INTEGER NOT NULL,
-        kind TEXT NOT NULL,
-        PRIMARY KEY (seq, kind)
-      );
-      CREATE TABLE IF NOT EXISTS telegram_delivery_parts (
-        seq INTEGER NOT NULL,
-        part_key TEXT NOT NULL,
-        telegram_chat_id INTEGER NOT NULL,
-        telegram_message_id INTEGER NOT NULL,
-        completed_at INTEGER NOT NULL,
-        PRIMARY KEY (seq, part_key, telegram_chat_id)
-      );
-      CREATE TABLE IF NOT EXISTS telegram_failures (
-        id TEXT PRIMARY KEY,
-        seq INTEGER NOT NULL,
-        kind TEXT NOT NULL,
-        telegram_chat_id INTEGER,
-        reason TEXT NOT NULL,
-        attempts INTEGER NOT NULL DEFAULT 0,
-        created_at INTEGER NOT NULL,
-        resolved_at INTEGER,
-        resolution TEXT
-      );
-      CREATE INDEX IF NOT EXISTS idx_telegram_failures_open ON telegram_failures(resolved_at, created_at);
-
-      CREATE TABLE IF NOT EXISTS telegram_hold (
-        telegram_message_id INTEGER PRIMARY KEY,
-        telegram_thread_id INTEGER NOT NULL,
-        payload TEXT NOT NULL
-      );
-    `);
-    if (!this.db.prepare("PRAGMA table_info(messages)").all().some(column => column.name === "event_type")) {
-      this.db.exec("ALTER TABLE messages ADD COLUMN event_type TEXT");
-    }
-    // Legacy bots have revision 1 and keep their existing token hash. A row is
-    // needed only after the first credential change; no raw token is stored.
-    this.db.exec(`CREATE TABLE IF NOT EXISTS bot_credentials (
-      bot_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
-      revision INTEGER NOT NULL, revoked INTEGER NOT NULL
-    )`);
-    if (!this.db.prepare('PRAGMA table_info(messages)').all().some(column => column.name === 'recipients')) {
-      this.db.exec("ALTER TABLE messages ADD COLUMN recipients TEXT NOT NULL DEFAULT '[]'");
-    }
   }
 
   private mapProject(row: ProjectRow): Project {

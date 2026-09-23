@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { Hive } from "./hive.ts";
 import { removeLegacyIdentityDirs } from "./legacy-identities.ts";
+import { markLegacyStorage } from "./test-fixtures.ts";
 
 // Every test uses its own temporary hive home; the real ~/.hivemind is never touched.
 function tempHome(t: { after: (fn: () => void) => void }): string {
@@ -57,6 +58,7 @@ test("startup drops the unused agent_credentials table and no longer creates it"
   assert.equal(table(first.db), undefined);
   // schema-level assertion: recreate the legacy credentials table.
   first.db.exec("CREATE TABLE agent_credentials (agent_id TEXT PRIMARY KEY, revision INTEGER NOT NULL, revoked INTEGER NOT NULL)");
+  markLegacyStorage(first);
   first.db.close();
 
   const reopened = new Hive(dbPath);

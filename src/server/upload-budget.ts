@@ -16,24 +16,6 @@ export class UploadBudget {
       if (!Number.isSafeInteger(value) || value < 1 || (key === 'deadlineMs' && value > UPLOAD_DEADLINE_MS))
         throw new Error('Invalid upload budget');
     }
-    host.transaction(() => { host.db.exec(`
-      CREATE TABLE IF NOT EXISTS upload_usage (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), bytes INTEGER NOT NULL);
-      CREATE TRIGGER IF NOT EXISTS upload_usage_insert AFTER INSERT ON attachments BEGIN
-        UPDATE upload_usage SET bytes = bytes + NEW.bytes WHERE singleton = 1; END;
-      CREATE TRIGGER IF NOT EXISTS upload_usage_delete AFTER DELETE ON attachments BEGIN
-        UPDATE upload_usage SET bytes = bytes - OLD.bytes WHERE singleton = 1; END;
-      CREATE TRIGGER IF NOT EXISTS upload_usage_change AFTER UPDATE OF bytes ON attachments BEGIN
-        UPDATE upload_usage SET bytes = bytes + NEW.bytes - OLD.bytes WHERE singleton = 1; END;
-      CREATE TABLE IF NOT EXISTS upload_reservations (
-        id TEXT PRIMARY KEY, actor_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-        bytes INTEGER NOT NULL, owner_pid INTEGER NOT NULL, expires_at INTEGER NOT NULL);
-      CREATE INDEX IF NOT EXISTS upload_reservations_expiry ON upload_reservations(expires_at);
-      CREATE INDEX IF NOT EXISTS upload_reservations_actor ON upload_reservations(actor_id);
-    `);
-      if (!host.db.prepare('SELECT 1 FROM upload_usage WHERE singleton = 1').get()) {
-        host.db.exec('INSERT INTO upload_usage SELECT 1, COALESCE(SUM(bytes),0) FROM attachments');
-      }
-    });
   }
   acquire(actorId: string, declared = FILE_MAX_BYTES) {
     if (!Number.isSafeInteger(declared) || declared < 1 || declared > FILE_MAX_BYTES) throw new HiveError(400, 'Invalid upload size');

@@ -13,7 +13,7 @@ import { advanceTopologyPolicy, initialTopologyPolicy, minimumTopologyWorkers, t
 import { ADAPTIVE_TOPOLOGY_CONTRACT_VERSION,
   type TopologyCapacitySnapshot, type TopologyEvaluationSnapshot } from './adaptive-topology-provider.ts';
 import { AdaptiveObservationStores, observeTopologyEvaluation } from './adaptive-evidence-observer.ts';
-import { initAdaptiveCommitments, openDelegations, readAdaptiveCapacity } from './adaptive-topology-capacity.ts';
+import { openDelegations, readAdaptiveCapacity } from './adaptive-topology-capacity.ts';
 import { AdaptiveAdmission, coordinationEventId } from './adaptive-topology-admission.ts';
 import type { JevCallSummary } from '../shared/jev-calls.ts';
 
@@ -115,10 +115,6 @@ export function topologyDirective(state: Pick<AdaptiveExecutionState,
     state.lockScope === 'none' ? '' : `Human lock: ${state.lockScope}.`].filter(Boolean).join('\n');
 }
 
-// A (channel, brain) has at most one current execution; older ones stay as non-current rows while they drain.
-const EXECUTIONS_SCHEMA = `CREATE TABLE adaptive_topology_executions (
-  execution_id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, brain_id TEXT NOT NULL, project_id TEXT NOT NULL,
-  root_message_id TEXT NOT NULL, snapshot TEXT NOT NULL, current INTEGER NOT NULL DEFAULT 1)`;
 const parseExecution = (row: Record<string, unknown>) => JSON.parse(String(row.snapshot)) as StoredExecution;
 /** Other executions revalidated at once after a capacity change; each channel still runs one at a time. */
 const PROJECT_REVALIDATION_CONCURRENCY = 4;
@@ -173,59 +169,6 @@ export class AdaptiveTopologyRuntime {
   }
   constructor(private hive: Hive) {
     this.observations = new AdaptiveObservationStores(hive.db, health => hive.bus.emit('evidence-health', health));
-    hive.storage.transaction(() => this.migrateExecutionKeys());
-    hive.db.exec(`${EXECUTIONS_SCHEMA.replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS')};
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_adaptive_topology_current ON adaptive_topology_executions(channel_id,brain_id) WHERE current=1;
-      CREATE INDEX IF NOT EXISTS idx_adaptive_topology_brain ON adaptive_topology_executions(brain_id,project_id);
-      CREATE INDEX IF NOT EXISTS idx_adaptive_topology_root ON adaptive_topology_executions(root_message_id);
-      CREATE TABLE IF NOT EXISTS adaptive_topology_events (
-        id TEXT PRIMARY KEY, execution_id TEXT NOT NULL, channel_id TEXT NOT NULL,
-        project_id TEXT NOT NULL, created_at INTEGER NOT NULL, snapshot TEXT NOT NULL);
-      CREATE INDEX IF NOT EXISTS idx_adaptive_topology_events_channel ON adaptive_topology_events(channel_id,created_at DESC);
-      CREATE TABLE IF NOT EXISTS adaptive_topology_locks (channel_id TEXT NOT NULL, brain_id TEXT NOT NULL,
-        topology TEXT NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY(channel_id,brain_id));
-      CREATE TABLE IF NOT EXISTS adaptive_topology_tasks (
-        task_id TEXT PRIMARY KEY REFERENCES task_records(id) ON DELETE CASCADE, execution_id TEXT NOT NULL);
-      CREATE INDEX IF NOT EXISTS idx_adaptive_topology_tasks_execution ON adaptive_topology_tasks(execution_id);
-      CREATE TABLE IF NOT EXISTS adaptive_topology_evaluated (execution_id TEXT NOT NULL, event_id TEXT NOT NULL, PRIMARY KEY(execution_id,event_id));`);
-    initAdaptiveCommitments(hive);
-    // Cleanup is transactionally tied to channel/project deletion, not a best-effort UI callback.
-    hive.db.exec(`CREATE TRIGGER IF NOT EXISTS adaptive_channel_deleted AFTER DELETE ON channels BEGIN
-      DELETE FROM adaptive_topology_evaluated WHERE execution_id IN
-        (SELECT execution_id FROM adaptive_topology_executions WHERE channel_id=OLD.id);
-      DELETE FROM adaptive_topology_events WHERE channel_id=OLD.id;
-      DELETE FROM adaptive_topology_locks WHERE channel_id=OLD.id;
-      DELETE FROM adaptive_topology_executions WHERE channel_id=OLD.id;
-    END;`);
-  }
-  /**
-   * Phase 2 keyed executions and locks by channel alone, phase 3 executions by (channel, brain). Executions are now
-   * keyed by execution_id so a replaced request can drain beside its successor; every migrated row stays current.
-   */
-  private migrateExecutionKeys() {
-    const keys = (table: string) => this.hive.db.prepare(`PRAGMA table_info(${table})`).all()
-      .filter(column => Number(column.pk) > 0).map(column => String(column.name));
-    const executions = keys('adaptive_topology_executions'), locks = keys('adaptive_topology_locks');
-    const legacy = (columns: string[]) => columns.length === 1 && columns[0] === 'channel_id';
-    const rekey = executions.length > 0 && !(executions.length === 1 && executions[0] === 'execution_id');
-    if (!rekey && !legacy(locks)) return;
-    // The deletion trigger names these tables; recreate it after the tables are rebuilt.
-    this.hive.db.exec('DROP TRIGGER IF EXISTS adaptive_channel_deleted');
-    if (rekey) this.hive.db.exec(`ALTER TABLE adaptive_topology_executions RENAME TO adaptive_topology_executions_old;
-      ${EXECUTIONS_SCHEMA};
-      INSERT INTO adaptive_topology_executions(execution_id,channel_id,brain_id,project_id,root_message_id,snapshot,current)
-        SELECT execution_id,channel_id,brain_id,project_id,root_message_id,snapshot,1 FROM adaptive_topology_executions_old ORDER BY rowid;
-      DROP TABLE adaptive_topology_executions_old;`);
-    if (legacy(locks)) this.hive.db.exec(`ALTER TABLE adaptive_topology_locks RENAME TO adaptive_topology_locks_v1;
-      CREATE TABLE adaptive_topology_locks (channel_id TEXT NOT NULL, brain_id TEXT NOT NULL,
-        topology TEXT NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY(channel_id,brain_id));
-      INSERT INTO adaptive_topology_locks(channel_id,brain_id,topology,updated_at)
-        SELECT channel_id,brain_id,topology,updated_at FROM (SELECT l.channel_id,l.topology,l.updated_at,
-          COALESCE((SELECT e.brain_id FROM adaptive_topology_executions e WHERE e.channel_id=l.channel_id LIMIT 1),
-            (SELECT cm.agent_id FROM channel_members cm JOIN agents a ON a.id=cm.agent_id
-              WHERE cm.channel_id=l.channel_id AND a.role='brain' LIMIT 1)) AS brain_id
-          FROM adaptive_topology_locks_v1 l) WHERE brain_id IS NOT NULL;
-      DROP TABLE adaptive_topology_locks_v1;`);
   }
   async stop(): Promise<void> {
     this.stopped = true; this.abort.abort();

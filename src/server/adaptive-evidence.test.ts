@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { AdaptiveEvidenceStore, exportAdaptiveEvidence, EVIDENCE_ATTEMPT_LIMIT, EVIDENCE_RUN_LIMIT } from './adaptive-evidence.ts';
 import type { AdaptiveTopologyDecision } from '../shared/adaptive-topology.ts';
+import { rerunMigration } from './test-fixtures.ts';
 
 const input = { topology: 'single', workers: 0, usableWorkers: 2, policyVersion: 'topology-policy-v2.1' };
 const scope = { executionId: 'e1', channelId: 'c1', projectId: 'p1', phase: 'continuous' as const };
@@ -12,6 +13,7 @@ const decision: AdaptiveTopologyDecision = { routeId: 'r1', contractVersion: 'ad
 function fixture() {
   const db = new DatabaseSync(':memory:');
   db.exec("PRAGMA foreign_keys=ON; CREATE TABLE channels(id TEXT PRIMARY KEY); INSERT INTO channels VALUES('c1'),('c2');");
+  rerunMigration(db, 'adaptive_observations');
   const store = new AdaptiveEvidenceStore(db);
   return { db, store };
 }

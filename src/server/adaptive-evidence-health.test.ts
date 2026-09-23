@@ -10,7 +10,7 @@ import { saveAdaptiveRouting } from './adaptive-config.ts';
 import { AdaptiveEvidenceStore, evidenceCapture, exportAdaptiveEvidence, EVIDENCE_RUN_LIMIT } from './adaptive-evidence.ts';
 import { EVIDENCE_GAP_MARKER_LIMIT, EvidenceCollectorMonitor } from './adaptive-evidence-health.ts';
 import { jevTopologyResponse } from './fixtures/jev-topology.ts';
-import { countRows, deleteRows, failWrites } from './test-fixtures.ts';
+import { countRows, deleteRows, failWrites, rerunMigration } from './test-fixtures.ts';
 import type { AdaptiveTopologyDecision } from '../shared/adaptive-topology.ts';
 import type { EvidenceCollectorHealth } from '../shared/evidence-health.ts';
 
@@ -23,6 +23,7 @@ const gap = (at = 1_000) => ({ missedBegins: 1, missedFinishes: 0, unattributed:
 function storeFixture(t: TestContext) {
   const db = new DatabaseSync(':memory:');
   db.exec("PRAGMA foreign_keys=ON; CREATE TABLE channels(id TEXT PRIMARY KEY); INSERT INTO channels VALUES('c1'),('c2');");
+  rerunMigration(db, 'adaptive_observations');
   t.after(() => db.close());
   return { db, store: new AdaptiveEvidenceStore(db) };
 }

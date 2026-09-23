@@ -16,36 +16,6 @@ export function telegramBotKey(token: string, verifiedBotId?: number): string {
     : `credential:${createHash("sha256").update(token).digest("hex")}`;
 }
 
-export function initTelegramOutbox(db: DatabaseSync): void {
-  const has = (table: string, name: string) =>
-    (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some(row => row.name === name);
-  Storage.for(db).transaction(() => {
-    for (const table of ["telegram_pending", "telegram_failures"]) {
-      if (!has(table, "bot_key")) db.exec(`ALTER TABLE ${table} ADD COLUMN bot_key TEXT`);
-    }
-    if (!has("telegram_pending", "telegram_chat_id")) db.exec("ALTER TABLE telegram_pending ADD COLUMN telegram_chat_id INTEGER");
-    if (!has("telegram_delivery_parts", "bot_key")) {
-      db.exec(`
-        ALTER TABLE telegram_delivery_parts RENAME TO telegram_delivery_parts_legacy;
-        CREATE TABLE telegram_delivery_parts (
-          seq INTEGER NOT NULL, part_key TEXT NOT NULL, bot_key TEXT NOT NULL,
-          telegram_chat_id INTEGER NOT NULL, telegram_message_id INTEGER NOT NULL,
-          completed_at INTEGER NOT NULL,
-          PRIMARY KEY (seq, part_key, bot_key, telegram_chat_id)
-        );
-        INSERT INTO telegram_delivery_parts
-          SELECT seq, part_key, '', telegram_chat_id, telegram_message_id, completed_at FROM telegram_delivery_parts_legacy;
-        DROP TABLE telegram_delivery_parts_legacy;
-      `);
-    }
-    for (const column of ["attempts", "first_attempt_at", "revision"]) {
-      if (!has("telegram_pending", column)) db.exec(`ALTER TABLE telegram_pending ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`);
-    }
-    if (!has("telegram_failures", "destination_invalidated")) db.exec("ALTER TABLE telegram_failures ADD COLUMN destination_invalidated INTEGER NOT NULL DEFAULT 0");
-    db.exec("CREATE INDEX IF NOT EXISTS idx_telegram_parts_seq ON telegram_delivery_parts(seq)");
-  });
-}
-
 function validDestination(value: TelegramDestination | null | undefined): value is TelegramDestination {
   return Boolean(value?.botKey && Number.isSafeInteger(value.chatId) && value.chatId !== 0);
 }

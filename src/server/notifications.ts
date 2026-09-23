@@ -7,10 +7,6 @@ import { notificationRoute, subscriptionSchema, subscriptionScopeSchema,
 export class NotificationStore {
   private readonly lookup: StatementSync;
   constructor(private hive: Hive) {
-    hive.db.exec(`CREATE TABLE IF NOT EXISTS notification_subscriptions (
-      agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-      channel_id TEXT NOT NULL, thread_id TEXT NOT NULL DEFAULT '', event_types TEXT NOT NULL,
-      PRIMARY KEY(agent_id, channel_id, thread_id));`);
     this.lookup = hive.db.prepare(`SELECT event_types FROM notification_subscriptions
       WHERE agent_id = ? AND channel_id = ? AND thread_id IN ('', ?) ORDER BY length(thread_id) DESC LIMIT 1`);
   }
