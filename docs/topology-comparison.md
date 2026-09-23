@@ -39,6 +39,7 @@ For a real study, create a separate configuration with:
 
 - `evidenceKind: "live"`;
 - an exact 40-character Hivemind commit SHA and the workload provider/model/host/configuration identifiers;
+- optionally `versions.jevModel`: the Jev identifier saved in the Auto trials' settings (see [Jev model](adaptive-routing.md#jev-model-alias-or-pinned-identifier)). When set, every Auto trial's router evidence must record exactly that requested identifier; exports without requested models cannot join such a cohort;
 - the supported policy version (`topology-policy-v2.1`);
 - one to ten workloads, each with a stable ID/version and exact `inputDigest` / `acceptanceDigest`;
 - one to ten repeats, a uint32 random seed, and the same initial free-worker count (2–254) for all conditions;
@@ -98,7 +99,7 @@ The summary reports `auto_minus_fixed` for each matched workload/repeat, then de
 - Net tokens are `workloadTokens + Jev inputTokens + Jev outputTokens` for Auto; fixed router usage is zero only under the explicit Jev-off condition.
 - Complete net comparisons require healthy instrumentation, known workload and router usage, exactly one known resolved Jev model, and an unpruned capture beginning at the initial attempt. Missing, truncated or mid-execution evidence suppresses the net delta instead of becoming zero cost.
 - An export may acknowledge incomplete history even when no retained attempt was pruned, for example after its capture was recreated. Such exports remain valid observations but cannot establish complete net usage. Legacy exports claiming complete history are still checked for an initial first attempt before entering net comparisons.
-- Distinct resolved Jev model versions cannot be pooled. Preserve and split those cohorts; a mutable alias alone is not a reproducibility guarantee.
+- Distinct resolved Jev model versions cannot be pooled, and neither can distinct requested identifiers. `validate` reports `requestedModels` and `resolvedModels` separately. Preserve and split those cohorts; a mutable alias alone is not a reproducibility guarantee, and a pinned identifier is not assumed immutable either: drift in the resolved model still splits the cohort.
 - End-to-end `wallMs` already includes classifier waits. Summed classifier latency is **not added again**.
 - Efficiency deltas include only jointly acceptance-passing, independently reviewed pairs. Independent defect deltas remain visible alongside them; a faster result with more review defects is not automatically better.
 - Quality regressions/improvements, harness/interrupted exclusions, exceeded budgets and unknown routing-review labels are separate counters.

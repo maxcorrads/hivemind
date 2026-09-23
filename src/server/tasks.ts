@@ -171,7 +171,7 @@ export class TaskStore {
       duplicate = this.retry(actor, input.requestId, hash); if (duplicate) return;
       const worker = this.worker(actor, input.worker);
       this.contract(actor, input.contract); this.workerEvidence(worker, input.contract.evidenceSeqs);
-      const channel = input.channel ? this.hive.getChannel(input.channel, actor.projectId) : this.hive.openDm(actor, worker.name, true);
+      const channel = input.channel ? this.hive.getChannel(input.channel, actor.projectId) : this.hive.openDm(actor, worker.name);
       this.writable(actor, worker, channel);
       const room = this.hive.rooms.assignment(actor, channel, worker, input);
       if (room?.existing) {

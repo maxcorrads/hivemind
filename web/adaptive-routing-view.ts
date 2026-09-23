@@ -15,6 +15,8 @@ export function primaryExecution(executions: AdaptiveExecutionState[]): Adaptive
     .sort((a, b) => Number(Boolean(a.completedAt)) - Number(Boolean(b.completedAt)) || b.updatedAt - a.updatedAt)[0] ?? null;
 }
 
+/** Server reasons that complete an execution; a replaced one is never reopened afterwards. */
+const DRAINED_REASONS = new Set(['delegated_work_drained', 'execution_completed']);
 /**
  * Merge delayed HTTP with realtime without crossing channel or execution boundaries. Executions are keyed by
  * executionId: each brain keeps its newest current execution (a newer request replaces an older current one),
@@ -37,13 +39,20 @@ export function mergeRoutingView(current: AdaptiveRoutingView | null, incoming: 
     const existing = latestCurrent.get(item.brainId);
     if (!existing || newer(existing, item)) latestCurrent.set(item.brainId, item);
   }
-  const executions = [...byId.values()].filter(item => !isCurrentExecution(item) || latestCurrent.get(item.brainId) === item);
-  const state = primaryExecution(executions);
-  const events = new Map<string, AdaptiveRoutingEvent>();
+  const byEvent = new Map<string, AdaptiveRoutingEvent>();
   for (const item of [...(current?.events ?? []), ...incoming.events]) {
-    if (item.channelId === channelId) events.set(item.id, item);
+    if (item.channelId === channelId) byEvent.set(item.id, item);
   }
-  return { state, executions, events: [...events.values()].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)).slice(-100) };
+  const events = [...byEvent.values()].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)).slice(-100);
+  // A replaced execution leaves once the server reports it completed; its completion event keeps a delayed
+  // snapshot (updated before that event) from bringing it back as still finishing.
+  const drainedAt = new Map<string, number>();
+  for (const item of events) if (item.kind === 'status' && DRAINED_REASONS.has(item.reason))
+    drainedAt.set(item.executionId, Math.max(drainedAt.get(item.executionId) ?? 0, item.createdAt));
+  const executions = [...byId.values()].filter(item => isCurrentExecution(item)
+    ? latestCurrent.get(item.brainId) === item
+    : !item.completedAt && !((drainedAt.get(item.executionId) ?? -Infinity) >= item.updatedAt));
+  return { state: primaryExecution(executions), executions, events };
 }
 
 /** Routing strip counts for a channel: running brains (current executions) and older requests still finishing. */

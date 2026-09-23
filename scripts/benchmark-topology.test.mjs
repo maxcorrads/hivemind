@@ -34,7 +34,7 @@ test('prepare is deterministic, balanced, version-pinned and does not fabricate 
   assert.equal(new Set(a.trials.map(t => t.id)).size, 10);
   for (const mode of CONDITIONS) assert.equal(a.trials.filter(t => t.condition === mode).length, 2);
   assert.ok(a.trials.every(t => t.observed === null));
-  assert.deepEqual(validateStudy(a), { expected: 10, completed: 0, pending: 10, resolvedModels: [] });
+  assert.deepEqual(validateStudy(a), { expected: 10, completed: 0, pending: 10, requestedModels: [], resolvedModels: [] });
   assert.notEqual(prepareStudy({ ...config, seed: 30 }).studyId, a.studyId);
 });
 
@@ -94,6 +94,29 @@ test('no pooling live/synthetic, model, policy, host configuration or initial ca
     o => { o.routerEvidence.contractVersion = 'adaptive-routing-v1'; },
     o => { o.routerEvidence.models = ['jev-other']; },
   ]) { const study = completed(); change(auto(study).observed); assert.throws(() => summarizeStudy(study)); }
+});
+
+test('pinned Jev model cohorts check requested identifiers separately from resolved models', () => {
+  const pinned = { ...config, versions: { ...config.versions, jevModel: 'jev-2026-09-01' } };
+  const requested = () => ({ ...evidence(), requestedModels: ['jev-2026-09-01'], requestedModelsTruncated: false });
+  assert.notEqual(prepareStudy(pinned).studyId, prepareStudy(config).studyId, 'a pinned Jev model is part of the study identity');
+  assert.deepEqual(validateStudy(completed(pinned, requested)).requestedModels, ['jev-2026-09-01']);
+  assert.deepEqual(validateStudy(completed(pinned, requested)).resolvedModels, ['jev-fixture-v1']);
+  assert.ok(summarizeStudy(completed(pinned, requested)));
+  // Pre-#134 exports do not record the requested model: they cannot join a pinned cohort, but stay valid unpinned.
+  assert.throws(() => validateStudy(completed(pinned)), /does not record the requested Jev model/);
+  assert.deepEqual(validateStudy(completed()).requestedModels, []);
+  assert.throws(() => validateStudy(completed(pinned, () => ({ ...requested(), requestedModels: ['jev-latest'] }))), /differs from versions.jevModel/);
+  const alternating = (a, b) => { let n = 0; return () => (n++ % 2 ? b : a); };
+  const requestedSeq = alternating('jev-a', 'jev-b');
+  assert.throws(() => validateStudy(completed(config, () => ({ ...requested(), requestedModels: [requestedSeq()] }))),
+    /Requested Jev models differ/);
+  // Response drift under a pinned request is still rejected by the resolved-model check.
+  const resolvedSeq = alternating('jev-r1', 'jev-r2');
+  assert.throws(() => validateStudy(completed(pinned, () => ({ ...requested(), models: [resolvedSeq()] }))),
+    /Resolved Jev models differ/);
+  assert.throws(() => prepareStudy({ ...config, versions: { ...config.versions, jevModel: 'https://evil.example/v1' } }), /bounded Jev model/);
+  assert.throws(() => validateStudy(completed(config, () => ({ ...requested(), requestedModels: ['a/b'] }))), /Invalid requested models/);
 });
 
 test('manual locks with Jev monitoring cannot masquerade as a fixed no-router baseline', () => {
@@ -179,7 +202,7 @@ test('CLI validates and summarizes the full supported cohort with retained expor
   const cli = new URL('./benchmark-topology.mjs', import.meta.url).pathname;
   const validated = spawnSync(process.execPath, [cli, 'validate', '--input', input], { encoding: 'utf8' });
   assert.equal(validated.status, 0, validated.stderr);
-  assert.deepEqual(JSON.parse(validated.stdout), { expected: 500, completed: 500, pending: 0, resolvedModels: [model] });
+  assert.deepEqual(JSON.parse(validated.stdout), { expected: 500, completed: 500, pending: 0, requestedModels: [], resolvedModels: [model] });
   const summarized = spawnSync(process.execPath, [cli, 'summarize', '--input', input, '--output', output], { encoding: 'utf8' });
   assert.equal(summarized.status, 0, summarized.stderr);
   const summary = JSON.parse(readFileSync(output, 'utf8'));

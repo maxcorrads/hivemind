@@ -4,7 +4,7 @@ import { Window } from 'happy-dom';
 import { act } from 'react';
 import { JevLog } from './JevLog.tsx';
 import { api } from './api.ts';
-import { answerLabel, appendOlderPage, mergeRefreshedPage, outcomeLabel, questionRows, triggerLabel } from './jev-log-view.ts';
+import { answerLabel, appendOlderPage, mergeRefreshedPage, outcomeLabel, questionRows, requestedModel, triggerLabel } from './jev-log-view.ts';
 import type { JevCall, JevCallSummary, JevRequestGroup } from '../src/shared/jev-calls.ts';
 
 const window = new Window({ url: 'http://localhost/' });
@@ -45,6 +45,14 @@ test('labels explain triggers, answers and outcomes in plain words', () => {
   assert.deepEqual(questionRows(sent, null).map(row => row.answer), ['No answer', 'No answer', 'No answer'], 'Malformed or missing answers never crash');
 });
 
+test('requested model comes from the summary, or from the exact sent payload for calls recorded before pinning', () => {
+  const call: JevCall = { ...summary('a'), sent, received };
+  assert.equal(requestedModel(call), 'jev-latest');
+  assert.equal(requestedModel({ ...call, requestedModel: 'jev-2026-09-01' }), 'jev-2026-09-01');
+  assert.equal(requestedModel({ ...call, requestedModel: null, sent: null }), null);
+  assert.equal(requestedModel({ ...call, sent: null }), null);
+});
+
 test('the Routing log groups calls by request and shows the exact exchange of the selected call', async t => {
   const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
   t.after(async () => { await act(async () => root.unmount()); host.remove(); });
@@ -73,6 +81,8 @@ test('the Routing log groups calls by request and shows the exact exchange of th
   assert.match(text(), /Can the brain handle it alone\?/);
   assert.match(text(), /No, delegation helps/);
   assert.match(text(), /One worker is enough/);
+  assert.match(text(), /Requested modeljev-latest/);
+  assert.doesNotMatch(text(), /differs from requested/);
   assert.match(host.querySelector('pre')?.textContent ?? '', /"request": "Refactor the parser\."/);
   const channel = Array.from(host.querySelectorAll('.jev-request button.text-btn')).find(item => item.textContent === 'Human, Atlas') as HTMLElement;
   await act(async () => channel.click());

@@ -33,6 +33,9 @@ export type JevCallSummary = {
   confidence: number | null;
   reason: string;
   error: string | null;
+  /** Identifier Hivemind requested. Absent on calls recorded before #134 (their sent payload still has it). */
+  requestedModel?: string | null;
+  /** Model the provider reported it resolved to. */
   model: string | null;
   latencyMs: number;
   inputTokens: number | null;

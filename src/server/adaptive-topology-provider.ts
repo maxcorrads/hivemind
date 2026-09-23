@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { TYPESAFE_ENDPOINT, TYPESAFE_MODEL } from './adaptive-config.ts';
+import { TYPESAFE_ENDPOINT, TYPESAFE_MODEL, validJevModel } from './adaptive-config.ts';
 import type { AdaptiveTopology, AdaptiveTopologyDecision, AdaptiveWorkerCapacity, AdaptiveLockScope } from '../shared/adaptive-topology.ts';
 import { validTopologyTarget } from '../shared/adaptive-topology-policy.ts';
 
@@ -117,7 +117,8 @@ async function responseJson(response: Response): Promise<unknown> {
 /** API contract: https://docs.typesafe.ai/api. No SDK, retries or externally supplied endpoint. */
 export async function evaluateAdaptiveTopology(
   snapshot: TopologyEvaluationSnapshot,
-  config: { apiKey: string },
+  /** `model` is the requested identifier (the saved setting); absent means the default alias. */
+  config: { apiKey: string; model?: string },
   options: { fetchImpl?: typeof fetch; timeoutMs?: number; signal?: AbortSignal;
     /** Receives the exact request body (never the key) and the parsed response, for the Human-only call log. */
     onExchange?: (exchange: { sent: unknown | null; received: unknown | null; error: string | null }) => void } = {},
@@ -125,11 +126,15 @@ export async function evaluateAdaptiveTopology(
   const routeId = `route-${randomUUID()}`;
   const started = Date.now();
   let sent: unknown | null = null, received: unknown | null = null;
+  const requested = config.model ?? TYPESAFE_MODEL;
+  // Never sent unless it is a bounded identifier; the endpoint is fixed regardless of the model.
+  const requestedModel = validJevModel(requested) ? requested : null;
   try {
+    ensure(requestedModel, 'invalid_model_setting');
     const timeout = options.timeoutMs ?? 2_000;
     ensure(Number.isSafeInteger(timeout) && timeout >= 1 && timeout <= 10_000);
     const { questions, topologies, budgets, usable } = topologyQuestions(snapshot);
-    sent = { state: snapshot, model: TYPESAFE_MODEL, questions };
+    sent = { state: snapshot, model: requestedModel, questions };
     const body = JSON.stringify(sent);
     ensure(Buffer.byteLength(body) <= 64 * 1024, 'Routing snapshot exceeds budget');
     const deadline = AbortSignal.timeout(timeout);
@@ -138,6 +143,7 @@ export async function evaluateAdaptiveTopology(
       headers: { Authorization: `Bearer ${config.apiKey}`, 'Content-Type': 'application/json' },
       body, signal: options.signal ? AbortSignal.any([options.signal, deadline]) : deadline,
     });
+    // An unavailable pinned identifier surfaces as a provider HTTP error: never retried with another model.
     if (!response.ok) { await response.body?.cancel().catch(() => undefined); throw new Error(`http_${response.status}`); }
     const raw = await responseJson(response);
     received = raw;
@@ -167,7 +173,8 @@ export async function evaluateAdaptiveTopology(
       reason: blocked ? 'orchestration_needed_no_capacity' : targetTopology === 'single' ? 'single_sufficient'
         : targetTopology === 'brain_multi_room' ? 'shared_coordination_pressure'
           : targetTopology === 'brain_multi_dm' ? 'parallel_workstreams' : 'one_worker_sufficient',
-      providerStatus: 'ok', model: envelope.model, latencyMs: Date.now() - started,
+      // The resolved model may differ from the requested one (alias drift); both are kept, neither is rewritten.
+      providerStatus: 'ok', requestedModel, model: envelope.model, latencyMs: Date.now() - started,
       inputTokens: Number(envelope.usage!.input_tokens), outputTokens: Number(envelope.usage!.output_tokens),
       singleSufficient, needsOrchestration: blocked || !singleSufficient,
     };
@@ -179,7 +186,7 @@ export async function evaluateAdaptiveTopology(
       routeId, contractVersion: ADAPTIVE_TOPOLOGY_CONTRACT_VERSION,
       targetTopology: snapshot.current?.topology ?? 'single', targetWorkers: snapshot.current?.workerBudget ?? 0,
       confidence: null, reason: timeout ? 'provider_timeout_preserve_current' : 'provider_unavailable_preserve_current',
-      providerStatus: 'unavailable', model: null, latencyMs: Date.now() - started,
+      providerStatus: 'unavailable', requestedModel, model: null, latencyMs: Date.now() - started,
       inputTokens: null, outputTokens: null, singleSufficient: null, needsOrchestration: null,
     };
   }

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { JevCall, JevCallLogView, JevCallSummary, JevRequestGroup } from '../src/shared/jev-calls.ts';
 import { api } from './api.ts';
 import { topologyLabel } from './AdaptiveRoutingPanel.tsx';
-import { answerLabel, appendOlderPage, contextRows, mergeRefreshedPage, outcomeLabel, percent, questionRows, reasonLabel, triggerLabel, workersLabel } from './jev-log-view.ts';
+import { answerLabel, appendOlderPage, contextRows, mergeRefreshedPage, outcomeLabel, percent, questionRows, reasonLabel, requestedModel, triggerLabel, workersLabel } from './jev-log-view.ts';
 
 type Props = {
   project: string;
@@ -162,7 +162,9 @@ function CallDetail({ project, id, channelLabel, agentName }: { project: string;
         <div><dt>Overall confidence</dt><dd>{percent(call.confidence)} <small>(lowest answer confidence)</small></dd></div>
         <div><dt>Reason</dt><dd>{reasonLabel(call.reason)}</dd></div>
         <div><dt>What Hivemind did</dt><dd className={`jev-outcome ${outcome.tone}`}>{outcome.text}</dd></div>
-        <div><dt>Model · time · tokens</dt><dd>{call.model ?? '—'} · {call.latencyMs} ms · {call.inputTokens ?? '—'} in / {call.outputTokens ?? '—'} out</dd></div>
+        <div><dt>Requested model</dt><dd>{requestedModel(call) ?? '—'}</dd></div>
+        <div><dt>Resolved model · time · tokens</dt><dd>{call.model ?? '—'}{call.model && requestedModel(call) && call.model !== requestedModel(call)
+          ? <small> (differs from requested)</small> : null} · {call.latencyMs} ms · {call.inputTokens ?? '—'} in / {call.outputTokens ?? '—'} out</dd></div>
       </dl>
     </section>
 

@@ -35,7 +35,7 @@ node --import tsx scripts/export-topology-evidence.mjs \
 
 This is a local Human/operator command, not an agent tool. SQLite is opened **read-only**, using one read transaction so counters and detail belong to the same snapshot. The output must be a new file and is created with mode `0600`; existing evidence is never overwritten. The command performs no migration, provider request, trial execution or upload.
 
-Exports use `schemaVersion: 1`, `evidenceClass: adaptive-evidence-v1`, `contractVersion: adaptive-routing-v2`, and the exact policy version. Retained resolved model identifiers are exposed to detect mixed-model observations; more than 16 distinct identifiers sets `modelsTruncated` instead of claiming an exhaustive model list.
+Exports use `schemaVersion: 1`, `evidenceClass: adaptive-evidence-v1`, `contractVersion: adaptive-routing-v2`, and the exact policy version. Retained resolved model identifiers are exposed to detect mixed-model observations; more than 16 distinct identifiers sets `modelsTruncated` instead of claiming an exhaustive model list. `requestedModels` / `requestedModelsTruncated` list the Jev identifiers Hivemind requested (the alias or a pinned identifier), independently of the resolved models; each attempt carries `requestedModel` and `model`. Runs recorded before requested models were captured export `requestedModels: null` (unknown), not an empty list.
 
 ## Interpreting the report
 

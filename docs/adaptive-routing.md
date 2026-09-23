@@ -110,8 +110,17 @@ The adapter calls:
 ```text
 POST https://api.typesafe.ai/v1/systemone
 Authorization: Bearer <TypeSafe API key>
-model: jev-latest
+model: <requested Jev model; default jev-latest>
 ```
+
+### Jev model: alias or pinned identifier
+
+By default Hivemind requests the alias `jev-latest`, which TypeSafe may resolve to a different model over time. For reproducible routing evaluation, Human can pin an exact identifier in **Adaptive routing · Jev → Fallback and advanced options → Jev model identifier** (or `PUT /api/ui/adaptive-routing` with `{"model": "<id>"}`; `null` or an empty string returns to the alias). The identifier is bounded: 1–64 letters, digits, dots, underscores or hyphens, starting and ending with a letter or digit. It can never be a URL, host or path, and the TypeSafe endpoint is fixed regardless of it.
+
+- Configuration files saved before this setting have no `model` field and keep using the alias. Reading them never enables Jev or contacts TypeSafe, and the alias is not written back to the file.
+- Hivemind does not list models or prices and does not verify that an identifier exists or is immutable. An unavailable identifier makes the call fail (`http_<status>` in the Routing log); ongoing work preserves its current topology and the initial request uses its fallback, exactly as for any other provider failure. Hivemind never retries with a different model.
+- The Routing log, the evidence export and the Human connection test use the configured identifier. Each call records the **requested** model and the **resolved** model the provider reports, separately; a difference is shown, never rewritten.
+- Changing the model is a settings change: it invalidates in-flight initial and ongoing classifications and connection-test revisions, just like key or fallback changes.
 
 The Phase 2 contract is `adaptive-routing-v2`. It includes atomic sufficiency, complexity, parallelizability, coupling, specialization and coordination signals, plus feasible topology and worker-budget choices. The provider contract is documented at <https://docs.typesafe.ai/api>.
 
@@ -127,7 +136,7 @@ Selecting a call shows:
 
 1. **Sent to Jev**: the request text and the context sent with it (mode at the time, worker capacity, delegated work, locks, triggering message).
 2. **Jev's answers**: every question with its answer, confidence and probability distribution.
-3. **Decision and result**: recommendation, overall confidence (the lowest answer confidence), reason, what Hivemind applied, model, latency and tokens.
+3. **Decision and result**: recommendation, overall confidence (the lowest answer confidence), reason, what Hivemind applied, requested and resolved model, latency and tokens.
 4. **Raw JSON**: the exact request body sent to TypeSafe and the parsed response.
 
 The full payloads are stored only in the local SQLite database (`jev_calls`), are served only on the authenticated Human API (`GET /api/ui/projects/:project/jev-calls` and `/jev-calls/:id`), and never include the TypeSafe key or provider error bodies. Failed calls keep what was sent and a local failure class (for example `timeout` or `http_503`). History is bounded to the latest 1,000 calls per project and is removed with its channel or project. New calls appear live through the Human `jev-call` websocket event.

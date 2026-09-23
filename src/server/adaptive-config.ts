@@ -13,10 +13,13 @@ import {
 import path from "node:path";
 import { HiveError } from "../shared/types.ts";
 import type { AdaptiveTopology } from "../shared/adaptive-topology.ts";
+import { JEV_MODEL_ALIAS, validJevModel } from "../shared/jev-model.ts";
 
 export const ADAPTIVE_ROUTING_CONFIG_VERSION = 1;
 export const TYPESAFE_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
-export const TYPESAFE_MODEL = "jev-latest";
+/** Requested when no model is pinned; see src/shared/jev-model.ts. */
+export const TYPESAFE_MODEL = JEV_MODEL_ALIAS;
+export { validJevModel };
 
 export type AdaptiveStrategy = "single" | "orchestrated";
 
@@ -26,13 +29,20 @@ export type AdaptiveRoutingFile = {
   apiKey: string;
   fallback: AdaptiveStrategy;
   topologyFallback: Exclude<AdaptiveTopology, "single">;
+  /** Requested Jev model identifier. Configs saved before #134 omit it and use TYPESAFE_MODEL. */
+  model: string;
 };
 
 export type AdaptiveRoutingPublic = {
   enabled: boolean;
   apiKeySet: boolean;
   apiKeyHint: string | null;
+  /** The identifier Hivemind requests from TypeSafe. */
   model: string;
+  /** The provider alias used when nothing is pinned. */
+  defaultModel: string;
+  /** True when the Human pinned an identifier other than the default alias. */
+  modelPinned: boolean;
   fallback: AdaptiveStrategy;
   topologyFallback: Exclude<AdaptiveTopology, "single">;
 };
@@ -42,6 +52,8 @@ export type AdaptiveRoutingInput = {
   apiKey?: string | null;
   fallback?: AdaptiveStrategy;
   topologyFallback?: Exclude<AdaptiveTopology, "single">;
+  /** A bounded identifier, or null/empty to return to the default alias. */
+  model?: string | null;
 };
 
 function configPath(home: string): string {
@@ -64,19 +76,25 @@ function readRawConfig(home: string): AdaptiveRoutingFile | null {
     if (raw.fallback !== undefined && raw.fallback !== "single" && raw.fallback !== "orchestrated") return null;
     if (raw.topologyFallback !== undefined && !["brain_one_worker", "brain_multi_dm", "brain_multi_room"].includes(raw.topologyFallback)) return null;
     if (raw.enabled && !apiKey) return null;
+    // An invalid identifier fails closed like any other invalid setting: the file is ignored, Jev stays off.
+    if (raw.model !== undefined && !validJevModel(raw.model)) return null;
     return {
       version: 1,
       enabled: raw.enabled,
       apiKey,
       fallback: raw.fallback ?? "orchestrated",
       topologyFallback: raw.topologyFallback ?? "brain_one_worker",
+      model: raw.model ?? TYPESAFE_MODEL,
     };
   } catch {
     return null;
   }
 }
 
-function persistConfig(home: string, value: AdaptiveRoutingFile): void {
+function persistConfig(home: string, config: AdaptiveRoutingFile): void {
+  // The default alias is not written, so an unpinned file stays identical to the pre-#134 format.
+  const { model, ...rest } = config;
+  const value = model === TYPESAFE_MODEL ? rest : config;
   mkdirSync(home, { recursive: true, mode: 0o700 });
   const tmp = path.join(home, `.adaptive-routing-${randomUUID()}.tmp`);
   let fd: number | undefined;
@@ -99,7 +117,9 @@ export function adaptiveRoutingPublic(home: string): AdaptiveRoutingPublic {
     enabled: config?.enabled ?? false,
     apiKeySet: Boolean(config?.apiKey),
     apiKeyHint: config?.apiKey ? maskKey(config.apiKey) : null,
-    model: TYPESAFE_MODEL,
+    model: config?.model ?? TYPESAFE_MODEL,
+    defaultModel: TYPESAFE_MODEL,
+    modelPinned: Boolean(config && config.model !== TYPESAFE_MODEL),
     fallback: config?.fallback ?? "orchestrated",
     topologyFallback: config?.topologyFallback ?? "brain_one_worker",
   };
@@ -110,7 +130,7 @@ export function saveAdaptiveRouting(home: string, raw: unknown): AdaptiveRouting
     throw new HiveError(400, "Adaptive routing settings must be an object");
   const input = raw as AdaptiveRoutingInput & Record<string, unknown>;
   const unknown = Object.keys(input).filter(key =>
-    key !== "enabled" && key !== "apiKey" && key !== "fallback" && key !== "topologyFallback");
+    key !== "enabled" && key !== "apiKey" && key !== "fallback" && key !== "topologyFallback" && key !== "model");
   if (unknown.length) throw new HiveError(400, "Unknown adaptive routing setting");
   const previous = readRawConfig(home);
   if (input.enabled !== undefined && typeof input.enabled !== "boolean")
@@ -122,13 +142,19 @@ export function saveAdaptiveRouting(home: string, raw: unknown): AdaptiveRouting
   if (input.topologyFallback !== undefined &&
       !["brain_one_worker", "brain_multi_dm", "brain_multi_room"].includes(input.topologyFallback))
     throw new HiveError(400, "Adaptive topology fallback must be Brain+1, Multi-DM or Room");
+  if (input.model !== undefined && input.model !== null && typeof input.model !== "string")
+    throw new HiveError(400, "Jev model must be an identifier");
+  const requestedModel = typeof input.model === "string" ? input.model.trim() : input.model;
+  if (requestedModel && !validJevModel(requestedModel))
+    throw new HiveError(400, "Jev model must be a bounded identifier (letters, digits, dot, underscore, hyphen; no URL)");
   const enabled = input.enabled ?? previous?.enabled ?? false;
   const apiKey = input.apiKey === null ? "" : input.apiKey?.trim() || previous?.apiKey || "";
   const fallback = input.fallback ?? previous?.fallback ?? "orchestrated";
   const topologyFallback = input.topologyFallback ?? previous?.topologyFallback ?? "brain_one_worker";
+  const model = requestedModel === undefined ? previous?.model ?? TYPESAFE_MODEL : requestedModel || TYPESAFE_MODEL;
   if (apiKey.length > 512) throw new HiveError(400, "TypeSafe API key is too long");
   if (enabled && !apiKey) throw new HiveError(400, "TypeSafe API key is required when Jev adaptive routing is enabled");
-  persistConfig(home, { version: 1, enabled, apiKey, fallback, topologyFallback });
+  persistConfig(home, { version: 1, enabled, apiKey, fallback, topologyFallback, model });
   return adaptiveRoutingPublic(home);
 }
 

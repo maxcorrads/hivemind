@@ -14,7 +14,7 @@ test("adaptive routing settings keep the TypeSafe key private and support enable
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-active-routing-"));
   try {
     assert.deepEqual(adaptiveRoutingPublic(dir), {
-      enabled: false, apiKeySet: false, apiKeyHint: null, model: "jev-latest",
+      enabled: false, apiKeySet: false, apiKeyHint: null, model: "jev-latest", defaultModel: "jev-latest", modelPinned: false,
       fallback: "orchestrated", topologyFallback: "brain_one_worker",
     });
     assert.throws(() => saveAdaptiveRouting(dir, { enabled: true }), /API key is required/);
