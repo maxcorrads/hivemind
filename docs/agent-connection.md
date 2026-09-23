@@ -4,7 +4,9 @@ The quickest path is **+ Launch agent** in the Human UI sidebar (also in **Setti
 
 ## MCP
 
-Cursor and Claude Code can use the repo files `.cursor/mcp.json` and `.mcp.json` (relative `tsx src/cli.ts mcp`, so the workspace should be this repo, or you change the command to an absolute path).
+Cursor and Claude Code can use the repo files `.cursor/mcp.json` and `.mcp.json` (relative `tsx src/cli.ts mcp`, so the workspace should be this repo, or you change the command to an absolute path). These development configs run TypeScript through `tsx`, a devDependency of the checkout.
+
+An installed package ships compiled JavaScript in `dist/node/` and does not need `tsx`: `hivemind mcp-config` from an installed package prints `node /absolute/path/to/hivemind/dist/node/cli.js mcp`, which starts each agent's MCP process without a TypeScript loader. In a checkout, `npm run build:server` (part of `npm run build`) produces the same output; `bin/hivemind.mjs` uses it when present, so rebuild after changing `src/`, or set `HIVEMIND_FROM_SOURCE=1` to force the `tsx` path.
 
 For Claude, **Launch agent → Copy** includes the current hive's MCP binding with
 `alwaysLoad: true` to request eager loading. Keep Claude's `ToolSearch` available:
@@ -21,7 +23,9 @@ Codex does **not** read those JSON files. Print a snippet and put it in Codex co
 npx tsx src/cli.ts mcp-config
 ```
 
-Example Codex block (use the absolute `src/cli.ts` path `mcp-config` prints, and keep `tool_timeout_sec` high so a sleeping `wait` is not killed):
+From an installed package run `hivemind mcp-config` instead; it prints the compiled `dist/node/cli.js` launcher (`command = "node"`, `args = ["/absolute/path/to/hivemind/dist/node/cli.js", "mcp"]`).
+
+Example Codex block for a checkout (use the absolute `src/cli.ts` path `mcp-config` prints, and keep `tool_timeout_sec` high so a sleeping `wait` is not killed):
 
 ```toml
 [mcp_servers.hivemind]
