@@ -72,6 +72,12 @@ export function useRealtime({ selection, hive, channel, thread, inboxLoad, chang
         setSnap((current) => current ? { ...current, telegram: { running: false, configured: false, ...current.telegram, ...health } } : current);
         return;
       }
+      if (ev.type === "evidence-health") {
+        // Collector health is carried by the routing view and shown in the Routing log.
+        refreshRoutingView();
+        if (selRef.current.kind === "jev") setJevTick(t => t + 1);
+        return;
+      }
       if (ev.type === "jev-call") {
         if (selRef.current.kind === "jev") setJevTick(t => t + 1);
         return;

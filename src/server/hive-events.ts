@@ -4,6 +4,7 @@ import type { TaskSnapshot } from "../shared/tasks.ts";
 import type { DecisionView } from "../shared/decisions.ts";
 import type { AdaptiveExecutionState, AdaptiveRoutingEvent } from "../shared/adaptive-topology.ts";
 import type { JevCallSummary } from "../shared/jev-calls.ts";
+import type { EvidenceCollectorHealth } from "../shared/evidence-health.ts";
 import type { Hive } from "./hive.ts";
 import type { Storage } from "./storage.ts";
 
@@ -48,6 +49,8 @@ export type HiveEvents = {
   "adaptive-routing": { channelId: string; state: AdaptiveExecutionState | null; event: AdaptiveRoutingEvent };
   /** A Jev call was recorded or settled in the call log. */
   "jev-call": JevCallSummary;
+  /** Evidence-collector health changed (write failure, marker persisted); Human-only, no raw errors. */
+  "evidence-health": EvidenceCollectorHealth;
 };
 
 type EventMap = { [event: string]: unknown };

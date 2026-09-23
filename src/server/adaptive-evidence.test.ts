@@ -31,8 +31,11 @@ test('evidence separates attempts, unknown usage and billable claims', t => {
 
 test('all known attempts have additive totals, without counting finish retries', t => {
   const { db, store } = fixture(); t.after(() => db.close());
-  for (let i = 0; i < 3; i++) { const id = store.begin(scope, input); store.finish(id, decision); store.finish(id, decision); }
+  for (let i = 0; i < 3; i++) {
+    const id = store.begin({ ...scope, phase: i ? 'continuous' : 'initial' }, input); store.finish(id, decision); store.finish(id, decision);
+  }
   const report = exportAdaptiveEvidence(db, 'e1');
+  assert.equal(report.coverage.capture, 'complete'); assert.deepEqual(report.coverage.captureReasons, []);
   assert.equal(report.overhead.totalInputTokens, 120); assert.equal(report.overhead.totalOutputTokens, 15);
   assert.equal(report.overhead.summedLatencyMs, 30); assert.equal(report.coverage.usageComplete, true);
   assert.equal(report.attempts.length, 3);
@@ -40,9 +43,12 @@ test('all known attempts have additive totals, without counting finish retries',
 
 test('bounded attempt detail keeps exact lifetime aggregate and explicit retention coverage', t => {
   const { db, store } = fixture(); t.after(() => db.close());
-  for (let i = 0; i < EVIDENCE_ATTEMPT_LIMIT + 3; i++) store.finish(store.begin(scope, input), decision);
+  for (let i = 0; i < EVIDENCE_ATTEMPT_LIMIT + 3; i++) store.finish(store.begin({ ...scope, phase: i ? 'continuous' : 'initial' }, input), decision);
   const report = exportAdaptiveEvidence(db, 'e1');
   assert.equal(report.attempts.length, EVIDENCE_ATTEMPT_LIMIT);
+  // Truncated detail is an incomplete capture, but lifetime counters are still exact totals.
+  assert.equal(report.coverage.capture, 'incomplete'); assert.deepEqual(report.coverage.captureReasons, ['history_truncated']);
+  assert.equal(report.coverage.aggregateCapture, 'complete');
   assert.equal(report.coverage.prunedAttempts, 3); assert.equal(report.coverage.historyComplete, false);
   assert.equal(report.overhead.totalInputTokens, (EVIDENCE_ATTEMPT_LIMIT + 3) * 40);
 });
@@ -100,7 +106,10 @@ test('recreated continuous capture does not claim complete execution history', t
   const report = exportAdaptiveEvidence(db, scope.executionId);
   assert.equal(report.coverage.historyComplete, false);
   assert.equal(report.coverage.prunedAttempts, 0);
-  assert.equal(report.coverage.usageComplete, true);
+  // Counters since a mid-execution installation are never promoted to full-run totals.
+  assert.equal(report.coverage.capture, 'incomplete');
+  assert.deepEqual(report.coverage.captureReasons, ['recorder_installed_mid_execution']);
+  assert.equal(report.coverage.usageComplete, false); assert.equal(report.overhead.totalInputTokens, null);
   assert.equal(report.overhead.knownInputTokens, 40);
   assert.equal(report.attempts[0]!.phase, 'continuous');
 });

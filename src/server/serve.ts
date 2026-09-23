@@ -20,7 +20,7 @@ import { packageRoot } from "../shared/package-root.ts";
 /** Hive events forwarded verbatim to every web UI socket; Telegram wake signals stay server-side. */
 const FORWARDED_EVENTS = [
   "message", "agent", "channel", "thread", "reaction", "queued", "project", "telegram-health",
-  "task", "room", "decision", "adaptive-routing", "jev-call",
+  "task", "room", "decision", "adaptive-routing", "jev-call", "evidence-health",
 ] as const satisfies ReadonlyArray<keyof HiveEvents>;
 type ForwardedEvent = (typeof FORWARDED_EVENTS)[number];
 

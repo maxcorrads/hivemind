@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import type { JevCall, JevCallLogView, JevCallSummary, JevRequestGroup } from '../src/shared/jev-calls.ts';
 import { api } from './api.ts';
 import { topologyLabel } from './AdaptiveRoutingPanel.tsx';
+import { CollectorHealthNotice } from './EvidenceHealth.tsx';
+import type { EvidenceCollectorHealth } from '../src/shared/evidence-health.ts';
 import { answerLabel, appendOlderPage, contextRows, mergeRefreshedPage, outcomeLabel, percent, questionRows, reasonLabel, requestedModel, triggerLabel, workersLabel } from './jev-log-view.ts';
 
 type Props = {
@@ -21,6 +23,7 @@ export function JevLog({ project, tick, channelLabel, agentName, onOpenChannel }
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [collector, setCollector] = useState<EvidenceCollectorHealth | null>(null);
   const detail = useRef<HTMLDivElement>(null);
   // On narrow screens the detail sits below the list: bring it into view when a call is chosen.
   useEffect(() => {
@@ -33,6 +36,8 @@ export function JevLog({ project, tick, channelLabel, agentName, onOpenChannel }
       setView(current => mergeRefreshedPage(current, next));
       setError(null);
     }).catch(reason => { if ((reason as Error)?.name !== 'AbortError') setError(String((reason as Error)?.message ?? reason)); });
+    // Collector health is diagnostic only; failing to read it never hides the history.
+    api.evidenceHealth(controller.signal).then(setCollector).catch(() => {});
     return () => controller.abort();
   }, [project, tick]);
   const older = () => {
@@ -51,6 +56,7 @@ export function JevLog({ project, tick, channelLabel, agentName, onOpenChannel }
     </div></header>
     <div className="jev-log">
       <div className="jev-requests" aria-label="Routing log requests">
+        <CollectorHealthNotice health={collector} />
         {error && <p className="err" role="alert">{error}</p>}
         {!view && !error && <p className="empty">Loading the routing log…</p>}
         {view?.requests.length === 0 && <p className="empty">Nothing in the routing log yet for this project. Enable Jev in Adaptive routing and write to a brain.</p>}

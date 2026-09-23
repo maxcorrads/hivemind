@@ -52,7 +52,8 @@ export function mergeRoutingView(current: AdaptiveRoutingView | null, incoming: 
   const executions = [...byId.values()].filter(item => isCurrentExecution(item)
     ? latestCurrent.get(item.brainId) === item
     : !item.completedAt && !((drainedAt.get(item.executionId) ?? -Infinity) >= item.updatedAt));
-  return { state: primaryExecution(executions), executions, events };
+  const collector = incoming.collector ?? current?.collector;
+  return { state: primaryExecution(executions), executions, events, ...(collector ? { collector } : {}) };
 }
 
 /** Routing strip counts for a channel: running brains (current executions) and older requests still finishing. */

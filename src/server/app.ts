@@ -90,6 +90,10 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const cursor = decodeJevCallCursor(c.req.query('cursor') ?? c.req.query('before'));
     return c.json(hive.adaptiveTopology.observations.jevCalls.view(projectRef(c.req.param('id')).id, cursor));
   });
+  ui.get('/adaptive-routing/evidence-health', c => {
+    hive.getAgent('human');
+    return c.json(hive.adaptiveTopology.observations.collectorHealth());
+  });
   ui.get('/projects/:id/jev-calls/:callId', c => c.json({ call: hive.adaptiveTopology.observations.jevCalls.get(projectRef(c.req.param('id')).id, c.req.param('callId')) }));
   ui.get("/channels/:id/adaptive-routing", c => c.json(hive.adaptiveTopology.view(hive.getAgent("human"), c.req.param("id"))));
   ui.put("/channels/:id/adaptive-routing/lock", async c => c.json(hive.adaptiveTopology.setLock(hive.getAgent("human"), c.req.param("id"), await readLimitedJson(c.req.raw, CREDENTIAL_JSON_BYTES))));

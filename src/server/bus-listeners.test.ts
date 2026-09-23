@@ -11,7 +11,7 @@ import { startTelegram, writeTelegramFile } from "./telegram.ts";
 const CYCLES = HIVE_BUS_MAX_LISTENERS + 2;
 const EVENTS: Array<keyof HiveEvents> = [
   "message", "agent", "channel", "thread", "reaction", "queued", "project", "telegram-health",
-  "telegram-inbox-wake", "telegram-outbox-wake", "task", "room", "decision", "adaptive-routing", "jev-call",
+  "telegram-inbox-wake", "telegram-outbox-wake", "task", "room", "decision", "adaptive-routing", "jev-call", "evidence-health",
 ];
 
 function fixture(t: TestContext) {
