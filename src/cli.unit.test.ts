@@ -69,7 +69,7 @@ test("help and its aliases print usage without contacting the hive", async (t) =
   const { calls, out } = harness(t);
   for (const argv of [[], ["help"], ["-h"], ["--help"]]) await runCli(argv);
   assert.equal(out.length, 4);
-  assert.ok(out.every(text => text.includes("hivemind send --to NAME") && text.includes("--execution-id ID")));
+  assert.ok(out.every(text => text.includes("hivemind send --to NAME") && !text.includes("--execution-id")));
   assert.equal(calls.length, 0);
 });
 
@@ -309,13 +309,13 @@ test("send posts a multi-word body to a channel with thread, event type and reci
   assert.deepEqual(out, ["sent m1 seq 7"]);
 });
 
-test("send --to opens the DM first and forwards --execution-id", async (t) => {
+test("send --to opens the DM first; a legacy --execution-id is accepted and not forwarded", async (t) => {
   const { calls, err } = harness(t, { channel: { id: "dm-1" } }, sent);
   await runCli(["send", "--to", "Ada", "--body", "do it", "--execution-id", "exec-1"]);
   assert.deepEqual(calls.map(call => call.path), ["/api/agent/dms", "/api/agent/channels/dm-1/messages"]);
   assert.deepEqual(calls[0]!.body, { name: "Ada" });
-  const body = calls[1]!.body as { executionId: string; requestId: string; threadId: null };
-  assert.equal(body.executionId, "exec-1");
+  const body = calls[1]!.body as { executionId?: string; requestId: string; threadId: null };
+  assert.equal(body.executionId, undefined);
   assert.equal(body.threadId, null);
   assert.match(err[0]!, new RegExp(`^Send requestId: ${body.requestId}$`));
 });

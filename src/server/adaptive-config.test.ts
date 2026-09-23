@@ -8,14 +8,13 @@ import { Hive } from "./hive.ts";
 import { jevTopologyResponse } from "./fixtures/jev-topology.ts";
 import { adaptiveRoutingPublic, loadAdaptiveRouting, saveAdaptiveRouting } from "./adaptive-config.ts";
 import type { Message } from "../shared/types.ts";
-import type { AdaptiveTopologyDecision, AdaptiveExecutionState } from "../shared/adaptive-topology.ts";
+import type { AdaptiveExecutionState } from "../shared/adaptive-topology.ts";
 
 test("adaptive routing settings keep the TypeSafe key private and support enable/disable", () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-active-routing-"));
   try {
     assert.deepEqual(adaptiveRoutingPublic(dir), {
       enabled: false, apiKeySet: false, apiKeyHint: null, model: "jev-latest", defaultModel: "jev-latest", modelPinned: false,
-      fallback: "orchestrated", topologyFallback: "brain_one_worker",
     });
     assert.throws(() => saveAdaptiveRouting(dir, { enabled: true }), /API key is required/);
     assert.throws(() => saveAdaptiveRouting(dir, null), /must be an object/);
@@ -30,12 +29,14 @@ test("adaptive routing settings keep the TypeSafe key private and support enable
     const disabled = saveAdaptiveRouting(dir, { enabled: false });
     assert.equal(disabled.enabled, false);
     assert.equal(loadAdaptiveRouting(dir)?.apiKey, "ts_fixture_secret_1234");
-    assert.equal(saveAdaptiveRouting(dir, { topologyFallback: "brain_multi_room" }).topologyFallback, "brain_multi_room");
-    assert.throws(() => saveAdaptiveRouting(dir, { topologyFallback: "unknown" }), /topology fallback/);
+    // The enforced-mode fallbacks were removed (#211): older pages may still send them; they are ignored, not stored.
+    const ignored = saveAdaptiveRouting(dir, { fallback: "single", topologyFallback: "brain_multi_room" });
+    assert.equal("fallback" in ignored || "topologyFallback" in ignored, false);
+    assert.deepEqual(Object.keys(JSON.parse(readFileSync(path.join(dir, "adaptive-routing.json"), "utf8"))).sort(), ["apiKey", "enabled", "version"]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("enabled topology routing changes real Human delivery while disabled Auto and send retries preserve legacy mail", async t => {
+test("enabling Jev adds advice to Human delivery without changing it; disabled Jev and send retries make no call", async t => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-routing-http-"));
   const hive = new Hive(path.join(dir, "hive.db"));
   t.after(async () => {
@@ -57,21 +58,10 @@ test("enabled topology routing changes real Human delivery while disabled Auto a
   });
   const legacy = await send({ body: "Legacy request", requestId: "legacy-request" });
   assert.equal(legacy.status, 200);
-  const legacyJson = await legacy.json() as { message: Message; routing: unknown };
+  const legacyJson = await legacy.json() as { message: Message; adaptiveStates?: unknown };
   assert.equal(legacyJson.message.body, "Legacy request");
-  assert.equal(legacyJson.routing, null);
+  assert.equal(legacyJson.adaptiveStates, undefined);
   assert.equal(calls, 0);
-
-  const manual = await send({ body: "Manual single request", requestId: "manual-single", routing: "single" });
-  assert.equal(manual.status, 200);
-  const manualJson = await manual.json() as { message: Message; routingMessage: Message;
-    routing: AdaptiveTopologyDecision; adaptiveState: AdaptiveExecutionState };
-  assert.equal(calls, 0, "Jev remains disabled for an explicit local choice");
-  assert.equal(manualJson.message.body, "Manual single request");
-  assert.equal(manualJson.routing.targetTopology, "single");
-  assert.equal(manualJson.routing.providerStatus, "bypassed");
-  assert.equal(manualJson.adaptiveState.lockedTopology, "single");
-  assert.match(manualJson.routingMessage.body, /SINGLE/);
 
   const settings = await app.request("/api/ui/adaptive-routing", {
     method: "PUT", headers: { "content-type": "application/json" },
@@ -85,35 +75,35 @@ test("enabled topology routing changes real Human delivery while disabled Auto a
 
   const active = await send({ body: "Small direct request", requestId: "active-request" });
   assert.equal(active.status, 200);
-  const activeJson = await active.json() as { message: Message; routingMessage: Message;
-    routing: AdaptiveTopologyDecision; adaptiveState: AdaptiveExecutionState };
+  const activeJson = await active.json() as { message: Message; adaptiveStates: AdaptiveExecutionState[] };
   assert.equal(calls, 1);
-  assert.equal(activeJson.routing.targetTopology, "single");
-  assert.equal(activeJson.routing.providerStatus, "ok", "A malformed mock must not make a fallback look like successful routing");
-  assert.equal(activeJson.routing.contractVersion, "adaptive-routing-v3");
-  assert.equal(activeJson.adaptiveState.currentTopology, "single");
-  assert.equal(activeJson.adaptiveState.lockedTopology, null);
-  assert.match(activeJson.routing.routeId, /^route-/);
+  const [state] = activeJson.adaptiveStates;
+  assert.equal(state!.recommendation?.targetTopology, "single");
+  assert.equal(state!.recommendation?.providerStatus, "ok", "A malformed mock must not look like a successful answer");
+  assert.equal(state!.recommendation?.contractVersion, "adaptive-routing-v3");
+  assert.match(state!.recommendation!.routeId, /^route-/);
+  assert.equal(state!.advice?.plan, "single");
   assert.equal(activeJson.message.body, "Small direct request");
-  assert.match(activeJson.routingMessage.body, /Hivemind adaptive topology · SINGLE/);
-  assert.match(activeJson.routingMessage.body, /Do not delegate/);
+  assert.deepEqual(hive.messageQueries.listMessages(human, dm.id).messages.map(message => message.body),
+    ["Legacy request", "Small direct request"], "Jev posts nothing");
 
   const retry = await send({ body: "Small direct request", requestId: "active-request" });
   assert.equal(retry.status, 200);
-  const retried = await retry.json() as { message: Message; routing: unknown };
+  const retried = await retry.json() as { message: Message; adaptiveStates?: unknown };
   assert.equal(retried.message.id, activeJson.message.id);
-  assert.equal(retried.routing, null);
+  assert.equal(retried.adaptiveStates, undefined);
   assert.equal(calls, 1, "A committed send retry must not reclassify");
   const reply = await send({ body: "Thread clarification", threadId: activeJson.message.id, requestId: "reply-request" });
   assert.equal(reply.status, 200);
-  const replied = await reply.json() as { routing: unknown; message: Message };
-  assert.equal(replied.routing, null, "A Human reply revalidates in place instead of starting a second execution");
+  const replied = await reply.json() as { adaptiveStates?: AdaptiveExecutionState[]; message: Message };
+  assert.equal(replied.adaptiveStates?.[0]?.executionId, state!.executionId, "A Human reply continues its request");
   assert.equal(replied.message.threadId, activeJson.message.id);
-  assert.equal(calls, 2, "A Human reply is evaluated by Jev before delivery");
+  assert.equal(calls, 2, "A Human reply is sent to Jev before delivery");
   const view = hive.adaptiveTopology.view(human, dm.id);
   assert.equal(view.executions?.length, 1);
-  assert.equal(view.state?.executionId, activeJson.adaptiveState.executionId);
-  assert.equal(view.events.at(-1)?.kind, "evaluation");
+  assert.equal(view.state?.executionId, state!.executionId);
+  assert.equal(view.events.at(-1)?.kind, "advice");
+  assert.equal(view.events.at(-1)?.trigger, "human_message");
   const replayed = await send({ body: "Thread clarification", threadId: activeJson.message.id, requestId: "reply-request" });
   assert.equal(replayed.status, 200);
   assert.equal(calls, 2, "A committed reply retry must not reclassify");

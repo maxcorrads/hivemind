@@ -59,7 +59,7 @@ test('Human connection test is explicit, fixed-endpoint and inert with respect t
   const dm = f.hive.channels.openDm(human, brain.agent.name);
   const send = await f.app.request(`/api/ui/channels/${dm.id}/messages`, { method: 'POST',
     headers: { 'content-type': 'application/json' }, body: JSON.stringify({
-      body: 'private-project-request', requestId: 'diagnostic-work-fixture', routing: 'single', lockScope: 'conversation',
+      body: 'private-project-request', requestId: 'diagnostic-work-fixture',
     }) });
   assert.equal(send.status, 200);
   const before = f.hive.adaptiveTopology.view(human, dm.id);

@@ -137,8 +137,8 @@ function runtime(t: TestContext) {
   t.after(async () => { await hive.adaptiveTopology.stop(); hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
   return {
     get hive() { return hive; }, human, brain, worker, dm, errors, events, calls: () => calls,
-    start: () => hive.adaptiveTopology.routeHumanRequest(human, { channel: dm.id, body: 'Private original Human request', requestId: 'root' }, 'auto', 'none'),
-    check: (id: string) => hive.adaptiveTopology.revalidateForActor(brain, { kind: 'brain_message', actorId: brain.id, actorRole: 'brain', channelId: dm.id, eventId: id }),
+    start: () => hive.adaptiveTopology.routeHumanRequest(human, { channel: dm.id, body: 'Private original Human request', requestId: 'root' }),
+    check: (summary: string) => hive.adaptiveTopology.adviseBrainAction(brain, { kind: 'brain_message', channelId: dm.id, summary }),
     view: () => hive.adaptiveTopology.view(human, dm.id),
     restart: async () => { await hive.adaptiveTopology.stop(); hive.db.close(); hive = new Hive(path.join(dir, 'hive.db')); listen(); },
   };
@@ -147,14 +147,14 @@ const privateText = /Private original|never-export|secret-|SQLITE|constraint/i;
 
 test('begin failure degrades collector health, recovers by persisting a gap marker, and never blocks Human work', async t => {
   const f = runtime(t), started = await f.start(); assert.ok(started);
-  const executionId = started.state.executionId;
+  const executionId = started.states[0]!.executionId;
   assert.equal(f.view().collector?.status, 'healthy');
   assert.equal(f.view().state?.evidence?.capture, 'complete');
   const heal = failWrites(f.hive, 'adaptive_evidence_runs', { message: 'secret-database-error', persistent: true });
   const result = await f.check('lost-attempt');
-  assert.equal(result?.currentTopology, 'single'); assert.equal(f.calls(), 2, 'No extra Jev call for diagnostics');
+  assert.equal(result?.plan, 'single'); assert.equal(f.calls(), 2, 'No extra Jev call for diagnostics');
   let view = f.view();
-  assert.equal(view.state?.providerAvailable, true, 'Jev availability is independent of collector health');
+  assert.equal(view.state?.advice?.state, 'ok', 'Jev availability is independent of collector health');
   assert.equal(view.collector?.status, 'degraded'); assert.equal(view.collector?.pendingGaps, 1);
   assert.deepEqual(view.state?.evidence, { capture: 'incomplete', reasons: ['collection_gap'] });
   assert.equal(f.events.at(-1)?.status, 'degraded');
@@ -177,7 +177,7 @@ test('begin failure degrades collector health, recovers by persisting a gap mark
   await f.check('after-recovery');
   assert.equal(exportAdaptiveEvidence(f.hive.db, executionId).coverage.capture, 'incomplete');
   assert.doesNotMatch(JSON.stringify([f.view(), f.events, f.errors, report]), privateText);
-  assert.doesNotMatch(JSON.stringify(f.hive.adaptiveTopology.forAgent(f.brain)), /evidence|collector|capture/);
+  assert.doesNotMatch(JSON.stringify(await f.check('agent-view')), /evidence|collector|capture/);
 });
 
 test('finish failure leaves a pending attempt explained by a persisted gap, not a complete total', async t => {
@@ -187,7 +187,7 @@ test('finish failure leaves a pending attempt explained by a persisted gap, not 
   heal();
   const health = f.view().collector!;
   assert.equal(health.status, 'recovered'); assert.deepEqual(health.failures, { begin: 0, finish: 1, marker: 0 });
-  const report = exportAdaptiveEvidence(f.hive.db, started.state.executionId);
+  const report = exportAdaptiveEvidence(f.hive.db, started.states[0]!.executionId);
   assert.equal(report.coverage.pendingAttempts, 1); assert.equal(report.coverage.collectionGap?.missedFinishes, 1);
   assert.deepEqual(report.coverage.captureReasons, ['collection_gap']);
   assert.equal(report.overhead.totalInputTokens, null);
@@ -214,7 +214,7 @@ test('restart during a gap: a lost marker still cannot yield a complete capture,
   // A connection-scoped failure: still failing when stop() tries to persist the marker, gone after the restart.
   failWrites(f.hive, 'adaptive_evidence_runs');
   const started = await f.start(); assert.ok(started, 'Human work proceeds while the collector is down');
-  const executionId = started.state.executionId;
+  const executionId = started.states[0]!.executionId;
   assert.equal(f.view().state?.evidence?.capture, 'incomplete');
   await f.restart(); // The store still rejected writes at shutdown: the in-memory marker is lost with the process.
   assert.equal(f.view().collector?.status, 'healthy', 'A new process knows nothing of the lost marker');
@@ -237,11 +237,11 @@ test('restart during a gap: a lost marker still cannot yield a complete capture,
 test('collector installation after an execution began is explicitly incomplete for Human and export', async t => {
   const f = runtime(t), started = await f.start(); assert.ok(started);
   // Simulates an execution that started before this database had an evidence recorder.
-  deleteRows(f.hive, 'adaptive_evidence_runs', { execution_id: started.state.executionId });
+  deleteRows(f.hive, 'adaptive_evidence_runs', { execution_id: started.states[0]!.executionId });
   assert.deepEqual(f.view().state?.evidence, { capture: 'unknown', reasons: ['not_recorded'] });
   await f.check('first-recorded');
   assert.deepEqual(f.view().state?.evidence, { capture: 'incomplete', reasons: ['recorder_installed_mid_execution'] });
-  const report = exportAdaptiveEvidence(f.hive.db, started.state.executionId);
+  const report = exportAdaptiveEvidence(f.hive.db, started.states[0]!.executionId);
   assert.equal(report.coverage.capture, 'incomplete'); assert.equal(report.coverage.historyComplete, false);
   assert.equal(report.overhead.totalInputTokens, null); assert.equal(report.overhead.knownInputTokens, 80);
   assert.equal(f.view().collector?.status, 'healthy', 'Mid-execution installation is a capture state, not a write failure');

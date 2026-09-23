@@ -872,12 +872,10 @@ export class TelegramBridge {
       this.store.saveInboundMapping(chatId, message.message_id, posted.seq, posted.channelId, posted.threadId, telegramConfigKey(this.cfg));
     };
     try {
-      // Same policy as the Human UI: every message addressed to a brain passes through Jev first.
+      // Same as the Human UI: every message addressed to a brain is sent to Jev first, for advice only.
       const routed = await this.hive.adaptiveTopology.routeHumanRequest(
         human,
         { channel: channelId, body, threadId, source: "telegram", attachmentIds },
-        "auto",
-        "none",
         persistReceipt,
         routingText,
       );

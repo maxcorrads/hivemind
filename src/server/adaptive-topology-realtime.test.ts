@@ -12,7 +12,7 @@ import { jevTopologyResponse } from './fixtures/jev-topology.ts';
 import type { AdaptiveExecutionState, AdaptiveRoutingEvent, AdaptiveTopology } from '../shared/adaptive-topology.ts';
 import { countRows } from './test-fixtures.ts';
 
-test('real authenticated Human websocket receives every routing check while agent context gets only applied policy', { timeout: 15000 }, async t => {
+test('the Human websocket receives every piece of advice; agents only get it in their own responses', { timeout: 15000 }, async t => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-routing-realtime-'));
   const hive = new Hive(path.join(dir, 'hive.db'));
   const human = hive.identity.getAgent('human');
@@ -50,32 +50,31 @@ test('real authenticated Human websocket receives every routing check while agen
     socket!.on('message', listener);
   });
   let pending = nextRouting();
-  const started = await hive.adaptiveTopology.routeHumanRequest(human, { channel: dm.id, body: 'Perform the bounded request.', requestId: 'start' }, 'auto', 'none');
-  assert.ok(started); const initial = await pending; assert.equal(initial.payload.state.monitoring, 'active');
+  const started = await hive.adaptiveTopology.routeHumanRequest(human, { channel: dm.id, body: 'Perform the bounded request.', requestId: 'start' });
+  assert.ok(started); const initial = await pending;
+  assert.equal(initial.payload.state.monitoring, 'active');
+  assert.equal(initial.payload.state.advice?.plan, 'single');
   const messagesBefore = countRows(hive, 'messages');
-  const checkpoint = (key: string) => hive.adaptiveTopology.revalidateForActor(brain.agent, {
-    kind: 'brain_message', actorId: brain.agent.id, actorRole: 'brain', channelId: dm.id, eventId: key,
-  });
-  pending = nextRouting(); unavailable = true; await checkpoint('failure');
-  const failed = await pending; assert.equal(failed.payload.event.kind, 'warning');
-  assert.equal(failed.payload.state.currentTopology, 'single'); assert.equal(failed.payload.state.monitoring, 'unavailable');
-  pending = nextRouting(); unavailable = false; target = 'brain_multi_room'; await checkpoint('recovery');
-  const recovered = await pending; assert.equal(recovered.payload.event.kind, 'transition');
-  assert.equal(recovered.payload.state.currentTopology, 'brain_multi_room'); assert.equal(recovered.payload.state.warning, null);
+  const act = () => hive.adaptiveTopology.adviseBrainAction(brain.agent, { kind: 'brain_message', channelId: dm.id, summary: 'progress' });
+  pending = nextRouting(); unavailable = true;
+  assert.equal((await act())?.state, 'unavailable');
+  const failed = await pending; assert.equal(failed.payload.event.kind, 'advice');
+  assert.equal(failed.payload.state.advice?.state, 'unavailable');
+  pending = nextRouting(); unavailable = false; target = 'brain_multi_room';
+  assert.equal((await act())?.plan, 'brain_multi_room_2');
+  const recovered = await pending;
+  assert.equal(recovered.payload.state.advice?.topology, 'brain_multi_room');
   assert.ok((recovered.payload.state.revision ?? 0) > (failed.payload.state.revision ?? 0));
-  assert.equal(countRows(hive, 'messages'), messagesBefore);
+  assert.equal(countRows(hive, 'messages'), messagesBefore, 'advice never becomes a message');
   const agent = await fetch(`${base}/api/agent/me`, { headers: { authorization: `Bearer ${brain.token}` } });
-  const policy = (await agent.json() as { adaptiveRouting: Record<string, unknown> }).adaptiveRouting;
-  assert.equal(policy.currentTopology, 'brain_multi_room');
-  assert.deepEqual(Object.keys(policy).sort(), ['currentTopology', 'delegationPaused', 'executionId', 'locked', 'workerBudget'].sort());
+  const me = await agent.json() as Record<string, unknown>;
+  assert.equal('adaptiveRouting' in me || 'adaptiveExecutions' in me, false);
   const forbidden = await fetch(`${base}/api/ui/channels/${dm.id}/adaptive-routing`, { headers: { authorization: `Bearer ${brain.token}` } });
   assert.equal(forbidden.status, 401); await forbidden.arrayBuffer();
-  pending = nextRouting();
   const disabled = await fetch(`${base}/api/ui/adaptive-routing`, { method: 'PUT', headers: { origin: base, cookie, 'content-type': 'application/json' }, body: JSON.stringify({ enabled: false }) });
   assert.equal(disabled.status, 200); await disabled.arrayBuffer();
-  assert.equal((await pending).payload.state.monitoring, 'disabled');
   const retained = await fetch(`${base}/api/ui/channels/${dm.id}/adaptive-routing`, { headers: { origin: base, cookie } });
   const view = await retained.json() as { state: AdaptiveExecutionState; events: AdaptiveRoutingEvent[] };
-  assert.equal(view.state.monitoring, 'disabled'); assert.equal(view.events.length, 4);
-  assert.equal(frames.filter(frame => frame.type === 'adaptive-routing').length, 4);
+  assert.equal(view.state.monitoring, 'disabled'); assert.equal(view.events.length, 3);
+  assert.equal(frames.filter(frame => frame.type === 'adaptive-routing').length, 3);
 });

@@ -37,12 +37,12 @@ export type MessageServiceDeps = Core & {
   readonly tasks: Pick<TaskStore, "has">;
   readonly timeline: Pick<TimelineStore, "prepare" | "recordMessage" | "source">;
   readonly decisions: Pick<DecisionStore, "replyRecipientNames" | "captureHumanReply">;
-  readonly adaptiveTopology: Pick<AdaptiveTopologyRuntime, "humanMessageCommitted" | "threadStatusChange" | "store">;
+  readonly adaptiveTopology: Pick<AdaptiveTopologyRuntime, "threadStatusChange">;
 };
 
 /**
  * The message write path: posting (with idempotent request IDs, recipients,
- * attachments and trace provenance), adaptive requests, system notices,
+ * attachments and trace provenance), system notices,
  * thread status, clear_context control messages and reactions.
  */
 export class MessageService implements MessagePoster {
@@ -145,7 +145,6 @@ export class MessageService implements MessagePoster {
       const decision = actor.role === 'human' ? this.deps.decisions?.captureHumanReply(actor, msg, input.source ?? 'hive') ?? null : null;
       this.deps.storage.afterCommit(() => {
         if (input.source === "telegram") this.telegramOrigin.add(msg.id);
-        this.deps.adaptiveTopology?.humanMessageCommitted(msg);
         this.deps.bus.emit("message", msg);
         this.deps.delivery.wakeMembers(ch, msg);
         if (decision) this.deps.bus.emit('decision', decision);
@@ -161,40 +160,6 @@ export class MessageService implements MessagePoster {
       WHERE actor_id=? AND project_id=? AND request_id=? AND expires_at>?`)
       .get(actor.id, channel.projectId, requestId, Date.now()) as { found: number } | undefined;
     return Boolean(row?.found);
-  }
-
-  postAdaptiveRequest(
-    actor: Agent,
-    input: {
-      channel: string;
-      body: string;
-      requestId?: string;
-      threadId?: string | null;
-      eventType?: Message["eventType"];
-      traceId?: string;
-      causeMessageId?: string;
-      attachmentIds?: string[];
-      recipients?: string[];
-      source?: "hive" | "telegram";
-    },
-    directives: Array<{ body: string; requestId: string; recipients?: string[] }>,
-    persistReceipt?: (message: Message) => void,
-    persistRouting?: (message: Message) => void,
-  ): { message: Message; routingMessages: Message[] } {
-    return this.deps.storage.transaction(() => {
-      // One directive per owning brain, in the request's thread, immediately before the request.
-      const routingMessages = directives.map(directive => this.postMessage(actor, {
-        channel: input.channel,
-        body: directive.body,
-        requestId: directive.requestId,
-        threadId: input.threadId ?? null,
-        recipients: directive.recipients,
-        eventType: "assignment",
-      }));
-      const message = this.postMessage(actor, input, persistReceipt);
-      persistRouting?.(message);
-      return { message, routingMessages };
-    });
   }
 
   fromTelegram(messageId: string): boolean {
@@ -241,12 +206,6 @@ export class MessageService implements MessagePoster {
     }
     const ch = this.deps.channels.getChannel(row.channel_id);
     if (!this.deps.channels.canSeeChannel(actor, ch)) throw new HiveError(403, "Cannot access thread");
-    if (this.deps.adaptiveTopology.store.hasDelegations(threadId)) {
-      if (actor.role !== 'human' && actor.id !== this.deps.messageQueries.getMessageById(threadId).authorId)
-        throw new HiveError(403, 'Only Human or the delegating brain can close adaptive delegated work');
-      if (this.db.prepare('SELECT status FROM threads WHERE id=?').get(threadId)?.status === 'done' && status !== 'done')
-        throw new HiveError(409, 'Start a new guarded assignment instead of reopening completed adaptive work');
-    }
     return this.deps.storage.transaction(() => {
       const routingChanged = this.deps.adaptiveTopology?.threadStatusChange(actor, threadId, status);
       this.db.prepare(`INSERT INTO threads (id, channel_id, status) VALUES (?, ?, ?)

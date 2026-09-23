@@ -15,7 +15,7 @@ import { BotIngressBudget, readLimitedJson, assertLocalHumanRequest, BOT_JSON_BY
 import { adaptiveRoutingPublic, saveAdaptiveRouting } from "./adaptive-config.ts";
 import { decodeJevCallCursor } from "../shared/jev-calls.ts";
 import { installJevDiagnostics } from './adaptive-routing-diagnostics.ts';
-import { assignAdaptiveTask, mutateAdaptiveTask, mutateAdaptiveRoom, sendAdaptiveAgentMessage, setAdaptiveThreadStatus } from './adaptive-topology-actions.ts';
+import { adviseAfterWait, assignAdaptiveTask, mutateAdaptiveTask, mutateAdaptiveRoom, sendAdaptiveAgentMessage, setAdaptiveThreadStatus } from './adaptive-topology-actions.ts';
 
 export type AppHooks = {
   jevDiagnosticFetch?: typeof fetch;
@@ -80,7 +80,6 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   ui.put("/adaptive-routing", async c => {
     hive.identity.getAgent("human");
     const saved = saveAdaptiveRouting(hive.home, await readLimitedJson(c.req.raw, CREDENTIAL_JSON_BYTES));
-    hive.adaptiveTopology.settingsChanged();
     jevDiagnostics.settingsChanged();
     return c.json(saved);
   });
@@ -96,7 +95,6 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   });
   ui.get('/projects/:id/jev-calls/:callId', c => c.json({ call: hive.adaptiveTopology.observations.jevCalls.get(projectRef(c.req.param('id')).id, c.req.param('callId')) }));
   ui.get("/channels/:id/adaptive-routing", c => c.json(hive.adaptiveTopology.view(hive.identity.getAgent("human"), c.req.param("id"))));
-  ui.put("/channels/:id/adaptive-routing/lock", async c => c.json(hive.adaptiveTopology.setLock(hive.identity.getAgent("human"), c.req.param("id"), await readLimitedJson(c.req.raw, CREDENTIAL_JSON_BYTES))));
   ui.get("/snapshot", c => {
     const human = hive.identity.getAgent("human");
     return c.json({ you: human, projects: hive.projects.listProjects(), agents: hive.identity.listAgents(), channels: hive.channels.listChannels(human),
@@ -234,13 +232,11 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       eventType: body.eventType, traceId: body.traceId, causeMessageId: body.causeMessageId, recipients: body.recipients,
       attachmentIds: Array.isArray(body.attachmentIds) ? body.attachmentIds.map(String) : undefined };
     if (hive.messages.hasActiveSendRequest(human, channel.id, body.requestId))
-      return c.json({ message: hive.messages.postMessage(human, messageInput), routing: null, adaptiveState: null });
-    // Every Human message addressed to a brain, in any channel or thread, passes through Jev first.
-    const routed = await hive.adaptiveTopology.routeHumanRequest(human, messageInput,
-      String(body.routing ?? 'auto'), String(body.lockScope ?? 'none'));
-    if (!routed) return c.json({ message: hive.messages.postMessage(human, messageInput), routing: null, adaptiveState: null });
-    return c.json({ message: routed.message, routing: routed.routing, routingMessage: routed.routingMessage,
-      routingMessages: routed.routingMessages, adaptiveState: routed.state, adaptiveStates: routed.states });
+      return c.json({ message: hive.messages.postMessage(human, messageInput) });
+    // Every Human message addressed to a brain is sent to Jev first; the advice is kept for that brain, never applied.
+    const routed = await hive.adaptiveTopology.routeHumanRequest(human, messageInput);
+    if (!routed) return c.json({ message: hive.messages.postMessage(human, messageInput) });
+    return c.json({ message: routed.message, adaptiveStates: routed.states });
   });
   ui.post('/files', async c => {
     const human = hive.identity.getAgent('human'), name = c.req.header('x-file-name') || 'paste.png';
@@ -317,11 +313,10 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       ordersRef: result.created ? undefined : 'unchanged', handoffs: hive.tasks.handoffs(result.agent) });
   });
   agent.get('/me', c => {
-    const me = c.get('me'), adaptiveRouting = hive.adaptiveTopology.forAgent(me) ?? undefined;
-    const executions = hive.adaptiveTopology.policiesFor(me), adaptiveExecutions = executions.length ? executions : undefined;
-    if (c.req.query('orders') === '1') return c.json({ you: me, standingOrders: standingOrders(me), adaptiveRouting, adaptiveExecutions });
+    const me = c.get('me');
+    if (c.req.query('orders') === '1') return c.json({ you: me, standingOrders: standingOrders(me) });
     return c.json({ you: { name: me.name, role: me.role, seniority: me.seniority, focus: me.focus, online: me.online, project: me.project },
-      ordersRef: 'unchanged', adaptiveRouting, adaptiveExecutions });
+      ordersRef: 'unchanged' });
   });
   agent.get('/agents', c => c.json({ agents: hive.identity.listAgents(c.get('me')).map(({ createdAt: _c, ...a }) => a) }));
   agent.get('/search', c => {
@@ -353,17 +348,17 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     return c.json({ channel: hive.channels.createChannel(c.get('me'), { name: String(body.name ?? ''), type: body.type ?? 'public', topic: body.topic, memberNames: body.memberNames }) });
   });
   agent.post('/channels/:id/messages', async c => c.json(await sendAdaptiveAgentMessage(
-    hive, c.get('me'), c.req.param('id'), await requestJson(c.req.raw), c.get('token'))));
+    hive, c.get('me'), c.req.param('id'), await requestJson(c.req.raw))));
   agent.get('/messages/:seq', c => c.json({ message: hive.messageQueries.getVisibleMessage(c.get('me'), Number(c.req.param('seq'))) }));
   agent.post('/messages/expand', async c => c.json(hive.messageQueries.expandDigest(c.get('me'), await requestJson(c.req.raw))));
-  agent.post('/tasks', async c => c.json(await assignAdaptiveTask(hive, c.get('me'), await requestJson(c.req.raw), c.get('token'))));
+  agent.post('/tasks', async c => c.json(await assignAdaptiveTask(hive, c.get('me'), await requestJson(c.req.raw))));
   agent.post('/decisions', async c => c.json(hive.decisions.create(c.get('me'), await requestJson(c.req.raw))));
   agent.get('/decisions/:id', c => c.json({ decision: hive.decisions.get(c.get('me'), c.req.param('id')) }));
   agent.get('/tasks/:id/decisions', c => c.json({ decisions: hive.decisions.forTask(c.get('me'), c.req.param('id')) }));
   agent.post('/decisions/:id/events', async c => c.json(hive.decisions.event(c.get('me'), c.req.param('id'), await requestJson(c.req.raw))));
   agent.get('/channels/:id/room', c => c.json(hive.rooms.view(c.get('me'), c.req.param('id'), c.req.query('beforeTask'))));
   agent.get('/channels/:id/room/history', c => c.json({ history: hive.rooms.history(c.get('me'), c.req.param('id'), Number(c.req.query('before') ?? Number.MAX_SAFE_INTEGER)) }));
-  agent.post('/channels/:id/room', async c => c.json(await mutateAdaptiveRoom(hive, c.get('me'), c.req.param('id'), await requestJson(c.req.raw), c.get('token'))));
+  agent.post('/channels/:id/room', async c => c.json(await mutateAdaptiveRoom(hive, c.get('me'), c.req.param('id'), await requestJson(c.req.raw))));
   agent.get('/workers/:id/capabilities', c => c.json({ capability: hive.routing.get(c.get('me'), c.req.param('id')) }));
   agent.post('/capabilities', async c => c.json({ capability: hive.routing.set(c.get('me'), await requestJson(c.req.raw)) }));
   agent.post('/tasks/:id/routing', async c => c.json(hive.routing.suggest(c.get('me'), c.req.param('id'), await requestJson(c.req.raw))));
@@ -375,7 +370,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   agent.get('/tasks/:id/timeline', c => c.json({ timeline: hive.timeline.traceForTask(c.get('me'), c.req.param('id')) }));
   agent.get('/tasks/:id/timeline/export', c => c.json({ fixture: hive.timeline.exportTask(c.get('me'), c.req.param('id')) }));
   agent.get('/tasks/:id', c => c.json({ task: hive.tasks.get(c.get('me'), c.req.param('id')) }));
-  agent.post('/tasks/:id/events', async c => c.json(await mutateAdaptiveTask(hive, c.get('me'), c.req.param('id'), await requestJson(c.req.raw), c.get('token'))));
+  agent.post('/tasks/:id/events', async c => c.json(await mutateAdaptiveTask(hive, c.get('me'), c.req.param('id'), await requestJson(c.req.raw))));
   agent.post('/files', async c => {
     const name = c.req.header('x-file-name') || 'file';
     const file = await hive.files.createFile(c.get('me'), { authorize: () => hive.identity.agentByToken(c.get('token')), name,
@@ -395,8 +390,8 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   });
   agent.post('/threads/:id/status', async c => {
     const body = await requestJson(c.req.raw);
-    const { thread, ...routing } = await setAdaptiveThreadStatus(hive, c.get('me'), c.req.param('id'), body.status ?? null, c.get('token'));
-    return c.json({ thread: threadResponseSchema.parse(thread), ...routing });
+    const { thread, ...advice } = await setAdaptiveThreadStatus(hive, c.get('me'), c.req.param('id'), body.status ?? null);
+    return c.json({ thread: threadResponseSchema.parse(thread), ...advice });
   });
   agent.post('/channels/:id/invite', async c => {
     const body = await requestJson(c.req.raw);
@@ -412,9 +407,8 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     if (body?.sessionId == null) throw new HiveError(409, 'HTTP 409: Inbox delivery protocol changed. Restart the Hivemind MCP client and rejoin. HTTP/CLI clients must open an inbox session and include sessionId in wait. Do not retry this wait unchanged.');
     if (typeof body.sessionId !== 'string') throw new HiveError(400, 'Expected sessionId');
     const result = await hive.delivery.wait(me, Number(body.timeoutMs ?? DEFAULT_WAIT_MS), c.req.raw.signal, { compact: Boolean(body.compact), sessionId: body.sessionId });
-    const executions = hive.adaptiveTopology.policiesFor(me);
-    return c.json({ ...result, adaptiveRouting: hive.adaptiveTopology.forAgent(me) ?? undefined,
-      adaptiveExecutions: executions.length ? executions : undefined });
+    const delivered = result.idle !== true && Boolean(result.mail?.length || result.messages?.length || result.mentions?.length || result.control?.length);
+    return c.json({ ...result, ...await adviseAfterWait(hive, me, delivered) });
   });
   agent.post('/inbox/session', async c => {
     const body = await requestJson(c.req.raw);

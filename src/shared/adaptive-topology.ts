@@ -1,5 +1,9 @@
 import type { EvidenceCaptureView, EvidenceCollectorHealth } from "./evidence-health.ts";
 
+/**
+ * The ways a brain can organize a Human request. Jev only *suggests* one (#211): Hivemind never applies, enforces or
+ * locks a topology. The brain decides, and Human instructions always take precedence over Jev's advice.
+ */
 export const ADAPTIVE_TOPOLOGIES = [
   "single",
   "brain_one_worker",
@@ -8,19 +12,16 @@ export const ADAPTIVE_TOPOLOGIES = [
 ] as const;
 
 export type AdaptiveTopology = (typeof ADAPTIVE_TOPOLOGIES)[number];
-export type AdaptiveRoutingMode =
-  | "auto"
-  | AdaptiveTopology
-  | "orchestrated_auto";
-
-export type AdaptiveLockScope = "none" | "task" | "conversation";
 
 export type AdaptiveWorkerCapacity = {
   total: number;
   online: number;
+  /** Live workers holding unfinished structured work from another brain. */
   busyOther: number;
+  /** Live workers holding unfinished structured work from this brain. */
   busyCurrent: number;
   free: number;
+  /** Workers this brain could use: free ones plus those already working for it. */
   usableForExecution: number;
   available: Array<{
     id: string;
@@ -33,10 +34,11 @@ export type AdaptiveWorkerCapacity = {
 
 /**
  * v2 asked Jev for a topology and a worker budget separately; v3 asks for one joint plan (#207).
- * Decisions recorded under v2 stay readable (stored recommendations, the Routing log, exported evidence).
+ * Decisions recorded under v2 stay readable (the Routing log, exported evidence).
  */
 export type AdaptiveTopologyContractVersion = "adaptive-routing-v2" | "adaptive-routing-v3";
 
+/** One Jev answer (or failure), exactly as the provider adapter produced it. */
 export type AdaptiveTopologyDecision = {
   routeId: string;
   contractVersion: AdaptiveTopologyContractVersion;
@@ -59,97 +61,85 @@ export type AdaptiveTopologyDecision = {
    * `malformed_answer:<question>`, `http_503`, `timeout`). Absent or null on success and on decisions made before #207.
    */
   error?: string | null;
-  /**
-   * Set when Jev's answers were valid one by one but contradict each other (#209). Such an answer is accepted and
-   * recorded, but it is uncertain by definition: Hivemind never applies a transition from it. Absent or null otherwise.
-   */
+  /** Set when Jev's answers were valid one by one but contradict each other (#209): the advice is uncertain. */
   incoherent?: AdaptiveIncoherence | null;
 };
 
 /** `plan_vs_sufficiency`: a zero-worker plan while saying delegation materially helps and workers are usable. */
 export type AdaptiveIncoherence = "plan_vs_sufficiency";
 
+/** How much a brain can rely on one piece of advice. */
+export type JevAdviceState = "ok" | "uncertain" | "incoherent" | "unavailable" | "rejected";
+
+export const JEV_ADVICE_NOTE = "Advisory only — you decide; Human instructions take precedence.";
+
+/**
+ * Jev's non-binding suggestion, returned to the brain in the response to each of its actions and in wait results.
+ * `plan`, `topology` and `workers` are null when no usable answer arrived (`unavailable`, `rejected`).
+ */
+export type JevAdvice = {
+  /** Joint plan id (contract v3): `single`, `brain_one_worker`, `brain_multi_dm_<n>`, `brain_multi_room_<n>`, `capacity_blocked`. */
+  plan: string | null;
+  topology: AdaptiveTopology | null;
+  workers: number | null;
+  confidence: number | null;
+  state: JevAdviceState;
+  /** Why Jev suggested this plan, or the failure class when it could not answer. */
+  reason?: string;
+  at: number;
+  note: typeof JEV_ADVICE_NOTE;
+};
+
+/** Human-only audit of what Jev advised; nothing here was enforced. */
 export type AdaptiveRoutingEvent = {
   id: string;
   executionId: string;
   channelId: string;
   projectId: string;
   createdAt: number;
-  /** observation: Jev classified a request without a single owning brain; nothing was enforced. */
-  kind: "evaluation" | "transition" | "warning" | "lock" | "status" | "observation";
-  fromTopology: AdaptiveTopology;
+  /** advice: delivered to the owning brain · observation: no single owning brain, recorded only · status: request closed or reopened. */
+  kind: "advice" | "observation" | "status";
+  /** What caused the Jev call (absent on status events). */
+  trigger?: string;
   targetTopology: AdaptiveTopology;
-  appliedTopology: AdaptiveTopology;
   targetWorkers: number;
-  appliedWorkers: number;
   confidence: number | null;
   reason: string;
   providerStatus: AdaptiveTopologyDecision["providerStatus"];
-  applied: boolean;
-  warning: string | null;
-  /** The Jev decision this event consumed; links it to the Human-only call log. */
+  /** The Jev decision this event records; links it to the Human-only call log. */
   routeId?: string;
-  /** Copied from the decision: its answers contradicted each other, so it was treated as uncertain (#209). */
   incoherent?: AdaptiveIncoherence | null;
+  error?: string | null;
 };
 
-export type AdaptiveMonitoring = "active" | "pending" | "disabled" | "unavailable" | "completed";
-
+/**
+ * One Human request handled by one brain. It only groups Jev calls (the Routing log and evidence) and keeps the
+ * latest advice; it carries no mode, budget or lock.
+ */
 export type AdaptiveExecutionState = {
-  /** Monotonic within a channel, including settings/lifecycle changes. */
-  revision?: number;
-  completedAt?: number | null;
-  monitoring?: AdaptiveMonitoring;
   executionId: string;
   channelId: string;
   projectId: string;
   brainId: string;
   rootMessageId: string;
-  currentTopology: AdaptiveTopology;
-  workerBudget: number;
-  desiredTopology: AdaptiveTopology | null;
-  desiredWorkers: number | null;
-  lockScope: AdaptiveLockScope;
-  lockedTopology: AdaptiveTopology | null;
-  orchestratedOnly: boolean;
-  providerAvailable: boolean;
-  warning: string | null;
-  recommendation: AdaptiveTopologyDecision | null;
-  confirmations: number;
-  confirmationTopology: AdaptiveTopology | null;
-  confirmationWorkers: number | null;
-  eventsSinceChange: number;
+  /** Monotonic per execution. */
+  revision?: number;
   updatedAt: number;
-  /**
-   * False once a newer Human request to the same brain replaced this execution: it is draining its delegated work
-   * (or has finished draining). Absent or true for the brain's current execution in the channel.
-   */
-  current?: boolean;
-  /** Draining executions only: an excerpt of the Human request they serve. */
-  requestExcerpt?: string;
-  /** Draining executions only: delegated work still open (structured tasks and free-form delegations). */
-  openWork?: { tasks: number; delegations: number };
+  completedAt?: number | null;
+  /** active: Jev advises on every brain action · disabled: Jev is off · completed: the request thread is done. */
+  monitoring?: "active" | "disabled" | "completed";
+  /** The latest Jev decision for this request (null before the first call). */
+  recommendation: AdaptiveTopologyDecision | null;
+  /** The same decision as the brain received it. */
+  advice?: JevAdvice | null;
   /** Human-only: whether Jev overhead for this execution was completely measured. Absent when nothing was recorded. */
   evidence?: EvidenceCaptureView;
 };
 
-export type AdaptiveAgentPolicy = {
-  executionId: string;
-  currentTopology: AdaptiveTopology;
-  workerBudget: number;
-  desiredTopology: AdaptiveTopology | null;
-  desiredWorkers: number | null;
-  lockScope: AdaptiveLockScope;
-  lockedTopology: AdaptiveTopology | null;
-};
-
 export type AdaptiveRoutingView = {
-  /** Primary execution in the channel: the most recently updated current one still running. */
+  /** The most recently updated open request in this channel. */
   state: AdaptiveExecutionState | null;
-  /**
-   * Every execution in this channel: the current one per brain that owns a request, plus older ones replaced by a
-   * newer request (`current: false`) that are still draining their delegated work or finished draining.
-   */
+  /** The latest request of each brain in this channel. */
   executions?: AdaptiveExecutionState[];
   events: AdaptiveRoutingEvent[];
   /** Human-only health of the evidence collector (independent of Jev availability). */

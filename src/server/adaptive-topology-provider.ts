@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { TYPESAFE_ENDPOINT, TYPESAFE_MODEL, validJevModel } from './adaptive-config.ts';
-import type { AdaptiveTopology, AdaptiveTopologyDecision, AdaptiveWorkerCapacity, AdaptiveLockScope } from '../shared/adaptive-topology.ts';
+import type { AdaptiveTopologyDecision, AdaptiveWorkerCapacity } from '../shared/adaptive-topology.ts';
 import { parseTopologyPlan, topologyPlanId, validTopologyTarget } from '../shared/adaptive-topology-policy.ts';
 
 /** v3 (#207): one joint `plan` choice replaces v2's independent `target_topology` and `worker_budget` questions. */
@@ -22,9 +22,8 @@ function ensure(value: unknown, code: string): asserts value {
 /**
  * Largest worker count offered as a Multi-DM or Multi-Room plan. Every option is sent (and billed) on every call and
  * takes a share of Jev's probability mass, and one brain cannot usefully supervise more parallel workstreams than
- * this. The current multi-worker plan is still offered (as Multi-DM and Multi-Room) when it is feasible above the cap,
- * so the cap alone never pushes a running execution down. The plan question therefore has at most
- * 1 + 1 + 2 * (8 - 1) + 2 = 18 options, far below TypeSafe's 255-option Choice limit.
+ * this. The plan question therefore has at most 1 + 1 + 2 * (8 - 1) + 1 = 17 options, far below TypeSafe's 255-option
+ * Choice limit.
  */
 export const MAX_PLAN_WORKERS = 8;
 
@@ -37,13 +36,14 @@ export type TopologyCapacitySnapshot = {
   workstreams: number;
   unreconciledClaims?: number;
 };
+/**
+ * What Jev sees (#211): the Human request, worker capacity, the brain's open structured work and what just happened.
+ * There is no applied mode, lock or budget: Jev's answer is advice for the brain, never enforced.
+ */
 export type TopologyEvaluationSnapshot = {
   request: string;
   project: { slug: string; name: string };
-  current: { topology: AdaptiveTopology; workerBudget: number;
-    desiredTopology: AdaptiveTopology | null; desiredWorkers: number | null } | null;
   capacity: TopologyCapacitySnapshot;
-  execution: { orchestratedOnly: boolean; lockScope: AdaptiveLockScope; lockedTopology: AdaptiveTopology | null };
   tasks: { active: number; activeWorkers: number; blockers: number; openDependencies: number; workstreams: number };
   recentCoordinationEvents: readonly unknown[];
   trigger: unknown;
@@ -84,8 +84,7 @@ export function topologyPlans(snapshot: TopologyEvaluationSnapshot): Record<stri
   const usable = snapshot.capacity.workers.usableForExecution;
   ensure(Number.isSafeInteger(usable) && usable >= 0, 'invalid_snapshot');
   const plans: Record<string, string> = {};
-  if (!snapshot.execution.orchestratedOnly || usable === 0)
-    plans.single = 'Single · the brain alone safely completes the next phase. Zero workers.';
+  plans.single = 'Single · the brain alone safely completes the next phase. Zero workers.';
   if (usable >= 1) plans.brain_one_worker = 'Brain + 1 worker · exactly one worker provides useful specialization or delegation.';
   const multi = (workers: number) => {
     plans[topologyPlanId({ topology: 'brain_multi_dm', workers })] =
@@ -94,11 +93,8 @@ export function topologyPlans(snapshot: TopologyEvaluationSnapshot): Record<stri
       `Multi-Room · ${workers} workers in total · the workers need shared decisions, peer clarification or common coordination state in one room.`;
   };
   for (let workers = 2; workers <= Math.min(usable, MAX_PLAN_WORKERS); workers++) multi(workers);
-  const current = snapshot.current;
-  if (current && current.workerBudget > MAX_PLAN_WORKERS && validTopologyTarget({ topology: current.topology, workers: current.workerBudget }, usable))
-    multi(current.workerBudget);
-  // Same rule as contract v2: offered when no worker is usable, or when orchestration is required but only Brain + 1 fits.
-  if (usable === 0 || Object.keys(plans).length === 1)
+  // Offered when no worker is usable: Jev can then say that the request needs workers Hivemind does not have.
+  if (usable === 0)
     plans.capacity_blocked = 'The necessary orchestration is not feasible with this capacity. Keep doing safe local work and report missing capacity.';
   return plans;
 }
@@ -116,11 +112,10 @@ export function topologyQuestions(snapshot: TopologyEvaluationSnapshot) {
     specialization_need: { type: 'score', instructions: 'How much does distinct specialist expertise help the next phase?', criteria: ['Little.', 'Useful.', 'Materially important.'] },
     coordination_need: { type: 'score', instructions: 'How much active coordination between workers is needed?', criteria: ['None.', 'Handoffs and occasional synchronization.', 'Shared decisions or peer clarification.'] },
     plan: { type: 'choice', instructions: {
-      question: 'Choose the best feasible plan for the next phase: how the work is organized and how many workers it needs in total. Use only the options below. The worker count includes workers already committed to this execution; do not count them twice. Do not choose specific workers or subtasks.',
+      question: 'Choose the best feasible plan for the next phase: how the work is organized and how many workers it needs in total. Use only the options below. The worker count includes workers already working for this brain; do not count them twice. Do not choose specific workers or subtasks.',
       free_workers: snapshot.capacity.workers.free,
-      already_committed_to_this_execution: snapshot.capacity.workers.busyCurrent,
+      already_working_for_this_brain: snapshot.capacity.workers.busyCurrent,
       usable_workers: usable,
-      human_requires_orchestration: snapshot.execution.orchestratedOnly,
     }, criteria: plans },
   };
   return { questions, plans, usable };
@@ -216,8 +211,8 @@ export async function evaluateAdaptiveTopology(
     const singleSufficient = sufficiency.choice === 'sufficient';
     // "Delegation materially helps" together with a zero-worker plan while workers are usable cannot both be followed
     // and is not repaired into either reading (#209). It is still a valid answer, uncertain by definition: it is kept
-    // with this flag, and routing never acts on it (jevDecisionActionable). The reverse (sufficient, yet a delegating
-    // plan) is coherent: delegation can still pay off.
+    // with this flag and delivered to the brain as incoherent advice. The reverse (sufficient, yet a delegating plan)
+    // is coherent: delegation can still pay off.
     const incoherent = !blocked && target.topology === 'single' && !singleSufficient && usable > 0 ? 'plan_vs_sufficiency' as const : null;
     const confidence = Math.min(sufficiency.confidence, chosen.confidence, ...scores.map(s => s.confidence));
     options.onExchange?.({ sent, received, error: null });
@@ -238,7 +233,7 @@ export async function evaluateAdaptiveTopology(
     options.onExchange?.({ sent, received, error: code });
     return {
       routeId, contractVersion: ADAPTIVE_TOPOLOGY_CONTRACT_VERSION,
-      targetTopology: snapshot.current?.topology ?? 'single', targetWorkers: snapshot.current?.workerBudget ?? 0,
+      targetTopology: 'single', targetWorkers: 0,
       confidence: null,
       reason: code === 'timeout' ? 'provider_timeout_preserve_current'
         : responded ? 'response_rejected_preserve_current' : 'provider_unavailable_preserve_current',

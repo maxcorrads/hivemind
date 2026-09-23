@@ -7,7 +7,7 @@ import { Hive } from './hive.ts';
 import { saveAdaptiveRouting } from './adaptive-config.ts';
 import { exportAdaptiveEvidence, EVIDENCE_RUN_LIMIT } from './adaptive-evidence.ts';
 import { jevTopologyResponse } from './fixtures/jev-topology.ts';
-import { countRows, failWrites, setAgentPresence } from './test-fixtures.ts';
+import { countRows, failWrites } from './test-fixtures.ts';
 
 function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-evidence-runtime-'));
@@ -27,84 +27,48 @@ function fixture(t: TestContext) {
   });
   t.after(async () => { await hive.adaptiveTopology.stop(); hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
   const start = () => hive.adaptiveTopology.routeHumanRequest(human,
-    { channel: dm.id, body: 'Private original Human request', requestId: 'root-request' }, 'auto', 'none');
-  const check = (id: string) => hive.adaptiveTopology.revalidateForActor(brain, {
-    kind: 'brain_message', actorId: brain.id, actorRole: 'brain', channelId: dm.id, eventId: id,
-  });
+    { channel: dm.id, body: 'Private original Human request', requestId: 'root-request' });
+  const check = (summary: string) => hive.adaptiveTopology.adviseBrainAction(brain, { kind: 'brain_message', channelId: dm.id, summary });
   return { get hive() { return hive; }, dir, human, brain, workers, dm, start, check, calls: () => calls,
     restart: async () => { await hive.adaptiveTopology.stop(); hive.db.close(); hive = new Hive(path.join(dir, 'hive.db')); },
     fail: () => { fail = true; }, beforeReply: (action: () => void) => { hook = action; } };
 }
 
-test('runtime evidence counts distinct successful/failing calls but never duplicate votes or agent mail', async t => {
+test('runtime evidence counts every successful and failing advice call, and never becomes agent mail', async t => {
   const f = fixture(t), started = await f.start(); assert.ok(started);
   const messages = countRows(f.hive, 'messages');
-  await f.check('first-check'); await f.check('first-check'); f.fail(); await f.check('offline-check');
-  const report = exportAdaptiveEvidence(f.hive.db, started.state.executionId);
-  assert.equal(report.coverage.attemptsStarted, 3); assert.equal(f.calls(), 3);
-  assert.equal(report.overhead.tokenObservations, 2); assert.equal(report.overhead.totalInputTokens, null);
-  assert.equal(report.overhead.knownInputTokens, 160);
+  const advice = await f.check('first-check'); await f.check('second-check'); f.fail(); await f.check('offline-check');
+  const report = exportAdaptiveEvidence(f.hive.db, started.states[0]!.executionId);
+  assert.equal(report.coverage.attemptsStarted, 4); assert.equal(f.calls(), 4);
+  assert.equal(report.policyVersion, 'topology-advisory-v1');
+  assert.equal(report.overhead.tokenObservations, 3); assert.equal(report.overhead.totalInputTokens, null);
+  assert.equal(report.overhead.knownInputTokens, 240);
+  assert.deepEqual(report.policyEvents.map(event => [event.kind, event.changed]), Array(4).fill(['advice', false]));
   assert.equal(countRows(f.hive, 'messages'), messages);
   assert.doesNotMatch(JSON.stringify(report), /Private original|never-export|secret-provider-error/);
-  assert.doesNotMatch(JSON.stringify(f.hive.adaptiveTopology.forAgent(f.brain)), /overhead|inputTokens|models|attempts/);
+  assert.doesNotMatch(JSON.stringify(advice), /overhead|inputTokens|models|attempts/);
 });
 
-test('capacity refresh attempts are retained even when only the final decision starts execution', async t => {
-  const f = fixture(t);
-  f.beforeReply(() => setAgentPresence(f.hive, f.workers[0]!.id, { online: false }));
-  const started = await f.start(); assert.ok(started);
-  const report = exportAdaptiveEvidence(f.hive.db, started.state.executionId);
-  assert.equal(f.calls(), 2); assert.equal(report.coverage.attemptsStarted, 2);
-  assert.deepEqual(report.attempts.map(a => a.usableWorkers), [3, 2]);
-  assert.equal(report.policyEvents.length, 1);
-  assert.equal(report.overhead.totalInputTokens, 160);
-});
-
-test('stale-key output is charged to observed attempts, not silently dropped from overhead', async t => {
-  const f = fixture(t), started = await f.start(); assert.ok(started);
-  const before = f.hive.adaptiveTopology.view(f.human, f.dm.id);
-  f.beforeReply(() => saveAdaptiveRouting(f.dir, { apiKey: 'replacement-private-key' }));
-  await f.check('stale-check');
-  const after = f.hive.adaptiveTopology.view(f.human, f.dm.id);
-  assert.equal(after.events.length, before.events.length);
-  const report = exportAdaptiveEvidence(f.hive.db, started.state.executionId);
-  assert.equal(report.coverage.attemptsStarted, 2); assert.equal(report.overhead.totalInputTokens, 160);
-  assert.doesNotMatch(JSON.stringify(report), /replacement-private-key/);
-});
-
-test('recorder failure warns without changing a valid Jev decision or adding a second provider call', async t => {
+test('recorder failure warns without changing valid advice or adding a second provider call', async t => {
   const f = fixture(t), started = await f.start(); assert.ok(started);
   const errors: string[] = []; t.mock.method(console, 'error', (message: string) => errors.push(message));
   failWrites(f.hive, 'adaptive_evidence_attempts', { message: 'secret-database-error', persistent: true });
   const result = await f.check('recording-fails');
-  assert.equal(result?.currentTopology, 'single'); assert.equal(f.calls(), 2);
+  assert.equal(result?.plan, 'single'); assert.equal(result?.state, 'ok'); assert.equal(f.calls(), 2);
   assert.ok(errors.some(message => message.includes('measurements may be incomplete')));
   assert.doesNotMatch(errors.join('\n'), /secret-database-error|never-export-this-key/);
 });
 
-for (const interleaved of [false, true]) {
-  test(`active evidence survives rejected starts and restart with ${interleaved ? 'interleaved' : 'deferred'} revalidation`, async t => {
-    const f = fixture(t), started = await f.start(); assert.ok(started);
-    const initial = exportAdaptiveEvidence(f.hive.db, started.state.executionId);
-    setAgentPresence(f.hive, { role: 'worker' }, { online: false });
-    for (let i = 0; i < EVIDENCE_RUN_LIMIT; i++) {
-      await assert.rejects(f.hive.adaptiveTopology.routeHumanRequest(f.human,
-        { channel: f.dm.id, body: 'Rejected manual request', requestId: `rejected-${i}` }, 'brain_multi_room', 'task'),
-      /needs 2 available workers/);
-      if (i === Math.floor(EVIDENCE_RUN_LIMIT / 2)) await f.restart();
-      if (interleaved) await f.check(`between-${i}`);
-    }
-    assert.equal(f.hive.adaptiveTopology.view(f.human, f.dm.id).state?.executionId, started.state.executionId);
-    await f.check('after-rejections');
-    const report = exportAdaptiveEvidence(f.hive.db, started.state.executionId);
-    const expected = 2 + (interleaved ? EVIDENCE_RUN_LIMIT : 0);
-    assert.equal(f.calls(), expected + EVIDENCE_RUN_LIMIT);
-    assert.equal(report.coverage.attemptsStarted, expected);
-    assert.equal(report.coverage.attemptsFinished, expected);
-    assert.equal(report.coverage.startedAt, initial.coverage.startedAt);
-    assert.equal(report.coverage.historyComplete, true);
-    assert.equal(report.coverage.prunedAttempts, 0);
-    assert.equal(report.overhead.totalInputTokens, expected * 80);
-    assert.equal(countRows(f.hive, 'adaptive_evidence_runs'), EVIDENCE_RUN_LIMIT);
-  });
-}
+test('evidence of the open request survives a restart and later requests in the channel', async t => {
+  const f = fixture(t), started = await f.start(); assert.ok(started);
+  const executionId = started.states[0]!.executionId;
+  const initial = exportAdaptiveEvidence(f.hive.db, executionId);
+  await f.restart();
+  await f.check('after-restart');
+  const report = exportAdaptiveEvidence(f.hive.db, executionId);
+  assert.equal(report.coverage.attemptsStarted, 2);
+  assert.equal(report.coverage.startedAt, initial.coverage.startedAt);
+  assert.equal(report.coverage.historyComplete, true);
+  assert.equal(countRows(f.hive, 'adaptive_evidence_runs'), 1);
+  assert.ok(EVIDENCE_RUN_LIMIT > 1);
+});
