@@ -8,13 +8,14 @@ import { pruneTelegramFailures, type TelegramDestination } from "./telegram-outb
 import { TelegramAdminService } from "./services/telegram-admin.ts";
 import { FileService } from "./services/files.ts";
 import { ProjectService } from "./services/projects.ts";
-import { IdentityService, hashToken, newToken, type JoinInput } from "./services/identity.ts";
+import { IdentityService, type JoinInput } from "./services/identity.ts";
 import { Waiters } from "./services/waiters.ts";
 import { ChannelService } from "./services/channels.ts";
 import { MessageQueries } from "./services/message-queries.ts";
 import { DeliveryService } from "./services/delivery.ts";
 import { ReadService } from "./services/reads.ts";
 import { MessageService } from "./services/messages.ts";
+import { BotService } from "./services/bots.ts";
 import type { Core, PostMessageInput } from "./services/ports.ts";
 import { Storage } from './storage.ts';
 import { mkdirSync } from "node:fs";
@@ -22,10 +23,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { HiveBus } from "./hive-events.ts";
 import {
-  HiveError,
   type Agent,
-  type BotEvent,
-  type BotCredentialView,
   type Channel,
   type Message,
   type ThreadStatus,
@@ -36,7 +34,6 @@ import { InboxReader } from "./inbox-reader.ts";
 import { hiveHome } from "./paths.ts";
 import { preparePrivateDatabase } from "./private-database.ts";
 import { removeLegacyIdentityDirs } from "./legacy-identities.ts";
-import { botMessageSchema, createBotSchema, botCredentialSchema } from "../shared/bot-message.ts";
 import { applyMigrations, assertSupportedVersion } from "./migrations/index.ts";
 import { TaskStore } from './tasks.ts';
 import { NotificationStore } from './notifications.ts';
@@ -56,9 +53,6 @@ export { parseMentions };
 
 
 
-function now(): number {
-  return Date.now();
-}
 
 /** Every service's dependencies; filled in construction order, read by services at call time. */
 type ServiceRegistry = Core & {
@@ -111,6 +105,7 @@ export class Hive {
   readonly messageQueries!: MessageQueries;
   readonly delivery!: DeliveryService;
   readonly messages!: MessageService;
+  readonly bots!: BotService;
   readonly reads!: ReadService;
   /** The registry every service receives, typed down to its own dependencies (services/ports.ts). */
   private readonly services: ServiceRegistry;
@@ -144,6 +139,7 @@ export class Hive {
       this.messageQueries = services.reader = new MessageQueries(services);
       this.delivery = services.delivery = new DeliveryService(services);
       this.messages = services.messages = new MessageService(services);
+      this.bots = new BotService(services);
       this.reads = new ReadService(services);
       this.transaction(() => this.bootstrap());
       this.transaction(() => { pruneTelegramUpdates(this.db); pruneTelegramFailures(this.db); });
@@ -221,99 +217,10 @@ export class Hive {
     this.channels.addHumanToAllChannels();
   }
 
-  /** Human creates a project identity with no channel memberships. Token is returned once. */
-  createBot(actor: Agent, projectRef: string, raw: unknown): { bot: Agent; token: string } {
-    if (actor.role !== "human") throw new HiveError(403, "Only Human can create bots");
-    const project = this.projects.requireActorProject(actor, projectRef);
-    const parsed = createBotSchema.safeParse(raw);
-    if (!parsed.success) throw new HiveError(400, "Bot name must be 1–40 letters, digits, underscores or dashes, starting with a letter");
-    const { name } = parsed.data;
-    if (this.identity.getAgentByName(name)) throw new HiveError(409, "This identity name is already in use");
-    const id = crypto.randomUUID();
-    const token = newToken();
-    const t = now();
-    this.db.prepare(`INSERT INTO agents
-      (id, name, role, token_hash, online, last_seen_at, created_at, project_id)
-      VALUES (?, ?, 'bot', ?, 0, ?, ?, ?)`).run(id, name, hashToken(token), t, t, project.id);
-    const bot = this.identity.getAgent(id);
-    this.bus.emit("agent", bot);
-    return { bot, token };
-  }
-
-  botCredential(actor: Agent, projectRef: string, botId: string): BotCredentialView {
-    if (actor.role !== 'human') throw new HiveError(403, 'Only Human can manage bot credentials');
-    const project = this.projects.requireActorProject(actor, projectRef), bot = this.identity.getAgent(botId);
-    if (bot.role !== 'bot' || bot.projectId !== project.id) throw new HiveError(404, 'Bot not found in this project');
-    const row = this.db.prepare('SELECT revision, revoked FROM bot_credentials WHERE bot_id=?').get(bot.id);
-    return { bot, credential: { revision: row ? Number(row.revision) : 1, revoked: Boolean(row?.revoked) } };
-  }
-
-  changeBotCredential(actor: Agent, projectRef: string, botId: string, raw: unknown): BotCredentialView & { token?: string } {
-    if (actor.role !== 'human') throw new HiveError(403, 'Only Human can manage bot credentials');
-    const parsed = botCredentialSchema.safeParse(raw);
-    if (!parsed.success) throw new HiveError(400, 'Invalid credential operation: choose rotate/revoke and a positive expectedRevision');
-    return this.transaction(() => {
-      const current = this.botCredential(actor, projectRef, botId);
-      if (current.credential.revision !== parsed.data.expectedRevision)
-        throw new HiveError(409, 'Bot credential changed; reload its state before a new operation');
-      const revoked = parsed.data.action === 'revoke', revision = current.credential.revision + 1;
-      const token = revoked ? undefined : newToken();
-      // No possible SHA-256 token hash equals the empty revocation sentinel.
-      this.db.prepare('UPDATE agents SET token_hash=? WHERE id=?').run(token ? hashToken(token) : '', botId);
-      this.db.prepare(`INSERT INTO bot_credentials(bot_id,revision,revoked) VALUES(?,?,?)
-        ON CONFLICT(bot_id) DO UPDATE SET revision=excluded.revision, revoked=excluded.revoked`).run(botId, revision, Number(revoked));
-      return { bot: current.bot, credential: { revision, revoked }, ...(token ? { token } : {}) };
-    });
-  }
-
-  postBotMessage(actor: Agent, channel: string, raw: unknown): { message: Message; duplicate: boolean } {
-    if (actor.role !== "bot") throw new HiveError(403, "A bot identity is required");
-    const parsed = botMessageSchema.safeParse(raw);
-    if (!parsed.success) throw new HiveError(400, parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "));
-    const input = parsed.data;
-    const ch = this.channels.getChannel(channel, actor.projectId);
-    if (!this.channels.canSeeChannel(actor, ch) || (ch.type !== "public" && ch.type !== "private")) {
-      throw new HiveError(403, "Bot is not linked to this channel");
-    }
-    if (input.threadId) {
-      const root = this.db.prepare("SELECT channel_id, thread_id FROM messages WHERE id = ?").get(input.threadId) as
-        { channel_id: string; thread_id: string | null } | undefined;
-      if (!root || root.channel_id !== ch.id || root.thread_id) throw new HiveError(400, "Thread must be a root message in this channel");
-    }
-    const event: BotEvent = { eventId: input.eventId, ...(input.origin ? { origin: input.origin } : {}) };
-    const payloadHash = hashToken(JSON.stringify({ body: input.body, attachmentIds: input.attachmentIds, ...event,
-      ...(input.eventType ? { eventType: input.eventType } : {}) }));
-    const { messageId, duplicate } = this.transaction(() => {
-      const previous = this.db.prepare(`SELECT message_id, payload_hash FROM bot_events
-        WHERE bot_id = ? AND channel_id = ? AND thread_id = ? AND event_id = ?`)
-        .get(actor.id, ch.id, input.threadId ?? "", input.eventId) as { message_id: string; payload_hash: string } | undefined;
-      if (previous) {
-        if (previous.payload_hash !== payloadHash) throw new HiveError(409, "Event ID already used with different content; use a new revision/event ID");
-        return { messageId: previous.message_id, duplicate: true };
-      }
-      if (this.rooms.peek(ch.id)?.state === 'archived') throw new HiveError(409, 'Channel is archived; suspend this source link. Do not discard undelivered source events.');
-      this.files.validateAttachments(actor, input.attachmentIds);
-      const messageId = crypto.randomUUID();
-      this.db.prepare(`INSERT INTO messages (id, channel_id, thread_id, author_id, body, kind, mentions, created_at, event_type)
-        VALUES (?, ?, ?, ?, ?, 'chat', '[]', ?, ?)`)
-        .run(messageId, ch.id, input.threadId ?? null, actor.id, input.body, now(), input.eventType ?? null);
-      this.db.prepare(`INSERT INTO bot_events (message_id, bot_id, channel_id, thread_id, event_id, metadata, payload_hash)
-        VALUES (?, ?, ?, ?, ?, ?, ?)`)
-        .run(messageId, actor.id, ch.id, input.threadId ?? "", input.eventId, JSON.stringify(event), payloadHash);
-      this.timeline.recordMessage(messageId, { source: 'bot' });
-      this.files.bindAttachments(messageId, input.attachmentIds);
-      if (input.threadId) this.db.prepare("INSERT OR IGNORE INTO threads (id, channel_id, status) VALUES (?, ?, 'open')")
-        .run(input.threadId, ch.id);
-      return { messageId, duplicate: false };
-    });
-    const message = this.messageQueries.getMessageById(messageId);
-    if (!duplicate) {
-      this.bus.emit("message", message);
-      this.delivery.wakeMembers(ch, message);
-    }
-    return { message, duplicate };
-  }
-
+  createBot(actor: Agent, projectRef: string, raw: unknown) { return this.bots.createBot(actor, projectRef, raw); }
+  botCredential(actor: Agent, projectRef: string, botId: string) { return this.bots.botCredential(actor, projectRef, botId); }
+  changeBotCredential(...args: Parameters<BotService["changeBotCredential"]>) { return this.bots.changeBotCredential(...args); }
+  postBotMessage(actor: Agent, channel: string, raw: unknown) { return this.bots.postBotMessage(actor, channel, raw); }
   postMessage(actor: Agent, input: PostMessageInput, persistReceipt?: (message: Message) => void) { return this.messages.postMessage(actor, input, persistReceipt); }
   postAdaptiveRequest(...args: Parameters<MessageService["postAdaptiveRequest"]>) { return this.messages.postAdaptiveRequest(...args); }
   hasActiveSendRequest(actor: Agent, channelRef: string, requestId: string | undefined) { return this.messages.hasActiveSendRequest(actor, channelRef, requestId); }
