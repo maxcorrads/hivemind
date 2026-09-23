@@ -7,10 +7,7 @@ type ClaimRow = { id: string; claim: string; worker_id: string; contract_version
 
 /** Advisory metadata only. All mutations are called inside TaskStore's writer transaction. */
 export class TaskCoordination {
-  constructor(private hive: Hive) {
-    hive.db.exec(`CREATE INDEX IF NOT EXISTS task_held_claims ON task_records(channel_id, id)
-      WHERE json_extract(snapshot, '$.claim.state') = 'held'`);
-  }
+  constructor(private hive: Hive) {}
   private get db() { return this.hive.db; }
   private snapshot(id: string, projectId: string | null): TaskSnapshot | undefined {
     const row = this.db.prepare(`SELECT r.snapshot FROM task_records r JOIN channels c ON c.id = r.channel_id

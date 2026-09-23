@@ -7,39 +7,7 @@ import type { ReadStamp } from "../shared/read-state.ts";
 /** Explicit seen-message receipts complement, but never reinterpret, legacy reads. */
 export class ReadState {
   private readonly instance = randomUUID();
-  constructor(private readonly db: DatabaseSync) {
-    this.atomic(() => {
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS message_reads (
-          agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-          message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-          PRIMARY KEY (agent_id, message_id)
-        );
-        CREATE INDEX IF NOT EXISTS message_reads_message ON message_reads(message_id);
-        CREATE TABLE IF NOT EXISTS ui_read_revision (
-          singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
-          revision INTEGER NOT NULL DEFAULT 0
-        );
-        INSERT OR IGNORE INTO ui_read_revision (singleton, revision) VALUES (1, 0);
-      `);
-      // INSERT OR IGNORE retries do not fire INSERT triggers. All changes and
-      // their revision are committed/rolled back together by SQLite.
-      for (const [table, events] of [
-        ["message_reads", ["INSERT", "DELETE"]],
-        ["reads", ["INSERT", "UPDATE", "DELETE"]],
-        ["messages", ["DELETE"]],
-        ["channels", ["DELETE"]],
-        ["projects", ["DELETE"]],
-      ] as const) {
-        for (const event of events) {
-          db.exec(`CREATE TRIGGER IF NOT EXISTS ui_read_${table}_${event.toLowerCase()}
-            AFTER ${event} ON ${table} BEGIN
-              UPDATE ui_read_revision SET revision = revision + 1 WHERE singleton = 1;
-            END;`);
-        }
-      }
-    });
-  }
+  constructor(private readonly db: DatabaseSync) {}
 
   /** Writes read receipts atomically (IMMEDIATE when outermost). */
   atomic<T>(run: () => T): T {

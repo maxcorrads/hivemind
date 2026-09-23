@@ -10,7 +10,7 @@ import { jevTopologyResponse } from './fixtures/jev-topology.ts';
 import type { AdaptiveTopology } from '../shared/adaptive-topology.ts';
 import type { Message } from '../shared/types.ts';
 import type { TaskSnapshot } from '../shared/tasks.ts';
-import { insertRow, readValue } from './test-fixtures.ts';
+import { insertRow, markLegacyStorage, readValue } from './test-fixtures.ts';
 
 const contract = { objective: 'Complete bounded work.', scope: [], nonGoals: [], acceptanceCriteria: ['Return evidence.'], dependencies: [], evidenceSeqs: [] };
 
@@ -169,7 +169,7 @@ test('legacy channel-keyed executions and locks migrate to per-brain keys', asyn
   insertRow(hive, 'adaptive_topology_executions', { channel_id: dm.id, execution_id: 'execution-legacy', project_id: dm.projectId,
     brain_id: brain.agent.id, root_message_id: root.id, snapshot });
   insertRow(hive, 'adaptive_topology_locks', { channel_id: dm.id, topology: 'single', updated_at: 1 });
-  await hive.adaptiveTopology.stop(); hive.db.close();
+  markLegacyStorage(hive); await hive.adaptiveTopology.stop(); hive.db.close();
 
   hive = new Hive(file);
   t.after(async () => { await hive.adaptiveTopology.stop(); hive.db.close(); });
@@ -202,7 +202,7 @@ test('per-brain executions migrate to execution keys and stay current', async t 
       project_id TEXT NOT NULL, root_message_id TEXT NOT NULL, snapshot TEXT NOT NULL, PRIMARY KEY(channel_id,brain_id));`);
   insertRow(hive, 'adaptive_topology_executions', { channel_id: dm.id, brain_id: brain.agent.id, execution_id: 'execution-v2',
     project_id: dm.projectId, root_message_id: root.id, snapshot });
-  await hive.adaptiveTopology.stop(); hive.db.close();
+  markLegacyStorage(hive); await hive.adaptiveTopology.stop(); hive.db.close();
 
   hive = new Hive(file);
   t.after(async () => { await hive.adaptiveTopology.stop(); hive.db.close(); });

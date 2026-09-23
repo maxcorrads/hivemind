@@ -16,64 +16,10 @@ type DeliveryRow = {
 
 /** Durable receipt ledger; receiving mail is not accepting or completing an assignment. */
 export class InboxDeliveryStore {
-  constructor(private db: DatabaseSync) {
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS inbox_sessions (
-        agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-        session_id TEXT NOT NULL,
-        generation INTEGER NOT NULL,
-        PRIMARY KEY(agent_id, session_id), UNIQUE(agent_id, generation)
-      );
-      CREATE TABLE IF NOT EXISTS inbox_deliveries (
-        id TEXT PRIMARY KEY,
-        agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-        session_id TEXT NOT NULL,
-        through_seq INTEGER NOT NULL,
-        seqs TEXT NOT NULL,
-        attempts INTEGER NOT NULL,
-        offered_at INTEGER NOT NULL,
-        lease_until INTEGER NOT NULL,
-        acknowledged_at INTEGER
-      );
-      CREATE INDEX IF NOT EXISTS inbox_agent_receipts ON inbox_deliveries(agent_id, acknowledged_at);
-      CREATE TABLE IF NOT EXISTS inbox_early_receipts (
-        agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-        seq INTEGER NOT NULL,
-        PRIMARY KEY(agent_id, seq)
-      );
-    `);
-    this.transaction(() => {
-      if (!(db.prepare("PRAGMA table_info(inbox_deliveries)").all() as { name: string }[])
-        .some(column => column.name === "superseded_by")) {
-        db.exec(`ALTER TABLE inbox_deliveries ADD COLUMN superseded_by TEXT;
-          DROP INDEX IF EXISTS inbox_one_pending;`);
-      }
-      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS inbox_one_pending
-        ON inbox_deliveries(agent_id) WHERE acknowledged_at IS NULL AND superseded_by IS NULL;`);
-    });
-    this.migrateReceiptTotals();
-  }
+  constructor(private db: DatabaseSync) {}
 
   private transaction<T>(fn: () => T): T {
     return Storage.for(this.db).transaction(fn);
-  }
-
-  private migrateReceiptTotals() {
-    this.transaction(() => {
-      // The table is also the migration marker. Create and backfill atomically, so
-      // a failed upgrade can retry and later restarts never scan the ledger again.
-      if (this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'inbox_receipt_totals'").get()) return;
-      this.db.exec(`
-        CREATE TABLE inbox_receipt_totals (
-          agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
-          acknowledged_messages INTEGER NOT NULL,
-          last_acknowledged_at INTEGER NOT NULL
-        );
-        INSERT INTO inbox_receipt_totals(agent_id, acknowledged_messages, last_acknowledged_at)
-          SELECT agent_id, SUM(json_array_length(seqs)), MAX(acknowledged_at)
-          FROM inbox_deliveries WHERE acknowledged_at IS NOT NULL GROUP BY agent_id;
-      `);
-    });
   }
 
   currentSession(agentId: string): string | undefined {

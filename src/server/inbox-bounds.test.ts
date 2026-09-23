@@ -4,10 +4,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Hive } from "./hive.ts";
-import { INBOX_BATCH_MAX, InboxDeliveryStore } from "./inbox-delivery.ts";
+import { INBOX_BATCH_MAX } from "./inbox-delivery.ts";
 import { waitWireBytes } from "./wait-format.ts";
 import { waitUntilMail } from "../mcp/wait-loop.ts";
-import { countRows, failWrites, inboxCursor, insertRow, markInboxRead, readValue, seedAgedInboxReceipts, seedChannels, seedMessages, updateRows } from "./test-fixtures.ts";
+import { countRows, failWrites, inboxCursor, insertRow, markInboxRead, markLegacyStorage, readValue, seedAgedInboxReceipts, seedChannels, seedMessages, updateRows } from "./test-fixtures.ts";
 import { BODY_MAX, WAIT_MAIL_CAP, WAIT_MAX_BYTES, WAIT_SCAN_MAX, WAIT_NEXT, type WaitResult } from "../shared/types.ts";
 
 function fixture(t: TestContext, role: "brain" | "worker" = "brain") {
@@ -44,7 +44,6 @@ function bounded(result: WaitResult, messageCap = INBOX_BATCH_MAX) {
 // Grow only the retained acknowledged ledger, not the active message backlog.
 function agedReceipts(f: ReturnType<typeof fixture>, size = 10_000) {
   seedAgedInboxReceipts(f.hive, f.reader.agent.id, f.sessionId, size);
-  new InboxDeliveryStore(f.hive.db);
   assert.equal(f.hive.inbox.status(f.reader.agent.id).acknowledgedMessages, size);
   f.hive.db.function("json_array_length", () => { throw new Error("unexpected historical aggregation"); });
   return size;
@@ -343,6 +342,7 @@ test("legacy oversize pending batch is atomically split; its old ACK cannot disc
     DROP INDEX inbox_one_pending;
     ALTER TABLE inbox_deliveries DROP COLUMN superseded_by;
     CREATE UNIQUE INDEX inbox_one_pending ON inbox_deliveries(agent_id) WHERE acknowledged_at IS NULL;`);
+  markLegacyStorage(f.hive);
   f.hive.db.close();
   const upgraded = new Hive(f.file); t.after(() => upgraded.db.close());
   upgraded.db.function("json_array_length", () => { throw new Error("unexpected split aggregation"); });

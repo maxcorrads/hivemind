@@ -47,14 +47,6 @@ export class AdaptiveEvidenceStore {
   private readonly db: DatabaseSync;
   constructor(db: DatabaseSync) {
     this.db = db;
-    db.exec(`CREATE TABLE IF NOT EXISTS adaptive_evidence_runs (
-      execution_id TEXT PRIMARY KEY, channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
-      project_id TEXT NOT NULL, snapshot TEXT NOT NULL);
-      CREATE INDEX IF NOT EXISTS adaptive_evidence_channel ON adaptive_evidence_runs(channel_id);
-      CREATE TABLE IF NOT EXISTS adaptive_evidence_attempts (
-      id TEXT PRIMARY KEY, execution_id TEXT NOT NULL REFERENCES adaptive_evidence_runs(execution_id) ON DELETE CASCADE,
-      snapshot TEXT NOT NULL);
-      CREATE INDEX IF NOT EXISTS adaptive_evidence_execution ON adaptive_evidence_attempts(execution_id);`);
   }
   begin(scope: EvidenceScope, input: EvidenceInput): string {
     if (!scope.executionId || !scope.channelId || !scope.projectId || !['initial', 'continuous'].includes(scope.phase))

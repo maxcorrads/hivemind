@@ -14,7 +14,16 @@ Restore into an empty home directory while Hivemind is stopped. Restore the data
 
 Do **not** copy only a running `hive.db`: committed data can still be in its WAL. An online SQLite backup API or `VACUUM INTO` can produce a consistent database snapshot, but backing up its attachment files additionally requires coordinating writes and garbage collection. The stopped-home procedure above is the tested full-storage backup procedure.
 
-The project schema supports unversioned shipped databases (`user_version=0`) and version 2. Startup validates the schema, migrates and bootstraps in one transaction, and advances the marker only before commit. Unknown versions and inconsistent keys/partial versioned schemas are rejected without repair-by-data-loss. Retain the original home and investigate the error rather than deleting tables or lowering `user_version`.
+## Schema migrations
+
+The schema has a single source: the ordered, versioned migrations in `src/server/migrations/`. Stores only prepare statements. `PRAGMA user_version` is the number of the last applied migration. At startup, before any store is constructed, Hivemind applies each pending migration in its own `BEGIN IMMEDIATE` transaction together with its version bump, so a crash or failure rolls back only that step and the next start retries it. Afterwards the schema is checked against what the migrations produce on an empty database (every table, column, index and trigger) plus the core key invariants.
+
+- A database with a `user_version` newer than this build is refused with a clear error before anything writes to it. Upgrade Hivemind rather than lowering `user_version`.
+- Versions 0 (unversioned) and 2 (the project-storage marker of earlier releases) are legacy: such a database runs the whole baseline (versions 3–26). Every baseline step is idempotent and detects what already exists, so databases from any earlier release upgrade without data loss; version 2 must first pass the core-table checks.
+- The Telegram routing migration is deferred: it assigns legacy Telegram rows to the bot that is active when the bridge first starts, so the bridge runs it (it is idempotent and keeps its own marker table).
+- To change the schema, append a migration with the next version; never edit or reorder a shipped one. A unit test rejects `CREATE`/`ALTER`/`DROP` statements outside `src/server/migrations/`.
+
+Unknown versions and inconsistent keys/partial schemas are rejected without repair-by-data-loss. Retain the original home and investigate the error rather than deleting tables or lowering `user_version`.
 
 ## Files and attachments
 
@@ -32,7 +41,7 @@ Uploads, preview workspaces and downloads use unique temporary paths. Failure/ca
 
 ## Project-scoped query validation
 
-Roster queries scope non-Human agents by project before hydration, using indexed role and project lookups. Channel membership, search scope and inbox queries share a constant-parameter authorization subquery rather than an `IN` placeholder for every visible channel. Message authors, attachments and reactions use batches of at most 400 bindings; compact wait formatting reuses one label lookup per channel. Indexes are created only after the project migration inside the startup transaction. Null-project non-Human identities fail closed in both list and point authorization.
+Roster queries scope non-Human agents by project before hydration, using indexed role and project lookups. Channel membership, search scope and inbox queries share a constant-parameter authorization subquery rather than an `IN` placeholder for every visible channel. Message authors, attachments and reactions use batches of at most 400 bindings; compact wait formatting reuses one label lookup per channel. Query indexes are created by the migration that follows the project migration. Null-project non-Human identities fail closed in both list and point authorization.
 
 Run `node --import tsx scripts/benchmark-storage-queries.mjs` for a deterministic SQL-count fixture. An optional path to another checkout's `src/server/hive.ts` measures the same operations against that checkout. On Node 22.13.0, with 50,000 unrelated agents and 2,000 unrelated channels, main `738c1dd2` used 50,002 statements/100,003 returned hydration rows for a two-result roster and 4,009 statements/8,013 returned rows for a one-result channel list. This repair uses 1 statement/2 rows and 2 statements/3 rows respectively. These are executed statement/returned-row measurements, not wall-clock speedup claims or VM rows-examined counts.
 

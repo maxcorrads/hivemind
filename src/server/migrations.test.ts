@@ -5,7 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { test, type TestContext } from "node:test";
 import { Hive } from "./hive.ts";
-import { STORAGE_VERSION } from "./storage-migrations.ts";
+import { applyMigrations, LATEST_VERSION, MIGRATIONS } from "./migrations/index.ts";
 import { failWrites, findRow, insertRow, readValue } from "./test-fixtures.ts";
 
 function temp(t: TestContext) {
@@ -49,8 +49,33 @@ function snapshot(file: string) {
     const schema = db.prepare("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name").all();
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as { name: string }[];
     const rows = tables.map(({ name }) => [name, db.prepare(`SELECT * FROM "${name.replaceAll('"', '""')}" ORDER BY rowid`).all()]);
-    return { schema, rows, version: db.prepare("PRAGMA user_version").get() };
+    const { user_version } = db.prepare("PRAGMA user_version").get() as { user_version: number };
+    return { schema, rows, version: { user_version } };
   } finally { db.close(); }
+}
+
+function versionOf(name: string): number {
+  return MIGRATIONS.find(migration => migration.name === name)!.version;
+}
+
+/** The legacy fixture upgraded by the runner up to `target` (or fully), without faults. */
+function cleanUpgrade(t: TestContext, target?: number) {
+  const { file } = temp(t);
+  legacy(file);
+  const db = new DatabaseSync(file);
+  try { applyMigrations(db, target === undefined ? {} : { target, validate: false }); } finally { db.close(); }
+  return snapshot(file);
+}
+
+/**
+ * Each migration commits on its own: after a failure the file is either untouched or
+ * exactly at the last committed step (schema, rows and version), never half-applied.
+ */
+function assertRolledBackStep(t: TestContext, file: string, before: ReturnType<typeof snapshot>) {
+  const after = snapshot(file);
+  const version = after.version.user_version;
+  if (version === before.version.user_version) assert.deepEqual(after, before);
+  else assert.deepEqual(after, cleanUpgrade(t, version));
 }
 
 for (const chatColumn of [false, true]) {
@@ -60,7 +85,7 @@ for (const chatColumn of [false, true]) {
     const hive = new Hive(file);
     try {
       // schema-level assertion: migrated table shapes and rewritten legacy rows.
-      assert.equal((hive.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, STORAGE_VERSION);
+      assert.equal((hive.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, LATEST_VERSION);
       const expectedChat = chatColumn ? -123 : 0;
       assert.deepEqual(hive.db.prepare("SELECT telegram_chat_id, telegram_message_id, payload FROM telegram_hold ORDER BY telegram_message_id").all().map((r) => ({ ...r })), [
         { telegram_chat_id: expectedChat, telegram_message_id: 7, payload: '{"fixture":1}' },
@@ -120,9 +145,10 @@ for (const fault of faults) {
     stub.mock.restore();
     assert.ok(readFailedDb);
     assert.throws(readFailedDb, /not open|closed/i);
-    assert.deepEqual(snapshot(file), before);
+    assertRolledBackStep(t, file, before);
     new Hive(file).db.close();
     const after = snapshot(file);
+    assert.deepEqual(after.schema, cleanUpgrade(t).schema);
     new Hive(file).db.close();
     assert.deepEqual(snapshot(file), after);
   });
@@ -144,8 +170,9 @@ for (const table of ["telegram_hold", "telegram_out", "telegram_topics"]) {
     });
     assert.throws(() => new Hive(file), /injected row-copy failure/);
     stub.mock.restore();
-    assert.deepEqual(snapshot(file), before);
+    assertRolledBackStep(t, file, before);
     new Hive(file).db.close();
+    assert.deepEqual(snapshot(file).schema, cleanUpgrade(t).schema);
   });
 }
 
@@ -175,7 +202,10 @@ test("unversioned lookalike tables without the composite key are rejected rather
   hive.db.close();
   const before = snapshot(file);
   assert.throws(() => new Hive(file), /primary key/);
-  assert.deepEqual(snapshot(file), before);
+  // The steps before project_storage are no-ops that commit; the failing step leaves nothing behind.
+  const after = snapshot(file);
+  assert.deepEqual({ ...after, version: undefined }, { ...before, version: undefined });
+  assert.equal(after.version.user_version, versionOf("project_storage") - 1);
 });
 
 test("project, channel, DM, join and invitation failures roll back all rows and emit no events", (t) => {
