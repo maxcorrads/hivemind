@@ -25,9 +25,9 @@ test('notification wakes recheck authorization without hydrating a full roster f
   markInboxRead(hive);
   const queued: string[] = [];
   hive.bus.on('queued', (event: { agentId: string }) => queued.push(event.agentId));
-  const original = hive.getChannel.bind(hive);
+  const original = hive.channels.getChannel.bind(hive.channels);
   let channelLoads = 0;
-  const mock = t.mock.method(hive, 'getChannel', (...args: Parameters<Hive['getChannel']>) => {
+  const mock = t.mock.method(hive.channels, 'getChannel', (...args: Parameters<Hive['getChannel']>) => {
     channelLoads++;
     return original(...args);
   });
