@@ -26,9 +26,9 @@ import type { AgentDirectory, Core, MessagePoster, PostMessageInput } from "./po
 import { now } from "./rows.ts";
 
 export type MessageServiceDeps = Core & {
-  readonly agents: AgentDirectory & { touch(agentId: string, online?: boolean): void };
+  readonly identity: AgentDirectory & { touch(agentId: string, online?: boolean): void };
   readonly channels: Pick<ChannelService, "getChannel" | "canSeeChannel" | "canPost" | "addMember" | "openDm">;
-  readonly reader: Pick<MessageQueries, "getMessageById" | "getMessageBySeq" | "decorate">;
+  readonly messageQueries: Pick<MessageQueries, "getMessageById" | "getMessageBySeq" | "decorate">;
   readonly files: Pick<FileService, "validateAttachments" | "bindAttachments">;
   readonly delivery: Pick<DeliveryService, "wakeMembers">;
   /** Idempotent send receipts (requestId). */
@@ -73,7 +73,7 @@ export class MessageService implements MessagePoster {
       throw new HiveError(409, 'Archived room: no new work or root messages; use an existing task thread for closure');
     if (recipientNames.length > 32 || recipientNames.some(name => typeof name !== 'string')) throw new HiveError(400, 'Provide 1–32 recipient names');
     const recipients = [...new Set(recipientNames.map(name => {
-      const target = this.deps.agents.getAgentByName(name);
+      const target = this.deps.identity.getAgentByName(name);
       if (!target || target.role === 'bot' || !this.deps.channels.canSeeChannel(target, ch) ||
         (actor.role === 'worker' && target.role === 'human')) throw new HiveError(403, 'Recipient must be an accessible permitted person');
       return target.id;
@@ -90,7 +90,7 @@ export class MessageService implements MessagePoster {
     if (input.kind !== "control" && body.length > BODY_MAX) {
       throw new HiveError(400, `Message too long (${body.length} > ${BODY_MAX}). Split or use a thread.`);
     }
-    const mentions = parseMentions(body, this.deps.agents.listAgents(actor));
+    const mentions = parseMentions(body, this.deps.identity.listAgents(actor));
     if (actor.role === "worker" && mentions.some((id) => id === HUMAN_ID)) {
       throw new HiveError(403, "Workers cannot mention @Human. Ask a brain.");
     }
@@ -120,7 +120,7 @@ export class MessageService implements MessagePoster {
       if (input.requestId !== undefined) return this.deps.sendRequests.run(actor.id, ch.projectId, input.requestId,
         [ch.id, body, input.threadId ?? null, kind, input.control ?? null, input.source ?? "hive",
           input.eventType ?? null, attachmentIds, [...recipients].sort(), trace.traceId, trace.causeMessageId],
-        () => this.postMessage(actor, { ...input, requestId: undefined }, persistReceipt), id => this.deps.reader.getMessageById(id));
+        () => this.postMessage(actor, { ...input, requestId: undefined }, persistReceipt), id => this.deps.messageQueries.getMessageById(id));
       if (attachmentIds.length) this.deps.files.validateAttachments(actor, attachmentIds);
       if (actor.role === "human" && !ch.memberIds.includes(actor.id)) {
         this.deps.channels.addMember(ch.id, actor.id);
@@ -139,9 +139,9 @@ export class MessageService implements MessagePoster {
       }
       if (attachmentIds.length) this.deps.files.bindAttachments(id, attachmentIds);
       // Transport receipts participate in the same message/attachment transaction.
-      persistReceipt?.(this.deps.reader.getMessageById(id));
-      this.deps.agents.touch(actor.id, true);
-      const msg = this.deps.reader.getMessageById(id);
+      persistReceipt?.(this.deps.messageQueries.getMessageById(id));
+      this.deps.identity.touch(actor.id, true);
+      const msg = this.deps.messageQueries.getMessageById(id);
       const decision = actor.role === 'human' ? this.deps.decisions?.captureHumanReply(actor, msg, input.source ?? 'hive') ?? null : null;
       this.deps.storage.afterCommit(() => {
         if (input.source === "telegram") this.telegramOrigin.add(msg.id);
@@ -202,7 +202,7 @@ export class MessageService implements MessagePoster {
   }
 
   postSystem(channelId: string, body: string) {
-    const human = this.deps.agents.getAgent(HUMAN_ID);
+    const human = this.deps.identity.getAgent(HUMAN_ID);
     try {
       this.postMessage(human, { channel: channelId, body, kind: "system" });
     } catch {
@@ -224,7 +224,7 @@ export class MessageService implements MessagePoster {
     if (!this.deps.channels.canSeeChannel(actor, ch)) throw new HiveError(403, "Cannot access thread");
     const commitments = this.db.prepare('SELECT execution_id FROM adaptive_topology_messages WHERE root_id=?').all(threadId);
     if (commitments.length) {
-      if (actor.role !== 'human' && actor.id !== this.deps.reader.getMessageById(threadId).authorId)
+      if (actor.role !== 'human' && actor.id !== this.deps.messageQueries.getMessageById(threadId).authorId)
         throw new HiveError(403, 'Only Human or the delegating brain can close adaptive delegated work');
       if (this.db.prepare('SELECT status FROM threads WHERE id=?').get(threadId)?.status === 'done' && status !== 'done')
         throw new HiveError(409, 'Start a new guarded assignment instead of reopening completed adaptive work');
@@ -241,7 +241,7 @@ export class MessageService implements MessagePoster {
 
   clearContext(actor: Agent, targetName: string): Message {
     if (actor.role === "worker") throw new HiveError(403, "Only a brain or Human can clear context");
-    const target = this.deps.agents.getAgentByName(targetName);
+    const target = this.deps.identity.getAgentByName(targetName);
     if (!target) throw new HiveError(404, `No agent named ${targetName}`);
     if (target.role !== "worker") throw new HiveError(400, "clear_context is for workers");
     const dm = this.deps.channels.openDm(actor, target.name);
@@ -268,17 +268,17 @@ export class MessageService implements MessagePoster {
     if (!Number.isSafeInteger(seq) || seq < 1 || !REACTION_EMOJIS.includes(emoji as (typeof REACTION_EMOJIS)[number]) ||
       (present !== undefined && typeof present !== "boolean")) throw new HiveError(400, "Invalid reaction");
     return this.deps.storage.transaction(() => {
-      const msg = this.deps.reader.getMessageBySeq(seq), ch = this.deps.channels.getChannel(msg.channelId);
+      const msg = this.deps.messageQueries.getMessageBySeq(seq), ch = this.deps.channels.getChannel(msg.channelId);
       if (!this.deps.channels.canSeeChannel(actor, ch) || !this.deps.channels.canPost(actor, ch)) throw new HiveError(403, "Cannot react here");
       const had = Boolean(this.db.prepare('SELECT 1 FROM reactions WHERE message_id=? AND agent_id=? AND emoji=?').get(msg.id, actor.id, emoji));
       const wanted = present ?? !had;
       if (had !== wanted) {
         if (wanted) this.db.prepare('INSERT INTO reactions(message_id,agent_id,emoji,created_at) VALUES(?,?,?,?)').run(msg.id, actor.id, emoji, now());
         else this.db.prepare('DELETE FROM reactions WHERE message_id=? AND agent_id=? AND emoji=?').run(msg.id, actor.id, emoji);
-        const forUi = this.deps.reader.decorate([msg], HUMAN_ID)[0]!;
+        const forUi = this.deps.messageQueries.decorate([msg], HUMAN_ID)[0]!;
         this.deps.storage.afterCommit(() => this.deps.bus.emit("reaction", { seq: msg.seq, message: forUi }));
       }
-      return { message: this.deps.reader.decorate([msg], actor.id)[0]!, added: wanted };
+      return { message: this.deps.messageQueries.decorate([msg], actor.id)[0]!, added: wanted };
     });
   }
 }

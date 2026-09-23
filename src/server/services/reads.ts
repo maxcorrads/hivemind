@@ -8,8 +8,8 @@ import type { AgentDirectory, Core } from "./ports.ts";
 export type ReadServiceDeps = Core & {
   readonly readState: ReadState;
   readonly channels: Pick<ChannelService, "listChannels" | "getChannel" | "canSeeChannel">;
-  readonly reader: Pick<MessageQueries, "loadMessagesByIds">;
-  readonly agents: AgentDirectory;
+  readonly messageQueries: Pick<MessageQueries, "loadMessagesByIds">;
+  readonly identity: AgentDirectory;
 };
 
 /** Per-reader state: channel read cursors, explicit message receipts, unread counts and the mention inbox. */
@@ -39,7 +39,7 @@ export class ReadService {
 
   /** Explicit receipts for the rendered channel/thread page, not a global cursor. */
   markMessagesRead(actor: Agent, channelId: string, seqs: number[], threadId: string | null = null) {
-    this.deps.agents.getAgent(actor.id);
+    this.deps.identity.getAgent(actor.id);
     const channel = this.deps.channels.getChannel(channelId, actor.projectId);
     if (!this.deps.channels.canSeeChannel(actor, channel)) throw new HiveError(403, "Cannot read this channel");
     if (threadId !== null && (typeof threadId !== "string" || !threadId)) throw new HiveError(400, "Invalid thread ID");
@@ -58,7 +58,7 @@ export class ReadService {
   mentionInbox(actor: Agent, limit = 30, beforeSeq?: number, projectId?: string): MentionPage {
     return this.deps.readState.snapshot(() => {
       const page = this.deps.readState.page(actor.id, this.deps.channels.listChannels(actor).map((channel) => channel.id), limit, beforeSeq, projectId);
-      return { messages: this.deps.reader.loadMessagesByIds(page.ids, actor.id), hasMore: page.hasMore, ...this.deps.readState.stamp() };
+      return { messages: this.deps.messageQueries.loadMessagesByIds(page.ids, actor.id), hasMore: page.hasMore, ...this.deps.readState.stamp() };
     });
   }
 
@@ -71,7 +71,7 @@ export class ReadService {
       return {
         ...this.deps.readState.stamp(),
         unread: this.deps.readState.counts(actor.id, ids),
-        mentions: this.deps.reader.loadMessagesByIds(page.ids, actor.id),
+        mentions: this.deps.messageQueries.loadMessagesByIds(page.ids, actor.id),
         mentionsHasMore: page.hasMore,
         mentionCounts: Object.fromEntries(channels.map((channel) => [channel.project, counts[channel.projectId] ?? 0])),
       };

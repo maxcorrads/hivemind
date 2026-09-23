@@ -51,17 +51,17 @@ type ServiceRegistry = Core & {
   home: string;
   waiters: Waiters;
   uploads: UploadBudget;
-  telegram: TelegramAdminService;
+  telegramAdmin: TelegramAdminService;
   files: FileService;
   projects: ProjectService;
-  agents: IdentityService;
+  identity: IdentityService;
   channels: ChannelService;
-  reader: MessageQueries;
+  messageQueries: MessageQueries;
   delivery: DeliveryService;
   messages: MessageService;
   readState: ReadState;
   sendRequests: SendRequests;
-  deliveries: InboxDeliveryStore;
+  inbox: InboxDeliveryStore;
   inboxReader: InboxReader;
   tasks: TaskStore;
   rooms: RoomStore;
@@ -123,12 +123,12 @@ export class Hive {
       applyMigrations(this.db);
       // Constructing a domain service has no side effects.
       this.uploads = services.uploads = new UploadBudget({ db: this.db, transaction: work => this.storage.transaction(work) }, options.uploadLimits);
-      this.telegramAdmin = services.telegram = new TelegramAdminService(services);
+      this.telegramAdmin = services.telegramAdmin = new TelegramAdminService(services);
       this.files = services.files = new FileService(services);
       this.projects = services.projects = new ProjectService(services);
-      this.identity = services.agents = new IdentityService(services);
+      this.identity = services.identity = new IdentityService(services);
       this.channels = services.channels = new ChannelService(services);
-      this.messageQueries = services.reader = new MessageQueries(services);
+      this.messageQueries = services.messageQueries = new MessageQueries(services);
       this.delivery = services.delivery = new DeliveryService(services);
       this.messages = services.messages = new MessageService(services);
       this.reads = new ReadService(services);
@@ -144,8 +144,8 @@ export class Hive {
       this.routing = new RoutingStore(this);
       this.timeline = services.timeline = new TimelineStore(this);
       this.decisions = services.decisions = new DecisionStore(this, work => this.storage.transaction(work));
-      this.adaptiveTopology = services.adaptiveTopology = new AdaptiveTopologyRuntime(this);
-      this.inbox = services.deliveries = new InboxDeliveryStore(this.db);
+      this.adaptiveTopology = services.adaptiveTopology = new AdaptiveTopologyRuntime(services);
+      this.inbox = services.inbox = new InboxDeliveryStore(this.db);
       services.inboxReader = new InboxReader(this.db, this.inbox, this.notifications, options.routineBatchMs ?? ROUTINE_BATCH_MS);
     } catch (error) {
       try { this.db.close(); } catch { /* preserve the initialization failure */ }

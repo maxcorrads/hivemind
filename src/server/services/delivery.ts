@@ -20,9 +20,9 @@ import type { AgentDirectory, Core } from "./ports.ts";
 import type { Waiter, Waiters } from "./waiters.ts";
 
 export type DeliveryServiceDeps = Core & {
-  readonly agents: AgentDirectory & { touch(agentId: string, online?: boolean): void };
+  readonly identity: AgentDirectory & { touch(agentId: string, online?: boolean): void };
   /** Durable inbox sessions and delivery receipts. */
-  readonly deliveries: InboxDeliveryStore;
+  readonly inbox: InboxDeliveryStore;
   /** Classifies and pages an agent's unseen mail. */
   readonly inboxReader: InboxReader;
   readonly tasks: Pick<TaskStore, "recordReceipt" | "get">;
@@ -39,8 +39,8 @@ export class DeliveryService {
 
   openInboxSession(actor: Agent, sessionId: string): string {
     if (actor.role !== "brain" && actor.role !== "worker") throw new HiveError(403, "Only agents have inbox sessions");
-    const previous = this.deps.deliveries.currentSession(actor.id);
-    const current = this.deps.deliveries.openSession(actor.id, sessionId);
+    const previous = this.deps.inbox.currentSession(actor.id);
+    const current = this.deps.inbox.openSession(actor.id, sessionId);
     if (previous !== current) this.deps.waiters.supersede(actor.id);
     return current;
   }
@@ -48,24 +48,24 @@ export class DeliveryService {
   acknowledgeInbox(actor: Agent, sessionId: string, deliveryId: string) {
     if (actor.role !== "brain" && actor.role !== "worker") throw new HiveError(403, "Only agents acknowledge inbox mail");
     let changed: string[] = [];
-    const result = this.deps.deliveries.acknowledge(actor.id, sessionId, deliveryId,
+    const result = this.deps.inbox.acknowledge(actor.id, sessionId, deliveryId,
       (seqs, at) => { changed = this.deps.tasks.recordReceipt(actor.id, seqs, at); });
     this.deps.timeline.recordAcknowledgement(actor, deliveryId, result.acknowledgedAt);
-    for (const id of changed) this.deps.bus.emit('task', this.deps.tasks.get(this.deps.agents.getAgent(HUMAN_ID), id));
+    for (const id of changed) this.deps.bus.emit('task', this.deps.tasks.get(this.deps.identity.getAgent(HUMAN_ID), id));
     this.emitQueued(actor.id);
     return result;
   }
 
   inboxStatuses(): Record<string, InboxStatus> {
     return Object.fromEntries(
-      this.deps.agents.listAgents()
+      this.deps.identity.listAgents()
         .filter((agent) => agent.role === "brain" || agent.role === "worker")
-        .map((agent) => [agent.id, { ...this.deps.deliveries.status(agent.id), queued: this.deps.inboxReader.estimate(agent) }]),
+        .map((agent) => [agent.id, { ...this.deps.inbox.status(agent.id), queued: this.deps.inboxReader.estimate(agent) }]),
     );
   }
 
   private takeUnseen(actor: Agent, sessionId: string, compact: boolean, scanLimit: number): WaitResult {
-    const current = this.deps.agents.getAgent(actor.id);
+    const current = this.deps.identity.getAgent(actor.id);
     const result = this.deps.inboxReader.take(current, sessionId, compact, scanLimit);
     if (result.delivery) this.deps.timeline.recordOffer(current, result.delivery);
     this.emitQueued(actor.id, result.page!.remaining);
@@ -74,7 +74,7 @@ export class DeliveryService {
 
   queuedCounts(): Record<string, number> {
     const out: Record<string, number> = {};
-    for (const agent of this.deps.agents.listAgents()) {
+    for (const agent of this.deps.identity.listAgents()) {
       if (agent.role !== "brain" && agent.role !== "worker") continue;
       out[agent.id] = this.deps.inboxReader.estimate(agent).atLeast;
     }
@@ -82,13 +82,13 @@ export class DeliveryService {
   }
 
   private emitQueued(agentId: string, estimate?: QueueEstimate) {
-    const agent = this.deps.agents.getAgent(agentId);
+    const agent = this.deps.identity.getAgent(agentId);
     if (agent.role !== "brain" && agent.role !== "worker") return;
     const queued = estimate ?? this.deps.inboxReader.estimate(agent);
     this.deps.bus.emit("queued", {
       agentId,
       n: queued.atLeast,
-      inbox: { ...this.deps.deliveries.status(agentId), queued },
+      inbox: { ...this.deps.inbox.status(agentId), queued },
     });
   }
 
@@ -101,7 +101,7 @@ export class DeliveryService {
   wakeMembers(ch: Channel, msg: Message) {
     for (const id of new Set([...ch.memberIds, HUMAN_ID])) {
       if (id === msg.authorId) continue;
-      const agent = this.deps.agents.getAgent(id);
+      const agent = this.deps.identity.getAgent(id);
       // The notification classifier rechecks current project, channel membership,
       // role and routing in SQL. Do not hydrate the entire roster for every member.
       if (!this.isFor(agent, msg)) continue;
@@ -118,7 +118,7 @@ export class DeliveryService {
   ): Promise<WaitResult> {
     validated(waitDurationSchema, timeoutMs);
     const compact = Boolean(opts.compact);
-    const empty = () => packWait(this.deps.agents.getAgent(actor.id), [], 0, compact, () => "");
+    const empty = () => packWait(this.deps.identity.getAgent(actor.id), [], 0, compact, () => "");
 
     // A cancelled request is observational only: it must not touch presence,
     // install a waiter, advance inbox state, or consume already-queued mail.
@@ -129,10 +129,10 @@ export class DeliveryService {
 
     const sessionId =
       opts.sessionId ??
-      this.deps.deliveries.currentSession(actor.id) ??
+      this.deps.inbox.currentSession(actor.id) ??
       this.openInboxSession(actor, crypto.randomUUID());
-    this.deps.deliveries.requireSession(actor.id, sessionId);
-    this.deps.agents.touch(actor.id, true);
+    this.deps.inbox.requireSession(actor.id, sessionId);
+    this.deps.identity.touch(actor.id, true);
 
     return new Promise((resolve, reject) => {
       let done = false;
@@ -162,7 +162,7 @@ export class DeliveryService {
         if (done) return;
         done = true;
         cleanup();
-        this.deps.agents.touch(actor.id, true);
+        this.deps.identity.touch(actor.id, true);
         resolve(batch);
       };
       const finish = (consume: boolean) => {

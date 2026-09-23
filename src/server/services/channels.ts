@@ -19,7 +19,7 @@ function dmLabel(a: Agent, b: Agent): string {
 
 export type ChannelServiceDeps = Core & {
   readonly projects: Pick<ProjectDirectory, "requireActorProject"> & { slugOf(projectId: string): string | null };
-  readonly agents: AgentDirectory;
+  readonly identity: AgentDirectory;
   readonly messages: Pick<MessagePoster, "postMessage">;
 };
 
@@ -190,7 +190,7 @@ export class ChannelService implements ChannelAccess {
     if (input.type === "brains" && actor.role !== "human") {
       throw new HiveError(403, "Only Human can create brains channels");
     }
-    const { storage, bus, agents, messages } = this.deps;
+    const { storage, bus, identity: agents, messages } = this.deps;
     const project = this.deps.projects.requireActorProject(actor, input.project);
     const slug = slugify(input.name);
     if (!slug) throw new HiveError(400, "Invalid channel name");
@@ -228,7 +228,7 @@ export class ChannelService implements ChannelAccess {
   }
 
   openDm(actor: Agent, otherName: string): Channel {
-    const other = this.deps.agents.getAgentByName(otherName);
+    const other = this.deps.identity.getAgentByName(otherName);
     if (!other) throw new HiveError(404, `No agent named ${otherName}`);
     if (actor.role === "bot" || other.role === "bot") throw new HiveError(403, "Bots publish observations to explicitly linked channels, not DMs");
     if (other.id === actor.id) throw new HiveError(400, "Cannot DM yourself");
@@ -282,7 +282,7 @@ export class ChannelService implements ChannelAccess {
     const ch = this.getChannel(channelRef, actor.projectId);
     if (!this.canSeeChannel(actor, ch)) throw new HiveError(403, "Cannot access channel");
     if (ch.type === "dm") throw new HiveError(400, "Cannot invite to a DM");
-    const { storage, bus, agents, messages } = this.deps;
+    const { storage, bus, identity: agents, messages } = this.deps;
     return storage.transaction(() => {
       const added: string[] = [];
       for (const name of memberNames) {
