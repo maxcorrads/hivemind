@@ -65,6 +65,7 @@ type ServiceRegistry = Core & {
   inboxReader: InboxReader;
   tasks: TaskStore;
   rooms: RoomStore;
+  notifications: NotificationStore;
   timeline: TimelineStore;
   decisions: DecisionStore;
   adaptiveTopology: AdaptiveTopologyRuntime;
@@ -137,13 +138,13 @@ export class Hive {
       this.storage.transaction(() => { pruneTelegramUpdates(this.db); pruneTelegramFailures(this.db); });
       services.readState = new ReadState(this.db);
       services.sendRequests = new SendRequests(this.db);
-      // The coordination stores still take the facade as their host, typed down to a slice (services/ports.ts).
-      this.tasks = services.tasks = new TaskStore(this);
-      this.rooms = services.rooms = new RoomStore(this);
-      this.notifications = new NotificationStore(this);
-      this.routing = new RoutingStore(this);
-      this.timeline = services.timeline = new TimelineStore(this);
-      this.decisions = services.decisions = new DecisionStore(this, work => this.storage.transaction(work));
+      // The coordination stores take the same registry, each typed down to its slice (services/ports.ts).
+      this.tasks = services.tasks = new TaskStore(services);
+      this.rooms = services.rooms = new RoomStore(services);
+      this.notifications = services.notifications = new NotificationStore(services);
+      this.routing = new RoutingStore(services);
+      this.timeline = services.timeline = new TimelineStore(services);
+      this.decisions = services.decisions = new DecisionStore(services, work => this.storage.transaction(work));
       this.adaptiveTopology = services.adaptiveTopology = new AdaptiveTopologyRuntime(services);
       this.inbox = services.inbox = new InboxDeliveryStore(this.db);
       services.inboxReader = new InboxReader(this.db, this.inbox, this.notifications, options.routineBatchMs ?? ROUTINE_BATCH_MS);

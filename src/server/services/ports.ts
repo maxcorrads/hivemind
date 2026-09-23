@@ -75,38 +75,37 @@ export interface WaiterRegistry {
 }
 
 /*
- * Hosts of the coordination sub-stores (tasks, rooms, decisions, timeline, …).
- * Hive still passes itself as their host, but each store is typed against only
- * the slice it uses, so it cannot grow a dependency on the rest of the facade.
+ * Dependencies of the coordination sub-stores (tasks, rooms, decisions, timeline, …).
+ * Hive hands each store the same service registry it gives the services; each store
+ * sees only the slice it declares here, so it cannot grow a dependency on the rest.
  */
 
-export type TaskCoordinationHost = Core & ChannelAccess;
-export type CapacityDeps = Core & { readonly identity: Pick<AgentDirectory, "listAgents"> };
-export type AdmissionDeps = CapacityDeps & {
-  readonly channels: ChannelAccess;
-  readonly identity: AgentDirectory;
+type Channels<K extends keyof ChannelAccess = keyof ChannelAccess> = { readonly channels: Pick<ChannelAccess, K> };
+type Agents<K extends keyof AgentDirectory = keyof AgentDirectory> = { readonly identity: Pick<AgentDirectory, K> };
+type Messages<K extends keyof MessageReader = keyof MessageReader> = { readonly messageQueries: Pick<MessageReader, K> };
+type Poster<K extends keyof MessagePoster> = { readonly messages: Pick<MessagePoster, K> };
+
+export type TaskCoordinationDeps = Core & Channels;
+export type CapacityDeps = Core & Agents<"listAgents">;
+export type AdmissionDeps = CapacityDeps & Channels & Agents & {
   readonly rooms: Pick<RoomStore, "peek">;
   readonly adaptiveTopology: AdaptiveTopologyRuntime;
 };
-export type TaskStoreHost = AdmissionDeps & ChannelAccess & Pick<AgentDirectory, "getAgent" | "getAgentByName"> &
-  Pick<MessageReader, "getMessageById" | "getVisibleMessage"> & Pick<MessagePoster, "publishTaskMessage"> & {
-    openDm(actor: Agent, otherName: string): Channel;
+export type TaskStoreDeps = AdmissionDeps & TaskCoordinationDeps & Messages<"getMessageById" | "getVisibleMessage"> &
+  Poster<"publishTaskMessage"> & {
+    readonly channels: { openDm(actor: Agent, otherName: string): Channel };
     readonly rooms: RoomStore;
   };
-export type RoomStoreHost = Core & ChannelAccess & AgentDirectory & Pick<MessageReader, "getMessageById" | "getVisibleMessage"> &
-  Pick<MessagePoster, "publishTaskMessage"> & { readonly tasks: TaskStore };
-export type NotificationHost = Core & ChannelAccess & { readonly rooms: RoomStore };
-export type RoutingHost = Core & ChannelAccess & Pick<AgentDirectory, "getAgent"> & Pick<MessagePoster, "postMessage"> & {
-  readonly tasks: TaskStore;
+export type RoomStoreDeps = Core & Channels & Agents & Messages<"getMessageById" | "getVisibleMessage"> &
+  Poster<"publishTaskMessage"> & { readonly tasks: Pick<TaskStore, "get"> };
+export type NotificationDeps = Core & Channels<"getChannel" | "canSeeChannel"> & { readonly rooms: Pick<RoomStore, "peek"> };
+export type RoutingDeps = Core & Channels & Agents<"getAgent"> & Poster<"postMessage"> & { readonly tasks: Pick<TaskStore, "get"> };
+export type TimelineDeps = Core & Channels<"getChannel" | "canSeeChannel"> & Messages<"getMessageById"> & {
+  readonly rooms: Pick<RoomStore, "peek">;
+  readonly tasks: Pick<TaskStore, "get">;
 };
-export type TimelineHost = Core & ChannelAccess & Pick<MessageReader, "getMessageById"> & {
-  readonly rooms: RoomStore;
-  readonly tasks: TaskStore;
-};
-export type DecisionHost = Core & ChannelAccess & AgentDirectory & MessageReader & Pick<MessagePoster, "postMessage"> & {
-  readonly tasks: TaskStore;
-};
-export type DiagnosticsHost = { readonly home: string } & Pick<AgentDirectory, "getAgent">;
+export type DecisionDeps = Core & Channels & Agents & Messages & Poster<"postMessage"> & { readonly tasks: Pick<TaskStore, "get"> };
+export type DiagnosticsDeps = { readonly home: string } & Agents<"getAgent">;
 
 /** What the adaptive topology runtime reads and writes outside its own tables. */
 export type AdaptiveRuntimeDeps = Core & {
