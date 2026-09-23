@@ -5,7 +5,10 @@ import { newerTelegramHealth, telegramDegraded, type TelegramHealth } from "./te
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import type { Agent, Channel, Message, SearchHit, Thread, ThreadStatus, InboxStatus } from "../src/shared/types.ts";
 import { REACTION_EMOJIS } from "../src/shared/types.ts";
-import { isLiveSearchQuery, parseSearchQuery } from "../src/shared/search-query.ts";
+import { isLiveSearchQuery } from "../src/shared/search-query.ts";
+import { parseHash, repairSel, setHash, type InboxBox, type Sel } from "./selection.ts";
+import { STATUSES, avatarHue, channelTitle, memberNames, seniorityBars, upsertById } from "./labels.ts";
+import { renderSearchBody } from "./search-highlight.tsx";
 import { api, connectWs, type ChannelPayload, type Snapshot, type TelegramSettings, type SendRoutingMode, type SendLockScope } from "./api.ts";
 import { LaunchSheet } from "./LaunchSheet.tsx";
 import { BotOrigin, BotSetup, BotCredentials } from "./Bots.tsx";
@@ -30,81 +33,6 @@ import { DecisionCard, DecisionQueue } from './DecisionQueue.tsx';
 import type { DecisionView } from '../src/shared/decisions.ts';
 import type { TaskSnapshot } from '../src/shared/tasks.ts';
 import { selectThread, beginThreadLoad, cancelThreadLoad, failThreadLoad, receiveThreadConfirmation, receiveThreadMessage, receiveThreadTask, receiveThreadSnapshot, receiveThreadStatus, type ThreadView } from './thread-state.ts';
-
-type InboxBox = "unread" | "all";
-
-type Sel =
-  | { kind: "inbox"; project: string; box?: InboxBox }
-  | { kind: "decisions"; project: string }
-  /** Routing log: every Jev exchange of a project. Hash `#/routing-log/<project>`; `#/jev/<project>` is an alias. */
-  | { kind: "jev"; project: string }
-  | { kind: "channel"; id: string; thread?: string | null };
-
-const STATUSES: ThreadStatus[] = ["open", "in_progress", "blocked", "done"];
-
-function parseHash(): Sel {
-  const raw = location.hash.replace(/^#/, "") || "/c/general";
-  const parts = raw.split("/").filter(Boolean);
-  if (parts[0] === "inbox") {
-    return {
-      kind: "inbox",
-      project: parts[1] ? decodeURIComponent(parts[1]) : "",
-      box: parts[2] === "all" ? "all" : "unread",
-    };
-  }
-  if (parts[0] === "decisions") return { kind: "decisions", project: parts[1] ? decodeURIComponent(parts[1]) : "" };
-  if (parts[0] === "routing-log" || parts[0] === "jev") return { kind: "jev", project: parts[1] ? decodeURIComponent(parts[1]) : "" };
-  if (parts[1]) {
-    const thread = parts[2] === "t" && parts[3] ? decodeURIComponent(parts[3]) : undefined;
-    return { kind: "channel", id: decodeURIComponent(parts[1]), thread };
-  }
-  return { kind: "channel", id: "general" };
-}
-
-function upsertById<T extends { id: string }>(list: T[], item: T): T[] {
-  if (list.some((x) => x.id === item.id)) return list.map((x) => (x.id === item.id ? item : x));
-  return [...list, item];
-}
-
-function setHash(sel: Sel) {
-  location.hash =
-    sel.kind === "inbox"
-      ? `${sel.project ? `/inbox/${encodeURIComponent(sel.project)}` : "/inbox"}${sel.box === "all" ? "/all" : ""}`
-      : sel.kind === "decisions" || sel.kind === "jev"
-        ? `/${sel.kind === "jev" ? "routing-log" : sel.kind}${sel.project ? `/${encodeURIComponent(sel.project)}` : ""}`
-        : `/c/${encodeURIComponent(sel.id)}${sel.thread ? `/t/${encodeURIComponent(sel.thread)}` : ""}`;
-}
-
-function repairSel(sel: Sel, snap: Snapshot): Sel | null {
-  if (sel.kind === "inbox" || sel.kind === "decisions" || sel.kind === "jev") {
-    if (!sel.project) return snap.projects[0] ? { ...sel, project: snap.projects[0].slug } : null;
-    if (snap.projects.some((p) => p.slug === sel.project)) return null;
-    const fallback = snap.projects[0];
-    return fallback ? { ...sel, project: fallback.slug } : { ...sel, project: "" };
-  }
-  if (snap.channels.some((c) => c.id === sel.id)) return null;
-  const fallback = snap.projects[0];
-  return fallback ? { kind: "inbox", project: fallback.slug } : { kind: "inbox", project: "" };
-}
-
-function seniorityBars(agent: Agent): number {
-  if (agent.role !== "worker") return 0;
-  if (agent.seniority === "senior") return 3;
-  if (agent.seniority === "mid") return 2;
-  return 1;
-}
-
-function channelTitle(ch: Channel): string {
-  return ch.type === "dm" ? ch.name : `#${ch.name}`;
-}
-
-function memberNames(ch: Channel, agents: Agent[]): string {
-  const names = ch.memberIds
-    .map((id) => agents.find((a) => a.id === id)?.name)
-    .filter(Boolean);
-  if (names.length === 0) return "No members";
-  return names.join(", ");
-}
 
 export function App() {
   const [snap, setSnap] = useState<Snapshot | null>(null);
@@ -2061,35 +1989,6 @@ function DmRow({
   );
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function renderSearchBody(body: string, q: string) {
-  const tokens = parseSearchQuery(q).filter((token) => token.length > 0);
-  if (tokens.length === 0) return renderBody(body);
-  const re = new RegExp(tokens.map(escapeRegExp).join("|"), "gi");
-  const parts: ReturnType<typeof renderBody> = [];
-  let last = 0;
-  let key = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(body))) {
-    if (m.index === last && m[0] === "") {
-      re.lastIndex += 1;
-      continue;
-    }
-    if (m.index > last) parts.push(...renderBody(body.slice(last, m.index)));
-    parts.push(
-      <mark className="hit" key={`hit-${key++}`}>
-        {m[0]}
-      </mark>,
-    );
-    last = m.index + m[0].length;
-  }
-  if (last < body.length) parts.push(...renderBody(body.slice(last)));
-  return parts;
-}
-
 function SearchHitMsg({ hit, q }: { hit: SearchHit; q: string }) {
   const time = new Date(hit.createdAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
   return (
@@ -2515,10 +2414,6 @@ function Composer({
       </div>
     </div>
   );
-}
-
-function avatarHue(name: string): number {
-  return [...name].reduce((n, ch) => n + ch.charCodeAt(0), 0) % 360;
 }
 
 function Avatar({ name, role, online, small }: { name: string; role?: string; online?: boolean; small?: boolean }) {
