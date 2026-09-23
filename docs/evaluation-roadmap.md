@@ -69,6 +69,8 @@ Check the selected installed host/provider configuration before running. No prov
 
 Run the same reviewed workload set with `auto`, `single`, `brain_one_worker`, `brain_multi_dm`, and `brain_multi_room` in randomized repeated order, with fixed versions and equivalent initial capacity. Fixed-mode conditions must disable external Jev monitoring for a clean no-router overhead baseline; selecting a manual lock while Jev stays enabled is a different experimental condition, because monitoring continues.
 
+Use the [paired-study runner](topology-study-runner.md) (#136) to execute the #132 manifest: `prepare`, `validate` and `dry-run` are credential-free, and only an explicitly authorized `run` can spend. Do not use the fixed-workflow executor above for this comparison.
+
 Compare acceptance and independent defects first, then net provider tokens and elapsed wall time. Do not add summed Jev call latency to wall time already measured end-to-end. Keep workload-model tokens and Jev tokens separate; add them only where both are complete and the comparison is meaningful. Unknown monetary cost remains null; no current vendor price is hard-coded.
 
 Preserve workload failures, transport/harness failures, missing measurements, interrupted runs and review status. `Auto selected Single` is not automatically an under-orchestration error: it requires reviewed evidence that Single missed the quality target and a comparable orchestrated run succeeded. A controller recommendation alone cannot label that outcome.
