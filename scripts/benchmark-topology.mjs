@@ -11,6 +11,8 @@ const MAX_STUDY_BYTES = 128 * 1024 * 1024;
 const sha = /^[a-f0-9]{40}$/;
 const digest = /^[a-f0-9]{64}$/;
 const key = /^[a-z0-9][a-z0-9._/-]{0,199}$/i;
+// Mirrors JEV_MODEL_PATTERN in src/shared/jev-model.ts.
+const jevModel = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?$/;
 const finite = n => typeof n === 'number' && Number.isFinite(n) && n >= 0;
 const count = n => Number.isSafeInteger(n) && n >= 0;
 function object(value, label) { assert.ok(value && typeof value === 'object' && !Array.isArray(value), `${label} must be an object`); return value; }
@@ -29,9 +31,11 @@ function shuffled(values, random) { const out = [...values]; for (let i = out.le
 export function prepareStudy(raw) {
   exact(raw, ['evidenceKind','versions','workloads','repeats','seed','freeWorkers','limits'], 'study config');
   assert.ok(['synthetic','live'].includes(raw.evidenceKind), 'evidenceKind must explicitly be synthetic or live');
-  exact(raw.versions, ['hivemindRevision','provider','model','host','configuration','policyVersion'], 'versions');
+  exact(raw.versions, ['hivemindRevision','provider','model','host','configuration','policyVersion','jevModel'], 'versions');
   assert.match(raw.versions.hivemindRevision, sha, 'Pin an exact Hivemind revision');
   for (const k of ['provider','model','host','configuration','policyVersion']) assert.match(raw.versions[k], key, `Pin versions.${k}`);
+  // Optional: the Jev identifier requested by Auto trials (the saved Jev model setting). Omitted by pre-#134 studies.
+  if ('jevModel' in raw.versions) assert.match(raw.versions.jevModel, jevModel, 'versions.jevModel must be a bounded Jev model identifier');
   assert.equal(raw.versions.policyVersion, 'topology-policy-v2.1', 'Unsupported policy version; do not silently pool policies');
   assert.ok(Array.isArray(raw.workloads) && raw.workloads.length >= 1 && raw.workloads.length <= 10, 'Use 1..10 pinned workloads');
   assert.equal(new Set(raw.workloads.map(w => w.id)).size, raw.workloads.length, 'Duplicate workload');
@@ -84,6 +88,12 @@ function validateEvidence(e, policyVersion) {
   assert.equal(o.summedLatencyMs, o.latencyObservations === c.attemptsStarted ? o.knownLatencyMs : null);
   assert.ok(Array.isArray(e.models) && e.models.length <= 16 && e.models.every(m => typeof m === 'string' && key.test(m)));
   assert.equal(new Set(e.models).size, e.models.length); assert.equal(typeof e.modelsTruncated, 'boolean');
+  // Exports recorded before #134 have no requested identifiers: unknown (null), never an empty list.
+  if (e.requestedModels === undefined || e.requestedModels === null) assert.ok(e.requestedModelsTruncated == null, 'Inconsistent requested models');
+  else {
+    assert.ok(Array.isArray(e.requestedModels) && e.requestedModels.length <= 16 && e.requestedModels.every(m => typeof m === 'string' && jevModel.test(m)), 'Invalid requested models');
+    assert.equal(new Set(e.requestedModels).size, e.requestedModels.length); assert.equal(typeof e.requestedModelsTruncated, 'boolean');
+  }
   const total = c.usageComplete ? o.totalInputTokens + o.totalOutputTokens : null;
   assert.ok(total === null || count(total), 'Router token total overflow');
   return total;
@@ -95,7 +105,7 @@ export function validateStudy(study, { requireComplete = false } = {}) {
   const expected = prepareStudy(study.config);
   assert.equal(study.studyId, expected.studyId, 'Study configuration changed');
   assert.ok(Array.isArray(study.trials) && study.trials.length === expected.trials.length, 'Missing or extra trials');
-  let completed = 0; const modelVersions = new Set();
+  let completed = 0; const modelVersions = new Set(), requestedVersions = new Set();
   for (let i = 0; i < study.trials.length; i++) {
     const trial = study.trials[i], wanted = expected.trials[i];
     exact(trial, ['id','workloadId','repeat','condition','observed'], 'trial');
@@ -125,7 +135,16 @@ export function validateStudy(study, { requireComplete = false } = {}) {
     }
     if (trial.condition === 'auto') {
       if (o.routerEvidence === null) assert.equal(o.instrumentationHealthy, false, 'Missing router evidence is not zero overhead');
-      else { validateEvidence(o.routerEvidence, study.config.versions.policyVersion); for (const m of o.routerEvidence.models) modelVersions.add(m); }
+      else {
+        validateEvidence(o.routerEvidence, study.config.versions.policyVersion); for (const m of o.routerEvidence.models) modelVersions.add(m);
+        const requested = o.routerEvidence.requestedModels ?? null;
+        if (study.config.versions.jevModel !== undefined) {
+          assert.ok(requested !== null, 'Router evidence does not record the requested Jev model; it cannot join a pinned-model cohort');
+          assert.ok(!o.routerEvidence.requestedModelsTruncated && requested.every(m => m === study.config.versions.jevModel),
+            'Requested Jev model differs from versions.jevModel; split the cohort instead of pooling versions');
+        }
+        for (const m of requested ?? []) requestedVersions.add(m);
+      }
     } else assert.equal(o.routerEvidence, null, 'A clean fixed baseline does not call Jev');
     if (o.routingReview !== null) {
       exact(o.routingReview, ['underOrchestration','prematureDowngrade','flapping'], 'routingReview');
@@ -133,8 +152,10 @@ export function validateStudy(study, { requireComplete = false } = {}) {
     }
     completed++;
   }
+  assert.ok(requestedVersions.size <= 1, 'Requested Jev models differ; split the cohort instead of pooling versions');
   assert.ok(modelVersions.size <= 1, 'Resolved Jev models differ; split the cohort instead of pooling versions');
-  return { expected: study.trials.length, completed, pending: study.trials.length - completed, resolvedModels: [...modelVersions] };
+  return { expected: study.trials.length, completed, pending: study.trials.length - completed,
+    requestedModels: [...requestedVersions], resolvedModels: [...modelVersions] };
 }
 
 function metric(values) {

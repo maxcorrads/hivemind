@@ -126,13 +126,43 @@ test('panel labels disabled, pending, manual, locked, warning and completed stat
 
 test('settings save resets the secret input and refreshes monitoring without returning the key', async t => {
   const f = mounted(t); let saved = 0, notified = 0;
-  const settings = { enabled: true, apiKeySet: true, apiKeyHint: '…1234', model: 'jev-latest', fallback: 'orchestrated' as const, topologyFallback: 'brain_one_worker' as const };
+  const settings = { enabled: true, apiKeySet: true, apiKeyHint: '…1234', model: 'jev-latest', defaultModel: 'jev-latest', modelPinned: false, fallback: 'orchestrated' as const, topologyFallback: 'brain_one_worker' as const };
   t.mock.method(api, 'adaptiveRouting', async () => settings);
   t.mock.method(api, 'saveAdaptiveRouting', async () => { saved++; return settings; });
   await f.render(<AdaptiveRoutingSettings onClose={() => {}} onSaved={() => { notified++; }} />);
   assert.equal(f.host.querySelector<HTMLInputElement>('input[type=password]')?.value, '');
   await act(async () => f.host.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }) as unknown as Event));
   assert.equal(saved, 1); assert.equal(notified, 1); assert.equal(f.host.querySelector<HTMLInputElement>('input[type=password]')?.value, '');
+});
+
+test('settings explain alias vs pinned model, validate the identifier and can reset to the alias', async t => {
+  const f = mounted(t); const bodies: unknown[] = [];
+  const pinned = { enabled: false, apiKeySet: true, apiKeyHint: '…1234', model: 'jev-2026-09-01', defaultModel: 'jev-latest', modelPinned: true,
+    fallback: 'orchestrated' as const, topologyFallback: 'brain_one_worker' as const };
+  t.mock.method(api, 'adaptiveRouting', async () => pinned);
+  t.mock.method(api, 'saveAdaptiveRouting', async (body: unknown) => { bodies.push(body);
+    return { ...pinned, model: 'jev-latest', modelPinned: false }; });
+  await f.render(<AdaptiveRoutingSettings onClose={() => {}} />);
+  const input = f.host.querySelector<HTMLInputElement>('input[placeholder^="jev-latest"]');
+  assert.ok(input); assert.equal(input.value, 'jev-2026-09-01');
+  assert.match(f.host.textContent!, /pinned identifier/);
+  assert.match(f.host.textContent!, /may resolve to a different model over time/);
+  assert.match(f.host.textContent!, /does not list models or prices/);
+  assert.match(f.host.textContent!, /model jev-2026-09-01/, 'the connection test names the saved model it uses');
+  assert.doesNotMatch(f.host.textContent!, /\$|USD|per token/i, 'no hard-coded price');
+  const type = async (value: string) => act(async () => {
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!.call(input, value);
+    input.dispatchEvent(new window.Event('input', { bubbles: true }) as unknown as Event);
+  });
+  await type('https://evil.example/v1');
+  assert.match(f.host.textContent!, /not a URL/);
+  assert.equal(f.button('Save').disabled, true);
+  await type('');
+  assert.equal(f.button('Save').disabled, false);
+  assert.match(f.host.textContent!, /Save pending changes before testing/);
+  await act(async () => f.host.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }) as unknown as Event));
+  assert.deepEqual(bodies, [{ enabled: false, fallback: 'orchestrated', topologyFallback: 'brain_one_worker', model: null }]);
+  assert.match(f.host.textContent!, /default alias/);
 });
 
 test('a channel keeps one execution per brain, shows observations and locks the selected brain', async t => {
