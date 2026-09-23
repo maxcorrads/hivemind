@@ -30,26 +30,26 @@ test('explicit Human recipients enter For you once and remain until the exact sc
   const dir = mkdtempSync(path.join(os.tmpdir(), 'human-target-read-'));
   const hive = new Hive(path.join(dir, 'hive.db'));
   t.after(() => { hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
-  const human = hive.getAgent('human'), brain = hive.join({ role: 'brain' }).agent;
-  const room = hive.createChannel(brain, { name: 'targeted-read', type: 'private' });
-  const root = hive.postMessage(brain, { channel: room.id, body: 'Decision needed', recipients: ['Human'] });
-  const reply = hive.postMessage(brain, { channel: room.id, threadId: root.id,
+  const human = hive.identity.getAgent('human'), brain = hive.identity.join({ role: 'brain' }).agent;
+  const room = hive.channels.createChannel(brain, { name: 'targeted-read', type: 'private' });
+  const root = hive.messages.postMessage(brain, { channel: room.id, body: 'Decision needed', recipients: ['Human'] });
+  const reply = hive.messages.postMessage(brain, { channel: room.id, threadId: root.id,
     body: '@Human follow-up', recipients: ['Human'] });
-  const before = hive.readSnapshot(human);
+  const before = hive.reads.readSnapshot(human);
   assert.deepEqual(before.mentions.map(m => m.id), [reply.id, root.id]);
   assert.equal(before.mentionCounts[brain.project!], 2);
   // A GET/open view is read-only. Mention plus explicit recipient must count once.
-  hive.listMessages(human, room.id);
-  assert.deepEqual(hive.readSnapshot(human).mentions.map(m => m.id), [reply.id, root.id]);
-  hive.markMessagesRead(human, room.id, [root.seq]);
-  assert.deepEqual(hive.readSnapshot(human).mentions.map(m => m.id), [reply.id]);
-  hive.markMessagesRead(human, room.id, [root.seq]);
-  assert.deepEqual(hive.readSnapshot(human).mentions.map(m => m.id), [reply.id]);
-  hive.markMessagesRead(human, room.id, [reply.seq], root.id);
-  assert.deepEqual(hive.readSnapshot(human).mentions, []);
-  const next = hive.postMessage(brain, { channel: room.id, body: 'Next decision', recipients: ['Human'] });
-  assert.deepEqual(hive.mentionInbox(human).messages.map(m => m.id), [next.id]);
-  hive.markMentionsSeen(human, brain.projectId!);
-  assert.deepEqual(hive.readSnapshot(human).mentions, []);
+  hive.messageQueries.listMessages(human, room.id);
+  assert.deepEqual(hive.reads.readSnapshot(human).mentions.map(m => m.id), [reply.id, root.id]);
+  hive.reads.markMessagesRead(human, room.id, [root.seq]);
+  assert.deepEqual(hive.reads.readSnapshot(human).mentions.map(m => m.id), [reply.id]);
+  hive.reads.markMessagesRead(human, room.id, [root.seq]);
+  assert.deepEqual(hive.reads.readSnapshot(human).mentions.map(m => m.id), [reply.id]);
+  hive.reads.markMessagesRead(human, room.id, [reply.seq], root.id);
+  assert.deepEqual(hive.reads.readSnapshot(human).mentions, []);
+  const next = hive.messages.postMessage(brain, { channel: room.id, body: 'Next decision', recipients: ['Human'] });
+  assert.deepEqual(hive.reads.mentionInbox(human).messages.map(m => m.id), [next.id]);
+  hive.reads.markMentionsSeen(human, brain.projectId!);
+  assert.deepEqual(hive.reads.readSnapshot(human).mentions, []);
   assert.equal(before.mentions.length, 2, 'Do not mutate previous read snapshots');
 });

@@ -37,15 +37,15 @@ class SocketFixture {
 async function fixture(t: TestContext) {
   window.localStorage.clear(); window.sessionStorage.clear(); SocketFixture.instances = [];
   const dir = mkdtempSync(path.join(os.tmpdir(), "extensibility-workflow-"));
-  const hive = new Hive(path.join(dir, "hive.db")), human = hive.getAgent("human");
-  const a = hive.listProjects()[0]!, b = hive.createProject(human, { slug: "other", name: "Other" });
-  const brainA = hive.join({ role: "brain", project: a.slug }).agent;
-  const worker = hive.join({ role: "worker", seniority: "senior", project: a.slug }).agent;
-  const brainB = hive.join({ role: "brain", project: b.slug }).agent;
-  const botA = hive.createBot(human, a.id, { name: "FeedA" });
-  const botB = hive.createBot(human, b.id, { name: "FeedB" });
-  const channel = hive.createChannel(human, { project: a.slug, name: "observations", type: "private" });
-  hive.invite(human, channel.id, [botA.bot.name]);
+  const hive = new Hive(path.join(dir, "hive.db")), human = hive.identity.getAgent("human");
+  const a = hive.projects.listProjects()[0]!, b = hive.projects.createProject(human, { slug: "other", name: "Other" });
+  const brainA = hive.identity.join({ role: "brain", project: a.slug }).agent;
+  const worker = hive.identity.join({ role: "worker", seniority: "senior", project: a.slug }).agent;
+  const brainB = hive.identity.join({ role: "brain", project: b.slug }).agent;
+  const botA = hive.bots.createBot(human, a.id, { name: "FeedA" });
+  const botB = hive.bots.createBot(human, b.id, { name: "FeedB" });
+  const channel = hive.channels.createChannel(human, { project: a.slug, name: "observations", type: "private" });
+  hive.channels.invite(human, channel.id, [botA.bot.name]);
   window.happyDOM.setURL(`http://localhost/#/c/${channel.id}`);
   const app = createApp(hive), requests: string[] = [], copies: string[] = [];
   t.mock.method(globalThis, "fetch", async (url: string, init?: RequestInit) => {
@@ -88,7 +88,7 @@ async function fixture(t: TestContext) {
   const onClose = () => { closed++; };
   const renderLaunch = async (projects = [a, b], defaultProject = a.slug) => {
     await act(async () => root.render(createElement(LaunchSheet, {
-      projects, agents: hive.listAgents(human), defaultProject, onClose,
+      projects, agents: hive.identity.listAgents(human), defaultProject, onClose,
     })));
   };
   const context = (slug: string): LaunchContext => {
@@ -111,11 +111,11 @@ test("App routes project bot creation, one-time credentials and plugin settings 
   let dialog = f.host.querySelector('[aria-label="Create project bot"]')!;
   await f.change(dialog.querySelector("input")!, "CreatedFeed");
   await f.click(f.button("Create bot", dialog));
-  const created = f.hive.listAgents(f.human).find(agent => agent.name === "CreatedFeed")!;
+  const created = f.hive.identity.listAgents(f.human).find(agent => agent.name === "CreatedFeed")!;
   assert.equal(created.project, f.a.slug);
   const secret = dialog.querySelector<HTMLInputElement>('[aria-label="Bot token"]')!.value;
-  assert.equal(f.hive.agentByToken(secret).id, created.id);
-  assert.equal(f.hive.agentByToken(f.botB.token).id, f.botB.bot.id);
+  assert.equal(f.hive.identity.agentByToken(secret).id, created.id);
+  assert.equal(f.hive.identity.agentByToken(f.botB.token).id, f.botB.bot.id);
   await f.click(f.button("Close", dialog));
   assert.equal(f.host.querySelector('[aria-label="Create project bot"]'), null);
   await f.click(f.host.querySelector<HTMLButtonElement>('[aria-label="Actions for CreatedFeed"]')!);
@@ -143,7 +143,7 @@ test("App routes project bot creation, one-time credentials and plugin settings 
 test("App renders a bot observation once under duplicate delivery and keeps its source intact", async t => {
   const f = await fixture(t);
   await act(async () => f.root.render(createElement(App)));
-  const message = f.hive.postBotMessage(f.botA.bot, f.channel.id, {
+  const message = f.hive.bots.postBotMessage(f.botA.bot, f.channel.id, {
     eventId: "ui-dedup", body: "Unique observation from FeedA", origin: { label: "External feed", url: "https://example.com/event" },
   }).message;
   await act(async () => {
@@ -235,11 +235,11 @@ test("private-channel UI grants a bot access only after an explicit same-project
   await f.click(f.field(f.worker.name));
   await f.click(f.field(f.worker.name));
   await f.click(f.button("Create", form));
-  const channel = f.hive.listChannels(f.human).find(ch => ch.name === "bot-private")!;
+  const channel = f.hive.channels.listChannels(f.human).find(ch => ch.name === "bot-private")!;
   assert.equal(channel.project, f.a.slug);
   assert.ok(channel.memberIds.includes(f.worker.id));
   const input = { eventId: "invite-required", body: "New channel observation" };
-  assert.throws(() => f.hive.postBotMessage(f.botA.bot, channel.id, input), /channel|Channel|access/);
+  assert.throws(() => f.hive.bots.postBotMessage(f.botA.bot, channel.id, input), /channel|Channel|access/);
   await f.click(f.button("Invite"));
   const invite = f.host.querySelector(".modal form")!;
   assert.doesNotMatch(invite.textContent!, new RegExp(f.botB.bot.name));
@@ -247,9 +247,9 @@ test("private-channel UI grants a bot access only after an explicit same-project
   await f.click(f.field(f.botA.bot.name));
   await f.click(f.field(f.botA.bot.name));
   await f.click(f.button("Invite", invite));
-  assert.ok(f.hive.listChannels(f.human).find(ch => ch.id === channel.id)!.memberIds.includes(f.botA.bot.id));
-  assert.equal(f.hive.postBotMessage(f.botA.bot, channel.id, input).duplicate, false);
-  assert.throws(() => f.hive.postBotMessage(f.botB.bot, channel.id, input), /channel|Channel|access/);
+  assert.ok(f.hive.channels.listChannels(f.human).find(ch => ch.id === channel.id)!.memberIds.includes(f.botA.bot.id));
+  assert.equal(f.hive.bots.postBotMessage(f.botA.bot, channel.id, input).duplicate, false);
+  assert.throws(() => f.hive.bots.postBotMessage(f.botB.bot, channel.id, input), /channel|Channel|access/);
 });
 
 test("brain DMs expose per-request routing and show the committed directive without websocket echo", async t => {
@@ -269,16 +269,16 @@ test("brain DMs expose per-request routing and show the committed directive with
   assert.equal(mode.value, "auto", "explicit mode is one-request only");
   assert.match(f.host.textContent!, /Hivemind adaptive topology · SINGLE/);
   assert.match(f.host.textContent!, /Handle this directly/);
-  const sent = listRows(f.hive, "messages", { where: { author_id: "human", channel_id: f.hive.findDm(f.human.id, f.brainA.id)!.id },
+  const sent = listRows(f.hive, "messages", { where: { author_id: "human", channel_id: f.hive.channels.findDm(f.human.id, f.brainA.id)!.id },
     columns: "body", orderBy: "seq" }).reverse() as Array<{ body: string }>;
   assert.equal(sent[0]!.body, "Handle this directly");
   assert.match(sent[1]!.body, /adaptive topology · SINGLE/);
-  assert.equal(f.hive.adaptiveTopology.view(f.human, f.hive.findDm(f.human.id, f.brainA.id)!.id).state?.lockedTopology, "single");
+  assert.equal(f.hive.adaptiveTopology.view(f.human, f.hive.channels.findDm(f.human.id, f.brainA.id)!.id).state?.lockedTopology, "single");
 });
 
 test("observation threads support Human replies and reactions without granting bot workflow authority", async t => {
   const f = await fixture(t);
-  const message = f.hive.postBotMessage(f.botA.bot, f.channel.id, {
+  const message = f.hive.bots.postBotMessage(f.botA.bot, f.channel.id, {
     eventId: "discussion", body: "Review this observation", origin: { url: "https://example.com/review" },
   }).message;
   await act(async () => f.root.render(createElement(App)));
@@ -399,16 +399,16 @@ test("launch preferences and per-seat overrides survive remount without persisti
 for (const threaded of [false, true]) {
   test(`App preserves loaded history, DOM selection and unseen receipts under live arrivals (thread=${threaded})`, async t => {
     const f = await fixture(t);
-    f.hive.invite(f.human, f.channel.id, [f.brainA.name]);
-    const first = f.hive.postMessage(f.brainA, { channel: f.channel.id, body: "History body 1" });
-    if (threaded) f.hive.postMessage(f.brainA, { channel: f.channel.id, threadId: first.id, body: "History body 2" });
+    f.hive.channels.invite(f.human, f.channel.id, [f.brainA.name]);
+    const first = f.hive.messages.postMessage(f.brainA, { channel: f.channel.id, body: "History body 1" });
+    if (threaded) f.hive.messages.postMessage(f.brainA, { channel: f.channel.id, threadId: first.id, body: "History body 2" });
     seedMessages(f.hive, Array.from({ length: 580 - (threaded ? 3 : 2) + 1 }, (_, n) => (threaded ? 3 : 2) + n).map(i => ({
       id: `history-${i}`, channelId: f.channel.id, threadId: threaded ? first.id : null, authorId: f.brainA.id,
       body: `History body ${i}`, createdAt: 1 })));
     if (threaded) window.happyDOM.setURL(`http://localhost/#/c/${f.channel.id}/t/${first.id}`);
     const receipts: number[][] = [];
-    const mark = f.hive.markMessagesRead.bind(f.hive);
-    t.mock.method(f.hive, "markMessagesRead", (...args: Parameters<typeof mark>) => {
+    const mark = f.hive.reads.markMessagesRead.bind(f.hive.reads);
+    t.mock.method(f.hive.reads, "markMessagesRead", (...args: Parameters<typeof mark>) => {
       receipts.push(args[2]); return mark(...args);
     });
     await act(async () => f.root.render(createElement(App)));
@@ -435,7 +435,7 @@ for (const threaded of [false, true]) {
     selection.removeAllRanges(); selection.addRange(range);
     const selected = selection.toString();
     assert.equal(selected, "History body 40");
-    const incoming = f.hive.postMessage(f.brainA, {
+    const incoming = f.hive.messages.postMessage(f.brainA, {
       channel: f.channel.id, threadId: threaded ? first.id : null, body: "Deferred new live message",
     });
     await act(async () => SocketFixture.instances[0]!.emit("message", incoming));
@@ -460,9 +460,9 @@ for (const threaded of [false, true]) {
 for (const reconnect of [false, true]) {
   test(`mounted App preserves channel live events delivered during a delayed ${reconnect ? "reconnect" : "initial"} snapshot`, async t => {
     const f = await fixture(t);
-    f.hive.invite(f.human, f.channel.id, [f.brainA.name]);
-    const rootMessage = f.hive.postMessage(f.brainA, { channel: f.channel.id, body: "Race root fixture" });
-    const initialReply = f.hive.postMessage(f.brainA, { channel: f.channel.id, threadId: rootMessage.id, body: "Reply present in snapshot" });
+    f.hive.channels.invite(f.human, f.channel.id, [f.brainA.name]);
+    const rootMessage = f.hive.messages.postMessage(f.brainA, { channel: f.channel.id, body: "Race root fixture" });
+    const initialReply = f.hive.messages.postMessage(f.brainA, { channel: f.channel.id, threadId: rootMessage.id, body: "Reply present in snapshot" });
     let release!: () => void, captured!: () => void;
     const pending = new Promise<void>(resolve => { release = resolve; });
     const ready = new Promise<void>(resolve => { captured = resolve; });
@@ -485,10 +485,10 @@ for (const reconnect of [false, true]) {
       await act(async () => socket.emit("hello", undefined));
     }
     await ready;
-    const newRoot = f.hive.postMessage(f.brainA, { channel: f.channel.id, body: "Root delivered during pending snapshot" });
-    const reply = f.hive.postMessage(f.brainA, { channel: f.channel.id, threadId: rootMessage.id, body: "Reply delivered during pending snapshot" });
-    const reacted = f.hive.toggleReaction(f.human, rootMessage.seq, "✅").message;
-    const blocked = f.hive.setThreadStatus(f.brainA, rootMessage.id, "blocked");
+    const newRoot = f.hive.messages.postMessage(f.brainA, { channel: f.channel.id, body: "Root delivered during pending snapshot" });
+    const reply = f.hive.messages.postMessage(f.brainA, { channel: f.channel.id, threadId: rootMessage.id, body: "Reply delivered during pending snapshot" });
+    const reacted = f.hive.messages.toggleReaction(f.human, rootMessage.seq, "✅").message;
+    const blocked = f.hive.messages.setThreadStatus(f.brainA, rootMessage.id, "blocked");
     await act(async () => {
       socket.emit("message", newRoot); socket.emit("message", reply);
       socket.emit("reaction", { message: reacted }); socket.emit("thread", blocked);
@@ -507,7 +507,7 @@ for (const reconnect of [false, true]) {
 for (const alwaysOverflow of [false, true]) {
   test(`mounted channel refresh ${alwaysOverflow ? "fails visibly after three bounded attempts" : "retries a bounded live journal overflow"}`, async t => {
     const f = await fixture(t);
-    const stable = f.hive.postBotMessage(f.botA.bot, f.channel.id, { eventId: "stable", body: "Stable reading anchor" }).message;
+    const stable = f.hive.bots.postBotMessage(f.botA.bot, f.channel.id, { eventId: "stable", body: "Stable reading anchor" }).message;
     await act(async () => f.root.render(createElement(App)));
     const original = api.messages;
     let attempts = 0;

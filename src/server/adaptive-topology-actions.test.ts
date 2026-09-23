@@ -20,13 +20,13 @@ const result = { summary: 'Fixture complete.', artifacts: [], checks: [], gaps: 
 async function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'topology-actions-'));
   const hive = new Hive(path.join(dir, 'hive.db'));
-  const human = hive.getAgent('human');
-  const brain = hive.join({ role: 'brain', project: 'chapter' });
-  const otherBrain = hive.join({ role: 'brain', project: 'chapter' });
-  const workers = [0, 1].map(() => hive.join({ role: 'worker', seniority: 'senior', project: 'chapter' }));
-  const dm = hive.openDm(human, brain.agent.name);
-  const otherDm = hive.openDm(human, otherBrain.agent.name);
-  const workerDm = hive.openDm(brain.agent, workers[0]!.agent.name);
+  const human = hive.identity.getAgent('human');
+  const brain = hive.identity.join({ role: 'brain', project: 'chapter' });
+  const otherBrain = hive.identity.join({ role: 'brain', project: 'chapter' });
+  const workers = [0, 1].map(() => hive.identity.join({ role: 'worker', seniority: 'senior', project: 'chapter' }));
+  const dm = hive.channels.openDm(human, brain.agent.name);
+  const otherDm = hive.channels.openDm(human, otherBrain.agent.name);
+  const workerDm = hive.channels.openDm(brain.agent, workers[0]!.agent.name);
   const app = createApp(hive);
   let target: AdaptiveTopology = 'single';
   let calls = 0, latency = 0, inFlight = 0, maxInFlight = 0;
@@ -247,7 +247,7 @@ test('delegation must name one of the brain\'s active executions; parallel reque
   const f = await fixture(t);
   f.choose('brain_one_worker');
   const direct = await f.start();
-  const group = f.hive.createChannel(f.human, { name: 'planning', type: 'private', project: 'chapter', memberNames: [f.brain.agent.name, f.workers[0]!.agent.name, f.workers[1]!.agent.name] });
+  const group = f.hive.channels.createChannel(f.human, { name: 'planning', type: 'private', project: 'chapter', memberNames: [f.brain.agent.name, f.workers[0]!.agent.name, f.workers[1]!.agent.name] });
   f.choose('single');
   const parallel = await f.hive.adaptiveTopology.routeHumanRequest(f.human, {
     channel: group.id, body: 'Answer this quickly yourself.', requestId: 'group-request',
@@ -283,7 +283,7 @@ test('a brain report naming a worker who cannot read the channel is a reference,
   assert.equal(report.status, 200, await report.clone().text());
   assert.equal(countRows(f.hive, 'adaptive_topology_messages'), 0);
   assert.equal(readAdaptiveCapacity(f.hive, f.state()).activeWorkers, 0, 'A reference reserves no worker');
-  const group = f.hive.createChannel(f.human, { name: 'crew', type: 'private', project: 'chapter',
+  const group = f.hive.channels.createChannel(f.human, { name: 'crew', type: 'private', project: 'chapter',
     memberNames: [f.brain.agent.name, worker] });
   const unnamed = await f.post(f.brain.token, `/channels/${group.id}/messages`, {
     body: `@${worker} please take the parser.`, requestId: 'group-mention',
@@ -395,9 +395,9 @@ test('a post-commit routing warning with no resolvable execution records nothing
 test('capacity revalidation runs other executions concurrently, bounded, and isolates failures', async t => {
   const f = await fixture(t);
   // Five executions, one per brain, each in its own Human DM.
-  const extra = [0, 1, 2].map(() => f.hive.join({ role: 'brain', project: 'chapter' }));
+  const extra = [0, 1, 2].map(() => f.hive.identity.join({ role: 'brain', project: 'chapter' }));
   await f.start(f.brain, f.dm); await f.start(f.otherBrain, f.otherDm);
-  for (const brain of extra) await f.start(brain, f.hive.openDm(f.human, brain.agent.name));
+  for (const brain of extra) await f.start(brain, f.hive.channels.openDm(f.human, brain.agent.name));
   const ids = [f.brain, f.otherBrain, ...extra].map(brain => f.exec(brain)!);
   const evaluated = (eventId: string) => ids.filter(id => hasRow(f.hive, 'adaptive_topology_evaluated',
     { execution_id: id, event_id: coordinationEventId(f.brain.agent.id, 'capacity', eventId) })).length;

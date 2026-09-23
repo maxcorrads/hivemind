@@ -54,22 +54,22 @@ test('Human connection test is explicit, fixed-endpoint and inert with respect t
   assert.notEqual(saved.revision, missing.revision);
   assert.deepEqual(Object.keys(saved).sort(), ['apiKeySet', 'revision']);
 
-  const human = f.hive.getAgent('human');
-  const brain = f.hive.join({ role: 'brain', project: 'chapter' });
-  const dm = f.hive.openDm(human, brain.agent.name);
+  const human = f.hive.identity.getAgent('human');
+  const brain = f.hive.identity.join({ role: 'brain', project: 'chapter' });
+  const dm = f.hive.channels.openDm(human, brain.agent.name);
   const send = await f.app.request(`/api/ui/channels/${dm.id}/messages`, { method: 'POST',
     headers: { 'content-type': 'application/json' }, body: JSON.stringify({
       body: 'private-project-request', requestId: 'diagnostic-work-fixture', routing: 'single', lockScope: 'conversation',
     }) });
   assert.equal(send.status, 200);
   const before = f.hive.adaptiveTopology.view(human, dm.id);
-  const seq = f.hive.latestSeq(dm.id);
+  const seq = f.hive.messageQueries.latestSeq(dm.id);
   const response = await f.post({ revision: saved.revision });
   assert.deepEqual(await response.json(), { revision: saved.revision, code: 'success' });
   assert.equal(calls, 1);
   assert.equal(response.headers.get('cache-control'), 'no-store');
   assert.deepEqual(f.hive.adaptiveTopology.view(human, dm.id), before);
-  assert.equal(f.hive.latestSeq(dm.id), seq);
+  assert.equal(f.hive.messageQueries.latestSeq(dm.id), seq);
 });
 
 test('Human boundary rejects agent/bot credentials, cross-site requests and arbitrary probe inputs', async t => {

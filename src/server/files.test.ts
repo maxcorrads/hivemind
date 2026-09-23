@@ -21,7 +21,7 @@ function store(t: TestContext, uploadLimits = {}) {
   const dir = temp(t);
   const hive = new Hive(path.join(dir, "hive.db"), { uploadLimits });
   t.after(() => hive.db.close());
-  return { dir, hive, human: hive.getAgent("human") };
+  return { dir, hive, human: hive.identity.getAgent("human") };
 }
 function body(bytes: Uint8Array): ReadableStream<Uint8Array> {
   return new ReadableStream({ start(c) { c.enqueue(bytes); c.close(); } });
@@ -140,31 +140,31 @@ test("uploads reject empty, interrupted and cancelled streams and remove partial
 test("identical concurrent uploads retain every attachment and survive garbage collection", async (t) => {
   // This fixture targets publication/GC races, not production admission limits.
   const { hive, human, dir } = store(t, { active: 8, perActor: 8 });
-  const atts = await Promise.all(Array.from({ length: 8 }, () => hive.createFileFromBytes(human, { name: "same", mime: "text/plain", bytes: Buffer.from("same") })));
+  const atts = await Promise.all(Array.from({ length: 8 }, () => hive.files.createFileFromBytes(human, { name: "same", mime: "text/plain", bytes: Buffer.from("same") })));
   assert.equal(new Set(atts.map((a) => a.id)).size, 8);
   assert.equal(readdirSync(filesDir(dir)).length, 1);
-  assert.deepEqual(hive.gcFiles(), { attachments: 0, blobs: 0 });
-  for (const att of atts) assert.equal(readFileSync(filePathForHash(hive.getAttachment(human, att.id).sha256, dir), "utf8"), "same");
+  assert.deepEqual(hive.files.gcFiles(), { attachments: 0, blobs: 0 });
+  for (const att of atts) assert.equal(readFileSync(filePathForHash(hive.files.getAttachment(human, att.id).sha256, dir), "utf8"), "same");
 });
 
 test("metadata failures and GC commit failures never leave committed references to missing files", async (t) => {
   const { hive, human, dir } = store(t);
   const restoreAttachments = failWrites(hive, "attachments", { message: "metadata failed", persistent: true });
-  await assert.rejects(hive.createFileFromBytes(human, { name: "x", mime: "text/plain", bytes: Buffer.from("x") }), /metadata failed/);
+  await assert.rejects(hive.files.createFileFromBytes(human, { name: "x", mime: "text/plain", bytes: Buffer.from("x") }), /metadata failed/);
   assert.equal(countRows(hive, "attachments"), 0);
-  assert.equal(hive.gcFiles().blobs, 1);
+  assert.equal(hive.files.gcFiles().blobs, 1);
   assert.deepEqual(readdirSync(filesDir(dir)), []);
   restoreAttachments();
-  const att = await hive.createFileFromBytes(human, { name: "x", mime: "text/plain", bytes: Buffer.from("x") });
-  const hash = hive.getAttachment(human, att.id).sha256;
+  const att = await hive.files.createFileFromBytes(human, { name: "x", mime: "text/plain", bytes: Buffer.from("x") });
+  const hash = hive.files.getAttachment(human, att.id).sha256;
   backdate(hive, "attachments", "created_at");
   const exec = hive.db.exec.bind(hive.db);
   const mock = t.mock.method(hive.db, "exec", (sql: string) => { if (sql === "COMMIT") throw new Error("commit failed"); exec(sql); });
-  assert.throws(() => hive.gcFiles(), /commit failed/);
+  assert.throws(() => hive.files.gcFiles(), /commit failed/);
   mock.mock.restore();
-  assert.equal(hive.getAttachment(human, att.id).sha256, hash);
+  assert.equal(hive.files.getAttachment(human, att.id).sha256, hash);
   assert.equal(existsSync(filePathForHash(hash, dir)), true);
-  assert.deepEqual(hive.gcFiles(), { attachments: 1, blobs: 1 });
+  assert.deepEqual(hive.files.gcFiles(), { attachments: 1, blobs: 1 });
 });
 
 test("sweeps preserve old active uploads, expire dead owners, and never follow symlinks", async (t) => {
@@ -230,7 +230,7 @@ test("a separate GC process cannot enter the publish-to-metadata window", { time
       return prepare(sql);
     };
     try {
-      const att = await hive.createFileFromBytes(hive.getAgent('human'), {name:'interleaving', mime:'text/plain', bytes:Buffer.from('published')});
+      const att = await hive.files.createFileFromBytes(hive.identity.getAgent('human'), {name:'interleaving', mime:'text/plain', bytes:Buffer.from('published')});
       process.send({id:att.id});
     } finally { hive.db.close(); process.disconnect(); }
   `);
@@ -251,7 +251,7 @@ test("a separate GC process cannot enter the publish-to-metadata window", { time
     try { probe.exec('BEGIN IMMEDIATE'); probe.exec('ROLLBACK'); } catch { locked = true; }
     probe.close(); process.send({locked});
     const hive = new Hive(process.argv[2]);
-    try { process.send(hive.gcFiles()); } finally { hive.db.close(); process.disconnect(); }
+    try { process.send(hive.files.gcFiles()); } finally { hive.db.close(); process.disconnect(); }
   `);
   const collector = spawn(process.execPath, ["--import", "tsx", gcScript, file], { stdio: ["ignore", "pipe", "pipe", "ipc"] });
   t.after(() => collector.kill("SIGKILL"));
@@ -266,7 +266,7 @@ test("a separate GC process cannot enter the publish-to-metadata window", { time
   assert.equal((await pubExit)[0], 0, errors);
   assert.equal((await gcExit)[0], 0, errors);
   const expected = createHash("sha256").update("published").digest("hex");
-  assert.equal(hive.getAttachment(hive.getAgent("human"), id).sha256, expected);
+  assert.equal(hive.files.getAttachment(hive.identity.getAgent("human"), id).sha256, expected);
   assert.equal(readFileSync(filePathForHash(expected, dir), "utf8"), "published");
 });
 

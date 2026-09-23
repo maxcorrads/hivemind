@@ -65,16 +65,16 @@ test("real stdio wait fails invalid authentication once instead of entering a re
 });
 
 test("real stdio tools cannot read, search, DM or mutate another project's messages", { timeout: 20_000 }, async t => {
-  const f = await fixture(t), human = f.hive.getAgent("human");
-  f.hive.createProject(human, { name: "Beta", slug: "beta" });
-  const alpha = f.hive.join({ role: "brain", project: "chapter" });
-  const beta = f.hive.join({ role: "brain", project: "beta" });
+  const f = await fixture(t), human = f.hive.identity.getAgent("human");
+  f.hive.projects.createProject(human, { name: "Beta", slug: "beta" });
+  const alpha = f.hive.identity.join({ role: "brain", project: "chapter" });
+  const beta = f.hive.identity.join({ role: "brain", project: "beta" });
   // Ordinary UUID channel avoids confusing project-local legacy 'general' aliases.
-  const channel = f.hive.createChannel(beta.agent, { name: "beta-private", type: "private" });
+  const channel = f.hive.channels.createChannel(beta.agent, { name: "beta-private", type: "private" });
   const secret = "beta-secret-stdio-fixture";
-  const root = f.hive.postMessage(beta.agent, { channel: channel.id, body: secret });
-  f.hive.postMessage(beta.agent, { channel: channel.id, threadId: root.id, body: "private thread reply" });
-  const before = f.hive.listMessages(beta.agent, channel.id, { limit: 100 }).messages;
+  const root = f.hive.messages.postMessage(beta.agent, { channel: channel.id, body: secret });
+  f.hive.messages.postMessage(beta.agent, { channel: channel.id, threadId: root.id, body: "private thread reply" });
+  const before = f.hive.messageQueries.listMessages(beta.agent, channel.id, { limit: 100 }).messages;
   const client = await f.connect(alpha.token);
   const listed = await f.call(client, "channels");
   assert.notEqual(listed.isError, true);
@@ -95,7 +95,7 @@ test("real stdio tools cannot read, search, DM or mutate another project's messa
     assert.equal(result.isError, true, name);
     assert.ok(!text(result).includes(secret), `${name} leaked content in its error`);
   }
-  const thread = f.hive.threadsInChannel(channel.id).find(thread => thread.id === root.id);
+  const thread = f.hive.messageQueries.threadsInChannel(channel.id).find(thread => thread.id === root.id);
   assert.equal(thread?.status, "open");
-  assert.deepEqual(f.hive.listMessages(beta.agent, channel.id, { limit: 100 }).messages, before);
+  assert.deepEqual(f.hive.messageQueries.listMessages(beta.agent, channel.id, { limit: 100 }).messages, before);
 });

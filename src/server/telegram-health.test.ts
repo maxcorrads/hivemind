@@ -61,15 +61,15 @@ test("an already-connected real WebSocket receives bounded health changes and re
       socket!.on("message", onMessage);
     });
     const degraded = nextHealth();
-    recordTelegramUpdateFailure(hive.db, { botKey: "bot:123", chatId: -1001, projectId: hive.findProjectBySlug("chapter")!.id },
+    recordTelegramUpdateFailure(hive.db, { botKey: "bot:123", chatId: -1001, projectId: hive.projects.findProjectBySlug("chapter")!.id },
       { update_id: 1, message: { malformed: true } }, "Malformed update", { permanent: true });
-    hive.publishTelegramHealth();
+    hive.telegramAdmin.publishHealth();
     const failed = await degraded;
     assert.equal(failed.payload.quarantined, 1);
     assert.ok(failed.payload.revision > snapshot.telegram.revision);
-    for (let i = 0; i < 20; i++) hive.publishTelegramHealth();
+    for (let i = 0; i < 20; i++) hive.telegramAdmin.publishHealth();
     const recovered = nextHealth();
-    hive.discardTelegramUpdate(hive.telegramQuarantine()[0]!.id);
+    hive.telegramAdmin.discardUpdate(hive.telegramAdmin.quarantine()[0]!.id);
     const recovery = await recovered;
     assert.equal(recovery.payload.quarantined, 0);
     assert.ok(recovery.payload.revision > failed.payload.revision);

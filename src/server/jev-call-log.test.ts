@@ -14,10 +14,10 @@ import type { JevCall, JevCallLogView } from '../shared/jev-calls.ts';
 function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-jev-calls-'));
   const hive = new Hive(path.join(dir, 'hive.db'));
-  const human = hive.getAgent('human');
-  const brains = [0, 1].map(() => hive.join({ role: 'brain', project: 'chapter' }));
-  hive.join({ role: 'worker', seniority: 'senior', project: 'chapter' });
-  const dm = hive.openDm(human, brains[0]!.agent.name);
+  const human = hive.identity.getAgent('human');
+  const brains = [0, 1].map(() => hive.identity.join({ role: 'brain', project: 'chapter' }));
+  hive.identity.join({ role: 'worker', seniority: 'senior', project: 'chapter' });
+  const dm = hive.channels.openDm(human, brains[0]!.agent.name);
   const app = createApp(hive);
   let offline = false;
   t.mock.method(globalThis, 'fetch', async (_url: unknown, init?: RequestInit) => {
@@ -74,14 +74,14 @@ test('every Jev exchange is logged with the exact payloads, its trigger and what
 
   const stored = JSON.stringify(listRows(f.hive, 'jev_calls'));
   assert.doesNotMatch(stored, /ts_secret_fixture_key/, 'The API key is never logged');
-  const other = f.hive.createProject(f.human, { slug: 'other', name: 'Other' })!;
+  const other = f.hive.projects.createProject(f.human, { slug: 'other', name: 'Other' })!;
   assert.equal((await f.get(`/projects/${other.slug}/jev-calls/${group.calls[0]!.id}`)).status, 404);
   assert.equal((await f.get<JevCallLogView>(`/projects/${other.slug}/jev-calls`)).body.requests.length, 0);
 });
 
 test('observations are logged without a brain and the history is bounded per project', async t => {
   const f = fixture(t);
-  const group = f.hive.createChannel(f.human, { name: 'council', type: 'private', project: 'chapter',
+  const group = f.hive.channels.createChannel(f.human, { name: 'council', type: 'private', project: 'chapter',
     memberNames: f.brains.map(brain => brain.agent.name) });
   await f.hive.adaptiveTopology.routeHumanRequest(f.human, { channel: group.id, body: 'Who takes this?', requestId: 'who' }, 'auto', 'none');
   const view = f.hive.adaptiveTopology.observations.jevCalls.view(group.projectId);
@@ -98,9 +98,9 @@ test('observations are logged without a brain and the history is bounded per pro
       trigger: { kind: 'observation', eventType: null } }, { sent: null, received: null, error: null }, { ...decision, routeId: `bulk-route-${i}` });
   assert.equal(countRows(f.hive, 'jev_calls', { project_id: group.projectId }), JEV_CALLS_PER_PROJECT);
   await f.hive.adaptiveTopology.stop();
-  for (const agent of f.hive.listAgents(f.human).filter(agent => agent.role !== 'human')) f.hive.setOffline(agent.id);
-  f.hive.createProject(f.human, { slug: 'other', name: 'Other' });
-  f.hive.deleteProject(f.human, 'chapter');
+  for (const agent of f.hive.identity.listAgents(f.human).filter(agent => agent.role !== 'human')) f.hive.identity.setOffline(agent.id);
+  f.hive.projects.createProject(f.human, { slug: 'other', name: 'Other' });
+  f.hive.projects.deleteProject(f.human, 'chapter');
   assert.equal(countRows(f.hive, 'jev_calls'), 0, 'Project deletion removes its Jev history');
 });
 

@@ -24,7 +24,7 @@ test('fresh real stdio and CLI sessions recover bounded handoffs without token d
     finally { try { await server.shutdown(); } finally { hive.db.close(); rmSync(dir, { recursive: true, force: true }); } }
   });
   const port = await server.ready;
-  const brain = hive.join({ role: 'brain' }), worker = hive.join({ role: 'worker', seniority: 'mid' });
+  const brain = hive.identity.join({ role: 'brain' }), worker = hive.identity.join({ role: 'worker', seniority: 'mid' });
   const task = hive.tasks.assign(brain.agent, { requestId: 'handoff-assignment', worker: worker.agent.name,
     contract: { objective: 'Repair parser', scope: ['parser'], nonGoals: [], acceptanceCriteria: ['Regression test'], dependencies: [], evidenceSeqs: [] } }).task;
   hive.tasks.event(worker.agent, task.id, { requestId: 'accept', expectedRevision: 1, action: { type: 'accept' } });

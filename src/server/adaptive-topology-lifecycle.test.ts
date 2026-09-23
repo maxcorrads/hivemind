@@ -16,10 +16,10 @@ const contract = { objective: 'Complete bounded work.', scope: [], nonGoals: [],
 function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-topology-lifecycle-'));
   const hive = new Hive(path.join(dir, 'hive.db'));
-  const human = hive.getAgent('human');
-  const brain = hive.join({ role: 'brain', project: 'chapter' });
-  const workers = [0, 1, 2].map(() => hive.join({ role: 'worker', seniority: 'senior', project: 'chapter' }));
-  const dm = hive.openDm(human, brain.agent.name), workerDm = hive.openDm(brain.agent, workers[0]!.agent.name);
+  const human = hive.identity.getAgent('human');
+  const brain = hive.identity.join({ role: 'brain', project: 'chapter' });
+  const workers = [0, 1, 2].map(() => hive.identity.join({ role: 'worker', seniority: 'senior', project: 'chapter' }));
+  const dm = hive.channels.openDm(human, brain.agent.name), workerDm = hive.channels.openDm(brain.agent, workers[0]!.agent.name);
   const app = createApp(hive);
   let target: AdaptiveTopology | 'capacity_blocked' = 'single';
   let beforeReply: (() => void | Promise<void>) | null = null;
@@ -65,13 +65,13 @@ test('monitoring state distinguishes disabled, pending, unavailable, recovered a
   const calls = f.calls(); await f.recheck(); assert.equal(f.calls(), calls);
   await f.settings(true); assert.equal(f.view().state?.monitoring, 'pending');
   f.fail(false); await f.recheck(); assert.equal(f.view().state?.monitoring, 'active');
-  f.hive.setThreadStatus(f.brain.agent, started.message.id, 'done');
+  f.hive.messages.setThreadStatus(f.brain.agent, started.message.id, 'done');
   assert.equal(f.view().state?.monitoring, 'completed');
   const completedCalls = f.calls(); await f.recheck(); assert.equal(f.calls(), completedCalls);
   assert.equal(f.hive.adaptiveTopology.forAgent(f.brain.agent), null);
   assert.equal(count(), before, 'status/evaluation audit never adds messages');
   assert.throws(() => f.hive.adaptiveTopology.setLock(f.human, f.dm.id, { scope: 'task', topology: 'single' }), /completed/);
-  f.hive.setThreadStatus(f.human, started.message.id, 'open'); await f.recheck();
+  f.hive.messages.setThreadStatus(f.human, started.message.id, 'open'); await f.recheck();
   assert.equal(f.view().state?.monitoring, 'active');
 });
 
@@ -107,7 +107,7 @@ test('lock compare-and-set rejects stale revision and stale execution while conv
   assert.equal(locked.state?.currentTopology, 'brain_multi_room');
   const unchanged = f.hive.adaptiveTopology.setLock(f.human, f.dm.id, { scope: 'conversation', topology: 'brain_multi_room' });
   assert.equal(unchanged.events.length, locked.events.length, 'unchanged lock is a no-op');
-  f.hive.setThreadStatus(f.human, original.message.id, 'done');
+  f.hive.messages.setThreadStatus(f.human, original.message.id, 'done');
   const next = await f.start(); assert.equal(next.state.lockScope, 'conversation'); assert.equal(next.state.currentTopology, 'brain_multi_room');
   assert.throws(() => f.hive.adaptiveTopology.setLock(f.human, f.dm.id,
     { scope: 'task', topology: 'single', expectedExecutionId: original.state.executionId }), /Execution changed/);
@@ -131,14 +131,14 @@ test('a completed delegation cannot be reused or reopened to bypass Single; work
   const f = fixture(t); f.choose('brain_one_worker'); const executionId = (await f.start()).state.executionId;
   const sent = await f.post(`/api/agent/channels/${f.workerDm.id}/messages`, { body: 'Implement this.', eventType: 'assignment', requestId: 'delegated', executionId }, f.brain.token);
   assert.equal(sent.status, 200); const root = (await sent.json() as { id: string }).id;
-  assert.throws(() => f.hive.setThreadStatus(f.workers[0]!.agent, root, 'done'), /delegating brain/);
+  assert.throws(() => f.hive.messages.setThreadStatus(f.workers[0]!.agent, root, 'done'), /delegating brain/);
   const continued = await f.post(`/api/agent/channels/${f.workerDm.id}/messages`, { body: 'Include this case.', threadId: root, requestId: 'same-thread' }, f.brain.token);
   assert.equal(continued.status, 200, await continued.clone().text());
   assert.equal(countRows(f.hive, 'adaptive_topology_messages'), 1);
   f.choose('single'); await f.recheck(); await f.recheck();
   const closed = await f.post(`/api/agent/threads/${root}/status`, { status: 'done' }, f.brain.token);
   assert.equal(closed.status, 200); assert.equal(f.view().state?.currentTopology, 'single');
-  assert.throws(() => f.hive.setThreadStatus(f.brain.agent, root, 'open'), /guarded assignment/);
+  assert.throws(() => f.hive.messages.setThreadStatus(f.brain.agent, root, 'open'), /guarded assignment/);
   const escaped = await f.post(`/api/agent/channels/${f.workerDm.id}/messages`, { body: 'Start more work.', threadId: root, requestId: 'closed-work', executionId }, f.brain.token);
   assert.equal(escaped.status, 409);
   f.choose('brain_one_worker');
@@ -150,7 +150,7 @@ test('manual Single drain can complete while Jev is disabled; task completion ca
   const f = fixture(t); f.choose('brain_one_worker'); const started = await f.start();
   const response = await f.post('/api/agent/tasks', { requestId: 'task', worker: f.workers[0]!.agent.name, contract, executionId: started.state.executionId }, f.brain.token);
   assert.equal(response.status, 200); const task = (await response.json() as { task: TaskSnapshot }).task;
-  assert.throws(() => f.hive.setThreadStatus(f.human, started.message.id, 'done'), /Finish delegated/);
+  assert.throws(() => f.hive.messages.setThreadStatus(f.human, started.message.id, 'done'), /Finish delegated/);
   f.hive.adaptiveTopology.setLock(f.human, f.dm.id, { scope: 'task', topology: 'single' });
   assert.equal(f.view().state?.desiredTopology, 'single'); await f.settings(false);
   const calls = f.calls();
@@ -160,15 +160,15 @@ test('manual Single drain can complete while Jev is disabled; task completion ca
   const checkpoint = await f.post(`/api/agent/channels/${f.dm.id}/messages`, { body: 'The worker declined; continuing locally.', eventType: 'progress', requestId: 'drain-checkpoint' }, f.brain.token);
   assert.equal(checkpoint.status, 200, await checkpoint.clone().text());
   assert.equal(f.view().state?.currentTopology, 'single'); assert.equal(f.calls(), calls);
-  f.hive.setThreadStatus(f.human, started.message.id, 'done'); assert.equal(f.view().state?.monitoring, 'completed');
+  f.hive.messages.setThreadStatus(f.human, started.message.id, 'done'); assert.equal(f.view().state?.monitoring, 'completed');
 });
 
 test('deleting a project prunes its routing state, locks and audit without leaving stale presence handlers', async t => {
   const f = fixture(t); await f.start('single', 'conversation'); await f.recheck();
-  for (const a of [f.brain, ...f.workers]) f.hive.setOffline(a.agent.id);
+  for (const a of [f.brain, ...f.workers]) f.hive.identity.setOffline(a.agent.id);
   await f.hive.adaptiveTopology.stop();
-  const other = f.hive.createProject(f.human, { slug: 'other', name: 'Other' }); assert.ok(other);
-  f.hive.deleteProject(f.human, 'chapter');
+  const other = f.hive.projects.createProject(f.human, { slug: 'other', name: 'Other' }); assert.ok(other);
+  f.hive.projects.deleteProject(f.human, 'chapter');
   for (const table of ['adaptive_topology_executions', 'adaptive_topology_events', 'adaptive_topology_locks', 'adaptive_topology_evaluated'])
     assert.equal(countRows(f.hive, table), 0, table);
 });
@@ -185,7 +185,7 @@ test('zero capacity is signalled without inventing a worker budget and recovers 
 
 test('Room can be selected immediately, actual room tasks are admitted, and stopped work does not keep capacity busy', async t => {
   const f = fixture(t); f.choose('brain_multi_room'); const started = await f.start();
-  const channel = f.hive.createChannel(f.brain.agent, { name: 'adaptive-room', type: 'private', memberNames: f.workers.slice(0, 2).map(w => w.agent.name) });
+  const channel = f.hive.channels.createChannel(f.brain.agent, { name: 'adaptive-room', type: 'private', memberNames: f.workers.slice(0, 2).map(w => w.agent.name) });
   const roomContract = { mode: 'ongoing', purpose: 'Complete this Human request together.', rules: ['Coordinate peer findings here.'], limits: [],
     coordinator: f.brain.agent.name, participants: f.workers.slice(0, 2).map(w => ({ name: w.agent.name, boundary: 'One independent workstream.' })),
     completion: ['All subtasks accepted.'], originTaskId: null };
@@ -199,7 +199,7 @@ test('Room can be selected immediately, actual room tasks are admitted, and stop
   const task = (await response.json() as { task: TaskSnapshot }).task;
   assert.equal(task.room?.channelId, channel.id); assert.equal(readAdaptiveCapacity(f.hive, f.view().state!).activeWorkers, 1);
   f.choose('single');
-  const instruction = f.hive.postMessage(f.human, { channel: channel.id, body: 'Stop this distributed work.' });
+  const instruction = f.hive.messages.postMessage(f.human, { channel: channel.id, body: 'Stop this distributed work.' });
   const archive = await f.post(`/api/agent/channels/${channel.id}/room`, { requestId: 'archive', expectedRevision: f.hive.rooms.peek(channel.id)!.revision,
     humanInstructionSeq: instruction.seq, action: { type: 'archive', running: 'stop', reason: 'No longer needed.' }, executionId: started.state.executionId }, f.brain.token);
   assert.equal(archive.status, 200, await archive.clone().text());

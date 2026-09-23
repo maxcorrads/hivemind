@@ -252,22 +252,22 @@ test('Hive modules share one unit of work: formerly top-level-only writes nest, 
   const file = tempFile(t), hive = new Hive(file);
   t.after(() => hive.db.close());
   assert.equal(hive.storage, Storage.for(hive.db));
-  const human = hive.getAgent('human'), worker = hive.join({ role: 'worker', seniority: 'mid' }).agent;
-  const dm = hive.openDm(human, worker.name), seen: string[] = [];
+  const human = hive.identity.getAgent('human'), worker = hive.identity.join({ role: 'worker', seniority: 'mid' }).agent;
+  const dm = hive.channels.openDm(human, worker.name), seen: string[] = [];
   const onMessage = (message: Message) => seen.push(message.body);
   hive.bus.on('message', onMessage);
   t.after(() => hive.bus.off('message', onMessage));
   const session = randomUUID();
   assert.throws(() => hive.storage.transaction(() => {
-    hive.openInboxSession(worker, session); // InboxDeliveryStore used its own BEGIN IMMEDIATE before #168
-    hive.postMessage(human, { channel: dm.id, body: 'rolled back' });
+    hive.delivery.openInboxSession(worker, session); // InboxDeliveryStore used its own BEGIN IMMEDIATE before #168
+    hive.messages.postMessage(human, { channel: dm.id, body: 'rolled back' });
     throw new Error('abort');
   }), /abort/);
   assert.deepEqual(seen, []);
   assert.equal(hasRow(hive, 'inbox_sessions', { session_id: session }), false);
   hive.storage.transaction(() => {
-    hive.openInboxSession(worker, session);
-    hive.postMessage(human, { channel: dm.id, body: 'kept' });
+    hive.delivery.openInboxSession(worker, session);
+    hive.messages.postMessage(human, { channel: dm.id, body: 'kept' });
     assert.deepEqual(seen, [], 'no event before the outer commit');
   });
   assert.deepEqual(seen, ['kept']);

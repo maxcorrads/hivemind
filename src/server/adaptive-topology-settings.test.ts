@@ -16,10 +16,10 @@ const replacementKey = 'ts_rotated_fixture_secret_same';
 function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-topology-settings-'));
   const hive = new Hive(path.join(dir, 'hive.db'));
-  const human = hive.getAgent('human');
-  const brain = hive.join({ role: 'brain', project: 'chapter' }).agent;
-  for (let index = 0; index < 2; index++) hive.join({ role: 'worker', seniority: 'senior', project: 'chapter' });
-  const dm = hive.openDm(human, brain.name);
+  const human = hive.identity.getAgent('human');
+  const brain = hive.identity.join({ role: 'brain', project: 'chapter' }).agent;
+  for (let index = 0; index < 2; index++) hive.identity.join({ role: 'worker', seniority: 'senior', project: 'chapter' });
+  const dm = hive.channels.openDm(human, brain.name);
   let target: AdaptiveTopology = 'single';
   let hook: (() => void) | undefined;
   let serial = 0;

@@ -16,7 +16,7 @@ test('real MCP clients assign/receive/accept/result/review and CLI reads the sam
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-task-clients-'));
   const hive = new Hive(path.join(dir, 'hive.db'));
   const server = startServer({ port: 0, hive, telegram: false }); const port = await server.ready;
-  const brain = hive.join({ role: 'brain' }), worker = hive.join({ role: 'worker', seniority: 'mid' });
+  const brain = hive.identity.join({ role: 'brain' }), worker = hive.identity.join({ role: 'worker', seniority: 'mid' });
   const clients: Client[] = [];
   const env = (token: string) => ({ PATH: process.env.PATH ?? '', HIVEMIND_TOKEN: token,
     HIVEMIND_HOME: path.join(dir, 'identities'), HIVEMIND_URL: `http://127.0.0.1:${port}` });
@@ -46,8 +46,8 @@ test('real MCP clients assign/receive/accept/result/review and CLI reads the sam
     const workerReview = await assignee.callTool({ name: 'task_event', arguments: { taskId, requestId: 'self-review', expectedRevision: 3,
       action: { type: 'review', decision: 'accepted', summary: 'Self review', evidenceSeqs: [] } } });
     assert.equal(workerReview.isError, true);
-    const notes = hive.createChannel(brain.agent, { name: 'private-review', type: 'private' });
-    const privateEvidence = hive.postMessage(brain.agent, { channel: notes.id, body: 'Invented private evidence' });
+    const notes = hive.channels.createChannel(brain.agent, { name: 'private-review', type: 'private' });
+    const privateEvidence = hive.messages.postMessage(brain.agent, { channel: notes.id, body: 'Invented private evidence' });
     const inaccessible = await assigner.callTool({ name: 'task_event', arguments: { taskId, requestId: 'mcp-changes', expectedRevision: 3,
       action: { type: 'review', decision: 'changes_requested', summary: 'Add a regression', evidenceSeqs: [privateEvidence.seq] } } });
     assert.equal(inaccessible.isError, true);
@@ -72,7 +72,7 @@ test('real MCP clients assign/receive/accept/result/review and CLI reads the sam
       action: { type: 'review', decision: 'accepted', summary: 'Evidence checked', evidenceSeqs: [] } });
     const cli = await promisify(execFile)(process.execPath, [...args, 'task', 'get', '--id', taskId], { cwd: dir, env: env(brain.token), timeout: 10000 });
     assert.equal(JSON.parse(cli.stdout).task.state, 'accepted_complete');
-    assert.equal(hive.listMessages(brain.agent, assigned.task.channelId, { threadId: taskId }).messages.filter(m => m.taskEvent).length, 6);
+    assert.equal(hive.messageQueries.listMessages(brain.agent, assigned.task.channelId, { threadId: taskId }).messages.filter(m => m.taskEvent).length, 6);
   } finally {
     for (const client of clients) await client.close();
     server.shutdown(); server.server.closeAllConnections(); hive.db.close(); rmSync(dir, { recursive: true, force: true });

@@ -14,9 +14,9 @@ test('real MCP brain requests a Human decision and Telegram-root reply resolves 
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
   const dir = mkdtempSync(path.join(os.tmpdir(), 'decision-mcp-')), hive = new Hive(path.join(dir, 'hive.db'));
   const server = startServer({ hive, port: 0, telegram: false });
-  const brain = hive.join({ role: 'brain' }), worker = hive.join({ role: 'worker', seniority: 'mid' });
-  const reviewer = hive.join({ role: 'worker', seniority: 'senior' });
-  const channel = hive.createChannel(brain.agent, { name: 'decision-mcp', type: 'private', memberNames: [worker.agent.name, reviewer.agent.name] });
+  const brain = hive.identity.join({ role: 'brain' }), worker = hive.identity.join({ role: 'worker', seniority: 'mid' });
+  const reviewer = hive.identity.join({ role: 'worker', seniority: 'senior' });
+  const channel = hive.channels.createChannel(brain.agent, { name: 'decision-mcp', type: 'private', memberNames: [worker.agent.name, reviewer.agent.name] });
   const task = hive.tasks.assign(brain.agent, { requestId: 'task', worker: worker.agent.name, channel: channel.id,
     contract: { objective: 'Choose parser policy', scope: ['parser'], nonGoals: [], acceptanceCriteria: ['Decision'], dependencies: [], evidenceSeqs: [] } }).task;
   const port = await server.ready, clients: Client[] = [], transports: StdioClientTransport[] = [];
@@ -42,7 +42,7 @@ test('real MCP brain requests a Human decision and Telegram-root reply resolves 
     assert.equal(made.decision.state, 'awaiting_input');
     const denied = await w.callTool({ name: 'request_human_decision', arguments: input }); assert.equal(denied.isError, true);
     const before = await call(b, 'get_task_decisions', { taskId: task.id }); assert.equal(before.decisions[0].id, made.decision.id);
-    hive.postMessage(hive.getAgent('human'), { channel: channel.id, threadId: made.decision.id,
+    hive.messages.postMessage(hive.identity.getAgent('human'), { channel: channel.id, threadId: made.decision.id,
       body: 'Telegram answer: compatible.', source: 'telegram' });
     const answered = await call(b, 'get_decision', { decisionId: made.decision.id });
     assert.equal(answered.decision.state, 'answered'); assert.equal(answered.decision.answer.source, 'telegram');

@@ -37,10 +37,10 @@ function payload(topology: AdaptiveTopology, confidence = 0.95, workers = 2) {
 function fixture(t: TestContext) {
   const home = mkdtempSync(path.join(os.tmpdir(), 'hive-topology-regression-'));
   const hive = new Hive(path.join(home, 'hive.db'));
-  const human = hive.getAgent('human');
-  const brain = hive.join({ role: 'brain', project: 'chapter' });
-  const workers = [0, 1].map(() => hive.join({ role: 'worker', seniority: 'senior', project: 'chapter' }));
-  const dm = hive.openDm(human, brain.agent.name);
+  const human = hive.identity.getAgent('human');
+  const brain = hive.identity.join({ role: 'brain', project: 'chapter' });
+  const workers = [0, 1].map(() => hive.identity.join({ role: 'worker', seniority: 'senior', project: 'chapter' }));
+  const dm = hive.channels.openDm(human, brain.agent.name);
   const app = createApp(hive);
   let next = payload('single');
   let unavailable = false;

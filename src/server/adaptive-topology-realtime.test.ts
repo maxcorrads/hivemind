@@ -15,10 +15,10 @@ import { countRows } from './test-fixtures.ts';
 test('real authenticated Human websocket receives every routing check while agent context gets only applied policy', { timeout: 15000 }, async t => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-routing-realtime-'));
   const hive = new Hive(path.join(dir, 'hive.db'));
-  const human = hive.getAgent('human');
-  const brain = hive.join({ role: 'brain', project: 'chapter' });
-  for (let i = 0; i < 2; i++) hive.join({ role: 'worker', seniority: 'senior', project: 'chapter' });
-  const dm = hive.openDm(human, brain.agent.name);
+  const human = hive.identity.getAgent('human');
+  const brain = hive.identity.join({ role: 'brain', project: 'chapter' });
+  for (let i = 0; i < 2; i++) hive.identity.join({ role: 'worker', seniority: 'senior', project: 'chapter' });
+  const dm = hive.channels.openDm(human, brain.agent.name);
   const server = startServer({ hive, port: 0, telegram: false });
   let socket: WebSocket | undefined;
   t.after(async () => {

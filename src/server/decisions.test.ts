@@ -10,9 +10,9 @@ function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-decisions-')), file = path.join(dir, 'hive.db');
   let hive = new Hive(file), serial = 0;
   t.after(() => { hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
-  const human = hive.getAgent('human'), brain = hive.join({ role: 'brain' }), otherBrain = hive.join({ role: 'brain' });
-  const a = hive.join({ role: 'worker', seniority: 'mid' }), b = hive.join({ role: 'worker', seniority: 'senior' });
-  const room = hive.createChannel(brain.agent, { name: 'decision-fixture', type: 'private',
+  const human = hive.identity.getAgent('human'), brain = hive.identity.join({ role: 'brain' }), otherBrain = hive.identity.join({ role: 'brain' });
+  const a = hive.identity.join({ role: 'worker', seniority: 'mid' }), b = hive.identity.join({ role: 'worker', seniority: 'senior' });
+  const room = hive.channels.createChannel(brain.agent, { name: 'decision-fixture', type: 'private',
     memberNames: [a.agent.name, b.agent.name, otherBrain.agent.name] });
   const task = hive.tasks.assign(brain.agent, { requestId: 'task', worker: a.agent.name, channel: room.id,
     contract: { objective: 'Choose a parser boundary', scope: ['src/parser'], nonGoals: [],
@@ -45,9 +45,9 @@ test('schema rejects one-option menus, forged recommendations and inaccessible w
   const f = fixture(t);
   assert.throws(() => f.hive.decisions.create(f.brain.agent, f.input({ options: [{ id: 'only', label: 'Only', impact: 'No comparison' }] })), status(400));
   assert.throws(() => f.hive.decisions.create(f.brain.agent, f.input({ recommendation: { optionId: 'missing', rationale: 'Nope', uncertainty: 'unknown' } })), status(400));
-  const outsider = f.hive.join({ role: 'worker', seniority: 'mid' });
-  const privateNotes = f.hive.createChannel(f.otherBrain.agent, { name: 'private-decision-evidence', type: 'private' });
-  const secret = f.hive.postMessage(f.otherBrain.agent, { channel: privateNotes.id, body: 'secret evidence' });
+  const outsider = f.hive.identity.join({ role: 'worker', seniority: 'mid' });
+  const privateNotes = f.hive.channels.createChannel(f.otherBrain.agent, { name: 'private-decision-evidence', type: 'private' });
+  const secret = f.hive.messages.postMessage(f.otherBrain.agent, { channel: privateNotes.id, body: 'secret evidence' });
   assert.throws(() => f.hive.decisions.create(f.brain.agent, f.input({ affectedWorkers: [outsider.agent.name] })), /task-channel access/);
   assert.throws(() => f.hive.decisions.create(f.brain.agent, f.input({ evidenceSeqs: [secret.seq] })), /Cannot read/);
 });
@@ -62,17 +62,17 @@ test('Human UI answer is applied once, routes to requester and affected workers,
   assert.deepEqual(f.hive.decisions.answer(f.human, made.decision.id,
     { requestId: 'answer-once', expectedRevision: made.decision.revision, body: 'Choose compatible mode; preserve the legacy payload for this revision.' }).message?.id, answerMessage.id);
   assert.ok(answer.decision.delivery.every(item => item.state === 'pending'));
-  const session = f.hive.openInboxSession(f.a.agent, crypto.randomUUID());
-  const offered = await f.hive.wait(f.a.agent, 1, undefined, { sessionId: session, compact: true });
+  const session = f.hive.delivery.openInboxSession(f.a.agent, crypto.randomUUID());
+  const offered = await f.hive.delivery.wait(f.a.agent, 1, undefined, { sessionId: session, compact: true });
   assert.ok(offered.delivery?.messageSeqs.includes(answerMessage.seq));
   assert.equal(f.hive.decisions.get(f.human, made.decision.id).delivery.find(item => item.agentId === f.a.agent.id)?.state, 'offered');
-  f.hive.acknowledgeInbox(f.a.agent, session, offered.delivery!.id);
+  f.hive.delivery.acknowledgeInbox(f.a.agent, session, offered.delivery!.id);
   assert.equal(f.hive.decisions.get(f.human, made.decision.id).delivery.find(item => item.agentId === f.a.agent.id)?.state, 'acknowledged');
 });
 
 test('a Telegram-origin Human reply to the decision root answers the same request', t => {
   const f = fixture(t), made = f.hive.decisions.create(f.brain.agent, f.input());
-  const message = f.hive.postMessage(f.human, { channel: made.decision.channelId, threadId: made.decision.id,
+  const message = f.hive.messages.postMessage(f.human, { channel: made.decision.channelId, threadId: made.decision.id,
     body: 'Telegram answer: strict mode for this task revision.', source: 'telegram' });
   const decision = f.hive.decisions.get(f.human, made.decision.id);
   assert.equal(decision.state, 'answered'); assert.equal(decision.answer?.messageId, message.id);
@@ -88,7 +88,7 @@ test('task revisions and deadlines fail closed without auto-applying a recommend
   assert.equal(stale.state, 'superseded'); assert.equal(stale.staleReason, 'task_changed'); assert.equal(stale.answer, null);
   assert.throws(() => f.hive.decisions.answer(f.human, made.decision.id,
     { requestId: 'stale-answer', expectedRevision: stale.revision, body: 'Do not apply' }), status(409));
-  f.hive.postMessage(f.human, { channel: stale.channelId, threadId: stale.id, body: 'Free-text stale follow-up remains history.' });
+  f.hive.messages.postMessage(f.human, { channel: stale.channelId, threadId: stale.id, body: 'Free-text stale follow-up remains history.' });
   assert.equal(f.hive.decisions.get(f.human, stale.id).answer, null);
 
   const current = f.hive.tasks.get(f.brain.agent, f.task.id);

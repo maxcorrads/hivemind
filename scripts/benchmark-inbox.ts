@@ -20,11 +20,11 @@ const hive = new Hive(path.join(dir, "hive.db"));
 const server = createServer(getRequestListener(createApp(hive).fetch));
 const delay = monitorEventLoopDelay({ resolution: 10 });
 try {
-  const sender = hive.join({ role: "worker", seniority: "mid" });
+  const sender = hive.identity.join({ role: "worker", seniority: "mid" });
   const readers = Array.from({ length: agentCount }, () => {
-    const joined = hive.join({ role: "brain" });
-    return { ...joined, channel: hive.openDm(joined.agent, sender.agent.name).id,
-      sessionId: hive.openInboxSession(joined.agent, crypto.randomUUID()), expected: [] as number[] };
+    const joined = hive.identity.join({ role: "brain" });
+    return { ...joined, channel: hive.channels.openDm(joined.agent, sender.agent.name).id,
+      sessionId: hive.delivery.openInboxSession(joined.agent, crypto.randomUUID()), expected: [] as number[] };
   });
   hive.db.exec("UPDATE agents SET inbox_cursor = (SELECT MAX(seq) FROM messages)");
   const insert = hive.db.prepare(`INSERT INTO messages(id, channel_id, author_id, body, created_at)

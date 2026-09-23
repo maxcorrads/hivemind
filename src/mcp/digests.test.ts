@@ -19,10 +19,10 @@ test("real MCP and CLI send typed events, reply by root ID and expand the same d
   const hive = new Hive(path.join(dir, "hive.db"));
   const server = startServer({ port: 0, hive, telegram: false });
   const port = await server.ready;
-  const brain = hive.join({ role: "brain" });
-  const worker = hive.join({ role: "worker", seniority: "mid" });
-  const dm = hive.openDm(brain.agent, worker.agent.name);
-  const room = hive.createChannel(brain.agent, { name: "other-task", type: "private", memberNames: [worker.agent.name] });
+  const brain = hive.identity.join({ role: "brain" });
+  const worker = hive.identity.join({ role: "worker", seniority: "mid" });
+  const dm = hive.channels.openDm(brain.agent, worker.agent.name);
+  const room = hive.channels.createChannel(brain.agent, { name: "other-task", type: "private", memberNames: [worker.agent.name] });
   markInboxRead(hive);
   const clients: Array<{ client: Client; transport: StdioClientTransport }> = [];
   const env = (token: string) => ({ PATH: process.env.PATH ?? "", HIVEMIND_TOKEN: token,
@@ -64,7 +64,7 @@ test("real MCP and CLI send typed events, reply by root ID and expand the same d
     const next = await call<DigestExpansionResult>(reader, "expand_digest", { ...digest.expand!, afterSeq: page.nextAfterSeq });
     assert.deepEqual([...page.messages, ...next.messages].map(m => m.id), expected);
     const reply = await call<{ seq: number }>(reader, "send", { channel: digest.channelId, threadId: digest.rootId, body: "Answer" });
-    assert.equal(hive.getVisibleMessage(brain.agent, reply.seq).threadId, first.id);
+    assert.equal(hive.messageQueries.getVisibleMessage(brain.agent, reply.seq).threadId, first.id);
 
     const cliPage = JSON.parse(await cli(brain.token, ["expand", "--channel", digest.channelId, "--ids", expected.join(",")])) as DigestExpansionResult;
     assert.deepEqual(cliPage, page);
@@ -72,7 +72,7 @@ test("real MCP and CLI send typed events, reply by root ID and expand the same d
     assert.deepEqual(cliTail, next);
     const sent = await cli(worker.token, ["send", "--channel", dm.id, "--thread", first.id, "--event-type", "question", "--body", "CLI question"]);
     const match = /seq (\d+)/.exec(sent)!;
-    assert.equal(hive.getVisibleMessage(brain.agent, Number(match[1])).eventType, "question");
+    assert.equal(hive.messageQueries.getVisibleMessage(brain.agent, Number(match[1])).eventType, "question");
     const acked = hive.inbox.status(brain.agent.id);
     const invalid = await reader.callTool({ name: "expand_digest", arguments: { channel: dm.id, messageIds: ["invalid"] } });
     assert.equal(invalid.isError, true);

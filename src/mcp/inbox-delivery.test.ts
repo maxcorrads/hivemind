@@ -30,13 +30,13 @@ test("real stdio MCP never auto-ACKs; replacement sessions replay and reject sta
     return JSON.parse((result.content as Array<{ type: string; text: string }>).find(x => x.type === "text")!.text) as T;
   };
   try {
-    const registered = hive.join({ role: "brain", project: "chapter" });
+    const registered = hive.identity.join({ role: "brain", project: "chapter" });
     const first = await connect(registered.token);
     assert.ok((await first.listTools()).tools.some(t => t.name === "ack_delivery"));
     const joined = await call<{ name: string }>(first, "join", { role: "brain", project: "chapter" });
-    const brain = hive.getAgentByName(joined.name)!;
-    const human = hive.getAgent("human"); const dm = hive.openDm(human, brain.name);
-    const message = hive.postMessage(human, { channel: dm.id, body: "An invented assignment; no external effects" });
+    const brain = hive.identity.getAgentByName(joined.name)!;
+    const human = hive.identity.getAgent("human"); const dm = hive.channels.openDm(human, brain.name);
+    const message = hive.messages.postMessage(human, { channel: dm.id, body: "An invented assignment; no external effects" });
     const one = await call<WaitResult>(first, "wait");
     assert.ok(one.delivery); assert.ok(one.delivery.messageSeqs.includes(message.seq));
     assert.match(one.next, /ack_delivery/);
@@ -59,7 +59,7 @@ test("real stdio MCP never auto-ACKs; replacement sessions replay and reject sta
     assert.equal(hive.inbox.status(brain.id).acknowledgedMessages, 1);
     assert.equal((await call<{ duplicate: boolean }>(replacement, "ack_delivery", { deliveryId: replay.delivery!.id })).duplicate, true);
 
-    hive.postMessage(human, { channel: dm.id, body: "Lost between receipt at MCP and confirmation by the host" });
+    hive.messages.postMessage(human, { channel: dm.id, body: "Lost between receipt at MCP and confirmation by the host" });
     const unconfirmed = await call<WaitResult>(replacement, "wait");
     await replacement.close();
     const afterCrash = await connect(registered.token);
