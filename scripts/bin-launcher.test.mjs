@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { childEnv } from "../src/test-support/child-process.ts";
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -26,7 +27,7 @@ function layout(t, { source, compiled }) {
   }
   return (env = {}) => {
     const { HIVEMIND_FROM_DIST: _ignored, ...base } = process.env;
-    const result = spawnSync(process.execPath, [path.join(dir, "bin/hivemind.mjs"), "doctor", "--x"], { encoding: "utf8", env: { ...base, ...env } });
+    const result = spawnSync(process.execPath, [path.join(dir, "bin/hivemind.mjs"), "doctor", "--x"], { encoding: "utf8", env: childEnv({ ...base, ...env }) });
     assert.equal(result.status, 0, result.stderr);
     return result.stdout.trim();
   };

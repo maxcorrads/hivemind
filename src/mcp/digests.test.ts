@@ -12,6 +12,7 @@ import { Hive } from "../server/hive.ts";
 import { startServer } from "../server/serve.ts";
 import { markInboxRead } from "../server/test-fixtures.ts";
 import { WAIT_MAX_BYTES, type DigestExpansionResult, type WaitResult } from "../shared/types.ts";
+import { childEnv } from "../test-support/child-process.ts";
 
 test("real MCP and CLI send typed events, reply by root ID and expand the same digest after ACK", { timeout: 25_000 }, async () => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -25,7 +26,7 @@ test("real MCP and CLI send typed events, reply by root ID and expand the same d
   const room = hive.createChannel(brain.agent, { name: "other-task", type: "private", memberNames: [worker.agent.name] });
   markInboxRead(hive);
   const clients: Array<{ client: Client; transport: StdioClientTransport }> = [];
-  const env = (token: string) => ({ PATH: process.env.PATH ?? "", HIVEMIND_TOKEN: token,
+  const env = (token: string) => childEnv({ PATH: process.env.PATH ?? "", HIVEMIND_TOKEN: token,
     HIVEMIND_HOME: path.join(dir, "identities"), HIVEMIND_URL: `http://127.0.0.1:${port}` });
   const args = ["--import", path.join(root, "node_modules/tsx/dist/loader.mjs"), path.join(root, "src/cli.ts")];
   const connect = async (token: string) => {

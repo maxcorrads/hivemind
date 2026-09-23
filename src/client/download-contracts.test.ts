@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { childEnv } from "../test-support/child-process.ts";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -46,7 +47,7 @@ for (const outcome of ["success", "interrupted", "length-mismatch", "cancelled",
 test("download cleanup preserves active owners and reaps crash leftovers", async (t) => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-download-reap-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const child = spawnSync(process.execPath, ["-e", ""]);
+  const child = spawnSync(process.execPath, ["-e", ""], { env: childEnv() });
   assert.equal(child.status, 0);
   const dead = path.join(dir, `.download-${child.pid}-aaaa-bbbb`);
   const live = path.join(dir, `.download-${process.pid}-aaaa-bbbb`);

@@ -9,6 +9,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { Hive } from "../server/hive.ts";
 import { startServer } from "../server/serve.ts";
 import type { WaitResult } from "../shared/types.ts";
+import { childEnv } from "../test-support/child-process.ts";
 
 test("real stdio MCP never auto-ACKs; replacement sessions replay and reject stale confirmations", { timeout: 20_000 }, async () => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -21,7 +22,7 @@ test("real stdio MCP never auto-ACKs; replacement sessions replay and reject sta
     const client = new Client({ name: "receipt-fixture", version: "1" });
     const transport = new StdioClientTransport({ command: process.execPath,
       args: ["--import", path.join(root, "node_modules/tsx/dist/loader.mjs"), path.join(root, "src/cli.ts"), "mcp"], cwd: dir,
-      env: { PATH: process.env.PATH ?? "", HIVEMIND_HOME: path.join(dir, "identities"), HIVEMIND_URL: `http://127.0.0.1:${port}`, HIVEMIND_TOKEN: token }, stderr: "pipe" });
+      env: childEnv({ PATH: process.env.PATH ?? "", HIVEMIND_HOME: path.join(dir, "identities"), HIVEMIND_URL: `http://127.0.0.1:${port}`, HIVEMIND_TOKEN: token }), stderr: "pipe" });
     clients.push({ client, transport }); await client.connect(transport); return client;
   };
   const call = async <T>(client: Client, name: string, args: Record<string, unknown> = {}) => {

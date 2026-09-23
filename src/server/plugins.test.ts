@@ -15,6 +15,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { childEnv } from "../test-support/child-process.ts";
 import {
   registerPlugin,
   listPlugins,
@@ -191,7 +192,7 @@ test("launch instructions apply to brains, survive quoting, and MCP is bound to 
   const shells = process.platform === "darwin" ? ["/bin/bash", "/bin/zsh"] : ["/bin/bash"];
   for (const shell of shells) {
     const result = spawnSync(shell, [script, process.execPath], {
-      encoding: "utf8", cwd: f.dir, timeout: 5_000, maxBuffer: 1024 * 1024,
+      encoding: "utf8", cwd: f.dir, timeout: 5_000, maxBuffer: 1024 * 1024, env: childEnv(),
     });
     assert.equal(result.error, undefined);
     for (const canary of ["substitution-ran", "backtick-ran", "separator-ran"]) {
@@ -1159,7 +1160,7 @@ test("CLI registers and lists only installed local code; binding uses an explici
         "--home",
         f.home,
       ],
-      { encoding: "utf8" },
+      { encoding: "utf8", env: childEnv() },
     );
   assert.equal(invoke(["add", f.manifest]).status, 0);
   assert.equal(JSON.parse(invoke(["list"]).stdout)[0].id, "invented-source");
@@ -1234,7 +1235,7 @@ test("a server update and another CLI process cannot mutate the catalog or profi
         "--home",
         f.home,
       ],
-      { encoding: "utf8" },
+      { encoding: "utf8", env: childEnv() },
     );
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /plugins.lock/);
@@ -1284,7 +1285,7 @@ test("CLI binds an existing profile without copying or erasing retained state", 
         "--home",
         f.home,
       ],
-      { encoding: "utf8" },
+      { encoding: "utf8", env: childEnv() },
     );
   const result = invoke([
     "bind",

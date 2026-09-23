@@ -12,6 +12,7 @@ import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { Hive } from '../server/hive.ts';
 import { startServer } from '../server/serve.ts';
 import type { TaskSnapshot } from '../shared/tasks.ts';
+import { childEnv } from '../test-support/child-process.ts';
 
 test('real MCP claim retries and CLI release share one versioned advisory ledger', { timeout: 20000 }, async t => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -25,7 +26,7 @@ test('real MCP claim retries and CLI release share one versioned advisory ledger
     const brain = hive.join({ role: 'brain' }), worker = hive.join({ role: 'worker', seniority: 'mid' });
     const task = hive.tasks.assign(brain.agent, { requestId: 'fixture', worker: worker.agent.name,
       contract: { objective: 'Check advisory fixture', scope: [], nonGoals: [], acceptanceCriteria: ['Inspected'], dependencies: [], evidenceSeqs: [] } }).task;
-    const env = { PATH: process.env.PATH ?? '', HIVEMIND_TOKEN: brain.token, HIVEMIND_HOME: path.join(dir, 'client'), HIVEMIND_URL: `http://127.0.0.1:${port}` };
+    const env = childEnv({ PATH: process.env.PATH ?? '', HIVEMIND_TOKEN: brain.token, HIVEMIND_HOME: path.join(dir, 'client'), HIVEMIND_URL: `http://127.0.0.1:${port}` });
     const args = ['--import', path.join(root, 'node_modules/tsx/dist/loader.mjs'), path.join(root, 'src/cli.ts')];
     transport = new StdioClientTransport({ command: process.execPath, args: [...args, 'mcp'], env, cwd: dir, stderr: 'pipe' });
     await client.connect(transport, { signal: t.signal, timeout: 5000 });

@@ -10,6 +10,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { Hive } from '../server/hive.ts';
 import { startServer } from '../server/serve.ts';
+import { childEnv } from '../test-support/child-process.ts';
 
 test('real stdio MCP preserves HTTP task/room payloads across client reconnect and enforces project/actor scope', { timeout: 20000 }, async t => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -39,7 +40,7 @@ test('real stdio MCP preserves HTTP task/room payloads across client reconnect a
     const client = new Client({ name: 'coordination-wire-fixture', version: '1' }); clients.push(client);
     await client.connect(new StdioClientTransport({ command: process.execPath,
       args: ['--import', path.join(root, 'node_modules/tsx/dist/loader.mjs'), path.join(root, 'src/cli.ts'), 'mcp'], cwd: dir,
-      env: { PATH: process.env.PATH ?? '', HIVEMIND_TOKEN: token, HIVEMIND_HOME: path.join(dir, 'identities'), HIVEMIND_URL: url }, stderr: 'pipe' }));
+      env: childEnv({ PATH: process.env.PATH ?? '', HIVEMIND_TOKEN: token, HIVEMIND_HOME: path.join(dir, 'identities'), HIVEMIND_URL: url }), stderr: 'pipe' }));
     return client;
   };
   const call = async (client: Client, name: string, args: Record<string, unknown>) => {
