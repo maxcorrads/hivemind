@@ -12,7 +12,7 @@ import { advanceTopologyPolicy, initialTopologyPolicy, minimumTopologyWorkers, t
 import { ADAPTIVE_TOPOLOGY_CONTRACT_VERSION,
   type TopologyCapacitySnapshot, type TopologyEvaluationSnapshot } from './adaptive-topology-provider.ts';
 import { observeTopologyEvaluation } from './adaptive-evidence-observer.ts';
-import { initAdaptiveCommitments, readAdaptiveCapacity } from './adaptive-topology-capacity.ts';
+import { initAdaptiveCommitments, openDelegations, readAdaptiveCapacity } from './adaptive-topology-capacity.ts';
 import { coordinationEventId } from './adaptive-topology-admission.ts';
 import { immediateTransaction } from './transaction.ts';
 import { jevCallLog } from './jev-call-log.ts';
@@ -35,6 +35,12 @@ type StoredExecution = AdaptiveExecutionState & {
   recentEvents: AdaptiveCoordinationEvent[]; confirmationHighCount?: number; revision?: number;
   /** The Human message classified as the request; rootMessageId is its thread root. */
   requestMessageId?: string;
+  /**
+   * Set when a newer Human request replaced this execution while it still had delegated work: the successor's
+   * executionId, or 'human_message' for an unrouted request. It keeps draining until that work ends.
+   * Mirrors the `current=0` column, which is the authority for lookups.
+   */
+  supersededBy?: string | null;
 };
 export type RoutedHumanMessage = {
   message: Message; routingMessage: Message | undefined; routingMessages: Message[];
@@ -110,21 +116,43 @@ export function topologyDirective(state: Pick<AdaptiveExecutionState,
     state.lockScope === 'none' ? '' : `Human lock: ${state.lockScope}.`].filter(Boolean).join('\n');
 }
 
+// A (channel, brain) has at most one current execution; older ones stay as non-current rows while they drain.
+const EXECUTIONS_SCHEMA = `CREATE TABLE adaptive_topology_executions (
+  execution_id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, brain_id TEXT NOT NULL, project_id TEXT NOT NULL,
+  root_message_id TEXT NOT NULL, snapshot TEXT NOT NULL, current INTEGER NOT NULL DEFAULT 1)`;
+const parseExecution = (row: Record<string, unknown>) => JSON.parse(String(row.snapshot)) as StoredExecution;
+
 export class AdaptiveTopologyRuntime {
   private serial = new Map<string, Promise<void>>();
   private stopped = false;
   private abort = new AbortController();
-  // A new Human request to the same brain in the same channel replaces its previous execution,
-  // and a legacy (unrouted) request must not resurrect an older execution on re-enable.
+  /** Hive calls this after every committed message (the name predates worker reports). */
   humanMessageCommitted(message: Message): void {
-    if (this.stopped || message.authorRole !== 'human' || message.kind !== 'chat' || message.threadId) return;
+    if (this.stopped) return;
+    // Any activity may be the end of a draining execution's work (e.g. a worker declining its task).
+    if (message.authorRole === 'worker' && message.kind === 'chat') this.workerReported(message);
+    this.settleDrained(this.hive.getChannel(message.channelId).projectId);
+    if (message.kind !== 'chat') return;
+    if (message.authorRole !== 'human' || message.threadId) return;
+    // A new Human request to the same brain in the same channel replaces its previous execution,
+    // and a legacy (unrouted) request must not resurrect an older execution on re-enable.
     const channel = this.hive.getChannel(message.channelId);
     for (const brain of this.requestOwners(channel, message.body).owners) {
       const state = this.row(channel.id, brain.id);
       if (!state || state.completedAt || state.rootMessageId === message.id) continue;
       if (message.seq <= this.hive.getMessageById(state.rootMessageId).seq) continue;
-      this.complete(state, 'superseded_by_human_request');
+      const item = immediateTransaction(this.hive.db, () => this.retire(state, null));
+      if (item) this.publish(state, item);
     }
+  }
+  /**
+   * A free-form delegation also ends when its worker reports the outcome in the delegation thread: a decision, or an
+   * acknowledgement carrying evidence. A bare acknowledgement only confirms receipt. There is no idle timeout.
+   */
+  private workerReported(message: Message) {
+    const finished = message.eventType === 'decision' || (message.eventType === 'acknowledgement' && Boolean(message.attachments?.length));
+    if (!finished || !message.threadId) return;
+    this.hive.db.prepare('DELETE FROM adaptive_topology_messages WHERE root_id=? AND worker_id=?').run(message.threadId, message.authorId);
   }
   /** Which brains own a Human request: room coordinator, then mentioned brains, then the only brain. */
   requestOwners(channel: Channel, body: string): { brains: Agent[]; owners: Agent[] } {
@@ -140,9 +168,8 @@ export class AdaptiveTopologyRuntime {
   }
   constructor(private hive: Hive) {
     immediateTransaction(hive.db, () => this.migrateExecutionKeys());
-    hive.db.exec(`CREATE TABLE IF NOT EXISTS adaptive_topology_executions (
-      channel_id TEXT NOT NULL, brain_id TEXT NOT NULL, execution_id TEXT NOT NULL UNIQUE, project_id TEXT NOT NULL,
-      root_message_id TEXT NOT NULL, snapshot TEXT NOT NULL, PRIMARY KEY(channel_id,brain_id));
+    hive.db.exec(`${EXECUTIONS_SCHEMA.replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS')};
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_adaptive_topology_current ON adaptive_topology_executions(channel_id,brain_id) WHERE current=1;
       CREATE INDEX IF NOT EXISTS idx_adaptive_topology_brain ON adaptive_topology_executions(brain_id,project_id);
       CREATE INDEX IF NOT EXISTS idx_adaptive_topology_root ON adaptive_topology_executions(root_message_id);
       CREATE TABLE IF NOT EXISTS adaptive_topology_events (
@@ -165,22 +192,24 @@ export class AdaptiveTopologyRuntime {
       DELETE FROM adaptive_topology_executions WHERE channel_id=OLD.id;
     END;`);
   }
-  /** Phase 2 keyed executions and locks by channel alone; a brain now owns one per channel. */
+  /**
+   * Phase 2 keyed executions and locks by channel alone, phase 3 executions by (channel, brain). Executions are now
+   * keyed by execution_id so a replaced request can drain beside its successor; every migrated row stays current.
+   */
   private migrateExecutionKeys() {
     const keys = (table: string) => this.hive.db.prepare(`PRAGMA table_info(${table})`).all()
       .filter(column => Number(column.pk) > 0).map(column => String(column.name));
     const executions = keys('adaptive_topology_executions'), locks = keys('adaptive_topology_locks');
     const legacy = (columns: string[]) => columns.length === 1 && columns[0] === 'channel_id';
-    if (!legacy(executions) && !legacy(locks)) return;
+    const rekey = executions.length > 0 && !(executions.length === 1 && executions[0] === 'execution_id');
+    if (!rekey && !legacy(locks)) return;
     // The deletion trigger names these tables; recreate it after the tables are rebuilt.
     this.hive.db.exec('DROP TRIGGER IF EXISTS adaptive_channel_deleted');
-    if (legacy(executions)) this.hive.db.exec(`ALTER TABLE adaptive_topology_executions RENAME TO adaptive_topology_executions_v1;
-      CREATE TABLE adaptive_topology_executions (
-        channel_id TEXT NOT NULL, brain_id TEXT NOT NULL, execution_id TEXT NOT NULL UNIQUE, project_id TEXT NOT NULL,
-        root_message_id TEXT NOT NULL, snapshot TEXT NOT NULL, PRIMARY KEY(channel_id,brain_id));
-      INSERT INTO adaptive_topology_executions(channel_id,brain_id,execution_id,project_id,root_message_id,snapshot)
-        SELECT channel_id,brain_id,execution_id,project_id,root_message_id,snapshot FROM adaptive_topology_executions_v1;
-      DROP TABLE adaptive_topology_executions_v1;`);
+    if (rekey) this.hive.db.exec(`ALTER TABLE adaptive_topology_executions RENAME TO adaptive_topology_executions_old;
+      ${EXECUTIONS_SCHEMA};
+      INSERT INTO adaptive_topology_executions(execution_id,channel_id,brain_id,project_id,root_message_id,snapshot,current)
+        SELECT execution_id,channel_id,brain_id,project_id,root_message_id,snapshot,1 FROM adaptive_topology_executions_old ORDER BY rowid;
+      DROP TABLE adaptive_topology_executions_old;`);
     if (legacy(locks)) this.hive.db.exec(`ALTER TABLE adaptive_topology_locks RENAME TO adaptive_topology_locks_v1;
       CREATE TABLE adaptive_topology_locks (channel_id TEXT NOT NULL, brain_id TEXT NOT NULL,
         topology TEXT NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY(channel_id,brain_id));
@@ -208,29 +237,68 @@ export class AdaptiveTopologyRuntime {
     return { ...publicState(state), monitoring: state.completedAt ? 'completed' : !enabled ? 'disabled'
       : state.providerAvailable ? 'active' : state.recommendation?.providerStatus === 'unavailable' ? 'unavailable' : 'pending' };
   }
+  /** The brain's current execution in this channel; draining predecessors are reached by id, task or thread. */
   private row(channel: string, brain: string): StoredExecution | null {
-    const row = this.hive.db.prepare('SELECT snapshot FROM adaptive_topology_executions WHERE channel_id=? AND brain_id=?').get(channel, brain);
-    return row ? JSON.parse(String(row.snapshot)) as StoredExecution : null;
+    const row = this.hive.db.prepare('SELECT snapshot FROM adaptive_topology_executions WHERE channel_id=? AND brain_id=? AND current=1').get(channel, brain);
+    return row ? parseExecution(row) : null;
   }
+  /** Every execution in the channel, current ones and those still draining or superseded. */
   private rows(channel: string): StoredExecution[] {
-    return this.hive.db.prepare('SELECT snapshot FROM adaptive_topology_executions WHERE channel_id=? ORDER BY rowid')
-      .all(channel).map(row => JSON.parse(String(row.snapshot)) as StoredExecution);
+    return this.hive.db.prepare('SELECT snapshot FROM adaptive_topology_executions WHERE channel_id=? ORDER BY rowid').all(channel).map(parseExecution);
   }
   private byExecution(executionId: string): StoredExecution | null {
     const row = this.hive.db.prepare('SELECT snapshot FROM adaptive_topology_executions WHERE execution_id=?').get(executionId);
-    return row ? JSON.parse(String(row.snapshot)) as StoredExecution : null;
+    return row ? parseExecution(row) : null;
   }
-  /** Executions whose policy currently binds this brain. */
+  /** Executions whose policy currently binds this brain: current ones first, then those still draining. */
   private activeFor(brainId: string, projectId: string): StoredExecution[] {
-    return this.hive.db.prepare('SELECT snapshot FROM adaptive_topology_executions WHERE brain_id=? AND project_id=? ORDER BY rowid')
-      .all(brainId, projectId).map(row => JSON.parse(String(row.snapshot)) as StoredExecution).filter(state => this.enabledOrLocked(state));
+    return this.hive.db.prepare('SELECT snapshot FROM adaptive_topology_executions WHERE brain_id=? AND project_id=? ORDER BY current DESC, rowid')
+      .all(brainId, projectId).map(parseExecution).filter(state => this.enabledOrLocked(state));
   }
+  /** Inserting a new execution requires its (channel, brain) predecessor to be retired first (unique current). */
   private save(state: StoredExecution) {
     this.hive.db.prepare(`INSERT INTO adaptive_topology_executions
-      (channel_id,brain_id,execution_id,project_id,root_message_id,snapshot) VALUES(?,?,?,?,?,?)
-      ON CONFLICT(channel_id,brain_id) DO UPDATE SET execution_id=excluded.execution_id,project_id=excluded.project_id,
-      root_message_id=excluded.root_message_id,snapshot=excluded.snapshot`)
-      .run(state.channelId, state.brainId, state.executionId, state.projectId, state.rootMessageId, JSON.stringify(state));
+      (execution_id,channel_id,brain_id,project_id,root_message_id,snapshot,current) VALUES(?,?,?,?,?,?,?)
+      ON CONFLICT(execution_id) DO UPDATE SET root_message_id=excluded.root_message_id,snapshot=excluded.snapshot,current=excluded.current`)
+      .run(state.executionId, state.channelId, state.brainId, state.projectId, state.rootMessageId, JSON.stringify(state), state.supersededBy ? 0 : 1);
+  }
+  private forget(executionId: string) {
+    this.hive.db.prepare('DELETE FROM adaptive_topology_evaluated WHERE execution_id=?').run(executionId);
+    this.hive.db.prepare('DELETE FROM adaptive_topology_executions WHERE execution_id=?').run(executionId);
+  }
+  /** Delegated work that keeps an execution alive after the Human moved on. */
+  private outstanding(state: Pick<StoredExecution, 'projectId' | 'executionId'>): boolean {
+    const capacity = this.capacity(state);
+    return capacity.activeTasks > 0 || (capacity.unreconciledClaims ?? 0) > 0;
+  }
+  /**
+   * A newer Human request retires the brain's current execution. Idle work is replaced (or, for an unrouted
+   * request, completed) as before; delegated work keeps it alive as a draining execution beside its successor,
+   * so its workers, commitments and executionId stay valid. Runs inside the caller's transaction.
+   */
+  private retire(previous: StoredExecution, successor: string | null): AdaptiveRoutingEvent | null {
+    if (previous.completedAt || !this.outstanding(previous)) {
+      if (successor) { this.forget(previous.executionId); return null; }
+      if (previous.completedAt) return null;
+      return this.completeInside(previous, 'superseded_by_human_request');
+    }
+    // Its applied policy (and any Human lock) keeps governing the work it already delegated.
+    this.touchState(previous); previous.supersededBy = successor ?? 'human_message';
+    const item = this.record(previous, { ...fallbackDecision(previous.currentTopology, previous.workerBudget), reason: 'superseded_draining_delegated_work' },
+      previous.currentTopology, 'status');
+    this.save(previous); this.saveEvent(item); return item;
+  }
+  /** Superseded executions that already finished are kept (for the panel) only until the brain's next request. */
+  private pruneSuperseded(channel: string, brain: string) {
+    for (const row of this.hive.db.prepare(`SELECT execution_id FROM adaptive_topology_executions WHERE channel_id=? AND brain_id=? AND current=0
+      AND json_extract(snapshot,'$.completedAt') IS NOT NULL`).all(channel, brain)) this.forget(String(row.execution_id));
+  }
+  /** Completes draining executions whose delegated work has ended; nothing else can end them. */
+  private settleDrained(projectId: string) {
+    if (this.stopped) return;
+    const draining = this.hive.db.prepare(`SELECT snapshot FROM adaptive_topology_executions WHERE project_id=? AND current=0
+      AND json_extract(snapshot,'$.completedAt') IS NULL`).all(projectId).map(parseExecution);
+    for (const state of draining) if (!this.outstanding(state)) this.complete(state, 'delegated_work_drained');
   }
   private conversationLock(channel: string, brain: string): AdaptiveTopology | null {
     const row = this.hive.db.prepare('SELECT topology FROM adaptive_topology_locks WHERE channel_id=? AND brain_id=?').get(channel, brain);
@@ -284,7 +352,8 @@ export class AdaptiveTopologyRuntime {
     this.publish(state, event);
   }
   private publish(state: StoredExecution, event: AdaptiveRoutingEvent) {
-    this.hive.bus.emit('adaptive-routing', { channelId: state.channelId, state: this.displayState(state), event });
+    // The panel shows one execution per brain (the current one); a draining execution reports through its events only.
+    this.hive.bus.emit('adaptive-routing', { channelId: state.channelId, state: state.supersededBy ? null : this.displayState(state), event });
   }
   private assertEventActor(actor: Agent, event: AdaptiveCoordinationEvent) {
     if (actor.id !== event.actorId || actor.role !== event.actorRole || actor.role !== 'brain') throw new HiveError(403, 'Routing event identity does not match the authenticated actor');
@@ -337,7 +406,8 @@ export class AdaptiveTopologyRuntime {
       if (delegated.length === 1) return mine(delegated[0]!.execution_id);
       if (delegated.length > 1) return null;
     }
-    return event.channelId ? active.find(state => state.channelId === event.channelId) ?? null : null;
+    // A channel alone names only the current request; a draining one needs its id, task or thread.
+    return event.channelId ? active.find(state => state.channelId === event.channelId && !state.supersededBy) ?? null : null;
   }
   private enabledOrLocked(state: StoredExecution): boolean { return !state.completedAt && Boolean(loadAdaptiveRouting(this.hive.home)?.enabled || state.lockedTopology); }
   private async evaluateStable(state: StoredExecution, event: AdaptiveCoordinationEvent, config: AdaptiveRoutingFile) {
@@ -375,8 +445,8 @@ export class AdaptiveTopologyRuntime {
     if (event.eventId && this.hive.db.prepare('SELECT 1 FROM adaptive_topology_evaluated WHERE execution_id=? AND event_id=?').get(state.executionId, event.eventId)) return state;
     const from = state.currentTopology, revision = state.revision ?? 0;
     const { decision, capacity } = await this.evaluateStable(state, event, config);
-    const latest = this.row(state.channelId, state.brainId);
-    if (!latest || latest.executionId !== state.executionId || (latest.revision ?? 0) !== revision || !isDeepStrictEqual(config, loadAdaptiveRouting(this.hive.home)) || this.stopped) return latest ?? state;
+    const latest = this.byExecution(state.executionId);
+    if (!latest || (latest.revision ?? 0) !== revision || !isDeepStrictEqual(config, loadAdaptiveRouting(this.hive.home)) || this.stopped) return latest ?? state;
     const forced: TopologyTarget | null = state.lockedTopology ? { topology: state.lockedTopology,
       workers: state.lockedTopology === 'single' ? 0 : state.lockedTopology === state.currentTopology ? state.workerBudget : Math.max(minimumTopologyWorkers(state.lockedTopology), state.desiredWorkers ?? 0) } : null;
     const next = advanceTopologyPolicy(policyOf(state), { target: { topology: decision.targetTopology, workers: decision.targetWorkers },
@@ -405,10 +475,12 @@ export class AdaptiveTopologyRuntime {
     return this.enabledOrLocked(updated) ? compactPolicy(updated) : null;
   }
   private revalidateQueued(state: StoredExecution, event: AdaptiveCoordinationEvent): Promise<StoredExecution> {
-    return this.queued(state.channelId, () => {
-      const current = this.row(state.channelId, state.brainId);
-      return current && current.executionId === state.executionId ? this.revalidateStored(current, event) : state;
-    });
+    return this.queued(state.channelId, () => this.revalidateLatest(state, event));
+  }
+  /** Revalidates the stored version of an execution, current or draining; a replaced one is left alone. */
+  private revalidateLatest(state: StoredExecution, event: AdaptiveCoordinationEvent): Promise<StoredExecution> | StoredExecution {
+    const latest = this.byExecution(state.executionId);
+    return latest ? this.revalidateStored(latest, event) : state;
   }
   private async revalidateProject(projectId: string, event: AdaptiveCoordinationEvent, exceptExecution?: string) {
     const rows = this.hive.db.prepare('SELECT snapshot FROM adaptive_topology_executions WHERE project_id=?').all(projectId);
@@ -449,6 +521,7 @@ export class AdaptiveTopologyRuntime {
     if (!actor.projectId || actor.role !== 'brain') return;
     await this.revalidateProject(actor.projectId, { kind: 'capacity_change', actorId: actor.id,
       actorRole: 'brain', eventId: coordinationEventId(actor.id, 'capacity', eventId) }, exceptExecution);
+    this.settleDrained(actor.projectId);
   }
   /** Compact policy for one execution, or the brain's only active execution when none is named. */
   forAgent(actor: Agent, executionId?: string): AdaptiveAgentPolicy | null {
@@ -502,23 +575,27 @@ export class AdaptiveTopologyRuntime {
   private async routeHumanReply(human: Agent, channel: Channel, input: HumanMessageInput, request: string,
     persistReceipt?: (message: Message) => void): Promise<RoutedHumanMessage | null> {
     const threadId = input.threadId!;
-    const rooted = this.rows(channel.id).filter(state => state.rootMessageId === threadId).map(state => this.hive.getAgent(state.brainId));
-    const owners = rooted.length ? rooted : this.requestOwners(channel, input.body).owners;
+    // A draining execution keeps its thread; a finished superseded one is history, not a reply target.
+    const rooted = this.rows(channel.id).filter(state => state.rootMessageId === threadId && !(state.supersededBy && state.completedAt));
+    const owners = rooted.length ? [...new Set(rooted.map(state => state.brainId))].map(id => this.hive.getAgent(id)) : this.requestOwners(channel, input.body).owners;
     if (!owners.length) { await this.observe(channel, request); return null; }
     const event: AdaptiveCoordinationEvent = { kind: 'human_message', actorId: human.id, actorRole: 'human', channelId: channel.id,
       threadId, summary: request, eventId: coordinationEventId(human.id, 'human-message', input.requestId ?? randomUUID()) };
-    const fresh: Agent[] = [];
+    const fresh: Agent[] = [], revalidate: StoredExecution[] = [];
+    const executionOf = (brain: Agent) => rooted.find(state => state.brainId === brain.id) ?? this.row(channel.id, brain.id);
     for (const brain of owners) {
-      let state = this.row(channel.id, brain.id);
+      let state = executionOf(brain);
       if (state?.completedAt && state.rootMessageId === threadId) {
         // Completed delegated work is never reopened; the reply then starts a new execution instead.
         try { this.reopen(human, threadId); } catch (error) { if (!(error instanceof HiveError) || error.status !== 409) throw error; }
-        state = this.row(channel.id, brain.id);
+        state = this.byExecution(state.executionId);
       }
       if (state && !state.completedAt) {
-        if (this.enabledOrLocked(state)) await this.revalidateQueued(state, event);
+        if (this.enabledOrLocked(state)) revalidate.push(state);
       } else if (loadAdaptiveRouting(this.hive.home)?.enabled || this.conversationLock(channel.id, brain.id)) fresh.push(brain);
     }
+    // Owners are classified in parallel; each result is still fenced by its own execution revision.
+    if (revalidate.length) await this.queued(channel.id, () => Promise.all(revalidate.map(state => this.revalidateLatest(state, event))));
     if (!fresh.length || this.stopped) return null;
     return this.startExecutions(human, input, 'auto', 'none', persistReceipt, request, fresh);
   }
@@ -557,11 +634,8 @@ export class AdaptiveTopologyRuntime {
     scope: AdaptiveLockScope, manual: AdaptiveTopology | null, config: AdaptiveRoutingFile | null, routingRequest?: string) {
     const inherited = manual ? null : this.conversationLock(channel.id, brain.id);
     if (!config?.enabled && mode === 'auto' && !inherited) return null;
+    // A previous execution with delegated work is never a reason to reject the Human: it drains beside the new one.
     const previous = this.row(channel.id, brain.id);
-    if (previous) {
-      const outstanding = this.capacity(previous);
-      if (outstanding.activeTasks > 0 || (outstanding.unreconciledClaims ?? 0) > 0) throw new HiveError(409, `The current execution of @${brain.name} still has delegated work; continue in its thread or reconcile it before a new request`);
-    }
     const locked = manual ?? inherited;
     const lockScope: AdaptiveLockScope = manual ? scope : inherited ? 'conversation' : 'none';
     const executionId = `execution-${randomUUID()}`, project = this.hive.getProject(channel.projectId);
@@ -595,11 +669,9 @@ export class AdaptiveTopologyRuntime {
     return this.queued(channel.id, async () => {
       if (this.hive.hasActiveSendRequest(human, channel.id, input.requestId)) return null;
       const config = loadAdaptiveRouting(this.hive.home);
-      const plans = [];
-      for (const brain of owners) {
-        const plan = await this.planExecution(channel, brain, input, mode, scope, manual, config, routingRequest);
-        if (plan) plans.push(plan);
-      }
+      // Owners are classified in parallel: a Human send waits for the slowest brain, not the sum. No total deadline.
+      const plans = (await Promise.all(owners.map(brain => this.planExecution(channel, brain, input, mode, scope, manual, config, routingRequest))))
+        .filter(plan => plan !== null);
       if (!plans.length) return null;
       if (this.stopped) throw new HiveError(503, 'Server is shutting down');
       const currentConfig = loadAdaptiveRouting(this.hive.home);
@@ -640,17 +712,22 @@ export class AdaptiveTopologyRuntime {
       // Group channels address each directive to its brain only, so workers are not woken by it.
       const directives = states.map(({ state, plan }) => ({ body: topologyDirective(state, plan.brain.name),
         requestId: `adaptive-${state.executionId}`, recipients: channel.type === 'dm' ? undefined : [plan.brain.name] }));
-      const items: AdaptiveRoutingEvent[] = [];
+      const items: AdaptiveRoutingEvent[] = [], retired: Array<[StoredExecution, AdaptiveRoutingEvent]> = [];
       const delivered = this.hive.postAdaptiveRequest(human, input, directives, persistReceipt, message => {
         for (const { state, decision, warning, plan } of states) {
           state.rootMessageId = message.threadId ?? message.id; state.requestMessageId = message.id;
           if (manual && scope === 'conversation') this.conversationLockWrite(channel.id, plan.brain.id, manual);
+          this.pruneSuperseded(channel.id, plan.brain.id);
+          if (plan.previous) {
+            const item = this.retire(plan.previous, state.executionId);
+            if (item) retired.push([plan.previous, item]);
+          }
           this.save(state);
-          if (plan.previous) this.hive.db.prepare('DELETE FROM adaptive_topology_evaluated WHERE execution_id=?').run(plan.previous.executionId);
           const item = this.record(state, decision, state.currentTopology, warning ? 'warning' : plan.locked ? 'lock' : 'evaluation', false);
           this.saveEvent(item); items.push(item);
         }
       });
+      for (const [state, item] of retired) this.publish(state, item);
       states.forEach(({ state }, index) => this.publish(state, items[index]!));
       const display = states.map(({ state }) => this.displayState(state));
       return { message: delivered.message, routingMessage: delivered.routingMessages[0], routingMessages: delivered.routingMessages,
@@ -671,18 +748,24 @@ export class AdaptiveTopologyRuntime {
       this.commit(state, this.record(state, decision, state.currentTopology, 'status'));
     }
   }
-  private complete(state: StoredExecution, reason: string): void {
+  private completeInside(state: StoredExecution, reason: string): AdaptiveRoutingEvent {
     this.touchState(state); state.completedAt = state.updatedAt;
     state.desiredTopology = null; state.desiredWorkers = null;
     state.lockedTopology = null; state.lockScope = 'none'; state.warning = null;
-    const decision = { ...fallbackDecision(state.currentTopology, state.workerBudget), reason };
-    this.commit(state, this.record(state, decision, state.currentTopology, 'status'));
+    const item = this.record(state, { ...fallbackDecision(state.currentTopology, state.workerBudget), reason }, state.currentTopology, 'status');
+    this.save(state); this.saveEvent(item); return item;
+  }
+  private complete(state: StoredExecution, reason: string): void {
+    this.publish(state, immediateTransaction(this.hive.db, () => this.completeInside(state, reason)));
   }
   /** Invoked inside Hive's thread transaction; returns a post-commit notification. */
   threadStatusChange(actor: Agent, threadId: string, status: ThreadStatus | null): (() => void) | null {
+    const projectId = this.hive.getChannel(this.hive.getMessageById(threadId).channelId).projectId;
+    // Closing a delegation thread may be the last work of a draining execution.
+    const settle = () => this.settleDrained(projectId);
     const rooted = this.hive.db.prepare('SELECT snapshot FROM adaptive_topology_executions WHERE root_message_id=? ORDER BY rowid').all(threadId)
-      .map(row => JSON.parse(String(row.snapshot)) as StoredExecution);
-    if (!rooted.length) return null;
+      .map(parseExecution);
+    if (!rooted.length) return settle;
     // Human closes every brain's execution on this request; a brain closes only its own.
     const owned = actor.role === 'human' ? rooted : rooted.filter(state => state.brainId === actor.id);
     if (!owned.length) throw new HiveError(403, 'Only Human or the coordinating brain closes this execution');
@@ -690,10 +773,20 @@ export class AdaptiveTopologyRuntime {
     const published: Array<[StoredExecution, AdaptiveRoutingEvent]> = [];
     for (const state of owned) {
       if (complete === Boolean(state.completedAt)) continue;
+      // A superseded execution is history once finished; the Human continues through the current one.
+      if (!complete && state.supersededBy) continue;
+      let released = 0;
       if (complete) {
-        const capacity = this.capacity(state);
-        if (capacity.activeTasks || capacity.blockers || capacity.openDependencies || capacity.unreconciledClaims)
+        const capacity = this.capacity(state), open = openDelegations(this.hive, { executionId: state.executionId });
+        // The Human may close a request over free-form delegations (they are released below); structured tasks
+        // and claims have their own lifecycle and must still be finished or reconciled.
+        const freeForm = actor.role === 'human' ? open : [];
+        const tasks = capacity.activeTasks - new Set(freeForm.map(row => String(row.root_id))).size;
+        const blockers = capacity.blockers - freeForm.filter(row => row.status === 'blocked').length;
+        if (tasks || blockers || capacity.openDependencies || capacity.unreconciledClaims)
           throw new HiveError(409, 'Finish delegated work and reconcile claims before completing this execution');
+        released = freeForm.length;
+        if (released) this.hive.db.prepare('DELETE FROM adaptive_topology_messages WHERE execution_id=?').run(state.executionId);
       }
       this.touchState(state); state.completedAt = complete ? state.updatedAt : null;
       state.desiredTopology = null; state.desiredWorkers = null;
@@ -701,17 +794,19 @@ export class AdaptiveTopologyRuntime {
       if (complete) { state.lockedTopology = null; state.lockScope = 'none'; state.warning = null; }
       const decision = { ...fallbackDecision(state.currentTopology, state.workerBudget), reason: complete ? 'execution_completed' : 'execution_reopened' };
       const item = this.record(state, decision, state.currentTopology, 'status');
+      if (released) item.warning = `Human completed the request · released ${released} open delegation${released === 1 ? '' : 's'} without a worker report`;
       this.save(state); this.saveEvent(item);
       if (complete) this.hive.db.prepare('DELETE FROM adaptive_topology_evaluated WHERE execution_id=?').run(state.executionId);
       published.push([state, item]);
     }
-    return published.length ? () => { for (const [state, item] of published) this.publish(state, item); } : null;
+    return () => { for (const [state, item] of published) this.publish(state, item); settle(); };
   }
   view(actor: Agent, channelId: string): AdaptiveRoutingView {
     if (actor.role !== 'human') throw new HiveError(403, 'Adaptive routing timeline is Human-only');
     const channel = this.hive.getChannel(channelId);
     if (!this.hive.canSeeChannel(actor, channel)) throw new HiveError(403, 'Cannot read routing state');
-    const executions = this.rows(channel.id).map(state => this.displayState(state));
+    // One execution per brain, as the panel expects: draining predecessors appear through their audit events.
+    const executions = this.rows(channel.id).filter(state => !state.supersededBy).map(state => this.displayState(state));
     // The primary execution is the most recently updated one still running, else the latest.
     const state = [...executions].sort((a, b) => Number(Boolean(a.completedAt)) - Number(Boolean(b.completedAt)) || b.updatedAt - a.updatedAt)[0] ?? null;
     const events = this.hive.db.prepare('SELECT snapshot FROM adaptive_topology_events WHERE channel_id=? ORDER BY rowid DESC LIMIT 100')
@@ -728,9 +823,9 @@ export class AdaptiveTopologyRuntime {
     if (scope !== 'none' && !topology) throw new HiveError(400, 'Choose a topology to lock');
     const executions = this.rows(this.hive.getChannel(channelId).id);
     if (!executions.length) throw new HiveError(404, 'No adaptive execution in this channel');
-    const expected = input.expectedExecutionId;
-    if (expected === undefined && executions.length > 1) throw new HiveError(400, 'Several brains have executions here; choose the execution to lock');
-    const state = expected === undefined ? executions[0]! : executions.find(item => item.executionId === expected);
+    const expected = input.expectedExecutionId, current = executions.filter(item => !item.supersededBy);
+    if (expected === undefined && current.length !== 1) throw new HiveError(400, 'Several executions are active here; choose the execution to lock');
+    const state = expected === undefined ? current[0]! : executions.find(item => item.executionId === expected);
     if (!state) throw new HiveError(409, 'Execution changed; reload the routing panel');
     if (state.completedAt) throw new HiveError(409, 'This execution has completed; start a new request');
     if (input.expectedRevision !== undefined && input.expectedRevision !== (state.revision ?? 0))
