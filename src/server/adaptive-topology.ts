@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { parseMentions, type Hive } from './hive.ts';
+import type { Hive } from './hive.ts';
+import { parseMentions } from '../shared/mentions.ts';
 import { HiveError, type Agent, type Channel, type Message, type ThreadStatus } from '../shared/types.ts';
 import { ADAPTIVE_TOPOLOGIES, type AdaptiveExecutionState, type AdaptiveLockScope,
   type AdaptiveRoutingEvent, type AdaptiveRoutingMode, type AdaptiveRoutingView,
@@ -11,11 +12,10 @@ import { advanceTopologyPolicy, initialTopologyPolicy, minimumTopologyWorkers, t
   type TopologyTarget, type TopologyPolicyState, type TopologySafety } from '../shared/adaptive-topology-policy.ts';
 import { ADAPTIVE_TOPOLOGY_CONTRACT_VERSION,
   type TopologyCapacitySnapshot, type TopologyEvaluationSnapshot } from './adaptive-topology-provider.ts';
-import { observeTopologyEvaluation } from './adaptive-evidence-observer.ts';
+import { AdaptiveObservationStores, observeTopologyEvaluation } from './adaptive-evidence-observer.ts';
 import { initAdaptiveCommitments, openDelegations, readAdaptiveCapacity } from './adaptive-topology-capacity.ts';
-import { coordinationEventId } from './adaptive-topology-admission.ts';
+import { AdaptiveAdmission, coordinationEventId } from './adaptive-topology-admission.ts';
 import { immediateTransaction } from './transaction.ts';
-import { jevCallLog } from './jev-call-log.ts';
 import type { JevCallSummary } from '../shared/jev-calls.ts';
 
 export { evaluateAdaptiveTopology, ADAPTIVE_TOPOLOGY_CONTRACT_VERSION } from './adaptive-topology-provider.ts';
@@ -126,6 +126,10 @@ export class AdaptiveTopologyRuntime {
   private serial = new Map<string, Promise<void>>();
   private stopped = false;
   private abort = new AbortController();
+  /** Permits, per-brain lanes and post-commit follow-ups of adaptive actions; permits are dropped on stop(). */
+  readonly admission = new AdaptiveAdmission();
+  /** Evidence and Jev call history stores for this hive's database. */
+  readonly observations: AdaptiveObservationStores;
   /** Hive calls this after every committed message (the name predates worker reports). */
   humanMessageCommitted(message: Message): void {
     if (this.stopped) return;
@@ -167,6 +171,7 @@ export class AdaptiveTopologyRuntime {
     return { brains, owners: brains.length === 1 ? brains : [] };
   }
   constructor(private hive: Hive) {
+    this.observations = new AdaptiveObservationStores(hive.db);
     immediateTransaction(hive.db, () => this.migrateExecutionKeys());
     hive.db.exec(`${EXECUTIONS_SCHEMA.replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS')};
       CREATE UNIQUE INDEX IF NOT EXISTS idx_adaptive_topology_current ON adaptive_topology_executions(channel_id,brain_id) WHERE current=1;
@@ -224,6 +229,7 @@ export class AdaptiveTopologyRuntime {
   async stop(): Promise<void> {
     this.stopped = true; this.abort.abort();
     await Promise.allSettled(this.serial.values());
+    this.admission.dispose();
   }
   private queued<T>(key: string, work: () => Promise<T> | T): Promise<T> {
     const next = (this.serial.get(key) ?? Promise.resolve()).then(work);
@@ -330,7 +336,7 @@ export class AdaptiveTopologyRuntime {
   }
   private readonly callRecorded = (summary: JevCallSummary) => this.hive.bus.emit('jev-call', summary);
   private saveEvent(event: AdaptiveRoutingEvent) {
-    const settled = jevCallLog(this.hive.db).settle(event);
+    const settled = this.observations.jevCalls.settle(event);
     // Published after the caller's transaction; a rolled-back event leaves the call unsettled on reload.
     if (settled) queueMicrotask(() => this.hive.bus.emit('jev-call', settled));
     this.hive.db.prepare(`INSERT INTO adaptive_topology_events(id,execution_id,channel_id,project_id,created_at,snapshot)
@@ -414,7 +420,7 @@ export class AdaptiveTopologyRuntime {
     let capacity = this.capacity(state), decision: AdaptiveTopologyDecision | null = null;
     for (let attempt = 0; attempt < 3; attempt++) {
       const signature = fingerprint(capacity.workers.available);
-      decision = await observeTopologyEvaluation(this.hive.db,
+      decision = await observeTopologyEvaluation(this.observations,
         { executionId: state.executionId, channelId: state.channelId, projectId: state.projectId, phase: 'continuous' },
         this.snapshot(state, event, capacity), config, { signal: this.abort.signal },
         { context: { brainId: state.brainId, phase: 'continuous', trigger: { kind: event.kind, eventType: event.eventType ?? null } }, recorded: this.callRecorded });
@@ -613,7 +619,7 @@ export class AdaptiveTopologyRuntime {
     if (!config?.enabled || this.stopped) return;
     const executionId = `observation-${randomUUID()}`, project = this.hive.getProject(channel.projectId);
     const capacity = this.capacity({ projectId: channel.projectId, executionId });
-    const decision = await observeTopologyEvaluation(this.hive.db,
+    const decision = await observeTopologyEvaluation(this.observations,
       { executionId, channelId: channel.id, projectId: channel.projectId, phase: 'initial' },
       { request, project: { slug: project.slug, name: project.name }, current: null, capacity,
         execution: { orchestratedOnly: false, lockScope: 'none', lockedTopology: null },
@@ -649,7 +655,7 @@ export class AdaptiveTopologyRuntime {
     let stable = !config?.enabled;
     if (config?.enabled) for (let attempt = 0; attempt < 3; attempt++) {
       const signature = fingerprint(capacity.workers.available);
-      decision = await observeTopologyEvaluation(this.hive.db,
+      decision = await observeTopologyEvaluation(this.observations,
         { executionId, channelId: channel.id, projectId: channel.projectId, phase: 'initial' },
         makeSnapshot(), config, { signal: this.abort.signal },
         { context: { brainId: brain.id, phase: 'initial', trigger: { kind: input.threadId ? 'human_message' : 'human_request', eventType: null } }, recorded: this.callRecorded });
