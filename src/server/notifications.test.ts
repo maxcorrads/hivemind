@@ -9,6 +9,7 @@ import { InboxDeliveryStore } from './inbox-delivery.ts';
 import { ROUTINE_BATCH_MS } from '../shared/notifications.ts';
 import { WAIT_SCAN_MAX, type WaitResult, type Message } from '../shared/types.ts';
 import { waitUntilMail } from '../mcp/wait-loop.ts';
+import { countRows, markInboxRead, removeChannelMember, seedAgedInboxReceipts, setAgentPresence } from './test-fixtures.ts';
 
 function fixture(t: TestContext, fakeClock = false) {
   if (fakeClock) t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1_000_000 });
@@ -18,7 +19,7 @@ function fixture(t: TestContext, fakeClock = false) {
   const brain = hive.join({ role: 'brain' }), peer = hive.join({ role: 'brain' });
   const worker = hive.join({ role: 'worker', seniority: 'mid' });
   const room = hive.createChannel(brain.agent, { name: 'work', type: 'private', memberNames: [peer.agent.name, worker.agent.name] });
-  hive.db.exec('UPDATE agents SET inbox_cursor = (SELECT MAX(seq) FROM messages)');
+  markInboxRead(hive);
   const session = hive.openInboxSession(brain.agent, crypto.randomUUID());
   const wait = (ms = 1) => hive.wait(brain.agent, ms, undefined, { sessionId: session, compact: true });
   const ack = (mail: WaitResult) => hive.acknowledgeInbox(brain.agent, session, mail.delivery!.id);
@@ -78,18 +79,14 @@ test('pending receipts replay unchanged across subscription edits and restart; r
   f.hive.notifications.set(f.brain.agent, { channel: f.room.id, eventTypes: [] });
   f.reopen(); const replay = await f.wait();
   assert.equal(replay.delivery!.id, first.delivery!.id); assert.deepEqual(replay.delivery!.messageSeqs, [original.seq]);
-  f.hive.db.prepare('DELETE FROM channel_members WHERE channel_id = ? AND agent_id = ?').run(f.room.id, f.brain.agent.id);
+  removeChannelMember(f.hive, f.room.id, f.brain.agent.id);
   await assert.rejects(f.wait(), /no longer accessible/);
   assert.equal(f.hive.inbox.pending(f.brain.agent.id)!.id, first.delivery!.id);
 });
 
 test('aged receipt totals survive progress batching, mute, session replacement and pending replay', async t => {
   const f = fixture(t, true), historical = 10_000;
-  f.hive.db.exec('DROP TABLE inbox_receipt_totals');
-  f.hive.db.prepare(`WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i + 1 FROM n WHERE i < ?)
-    INSERT INTO inbox_deliveries(id, agent_id, session_id, through_seq, seqs, attempts, offered_at, lease_until, acknowledged_at)
-    SELECT 'notification-history-' || i, ?, ?, 0, '[0]', 1, 1, 2, 100 FROM n`)
-    .run(historical, f.brain.agent.id, f.session);
+  seedAgedInboxReceipts(f.hive, f.brain.agent.id, f.session, historical);
   new InboxDeliveryStore(f.hive.db);
   const forbidAggregation = () => f.hive.db.function('json_array_length', () => { throw new Error('unexpected notification aggregation'); });
   forbidAggregation();
@@ -122,7 +119,7 @@ test('aged receipt totals survive progress batching, mute, session replacement a
 
 test('upgrade adds routing storage without reclassifying legacy chat or losing an offered receipt', async t => {
   const f = fixture(t); const original = f.send('Legacy chat'); const before = await f.wait();
-  f.hive.db.exec('DROP TABLE notification_subscriptions; ALTER TABLE messages DROP COLUMN recipients');
+  f.hive.db.exec('DROP TABLE notification_subscriptions; ALTER TABLE messages DROP COLUMN recipients'); // schema-level assertion
   f.reopen(); const replay = await f.wait();
   assert.equal(replay.delivery!.id, before.delivery!.id);
   assert.deepEqual(replay.delivery!.messageSeqs, [original.seq]);
@@ -237,12 +234,12 @@ test('HTTP subscriptions and recipients reject forged identities and invalid tar
   });
   assert.equal((await post('/subscriptions', { channel: f.room.id, eventTypes: ['decision'] })).status, 200);
   assert.equal((await post('/subscriptions', { channel: f.room.id, eventTypes: [], agentId: f.worker.agent.id })).status, 400);
-  const before = f.hive.db.prepare('SELECT COUNT(*) AS n FROM messages').get()!.n;
+  const before = countRows(f.hive, 'messages');
   for (const recipients of [[], 'all', [123], ['Nobody'], ['Human'], Array(33).fill(f.brain.agent.name)]) {
     const response = await post(`/channels/${f.room.id}/messages`, { body: 'Invalid', recipients }, f.worker.token);
     assert.ok([400, 403].includes(response.status));
   }
-  assert.equal(f.hive.db.prepare('SELECT COUNT(*) AS n FROM messages').get()!.n, before);
+  assert.equal(countRows(f.hive, 'messages'), before);
   assert.equal((await post('/subscriptions/reset', { channel: f.room.id })).status, 200);
   assert.equal((await post(`/channels/${f.room.id}/messages`, { body: 'Direct', recipients: [f.brain.agent.name] }, f.worker.token)).status, 200);
 });
@@ -306,9 +303,9 @@ test('directed progress stays immediate and full, retaining intended recipients 
 test('subscription cleanup follows project deletion without leaving stale channel rules', t => {
   const f = fixture(t);
   f.hive.notifications.set(f.brain.agent, { channel: f.room.id, eventTypes: ['message'] });
-  f.hive.db.exec("UPDATE agents SET online = 0 WHERE role != 'human'");
+  setAgentPresence(f.hive, { notRole: 'human' }, { online: false });
   f.hive.deleteProject(f.hive.getAgent('human'), f.room.project);
-  assert.equal(f.hive.db.prepare('SELECT COUNT(*) AS n FROM notification_subscriptions').get()!.n, 0);
+  assert.equal(countRows(f.hive, 'notification_subscriptions'), 0);
 });
 
 test('controlled task replay measures model-returning waits, not idle HTTP polls', async t => {

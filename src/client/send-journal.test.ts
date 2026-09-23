@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
 import { SendJournal, LOCAL_SEND_LIMIT } from "./send-journal.ts";
+import { countRows, deleteRows, insertRows, updateRows } from "../server/test-fixtures.ts";
 
 function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-send-journal-"));
@@ -33,7 +34,7 @@ test("live owner conflicts and stale owner recovery are atomic and nonce fenced"
   const f = fixture(t), first = f.open(), second = f.open();
   const one = first.claim("a", "key", "hash", []);
   assert.throws(() => second.claim("a", "key", "hash", []), /in progress/);
-  first.db.prepare("UPDATE sends SET owner=1073741824 WHERE key='key'").run();
+  updateRows(first, "sends", { owner: 1073741824 }, { key: "key" });
   const replacement = second.claim("a", "key", "hash", []);
   assert.notEqual(replacement.nonce, one.nonce);
   assert.throws(() => first.uploaded("a", "key", one.nonce, [randomUUID()]), /claim changed/);
@@ -48,17 +49,17 @@ test("expiry/corruption/quota fail closed without evicting active guarantees", t
   const one = journal.claim("a", "key", "hash", [], 100);
   journal.release("a", "key", one.nonce);
   assert.throws(() => journal.claim("a", "key", "hash", [], 86_400_100), /Outside/);
-  journal.db.prepare("UPDATE sends SET ids='{}' WHERE key='key'").run();
+  updateRows(journal, "sends", { ids: "{}" }, { key: "key" });
   assert.throws(() => journal.claim("a", "key", "hash", [], 101));
-  journal.db.exec("DELETE FROM sends; BEGIN");
-  const insert = journal.db.prepare("INSERT INTO sends VALUES(?,?,?,?,?,?,?)");
-  for (let i = 0; i < LOCAL_SEND_LIMIT; i++) insert.run("a", String(i), "hash", "[]", 100, null, null);
-  journal.db.exec("COMMIT");
+  deleteRows(journal, "sends");
+  insertRows(journal, "sends", Array.from({ length: LOCAL_SEND_LIMIT }, (_, i) => ({
+    scope: "a", key: String(i), hash: "hash", ids: "[]", created: 100, owner: null, nonce: null,
+  })));
   assert.throws(() => journal.claim("a", "extra", "hash", [], 101), /full/);
   const old = journal.claim("a", "1", "hash", [], 101);
   journal.release("a", "1", old.nonce);
   assert.ok(journal.claim("a", "extra", "hash", [], 86_400_101));
-  assert.ok(Number(journal.db.prepare("SELECT COUNT(*) AS n FROM sends").get()!.n) < LOCAL_SEND_LIMIT);
+  assert.ok(countRows(journal, "sends") < LOCAL_SEND_LIMIT);
 });
 
 test("existing public-mode journal is not silently trusted", t => {

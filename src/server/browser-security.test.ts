@@ -6,6 +6,7 @@ import path from "node:path";
 import { test, type TestContext } from "node:test";
 import { createServer as createViteServer } from "vite";
 import { Hive } from "./hive.ts";
+import { listRows } from "./test-fixtures.ts";
 import { startServer } from "./serve.ts";
 import { registerPlugin, projectPlugins } from "./plugins.ts";
 
@@ -211,7 +212,7 @@ test("Chrome: real cookies isolate tabs/instances, reject cross-origin attacks, 
 
   await chrome.select(tabB);
   const native = a.hive.join({ role: "worker", seniority: "mid" });
-  const identities = () => a.hive.db.prepare("SELECT id, token_hash FROM agents ORDER BY id").all();
+  const identities = () => listRows(a.hive, "agents", { columns: ["id", "token_hash"], orderBy: "id" });
   const victim = a.hive.createBot(a.hive.getAgent("human"), "chapter", { name: "BrowserVictim" });
   const before = identities();
   const victimPath = `/api/ui/projects/chapter/bots/${victim.bot.id}/credential`;

@@ -7,6 +7,7 @@ import { Hive } from "./hive.ts";
 import { INBOX_BATCH_MAX, InboxDeliveryStore } from "./inbox-delivery.ts";
 import { waitWireBytes } from "./wait-format.ts";
 import { waitUntilMail } from "../mcp/wait-loop.ts";
+import { countRows, failWrites, inboxCursor, insertRow, markInboxRead, readValue, seedAgedInboxReceipts, seedChannels, seedMessages, updateRows } from "./test-fixtures.ts";
 import { BODY_MAX, WAIT_MAIL_CAP, WAIT_MAX_BYTES, WAIT_SCAN_MAX, WAIT_NEXT, type WaitResult } from "../shared/types.ts";
 
 function fixture(t: TestContext, role: "brain" | "worker" = "brain") {
@@ -18,17 +19,11 @@ function fixture(t: TestContext, role: "brain" | "worker" = "brain") {
   const reader = hive.join(role === "brain" ? { role } : { role, seniority: "mid" });
   const writer = hive.join({ role: "brain" });
   const dm = hive.openDm(writer.agent, reader.agent.name);
-  hive.db.prepare("UPDATE agents SET inbox_cursor = (SELECT MAX(seq) FROM messages) WHERE id = ?").run(reader.agent.id);
+  markInboxRead(hive, reader.agent.id);
   const sessionId = hive.openInboxSession(reader.agent, crypto.randomUUID());
   const bulk = (n: number, body = "ordinary", channel = dm.id, kind = "chat", mentions: string[] = []) => {
-    const insert = hive.db.prepare(`INSERT INTO messages(id, channel_id, author_id, body, kind, control, mentions, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
-    const seqs: number[] = [];
-    hive.db.exec("BEGIN");
-    for (let i = 0; i < n; i++) seqs.push(Number(insert.run(crypto.randomUUID(), channel, writer.agent.id, body,
-      kind, kind === "control" ? "clear_context" : null, JSON.stringify(mentions), Date.now()).lastInsertRowid));
-    hive.db.exec("COMMIT");
-    return seqs;
+    return seedMessages(hive, Array.from({ length: n }, () => ({ channelId: channel, authorId: writer.agent.id, body,
+      kind, control: kind === "control" ? "clear_context" : null, mentions })));
   };
   const wait = (compact = true) => hive.wait(reader.agent, 1, undefined, { sessionId, compact });
   const ack = (result: WaitResult) => hive.acknowledgeInbox(reader.agent, sessionId, result.delivery!.id);
@@ -48,11 +43,7 @@ function bounded(result: WaitResult, messageCap = INBOX_BATCH_MAX) {
 
 // Grow only the retained acknowledged ledger, not the active message backlog.
 function agedReceipts(f: ReturnType<typeof fixture>, size = 10_000) {
-  f.hive.db.exec("DROP TABLE inbox_receipt_totals");
-  f.hive.db.prepare(`WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i + 1 FROM n WHERE i < ?)
-    INSERT INTO inbox_deliveries(id, agent_id, session_id, through_seq, seqs, attempts, offered_at, lease_until, acknowledged_at)
-    SELECT 'aged-' || i, ?, ?, 0, '[0]', 1, 1, 2, 100 FROM n`)
-    .run(size, f.reader.agent.id, f.sessionId);
+  seedAgedInboxReceipts(f.hive, f.reader.agent.id, f.sessionId, size);
   new InboxDeliveryStore(f.hive.db);
   assert.equal(f.hive.inbox.status(f.reader.agent.id).acknowledgedMessages, size);
   f.hive.db.function("json_array_length", () => { throw new Error("unexpected historical aggregation"); });
@@ -84,10 +75,10 @@ for (const role of ["brain", "worker"] as const) test(`${role} compact mail pres
     const ch = f.hive.createChannel(f.writer.agent, { name: `legacy-${length}`, type: "private", memberNames: [f.reader.agent.name] });
     // Admission now rejects oversized NEW names; existing persisted names must
     // still be represented/recoverable without losing canonical channel IDs.
-    f.hive.db.prepare("UPDATE channels SET name = ? WHERE id = ?").run("a".repeat(length), ch.id);
+    updateRows(f.hive, "channels", { name: "a".repeat(length) }, { id: ch.id });
     return f.hive.getChannel(ch.id);
   });
-  f.hive.db.prepare("UPDATE agents SET inbox_cursor = (SELECT MAX(seq) FROM messages) WHERE id = ?").run(f.reader.agent.id);
+  markInboxRead(f.hive, f.reader.agent.id);
   for (const channel of channels) {
     const sent = f.hive.postMessage(f.writer.agent, { channel: channel.id, body: "Reply in this channel." });
     const compact = await f.wait(); bounded(compact, role === "worker" ? WAIT_MAIL_CAP : INBOX_BATCH_MAX);
@@ -115,10 +106,10 @@ test("compact digests retain distinct channel IDs when abbreviated labels coinci
   const prefix = "a".repeat(200);
   const channels = [prefix, `${prefix}-one`, `${prefix}-two`].map((name, index) => {
     const ch = f.hive.createChannel(f.writer.agent, { name: `legacy-digest-${index}`, type: "private", memberNames: [f.reader.agent.name, worker.agent.name] });
-    f.hive.db.prepare("UPDATE channels SET name = ? WHERE id = ?").run(name, ch.id);
+    updateRows(f.hive, "channels", { name }, { id: ch.id });
     return f.hive.getChannel(ch.id);
   });
-  f.hive.db.prepare("UPDATE agents SET inbox_cursor = (SELECT MAX(seq) FROM messages) WHERE id = ?").run(f.reader.agent.id);
+  markInboxRead(f.hive, f.reader.agent.id);
   const expected = new Map<string, number[]>();
   for (const channel of channels) {
     const root = f.hive.postMessage(worker.agent, { channel: channel.id, body: "Report 0", eventType: "progress" });
@@ -276,20 +267,19 @@ test("reserved mentions and control cannot skip ordinary mail; sparse receipts s
   for (const seq of urgent) assert.ok(first.delivery!.messageSeqs.includes(seq));
   const replay = await f.wait(false); bounded(replay, WAIT_MAIL_CAP);
   assert.deepEqual(replay.delivery!.messageSeqs, first.delivery!.messageSeqs);
-  const cursor = () => f.hive.db.prepare("SELECT inbox_cursor FROM agents WHERE id = ?").get(f.reader.agent.id)!.inbox_cursor;
+  const cursor = () => inboxCursor(f.hive, f.reader.agent.id);
   const before = cursor();
-  f.hive.db.exec(`CREATE TEMP TRIGGER reject_sparse_counter BEFORE UPDATE ON inbox_receipt_totals
-    BEGIN SELECT RAISE(ABORT, 'injected sparse counter failure'); END`);
+  const allowCounter = failWrites(f.hive, "inbox_receipt_totals", { on: "update", message: "injected sparse counter failure" });
   assert.throws(() => f.ack(first), /injected sparse counter failure/);
   assert.equal(cursor(), before);
   assert.equal(f.hive.inbox.pending(f.reader.agent.id)!.id, first.delivery!.id);
-  assert.equal(f.hive.db.prepare("SELECT COUNT(*) AS n FROM inbox_early_receipts").get()!.n, 0);
+  assert.equal(countRows(f.hive, "inbox_early_receipts"), 0);
   assert.equal(f.hive.inbox.status(f.reader.agent.id).acknowledgedMessages, historical);
-  f.hive.db.exec("DROP TRIGGER reject_sparse_counter");
+  allowCounter();
   f.ack(first);
   assert.equal(f.ack(first).duplicate, true);
   assert.equal(f.hive.inbox.status(f.reader.agent.id).acknowledgedMessages, historical + WAIT_MAIL_CAP);
-  assert.equal(f.hive.db.prepare("SELECT COUNT(*) AS n FROM inbox_early_receipts").get()!.n, 2);
+  assert.equal(countRows(f.hive, "inbox_early_receipts"), 2);
   f.hive.db.close();
   const restarted = new Hive(f.file); t.after(() => restarted.db.close());
   restarted.db.function("json_array_length", () => { throw new Error("unexpected restart aggregation"); });
@@ -303,7 +293,7 @@ test("reserved mentions and control cannot skip ordinary mail; sparse receipts s
     restarted.acknowledgeInbox(f.reader.agent, sessionId, next.delivery.id);
   }
   assert.deepEqual(seen.sort((a, b) => a - b), [...normal, ...urgent]);
-  assert.equal(restarted.db.prepare("SELECT COUNT(*) AS n FROM inbox_early_receipts").get()!.n, 0);
+  assert.equal(countRows(restarted, "inbox_early_receipts"), 0);
   assert.equal(restarted.inboxStatuses()[f.reader.agent.id].acknowledgedMessages, historical + normal.length + urgent.length);
 });
 
@@ -348,6 +338,7 @@ test("legacy oversize pending batch is atomically split; its old ACK cannot disc
   const all = f.bulk(100, "界".repeat(BODY_MAX));
   const old = f.hive.inbox.offer(f.reader.agent.id, f.sessionId, all, all.at(-1)!);
   // Recreate the exact v3 schema/index, then exercise startup migration.
+  // schema-level assertion
   f.hive.db.exec(`DROP TABLE inbox_receipt_totals;
     DROP INDEX inbox_one_pending;
     ALTER TABLE inbox_deliveries DROP COLUMN superseded_by;
@@ -390,9 +381,8 @@ test("control bodies, UTF-8 and JSON escapes obey byte caps; truncated originals
 test("oversize single-message metadata returns an explicit history stub, not a stuck queue", async t => {
   const f = fixture(t);
   const seq = f.bulk(1)[0];
-  const row = f.hive.db.prepare("SELECT id FROM messages WHERE seq = ?").get(seq)!;
-  f.hive.db.prepare(`INSERT INTO bot_events(message_id, bot_id, channel_id, event_id, metadata, payload_hash)
-    VALUES (?, ?, ?, ?, ?, ?)`).run(row.id, f.writer.agent.id, f.dm.id, "legacy", JSON.stringify({ eventId: "legacy", origin: { label: "x".repeat(100_000) } }), "fixture");
+  insertRow(f.hive, "bot_events", { message_id: readValue(f.hive, "messages", "id", { seq })!, bot_id: f.writer.agent.id, channel_id: f.dm.id,
+    event_id: "legacy", metadata: JSON.stringify({ eventId: "legacy", origin: { label: "x".repeat(100_000) } }), payload_hash: "fixture" });
   const result = await f.wait(); bounded(result);
   assert.match(result.mail![0].body!, /exceeds the wait budget/);
   assert.ok(result.mail![0].recovery);
@@ -402,17 +392,8 @@ test("oversize single-message metadata returns an explicit history stub, not a s
 
 test("many channel memberships do not create a SQL-variable list and all classes obey the conversation cap", async t => {
   const f = fixture(t);
-  const channel = f.hive.db.prepare(`INSERT INTO channels(id, name, type, created_by, created_at, project_id)
-    VALUES (?, ?, 'private', ?, ?, ?)`);
-  const member = f.hive.db.prepare("INSERT INTO channel_members(channel_id, agent_id) VALUES (?, ?)");
-  const channels: string[] = [];
-  f.hive.db.exec("BEGIN");
-  for (let i = 0; i < 1100; i++) {
-    const id = crypto.randomUUID(); channels.push(id);
-    channel.run(id, `fixture-${i}`, f.writer.agent.id, Date.now(), f.reader.agent.projectId!);
-    member.run(id, f.reader.agent.id);
-  }
-  f.hive.db.exec("COMMIT");
+  const channels = seedChannels(f.hive, Array.from({ length: 1100 }, (_, i) => ({
+    name: `fixture-${i}`, createdBy: f.writer.agent.id, projectId: f.reader.agent.projectId!, members: [f.reader.agent.id] })));
   const expected = channels.slice(0, 12).flatMap(id => f.bulk(1, "urgent", id, "chat", [f.reader.agent.id]));
   const first = await f.wait(false); bounded(first);
   assert.equal(first.delivery!.messageSeqs.length, WAIT_MAIL_CAP);
@@ -443,7 +424,7 @@ test("thread reply fallback recovers the exact original, even with newer replies
   const root = f.hive.postMessage(f.writer.agent, { channel: f.dm.id, body: "root" });
   const reply = f.hive.postMessage(f.writer.agent, { channel: f.dm.id, threadId: root.id, body: "reply" });
   const original = "😀".repeat(BODY_MAX);
-  f.hive.db.prepare("UPDATE messages SET body = ?, kind = 'control', control = 'clear_context' WHERE seq = ?").run(original, reply.seq);
+  updateRows(f.hive, "messages", { body: original, kind: "control", control: "clear_context" }, { seq: reply.seq });
   f.hive.postMessage(f.writer.agent, { channel: f.dm.id, threadId: root.id, body: "later reply" });
   const page = await f.wait(); bounded(page);
   const item = page.control.find(m => m.seq === reply.seq)!;

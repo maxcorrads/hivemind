@@ -31,7 +31,7 @@ for (const legacy of [false, true]) {
       const hive = new Hive(file);
       try {
         for (const index of ["idx_agents_project_role", "idx_agents_role", "idx_channels_project_type_name", "idx_channel_members_agent_channel"]) {
-          assert.ok(hive.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?").get(index));
+          assert.ok(hive.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?").get(index)); // schema-level assertion
         }
         assert.equal(hive.getAgent("human").role, "human");
       } finally { hive.db.close(); }

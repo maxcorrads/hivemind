@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { Hive } from './hive.ts';
+import { countRows, listRows } from './test-fixtures.ts';
 import { createApp } from './app.ts';
 import { saveAdaptiveRouting } from './adaptive-config.ts';
 import { jevTopologyResponse } from './fixtures/jev-topology.ts';
@@ -71,7 +72,7 @@ test('every Jev exchange is logged with the exact payloads, its trigger and what
   assert.equal(failed.body.call.received, null);
   assert.ok(failed.body.call.sent, 'A failed call still shows what was sent');
 
-  const stored = JSON.stringify(f.hive.db.prepare('SELECT * FROM jev_calls').all());
+  const stored = JSON.stringify(listRows(f.hive, 'jev_calls'));
   assert.doesNotMatch(stored, /ts_secret_fixture_key/, 'The API key is never logged');
   const other = f.hive.createProject(f.human, { slug: 'other', name: 'Other' })!;
   assert.equal((await f.get(`/projects/${other.slug}/jev-calls/${group.calls[0]!.id}`)).status, 404);
@@ -95,12 +96,12 @@ test('observations are logged without a brain and the history is bounded per pro
   for (let i = 0; i < JEV_CALLS_PER_PROJECT + 5; i++)
     log.record({ executionId: `bulk-${i % 7}`, channelId: group.id, projectId: group.projectId, brainId: null, phase: 'observation',
       trigger: { kind: 'observation', eventType: null } }, { sent: null, received: null, error: null }, { ...decision, routeId: `bulk-route-${i}` });
-  assert.equal(Number(f.hive.db.prepare('SELECT COUNT(*) AS n FROM jev_calls WHERE project_id=?').get(group.projectId)!.n), JEV_CALLS_PER_PROJECT);
+  assert.equal(countRows(f.hive, 'jev_calls', { project_id: group.projectId }), JEV_CALLS_PER_PROJECT);
   await f.hive.adaptiveTopology.stop();
   for (const agent of f.hive.listAgents(f.human).filter(agent => agent.role !== 'human')) f.hive.setOffline(agent.id);
   f.hive.createProject(f.human, { slug: 'other', name: 'Other' });
   f.hive.deleteProject(f.human, 'chapter');
-  assert.equal(Number(f.hive.db.prepare('SELECT COUNT(*) AS n FROM jev_calls').get()!.n), 0, 'Project deletion removes its Jev history');
+  assert.equal(countRows(f.hive, 'jev_calls'), 0, 'Project deletion removes its Jev history');
 });
 
 test('pagination returns every request exactly once when groups share the page-boundary millisecond', async t => {

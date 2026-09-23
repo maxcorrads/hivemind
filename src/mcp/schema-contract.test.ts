@@ -9,6 +9,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { CallToolResultSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { Hive } from "../server/hive.ts";
 import { startServer } from "../server/serve.ts";
+import { countTables } from "../server/test-fixtures.ts";
 
 function textResult(result: CallToolResult): Record<string, unknown> {
   assert.notEqual(result.isError, true, JSON.stringify(result));
@@ -213,9 +214,7 @@ test("production MCP schemas and calls retain their observable contracts", { tim
     ["send", { channel: "general", body: "x", traceId: "invalid" }],
     ["send", { channel: "general", body: "x", causeMessageId: "invalid" }],
   ];
-  const count = () => database.db.prepare(
-    "SELECT (SELECT COUNT(*) FROM agents) AS agents, (SELECT COUNT(*) FROM messages) AS messages, (SELECT COUNT(*) FROM channels) AS channels",
-  ).get();
+  const count = () => countTables(database, ["agents", "messages", "channels"]);
   const before = count();
   for (const [index, [name, args]] of invalid.entries()) {
     await t.test(`invalid production input ${index + 1}: ${name}`, async () => {

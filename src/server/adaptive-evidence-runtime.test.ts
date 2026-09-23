@@ -7,6 +7,7 @@ import { Hive } from './hive.ts';
 import { saveAdaptiveRouting } from './adaptive-config.ts';
 import { exportAdaptiveEvidence, EVIDENCE_RUN_LIMIT } from './adaptive-evidence.ts';
 import { jevTopologyResponse } from './fixtures/jev-topology.ts';
+import { countRows, failWrites, setAgentPresence } from './test-fixtures.ts';
 
 function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-evidence-runtime-'));
@@ -37,20 +38,20 @@ function fixture(t: TestContext) {
 
 test('runtime evidence counts distinct successful/failing calls but never duplicate votes or agent mail', async t => {
   const f = fixture(t), started = await f.start(); assert.ok(started);
-  const messages = Number(f.hive.db.prepare('SELECT COUNT(*) AS n FROM messages').get()!.n);
+  const messages = countRows(f.hive, 'messages');
   await f.check('first-check'); await f.check('first-check'); f.fail(); await f.check('offline-check');
   const report = exportAdaptiveEvidence(f.hive.db, started.state.executionId);
   assert.equal(report.coverage.attemptsStarted, 3); assert.equal(f.calls(), 3);
   assert.equal(report.overhead.tokenObservations, 2); assert.equal(report.overhead.totalInputTokens, null);
   assert.equal(report.overhead.knownInputTokens, 160);
-  assert.equal(Number(f.hive.db.prepare('SELECT COUNT(*) AS n FROM messages').get()!.n), messages);
+  assert.equal(countRows(f.hive, 'messages'), messages);
   assert.doesNotMatch(JSON.stringify(report), /Private original|never-export|secret-provider-error/);
   assert.doesNotMatch(JSON.stringify(f.hive.adaptiveTopology.forAgent(f.brain)), /overhead|inputTokens|models|attempts/);
 });
 
 test('capacity refresh attempts are retained even when only the final decision starts execution', async t => {
   const f = fixture(t);
-  f.beforeReply(() => f.hive.db.prepare('UPDATE agents SET online=0 WHERE id=?').run(f.workers[0]!.id));
+  f.beforeReply(() => setAgentPresence(f.hive, f.workers[0]!.id, { online: false }));
   const started = await f.start(); assert.ok(started);
   const report = exportAdaptiveEvidence(f.hive.db, started.state.executionId);
   assert.equal(f.calls(), 2); assert.equal(report.coverage.attemptsStarted, 2);
@@ -74,7 +75,7 @@ test('stale-key output is charged to observed attempts, not silently dropped fro
 test('recorder failure warns without changing a valid Jev decision or adding a second provider call', async t => {
   const f = fixture(t), started = await f.start(); assert.ok(started);
   const errors: string[] = []; t.mock.method(console, 'error', (message: string) => errors.push(message));
-  f.hive.db.exec("CREATE TRIGGER fail_evidence BEFORE INSERT ON adaptive_evidence_attempts BEGIN SELECT RAISE(ABORT,'secret-database-error'); END;");
+  failWrites(f.hive, 'adaptive_evidence_attempts', { message: 'secret-database-error', persistent: true });
   const result = await f.check('recording-fails');
   assert.equal(result?.currentTopology, 'single'); assert.equal(f.calls(), 2);
   assert.ok(errors.some(message => message.includes('measurements may be incomplete')));
@@ -85,7 +86,7 @@ for (const interleaved of [false, true]) {
   test(`active evidence survives rejected starts and restart with ${interleaved ? 'interleaved' : 'deferred'} revalidation`, async t => {
     const f = fixture(t), started = await f.start(); assert.ok(started);
     const initial = exportAdaptiveEvidence(f.hive.db, started.state.executionId);
-    f.hive.db.prepare("UPDATE agents SET online=0 WHERE role='worker'").run();
+    setAgentPresence(f.hive, { role: 'worker' }, { online: false });
     for (let i = 0; i < EVIDENCE_RUN_LIMIT; i++) {
       await assert.rejects(f.hive.adaptiveTopology.routeHumanRequest(f.human,
         { channel: f.dm.id, body: 'Rejected manual request', requestId: `rejected-${i}` }, 'brain_multi_room', 'task'),
@@ -104,6 +105,6 @@ for (const interleaved of [false, true]) {
     assert.equal(report.coverage.historyComplete, true);
     assert.equal(report.coverage.prunedAttempts, 0);
     assert.equal(report.overhead.totalInputTokens, expected * 80);
-    assert.equal(f.hive.db.prepare('SELECT COUNT(*) AS n FROM adaptive_evidence_runs').get()!.n, EVIDENCE_RUN_LIMIT);
+    assert.equal(countRows(f.hive, 'adaptive_evidence_runs'), EVIDENCE_RUN_LIMIT);
   });
 }

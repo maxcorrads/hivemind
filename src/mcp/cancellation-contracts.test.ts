@@ -6,6 +6,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { agentRequest } from "../client/http.ts";
 import { Hive } from "../server/hive.ts";
+import { inboxCursor } from "../server/test-fixtures.ts";
 import type { WaitResult } from "../shared/types.ts";
 import { waitUntilMail } from "./wait-loop.ts";
 
@@ -113,15 +114,11 @@ test("cancelled and superseded Hive waits do not consume queued mail or leak sig
   const alreadyQueued = hive.postMessage(human, { channel: dm.id, body: "already queued before cancellation" });
   const pre = new AbortController();
   pre.abort(new DOMException("already cancelled", "AbortError"));
-  const beforeCursor = (hive.db.prepare("SELECT inbox_cursor FROM agents WHERE id = ?").get(worker.id) as {
-    inbox_cursor: number;
-  }).inbox_cursor;
+  const beforeCursor = inboxCursor(hive, worker.id);
   const preResult = await hive.wait(worker, 60_000, pre.signal);
   assert.equal(preResult.idle, true);
   assert.equal(getEventListeners(pre.signal, "abort").length, 0);
-  const afterCursor = (hive.db.prepare("SELECT inbox_cursor FROM agents WHERE id = ?").get(worker.id) as {
-    inbox_cursor: number;
-  }).inbox_cursor;
+  const afterCursor = inboxCursor(hive, worker.id);
   assert.equal(afterCursor, beforeCursor);
   const afterCancelled = await hive.wait(worker, 60_000);
   assert.equal(afterCancelled.messages.filter((message) => message.id === alreadyQueued.id).length, 1);

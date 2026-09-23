@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
 import { Hive } from "./hive.ts";
+import { backdate, countRows, failWrites } from "./test-fixtures.ts";
 import { commitUpload, filePathForHash, filesDir, imageDimensions, imagePreview, openBlob, removeOrphanBlobs, streamUpload, uploadTempName } from "./files.ts";
 import { cleanupPreviewTemps, previewMetrics, IMAGE_PREVIEW_MAX_SOURCE_BYTES } from "./image-preview.ts";
 import { PNG, JPEG } from "./fixtures/preview-images.ts";
@@ -148,15 +149,15 @@ test("identical concurrent uploads retain every attachment and survive garbage c
 
 test("metadata failures and GC commit failures never leave committed references to missing files", async (t) => {
   const { hive, human, dir } = store(t);
-  hive.db.exec("CREATE TRIGGER fail_attachment BEFORE INSERT ON attachments BEGIN SELECT RAISE(ABORT, 'metadata failed'); END");
+  const restoreAttachments = failWrites(hive, "attachments", { message: "metadata failed", persistent: true });
   await assert.rejects(hive.createFileFromBytes(human, { name: "x", mime: "text/plain", bytes: Buffer.from("x") }), /metadata failed/);
-  assert.equal(hive.db.prepare("SELECT COUNT(*) AS n FROM attachments").get()?.n, 0);
+  assert.equal(countRows(hive, "attachments"), 0);
   assert.equal(hive.gcFiles().blobs, 1);
   assert.deepEqual(readdirSync(filesDir(dir)), []);
-  hive.db.exec("DROP TRIGGER fail_attachment");
+  restoreAttachments();
   const att = await hive.createFileFromBytes(human, { name: "x", mime: "text/plain", bytes: Buffer.from("x") });
   const hash = hive.getAttachment(human, att.id).sha256;
-  hive.db.exec("UPDATE attachments SET created_at = 0");
+  backdate(hive, "attachments", "created_at");
   const exec = hive.db.exec.bind(hive.db);
   const mock = t.mock.method(hive.db, "exec", (sql: string) => { if (sql === "COMMIT") throw new Error("commit failed"); exec(sql); });
   assert.throws(() => hive.gcFiles(), /commit failed/);
@@ -239,7 +240,7 @@ test("a separate GC process cannot enter the publish-to-metadata window", { time
   publisher.stderr!.on("data", (data) => { errors += data; });
   const pubExit = once(publisher, "exit");
   assert.deepEqual((await once(publisher, "message"))[0], { published: true });
-  assert.equal(hive.db.prepare("SELECT COUNT(*) AS n FROM attachments").get()?.n, 0);
+  assert.equal(countRows(hive, "attachments"), 0);
   assert.equal(readdirSync(filesDir(dir)).filter((name) => /^[a-f0-9]{64}$/.test(name)).length, 1);
   const gcScript = path.join(dir, "gc.mjs");
   writeFileSync(gcScript, `

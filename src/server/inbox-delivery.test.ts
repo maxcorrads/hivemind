@@ -10,6 +10,7 @@ import { Hive } from "./hive.ts";
 import { createApp } from "./app.ts";
 import { INBOX_BATCH_MAX, InboxDeliveryStore } from "./inbox-delivery.ts";
 import { waitUntilMail } from "../mcp/wait-loop.ts";
+import { backdate, countRows, inboxCursor } from "./test-fixtures.ts";
 
 function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-receipt-"));
@@ -22,7 +23,7 @@ function fixture(t: TestContext) {
   const sessionId = hive.openInboxSession(worker.agent, crypto.randomUUID());
   const send = (body: string) => hive.postMessage(brain.agent, { channel: dm.id, body });
   const wait = () => hive.wait(worker.agent, 2, undefined, { sessionId, compact: true });
-  const cursor = () => (hive.db.prepare("SELECT inbox_cursor AS n FROM agents WHERE id = ?").get(worker.agent.id) as { n: number }).n;
+  const cursor = () => inboxCursor(hive, worker.agent.id);
   return { dir, file, hive, brain, worker, sessionId, send, wait, cursor };
 }
 
@@ -66,7 +67,7 @@ test("session takeover fences old waits, acknowledgements and delayed session-op
 
 test("pending delivery survives restart and expiry without becoming accepted or completed work", async t => {
   const f = fixture(t); f.send("survive restart"); const first = (await f.wait()).delivery!;
-  f.hive.db.prepare("UPDATE inbox_deliveries SET lease_until = 0 WHERE id = ?").run(first.id);
+  backdate(f.hive, "inbox_deliveries", "lease_until", { id: first.id });
   f.hive.db.close();
   const restarted = new Hive(f.file); t.after(() => restarted.db.close());
   assert.equal(restarted.inbox.status(f.worker.agent.id).awaitingReceipt, 1);
@@ -75,7 +76,7 @@ test("pending delivery survives restart and expiry without becoming accepted or 
   assert.equal(replay.id, first.id); assert.deepEqual(replay.messageSeqs, first.messageSeqs);
   assert.ok(replay.leaseExpiresAt > Date.now());
   restarted.acknowledgeInbox(f.worker.agent, session, replay.id);
-  assert.equal(restarted.db.prepare("SELECT COUNT(*) AS n FROM threads").get()!.n, 0);
+  assert.equal(countRows(restarted, "threads"), 0);
 });
 
 test("pre-aborted waits never reserve mail; a replacement session terminates an old sleeping wait", async t => {

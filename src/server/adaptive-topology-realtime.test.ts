@@ -10,6 +10,7 @@ import { startServer } from './serve.ts';
 import { saveAdaptiveRouting } from './adaptive-config.ts';
 import { jevTopologyResponse } from './fixtures/jev-topology.ts';
 import type { AdaptiveExecutionState, AdaptiveRoutingEvent, AdaptiveTopology } from '../shared/adaptive-topology.ts';
+import { countRows } from './test-fixtures.ts';
 
 test('real authenticated Human websocket receives every routing check while agent context gets only applied policy', { timeout: 15000 }, async t => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-routing-realtime-'));
@@ -51,7 +52,7 @@ test('real authenticated Human websocket receives every routing check while agen
   let pending = nextRouting();
   const started = await hive.adaptiveTopology.routeHumanRequest(human, { channel: dm.id, body: 'Perform the bounded request.', requestId: 'start' }, 'auto', 'none');
   assert.ok(started); const initial = await pending; assert.equal(initial.payload.state.monitoring, 'active');
-  const messagesBefore = Number(hive.db.prepare('SELECT COUNT(*) AS n FROM messages').get()!.n);
+  const messagesBefore = countRows(hive, 'messages');
   const checkpoint = (key: string) => hive.adaptiveTopology.revalidateForActor(brain.agent, {
     kind: 'brain_message', actorId: brain.agent.id, actorRole: 'brain', channelId: dm.id, eventId: key,
   });
@@ -62,7 +63,7 @@ test('real authenticated Human websocket receives every routing check while agen
   const recovered = await pending; assert.equal(recovered.payload.event.kind, 'transition');
   assert.equal(recovered.payload.state.currentTopology, 'brain_multi_room'); assert.equal(recovered.payload.state.warning, null);
   assert.ok((recovered.payload.state.revision ?? 0) > (failed.payload.state.revision ?? 0));
-  assert.equal(Number(hive.db.prepare('SELECT COUNT(*) AS n FROM messages').get()!.n), messagesBefore);
+  assert.equal(countRows(hive, 'messages'), messagesBefore);
   const agent = await fetch(`${base}/api/agent/me`, { headers: { authorization: `Bearer ${brain.token}` } });
   const policy = (await agent.json() as { adaptiveRouting: Record<string, unknown> }).adaptiveRouting;
   assert.equal(policy.currentTopology, 'brain_multi_room');

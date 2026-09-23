@@ -6,6 +6,7 @@ import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { test } from "node:test";
 import { Hive } from "./hive.ts";
+import { countRows, hasRow, insertRow, readValue, rowsContaining } from "./test-fixtures.ts";
 import { TelegramBridge, startTelegram, writeTelegramFile, readTelegramFile, loadTelegramConfig, telegramConfigKey } from "./telegram.ts";
 import { enqueueTelegramPending } from "./telegram-outbox.ts";
 import { saveAdaptiveRouting } from "./adaptive-config.ts";
@@ -72,7 +73,7 @@ test("configuration drains late old topic work before publishing, and never reta
     await change;
     await until(() => hive.telegramFailureCount() === 2);
     assert.equal(readTelegramFile(dir)?.projects.chapter, -1002);
-    assert.equal(hive.db.prepare("SELECT 1 FROM telegram_topics WHERE telegram_thread_id = 11").get(), undefined);
+    assert.equal(hasRow(hive, "telegram_topics", { telegram_thread_id: 11 }), false);
     assert.equal(sentChats.length, 0);
     hive.postMessage(human, { channel: channel.id, body: "new audience" });
     await until(() => sentChats.length === 1);
@@ -83,7 +84,7 @@ test("configuration drains late old topic work before publishing, and never reta
 
 test("different bots process colliding update and message IDs without inheriting an offset", async t => {
   const { hive, close } = fixture();
-  hive.db.prepare("INSERT INTO telegram_state(key,value) VALUES('offset','777')").run();
+  insertRow(hive, "telegram_state", { key: "offset", value: "777" });
   const pollOffsets = new Map<string, unknown[]>();
   t.mock.method(globalThis, "fetch", async (url: unknown, init?: RequestInit) => {
     const token = String(url).includes("/botfirst/") ? "first" : "second";
@@ -102,8 +103,8 @@ test("different bots process colliding update and message IDs without inheriting
     await until(() => (pollOffsets.get("second")?.length ?? 0) >= 2);
     assert.equal(pollOffsets.get("first")![0], 777);
     assert.equal(pollOffsets.get("second")![0], undefined);
-    assert.equal((hive.db.prepare("SELECT COUNT(*) AS n FROM telegram_out WHERE telegram_message_id = 7").get() as { n: number }).n, 2);
-    assert.equal((hive.db.prepare("SELECT COUNT(*) AS n FROM telegram_in WHERE update_id = 900").get() as { n: number }).n, 2);
+    assert.equal(countRows(hive, "telegram_out", { telegram_message_id: 7 }), 2);
+    assert.equal(countRows(hive, "telegram_in", { update_id: 900 }), 2);
     const bodies = hive.listMessages(hive.getAgent("human"), "general").messages.map(m => m.body);
     assert.ok(bodies.some(body => body.endsWith("first")) && bodies.some(body => body.endsWith("second")));
   } finally { await bridge.stop(); close(); }
@@ -117,8 +118,7 @@ test("Telegram Human replies in a brain DM use active Jev routing and keep recei
   const cfg = { botToken: "fixture", botId: 77, allowUserIds: [1], groups: { chapter: -1001 } };
   const botKey = telegramConfigKey(cfg);
   const bridge = new TelegramBridge(hive, cfg);
-  hive.db.prepare("INSERT INTO telegram_topics(channel_id,telegram_thread_id,telegram_chat_id,bot_key) VALUES(?,?,?,?)")
-    .run(dm.id, 22, -1001, botKey);
+  insertRow(hive, "telegram_topics", { channel_id: dm.id, telegram_thread_id: 22, telegram_chat_id: -1001, bot_key: botKey });
   saveAdaptiveRouting(dir, { enabled: true, apiKey: "typesafe-fixture" });
   let polls = 0, jevCalls = 0;
   const routingRequests: unknown[] = [];
@@ -143,9 +143,8 @@ test("Telegram Human replies in a brain DM use active Jev routing and keep recei
   });
   try {
     bridge.start();
-    await until(() => jevCalls === 1 && (hive.db.prepare(
-      "SELECT COUNT(*) AS n FROM messages WHERE channel_id=? AND body LIKE ?",
-    ).get(dm.id, "%Small Telegram request%") as { n: number }).n === 1);
+    await until(() => jevCalls === 1 && rowsContaining(hive, "messages", "body", "Small Telegram request", "channel_id")
+      .filter(row => row.channel_id === dm.id).length === 1);
     const messages = hive.listMessages(human, dm.id).messages.filter(m => m.kind === "chat");
     const original = messages.find(m => m.body.endsWith("Small Telegram request"))!;
     const directive = messages.find(m => m.body.includes("adaptive topology · SINGLE"))!;
@@ -157,10 +156,7 @@ test("Telegram Human replies in a brain DM use active Jev routing and keep recei
     assert.equal(state.currentTopology, "single");
     assert.equal(hive.fromTelegram(original.id), true);
     assert.equal(hive.fromTelegram(directive.id), false);
-    const mapped = hive.db.prepare(
-      "SELECT seq FROM telegram_out WHERE telegram_chat_id=? AND telegram_message_id=? AND bot_key=?",
-    ).get(-1001, 88, botKey) as { seq: number };
-    assert.equal(mapped.seq, original.seq);
+    assert.equal(readValue(hive, "telegram_out", "seq", { telegram_chat_id: -1001, telegram_message_id: 88, bot_key: botKey }), original.seq);
   } finally {
     await bridge.stop();
     await hive.adaptiveTopology.stop();
@@ -180,7 +176,7 @@ test("verified same-bot rotation preserves its namespace and publication failure
     enqueueTelegramPending(hive.db, message.seq, "message", undefined, { botKey: first, chatId: -1001 });
     await handle.configure({ botToken: "rotated", allowUserIds: [1], projects: { chapter: -1001 } });
     assert.equal(telegramConfigKey(loadTelegramConfig(dir)!), first);
-    assert.equal((hive.db.prepare("SELECT bot_key FROM telegram_pending WHERE seq = ?").get(message.seq) as { bot_key: string }).bot_key, first);
+    assert.equal(readValue(hive, "telegram_pending", "bot_key", { seq: message.seq }), first);
     const before = readFileSync(path.join(dir, "telegram.json"), "utf8");
     t.mock.method(fs, "renameSync", () => { throw new Error("fixture publication failure"); }); syncBuiltinESMExports();
     await assert.rejects(handle.configure({ botToken: "different", allowUserIds: [1], projects: { chapter: -1002 } }), /publication failure/);

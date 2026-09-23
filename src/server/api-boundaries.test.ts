@@ -5,6 +5,7 @@ import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Hive } from './hive.ts';
+import { countRows, deleteRows, findRow, readValue, setAgentPresence, snapshotTables } from './test-fixtures.ts';
 import { createApp } from './app.ts';
 import { startServer } from './serve.ts';
 import { readLimitedJson } from './ingress.ts';
@@ -30,13 +31,8 @@ function paused() {
 
 test('invalid HTTP values fail before presence, session, membership or message mutation', async t => {
   const f = fixture(t), agent = f.hive.join({ role: 'brain' });
-  f.hive.db.prepare('UPDATE agents SET last_seen_at = 1 WHERE id = ?').run(agent.agent.id);
-  const state = () => ({
-    agents: f.hive.db.prepare('SELECT * FROM agents').all(),
-    messages: f.hive.db.prepare('SELECT * FROM messages').all(),
-    members: f.hive.db.prepare('SELECT * FROM channel_members').all(),
-    sessions: f.hive.db.prepare('SELECT * FROM inbox_sessions').all(),
-  });
+  setAgentPresence(f.hive, agent.agent.id, { lastSeenAt: 1 });
+  const state = () => snapshotTables(f.hive, ['agents', 'messages', 'channel_members', 'inbox_sessions']);
   const before = state();
   for (const [route, input] of [
     ['/join', { role: 'brain', seniority: 'superhuman' }],
@@ -67,11 +63,11 @@ test('invalid HTTP values fail before presence, session, membership or message m
 
 test('huge/nonfinite direct wait durations do not create timers, sessions or presence changes', async t => {
   const f = fixture(t), agent = f.hive.join({ role: 'worker', seniority: 'mid' }).agent;
-  const before = f.hive.db.prepare('SELECT * FROM agents WHERE id = ?').get(agent.id);
+  const before = findRow(f.hive, 'agents', { id: agent.id });
   for (const invalid of [NaN, Infinity, -1, 0, 0.2, MAX_WAIT_MS + 1, 2 ** 40]) {
     await assert.rejects(f.hive.wait(agent, invalid), /Invalid request field/);
     assert.equal(f.hive.inbox.currentSession(agent.id), undefined);
-    assert.deepEqual(f.hive.db.prepare('SELECT * FROM agents WHERE id = ?').get(agent.id), before);
+    assert.deepEqual(findRow(f.hive, 'agents', { id: agent.id }), before);
   }
 });
 
@@ -108,8 +104,8 @@ test('upload limits are shared by database instances, permit another actor, and 
   const c = other.createFile(worker, { name: 'three', mime: 'text/plain', body: three.stream, declaredBytes: 1 });
   one.finish(); two.finish(); three.finish();
   assert.equal((await Promise.all([a,b,c])).length, 3);
-  assert.equal(f.hive.db.prepare('SELECT count(*) AS n FROM upload_reservations').get()!.n, 0);
-  assert.equal(f.hive.db.prepare('SELECT bytes FROM upload_usage').get()!.bytes, 3);
+  assert.equal(countRows(f.hive, 'upload_reservations'), 0);
+  assert.equal(readValue(f.hive, 'upload_usage', 'bytes'), 3);
 });
 
 test('quota accounts for committed metadata and in-flight reservation; lying lengths never overcommit', async t => {
@@ -119,11 +115,11 @@ test('quota accounts for committed metadata and in-flight reservation; lying len
   const uploading = f.hive.createFile(f.human, { name: 'held', mime: 'text/plain', body: hold.stream, declaredBytes: 2 });
   await assert.rejects(f.hive.createFile(f.human, { name: 'too-much', mime: 'text/plain', body: body('x'), declaredBytes: 1 }), /quota/);
   hold.finish('xx'); await uploading;
-  assert.equal(f.hive.db.prepare('SELECT bytes FROM upload_usage').get()!.bytes, 4);
-  f.hive.db.exec('DELETE FROM attachments');
+  assert.equal(readValue(f.hive, 'upload_usage', 'bytes'), 4);
+  deleteRows(f.hive, 'attachments');
   await assert.rejects(f.hive.createFile(f.human, { name: 'lie', mime: 'text/plain', body: body('xxx'), declaredBytes: 2 }), /large|reservation/);
-  assert.equal(f.hive.db.prepare('SELECT count(*) AS n FROM upload_reservations').get()!.n, 0);
-  assert.equal(f.hive.db.prepare('SELECT bytes FROM upload_usage').get()!.bytes, 0);
+  assert.equal(countRows(f.hive, 'upload_reservations'), 0);
+  assert.equal(readValue(f.hive, 'upload_usage', 'bytes'), 0);
 });
 
 test('stalled uploads enforce deadlines and remove temporary files and quota reservations', { timeout: 5000 }, async t => {
@@ -139,7 +135,7 @@ test('stalled uploads enforce deadlines and remove temporary files and quota res
   });
   timeout();
   await assert.rejects(uploading, /deadline/);
-  assert.equal(f.hive.db.prepare('SELECT count(*) AS n FROM upload_reservations').get()!.n, 0);
+  assert.equal(countRows(f.hive, 'upload_reservations'), 0);
   assert.deepEqual(readdirSync(filesDir(f.dir)), []);
 });
 
@@ -161,7 +157,7 @@ test('upload global concurrency stops a fifth actor without stranding its body',
   const pending = streams.map((stream, i) => f.hive.createFile(workers[i]!, { name: 'bounded', mime: 'text/plain', body: stream.stream, declaredBytes: 1 }));
   await assert.rejects(f.hive.createFile(workers[4]!, { name: 'fifth', mime: 'text/plain', body: body('x'), declaredBytes: 1 }), /concurrency/);
   for (const stream of streams) stream.finish(); await Promise.all(pending);
-  assert.equal(f.hive.db.prepare('SELECT count(*) AS n FROM upload_reservations').get()!.n, 0);
+  assert.equal(countRows(f.hive, 'upload_reservations'), 0);
 });
 
 test('upload deadline does not await an uncooperative producer cancel promise', { timeout: 5000 }, async t => {
@@ -174,7 +170,7 @@ test('upload deadline does not await an uncooperative producer cancel promise', 
     body: new ReadableStream({ cancel() { return new Promise<void>(() => {}); } }),
   });
   timeout(); await assert.rejects(pending, /deadline/);
-  assert.equal(f.hive.db.prepare('SELECT count(*) AS n FROM upload_reservations').get()!.n, 0);
+  assert.equal(countRows(f.hive, 'upload_reservations'), 0);
   assert.deepEqual(readdirSync(filesDir(f.dir)), []);
 });
 
@@ -185,6 +181,6 @@ test('a session replaced by a resume during upload cannot authorize its final co
     declaredBytes: 1, authorize: () => f.hive.agentByToken(joined.token) });
   f.hive.join({ role: 'brain', resumeName: joined.agent.name });
   stream.finish(); await assert.rejects(upload, /token/i);
-  assert.equal(f.hive.db.prepare('SELECT count(*) AS n FROM attachments').get()!.n, 0);
-  assert.equal(f.hive.db.prepare('SELECT count(*) AS n FROM upload_reservations').get()!.n, 0);
+  assert.equal(countRows(f.hive, 'attachments'), 0);
+  assert.equal(countRows(f.hive, 'upload_reservations'), 0);
 });

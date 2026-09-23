@@ -8,6 +8,7 @@ import { createApp } from './app.ts';
 import { InboxDeliveryStore } from './inbox-delivery.ts';
 import type { RoomContract } from '../shared/rooms.ts';
 import { standingOrders } from '../shared/standing-orders.ts';
+import { countRows, failWrites, listRows, markInboxRead, seedAgedInboxReceipts, storedSnapshot, updateRows } from './test-fixtures.ts';
 
 function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-rooms-')), file = path.join(dir, 'hive.db');
@@ -88,8 +89,7 @@ test('concurrent worker acknowledgements of the same unchanged contract do not c
     action: { type: 'acknowledge', contractVersion },
   });
   assert.equal(f.hive.rooms.peek(f.channel.id)!.revision, observedRevision + 2);
-  const rows = f.hive.db.prepare('SELECT actor_id, version FROM room_acks WHERE channel_id=? ORDER BY actor_id')
-    .all(f.channel.id) as Array<{ actor_id: string; version: number }>;
+  const rows = listRows(f.hive, 'room_acks', { where: { channel_id: f.channel.id }, columns: ['actor_id', 'version'], orderBy: 'actor_id' });
   assert.deepEqual(rows.map(row => [row.actor_id, row.version]).sort(),
     [[f.a.agent.id, contractVersion], [f.b.agent.id, contractVersion]].sort());
 
@@ -218,7 +218,7 @@ test('finite shared-interface room summarizes once into origin and retains histo
 test('room transactions do not publish or retain partial changes on failure', t => {
   const f = fixture(t), seen: unknown[] = [];
   const instruction = f.command(); f.hive.bus.on('message', m => seen.push(m));
-  f.hive.db.exec("CREATE TRIGGER fail_room BEFORE INSERT ON room_events BEGIN SELECT RAISE(ABORT, 'fixture failure'); END");
+  failWrites(f.hive, 'room_events', { message: 'fixture failure', persistent: true });
   assert.throws(() => f.event({ type: 'configure', contract: f.contract, reason: 'Start' }, f.brain.agent, { humanInstructionSeq: instruction }), /fixture failure/);
   assert.equal(f.hive.rooms.peek(f.channel.id), null); assert.deepEqual(seen, []);
 });
@@ -287,7 +287,7 @@ test('source reports are bot-owned, transactional and cannot claim the opposite 
   assert.throws(() => f.hive.rooms.reportLink(other, f.channel.id, 'stream', { generation: 1, observed: 'running' }), /not found/);
   assert.throws(() => f.hive.rooms.reportLink(bot, f.channel.id, 'stream', { generation: 1, observed: 'paused' }), /requested state/);
   f.event({ type: 'archive', reason: 'Stop' }, f.human);
-  f.hive.db.exec("CREATE TRIGGER fail_report BEFORE INSERT ON messages BEGIN SELECT RAISE(ABORT, 'fixture failure'); END");
+  failWrites(f.hive, 'messages', { message: 'fixture failure', persistent: true });
   assert.throws(() => f.hive.rooms.reportLink(bot, f.channel.id, 'stream', { generation: 2, observed: 'paused' }), /fixture failure/);
   assert.equal(f.hive.rooms.botLinks(bot, f.channel.id)[0]!.observed, 'pending');
 });
@@ -316,8 +316,8 @@ test('project deletion cascades room history, aliases, acknowledgements and link
   f.configure(); f.assign('retained'); f.assign('retained');
   f.hive.setOffline(brain.id);
   f.hive.deleteProject(f.human, p.slug);
-  for (const table of ['rooms', 'room_events', 'source_links']) assert.equal(f.hive.db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE channel_id=?`).get(ch.id)!.n, 0);
-  assert.ok(f.hive.rooms.peek(f.channel.id)); assert.equal(f.hive.db.prepare('SELECT COUNT(*) AS n FROM task_request_aliases').get()!.n, 1);
+  for (const table of ['rooms', 'room_events', 'source_links']) assert.equal(countRows(f.hive, table, { channel_id: ch.id }), 0);
+  assert.ok(f.hive.rooms.peek(f.channel.id)); assert.equal(countRows(f.hive, 'task_request_aliases'), 1);
 });
 
 test('coordinator may select invited workers without expanding Human-owned rules or abandoning running work', t => {
@@ -346,12 +346,8 @@ test('aged receipt totals remain atomic through room archive retries and source 
   f.hive.rooms.registerLink(bot, f.channel.id, { id: 'sensor', label: 'Synthetic sensor', suspendSupported: true });
   f.hive.rooms.reportLink(bot, f.channel.id, 'sensor', { generation: 1, observed: 'running' });
   const session = f.hive.openInboxSession(f.a.agent, crypto.randomUUID()), historical = 10_000;
-  f.hive.db.prepare('UPDATE agents SET inbox_cursor = (SELECT MAX(seq) FROM messages) WHERE id = ?').run(f.a.agent.id);
-  f.hive.db.exec('DROP TABLE inbox_receipt_totals');
-  f.hive.db.prepare(`WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i + 1 FROM n WHERE i < ?)
-    INSERT INTO inbox_deliveries(id, agent_id, session_id, through_seq, seqs, attempts, offered_at, lease_until, acknowledged_at)
-    SELECT 'room-history-' || i, ?, ?, 0, '[0]', 1, 1, 2, 100 FROM n`)
-    .run(historical, f.a.agent.id, session);
+  markInboxRead(f.hive, f.a.agent.id);
+  seedAgedInboxReceipts(f.hive, f.a.agent.id, session, historical);
   new InboxDeliveryStore(f.hive.db);
   const forbidAggregation = () => f.hive.db.function('json_array_length', () => { throw new Error('unexpected room-path aggregation'); });
   forbidAggregation();
@@ -373,12 +369,12 @@ test('aged receipt totals remain atomic through room archive retries and source 
   assert.equal(replay.delivery!.id, mail.delivery!.id);
   assert.deepEqual(replay.delivery!.messageSeqs, mail.delivery!.messageSeqs);
   const before = f.hive.rooms.view(f.human, f.channel.id);
-  f.hive.db.exec("CREATE TEMP TRIGGER room_ack_failure AFTER UPDATE ON task_records BEGIN SELECT RAISE(ABORT, 'room receipt failure'); END");
+  const allowAck = failWrites(f.hive, 'task_records', { on: 'update', timing: 'after', message: 'room receipt failure' });
   assert.throws(() => f.hive.acknowledgeInbox(f.a.agent, session, replay.delivery!.id), /room receipt failure/);
   assert.equal(f.hive.inbox.status(f.a.agent.id).acknowledgedMessages, historical);
   assert.equal(f.hive.inbox.pending(f.a.agent.id)!.id, mail.delivery!.id);
   assert.deepEqual(f.hive.rooms.view(f.human, f.channel.id), before);
-  f.hive.db.exec('DROP TRIGGER room_ack_failure');
+  allowAck();
   f.hive.acknowledgeInbox(f.a.agent, session, replay.delivery!.id);
   assert.equal(f.hive.acknowledgeInbox(f.a.agent, session, replay.delivery!.id).duplicate, true);
   assert.equal(f.hive.inboxStatuses()[f.a.agent.id].acknowledgedMessages, historical + 1);
@@ -438,11 +434,11 @@ for (const priorState of ['rejected', 'accepted_complete'] as const) {
       f.configure();
       if (archived) f.event({ type: 'archive', reason: 'End this activity' }, f.human);
       f.reopen();
-      const messagesBefore = f.hive.db.prepare('SELECT COUNT(*) AS n FROM messages').get()!.n;
+      const messagesBefore = countRows(f.hive, 'messages');
       assert.throws(() => f.taskEvent(old.id, { type: 'revise', worker: f.a.agent.name,
         contract: f.taskContract, reason: 'Revive previous work' }, f.brain.agent), /predating.*historical/);
       assert.deepEqual(f.hive.tasks.get(f.brain.agent, old.id), before);
-      assert.equal(f.hive.db.prepare('SELECT COUNT(*) AS n FROM messages').get()!.n, messagesBefore);
+      assert.equal(countRows(f.hive, 'messages'), messagesBefore);
       assert.equal(f.hive.rooms.view(f.human, f.channel.id).activeTaskCount, 0);
       if (archived) assert.throws(() => f.assign('replacement-work'), /archived/);
       else {
@@ -464,10 +460,10 @@ test('historical assignment/event retries stay idempotent after room installatio
   const rejection = { requestId: 'legacy-rejection', expectedRevision: 1, action: { type: 'reject', reason: 'No work needed' } };
   f.hive.tasks.event(f.a.agent, old.id, rejection); f.configure();
   const replay = () => {
-    const count = f.hive.db.prepare('SELECT COUNT(*) AS n FROM messages').get()!.n;
+    const count = countRows(f.hive, 'messages');
     assert.equal(f.hive.tasks.assign(f.brain.agent, assignment).duplicate, true);
     assert.equal(f.hive.tasks.event(f.a.agent, old.id, rejection).duplicate, true);
-    assert.equal(f.hive.db.prepare('SELECT COUNT(*) AS n FROM messages').get()!.n, count);
+    assert.equal(countRows(f.hive, 'messages'), count);
     assert.equal(f.hive.tasks.get(f.a.agent, old.id).state, 'rejected');
     assert.throws(() => f.hive.tasks.event(f.a.agent, old.id, { ...rejection,
       action: { ...rejection.action, reason: 'Changed payload' } }), /requestId/);
@@ -516,13 +512,13 @@ test('brain finite closure still uses its agreed policy without a new Human inst
 
 test('room metadata stays a derived projection, including tasks written by the older prototype', t => {
   const f = fixture(t); f.configure(); const assigned = f.assign().task;
-  const stored = () => JSON.parse(String(f.hive.db.prepare('SELECT snapshot FROM task_records WHERE id=?').get(assigned.id)!.snapshot));
+  const stored = () => storedSnapshot(f.hive, 'task_records', assigned.id);
   assert.equal(Object.hasOwn(stored(), 'room'), false);
   // The earlier prototype persisted the projection when writing a later task event.
   // Such cached metadata must never override the authoritative room after restart.
   const legacy = { ...stored(), room: { ...assigned.room, channelId: 'stale-channel', currentVersion: 99,
     roomRevision: 99, status: 'stopped', acknowledged: true } };
-  f.hive.db.prepare('UPDATE task_records SET snapshot=? WHERE id=?').run(JSON.stringify(legacy), assigned.id);
+  updateRows(f.hive, 'task_records', { snapshot: JSON.stringify(legacy) }, { id: assigned.id });
   f.reopen();
   const restored = f.hive.tasks.get(f.a.agent, assigned.id);
   assert.equal(restored.room!.channelId, f.channel.id);

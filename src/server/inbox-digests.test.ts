@@ -6,6 +6,7 @@ import path from "node:path";
 import { Hive } from "./hive.ts";
 import { createApp } from "./app.ts";
 import { waitWireBytes } from "./wait-format.ts";
+import { markInboxRead, updateRows } from "./test-fixtures.ts";
 import { WAIT_MAX_BYTES, type DigestExpansionResult, type Message, type WaitResult } from "../shared/types.ts";
 
 function fixture(t: TestContext) {
@@ -18,7 +19,7 @@ function fixture(t: TestContext) {
   const worker = hive.join({ role: "worker", seniority: "mid" });
   const dm = hive.openDm(brain.agent, worker.agent.name);
   const room = hive.createChannel(brain.agent, { name: "parallel-work", type: "private", memberNames: [worker.agent.name] });
-  hive.db.prepare("UPDATE agents SET inbox_cursor = (SELECT MAX(seq) FROM messages) WHERE id = ?").run(brain.agent.id);
+  markInboxRead(hive, brain.agent.id);
   const sessionId = hive.openInboxSession(brain.agent, crypto.randomUUID());
   const send = (body: string, eventType?: Message["eventType"], threadId?: string, channel = dm.id) =>
     hive.postMessage(worker.agent, { channel, body, eventType, threadId });
@@ -240,7 +241,7 @@ test("an existing schema migrates without classifying legacy messages or breakin
   const f = fixture(t);
   const message = f.send("Unclassified blocker after upgrade"); f.other();
   const batch = await f.wait();
-  f.hive.db.exec("ALTER TABLE messages DROP COLUMN event_type");
+  f.hive.db.exec("ALTER TABLE messages DROP COLUMN event_type"); // schema-level assertion
   f.reopen();
   const replay = await f.wait();
   assert.equal(replay.delivery!.id, batch.delivery!.id);
@@ -252,7 +253,7 @@ test("oversized legacy originals fail explicitly without skipping them or changi
   const f = fixture(t);
   const first = f.send("Small original", "progress");
   const large = f.send("Legacy original", "progress", first.id);
-  f.hive.db.prepare("UPDATE messages SET body = ? WHERE id = ?").run("x".repeat(WAIT_MAX_BYTES + 1), large.id);
+  updateRows(f.hive, "messages", { body: "x".repeat(WAIT_MAX_BYTES + 1) }, { id: large.id });
   const reference = { channel: f.dm.id, messageIds: [first.id, large.id] };
   const before = f.hive.inbox.status(f.brain.agent.id);
   const page = f.hive.expandDigest(f.brain.agent, reference); bounded(page);

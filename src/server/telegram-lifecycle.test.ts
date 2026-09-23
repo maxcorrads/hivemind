@@ -7,6 +7,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { test } from "node:test";
 import { CoalescingPump } from "./coalescing-pump.ts";
 import { Hive } from "./hive.ts";
+import { hasRow } from "./test-fixtures.ts";
 import { startServer } from "./serve.ts";
 import { TelegramBridge, startTelegram, writeTelegramFile } from "./telegram.ts";
 
@@ -70,9 +71,9 @@ test("real bridge sends a job queued in the same turn as empty startup", async t
   bridge.start();
   const message = hive.postMessage(hive.getAgent("human"), { channel: "general", body: "startup work" });
   try {
-    await until(() => Boolean(hive.db.prepare("SELECT 1 FROM telegram_out WHERE seq = ?").get(message.seq)));
+    await until(() => hasRow(hive, "telegram_out", { seq: message.seq }));
     assert.equal(calls, 1);
-    assert.equal(hive.db.prepare("SELECT 1 FROM telegram_pending WHERE seq = ?").get(message.seq), undefined);
+    assert.equal(hasRow(hive, "telegram_pending", { seq: message.seq }), false);
   } finally { await bridge.stop(); }
 });
 
@@ -95,8 +96,8 @@ test("stop drains a delayed old topic response without restoring a mapping or co
   const stopped = bridge.stop();
   release(Response.json({ ok: true, result: { message_thread_id: 17 } }));
   await stopped;
-  assert.equal(hive.db.prepare("SELECT 1 FROM telegram_topics WHERE channel_id = ?").get(channel.id), undefined);
-  assert.ok(hive.db.prepare("SELECT 1 FROM telegram_pending WHERE seq = ?").get(message.seq));
+  assert.equal(hasRow(hive, "telegram_topics", { channel_id: channel.id }), false);
+  assert.ok(hasRow(hive, "telegram_pending", { seq: message.seq }));
 });
 
 test("serialized reload never overlaps polling generations", async t => {

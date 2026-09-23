@@ -5,6 +5,7 @@ import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { test, type TestContext } from "node:test";
 import { Hive } from "./hive.ts";
+import { countRows, failWrites, hasRow, insertRow, insertRows, deleteRows, rowsContaining, telegramOffset } from "./test-fixtures.ts";
 import { createApp } from "./app.ts";
 import { TelegramBridge, telegramConfigKey, writeTelegramFile, loadTelegramConfig, type TelegramConfig } from "./telegram.ts";
 import { initTelegramRouting } from "./telegram-routing.ts";
@@ -45,17 +46,17 @@ test("failure record, seen marker and cursor roll back at each SQLite statement 
     await t.test(table!, async sub => {
       const f = fixture(sub);
       initTelegramRouting(f.hive.db, telegramConfigKey(config));
-      f.hive.db.exec(`CREATE TEMP TRIGGER inject AFTER INSERT ON ${table} WHEN ${condition} BEGIN SELECT RAISE(ABORT, 'injected crash point'); END`);
+      failWrites(f.hive, table!, { timing: "after", when: condition, message: "injected crash point" });
       assert.throws(() => recordTelegramUpdateFailure(f.hive.db, scope(f.hive), message(7, "retain me"), "failure", { permanent: true }), /injected/);
-      assert.equal(f.hive.db.prepare("SELECT 1 FROM telegram_update_failures").get(), undefined);
-      assert.equal(f.hive.db.prepare("SELECT 1 FROM telegram_in WHERE update_id = 7").get(), undefined);
-      assert.equal(f.hive.db.prepare("SELECT 1 FROM telegram_bot_state WHERE key = 'offset'").get(), undefined);
+      assert.equal(hasRow(f.hive, "telegram_update_failures"), false);
+      assert.equal(hasRow(f.hive, "telegram_in", { update_id: 7 }), false);
+      assert.equal(telegramOffset(f.hive), undefined);
       f.hive.db.close();
       f.hive = new Hive(path.join(f.dir, "hive.db"));
       recordTelegramUpdateFailure(f.hive.db, scope(f.hive), message(7, "retain me"), "failure", { permanent: true });
       assert.equal(f.hive.telegramQuarantine().length, 1);
-      assert.ok(f.hive.db.prepare("SELECT 1 FROM telegram_in WHERE update_id = 7").get());
-      assert.equal((f.hive.db.prepare("SELECT value FROM telegram_bot_state WHERE key = 'offset'").get() as { value: string }).value, "8");
+      assert.ok(hasRow(f.hive, "telegram_in", { update_id: 7 }));
+      assert.equal(telegramOffset(f.hive), "8");
     });
   }
 });
@@ -101,7 +102,7 @@ test("a failed attachment cannot starve another project; retries have deadlines 
   const inbound = f.hive.listMessages(f.hive.getAgent("human"), f.hive.getChannel("general", scope(f.hive).projectId).id).messages.filter(m => m.attachments?.length);
   assert.equal(inbound.length, 1);
   assert.equal(inbound[0]!.attachments!.length, 1);
-  assert.equal((f.hive.db.prepare("SELECT value FROM telegram_bot_state WHERE key = 'offset'").get() as { value: string }).value, "3", "old replay must not regress the cursor");
+  assert.equal(telegramOffset(f.hive), "3", "old replay must not regress the cursor");
 });
 
 test("retry deadlines and original scopes survive restart without an unrelated incoming update", async t => {
@@ -113,9 +114,9 @@ test("retry deadlines and original scopes survive restart without an unrelated i
   f.bridge = new TelegramBridge(f.hive, config); f.bridge.start();
   await flush();
   t.mock.timers.tick(29_999); await flush();
-  assert.equal(f.hive.db.prepare("SELECT 1 FROM telegram_out WHERE telegram_message_id = 110").get(), undefined);
+  assert.equal(hasRow(f.hive, "telegram_out", { telegram_message_id: 110 }), false);
   t.mock.timers.tick(1);
-  await until(() => Boolean(f.hive.db.prepare("SELECT 1 FROM telegram_out WHERE telegram_message_id = 110").get()));
+  await until(() => hasRow(f.hive, "telegram_out", { telegram_message_id: 110 }));
   assert.equal(f.hive.telegramPollHealth().retrying, 0);
 });
 
@@ -151,15 +152,15 @@ test("inbound post and Telegram receipt are atomic; failed receipt publication d
     return blocked(init?.signal);
   });
   f.bridge = new TelegramBridge(f.hive, config);
-  f.hive.db.exec("CREATE TEMP TRIGGER receipt_fail BEFORE INSERT ON telegram_out BEGIN SELECT RAISE(ABORT, 'receipt failed'); END");
+  const restoreReceipts = failWrites(f.hive, "telegram_out", { message: "receipt failed" });
   f.bridge.start();
   await until(() => f.hive.telegramPollHealth().retrying === 1);
   assert.equal(published, 0);
-  assert.equal(f.hive.db.prepare("SELECT 1 FROM messages WHERE body LIKE '%transactional%'").get(), undefined);
-  f.hive.db.exec("DROP TRIGGER receipt_fail");
+  assert.equal(rowsContaining(f.hive, "messages", "body", "transactional").length, 0);
+  restoreReceipts();
   t.mock.timers.tick(1_000);
   await until(() => published === 1);
-  assert.equal((f.hive.db.prepare("SELECT COUNT(*) AS n FROM messages WHERE body LIKE '%transactional%'").get() as { n: number }).n, 1);
+  assert.equal(rowsContaining(f.hive, "messages", "body", "transactional").length, 1);
 });
 
 test("actual inbound replies preserve roots across nested replies, attachment mappings, stale roots, duplicates and restart", async t => {
@@ -169,9 +170,10 @@ test("actual inbound replies preserve roots across nested replies, attachment ma
   const nested = f.hive.postMessage(human, { channel: "general", body: "child", threadId: root.id });
   const gone = f.hive.postMessage(human, { channel: "general", body: "deleted" });
   f.bridge = new TelegramBridge(f.hive, config);
-  const mapping = f.hive.db.prepare("INSERT INTO telegram_out(bot_key,telegram_chat_id,telegram_message_id,seq,channel_id,thread_id) VALUES(?,?,?,?,?,?)");
-  for (const [id, m] of [[11, root], [12, nested], [13, root], [14, gone]] as const) mapping.run(telegramConfigKey(config), -1001, id, m.seq, m.channelId, m.threadId);
-  f.hive.db.prepare("DELETE FROM messages WHERE id = ?").run(gone.id);
+  insertRows(f.hive, "telegram_out", ([[11, root], [12, nested], [13, root], [14, gone]] as const).map(([id, m]) => ({
+    bot_key: telegramConfigKey(config), telegram_chat_id: -1001, telegram_message_id: id, seq: m.seq, channel_id: m.channelId, thread_id: m.threadId,
+  })));
+  deleteRows(f.hive, "messages", { id: gone.id });
   const updates = [11, 12, 13, 14, 999].map((replyId, i) => ({ ...message(20 + i, `reply-${replyId}`), message: { ...message(20 + i, `reply-${replyId}`).message, reply_to_message: { message_id: replyId } } }));
   updates.push(updates[0]!); // redelivered update
   let polls = 0;
@@ -180,7 +182,7 @@ test("actual inbound replies preserve roots across nested replies, attachment ma
     return blocked(init?.signal);
   });
   f.bridge.start(); await until(() => polls === 2);
-  const replies = (f.hive.db.prepare("SELECT seq FROM messages WHERE body LIKE '%reply-%'").all() as { seq: number }[]).map(row => f.hive.getMessageBySeq(row.seq));
+  const replies = rowsContaining(f.hive, "messages", "body", "reply-", "seq").map(row => f.hive.getMessageBySeq(Number(row.seq)));
   assert.equal(replies.length, 5);
   for (const id of [11, 12, 13]) assert.equal(replies.find(m => m.body.endsWith(`reply-${id}`))!.threadId, root.id);
   for (const id of [14, 999]) {
@@ -191,7 +193,7 @@ test("actual inbound replies preserve roots across nested replies, attachment ma
   polls = 0;
   f.bridge = new TelegramBridge(f.hive, config); f.bridge.start();
   await flush(); assert.equal(polls, 1); t.mock.timers.tick(250); await until(() => polls === 2);
-  assert.equal((f.hive.db.prepare("SELECT COUNT(*) AS n FROM messages WHERE body LIKE '%reply-%'").get() as { n: number }).n, 5);
+  assert.equal(rowsContaining(f.hive, "messages", "body", "reply-").length, 5);
 });
 
 test("quarantine API rejects a different bot/project/chat, rolls back a failed retry and publishes only after commit", async t => {
@@ -209,12 +211,12 @@ test("quarantine API rejects a different bot/project/chat, rolls back a failed r
   assert.equal((await app.request("/api/ui/telegram/quarantine?limit=NaN")).status, 400);
   const list = await app.request("/api/ui/telegram/quarantine");
   assert.equal(list.status, 200); assert.equal(JSON.stringify(await list.json()).includes('"payload"'), false);
-  f.hive.db.exec("CREATE TEMP TRIGGER retry_fail BEFORE UPDATE ON telegram_update_failures BEGIN SELECT RAISE(ABORT, 'retry failed'); END");
+  const restoreRetries = failWrites(f.hive, "telegram_update_failures", { on: "update", message: "retry failed" });
   let wakes = 0;
   f.hive.bus.on("telegram-inbox-wake", () => { wakes++; assert.equal(f.hive.telegramPollHealth().retrying, 1); });
   assert.throws(() => f.hive.retryTelegramUpdate(id, () => true), /retry failed/);
   assert.equal(wakes, 0); assert.equal(f.hive.telegramQuarantine().length, 1);
-  f.hive.db.exec("DROP TRIGGER retry_fail");
+  restoreRetries();
   assert.equal((await app.request(`/api/ui/telegram/quarantine/${id}/retry`, { method: "POST" })).status, 200);
   assert.equal(wakes, 1);
   f.hive.bus.removeAllListeners("telegram-inbox-wake");
@@ -231,11 +233,12 @@ test("bounded failure retention, legacy scope and monotone replay offsets remain
   recordTelegramUpdateFailure(f.hive.db, scope(f.hive), message(9999, "x".repeat(TELEGRAM_UPDATE_BYTES)), "too large");
   assert.ok(f.hive.telegramQuarantine(200).some(row => row.lastError === "update_payload_too_large" && !row.replayable));
   finishTelegramUpdate(f.hive.db, telegramConfigKey(config), 3);
-  assert.equal((f.hive.db.prepare("SELECT value FROM telegram_bot_state WHERE key = 'offset'").get() as { value: string }).value, "10000");
+  assert.equal(telegramOffset(f.hive), "10000");
   pruneTelegramUpdates(f.hive.db, Date.now() + 31 * 86400_000);
   assert.equal(f.hive.telegramPollHealth().quarantined, 0);
+  // schema-level assertion: recreate the legacy failure table before migration.
   f.hive.db.exec("DROP TABLE telegram_update_failures; CREATE TABLE telegram_update_failures(update_id INTEGER PRIMARY KEY, payload TEXT, attempts INTEGER, last_error TEXT, state TEXT, updated_at INTEGER)");
-  f.hive.db.prepare("INSERT INTO telegram_update_failures VALUES(1, ?, 3, 'failure', 'retrying', ?)").run(JSON.stringify(message(1, "legacy")), Date.now());
+  insertRow(f.hive, "telegram_update_failures", { update_id: 1, payload: JSON.stringify(message(1, "legacy")), attempts: 3, last_error: "failure", state: "retrying", updated_at: Date.now() });
   initTelegramInbox(f.hive.db); initTelegramInbox(f.hive.db);
   const legacy = f.hive.telegramQuarantine()[0]!;
   assert.equal(legacy.lastError, "legacy_scope_unknown"); assert.equal(legacy.replayable, false);
@@ -267,7 +270,7 @@ test("a proxy repeating an already-seen successful batch cannot spin the poller"
   assert.equal(polls, 2);
   t.mock.timers.tick(249); await flush(); assert.equal(polls, 2);
   t.mock.timers.tick(1); await until(() => polls === 3); await flush();
-  assert.equal((f.hive.db.prepare("SELECT COUNT(*) AS n FROM telegram_out WHERE telegram_message_id = 108").get() as { n: number }).n, 1);
+  assert.equal(countRows(f.hive, "telegram_out", { telegram_message_id: 108 }), 1);
 });
 
 test("file download HTTP 429 retains its Retry-After deadline and releases the error body", async t => {

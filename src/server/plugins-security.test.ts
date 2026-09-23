@@ -4,6 +4,7 @@ import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSyn
 import os from "node:os";
 import path from "node:path";
 import { Hive } from "./hive.ts";
+import { readValue } from "./test-fixtures.ts";
 import { createApp } from "./app.ts";
 import { configurePlugin, launchContext, projectPlugins, registerPlugin, saveProjectPlugin } from "./plugins.ts";
 import { preparePrivateDatabase } from "./private-database.ts";
@@ -129,8 +130,8 @@ test("new bot uploads create private files and never retain plaintext credential
   const f = fixture(t), human = f.hive.getAgent("human");
   const bot = f.hive.createBot(human, f.project.id, { name: "UploadSource" });
   const file = await f.hive.createFile(bot.bot, { name: "source.txt", mime: "text/plain", body: new Blob(["ordinary source"]).stream() });
-  const stored = f.hive.db.prepare("SELECT sha256 FROM attachments WHERE id=?").get(file.id)!;
-  assert.equal(statSync(path.join(f.home, "files", String(stored.sha256))).mode & 0o777, 0o600);
+  const sha256 = readValue(f.hive, "attachments", "sha256", { id: file.id });
+  assert.equal(statSync(path.join(f.home, "files", String(sha256))).mode & 0o777, 0o600);
   assert.equal(JSON.stringify(file).includes(bot.token), false);
   assert.equal(readdirSync(path.join(f.home, "files")).some(name => name.startsWith("part-")), false);
 });

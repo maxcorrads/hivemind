@@ -10,6 +10,7 @@ import { readAdaptiveCapacity } from './adaptive-topology-capacity.ts';
 import { jevTopologyResponse } from './fixtures/jev-topology.ts';
 import type { AdaptiveTopology } from '../shared/adaptive-topology.ts';
 import type { TaskSnapshot } from '../shared/tasks.ts';
+import { countRows, setAgentPresence } from './test-fixtures.ts';
 
 const contract = { objective: 'Complete bounded work.', scope: [], nonGoals: [], acceptanceCriteria: ['Return evidence.'], dependencies: [], evidenceSeqs: [] };
 function fixture(t: TestContext) {
@@ -56,7 +57,7 @@ function fixture(t: TestContext) {
 
 test('monitoring state distinguishes disabled, pending, unavailable, recovered and completed without agent mail', async t => {
   const f = fixture(t); const started = await f.start();
-  const count = () => Number(f.hive.db.prepare('SELECT COUNT(*) AS n FROM messages').get()!.n);
+  const count = () => countRows(f.hive, 'messages');
   const before = count();
   assert.equal(f.view().state?.monitoring, 'active');
   f.fail(true); await f.recheck(); assert.equal(f.view().state?.monitoring, 'unavailable');
@@ -133,7 +134,7 @@ test('a completed delegation cannot be reused or reopened to bypass Single; work
   assert.throws(() => f.hive.setThreadStatus(f.workers[0]!.agent, root, 'done'), /delegating brain/);
   const continued = await f.post(`/api/agent/channels/${f.workerDm.id}/messages`, { body: 'Include this case.', threadId: root, requestId: 'same-thread' }, f.brain.token);
   assert.equal(continued.status, 200, await continued.clone().text());
-  assert.equal(Number(f.hive.db.prepare('SELECT COUNT(*) AS n FROM adaptive_topology_messages').get()!.n), 1);
+  assert.equal(countRows(f.hive, 'adaptive_topology_messages'), 1);
   f.choose('single'); await f.recheck(); await f.recheck();
   const closed = await f.post(`/api/agent/threads/${root}/status`, { status: 'done' }, f.brain.token);
   assert.equal(closed.status, 200); assert.equal(f.view().state?.currentTopology, 'single');
@@ -169,15 +170,15 @@ test('deleting a project prunes its routing state, locks and audit without leavi
   const other = f.hive.createProject(f.human, { slug: 'other', name: 'Other' }); assert.ok(other);
   f.hive.deleteProject(f.human, 'chapter');
   for (const table of ['adaptive_topology_executions', 'adaptive_topology_events', 'adaptive_topology_locks', 'adaptive_topology_evaluated'])
-    assert.equal(Number(f.hive.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()!.n), 0, table);
+    assert.equal(countRows(f.hive, table), 0, table);
 });
 
 test('zero capacity is signalled without inventing a worker budget and recovers when capacity returns', async t => {
   const f = fixture(t);
   // Use database presence to avoid injecting unrelated background evaluations before initial selection.
-  f.hive.db.prepare("UPDATE agents SET online=0 WHERE role='worker'").run(); f.choose('capacity_blocked');
+  setAgentPresence(f.hive, { role: 'worker' }, { online: false }); f.choose('capacity_blocked');
   const started = await f.start(); assert.equal(started.state.workerBudget, 0); assert.match(started.state.warning ?? '', /no workers/);
-  f.hive.db.prepare("UPDATE agents SET online=1 WHERE role='worker'").run(); f.choose('brain_multi_room'); await f.recheck();
+  setAgentPresence(f.hive, { role: 'worker' }, { online: true }); f.choose('brain_multi_room'); await f.recheck();
   assert.equal(f.view().state?.currentTopology, 'brain_multi_room'); assert.equal(f.view().state?.warning, null);
   assert.equal(readAdaptiveCapacity(f.hive, f.view().state!).workers.free, 3);
 });
@@ -217,7 +218,7 @@ test('duplicate votes do not count twice, capacity races reevaluate, and a rotat
   assert.equal(f.calls(), calls); assert.equal(f.view().state?.currentTopology, 'brain_multi_room');
   await f.recheck(); assert.equal(f.view().state?.currentTopology, 'single');
   // Mutate the roster while Jev is answering, without a second unrelated presence event.
-  f.choose('brain_multi_room'); f.beforeReply(() => { f.hive.db.prepare('UPDATE agents SET online=0 WHERE id=?').run(f.workers[2]!.agent.id); });
+  f.choose('brain_multi_room'); f.beforeReply(() => { setAgentPresence(f.hive, f.workers[2]!.agent.id, { online: false }); });
   const raceCalls = f.calls(); await f.recheck(); assert.equal(f.calls(), raceCalls + 2);
   await f.recheck(); assert.equal(f.view().state?.currentTopology, 'brain_multi_room');
   const before = f.view().state!.revision;
@@ -239,11 +240,11 @@ test('pending classification drains on stop and cannot publish new audit or topo
 
 test('initial classifier output cannot outlive a settings change or leave a Human message half-committed', async t => {
   const f = fixture(t);
-  const before = Number(f.hive.db.prepare('SELECT COUNT(*) AS n FROM messages').get()!.n);
+  const before = countRows(f.hive, 'messages');
   f.beforeReply(() => { saveAdaptiveRouting(f.dir, { apiKey: 'new-private-key' }); });
   await assert.rejects(f.start(), /settings changed/);
   assert.equal(f.view().state, null);
-  assert.equal(Number(f.hive.db.prepare('SELECT COUNT(*) AS n FROM messages').get()!.n), before);
+  assert.equal(countRows(f.hive, 'messages'), before);
   const started = await f.start();
   assert.equal(started.state.currentTopology, 'single');
 });

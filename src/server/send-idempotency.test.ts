@@ -6,6 +6,7 @@ import path from "node:path";
 import { test, type TestContext } from "node:test";
 import { getRequestListener } from "@hono/node-server";
 import { Hive } from "./hive.ts";
+import { backdate, countRows, failWrites, insertRows, readValue } from "./test-fixtures.ts";
 import { createApp } from "./app.ts";
 import { SEND_KEYS_PER_ACTOR } from "../shared/mutation.ts";
 
@@ -34,12 +35,12 @@ test("send keys bind exact payloads atomically and replay attachments after rest
     assert.throws(() => f.hive.postMessage(f.brain.agent, { ...payload, ...patch }), /already used/);
   for (const requestId of ["", "../escape", "x".repeat(101)])
     assert.throws(() => f.hive.postMessage(f.brain.agent, { ...input, requestId }), /Invalid requestId/);
-  assert.equal(f.hive.db.prepare("SELECT COUNT(*) AS n FROM send_requests").get()!.n, 1);
+  assert.equal(countRows(f.hive, "send_requests"), 1);
   f.hive.db.close();
   const restart = new Hive(f.file); t.after(() => restart.db.close());
   const replay = restart.postMessage(f.brain.agent, payload);
   assert.equal(replay.id, original.id); assert.equal(replay.seq, original.seq);
-  assert.equal(restart.db.prepare("SELECT message_id FROM attachments WHERE id=?").get(attachment.id)!.message_id, original.id);
+  assert.equal(readValue(restart, "attachments", "message_id", { id: attachment.id }), original.id);
 });
 
 test("a journal insert failure rolls back message/bindings/events and leaves the key reusable", async t => {
@@ -47,13 +48,13 @@ test("a journal insert failure rolls back message/bindings/events and leaves the
     { name: "rollback.txt", mime: "text/plain", bytes: new TextEncoder().encode("rollback") });
   const input = { channel: f.dm.id, body: "atomic", requestId: "rollback", attachmentIds: [attachment.id] };
   let events = 0; f.hive.bus.on("message", () => events++);
-  f.hive.db.exec("CREATE TRIGGER fail_send_ledger BEFORE INSERT ON send_requests BEGIN SELECT RAISE(ABORT, 'ledger failure'); END;");
-  const count = Number(f.hive.db.prepare("SELECT COUNT(*) AS n FROM messages").get()!.n);
+  const restoreLedger = failWrites(f.hive, "send_requests", { message: "ledger failure", persistent: true });
+  const count = countRows(f.hive, "messages");
   assert.throws(() => f.hive.postMessage(f.brain.agent, input), /ledger failure/);
-  assert.equal(Number(f.hive.db.prepare("SELECT COUNT(*) AS n FROM messages").get()!.n), count);
-  assert.equal(f.hive.db.prepare("SELECT message_id FROM attachments WHERE id=?").get(attachment.id)!.message_id, null);
+  assert.equal(countRows(f.hive, "messages"), count);
+  assert.equal(readValue(f.hive, "attachments", "message_id", { id: attachment.id }), null);
   assert.equal(events, 0);
-  f.hive.db.exec("DROP TRIGGER fail_send_ledger");
+  restoreLedger();
   f.hive.postMessage(f.brain.agent, input);
   assert.equal(events, 1);
 });
@@ -98,16 +99,16 @@ test("keys remain project scoped, cannot bypass visibility and do not evict unex
   const one = f.hive.postMessage(f.human, { channel: "general", body: "A", requestId: "human-key" });
   const two = f.hive.postMessage(f.human, { channel: f.hive.getChannel("general", other.id).id, body: "B", requestId: "human-key" });
   assert.notEqual(one.id, two.id);
-  const insert = f.hive.db.prepare("INSERT INTO send_requests VALUES(?,?,?,?,?,?)");
-  f.hive.db.exec("BEGIN");
-  for (let i = 1; i < SEND_KEYS_PER_ACTOR; i++) insert.run(f.brain.agent.id, f.brain.agent.projectId!, `quota-${i}`, "hash", original.id, Date.now() + 100000);
-  f.hive.db.exec("COMMIT");
+  insertRows(f.hive, "send_requests", Array.from({ length: SEND_KEYS_PER_ACTOR - 1 }, (_, i) => ({
+    actor_id: f.brain.agent.id, project_id: f.brain.agent.projectId!, request_id: `quota-${i + 1}`,
+    payload_hash: "hash", message_id: original.id, expires_at: Date.now() + 100000,
+  })));
   assert.throws(() => f.hive.postMessage(f.brain.agent, { ...input, requestId: "over-cap" }), /full/);
   assert.equal(f.hive.postMessage(f.brain.agent, input).id, original.id, "old key remains replayable at capacity");
-  f.hive.db.prepare("UPDATE send_requests SET expires_at=0 WHERE actor_id=?").run(f.brain.agent.id);
+  backdate(f.hive, "send_requests", "expires_at", { actor_id: f.brain.agent.id });
   const afterWindow = f.hive.postMessage(f.brain.agent, input);
   assert.notEqual(afterWindow.id, original.id, "the documented 24-hour promise does not extend indefinitely");
-  assert.ok(Number(f.hive.db.prepare("SELECT COUNT(*) AS n FROM send_requests WHERE actor_id=?").get(f.brain.agent.id)!.n) < SEND_KEYS_PER_ACTOR);
+  assert.ok(countRows(f.hive, "send_requests", { actor_id: f.brain.agent.id }) < SEND_KEYS_PER_ACTOR);
 });
 
 test("desired-state reactions are retry safe, transactional and permission checked", t => {

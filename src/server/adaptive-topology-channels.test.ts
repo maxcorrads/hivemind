@@ -10,6 +10,7 @@ import { jevTopologyResponse } from './fixtures/jev-topology.ts';
 import type { AdaptiveTopology } from '../shared/adaptive-topology.ts';
 import type { Message } from '../shared/types.ts';
 import type { TaskSnapshot } from '../shared/tasks.ts';
+import { insertRow, readValue } from './test-fixtures.ts';
 
 const contract = { objective: 'Complete bounded work.', scope: [], nonGoals: [], acceptanceCriteria: ['Return evidence.'], dependencies: [], evidenceSeqs: [] };
 
@@ -102,7 +103,7 @@ test('Human replies revalidate, reopen or start the execution of their thread', 
   const reopened = f.hive.adaptiveTopology.view(f.human, dm.id);
   assert.equal(reopened.state?.executionId, executionId, 'A reply reopens the completed execution of its thread');
   assert.equal(reopened.state?.completedAt, null);
-  assert.equal(f.hive.db.prepare('SELECT status FROM threads WHERE id=?').get(request.message.id)?.status, 'open');
+  assert.equal(readValue(f.hive, 'threads', 'status', { id: request.message.id }), 'open');
   assert.equal(f.calls(), 3);
 
   // A thread without its own execution, after the brain's execution was superseded, starts a new one there.
@@ -160,21 +161,24 @@ test('legacy channel-keyed executions and locks migrate to per-brain keys', asyn
     rootMessageId: root.id, currentTopology: 'single', workerBudget: 0, desiredTopology: null, desiredWorkers: null, lockScope: 'conversation',
     lockedTopology: 'single', orchestratedOnly: false, providerAvailable: false, warning: null, recommendation: null, confirmations: 0,
     confirmationTopology: null, confirmationWorkers: null, eventsSinceChange: 0, updatedAt: 1, recentEvents: [], revision: 1, completedAt: null });
+  // schema-level assertion: recreate the legacy per-channel tables before the migration runs.
   hive.db.exec(`DROP TRIGGER adaptive_channel_deleted; DROP TABLE adaptive_topology_executions; DROP TABLE adaptive_topology_locks;
     CREATE TABLE adaptive_topology_executions (channel_id TEXT PRIMARY KEY, execution_id TEXT NOT NULL UNIQUE, project_id TEXT NOT NULL,
       brain_id TEXT NOT NULL, root_message_id TEXT NOT NULL, snapshot TEXT NOT NULL);
     CREATE TABLE adaptive_topology_locks (channel_id TEXT PRIMARY KEY, topology TEXT NOT NULL, updated_at INTEGER NOT NULL);`);
-  hive.db.prepare('INSERT INTO adaptive_topology_executions VALUES(?,?,?,?,?,?)').run(dm.id, 'execution-legacy', dm.projectId, brain.agent.id, root.id, snapshot);
-  hive.db.prepare('INSERT INTO adaptive_topology_locks VALUES(?,?,?)').run(dm.id, 'single', 1);
+  insertRow(hive, 'adaptive_topology_executions', { channel_id: dm.id, execution_id: 'execution-legacy', project_id: dm.projectId,
+    brain_id: brain.agent.id, root_message_id: root.id, snapshot });
+  insertRow(hive, 'adaptive_topology_locks', { channel_id: dm.id, topology: 'single', updated_at: 1 });
   await hive.adaptiveTopology.stop(); hive.db.close();
 
   hive = new Hive(file);
   t.after(async () => { await hive.adaptiveTopology.stop(); hive.db.close(); });
+  // schema-level assertion: primary keys and cleanup trigger after migration.
   const keys = (table: string) => hive.db.prepare(`PRAGMA table_info(${table})`).all().filter(c => Number(c.pk) > 0).map(c => String(c.name));
   assert.deepEqual(keys('adaptive_topology_executions'), ['execution_id']);
-  assert.equal(hive.db.prepare('SELECT current FROM adaptive_topology_executions WHERE execution_id=?').get('execution-legacy')?.current, 1);
+  assert.equal(readValue(hive, 'adaptive_topology_executions', 'current', { execution_id: 'execution-legacy' }), 1);
   assert.deepEqual(keys('adaptive_topology_locks'), ['channel_id', 'brain_id']);
-  assert.equal(hive.db.prepare('SELECT brain_id FROM adaptive_topology_locks WHERE channel_id=?').get(dm.id)?.brain_id, brain.agent.id);
+  assert.equal(readValue(hive, 'adaptive_topology_locks', 'brain_id', { channel_id: dm.id }), brain.agent.id);
   assert.equal(hive.adaptiveTopology.view(human, dm.id).state?.executionId, 'execution-legacy');
   assert.equal(hive.adaptiveTopology.forAgent(hive.getAgent(brain.agent.id))?.executionId, 'execution-legacy');
   assert.ok(hive.db.prepare("SELECT 1 FROM sqlite_master WHERE type='trigger' AND name='adaptive_channel_deleted'").get(), 'Deletion cleanup survives the migration');
@@ -192,14 +196,17 @@ test('per-brain executions migrate to execution keys and stay current', async t 
     rootMessageId: root.id, currentTopology: 'single', workerBudget: 0, desiredTopology: null, desiredWorkers: null, lockScope: 'task',
     lockedTopology: 'single', orchestratedOnly: false, providerAvailable: false, warning: null, recommendation: null, confirmations: 0,
     confirmationTopology: null, confirmationWorkers: null, eventsSinceChange: 0, updatedAt: 1, recentEvents: [], revision: 1, completedAt: null });
+  // schema-level assertion: recreate the per-brain v2 table before the migration runs.
   hive.db.exec(`DROP TRIGGER adaptive_channel_deleted; DROP TABLE adaptive_topology_executions;
     CREATE TABLE adaptive_topology_executions (channel_id TEXT NOT NULL, brain_id TEXT NOT NULL, execution_id TEXT NOT NULL UNIQUE,
       project_id TEXT NOT NULL, root_message_id TEXT NOT NULL, snapshot TEXT NOT NULL, PRIMARY KEY(channel_id,brain_id));`);
-  hive.db.prepare('INSERT INTO adaptive_topology_executions VALUES(?,?,?,?,?,?)').run(dm.id, brain.agent.id, 'execution-v2', dm.projectId, root.id, snapshot);
+  insertRow(hive, 'adaptive_topology_executions', { channel_id: dm.id, brain_id: brain.agent.id, execution_id: 'execution-v2',
+    project_id: dm.projectId, root_message_id: root.id, snapshot });
   await hive.adaptiveTopology.stop(); hive.db.close();
 
   hive = new Hive(file);
   t.after(async () => { await hive.adaptiveTopology.stop(); hive.db.close(); });
+  // schema-level assertion: execution key, current index and cleanup trigger after migration.
   const keys = hive.db.prepare('PRAGMA table_info(adaptive_topology_executions)').all().filter(c => Number(c.pk) > 0).map(c => String(c.name));
   assert.deepEqual(keys, ['execution_id']);
   assert.equal(hive.adaptiveTopology.view(human, dm.id).state?.executionId, 'execution-v2');

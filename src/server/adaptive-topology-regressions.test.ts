@@ -8,6 +8,7 @@ import { createApp } from './app.ts';
 import { saveAdaptiveRouting } from './adaptive-config.ts';
 import type { AdaptiveTopology } from '../shared/adaptive-topology.ts';
 import type { AdaptiveCoordinationEvent } from './adaptive-topology.ts';
+import { countRows } from './test-fixtures.ts';
 
 function choice(selected: string, options: string[], confidence: number) {
   const rest = options.length > 1 ? (1 - confidence) / (options.length - 1) : 0;
@@ -133,7 +134,7 @@ test('provider failure keeps the mode and warning; successful evaluation clears 
 test('every revalidation is Human-visible without becoming an agent message or inbox item', async t => {
   const f = fixture(t);
   await f.start();
-  const count = () => Number(f.hive.db.prepare('SELECT COUNT(*) AS n FROM messages').get()!.n);
+  const count = () => countRows(f.hive, 'messages');
   const beforeMessages = count();
   const beforeEvents = f.view().events.length;
   await f.recheck(); await f.recheck();

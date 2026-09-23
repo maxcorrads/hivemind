@@ -9,6 +9,7 @@ import { startServer } from './serve.ts';
 import { HiveError } from '../shared/types.ts';
 import { capabilityCardSchema, outcomeInterval, type CapabilityCard } from '../shared/routing.ts';
 import type { TaskSnapshot } from '../shared/tasks.ts';
+import { addChannelMember, backdate, cloneAgent, failWrites } from './test-fixtures.ts';
 
 const card: CapabilityCard = { enabled: true, capabilities: ['typescript', 'parser'], modes: ['implementation', 'review'],
   model: null, host: null, availableContext: 128000, availability: 'available', maxInProgress: 4 };
@@ -46,9 +47,9 @@ test('capability cards are worker opt-in, revision fenced, atomic and durable', 
   assert.throws(() => f.hive.routing.set(f.brain.agent, { expectedRevision: 0, card }), status(403));
   const first = f.set(0); assert.equal(first.revision, 1);
   assert.throws(() => f.hive.routing.set(worker, { expectedRevision: 0, card }), status(409));
-  f.hive.db.exec("CREATE TRIGGER fail_card BEFORE UPDATE ON worker_capabilities BEGIN SELECT RAISE(ABORT,'fixture write failure'); END");
+  const restoreCards = failWrites(f.hive, 'worker_capabilities', { on: 'update', message: 'fixture write failure', persistent: true });
   assert.throws(() => f.set(0, { enabled: false }), /fixture write failure/);
-  f.hive.db.exec('DROP TRIGGER fail_card');
+  restoreCards();
   f.reopen(); assert.deepEqual(f.hive.routing.get(worker, worker.id), first);
   assert.equal(f.set(0, { enabled: false }).revision, 2);
   for (const bad of [{ ...card, modes: ['implementation', 'implementation'] }, { ...card, availableContext: NaN }, { ...card, capabilities: ['../x'] }, { ...card, maxInProgress: 0 }])
@@ -113,7 +114,7 @@ test('changed task revisions and expired observations cannot masquerade as curre
   assert.equal(f.hive.routing.suggest(f.brain.agent, target.id, query).candidates[0]!.evidence.reviewed, 0);
   const second = f.complete(f.assign());
   f.hive.routing.recordOutcome(f.brain.agent, second.id, { expectedRevision: second.revision, category: 'parser', capabilityRevision: 1 });
-  f.hive.db.prepare('UPDATE routing_outcomes SET recorded_at = 0').run();
+  backdate(f.hive, 'routing_outcomes', 'recorded_at');
   assert.equal(f.hive.routing.suggest(f.brain.agent, target.id, query).candidates[0]!.evidence.reviewed, 0);
 });
 
@@ -159,13 +160,10 @@ test('actual HTTP capability races have one winner and validate before mutation'
 
 test('card roster admission is bounded and paginated suggestions do not silently discard cold starts', t => {
   const f = fixture(t), task = f.assign(), original = f.workers[0]!.agent; f.set(0);
-  const row = f.hive.db.prepare('SELECT * FROM agents WHERE id=?').get(original.id)!;
-  const cols = Object.keys(row), placeholders = cols.map(() => '?').join(',');
-  const insert = f.hive.db.prepare(`INSERT INTO agents (${cols.join(',')}) VALUES (${placeholders})`);
   for (let n = 0; n < 255; n++) {
     const id = randomUUID();
-    insert.run(...cols.map(col => col === 'id' ? id : col === 'name' ? `CardFixture${n}` : col === 'token_hash' ? randomUUID() : row[col]!));
-    f.hive.db.prepare('INSERT INTO channel_members(channel_id,agent_id) VALUES(?,?)').run(f.room.id, id);
+    cloneAgent(f.hive, original.id, [id], () => ({ name: `CardFixture${n}`, token_hash: randomUUID() }));
+    addChannelMember(f.hive, f.room.id, id);
     const actor = f.hive.getAgent(id); f.hive.routing.set(actor, { expectedRevision: 0, card });
   }
   assert.throws(() => f.set(1), status(429));

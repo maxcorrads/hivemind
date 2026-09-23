@@ -31,6 +31,7 @@ function fixture(t: TestContext) {
       hive = new Hive(dbPath);
       hive.bus.on("agent", onAgent);
     },
+    // schema-level assertion: counts physical row writes on the connection.
     writes() { return Number(hive.db.prepare("SELECT total_changes() AS n").get()!.n); },
   };
 }

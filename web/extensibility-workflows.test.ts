@@ -13,6 +13,7 @@ import type { LaunchContext } from "../src/shared/launch-prompt.ts";
 import { api } from "./api.ts";
 import { App } from "./App.tsx";
 import { LaunchSheet } from "./LaunchSheet.tsx";
+import { countRows, hasRow, listRows, seedMessages } from "../src/server/test-fixtures.ts";
 
 const window = new Window({ url: "http://localhost/" });
 Object.assign(globalThis, { window, document: window.document, location: window.location,
@@ -152,7 +153,7 @@ test("App renders a bot observation once under duplicate delivery and keeps its 
   const bodies = Array.from(f.host.querySelectorAll(".msg-b"));
   assert.equal(bodies.filter(el => el.textContent?.includes(message.body)).length, 1);
   assert.ok(f.host.querySelector('a[href="https://example.com/event"]'));
-  assert.equal(f.hive.db.prepare("SELECT count(*) AS n FROM bot_events").get()!.n, 1);
+  assert.equal(countRows(f.hive, "bot_events"), 1);
   await act(async () => { SocketFixture.instances[0]!.emit("queued", { agentId: f.brainA.id, n: 3 }); });
   assert.ok(f.host.querySelector('[title="3 waiting"]'));
 });
@@ -268,8 +269,8 @@ test("brain DMs expose per-request routing and show the committed directive with
   assert.equal(mode.value, "auto", "explicit mode is one-request only");
   assert.match(f.host.textContent!, /Hivemind adaptive topology · SINGLE/);
   assert.match(f.host.textContent!, /Handle this directly/);
-  const sent = f.hive.db.prepare("SELECT body FROM messages WHERE author_id='human' AND channel_id=? ORDER BY seq DESC LIMIT 2")
-    .all(f.hive.findDm(f.human.id, f.brainA.id)!.id) as Array<{ body: string }>;
+  const sent = listRows(f.hive, "messages", { where: { author_id: "human", channel_id: f.hive.findDm(f.human.id, f.brainA.id)!.id },
+    columns: "body", orderBy: "seq" }).reverse() as Array<{ body: string }>;
   assert.equal(sent[0]!.body, "Handle this directly");
   assert.match(sent[1]!.body, /adaptive topology · SINGLE/);
   assert.equal(f.hive.adaptiveTopology.view(f.human, f.hive.findDm(f.human.id, f.brainA.id)!.id).state?.lockedTopology, "single");
@@ -308,7 +309,7 @@ test("observation threads support Human replies and reactions without granting b
     composer.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }) as unknown as Event);
   });
   assert.equal(composer.value, "");
-  assert.ok(f.hive.db.prepare("SELECT id FROM messages WHERE body = ? AND author_id = ?").get("Human channel update", "human"));
+  assert.ok(hasRow(f.hive, "messages", { body: "Human channel update", author_id: "human" }));
 });
 
 test("mounted plugin configuration persists typed fields privately and availability remains project-scoped", async t => {
@@ -401,15 +402,9 @@ for (const threaded of [false, true]) {
     f.hive.invite(f.human, f.channel.id, [f.brainA.name]);
     const first = f.hive.postMessage(f.brainA, { channel: f.channel.id, body: "History body 1" });
     if (threaded) f.hive.postMessage(f.brainA, { channel: f.channel.id, threadId: first.id, body: "History body 2" });
-    const insert = f.hive.db.prepare(`INSERT INTO messages (id,channel_id,thread_id,author_id,body,created_at)
-      VALUES (?,?,?,?,?,1)`);
-    f.hive.db.exec("BEGIN");
-    try {
-      for (let i = threaded ? 3 : 2; i <= 580; i++) {
-        insert.run(`history-${i}`, f.channel.id, threaded ? first.id : null, f.brainA.id, `History body ${i}`);
-      }
-      f.hive.db.exec("COMMIT");
-    } catch (error) { f.hive.db.exec("ROLLBACK"); throw error; }
+    seedMessages(f.hive, Array.from({ length: 580 - (threaded ? 3 : 2) + 1 }, (_, n) => (threaded ? 3 : 2) + n).map(i => ({
+      id: `history-${i}`, channelId: f.channel.id, threadId: threaded ? first.id : null, authorId: f.brainA.id,
+      body: `History body ${i}`, createdAt: 1 })));
     if (threaded) window.happyDOM.setURL(`http://localhost/#/c/${f.channel.id}/t/${first.id}`);
     const receipts: number[][] = [];
     const mark = f.hive.markMessagesRead.bind(f.hive);

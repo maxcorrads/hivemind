@@ -31,5 +31,5 @@ test("a completed drain error remains visible but does not leak the server-owned
   await started.ready;
   await assert.rejects(started.shutdown(), /injected completed drain error/);
   assert.equal(started.server.listening, false);
-  assert.throws(() => started.hive.db.prepare("SELECT 1"), /not open/);
+  assert.throws(() => started.hive.db.prepare("SELECT 1"), /not open/); // schema-level assertion: connection is closed
 });

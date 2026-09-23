@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
 import { Hive, parseMentions } from "./hive.ts";
+import { countRows, dropTable, failWrites, findRow, inboxCursor, readValue } from "./test-fixtures.ts";
 import { createApp } from "./app.ts";
 import { botMessageSchema } from "../shared/bot-message.ts";
 import { buildLaunchPrompt } from "../shared/launch-prompt.ts";
@@ -40,8 +41,8 @@ test("project bots start without channels and keep private credentials across re
   assert.equal(bot.bot.seniority, null);
   assert.equal(bot.bot.online, false);
   assert.equal(hive.listChannels(human).length, count);
-  assert.equal(hive.db.prepare("SELECT COUNT(*) n FROM channel_members WHERE agent_id=?").get(bot.bot.id)!.n, 0);
-  assert.notEqual(hive.db.prepare("SELECT token_hash FROM agents WHERE id=?").get(bot.bot.id)!.token_hash, bot.token);
+  assert.equal(countRows(hive, "channel_members", { agent_id: bot.bot.id }), 0);
+  assert.notEqual(readValue(hive, "agents", "token_hash", { id: bot.bot.id }), bot.token);
   assert.equal(JSON.stringify(hive.listAgents(human)).includes(bot.token), false);
   assert.throws(() => hive.createBot(brain.agent, channel.projectId, { name: "Other" }), /Only Human/);
   for (const bad of [null, {}, { name: "" }, { name: "bad name" }, { name: "9bot" }, { name: "a".repeat(41) }, { name: "Okay", role: "human" }]) {
@@ -154,16 +155,16 @@ test('lost rotation response requires an explicit fresh revision, and old tokens
 
 test('credential update is atomic and migration preserves legacy bot tokens', t => {
   const ctx = setup(t), { hive, human, bot, channel } = ctx;
-  hive.db.exec('DROP TABLE bot_credentials'); ctx.reopen();
+  dropTable(hive, 'bot_credentials'); ctx.reopen();
   assert.equal(ctx.hive.agentByToken(bot.token).id, bot.bot.id);
   assert.deepEqual(ctx.hive.botCredential(human, channel.projectId, bot.bot.id).credential, { revision: 1, revoked: false });
-  ctx.hive.db.exec("CREATE TRIGGER fail_credential BEFORE INSERT ON bot_credentials BEGIN SELECT RAISE(ABORT, 'fixture storage failure'); END");
+  const restoreCredentials = failWrites(ctx.hive, 'bot_credentials', { message: 'fixture storage failure', persistent: true });
   assert.throws(() => ctx.hive.changeBotCredential(human, channel.projectId, bot.bot.id, { action: 'rotate', expectedRevision: 1 }), /fixture storage failure/);
   assert.equal(ctx.hive.agentByToken(bot.token).id, bot.bot.id);
   assert.equal(ctx.hive.botCredential(human, channel.projectId, bot.bot.id).credential.revision, 1);
-  ctx.hive.db.exec('DROP TRIGGER fail_credential');
+  restoreCredentials();
   const rotated = ctx.hive.changeBotCredential(human, channel.projectId, bot.bot.id, { action: 'rotate', expectedRevision: 1 });
-  ctx.hive.db.exec("CREATE TRIGGER fail_credential_update BEFORE UPDATE ON bot_credentials BEGIN SELECT RAISE(ABORT, 'fixture update failure'); END");
+  failWrites(ctx.hive, 'bot_credentials', { on: 'update', message: 'fixture update failure', persistent: true });
   assert.throws(() => ctx.hive.changeBotCredential(human, channel.projectId, bot.bot.id, { action: 'revoke', expectedRevision: 2 }), /fixture update failure/);
   assert.equal(ctx.hive.agentByToken(rotated.token!).id, bot.bot.id);
   assert.deepEqual(ctx.hive.botCredential(human, channel.projectId, bot.bot.id).credential, { revision: 2, revoked: false });
@@ -183,8 +184,8 @@ test('concurrent credential operations have one winner and leave other bots unto
   assert.equal((await status.json() as { credential: { revision: number } }).credential.revision, 2);
   assert.equal((await app.request(endpoint, { method: 'POST', body: 'invalid json' })).status, 400);
   assert.equal(hive.agentByToken(success.token).id, bot.bot.id);
-  assert.match(String(hive.db.prepare('SELECT token_hash FROM agents WHERE id=?').get(bot.bot.id)!.token_hash), /^[a-f0-9]{64}$/);
-  assert.deepEqual(hive.db.prepare('PRAGMA foreign_key_check').all(), []);
+  assert.match(String(readValue(hive, 'agents', 'token_hash', { id: bot.bot.id })), /^[a-f0-9]{64}$/);
+  assert.deepEqual(hive.db.prepare('PRAGMA foreign_key_check').all(), []); // schema-level assertion
 });
 
 test("bot destinations require an explicit invite and stay within one project", (t) => {
@@ -219,7 +220,7 @@ test("bot names are not mentions; Human, brain and worker mentions still work", 
   const publicRoom = hive.createChannel(human, { name: "mentions", type: "public", project: "chapter" });
   assert.equal(hive.isFor(brain.agent, hive.postMessage(human, { channel: publicRoom.id, body })), false);
   assert.equal(hive.isFor(brain.agent, hive.postMessage(human, { channel: publicRoom.id, body: `${body} @${brain.agent.name}` })), true);
-  const saved = ctx.reopen().db.prepare("SELECT body, mentions FROM messages WHERE id=?").get(message.id)!;
+  const saved = findRow(ctx.reopen(), "messages", { id: message.id }, ["body", "mentions"])!;
   assert.equal(saved.body, body);
   assert.equal(saved.mentions, "[]");
 });
@@ -244,7 +245,7 @@ test("queue counts never scan bot history and still track brain and worker mail"
   const after = hive.queuedCounts();
   for (const agent of [brain.agent, worker.agent]) assert.equal(after[agent.id], before[agent.id]! + 1);
   assert.deepEqual(emitted.sort(), [brain.agent.id, worker.agent.id].sort());
-  assert.equal(hive.db.prepare("SELECT inbox_cursor FROM agents WHERE id=?").get(bot.bot.id)!.inbox_cursor, 0);
+  assert.equal(inboxCursor(hive, bot.bot.id), 0);
 });
 
 test("observations preserve origin, suppress quoted mentions and persist idempotent retries", async (t) => {
@@ -365,7 +366,7 @@ test("HTTP malformed bot origin URLs return 400 without creating observations", 
     });
     assert.equal(response.status, 400);
     assert.equal(hive.latestSeq(channel.id), before);
-    assert.equal(hive.db.prepare("SELECT COUNT(*) AS n FROM bot_events").get()!.n, 0);
+    assert.equal(countRows(hive, "bot_events"), 0);
   }
 });
 
@@ -389,7 +390,7 @@ test("HTTP bot creation, ingress, upload and agent boundaries", async (t) => {
   assert.equal((await request(createUrl, "POST", { name: "buildbot" })).status, 409);
   assert.equal((await request("/api/ui/projects/missing/bots", "POST", { name: "Missing" })).status, 404);
   const created = hive.getAgentByName("BuildBot")!;
-  assert.equal(hive.db.prepare("SELECT COUNT(*) n FROM channel_members WHERE agent_id=?").get(created.id)!.n, 0);
+  assert.equal(countRows(hive, "channel_members", { agent_id: created.id }), 0);
   assert.equal((await request(`/api/agent/channels/${channel.id}/invite`, "POST", { names: [created.name] }, brain.token)).status, 200);
   const posted = await request(url, "POST", { eventId: "http1", body: "New comment" }, bot.token);
   assert.equal(posted.status, 201);
@@ -426,11 +427,11 @@ test("project deletion cleans bot events and the bot identity", (t) => {
   const { hive, human, channel, bot, brain } = setup(t);
   hive.postBotMessage(bot.bot, channel.id, { eventId: "1", body: "fixture" });
   const rotated = hive.changeBotCredential(human, channel.projectId, bot.bot.id, { action: 'rotate', expectedRevision: 1 });
-  assert.equal(hive.db.prepare('SELECT COUNT(*) AS n FROM bot_credentials').get()!.n, 1);
+  assert.equal(countRows(hive, 'bot_credentials'), 1);
   hive.setOffline(brain.agent.id);
   hive.deleteProject(human, channel.project);
-  assert.equal(hive.db.prepare("SELECT COUNT(*) AS n FROM bot_events").get()!.n, 0);
+  assert.equal(countRows(hive, "bot_events"), 0);
   assert.throws(() => hive.agentByToken(bot.token), /Invalid token/);
   assert.throws(() => hive.agentByToken(rotated.token!), /Invalid token/);
-  assert.equal(hive.db.prepare('SELECT COUNT(*) AS n FROM bot_credentials').get()!.n, 0);
+  assert.equal(countRows(hive, 'bot_credentials'), 0);
 });

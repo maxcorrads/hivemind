@@ -7,6 +7,7 @@ import { Hive } from './hive.ts';
 import { createApp } from './app.ts';
 import { WAIT_MAX_BYTES, type Agent } from '../shared/types.ts';
 import type { TaskAction, TaskCheckpointInput } from '../shared/tasks.ts';
+import { countRows, failWrites, removeChannelMember } from './test-fixtures.ts';
 
 function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-handoffs-'));
@@ -96,16 +97,15 @@ test('checkpoint rollback includes snapshot, history and post-commit notificatio
   const f = fixture(t), task = f.assign().task;
   f.event(task.id, f.worker.agent, { type: 'accept' });
   const before = f.hive.tasks.get(f.worker.agent, task.id);
-  const count = () => f.hive.db.prepare('SELECT COUNT(*) AS n FROM messages').get()!.n;
+  const count = () => countRows(f.hive, 'messages');
   const size = count(); let messages = 0, updates = 0;
   f.hive.bus.on('message', () => messages++); f.hive.bus.on('task', () => updates++);
-  f.hive.db.exec(`CREATE TRIGGER fail_checkpoint BEFORE INSERT ON task_events
-    WHEN json_extract(NEW.envelope, '$.action.type') = 'checkpoint'
-    BEGIN SELECT RAISE(ABORT, 'checkpoint fixture failure'); END`);
+  const restoreCheckpoints = failWrites(f.hive, 'task_events', { persistent: true,
+    when: "json_extract(NEW.envelope, '$.action.type') = 'checkpoint'", message: 'checkpoint fixture failure' });
   assert.throws(() => f.event(task.id, f.worker.agent, { type: 'checkpoint', checkpoint: data() }), /fixture failure/);
   assert.deepEqual(f.hive.tasks.get(f.worker.agent, task.id), before);
   assert.equal(count(), size); assert.equal(messages, 0); assert.equal(updates, 0);
-  f.hive.db.exec('DROP TRIGGER fail_checkpoint');
+  restoreCheckpoints();
   f.event(task.id, f.worker.agent, { type: 'checkpoint', checkpoint: data() });
   assert.equal(messages, 1); assert.equal(updates, 1);
 });
@@ -148,7 +148,7 @@ test('resume discovery pages unfinished authorized tasks and cannot enumerate ot
   for (let i = 0; i < 12; i++) all.push(f.assign().task.id);
   const hidden = f.assign(f.hive.createChannel(f.brain.agent,
     { name: 'removed-access', type: 'private', memberNames: [f.worker.agent.name] }).id).task;
-  f.hive.db.prepare('DELETE FROM channel_members WHERE channel_id = ? AND agent_id = ?').run(hidden.channelId, f.worker.agent.id);
+  removeChannelMember(f.hive, hidden.channelId, f.worker.agent.id);
   const outsider = f.hive.join({ role: 'worker', seniority: 'mid' }).agent;
   assert.deepEqual(f.hive.tasks.handoffs(outsider).items, []);
   const visited: string[] = []; let before: string | undefined;

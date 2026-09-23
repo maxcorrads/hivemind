@@ -12,6 +12,7 @@ import { coordinationEventId, settleAdaptiveFollowUps } from './adaptive-topolog
 import { HiveError } from '../shared/types.ts';
 import type { AdaptiveTopology } from '../shared/adaptive-topology.ts';
 import type { TaskSnapshot } from '../shared/tasks.ts';
+import { countRows, failWrites, findRow, hasRow, listRows } from './test-fixtures.ts';
 
 const contract = { objective: 'Complete the independent fixture work.', scope: [], nonGoals: [],
   acceptanceCriteria: ['Return an inspectable result.'], dependencies: [], evidenceSeqs: [] };
@@ -86,7 +87,7 @@ test('a Single delegation is checked once, then admitted and linked atomically; 
   const body = await response.json() as { task: TaskSnapshot; adaptiveRouting: { currentTopology: string } };
   assert.equal(f.calls(), before + 1);
   assert.equal(body.adaptiveRouting.currentTopology, 'brain_one_worker');
-  const linked = f.hive.db.prepare('SELECT execution_id FROM adaptive_topology_tasks WHERE task_id=?').get(body.task.id);
+  const linked = findRow(f.hive, 'adaptive_topology_tasks', { task_id: body.task.id });
   assert.equal(linked?.execution_id, f.state().executionId);
   const capacity = readAdaptiveCapacity(f.hive, f.state());
   assert.equal(capacity.workers.busyCurrent, 1);
@@ -102,7 +103,7 @@ test('a Single delegation is checked once, then admitted and linked atomically; 
 test('direct TaskStore assignment cannot bypass an active Single delegation gate', async t => {
   const f = await fixture(t);
   await f.start();
-  const count = () => Number(f.hive.db.prepare('SELECT count(*) AS n FROM task_records').get()!.n);
+  const count = () => countRows(f.hive, 'task_records');
   const before = count();
   assert.throws(() => f.hive.tasks.assign(f.brain.agent, { requestId: 'bypass', worker: f.workers[0]!.agent.name, contract }), /fresh Jev/);
   assert.equal(count(), before);
@@ -167,16 +168,16 @@ test('free-form DM assignments consume capacity until the coordinating brain clo
 test('a failed execution link rolls back the delegated task and its message together', async t => {
   const f = await fixture(t);
   f.choose('brain_one_worker'); await f.start();
-  const beforeMessages = Number(f.hive.db.prepare('SELECT count(*) AS n FROM messages').get()!.n);
-  f.hive.db.exec("CREATE TEMP TRIGGER fail_adaptive_link BEFORE INSERT ON adaptive_topology_tasks BEGIN SELECT RAISE(ABORT,'fixture link failure'); END");
+  const beforeMessages = countRows(f.hive, 'messages');
+  const restoreLink = failWrites(f.hive, 'adaptive_topology_tasks', { message: 'fixture link failure' });
   const failed = await f.assign('atomic-link');
   assert.equal(failed.status, 500);
-  assert.equal(Number(f.hive.db.prepare('SELECT count(*) AS n FROM task_records').get()!.n), 0);
-  assert.equal(Number(f.hive.db.prepare('SELECT count(*) AS n FROM messages').get()!.n), beforeMessages);
-  f.hive.db.exec('DROP TRIGGER fail_adaptive_link');
+  assert.equal(countRows(f.hive, 'task_records'), 0);
+  assert.equal(countRows(f.hive, 'messages'), beforeMessages);
+  restoreLink();
   const retried = await f.assign('atomic-link');
   assert.equal(retried.status, 200, await retried.clone().text());
-  assert.equal(Number(f.hive.db.prepare('SELECT count(*) AS n FROM adaptive_topology_tasks').get()!.n), 1);
+  assert.equal(countRows(f.hive, 'adaptive_topology_tasks'), 1);
 });
 
 test('another execution cannot claim a worker that is already busy even when its requested topology is feasible', async t => {
@@ -187,7 +188,7 @@ test('another execution cannot claim a worker that is already busy even when its
   assert.equal(first.status, 200, await first.clone().text());
   const conflict = await f.assign('second-owner', f.otherBrain);
   assert.equal(conflict.status, 409, await conflict.clone().text());
-  const rows = f.hive.db.prepare('SELECT worker_id FROM task_records').all();
+  const rows = listRows(f.hive, 'task_records', { columns: 'worker_id' });
   assert.equal(rows.length, 1);
   assert.equal(rows[0]!.worker_id, f.workers[0]!.agent.id);
 });
@@ -262,7 +263,7 @@ test('delegation must name one of the brain\'s active executions; parallel reque
     requestId: 'direct-task', worker: f.workers[0]!.agent.name, contract, executionId: direct.executionId });
   assert.equal(allowed.status, 200, await allowed.clone().text());
   const task = (await allowed.json() as { task: TaskSnapshot }).task;
-  const linked = f.hive.db.prepare('SELECT execution_id FROM adaptive_topology_tasks WHERE task_id=?').get(task.id);
+  const linked = findRow(f.hive, 'adaptive_topology_tasks', { task_id: task.id });
   assert.equal(linked?.execution_id, direct.executionId);
 });
 
@@ -274,7 +275,7 @@ test('a brain report naming a worker who cannot read the channel is a reference,
     body: `Update: @${worker} finished the parser.`, requestId: 'report-worker',
   });
   assert.equal(report.status, 200, await report.clone().text());
-  assert.equal(Number(f.hive.db.prepare('SELECT count(*) AS n FROM adaptive_topology_messages').get()!.n), 0);
+  assert.equal(countRows(f.hive, 'adaptive_topology_messages'), 0);
   assert.equal(readAdaptiveCapacity(f.hive, f.state()).activeWorkers, 0, 'A reference reserves no worker');
   const group = f.hive.createChannel(f.human, { name: 'crew', type: 'private', project: 'chapter',
     memberNames: [f.brain.agent.name, worker] });
@@ -325,8 +326,8 @@ test('project-wide capacity revalidation runs after the assignment is answered',
   f.choose('brain_one_worker');
   await f.start(); await f.start(f.otherBrain, f.otherDm);
   const otherExecution = f.exec(f.otherBrain)!;
-  const evaluated = () => Boolean(f.hive.db.prepare('SELECT 1 FROM adaptive_topology_evaluated WHERE execution_id=? AND event_id=?')
-    .get(otherExecution, coordinationEventId(f.brain.agent.id, 'capacity', 'capacity-after-lane')));
+  const evaluated = () => hasRow(f.hive, 'adaptive_topology_evaluated',
+    { execution_id: otherExecution, event_id: coordinationEventId(f.brain.agent.id, 'capacity', 'capacity-after-lane') });
   // Only the capacity revalidation (of the other execution) is slow.
   const release = f.hold((_call, body) => body.includes('"capacity_change"'));
   const assigned = await within(f.assign('capacity-after-lane'), 'The assignment');

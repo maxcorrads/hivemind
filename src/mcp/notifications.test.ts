@@ -10,6 +10,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { Hive } from '../server/hive.ts';
 import { startServer } from '../server/serve.ts';
+import { markInboxRead } from '../server/test-fixtures.ts';
 import type { WaitResult } from '../shared/types.ts';
 
 test('real MCP and CLI configure the same scoped subscriptions and deliver targeted events with explicit ACK', { timeout: 25_000 }, async () => {
@@ -19,7 +20,7 @@ test('real MCP and CLI configure the same scoped subscriptions and deliver targe
   const server = startServer({ port: 0, hive, telegram: false }); const port = await server.ready;
   const brain = hive.join({ role: 'brain' }), worker = hive.join({ role: 'worker', seniority: 'mid' });
   const general = hive.getChannel('general', brain.agent.projectId);
-  hive.db.exec('UPDATE agents SET inbox_cursor = (SELECT MAX(seq) FROM messages)');
+  markInboxRead(hive);
   const clients: Client[] = [];
   const env = (token: string) => ({ PATH: process.env.PATH ?? '', HIVEMIND_TOKEN: token,
     HIVEMIND_HOME: path.join(dir, 'identities'), HIVEMIND_URL: `http://127.0.0.1:${port}` });

@@ -9,6 +9,7 @@ import { startServer } from './serve.ts';
 import { HiveError, type Agent } from '../shared/types.ts';
 import { claimActionSchema, overlappingPaths, CLAIM_LIMITS } from '../shared/task-claims.ts';
 import type { TaskAction, TaskContract, TaskSnapshot } from '../shared/tasks.ts';
+import { countRows, failWrites, insertRow, removeChannelMember, storedSnapshot } from './test-fixtures.ts';
 
 function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-claims-')), file = path.join(dir, 'hive.db');
@@ -58,7 +59,7 @@ test('two real HTTP claim requests have one winner, stable retries, and no dupli
     assert.equal(saved.claim!.coordinatorId, inputs[winner]!.actor.agent.id);
     assert.equal(saved.assignerId, f.brain.agent.id); assert.equal(saved.workerId, f.worker.agent.id);
     assert.equal(saved.state, 'sent'); assert.equal(saved.coordination!.claim, 'held');
-    assert.ok(!JSON.parse(String(f.hive.db.prepare('SELECT snapshot FROM task_records WHERE id=?').get(task.id)!.snapshot)).coordination);
+    assert.ok(!storedSnapshot(f.hive, 'task_records', task.id).coordination);
   } finally { await server.shutdown(); }
 });
 
@@ -129,14 +130,14 @@ test('WIP admission counts uncertain claims and explicit release frees a slot', 
 
 test('claims and notifications roll back together on event persistence failure', t => {
   const f = fixture(t), task = f.assign(), before = f.hive.tasks.get(f.brain.agent, task.id);
-  const counts = () => ['messages', 'task_events'].map(table => Number(f.hive.db.prepare(`SELECT COUNT(*) n FROM ${table}`).get()!.n));
+  const counts = () => ['messages', 'task_events'].map(table => countRows(f.hive, table));
   const oldCounts = counts(); let events = 0; f.hive.bus.on('task', () => events++);
-  f.hive.db.exec(`CREATE TRIGGER fail_claim BEFORE INSERT ON task_events WHEN json_extract(NEW.envelope, '$.action.type') = 'claim'
-    BEGIN SELECT RAISE(ABORT, 'claim-fixture-failure'); END`);
+  const restoreClaims = failWrites(f.hive, 'task_events', { persistent: true,
+    when: "json_extract(NEW.envelope, '$.action.type') = 'claim'", message: 'claim-fixture-failure' });
   assert.throws(() => f.event(task, f.brain.agent, claim()), /claim-fixture-failure/);
   assert.deepEqual(f.hive.tasks.get(f.brain.agent, task.id), before);
   assert.deepEqual(counts(), oldCounts); assert.equal(events, 0);
-  f.hive.db.exec('DROP TRIGGER fail_claim'); f.event(task, f.brain.agent, claim()); assert.equal(events, 1);
+  restoreClaims(); f.event(task, f.brain.agent, claim()); assert.equal(events, 1);
 });
 
 test('dependency cycles reject atomically and only accepted review satisfies a prerequisite', t => {
@@ -166,10 +167,11 @@ test('dependency views mask inaccessible prerequisite state and bound legacy gra
   assert.deepEqual(otherView.coordination!.dependencies, [{ taskId: privateTask.id, status: 'unavailable' }]);
   // Seed a legacy-only deep graph without recursively exercising assignment.
   let previous: string | undefined;
-  const insert = f.hive.db.prepare('INSERT INTO task_records(id, channel_id, worker_id, dispatch_seq, received_at, snapshot) VALUES (?, ?, ?, 0, NULL, ?)');
   for (let i = 0; i <= CLAIM_LIMITS.graph; i++) {
     const id = randomUUID(), snapshot = { ...dependent, id, contract: { ...f.contract, dependencies: previous ? [previous] : [] } };
-    insert.run(id, f.room.id, f.worker.agent.id, JSON.stringify(snapshot)); previous = id;
+    insertRow(f.hive, 'task_records', { id, channel_id: f.room.id, worker_id: f.worker.agent.id, dispatch_seq: 0,
+      received_at: null, snapshot: JSON.stringify(snapshot) });
+    previous = id;
   }
   assert.throws(() => f.assign([previous!]), /256-task validation budget/);
 });
@@ -210,7 +212,6 @@ test('per-coordinator claim cap is independent of worker count', t => {
 test('project-wide cap includes invisible claims but never reveals their metadata', t => {
   const f = fixture(t), task = f.assign(), seed = f.assign();
   const privateChannel = f.hive.openDm(f.brain.agent, f.worker.agent.name);
-  const insert = f.hive.db.prepare('INSERT INTO task_records(id, channel_id, worker_id, dispatch_seq, snapshot) VALUES (?, ?, ?, 0, ?)');
   for (let i = 0; i < CLAIM_LIMITS.project; i++) {
     const id = randomUUID();
     // A controlled legacy fixture exceeds neither the project cap nor parser limits.
@@ -218,7 +219,7 @@ test('project-wide cap includes invisible claims but never reveals their metadat
       state: 'held', version: 1, coordinatorId: `historic-${i}`, coordinatorName: 'Private coordinator', workerId: `historic-worker-${i}`,
       contractVersion: 1, paths: ['private-intent'], overlapAcknowledgements: [], expiresAt: 1, updatedAt: 0,
     } };
-    insert.run(id, privateChannel.id, f.worker.agent.id, JSON.stringify(snapshot));
+    insertRow(f.hive, 'task_records', { id, channel_id: privateChannel.id, worker_id: f.worker.agent.id, dispatch_seq: 0, snapshot: JSON.stringify(snapshot) });
   }
   assert.throws(() => f.event(task, f.other.agent, claim()), error => {
     assert.ok(status(429)(error)); assert.ok(!String(error).includes('Private coordinator')); return true;
@@ -400,14 +401,14 @@ test('separate SQLite processes serialize the same claim revision with one expli
 test('read-only claim preview explains current visible conflicts without reserving or disclosing private work', t => {
   const f = fixture(t), one = f.assign(), two = f.assign();
   f.event(one, f.brain.agent, claim(['src/parser']));
-  const before = f.hive.db.prepare('SELECT COUNT(*) AS n FROM messages').get();
+  const before = countRows(f.hive, 'messages');
   const preview = f.hive.tasks.previewClaim(f.other.agent, two.id, { paths: ['src/parser/index.ts'] });
   assert.equal(preview.revision, 1); assert.equal(preview.overlaps[0]?.taskId, one.id);
   assert.equal(preview.overlaps[0]?.claimVersion, 1); assert.equal(preview.truncated, false);
-  assert.deepEqual(f.hive.db.prepare('SELECT COUNT(*) AS n FROM messages').get(), before);
+  assert.equal(countRows(f.hive, 'messages'), before);
   assert.equal(f.hive.tasks.get(f.brain.agent, two.id).claim, undefined);
   assert.throws(() => f.hive.tasks.previewClaim(f.worker.agent, two.id, { paths: [] }), status(403));
   assert.throws(() => f.hive.tasks.previewClaim(f.brain.agent, two.id, { paths: ['../secret'] }), status(400));
-  f.hive.db.prepare('DELETE FROM channel_members WHERE channel_id = ? AND agent_id = ?').run(f.room.id, f.other.agent.id);
+  removeChannelMember(f.hive, f.room.id, f.other.agent.id);
   assert.throws(() => f.hive.tasks.previewClaim(f.other.agent, two.id, { paths: ['src'] }), status(403));
 });
