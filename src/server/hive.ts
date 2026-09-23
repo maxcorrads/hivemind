@@ -2,7 +2,7 @@ import { RoutingStore } from './routing.ts';
 import { DecisionStore } from './decisions.ts';
 import { TimelineStore } from './timeline.ts';
 import { UploadBudget, type UploadLimits } from "./upload-budget.ts";
-import { validated, waitDurationSchema, cursorSchema, limitSchema, attachmentIdsSchema, memberNamesSchema } from "../shared/api-contract.ts";
+import { validated, waitDurationSchema, attachmentIdsSchema, memberNamesSchema } from "../shared/api-contract.ts";
 import { SendRequests } from "./send-requests.ts";
 import { pruneTelegramUpdates, type TelegramUpdateScope } from "./telegram-inbox.ts";
 import { pruneTelegramFailures, type TelegramDestination } from "./telegram-outbox.ts";
@@ -12,18 +12,18 @@ import { ProjectService } from "./services/projects.ts";
 import { IdentityService, hashToken, newToken, type JoinInput } from "./services/identity.ts";
 import { Waiters, type Waiter } from "./services/waiters.ts";
 import { ChannelService, channelLabel } from "./services/channels.ts";
-import type { Core, MessagePoster, MessageReader } from "./services/ports.ts";
+import { MessageQueries } from "./services/message-queries.ts";
+import type { Core, MessagePoster } from "./services/ports.ts";
 import { Storage } from './storage.ts';
 import { mkdirSync } from "node:fs";
 import path from "node:path";
-import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { HiveBus } from "./hive-events.ts";
 import {
   BODY_MAX,
   DEFAULT_WAIT_MS,
   FILES_PER_MESSAGE,
   MESSAGE_EVENT_TYPES,
-  WAIT_MAX_BYTES,
   REACTION_EMOJIS,
   HiveError,
   HUMAN_ID,
@@ -31,21 +31,15 @@ import {
   type Agent,
   type BotEvent,
   type BotCredentialView,
-  type AttachmentMeta,
   type Channel,
   type ControlAction,
   type Message,
-  type SearchHit,
-  type ReactionCount,
-  type Role,
   type Thread,
   type ThreadStatus,
   type WaitResult,
   type InboxStatus,
   type QueueEstimate,
-  type DigestExpansionResult,
-} from "../shared/types.ts";
-import { clampSearchLimit, likeNeedle, parseSearchQuery, snippetAround } from "../shared/search-query.ts";
+  } from "../shared/types.ts";
 import { ReadState } from "./read-state.ts";
 import { InboxDeliveryStore } from "./inbox-delivery.ts";
 import { InboxReader } from "./inbox-reader.ts";
@@ -54,7 +48,6 @@ import { hiveHome } from "./paths.ts";
 import { preparePrivateDatabase } from "./private-database.ts";
 import { removeLegacyIdentityDirs } from "./legacy-identities.ts";
 import { packWait } from "./wait-format.ts";
-import { digestExpansionSchema } from "../shared/digest.ts";
 import { botMessageSchema, createBotSchema, botCredentialSchema } from "../shared/bot-message.ts";
 import { applyMigrations, assertSupportedVersion } from "./migrations/index.ts";
 import { TaskStore } from './tasks.ts';
@@ -62,7 +55,6 @@ import { NotificationStore } from './notifications.ts';
 import { RoomStore } from './rooms.ts';
 import { ROUTINE_BATCH_MS } from '../shared/notifications.ts';
 import { AdaptiveTopologyRuntime } from './adaptive-topology.ts';
-import type { TaskEnvelope } from '../shared/tasks.ts';
 
 export { hiveHome } from "./paths.ts";
 export { hashToken, newToken, describeAgent } from "./services/identity.ts";
@@ -74,28 +66,7 @@ export { parseMentions };
 
 
 
-type MessageRow = {
-  seq: number;
-  id: string;
-  channel_id: string;
-  thread_id: string | null;
-  author_id: string;
-  body: string | Uint8Array;
-  kind: "chat" | "system" | "control";
-  control: ControlAction | null;
-  event_type?: Message["eventType"] | null;
-  mentions: string;
-  recipients?: string;
-  created_at: number;
-};
 
-
-const HYDRATION_BATCH = 400;
-function* batches<T>(items: T[]): Generator<T[]> {
-  for (let offset = 0; offset < items.length; offset += HYDRATION_BATCH) {
-    yield items.slice(offset, offset + HYDRATION_BATCH);
-  }
-}
 
 function now(): number {
   return Date.now();
@@ -108,8 +79,9 @@ type ServiceRegistry = Core & {
   telegram: TelegramAdminService;
   files: FileService;
   projects: ProjectService;
-  messages: MessageReader & MessagePoster;
+  messages: MessagePoster;
   channels: ChannelService;
+  reader: MessageQueries;
   agents: IdentityService;
   waiters: Waiters;
 };
@@ -139,6 +111,7 @@ export class Hive {
   readonly projects!: ProjectService;
   readonly identity!: IdentityService;
   readonly channels!: ChannelService;
+  readonly messageQueries!: MessageQueries;
   /** The registry every service receives, typed down to its own dependencies (services/ports.ts). */
   private readonly services: ServiceRegistry;
 
@@ -168,6 +141,7 @@ export class Hive {
       this.projects = services.projects = new ProjectService(services);
       this.identity = services.agents = new IdentityService(services);
       this.channels = services.channels = new ChannelService(services);
+      this.messageQueries = services.reader = new MessageQueries(services);
       this.transaction(() => this.bootstrap());
       this.transaction(() => { pruneTelegramUpdates(this.db); pruneTelegramFailures(this.db); });
       this.readState = new ReadState(this.db);
@@ -329,7 +303,7 @@ export class Hive {
         .run(input.threadId, ch.id);
       return { messageId, duplicate: false };
     });
-    const message = this.getMessageById(messageId);
+    const message = this.messageQueries.getMessageById(messageId);
     if (!duplicate) {
       this.bus.emit("message", message);
       this.wakeMembers(ch, message);
@@ -417,7 +391,7 @@ export class Hive {
       if (input.requestId !== undefined) return this.sendRequests.run(actor.id, ch.projectId, input.requestId,
         [ch.id, body, input.threadId ?? null, kind, input.control ?? null, input.source ?? "hive",
           input.eventType ?? null, attachmentIds, [...recipients].sort(), trace.traceId, trace.causeMessageId],
-        () => this.postMessage(actor, { ...input, requestId: undefined }, persistReceipt), id => this.getMessageById(id));
+        () => this.postMessage(actor, { ...input, requestId: undefined }, persistReceipt), id => this.messageQueries.getMessageById(id));
       if (attachmentIds.length) this.files.validateAttachments(actor, attachmentIds);
       if (actor.role === "human" && !ch.memberIds.includes(actor.id)) {
         this.channels.addMember(ch.id, actor.id);
@@ -436,9 +410,9 @@ export class Hive {
       }
       if (attachmentIds.length) this.files.bindAttachments(id, attachmentIds);
       // Transport receipts participate in the same message/attachment transaction.
-      persistReceipt?.(this.getMessageById(id));
+      persistReceipt?.(this.messageQueries.getMessageById(id));
       this.identity.touch(actor.id, true);
-      const msg = this.getMessageById(id);
+      const msg = this.messageQueries.getMessageById(id);
       const decision = actor.role === 'human' ? this.decisions?.captureHumanReply(actor, msg, input.source ?? 'hive') ?? null : null;
       this.afterCommit(() => {
         if (input.source === "telegram") this.telegramOrigin.add(msg.id);
@@ -507,329 +481,16 @@ export class Hive {
     }
   }
 
-  getVisibleMessage(actor: Agent, seq: number): Message {
-    const msg = this.getMessageBySeq(seq);
-    const ch = this.channels.getChannel(msg.channelId);
-    if (!this.channels.canSeeChannel(actor, ch)) throw new HiveError(403, "Cannot read this message");
-    return this.decorate([msg], actor.id)[0]!;
-  }
-
-  getMessageBySeq(seq: number): Message {
-    const row = this.db.prepare("SELECT *, CAST(body AS BLOB) AS body FROM messages WHERE seq = ?").get(seq) as MessageRow | undefined;
-    if (!row) throw new HiveError(404, "Message not found");
-    return this.decorate([this.mapMessage(row)])[0]!;
-  }
-
-  getMessageById(id: string): Message {
-    const row = this.db.prepare("SELECT *, CAST(body AS BLOB) AS body FROM messages WHERE id = ?").get(id) as MessageRow | undefined;
-    if (!row) throw new HiveError(404, "Message not found");
-    return this.decorate([this.mapMessage(row)])[0]!;
-  }
-
-  private mapMessages(rows: MessageRow[]): Message[] {
-    type Author = { id: string; name: string; role: Role };
-    const authors = new Map<string, Author>();
-    const botEvents = new Map<string, BotEvent>();
-    const taskEvents = new Map<string, TaskEnvelope>();
-    const sources = new Map<string, Message["source"]>();
-    for (const ids of batches(rows.map(row => row.id))) {
-      const found = this.db.prepare(`SELECT message_id, envelope FROM task_events WHERE message_id IN (${ids.map(() => "?").join(",")})`)
-        .all(...ids) as Array<{ message_id: string; envelope: string }>;
-      for (const event of found) taskEvents.set(event.message_id, JSON.parse(event.envelope) as TaskEnvelope);
-    }
-    for (const ids of batches(rows.map(row => row.id))) {
-      const found = this.db.prepare(`SELECT message_id, source FROM message_provenance WHERE message_id IN (${ids.map(() => "?").join(",")})`)
-        .all(...ids) as Array<{ message_id: string; source: "hive" | "telegram" | "bot" }>;
-      for (const item of found) if (item.source !== "hive") sources.set(item.message_id, item.source);
-    }
-    for (const ids of batches([...new Set(rows.map((row) => row.author_id))])) {
-      const found = this.db.prepare(
-        `SELECT id, name, role FROM agents WHERE id IN (${ids.map(() => "?").join(",")})`,
-      ).all(...ids) as Author[];
-      for (const author of found) authors.set(author.id, author);
-    }
-    const botMessageIds = [...new Set(
-      rows.filter((row) => authors.get(row.author_id)?.role === "bot").map((row) => row.id),
-    )];
-    for (const ids of batches(botMessageIds)) {
-      const found = this.db.prepare(
-        `SELECT message_id, metadata FROM bot_events WHERE message_id IN (${ids.map(() => "?").join(",")})`,
-      ).all(...ids) as Array<{ message_id: string; metadata: string }>;
-      for (const event of found) botEvents.set(event.message_id, JSON.parse(event.metadata) as BotEvent);
-    }
-    return rows.map((row) => ({
-      id: row.id, seq: row.seq, channelId: row.channel_id, threadId: row.thread_id,
-      authorId: row.author_id,
-      authorName: authors.get(row.author_id)?.name ?? "unknown",
-      authorRole: authors.get(row.author_id)?.role ?? "worker",
-      // Read message bodies through a BLOB projection: older Node SQLite TEXT
-      // conversion truncates at embedded NUL even though the stored value is intact.
-      body: typeof row.body === "string" ? row.body : Buffer.from(row.body).toString("utf8"),
-      kind: row.kind, control: row.control,
-      ...(row.event_type ? { eventType: row.event_type } : {}),
-      mentions: JSON.parse(row.mentions) as string[], createdAt: row.created_at,
-      ...(row.recipients && row.recipients !== '[]' ? { recipientIds: JSON.parse(row.recipients) as string[] } : {}),
-      ...(taskEvents.has(row.id) ? { taskEvent: taskEvents.get(row.id)! } : {}),
-      ...(sources.has(row.id) ? { source: sources.get(row.id)! } : {}),
-      ...(botEvents.has(row.id) ? { source: "bot" as const, botEvent: botEvents.get(row.id)! } : {}),
-    }));
-  }
-
-  private mapMessage(row: MessageRow): Message {
-    return this.mapMessages([row])[0]!;
-  }
-
-  /** Expand an immutable set of digest IDs; this never reads or mutates receipt state. */
-  expandDigest(actor: Agent, raw: unknown): DigestExpansionResult {
-    if (actor.role !== "brain" && actor.role !== "worker") throw new HiveError(403, "Only agents expand inbox digests");
-    const parsed = digestExpansionSchema.safeParse(raw);
-    if (!parsed.success) throw new HiveError(400, "Invalid digest reference: " + parsed.error.issues.map(i => i.message).join("; "));
-    const { channel, messageIds, afterSeq = 0 } = parsed.data;
-    const ch = this.channels.getChannel(channel, actor.projectId);
-    if (!this.channels.canSeeChannel(actor, ch)) throw new HiveError(403, "Cannot read this channel");
-    const headers = this.db.prepare(`SELECT id, seq, channel_id, length(CAST(body AS BLOB)) AS body_bytes,
-      COALESCE((SELECT length(CAST(metadata AS BLOB)) FROM bot_events WHERE message_id = messages.id), 0) +
-      COALESCE((SELECT length(CAST(envelope AS BLOB)) FROM task_events WHERE message_id = messages.id), 0) AS metadata_bytes FROM messages
-      WHERE id IN (SELECT value FROM json_each(?)) ORDER BY seq`).all(JSON.stringify(messageIds)) as
-        { id: string; seq: number; channel_id: string; body_bytes: number; metadata_bytes: number }[];
-    // Validate the entire selection before emitting any content, including past pages.
-    if (headers.length !== messageIds.length || headers.some(m => m.channel_id !== ch.id))
-      throw new HiveError(404, "Digest messages are missing or outside this channel");
-    if (afterSeq !== 0 && !headers.some(m => m.seq === afterSeq))
-      throw new HiveError(400, "afterSeq must be a sequence from this digest");
-    const pending = headers.filter(m => m.seq > afterSeq);
-    const messages: Message[] = [];
-    const result = (items: Message[]): DigestExpansionResult => ({ messages: items,
-      hasMore: items.length < pending.length,
-      nextAfterSeq: items.length < pending.length ? items.at(-1)!.seq : null });
-    for (const header of pending) {
-      // No reaction rosters or file bytes; hydrate one selected original at a time.
-      // Legacy oversized originals are rejected before loading their content.
-      const tooLarge = () => new HiveError(413, "Original exceeds expansion byte limit. Use history with " +
-        JSON.stringify({ channel: ch.id, threadId: header.id, since: header.seq - 1, limit: 1, meta: false }));
-      if (header.body_bytes + header.metadata_bytes > WAIT_MAX_BYTES) {
-        if (!messages.length) throw tooLarge();
-        break;
-      }
-      const row = this.db.prepare("SELECT *, CAST(body AS BLOB) AS body FROM messages WHERE id = ?").get(header.id) as MessageRow;
-      const message = this.mapMessage(row);
-      message.attachments = this.db.prepare("SELECT id, name, mime, bytes FROM attachments WHERE message_id = ? ORDER BY id LIMIT ?")
-        .all(header.id, FILES_PER_MESSAGE) as AttachmentMeta[];
-      const candidate = result([...messages, message]);
-      const pretty = JSON.stringify(candidate, null, 2);
-      const bytes = Math.max(Buffer.byteLength(pretty),
-        Buffer.byteLength(JSON.stringify({ content: [{ type: "text", text: pretty }] })));
-      if (bytes > WAIT_MAX_BYTES) {
-        if (!messages.length) throw tooLarge();
-        break;
-      }
-      messages.push(message);
-      if (messages.length === 8) break;
-    }
-    return result(messages);
-  }
-
-  listMessages(
-    actor: Agent,
-    channelRef: string,
-    opts: { threadId?: string | null; afterSeq?: number; beforeSeq?: number; limit?: number } = {},
-  ): { messages: Message[]; hasOlder: boolean; hasNewer: boolean; cursors: { before?: number; after?: number } } {
-    const ch = this.channels.getChannel(channelRef, actor.projectId);
-    if (!this.channels.canSeeChannel(actor, ch)) throw new HiveError(403, "Cannot read this channel");
-    for (const [name, value] of [["afterSeq", opts.afterSeq], ["beforeSeq", opts.beforeSeq]] as const) {
-      if (value !== undefined && (!Number.isSafeInteger(value) || value < 0)) {
-        throw new HiveError(400, `${name} must be a nonnegative safe integer`);
-      }
-    }
-    if (opts.afterSeq !== undefined && opts.beforeSeq !== undefined) {
-      throw new HiveError(400, "Use either afterSeq or beforeSeq, not both");
-    }
-    if (opts.limit !== undefined && (!Number.isSafeInteger(opts.limit) || opts.limit < 1)) {
-      throw new HiveError(400, "limit must be a positive safe integer");
-    }
-    const limit = Math.min(opts.limit ?? 80, 200);
-    // Root-channel reads default to latest-N. Explicit forward cursors and a
-    // thread's default opening page are oldest-first.
-    const ascending = opts.beforeSeq === undefined && (opts.afterSeq !== undefined || Boolean(opts.threadId));
-    const op = ascending ? ">" : "<";
-    const order = ascending ? "ASC" : "DESC";
-    const boundary = ascending ? (opts.afterSeq ?? 0) : (opts.beforeSeq ?? Number.MAX_SAFE_INTEGER);
-    let rows: MessageRow[];
-
-    if (opts.threadId) {
-      // Keep the root PK lookup separate from the indexed reply range. An OR
-      // over id/thread_id can otherwise scan unrelated channel history.
-      const root = this.db.prepare(
-        `SELECT *, CAST(body AS BLOB) AS body FROM messages WHERE id = ? AND channel_id = ? AND seq ${op} ?`,
-      ).get(opts.threadId, ch.id, boundary) as MessageRow | undefined;
-      const replies = this.db.prepare(
-        `SELECT *, CAST(body AS BLOB) AS body FROM messages WHERE channel_id = ? AND thread_id = ? AND seq ${op} ?
-         ORDER BY seq ${order} LIMIT ?`,
-      ).all(ch.id, opts.threadId, boundary, limit) as MessageRow[];
-      rows = [...(root ? [root] : []), ...replies]
-        .sort((a, b) => (ascending ? a.seq - b.seq : b.seq - a.seq))
-        .slice(0, limit);
-    } else {
-      rows = this.db.prepare(
-        `SELECT *, CAST(body AS BLOB) AS body FROM messages WHERE channel_id = ? AND thread_id IS NULL AND seq ${op} ?
-         ORDER BY seq ${order} LIMIT ?`,
-      ).all(ch.id, boundary, limit) as MessageRow[];
-    }
-
-    if (!ascending) rows.reverse();
-    const messages = this.decorate(this.mapMessages(rows), actor.id);
-    const existsBeyond = (operator: "<" | ">", seq: number): boolean => {
-      if (opts.threadId) {
-        return Boolean(this.db.prepare(
-          `SELECT 1 FROM messages WHERE id = ? AND channel_id = ? AND seq ${operator} ? LIMIT 1`,
-        ).get(opts.threadId, ch.id, seq)) || Boolean(this.db.prepare(
-          `SELECT 1 FROM messages WHERE channel_id = ? AND thread_id = ? AND seq ${operator} ? LIMIT 1`,
-        ).get(ch.id, opts.threadId, seq));
-      }
-      return Boolean(this.db.prepare(
-        `SELECT 1 FROM messages WHERE channel_id = ? AND thread_id IS NULL AND seq ${operator} ? LIMIT 1`,
-      ).get(ch.id, seq));
-    };
-    const oldest = messages[0]?.seq;
-    const newest = messages.at(-1)?.seq;
-    const hasOlder = oldest !== undefined && existsBeyond("<", oldest);
-    const hasNewer = newest !== undefined && existsBeyond(">", newest);
-    return {
-      messages,
-      hasOlder,
-      hasNewer,
-      cursors: {
-        before: hasOlder ? oldest : undefined,
-        after: hasNewer ? newest : undefined,
-      },
-    };
-  }
-
-  searchMessages(
-    actor: Agent,
-    input: { q: string; project?: string | null; channel?: string | null; beforeSeq?: number; limit?: number },
-  ): { hits: SearchHit[]; hasMore: boolean } {
-    if (input.beforeSeq !== undefined) validated(cursorSchema, input.beforeSeq);
-    if (input.limit !== undefined) validated(limitSchema, input.limit);
-    const tokens = parseSearchQuery(input.q ?? "");
-    if (tokens.length === 0) throw new HiveError(400, "Search needs a query");
-    const project = this.projects.searchProject(actor, input.project);
-    let rooms = this.channels.listChannels(actor).filter((ch) => ch.projectId === project.id);
-    if (input.channel) {
-      const ch = this.channels.getChannel(input.channel, project.id);
-      if (!this.channels.canSeeChannel(actor, ch) || ch.projectId !== project.id) {
-        throw new HiveError(403, "Cannot search this channel");
-      }
-      rooms = [ch];
-    }
-    if (rooms.length === 0) return { hits: [], hasMore: false };
-    const limit = clampSearchLimit(input.limit);
-    const before =
-      Number.isFinite(input.beforeSeq) && Number(input.beforeSeq) > 0
-        ? Number(input.beforeSeq)
-        : Number.MAX_SAFE_INTEGER;
-    const roomScope = input.channel
-      ? { sql: "SELECT id FROM channels WHERE id = ?", args: [rooms[0]!.id] }
-      : this.channels.visibleChannelScope(actor);
-    const params: SQLInputValue[] = [project.id, ...roomScope.args, before];
-    const tokenSql = tokens.map((token) => {
-      const like = likeNeedle(token);
-      params.push(like, like, like, like, like, like);
-      let extra = "";
-      if (/^\d+$/.test(token)) {
-        extra = " OR m.seq = ?";
-        params.push(Number(token));
-      }
-      return `(
-        m.body LIKE ? ESCAPE '\\'
-        OR a.name LIKE ? ESCAPE '\\'
-        OR c.name LIKE ? ESCAPE '\\'
-        OR EXISTS (SELECT 1 FROM attachments att WHERE att.message_id = m.id AND att.name LIKE ? ESCAPE '\\')
-        OR EXISTS (SELECT 1 FROM reactions r WHERE r.message_id = m.id AND r.emoji LIKE ? ESCAPE '\\')
-        OR EXISTS (
-          SELECT 1 FROM agents ma
-          WHERE instr(m.mentions, ma.id) > 0 AND ma.name LIKE ? ESCAPE '\\'
-        )
-        ${extra}
-      )`;
-    });
-    params.push(limit + 1);
-    const rows = this.db.prepare(
-      `SELECT m.id
-       FROM messages m
-       JOIN channels c ON c.id = m.channel_id
-       JOIN agents a ON a.id = m.author_id
-       WHERE c.project_id = ?
-         AND c.id IN (${roomScope.sql})
-         AND m.seq < ?
-         AND ${tokenSql.join(" AND ")}
-       ORDER BY m.seq DESC
-       LIMIT ?`,
-    ).all(...params) as { id: string }[];
-    const hasMore = rows.length > limit;
-    const page = rows.slice(0, limit);
-    const messages = this.loadMessagesByIds(
-      page.map((row) => row.id),
-      actor.id,
-    );
-    const byId = new Map(rooms.map((ch) => [ch.id, ch]));
-    return {
-      hasMore,
-      hits: messages.map((msg) => {
-        const ch = byId.get(msg.channelId) ?? this.channels.getChannel(msg.channelId);
-        return {
-          seq: msg.seq,
-          channelId: msg.channelId,
-          channelName: ch.name,
-          channelType: ch.type,
-          threadId: msg.threadId,
-          authorName: msg.authorName,
-          authorRole: msg.authorRole,
-          body: snippetAround(msg.body, tokens),
-          createdAt: msg.createdAt,
-          kind: msg.kind,
-          botEvent: msg.botEvent,
-          attachments: (msg.attachments ?? []).map((a) => a.name),
-          reactions: [...new Set((msg.reactions ?? []).map((r) => r.emoji))],
-        };
-      }),
-    };
-  }
-
-  private loadMessagesByIds(ids: string[], actorId: string): Message[] {
-    const byId = new Map<string, MessageRow>();
-    for (const batch of batches([...new Set(ids)])) {
-      const rows = this.db.prepare(
-        `SELECT *, CAST(body AS BLOB) AS body FROM messages WHERE id IN (${batch.map(() => "?").join(",")})`,
-      ).all(...batch) as MessageRow[];
-      for (const row of rows) byId.set(row.id, row);
-    }
-    return this.decorate(this.mapMessages(
-      ids.map((id) => byId.get(id)).filter((row): row is MessageRow => Boolean(row)),
-    ), actorId);
-  }
-
-  threadsInChannel(channelId: string): Thread[] {
-    return this.db
-      .prepare("SELECT id, channel_id AS channelId, status FROM threads WHERE channel_id = ?")
-      .all(channelId) as Thread[];
-  }
-
-  replyCounts(channelId: string): Record<string, number> {
-    const rows = this.db.prepare(
-      `SELECT thread_id AS id, COUNT(*) AS n FROM messages
-       WHERE channel_id = ? AND thread_id IS NOT NULL GROUP BY thread_id`,
-    ).all(channelId) as { id: string; n: number }[];
-    return Object.fromEntries(rows.map((r) => [r.id, r.n]));
-  }
-
-  latestSeq(channelId: string): number {
-    const row = this.db.prepare("SELECT COALESCE(MAX(seq), 0) AS n FROM messages WHERE channel_id = ?").get(
-      channelId,
-    ) as { n: number };
-    return row.n;
-  }
-
+  getVisibleMessage(actor: Agent, seq: number) { return this.messageQueries.getVisibleMessage(actor, seq); }
+  getMessageBySeq(seq: number) { return this.messageQueries.getMessageBySeq(seq); }
+  getMessageById(id: string) { return this.messageQueries.getMessageById(id); }
+  hasReaction(agentId: string, messageId: string, emoji: string) { return this.messageQueries.hasReaction(agentId, messageId, emoji); }
+  listMessages(...args: Parameters<MessageQueries["listMessages"]>) { return this.messageQueries.listMessages(...args); }
+  expandDigest(actor: Agent, raw: unknown) { return this.messageQueries.expandDigest(actor, raw); }
+  searchMessages(...args: Parameters<MessageQueries["searchMessages"]>) { return this.messageQueries.searchMessages(...args); }
+  threadsInChannel(channelId: string) { return this.messageQueries.threadsInChannel(channelId); }
+  replyCounts(channelId: string) { return this.messageQueries.replyCounts(channelId); }
+  latestSeq(channelId: string) { return this.messageQueries.latestSeq(channelId); }
   setThreadStatus(actor: Agent, threadId: string, status: ThreadStatus | null): Thread {
     if (this.tasks.has(threadId)) throw new HiveError(409, 'Use structured task events; generic thread status cannot change a task');
     if (actor.role === "bot") throw new HiveError(403, "Bots cannot change thread status");
@@ -844,7 +505,7 @@ export class Hive {
     if (!this.channels.canSeeChannel(actor, ch)) throw new HiveError(403, "Cannot access thread");
     const commitments = this.db.prepare('SELECT execution_id FROM adaptive_topology_messages WHERE root_id=?').all(threadId);
     if (commitments.length) {
-      if (actor.role !== 'human' && actor.id !== this.getMessageById(threadId).authorId)
+      if (actor.role !== 'human' && actor.id !== this.messageQueries.getMessageById(threadId).authorId)
         throw new HiveError(403, 'Only Human or the delegating brain can close adaptive delegated work');
       if (this.db.prepare('SELECT status FROM threads WHERE id=?').get(threadId)?.status === 'done' && status !== 'done')
         throw new HiveError(409, 'Start a new guarded assignment instead of reopening completed adaptive work');
@@ -899,7 +560,7 @@ export class Hive {
   mentionInbox(actor: Agent, limit = 30, beforeSeq?: number, projectId?: string): MentionPage {
     return this.readState.snapshot(() => {
       const page = this.readState.page(actor.id, this.channels.listChannels(actor).map((channel) => channel.id), limit, beforeSeq, projectId);
-      return { messages: this.loadMessagesByIds(page.ids, actor.id), hasMore: page.hasMore, ...this.readState.stamp() };
+      return { messages: this.messageQueries.loadMessagesByIds(page.ids, actor.id), hasMore: page.hasMore, ...this.readState.stamp() };
     });
   }
 
@@ -912,7 +573,7 @@ export class Hive {
       return {
         ...this.readState.stamp(),
         unread: this.readState.counts(actor.id, ids),
-        mentions: this.loadMessagesByIds(page.ids, actor.id),
+        mentions: this.messageQueries.loadMessagesByIds(page.ids, actor.id),
         mentionsHasMore: page.hasMore,
         mentionCounts: Object.fromEntries(channels.map((channel) => [channel.project, counts[channel.projectId] ?? 0])),
       };
@@ -981,14 +642,6 @@ export class Hive {
       out[agent.id] = this.inboxReader.estimate(agent).atLeast;
     }
     return out;
-  }
-
-  hasReaction(agentId: string, messageId: string, emoji: string): boolean {
-    return Boolean(
-      this.db.prepare(
-        "SELECT 1 AS ok FROM reactions WHERE message_id = ? AND agent_id = ? AND emoji = ?",
-      ).get(messageId, agentId, emoji),
-    );
   }
 
   private emitQueued(agentId: string, estimate?: QueueEstimate) {
@@ -1134,56 +787,18 @@ export class Hive {
     if (!Number.isSafeInteger(seq) || seq < 1 || !REACTION_EMOJIS.includes(emoji as (typeof REACTION_EMOJIS)[number]) ||
       (present !== undefined && typeof present !== "boolean")) throw new HiveError(400, "Invalid reaction");
     return this.transaction(() => {
-      const msg = this.getMessageBySeq(seq), ch = this.channels.getChannel(msg.channelId);
+      const msg = this.messageQueries.getMessageBySeq(seq), ch = this.channels.getChannel(msg.channelId);
       if (!this.channels.canSeeChannel(actor, ch) || !this.channels.canPost(actor, ch)) throw new HiveError(403, "Cannot react here");
       const had = Boolean(this.db.prepare('SELECT 1 FROM reactions WHERE message_id=? AND agent_id=? AND emoji=?').get(msg.id, actor.id, emoji));
       const wanted = present ?? !had;
       if (had !== wanted) {
         if (wanted) this.db.prepare('INSERT INTO reactions(message_id,agent_id,emoji,created_at) VALUES(?,?,?,?)').run(msg.id, actor.id, emoji, now());
         else this.db.prepare('DELETE FROM reactions WHERE message_id=? AND agent_id=? AND emoji=?').run(msg.id, actor.id, emoji);
-        const forUi = this.decorate([msg], HUMAN_ID)[0]!;
+        const forUi = this.messageQueries.decorate([msg], HUMAN_ID)[0]!;
         this.afterCommit(() => this.bus.emit("reaction", { seq: msg.seq, message: forUi }));
       }
-      return { message: this.decorate([msg], actor.id)[0]!, added: wanted };
+      return { message: this.messageQueries.decorate([msg], actor.id)[0]!, added: wanted };
     });
-  }
-
-  private decorate(messages: Message[], actorId?: string): Message[] {
-    if (messages.length === 0) return messages;
-    const atts: Array<{ id: string; message_id: string; name: string; mime: string; bytes: number }> = [];
-    const reacts: Array<{ message_id: string; emoji: string; agent_id: string }> = [];
-    for (const ids of batches([...new Set(messages.map((m) => m.id))])) {
-      const placeholders = ids.map(() => "?").join(",");
-      atts.push(...this.db.prepare(
-        `SELECT id, message_id, name, mime, bytes FROM attachments WHERE message_id IN (${placeholders})`,
-      ).all(...ids) as typeof atts);
-      reacts.push(...this.db.prepare(
-        `SELECT message_id, emoji, agent_id FROM reactions WHERE message_id IN (${placeholders})`,
-      ).all(...ids) as typeof reacts);
-    }
-    const attMap = new Map<string, AttachmentMeta[]>();
-    for (const a of atts) {
-      const list = attMap.get(a.message_id) ?? [];
-      list.push({ id: a.id, name: a.name, mime: a.mime, bytes: a.bytes });
-      attMap.set(a.message_id, list);
-    }
-    const reactMap = new Map<string, ReactionCount[]>();
-    for (const r of reacts) {
-      const list = reactMap.get(r.message_id) ?? [];
-      const found = list.find((x) => x.emoji === r.emoji);
-      if (found) {
-        found.count += 1;
-        if (actorId && r.agent_id === actorId) found.mine = true;
-      } else {
-        list.push({ emoji: r.emoji, count: 1, mine: Boolean(actorId && r.agent_id === actorId) });
-      }
-      reactMap.set(r.message_id, list);
-    }
-    return messages.map((m) => ({
-      ...m,
-      attachments: attMap.get(m.id) ?? [],
-      reactions: reactMap.get(m.id) ?? [],
-    }));
   }
 
 }
