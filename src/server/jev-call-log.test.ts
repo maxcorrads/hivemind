@@ -39,28 +39,25 @@ function fixture(t: TestContext) {
   return { hive, human, brains, dm, app, get, published, fail: (value: boolean | 'reject') => { offline = value; } };
 }
 
-test('every Jev exchange is logged with the exact payloads, its trigger and what Hivemind applied', async t => {
+test('every Jev exchange is logged with the exact payloads and its trigger; advice is never applied', async t => {
   const f = fixture(t);
   const routed = await f.hive.adaptiveTopology.routeHumanRequest(f.human,
-    { channel: f.dm.id, body: 'Draft the migration plan.', requestId: 'plan' }, 'auto', 'none');
+    { channel: f.dm.id, body: 'Draft the migration plan.', requestId: 'plan' });
   assert.ok(routed);
-  await f.hive.adaptiveTopology.revalidateForActor(f.brains[0]!.agent, { kind: 'brain_message', actorId: f.brains[0]!.agent.id,
-    actorRole: 'brain', channelId: f.dm.id, eventType: 'progress', eventId: 'progress-1' });
+  await f.hive.adaptiveTopology.adviseBrainAction(f.brains[0]!.agent, { kind: 'brain_message', channelId: f.dm.id, eventType: 'progress' });
   f.fail(true);
-  await f.hive.adaptiveTopology.revalidateForActor(f.brains[0]!.agent, { kind: 'brain_message', actorId: f.brains[0]!.agent.id,
-    actorRole: 'brain', channelId: f.dm.id, eventId: 'progress-2' });
+  await f.hive.adaptiveTopology.adviseBrainAction(f.brains[0]!.agent, { kind: 'brain_message', channelId: f.dm.id });
 
   const list = await f.get<JevCallLogView>('/projects/chapter/jev-calls');
   assert.equal(list.status, 200);
   assert.equal(list.body.requests.length, 1, 'All calls of one request are grouped');
   const group = list.body.requests[0]!;
-  assert.equal(group.executionId, routed.state.executionId);
+  assert.equal(group.executionId, routed.states[0]!.executionId);
   assert.equal(group.brainId, f.brains[0]!.agent.id);
   assert.equal(group.request, 'Draft the migration plan.');
   assert.deepEqual(group.calls.map(call => [call.phase, call.trigger.kind, call.status]),
     [['initial', 'human_request', 'ok'], ['continuous', 'brain_message', 'ok'], ['continuous', 'brain_message', 'unavailable']]);
-  assert.equal(group.calls[0]!.outcome?.kind, 'evaluation');
-  assert.equal(group.calls[0]!.outcome?.appliedTopology, 'single');
+  assert.ok(group.calls.every(call => call.outcome === null), 'advisory calls have no applied outcome (#211)');
   assert.equal(group.calls[1]!.trigger.eventType, 'progress');
   assert.equal(group.calls[2]!.error, 'network', 'Only the failure class is kept, never the transport message');
   assert.equal(f.published.length >= 3, true, 'Calls are published to the Human realtime stream');
@@ -86,11 +83,10 @@ test('every Jev exchange is logged with the exact payloads, its trigger and what
 test('a rejected answer is logged with its specific reason, resolved model and tokens', async t => {
   const f = fixture(t);
   const routed = await f.hive.adaptiveTopology.routeHumanRequest(f.human,
-    { channel: f.dm.id, body: 'Draft the migration plan.', requestId: 'plan' }, 'auto', 'none');
+    { channel: f.dm.id, body: 'Draft the migration plan.', requestId: 'plan' });
   assert.ok(routed);
   f.fail('reject');
-  await f.hive.adaptiveTopology.revalidateForActor(f.brains[0]!.agent, { kind: 'brain_message', actorId: f.brains[0]!.agent.id,
-    actorRole: 'brain', channelId: f.dm.id, eventType: 'progress', eventId: 'progress-1' });
+  await f.hive.adaptiveTopology.adviseBrainAction(f.brains[0]!.agent, { kind: 'brain_message', channelId: f.dm.id, eventType: 'progress' });
   const list = await f.get<JevCallLogView>('/projects/chapter/jev-calls');
   const call = list.body.requests[0]!.calls.at(-1)!;
   assert.equal(call.status, 'unavailable');
@@ -98,7 +94,7 @@ test('a rejected answer is logged with its specific reason, resolved model and t
   assert.equal(call.reason, 'response_rejected_preserve_current');
   assert.equal(call.model, 'jev-1.13.0');
   assert.equal(call.inputTokens, 2851); assert.equal(call.outputTokens, 248);
-  assert.equal(call.outcome?.appliedTopology, 'single', 'The current mode is kept');
+  assert.equal(call.outcome, null);
   const detail = await f.get<{ call: JevCall }>(`/projects/chapter/jev-calls/${call.id}`);
   assert.equal((detail.body.call.received as { answers: { plan: { choice: string } } }).answers.plan.choice, 'brain_one_worker_2');
 });
@@ -107,13 +103,12 @@ test('observations are logged without a brain and the history is bounded per pro
   const f = fixture(t);
   const group = f.hive.channels.createChannel(f.human, { name: 'council', type: 'private', project: 'chapter',
     memberNames: f.brains.map(brain => brain.agent.name) });
-  await f.hive.adaptiveTopology.routeHumanRequest(f.human, { channel: group.id, body: 'Who takes this?', requestId: 'who' }, 'auto', 'none');
+  await f.hive.adaptiveTopology.routeHumanRequest(f.human, { channel: group.id, body: 'Who takes this?', requestId: 'who' });
   const view = f.hive.adaptiveTopology.observations.jevCalls.view(group.projectId);
   const call = view.requests[0]!.calls[0]!;
   assert.equal(call.phase, 'observation');
   assert.equal(call.brainId, null);
-  assert.equal(call.outcome?.kind, 'observation');
-  assert.equal(call.outcome?.applied, false);
+  assert.equal(call.outcome, null);
 
   const log = f.hive.adaptiveTopology.observations.jevCalls, decision = { ...call, providerStatus: 'ok' as const, contractVersion: 'adaptive-routing-v2' as const,
     singleSufficient: true, needsOrchestration: false };

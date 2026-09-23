@@ -7,7 +7,6 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { TaskStoreDeps } from './services/ports.ts';
 import { BODY_MAX, HiveError, type Agent, type Channel } from '../shared/types.ts';
 import { assignTaskSchema, taskEventSchema, taskBody, type TaskContract, type TaskEnvelope, type TaskSnapshot } from '../shared/tasks.ts';
-import { admitAdaptiveTask, linkAdaptiveTask } from './adaptive-topology-admission.ts';
 
 type Row = { id: string; channel_id: string; worker_id: string; dispatch_seq: number; received_at: number | null; snapshot: string };
 type StoredEvent = { message_id: string; task_id: string; request_hash: string };
@@ -113,9 +112,6 @@ export class TaskStore {
   }
   private transaction<T>(f: () => T): T { return this.deps.storage.transaction(f); }
   private write(actor: Agent, task: TaskSnapshot, envelope: TaskEnvelope, requestId: string, hash: string, initial: boolean) {
-    // Admission observes live capacity inside this transaction; a stale preflight cannot oversubscribe workers.
-    const adaptiveExecution = envelope.action.type === 'assign' || envelope.action.type === 'revise'
-      ? admitAdaptiveTask(this.deps, actor, task, requestId) : null;
     const body = taskBody(envelope);
     if (body.length > BODY_MAX || Buffer.byteLength(JSON.stringify(envelope)) > 16000)
       throw new HiveError(400, 'Task envelope is too large; use a compact contract and evidence references');
@@ -141,7 +137,6 @@ export class TaskStore {
       ON CONFLICT(id) DO UPDATE SET worker_id=excluded.worker_id, dispatch_seq=excluded.dispatch_seq,
         received_at=excluded.received_at, snapshot=excluded.snapshot`)
       .run(task.id, task.channelId, task.workerId, task.dispatchSeq, task.receivedAt, JSON.stringify(this.record(task)));
-    linkAdaptiveTask(this.deps, task.id, adaptiveExecution);
     this.db.prepare('INSERT INTO task_events(message_id, task_id, actor_id, request_id, request_hash, envelope) VALUES (?, ?, ?, ?, ?, ?)')
       .run(id, task.id, actor.id, requestId, hash, JSON.stringify(envelope));
     this.deps.messages.ensureThread(task.id, task.channelId);
@@ -266,8 +261,9 @@ export class TaskStore {
       AND json_extract(t.snapshot,'$.state') NOT IN ('accepted_complete','rejected')`).get(taskId, workerId));
   }
   /** Work that occupies a worker in a project: unfinished tasks not stopped by their room, and held claims. */
-  capacityWork(projectId: string): Array<{ id: string; workerId: string; state: string; held: boolean; dependencies: string[] }> {
+  capacityWork(projectId: string): Array<{ id: string; workerId: string; assignerId: string; state: string; held: boolean; dependencies: string[] }> {
     return this.db.prepare(`SELECT t.id,t.worker_id,
+        json_extract(t.snapshot,'$.assignerId') AS assigner_id,
         json_extract(t.snapshot,'$.state') AS state,
         json_extract(t.snapshot,'$.claim.state') AS claim_state,
         json_extract(t.snapshot,'$.contract.dependencies') AS dependencies
@@ -276,7 +272,7 @@ export class TaskStore {
       WHERE t.channel_id IN (SELECT value FROM json_each(?)) AND ((json_extract(t.snapshot,'$.state') NOT IN ('accepted_complete','rejected')
         AND COALESCE(room.status,'active')!='stopped') OR json_extract(t.snapshot,'$.claim.state')='held')`)
       .all(JSON.stringify(this.deps.channels.channelIdsIn(projectId))).map(row => ({
-        id: String(row.id), workerId: String(row.worker_id), state: String(row.state), held: row.claim_state === 'held',
+        id: String(row.id), workerId: String(row.worker_id), assignerId: String(row.assigner_id), state: String(row.state), held: row.claim_state === 'held',
         dependencies: row.dependencies ? JSON.parse(String(row.dependencies)) as string[] : [],
       }));
   }

@@ -27,7 +27,7 @@ function help() {
   hivemind wait [--timeout ${Math.round(DEFAULT_WAIT_MS / 1000)}] [--session UUID]
   hivemind ack DELIVERY_ID --session UUID
   hivemind send --channel NAME --body TEXT [--thread ID] [--file PATH] [--event-type progress|blocker|question|action_required]
-  hivemind send --to NAME --body TEXT [--file PATH] [--request-id KEY] [--execution-id ID]
+  hivemind send --to NAME --body TEXT [--file PATH] [--request-id KEY]
   hivemind fetch --id ATT_ID [--out DIR]
   hivemind react --seq N --emoji 👍 [--remove]
   hivemind gc
@@ -278,8 +278,8 @@ export async function runCli(argv: string[]): Promise<void> {
     const thread = arg(argv, "--thread");
     const to = arg(argv, "--to");
     let channel = arg(argv, "--channel");
-    const executionId = arg(argv, "--execution-id");
-    validated(sendInputSchema, { body, threadId: thread, eventType, recipients, executionId, requestId: arg(argv, "--request-id") });
+    // --execution-id is accepted for older scripts and ignored (#211).
+    validated(sendInputSchema, { body, threadId: thread, eventType, recipients, executionId: arg(argv, "--execution-id"), requestId: arg(argv, "--request-id") });
     if (to) {
       const dm = await agentRequest<{ channel: Channel }>("POST", "/api/agent/dms", { name: to }, token);
       channel = dm.channel.id;
@@ -289,7 +289,7 @@ export async function runCli(argv: string[]): Promise<void> {
     const mime = file ? guessMime(file) : undefined;
     if (mime === "application/octet-stream") throw new Error("unsupported file type");
     console.error(`Send requestId: ${requestId}`);
-    const result = await sendOperation({ channel, body, threadId: thread, eventType, recipients, executionId,
+    const result = await sendOperation({ channel, body, threadId: thread, eventType, recipients,
       ...(file ? { file: { path: resolvePath(file), name: basename(file), mime: mime! } } : {}) }, token, requestId);
     console.log(`sent ${result.id} seq ${result.seq}`);
     return;

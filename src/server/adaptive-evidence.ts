@@ -266,7 +266,8 @@ export function exportAdaptiveEvidence(db: DatabaseSync, executionId: string) {
       const value = JSON.parse(String(row.snapshot)) as Record<string, unknown>;
       const mode = (v: unknown) => typeof v === 'string' && modes.includes(v) ? v : null;
       const number = (v: unknown) => safeInt(v) ? v : null;
-      return { kind: ['evaluation','transition','warning','lock','status'].includes(String(value.kind)) ? value.kind : 'unknown',
+      // advice (#211) is never applied; evaluation, transition, warning and lock are events recorded before it.
+      return { kind: ['advice','observation','evaluation','transition','warning','lock','status'].includes(String(value.kind)) ? value.kind : 'unknown',
         from: mode(value.fromTopology), target: mode(value.targetTopology), applied: mode(value.appliedTopology),
         targetWorkers: number(value.targetWorkers), appliedWorkers: number(value.appliedWorkers),
         changed: value.applied === true, hasWarning: typeof value.warning === 'string' && value.warning.length > 0 };

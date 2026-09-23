@@ -147,15 +147,14 @@ test("Telegram Human replies in a brain DM use active Jev routing and keep recei
       .filter(row => row.channel_id === dm.id).length === 1);
     const messages = hive.messageQueries.listMessages(human, dm.id).messages.filter(m => m.kind === "chat");
     const original = messages.find(m => m.body.endsWith("Small Telegram request"))!;
-    const directive = messages.find(m => m.body.includes("adaptive topology · SINGLE"))!;
-    assert.ok(original && directive);
+    assert.ok(original);
+    assert.equal(messages.length, 1, "Jev posts no directive (#211)");
     assert.deepEqual(routingRequests, ["Small Telegram request"], "Sender display name is not classifier context");
     const state = hive.adaptiveTopology.view(human, dm.id).state!;
     assert.equal(state.recommendation?.providerStatus, "ok", "A malformed fixture must not silently pass via fallback");
     assert.equal(state.recommendation?.contractVersion, "adaptive-routing-v3");
-    assert.equal(state.currentTopology, "single");
+    assert.equal(state.advice?.plan, "single");
     assert.equal(hive.messages.fromTelegram(original.id), true);
-    assert.equal(hive.messages.fromTelegram(directive.id), false);
     assert.equal(readValue(hive, "telegram_out", "seq", { telegram_chat_id: -1001, telegram_message_id: 88, bot_key: botKey }), original.seq);
   } finally {
     await bridge.stop();

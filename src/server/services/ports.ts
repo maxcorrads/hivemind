@@ -94,21 +94,14 @@ type ChannelScopes<K extends "channelIdsIn" | "memberChannelIds" = "channelIdsIn
 };
 
 export type TaskCoordinationDeps = Core & Channels & ChannelScopes;
-/** Worker capacity of an adaptive execution: roster, structured work, free-form delegations. */
+/** Worker capacity Jev sees for one brain: the project roster and unfinished structured work. */
 export type CapacityDeps = Agents<"listAgents"> & {
   readonly tasks: Pick<TaskStore, "capacityWork" | "completedAmong">;
-  readonly messageQueries: Pick<MessageQueries, "threadStatuses">;
-  readonly adaptiveTopology: Pick<AdaptiveTopologyRuntime, "store">;
-};
-export type AdmissionDeps = CapacityDeps & Channels & Agents & {
-  readonly messageQueries: Pick<MessageQueries, "threadStatus">;
-  readonly rooms: Pick<RoomStore, "peek">;
-  readonly adaptiveTopology: AdaptiveTopologyRuntime;
 };
 /** Coordination records insert their own message (and thread root) inside their transaction. */
 type CoordinationWriter<K extends "insertCoordinationMessage" | "ensureThread"> = { readonly messages: Pick<MessageService, K> };
 
-export type TaskStoreDeps = AdmissionDeps & TaskCoordinationDeps & Messages<"getMessageById" | "getVisibleMessage"> &
+export type TaskStoreDeps = TaskCoordinationDeps & Agents & Messages<"getMessageById" | "getVisibleMessage"> &
   Poster<"publishTaskMessage"> & CoordinationWriter<"insertCoordinationMessage" | "ensureThread"> & {
     readonly channels: { openDm(actor: Agent, otherName: string): Channel };
     readonly messageQueries: Pick<MessageQueries, "hasNewerInThread">;
@@ -138,23 +131,23 @@ export type DecisionDeps = Core & Channels & Agents & Messages & Poster<"postMes
 };
 export type DiagnosticsDeps = { readonly home: string } & Agents<"getAgent">;
 
-/** What the adaptive topology runtime reads and writes outside its own tables. */
+/** What the Jev advisor reads and writes outside its own tables. */
 export type AdaptiveRuntimeDeps = Core & CapacityDeps & {
   readonly home: string;
-  readonly identity: AgentDirectory & Pick<IdentityService, "sessionFingerprint">;
+  readonly identity: AgentDirectory;
   readonly projects: Pick<ProjectDirectory, "getProject">;
   readonly channels: ChannelAccess;
-  readonly messageQueries: Pick<MessageReader, "getMessageById"> & Pick<MessageQueries, "threadStatus">;
-  readonly messages: Pick<MessageService, "hasActiveSendRequest" | "postAdaptiveRequest" | "setThreadStatus">;
+  readonly messageQueries: Pick<MessageReader, "getMessageById">;
+  readonly messages: Pick<MessageService, "hasActiveSendRequest" | "postMessage">;
   readonly rooms: Pick<RoomStore, "peek">;
-  readonly tasks: Pick<TaskStore, "get">;
+  readonly tasks: Pick<TaskStore, "get" | "has">;
 };
 
-/** The brain coordination actions routed through adaptive admission (adaptive-topology-actions.ts). */
-export type AdaptiveActionDeps = AdmissionDeps & {
-  readonly identity: AgentDirectory & Pick<IdentityService, "agentByToken" | "sessionFingerprint">;
-  readonly messageQueries: Pick<MessageReader, "getMessageById"> & Pick<MessageQueries, "threadStatus">;
+/** Agent coordination actions; a brain's actions also return Jev's advice (adaptive-topology-actions.ts). */
+export type AdaptiveActionDeps = Channels & Agents & {
+  readonly adaptiveTopology: Pick<AdaptiveTopologyRuntime, "adviseBrainAction" | "latestAdvice">;
+  readonly messageQueries: Pick<MessageReader, "getMessageById">;
   readonly messages: Pick<MessageService, "postMessage" | "hasActiveSendRequest" | "setThreadStatus">;
   readonly rooms: Pick<RoomStore, "peek" | "view" | "event" | "hasRequest">;
-  readonly tasks: Pick<TaskStore, "assign" | "event" | "get" | "has" | "hasRequest" | "isOpenFor">;
+  readonly tasks: Pick<TaskStore, "assign" | "event" | "get" | "has" | "hasRequest">;
 };

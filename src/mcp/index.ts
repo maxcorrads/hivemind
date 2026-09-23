@@ -233,14 +233,15 @@ export async function startMcp() {
       causeMessageId: z.string().uuid().optional().describe(PARAM_DESCRIPTIONS.causeMessageId),
       executionId: executionIdSchema.optional(),
     },
-    async ({ body, channel, to, threadId, attachmentIds, eventType, recipients, traceId, causeMessageId, requestId, executionId }) => {
+    // executionId is accepted from older clients and ignored (#211).
+    async ({ body, channel, to, threadId, attachmentIds, eventType, recipients, traceId, causeMessageId, requestId }) => {
       let channelId = channel ? normalizeChannelReference(channel) : channel;
       if (to) {
         const dm = await agentRequest<{ channel: Channel }>("POST", "/api/agent/dms", { name: to }, token());
         channelId = dm.channel.id;
       }
       if (!channelId) throw new Error("Provide channel or to");
-      return text(await sendOperation({ channel: channelId, body, threadId, attachmentIds, eventType, recipients, traceId, causeMessageId, executionId }, token(), requestId));
+      return text(await sendOperation({ channel: channelId, body, threadId, attachmentIds, eventType, recipients, traceId, causeMessageId }, token(), requestId));
     },
   );
 
@@ -447,7 +448,7 @@ export async function startMcp() {
       causeMessageId: z.string().uuid().optional(),
       executionId: executionIdSchema.optional(),
     },
-    async ({ path: filePath, body, channel, to, threadId, mime, eventType, recipients, traceId, causeMessageId, requestId, executionId }) => {
+    async ({ path: filePath, body, channel, to, threadId, mime, eventType, recipients, traceId, causeMessageId, requestId }) => {
       const resolved = path.resolve(filePath);
       if (!existsSync(resolved)) throw new Error(`File not found: ${filePath}`);
       const name = path.basename(resolved);
@@ -458,7 +459,7 @@ export async function startMcp() {
         channelId = dm.channel.id;
       }
       if (!channelId) throw new Error("Provide channel or to");
-      return text(await sendOperation({ channel: channelId, body: body ?? "", threadId, eventType, recipients, traceId, causeMessageId, executionId,
+      return text(await sendOperation({ channel: channelId, body: body ?? "", threadId, eventType, recipients, traceId, causeMessageId,
         file: { path: resolved, name, mime: guessed } }, token(), requestId));
     },
   );

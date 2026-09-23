@@ -35,18 +35,8 @@ export const sendInputSchema = z.object({
   recipients: memberNamesSchema.min(1).optional(), attachmentIds: attachmentIdsSchema.optional(),
   executionId: executionIdSchema.optional(),
 }).strict();
-export const humanSendInputSchema = sendInputSchema.omit({ executionId: true }).extend({
-  routing: z.enum([
-    "auto",
-    "single",
-    "brain_one_worker",
-    "brain_multi_dm",
-    "brain_multi_room",
-    "orchestrated_auto",
-    "orchestrated",
-  ]).optional(),
-  lockScope: z.enum(["none", "task", "conversation"]).optional(),
-}).strict();
+/** The Human composer has no topology mode or lock (#211): Jev only advises the brain. */
+export const humanSendInputSchema = sendInputSchema.omit({ executionId: true }).strict();
 export const channelInputSchema = z.object({ name: nameSchema,
   type: z.enum(["public", "private", "brains"]).optional(), topic: z.string().max(4000).nullish(),
   memberNames: memberNamesSchema.optional(), project: z.string().min(1).max(32).nullish(),

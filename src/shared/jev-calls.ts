@@ -1,14 +1,21 @@
-import type { AdaptiveIncoherence, AdaptiveRoutingEvent, AdaptiveTopology, AdaptiveTopologyDecision } from "./adaptive-topology.ts";
+import type { AdaptiveIncoherence, AdaptiveTopology, AdaptiveTopologyDecision } from "./adaptive-topology.ts";
 
-/** Why Hivemind asked Jev: the initial request, a Human reply, or a brain coordination boundary. */
+/**
+ * Why Hivemind asked Jev: a Human request or reply, or a brain action (#211). `capacity_change` only appears on calls
+ * recorded before #211.
+ */
 export type JevCallTrigger = {
-  kind: "human_request" | "human_message" | "brain_message" | "delegation_attempt" | "task_event" | "room_event" | "capacity_change" | "observation";
+  kind: "human_request" | "human_message" | "brain_message" | "delegation_attempt" | "task_event" | "room_event"
+    | "thread_status" | "wait" | "capacity_change" | "observation";
   eventType: string | null;
 };
 
-/** What Hivemind did with the answer, recorded when the routing audit event is committed. */
+/**
+ * What Hivemind did with the answer when topologies were still enforced (before #211). Calls recorded since then
+ * have no outcome: their advice is returned to the brain and never applied.
+ */
 export type JevCallOutcome = {
-  kind: AdaptiveRoutingEvent["kind"];
+  kind: string;
   applied: boolean;
   appliedTopology: AdaptiveTopology;
   appliedWorkers: number;
@@ -33,7 +40,7 @@ export type JevCallSummary = {
   confidence: number | null;
   reason: string;
   error: string | null;
-  /** Jev's valid answers contradicted each other: kept as an uncertain answer, never acted on (#209). */
+  /** Jev's valid answers contradicted each other: delivered as uncertain advice (#209). */
   incoherent?: AdaptiveIncoherence | null;
   /** Identifier Hivemind requested. Absent on calls recorded before #134 (their sent payload still has it). */
   requestedModel?: string | null;
@@ -42,7 +49,7 @@ export type JevCallSummary = {
   latencyMs: number;
   inputTokens: number | null;
   outputTokens: number | null;
-  /** Null when the answer was discarded (state changed during the call) or not yet committed. */
+  /** Only on calls recorded before #211, when Hivemind still enforced a mode. */
   outcome: JevCallOutcome | null;
 };
 

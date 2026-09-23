@@ -36,7 +36,7 @@ export class AdaptiveObservationStores {
   }
 }
 
-/** Observe every attempt, BEFORE capacity/configuration fencing can discard its result. */
+/** Records every Jev attempt (evidence and the Human-only call log) around one provider call. */
 export async function observeTopologyEvaluation(
   stores: AdaptiveObservationStores, scope: EvidenceScope, snapshot: TopologyEvaluationSnapshot,
   config: { apiKey: string; model?: string }, options: Parameters<typeof evaluateAdaptiveTopology>[2] = {},
@@ -48,8 +48,8 @@ export async function observeTopologyEvaluation(
   stores.collector.flush(() => stores.evidence);
   try {
     store = stores.evidence;
-    id = store.begin(scope, { topology: snapshot.current?.topology ?? null,
-      workers: snapshot.current?.workerBudget ?? 0, usableWorkers: snapshot.capacity.workers.usableForExecution,
+    // Nothing is applied since #211: every attempt starts from "no mode".
+    id = store.begin(scope, { topology: null, workers: 0, usableWorkers: snapshot.capacity.workers.usableForExecution,
       policyVersion: TOPOLOGY_POLICY_VERSION });
   } catch {
     console.error('Adaptive evidence recording unavailable; measurements may be incomplete');

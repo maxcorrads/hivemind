@@ -27,10 +27,10 @@ test('configs saved before model pinning keep working with the default alias, wi
   assert.equal(loadAdaptiveRouting(dir)?.model, TYPESAFE_MODEL);
   assert.equal(loadAdaptiveRouting(dir)?.enabled, false);
   assert.deepEqual(adaptiveRoutingPublic(dir), { enabled: false, apiKeySet: true, apiKeyHint: '…-key', model: TYPESAFE_MODEL,
-    defaultModel: TYPESAFE_MODEL, modelPinned: false, fallback: 'single', topologyFallback: 'brain_one_worker' });
+    defaultModel: TYPESAFE_MODEL, modelPinned: false });
   // Reading never rewrites the file; an unrelated save keeps the pre-pinning format (no model field).
   assert.doesNotMatch(readFileSync(file, 'utf8'), /model/);
-  saveAdaptiveRouting(dir, { topologyFallback: 'brain_multi_dm' });
+  saveAdaptiveRouting(dir, { enabled: false });
   assert.doesNotMatch(readFileSync(file, 'utf8'), /model/);
   assert.equal(loadAdaptiveRouting(dir)?.enabled, false);
 });
@@ -56,10 +56,8 @@ test('the model setting is a bounded identifier, never a URL, and can be reset t
 
 function snapshot(): TopologyEvaluationSnapshot {
   return { request: 'Complete this phase.', project: { slug: 'test', name: 'Test' },
-    current: { topology: 'brain_multi_room', workerBudget: 2, desiredTopology: null, desiredWorkers: null },
     capacity: { workers: { total: 3, online: 3, busyOther: 0, busyCurrent: 0, free: 3, usableForExecution: 3, available: [] },
       activeTasks: 0, activeWorkers: 0, blockers: 0, openDependencies: 0, workstreams: 0 },
-    execution: { orchestratedOnly: false, lockedTopology: null, lockScope: 'none' },
     tasks: { active: 0, activeWorkers: 0, blockers: 0, openDependencies: 0, workstreams: 0 },
     recentCoordinationEvents: [], trigger: { kind: 'brain_message' }, previousDecision: null };
 }
@@ -87,7 +85,7 @@ test('the provider sends the requested identifier to the fixed endpoint and keep
   assert.equal(calls, 0);
   assert.equal(invalid.providerStatus, 'unavailable');
   assert.equal(invalid.requestedModel, null);
-  assert.equal(invalid.targetTopology, 'brain_multi_room', 'failure preserves the current topology');
+  assert.equal(invalid.targetTopology, 'single', 'a failure suggests nothing');
 });
 
 function runtime(t: TestContext) {
@@ -111,9 +109,8 @@ function runtime(t: TestContext) {
   t.after(async () => { await hive.adaptiveTopology.stop(); hive.db.close(); });
   return { hive, human, brain, dm, dir, requested,
     start: () => hive.adaptiveTopology.routeHumanRequest(human,
-      { channel: dm.id, body: 'Do the bounded Human request.', requestId: `request-${++serial}` }, 'auto', 'none'),
-    recheck: () => hive.adaptiveTopology.revalidateForActor(brain, {
-      actorId: brain.id, actorRole: 'brain', kind: 'brain_message', channelId: dm.id, eventId: `event-${++serial}` }),
+      { channel: dm.id, body: 'Do the bounded Human request.', requestId: `request-${++serial}` }),
+    recheck: () => hive.adaptiveTopology.adviseBrainAction(brain, { kind: 'brain_message', channelId: dm.id, summary: `event-${++serial}` }),
     choose: (topology: AdaptiveTopology) => { target = topology; },
     resolveAs: (fn: (requested: string) => string) => { resolved = fn; },
     makeUnavailable: (model: string) => { unavailable = model; },
@@ -144,7 +141,7 @@ test('Routing log and evidence export record requested and resolved models indep
   const detail = f.hive.adaptiveTopology.observations.jevCalls.get(f.dm.projectId, calls[0]!.id);
   assert.equal((detail.sent as { model: string }).model, PINNED, 'the exact sent payload holds the requested identifier');
   assert.equal((detail.received as { model: string }).model, 'jev-2026-09-01-build-7');
-  const report = exportAdaptiveEvidence(f.hive.db, started.state.executionId);
+  const report = exportAdaptiveEvidence(f.hive.db, started.states[0]!.executionId);
   assert.deepEqual(report.requestedModels, [PINNED]);
   assert.equal(report.requestedModelsTruncated, false);
   assert.deepEqual(report.models, ['jev-2026-09-01-build-7', 'jev-2026-09-01-build-8']);
@@ -153,46 +150,38 @@ test('Routing log and evidence export record requested and resolved models indep
   assert.doesNotMatch(JSON.stringify(report), /fixture-key/);
 });
 
-test('an unavailable pinned model fails visibly and preserves the current topology without falling back to the alias', async t => {
+test('an unavailable pinned model fails visibly as unavailable advice without falling back to the alias', async t => {
   const f = runtime(t);
   saveAdaptiveRouting(f.dir, { enabled: true, apiKey: 'fixture-key' });
   const started = await f.start(); assert.ok(started);
   saveAdaptiveRouting(f.dir, { model: PINNED });
   f.makeUnavailable(PINNED); f.choose('brain_multi_room');
-  await f.recheck();
+  const advice = await f.recheck();
   assert.deepEqual(f.requested, [TYPESAFE_MODEL, PINNED], 'no silent retry with another identifier');
-  const view = f.view();
-  assert.equal(view.state?.currentTopology, 'single');
-  assert.match(view.state?.warning ?? '', /Jev unavailable/);
+  assert.deepEqual([advice?.state, advice?.reason, advice?.plan], ['unavailable', 'http_404', null]);
+  assert.equal(f.view().state?.advice?.state, 'unavailable');
   const failed = f.calls().at(-1)!;
   assert.equal(failed.status, 'unavailable');
   assert.equal(failed.error, 'http_404');
   assert.equal(failed.requestedModel, PINNED);
   assert.equal(failed.model, null);
-  const report = exportAdaptiveEvidence(f.hive.db, started.state.executionId);
+  const report = exportAdaptiveEvidence(f.hive.db, started.states[0]!.executionId);
   assert.deepEqual(report.requestedModels, [TYPESAFE_MODEL, PINNED]);
   assert.deepEqual(report.attempts.at(-1), { ...report.attempts.at(-1), status: 'unavailable', requestedModel: PINNED, model: null });
 });
 
-test('changing the model invalidates in-flight initial and continuous classifications', async t => {
+test('changing the model during a call only affects later calls; the late answer is still delivered as advice', async t => {
   const f = runtime(t);
   saveAdaptiveRouting(f.dir, { enabled: true, apiKey: 'fixture-key' });
   f.beforeReply(() => { saveAdaptiveRouting(f.dir, { model: PINNED }); });
-  await assert.rejects(f.start(), /settings changed during initial routing/);
-  assert.equal(f.view().state, null);
   const started = await f.start(); assert.ok(started);
-  assert.deepEqual(f.requested, [TYPESAFE_MODEL, PINNED]);
+  assert.equal(started.states[0]!.advice?.plan, 'single');
   f.choose('brain_multi_room');
-  const before = f.view();
   f.beforeReply(() => { saveAdaptiveRouting(f.dir, { model: 'jev-2026-10-01' }); });
+  assert.equal((await f.recheck())?.plan, 'brain_multi_room_2');
   await f.recheck();
-  const stale = f.view();
-  assert.equal(stale.state?.currentTopology, 'single', 'a late result for the previous model is discarded');
-  assert.equal(stale.state?.revision, before.state?.revision);
-  assert.equal(stale.events.length, before.events.length);
-  await f.recheck();
-  assert.equal(f.requested.at(-1), 'jev-2026-10-01');
-  assert.equal(f.view().state?.currentTopology, 'brain_multi_room');
+  assert.deepEqual(f.requested, [TYPESAFE_MODEL, PINNED, 'jev-2026-10-01']);
+  assert.equal(f.view().state?.advice?.topology, 'brain_multi_room');
 });
 
 test('the Human connection test uses the configured model, and a model change revokes its revision', async t => {
