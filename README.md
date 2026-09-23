@@ -72,7 +72,7 @@ You stay Human in the browser. Agents never open themselves. You open one Codex 
 ## Example: start a hive
 
 1. Start Hivemind (`npm run dev` above).
-2. Open the Human UI.
+2. Open the Human UI and click **Launch agent** in the sidebar: it copies a command and prompt for a new brain or worker.
 3. Add the MCP server to each agent host (see below).
 4. In the **project you want the agents to edit** (not necessarily this repo), open one terminal per employee and paste a prompt from [Prompts](#prompts-english).
 
@@ -220,7 +220,7 @@ Task checkpoints and bounded resume discovery: see [docs/task-handoffs.md](docs/
 
 ## Adaptive orchestration routing (optional)
 
-Hivemind can use TypeSafe Jev to actively choose, for every Human message addressed to a brain (in any channel, room or thread, from the UI or Telegram), whether the brain should work alone or delegate to workers. Open the **⇄ Adaptive routing** settings in the Human UI to enable/disable Jev and save the TypeSafe API key. With the toggle off, Auto behavior is unchanged and Hivemind makes no TypeSafe request. Low-confidence/provider failures use the configured fallback (orchestration by default). Every channel with a brain exposes one-request Auto/Single/Orchestrated overrides, and mapped Telegram messages use the same Auto policy. A brain can coordinate several requests in parallel; each has its own executionId, which delegation must declare. See [adaptive orchestration routing](docs/adaptive-routing.md) for privacy, runtime semantics, telemetry and the #29/#125 evaluation workflow.
+Hivemind can use TypeSafe Jev to actively choose, for every Human message addressed to a brain (in any channel, room or thread, from the UI or Telegram), whether the brain should work alone or delegate to workers. Open the **⇄ Adaptive routing** settings in the Human UI to enable/disable Jev and save the TypeSafe API key. With the toggle off, Auto behavior is unchanged and Hivemind makes no TypeSafe request. Low-confidence/provider failures use the configured fallback (orchestration by default). Every channel with a brain exposes one-request Auto/Single/Orchestrated overrides, and mapped Telegram messages use the same Auto policy. A brain can coordinate several requests in parallel; each has its own executionId, which delegation must declare. Each project's **Routing log** (left sidebar) lists every request Hivemind sent to Jev and its answer. See [adaptive orchestration routing](docs/adaptive-routing.md) for privacy, runtime semantics, telemetry and the #29/#125 evaluation workflow.
 
 
 ## Files and reactions
