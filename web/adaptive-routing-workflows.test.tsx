@@ -3,7 +3,7 @@ import { after, test, type TestContext } from 'node:test';
 import { Window } from 'happy-dom';
 import { act, createElement } from 'react';
 import { useAdaptiveRouting } from './use-adaptive-routing.ts';
-import { mergeRoutingView, routingStreamEntries } from './adaptive-routing-view.ts';
+import { mergeRoutingView, routingStreamEntries, routingStripCounts } from './adaptive-routing-view.ts';
 import { AdaptiveRoutingPanel, routingEventLabel } from './AdaptiveRoutingPanel.tsx';
 import { AdaptiveRoutingSettings } from './AdaptiveRoutingSettings.tsx';
 import { api } from './api.ts';
@@ -159,4 +159,45 @@ test('a channel keeps one execution per brain, shows observations and locks the 
   await act(async () => tab.click());
   await act(async () => f.button('Apply lock').click());
   assert.equal((bodies[0] as { expectedExecutionId: string }).expectedExecutionId, 'run-a');
+});
+
+test('draining executions stay beside the current one: merge, realtime and a read-only panel list', async t => {
+  const current = { ...state('a', 10, 'run-new'), current: true };
+  const draining = { ...state('a', 12, 'run-old'), current: false, currentTopology: 'brain_one_worker' as const, workerBudget: 1,
+    requestExcerpt: 'Refactor the importer', openWork: { tasks: 1, delegations: 2 } };
+  const merged = mergeRoutingView(null, { state: current, executions: [draining, current], events: [] }, 'a');
+  assert.equal(merged.state?.executionId, 'run-new', 'a more recently updated draining execution never becomes primary');
+  assert.deepEqual(merged.executions?.map(item => [item.executionId, item.current]).sort(), [['run-new', true], ['run-old', false]]);
+  assert.deepEqual(routingStripCounts(merged, 'a'), { brains: 1, finishing: 1 });
+
+  // A realtime update of the draining execution does not replace the current one.
+  const update = { ...draining, updatedAt: 15, revision: 15, openWork: { tasks: 0, delegations: 1 } };
+  const live = mergeRoutingView(merged, { state: update, events: [event(update, 'drain-1', 'status')] }, 'a');
+  assert.equal(live.state?.executionId, 'run-new');
+  assert.deepEqual(live.executions?.find(item => item.executionId === 'run-old')?.openWork, { tasks: 0, delegations: 1 });
+  // A stale snapshot listing the old execution as current does not revive it.
+  const stale = mergeRoutingView(live, { state: { ...draining, current: true, updatedAt: 1, revision: 1 }, events: [] }, 'a');
+  assert.equal(stale.state?.executionId, 'run-new');
+  assert.equal(stale.executions?.find(item => item.executionId === 'run-old')?.current, false);
+  // A newer current execution for the same brain replaces the older current one, not the draining one.
+  const third = { ...state('a', 20, 'run-third'), current: true };
+  const replaced = mergeRoutingView(stale, { state: third, events: [] }, 'a');
+  assert.deepEqual(replaced.executions?.map(item => item.executionId).sort(), ['run-old', 'run-third']);
+  const finished = mergeRoutingView(replaced, { state: { ...update, updatedAt: 25, revision: 25, completedAt: 25, openWork: undefined }, events: [] }, 'a');
+  assert.deepEqual(routingStripCounts(finished, 'a'), { brains: 1, finishing: 0 });
+  assert.equal(finished.state?.executionId, 'run-third');
+
+  const f = mounted(t); const bodies: unknown[] = [];
+  t.mock.method(api, 'setAdaptiveRoutingLock', (_channel: string, body: unknown) => { bodies.push(body); return new Promise<AdaptiveRoutingView>(() => {}); });
+  await f.render(<AdaptiveRoutingPanel channelId="a" view={live} onChange={() => {}} onClose={() => {}} />);
+  const section = f.host.querySelector('[aria-label="Still finishing"]');
+  assert.ok(section, 'the draining list renders');
+  assert.match(section.textContent!, /Refactor the importer/);
+  assert.match(section.textContent!, /Brain \+ 1 · 1 worker · 1 delegation open/);
+  assert.equal(section.querySelectorAll('button, select, input').length, 0, 'the draining list is read-only');
+  assert.equal(f.host.querySelectorAll('[role="tab"]').length, 0, 'draining executions are not lock targets');
+  await act(async () => f.button('Apply lock').click());
+  assert.equal((bodies[0] as { expectedExecutionId: string }).expectedExecutionId, 'run-new');
+  await f.render(<AdaptiveRoutingPanel channelId="a" view={finished} onChange={() => {}} onClose={() => {}} />);
+  assert.equal(f.host.querySelector('[aria-label="Still finishing"]'), null, 'a drained execution leaves the list');
 });
