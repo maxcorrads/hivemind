@@ -157,7 +157,7 @@ for (const source of ['private', 'brains'] as const) {
     const membership = () => f.hive.db.prepare('SELECT * FROM channel_members ORDER BY channel_id, agent_id').all();
     const beforeMembership = membership();
     const notifications: string[] = [];
-    for (const name of ['message', 'task', 'channel', 'queued']) f.hive.bus.on(name, () => notifications.push(name));
+    for (const name of ['message', 'task', 'channel', 'queued'] as const) f.hive.bus.on(name, () => notifications.push(name));
     const input = { requestId: 'review-evidence', expectedRevision: before.revision,
       action: { type: 'review', decision: 'changes_requested', summary: 'Add a parser regression', evidenceSeqs: [evidence.seq, privateEvidence.seq] } };
     const app = createApp(f.hive);
@@ -225,7 +225,7 @@ test('accepted review evidence remains reviewer-visible and grants no worker acc
 
 test('assignment failure rolls back the message, task, DM and all notifications', t => {
   const f = fixture(t); const events: string[] = [];
-  for (const name of ['message', 'channel', 'task']) f.hive.bus.on(name, () => events.push(name));
+  for (const name of ['message', 'channel', 'task'] as const) f.hive.bus.on(name, () => events.push(name));
   const before = Number(f.hive.db.prepare('SELECT COUNT(*) AS n FROM messages').get()!.n);
   f.hive.db.exec("CREATE TRIGGER fail_task BEFORE INSERT ON task_events BEGIN SELECT RAISE(ABORT, 'fixture failure'); END");
   assert.throws(() => f.assign(), /fixture failure/);
