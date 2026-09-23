@@ -2,7 +2,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { AgentList, SearchDesk } from "./App.tsx";
+import { AgentList } from "./AgentList.tsx";
+import { SearchDesk } from "./SearchDesk.tsx";
 import { BotOrigin, BotSetup } from "./Bots.tsx";
 import type { Agent } from "../src/shared/types.ts";
 import { createBotSchema } from "../src/shared/bot-message.ts";
