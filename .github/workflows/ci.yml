@@ -60,7 +60,7 @@ jobs:
       - name: Typecheck server and web
         run: npm run typecheck
 
-      - name: Build production web UI
+      - name: Build web UI and compiled CLI
         run: npm run build
 
       - name: Validate and smoke-test release package

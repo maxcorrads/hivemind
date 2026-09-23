@@ -29,7 +29,7 @@ npm run dev
 - Human UI (Vite): [http://127.0.0.1:7421](http://127.0.0.1:7421)
 - API + built UI: [http://127.0.0.1:7420](http://127.0.0.1:7420)
 
-If you already ran `npm run build`, the UI is also on `7420`. Local production: `npm run build && npm start`. Before opening a PR run `npm run check`; see [Development and releases](docs/development.md).
+If you already ran `npm run build` (web UI into `dist/web`, compiled CLI/server/MCP into `dist/node`), the UI is also on `7420`; an installed package's `hivemind` binary runs that compiled JavaScript without `tsx`, while a checkout keeps running `src/` through `tsx` unless `HIVEMIND_FROM_DIST=1`. Local production: `npm run build && npm start`. Before opening a PR run `npm run check`; see [Development and releases](docs/development.md).
 
 ## Connect agents
 

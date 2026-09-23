@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, beforeEach, test, type TestContext } from "node:test";
-import { arg, argRest, isCliEntrypoint, runCli } from "./cli.ts";
+import { arg, argRest, isCliEntrypoint, mcpLauncher, runCli } from "./cli.ts";
 
 // Every command runs in-process against a mocked fetch; HIVEMIND_HOME is a
 // throwaway directory so send journals and gc never touch a real hive.
@@ -86,6 +86,11 @@ test("mcp-config prints a tsx launcher for this checkout", async (t) => {
   assert.ok(config.mcpServers.hivemind.args[1].endsWith(path.join("src", "cli.ts")));
   assert.equal(config.mcpServers.hivemind.env.HIVEMIND_URL, "http://127.0.0.1:7999");
   assert.match(err.join("\n"), /Server must be running at http:\/\/127\.0\.0\.1:7999/);
+});
+
+test("mcp-config launcher uses plain node and the compiled CLI for an installed package", () => {
+  assert.deepEqual(mcpLauncher(true, "/pkg"), { command: "node", args: [path.resolve("/pkg", "dist/node/cli.js"), "mcp"] });
+  assert.deepEqual(mcpLauncher(false, "/pkg"), { command: "npx", args: ["tsx", path.resolve("/pkg", "src/cli.ts"), "mcp"] });
 });
 
 test("plugins delegates to the plugin manager", async (t) => {

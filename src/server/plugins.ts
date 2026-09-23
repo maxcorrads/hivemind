@@ -10,13 +10,13 @@ import {
   unlinkSync,
 } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { hiveHome } from "./paths.ts";
 import { shSingleQuote, type LaunchContext } from "../shared/launch-prompt.ts";
+import { cliLaunchArgs } from "../shared/package-root.ts";
 import {
   emptySettings,
   settingsSchema,
@@ -529,10 +529,6 @@ export function launchContext(
   project?: Pick<Project, "id" | "slug">,
 ): LaunchContext {
   const origin = localOrigin(url);
-  const root = path.resolve(
-    path.dirname(fileURLToPath(import.meta.url)),
-    "../..",
-  );
   // Connection metadata does not depend on the plugin registry, packages or profiles.
   const connection: LaunchContext = {
     project,
@@ -540,12 +536,7 @@ export function launchContext(
     pluginInstructions: "",
     hivemindMcp: {
       command: process.execPath,
-      args: [
-        "--import",
-        import.meta.resolve("tsx"),
-        path.join(root, "src/cli.ts"),
-        "mcp",
-      ],
+      args: cliLaunchArgs(["mcp"]),
       env: {
         HIVEMIND_URL: origin.origin,
         HIVEMIND_HOME: path.join(home, "clients"),

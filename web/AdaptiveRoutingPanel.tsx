@@ -1,6 +1,7 @@
 import { Modal } from "./Modal.tsx";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "./api.ts";
+import { drainingExecutions, isCurrentExecution } from "./adaptive-routing-view.ts";
 import type {
   AdaptiveExecutionState, AdaptiveLockScope, AdaptiveRoutingEvent,
   AdaptiveRoutingView, AdaptiveTopology,
@@ -34,26 +35,59 @@ type PanelProps = {
 };
 
 export function AdaptiveRoutingPanel(props: PanelProps) {
-  const executions = (props.view.executions?.length ? props.view.executions : props.view.state ? [props.view.state] : [])
+  const all = (props.view.executions?.length ? props.view.executions : props.view.state ? [props.view.state] : [])
     .filter(item => item.channelId === props.channelId);
+  // Tabs and locks cover each brain's current execution; replaced ones still draining are listed read-only.
+  const executions = all.filter(isCurrentExecution);
   const [brainId, setBrainId] = useState<string | null>(null);
-  const primary = props.view.state?.channelId === props.channelId ? props.view.state : null;
+  const primary = props.view.state?.channelId === props.channelId && isCurrentExecution(props.view.state) ? props.view.state : null;
   // Each brain in a channel owns its own execution; the lock applies to the one selected here.
   const state = executions.find(item => item.brainId === brainId) ?? primary;
+  // A brain without a current execution (replaced by an unrouted request) still shows its draining work.
+  const draining = drainingExecutions(all).filter(item => !state || item.brainId === state.brainId ||
+    !executions.some(current => current.brainId === item.brainId));
+  const shown = new Set(draining.map(item => item.executionId));
   const events = props.view.events.filter(event => event.channelId === props.channelId &&
-    (executions.length < 2 || !state || event.executionId === state.executionId || event.kind === "observation"));
+    (executions.length < 2 || !state || event.executionId === state.executionId || shown.has(event.executionId) || event.kind === "observation"));
   const name = (id: string) => props.brainNames?.[id] ?? "Brain";
   const tabs = executions.length > 1 ? <div className="routing-executions" role="tablist" aria-label="Brain executions">
     {executions.map(item => <button key={item.executionId} type="button" role="tab" aria-selected={item.executionId === state?.executionId}
       onClick={() => setBrainId(item.brainId)}>{name(item.brainId)} · {topologyLabel(item.currentTopology)}</button>)}
   </div> : null;
+  const finishing = draining.length ? <DrainingList executions={draining}
+    name={new Set(all.map(item => item.brainId)).size > 1 ? name : null} /> : null;
   // Never retain an editor or its asynchronous response when navigating to another execution.
   return <RoutingPanelContent key={`${props.channelId}:${state?.executionId ?? "none"}`}
-    {...props} state={state} events={events} tabs={tabs} />;
+    {...props} state={state} events={events} tabs={tabs} finishing={finishing} />;
 }
 
-function RoutingPanelContent({ channelId, state, events, tabs, onChange, onClose }: PanelProps & {
-  state: AdaptiveExecutionState | null; events: AdaptiveRoutingEvent[]; tabs: ReactNode;
+function openWorkLabel(work: AdaptiveExecutionState["openWork"]): string {
+  if (!work) return "delegated work still open";
+  const parts = [work.tasks ? `${work.tasks} task${work.tasks === 1 ? "" : "s"}` : "",
+    work.delegations ? `${work.delegations} delegation${work.delegations === 1 ? "" : "s"}` : ""].filter(Boolean);
+  return parts.length ? `${parts.join(" · ")} open` : "settling";
+}
+
+/** Read-only: replaced requests complete automatically when their delegated work ends. */
+function DrainingList({ executions, name }: { executions: AdaptiveExecutionState[]; name: ((id: string) => string) | null }) {
+  return <section className="routing-draining" aria-label="Still finishing">
+    <h3>Still finishing</h3>
+    <p className="help-p">Earlier requests replaced by a newer one. They complete automatically when their delegated work ends; locks apply only to the current request.</p>
+    <ul>
+      {executions.map(item => <li key={item.executionId}>
+        {item.requestExcerpt && <q>{item.requestExcerpt}</q>}
+        <span>
+          {name ? `${name(item.brainId)} · ` : ""}{topologyLabel(item.currentTopology)}
+          {item.workerBudget > 0 ? ` · ${item.workerBudget} worker${item.workerBudget === 1 ? "" : "s"}` : ""}
+          {` · ${openWorkLabel(item.openWork)}`}
+        </span>
+      </li>)}
+    </ul>
+  </section>;
+}
+
+function RoutingPanelContent({ channelId, state, events, tabs, finishing, onChange, onClose }: PanelProps & {
+  state: AdaptiveExecutionState | null; events: AdaptiveRoutingEvent[]; tabs: ReactNode; finishing: ReactNode;
 }) {
   const [scope, setScope] = useState<Exclude<AdaptiveLockScope, "none">>(
     state?.lockScope === "conversation" ? "conversation" : "task",
@@ -119,6 +153,7 @@ function RoutingPanelContent({ channelId, state, events, tabs, onChange, onClose
             </div>
           </fieldset>
         </>}
+        {finishing}
         <h3>Jev evaluations</h3>
         <p className="help-p">Human-only audit: these entries are not messages delivered to agents.</p>
         <div className="routing-events">
