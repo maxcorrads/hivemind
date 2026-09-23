@@ -4,7 +4,6 @@ import type { Hive } from './hive.ts';
 import type { Agent } from '../shared/types.ts';
 import { HiveError } from '../shared/types.ts';
 import { validated } from '../shared/api-contract.ts';
-import { immediateTransaction } from './transaction.ts';
 import { ROUTING_LIMITS, setCapabilitiesSchema, suggestWorkersSchema, routingOutcomeSchema, routingOverrideSchema,
   outcomeInterval, type CapabilityCard, type CapabilityView, type RoutingSuggestions, type WorkerSuggestion } from '../shared/routing.ts';
 
@@ -47,7 +46,7 @@ export class RoutingStore {
   set(actor: Agent, raw: unknown): CapabilityView {
     if (actor.role !== 'worker' || !actor.projectId) throw new HiveError(403, 'Only a worker can opt in with its own capability card');
     const input = validated(setCapabilitiesSchema, raw);
-    return immediateTransaction(this.db, () => {
+    return this.hive.storage.transaction(() => {
       const previous = this.get(actor, actor.id);
       if ((previous?.revision ?? 0) !== input.expectedRevision) throw new HiveError(409, 'Capability changed; read its revision before saving');
       const count = Number(this.db.prepare('SELECT COUNT(*) AS n FROM worker_capabilities WHERE project_id = ?').get(actor.projectId)!.n);
@@ -67,7 +66,7 @@ export class RoutingStore {
   }
   recordOutcome(actor: Agent, id: string, raw: unknown) {
     const input = validated(routingOutcomeSchema, raw);
-    return immediateTransaction(this.db, () => {
+    return this.hive.storage.transaction(() => {
       const task = this.task(actor, id);
       if (actor.id !== task.assignerId || actor.role !== 'brain') throw new HiveError(403, 'Only the assigning reviewer can classify a task outcome');
       if (task.revision !== input.expectedRevision) throw new HiveError(409, 'Task revision changed');

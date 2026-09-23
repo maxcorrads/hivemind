@@ -30,11 +30,11 @@ try {
   const insert = hive.db.prepare(`INSERT INTO messages(id, channel_id, author_id, body, created_at)
     VALUES (?, ?, ?, ?, ?)`);
   const body = "x".repeat(4000);
-  hive.db.exec("BEGIN");
-  // Interleave agents: each wait must cross other agents' unread messages too.
-  for (let i = 0; i < messagesPerAgent; i++) for (const reader of readers)
-    reader.expected.push(Number(insert.run(crypto.randomUUID(), reader.channel, sender.agent.id, body, Date.now()).lastInsertRowid));
-  hive.db.exec("COMMIT");
+  hive.storage.transaction(() => {
+    // Interleave agents: each wait must cross other agents' unread messages too.
+    for (let i = 0; i < messagesPerAgent; i++) for (const reader of readers)
+      reader.expected.push(Number(insert.run(crypto.randomUUID(), reader.channel, sender.agent.id, body, Date.now()).lastInsertRowid));
+  });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const address = server.address(); assert.ok(address && typeof address !== "string");
   const base = `http://127.0.0.1:${address.port}/api/agent`;

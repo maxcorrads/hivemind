@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { HiveError } from "../shared/types.ts";
-import { outboxTransaction } from "./telegram-outbox.ts";
+import { Storage } from "./storage.ts";
 
 export const TELEGRAM_UPDATE_ATTEMPTS = 5;
 export const TELEGRAM_UPDATE_CAP = 1000;
@@ -32,7 +32,7 @@ export function validTelegramUpdateId(id: unknown): id is number {
 }
 
 export function initTelegramInbox(db: DatabaseSync): void {
-  outboxTransaction(db, () => {
+  Storage.for(db).transaction(() => {
     const columns = db.prepare("PRAGMA table_info(telegram_update_failures)").all() as { name: string }[];
     const legacy = columns.length > 0 && !columns.some(c => c.name === "bot_key");
     if (legacy) db.exec("ALTER TABLE telegram_update_failures RENAME TO telegram_update_failures_legacy");
@@ -81,13 +81,13 @@ export function recordTelegramUpdateFailure(
   db: DatabaseSync, scope: TelegramUpdateScope, update: TelegramUpdate, error: string,
   options: { permanent?: boolean; retryAt?: number; at?: number } = {},
 ): void {
-  outboxTransaction(db, () => recordFailureInside(db, scope, update, error, options));
+  Storage.for(db).transaction(() => recordFailureInside(db, scope, update, error, options));
 }
 
 /** Transfer the entire accepted remainder before a new routing generation can start. */
 export function handoffTelegramUpdates(db: DatabaseSync, entries: ReadonlyArray<{ scope: TelegramUpdateScope; update: TelegramUpdate }>): void {
   const at = Date.now();
-  outboxTransaction(db, () => {
+  Storage.for(db).transaction(() => {
     for (const { scope, update } of entries) {
       if (db.prepare("SELECT 1 FROM telegram_in WHERE bot_key = ? AND update_id = ?").get(scope.botKey, update.update_id)) continue;
       recordFailureInside(db, scope, update, "bridge_drained_before_completion", { at, retryAt: at + 1_000 });
@@ -123,11 +123,11 @@ function recordFailureInside(
 }
 
 export function acknowledgeTelegramUpdate(db: DatabaseSync, botKey: string, updateId: number): void {
-  outboxTransaction(db, () => acknowledgeInside(db, botKey, updateId));
+  Storage.for(db).transaction(() => acknowledgeInside(db, botKey, updateId));
 }
 
 export function finishTelegramUpdate(db: DatabaseSync, botKey: string, updateId: number): void {
-  outboxTransaction(db, () => {
+  Storage.for(db).transaction(() => {
     db.prepare("UPDATE telegram_update_failures SET state = 'resolved', payload = NULL, updated_at = ? WHERE bot_key = ? AND update_id = ? AND state = 'retry'")
       .run(Date.now(), botKey, updateId);
     acknowledgeInside(db, botKey, updateId);
@@ -151,7 +151,7 @@ export function telegramQuarantine(db: DatabaseSync, limit = 50) {
   return rows.map(({ payload, ...row }) => ({ ...row, replayable: Boolean(payload && row.botKey && row.projectId && !row.invalidated) }));
 }
 export function retryTelegramUpdate(db: DatabaseSync, id: string, matchesScope: (scope: TelegramUpdateScope) => boolean): void {
-  outboxTransaction(db, () => {
+  Storage.for(db).transaction(() => {
     const row = db.prepare(`${SELECT_FAILURE} WHERE id = ? AND state = 'quarantined'`).get(id) as TelegramUpdateFailure | undefined;
     if (!row) throw new HiveError(404, "Quarantined Telegram update not found");
     if (!row.payload || row.invalidated || !matchesScope(row)) throw new HiveError(409, "Telegram update has no replayable payload or its original bot/project/chat changed");

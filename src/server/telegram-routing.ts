@@ -1,10 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
-import { outboxTransaction } from "./telegram-outbox.ts";
+import { Storage } from "./storage.ts";
 
 /** Migrate legacy routing once, assigning it to the configuration active at upgrade. */
 export function initTelegramRouting(db: DatabaseSync, legacyNamespace: string): void {
   const columns = (table: string) => db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
-  outboxTransaction(db, () => {
+  Storage.for(db).transaction(() => {
     db.exec(`CREATE TABLE IF NOT EXISTS telegram_bot_state (
       bot_key TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(bot_key, key)
     );
@@ -50,7 +50,7 @@ export function initTelegramRouting(db: DatabaseSync, legacyNamespace: string): 
 
 /** Bind a verified provider identity without moving live state or depending on token spelling. */
 export function namespaceForVerifiedBot(db: DatabaseSync, botId: number, preferred?: string): string {
-  return outboxTransaction(db, () => {
+  return Storage.for(db).transaction(() => {
     const found = db.prepare("SELECT namespace FROM telegram_bot_identities WHERE bot_id = ?").get(botId) as { namespace: string } | undefined;
     if (found) return found.namespace;
     const namespace = preferred ?? `bot:${botId}`;

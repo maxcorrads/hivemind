@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { exportAdaptiveEvidence } from '../src/server/adaptive-evidence.ts';
+import { Storage } from '../src/server/storage.ts';
 
 export function main(argv = process.argv.slice(2)) {
   const options = {};
@@ -19,9 +20,7 @@ export function main(argv = process.argv.slice(2)) {
   const db = new DatabaseSync(file, { readOnly: true });
   let report;
   try {
-    db.exec('BEGIN');
-    report = exportAdaptiveEvidence(db, options['--execution']);
-    db.exec('COMMIT');
+    report = Storage.for(db).transaction(() => exportAdaptiveEvidence(db, options['--execution']), { immediate: false });
   } finally { db.close(); }
   const fd = openSync(output, 'wx', 0o600);
   try { writeFileSync(fd, JSON.stringify(report, null, 2) + '\n'); } finally { closeSync(fd); }

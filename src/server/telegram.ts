@@ -1275,8 +1275,7 @@ export class TelegramBridge {
     const result = sent.result as { message_id?: number } | undefined;
     if (!sent.ok || !Number.isSafeInteger(result?.message_id)) throw new Error("Telegram response has no message ID; delivery outcome is unknown");
     const messageId = result!.message_id!;
-    try {
-      this.hive.db.exec("BEGIN IMMEDIATE");
+    this.hive.storage.transaction(() => {
       this.hive.db.prepare(
         `INSERT OR REPLACE INTO telegram_out
           (telegram_chat_id, telegram_message_id, seq, channel_id, thread_id, bot_key)
@@ -1287,15 +1286,7 @@ export class TelegramBridge {
           (seq, part_key, telegram_chat_id, telegram_message_id, completed_at, bot_key)
          VALUES (?, ?, ?, ?, ?, ?)`,
       ).run(msg.seq, partKey, chatId, messageId, Date.now(), telegramConfigKey(this.cfg));
-      this.hive.db.exec("COMMIT");
-    } catch (err) {
-      try {
-        this.hive.db.exec("ROLLBACK");
-      } catch {
-        /* no open transaction */
-      }
-      throw err;
-    }
+    });
   }
 
   private async sendFile(

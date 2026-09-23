@@ -1,4 +1,4 @@
-import { immediateTransaction } from "./transaction.ts";
+import { Storage } from "./storage.ts";
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { HiveError, type InboxDelivery, type InboxStatus } from "../shared/types.ts";
@@ -55,7 +55,7 @@ export class InboxDeliveryStore {
   }
 
   private transaction<T>(fn: () => T): T {
-    return immediateTransaction(this.db, fn);
+    return Storage.for(this.db).transaction(fn);
   }
 
   private migrateReceiptTotals() {

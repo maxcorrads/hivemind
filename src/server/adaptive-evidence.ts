@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import type { AdaptiveTopologyDecision } from '../shared/adaptive-topology.ts';
+import { Storage } from './storage.ts';
 
 export const EVIDENCE_VERSION = 'adaptive-evidence-v1';
 export const EVIDENCE_RUN_LIMIT = 50;
@@ -40,11 +41,6 @@ function add(a: number, b: number): number {
   if (!Number.isSafeInteger(sum) || sum < 0) throw new Error('Evidence counter overflow');
   return sum;
 }
-function transaction<T>(db: DatabaseSync, work: () => T): T {
-  db.exec('SAVEPOINT adaptive_evidence_write');
-  try { const value = work(); db.exec('RELEASE adaptive_evidence_write'); return value; }
-  catch (error) { db.exec('ROLLBACK TO adaptive_evidence_write; RELEASE adaptive_evidence_write'); throw error; }
-}
 
 /** Numeric/enum allowlist only. Never accepts request text, config objects or raw provider envelopes. */
 export class AdaptiveEvidenceStore {
@@ -65,7 +61,7 @@ export class AdaptiveEvidenceStore {
       throw new Error('Invalid evidence scope');
     if (!(input.topology === null || modes.includes(input.topology)) || !safeInt(input.workers) || !safeInt(input.usableWorkers) ||
       !/^[a-z0-9.-]{1,80}$/i.test(input.policyVersion)) throw new Error('Invalid evidence snapshot');
-    return transaction(this.db, () => {
+    return Storage.for(this.db).transaction(() => {
       const existing = this.db.prepare('SELECT snapshot,channel_id,project_id FROM adaptive_evidence_runs WHERE execution_id=?').get(scope.executionId);
       if (existing && (existing.channel_id !== scope.channelId || existing.project_id !== scope.projectId)) throw new Error('Evidence scope conflict');
       const state: RunState = existing ? JSON.parse(String(existing.snapshot)) as RunState : {
@@ -90,7 +86,7 @@ export class AdaptiveEvidenceStore {
     });
   }
   finish(id: string, decision: AdaptiveTopologyDecision): void {
-    transaction(this.db, () => {
+    Storage.for(this.db).transaction(() => {
       const row = this.db.prepare('SELECT execution_id,snapshot FROM adaptive_evidence_attempts WHERE id=?').get(id);
       if (!row) return;
       const attempt = JSON.parse(String(row.snapshot)) as EvidenceAttempt;

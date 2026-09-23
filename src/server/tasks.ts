@@ -3,7 +3,6 @@ import { TaskCoordination } from './task-coordination.ts';
 import { claimActionSchema, claimPreviewSchema, isClaimAction } from '../shared/task-claims.ts';
 import { validated } from '../shared/api-contract.ts';
 import { checkpointFreshness, type HandoffSummary } from '../shared/handoffs.ts';
-import { immediateTransaction } from './transaction.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import type { Hive } from './hive.ts';
 import { BODY_MAX, HiveError, type Agent, type Channel } from '../shared/types.ts';
@@ -130,7 +129,7 @@ export class TaskStore {
     if (old.request_hash !== hash) throw new HiveError(409, 'requestId was already used for a different task event');
     return { task, message: this.hive.getMessageById(old.message_id), duplicate: true };
   }
-  private transaction<T>(f: () => T): T { return immediateTransaction(this.db, f); }
+  private transaction<T>(f: () => T): T { return this.hive.storage.transaction(f); }
   private write(actor: Agent, task: TaskSnapshot, envelope: TaskEnvelope, requestId: string, hash: string, initial: boolean) {
     // Admission observes live capacity inside this transaction; a stale preflight cannot oversubscribe workers.
     const adaptiveExecution = envelope.action.type === 'assign' || envelope.action.type === 'revise'
