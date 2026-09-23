@@ -129,10 +129,11 @@ test('only the current accepted worker can save bounded checkpoint evidence', as
     { ...data(), nextAction: '' },
   ]) assert.throws(() => f.hive.tasks.event(f.worker.agent, task.id,
     { requestId: 'bad', expectedRevision: 2, action: { type: 'checkpoint', checkpoint: payload } }), /Invalid task event/);
-  // Individually legal fields can still exceed the aggregate readable-message budget.
+  // Individually legal fields can still exceed the aggregate 16,000-byte envelope budget
+  // (multi-byte text); the readable message itself may now reach BODY_MAX (20,000 units).
   assert.throws(() => f.event(task.id, f.worker.agent, { type: 'checkpoint', checkpoint: {
-    ...data(), completedSteps: Array(8).fill('a'.repeat(240)), unresolvedQuestions: Array(8).fill('b'.repeat(240)),
-    nextAction: 'c'.repeat(400) } }), /too large/);
+    ...data(), completedSteps: Array(8).fill('界'.repeat(240)), unresolvedQuestions: Array(8).fill('問'.repeat(240)),
+    nextAction: '次'.repeat(400), artifacts: Array(8).fill(`docs/${'文'.repeat(195)}`) } }), /too large/);
   assert.deepEqual(f.hive.tasks.get(f.worker.agent, task.id), before);
   const app = createApp(f.hive);
   const response = await app.request(`/api/agent/tasks/${task.id}/events`, { method: 'POST',

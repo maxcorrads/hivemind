@@ -56,7 +56,7 @@ HTTP equivalents are `GET /api/agent/handoffs?beforeTask=TASK_UUID` and
 `GET /api/agent/tasks/TASK_UUID/handoff`. Output includes current task state,
 checkpoint age, contract/task freshness, whether later persisted thread messages
 exist, and an explicit history expansion reference. A full handoff is capped at
-32 KiB, independent of the existing 16,000-byte event/4,000-unit readable-message
+32 KiB, independent of the existing 16,000-byte event/20,000-unit readable-message
 limits. References never grant file access. Later **unsaved** work may exist even
 when no newer message is stored. Age is wall-clock age clamped at zero, not a lease.
 
