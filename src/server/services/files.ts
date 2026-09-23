@@ -113,6 +113,11 @@ export class FileService {
     this.db.prepare("DELETE FROM attachments WHERE created_by = ? AND message_id IS NULL").run(agentId);
   }
 
+  /** Drops one upload if it was never sent (a failed inbound transfer). */
+  discardUnsent(id: string) {
+    this.db.prepare("DELETE FROM attachments WHERE id = ? AND message_id IS NULL").run(id);
+  }
+
   collectUnusedBlobs(): number {
     // Acquire the same cross-process writer lock as publication BEFORE reading the live set.
     return this.deps.storage.transaction(() => {

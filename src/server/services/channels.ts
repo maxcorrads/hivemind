@@ -263,6 +263,11 @@ export class ChannelService implements ChannelAccess {
     return this.deps.storage.transaction(create);
   }
 
+  /** True while the channel still exists (e.g. it was not deleted with its project). */
+  exists(channelId: string): boolean {
+    return Boolean(this.db.prepare("SELECT id FROM channels WHERE id = ?").get(channelId));
+  }
+
   findDm(a: string, b: string): Channel | null {
     const [x, y] = [a, b].sort();
     const row = this.db.prepare("SELECT * FROM channels WHERE id = ?").get(`dm:${x}:${y}`) as

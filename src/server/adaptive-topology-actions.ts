@@ -27,7 +27,7 @@ function authenticate(hive: Hive, actor: Agent, token?: string): void {
 }
 function reauthorize(hive: Hive, actor: Agent, before: unknown, token?: string): void {
   authenticate(hive, actor, token);
-  if (hive.db.prepare('SELECT token_hash FROM agents WHERE id=?').get(actor.id)?.token_hash !== before)
+  if (hive.identity.sessionFingerprint(actor.id) !== before)
     throw new HiveError(401, 'Credentials changed while revalidating coordination');
 }
 /** Project-wide revalidation never holds the acting brain's lane; it runs once the mutation has left it. */
@@ -89,7 +89,7 @@ export function sendAdaptiveAgentMessage(hive: Hive, actor: Agent, channelRef: s
     // Sender-declared progress/decision labels are not authority to contact a new worker.
     // Only a known, still-open assignment thread of one active execution continues without admitting new work.
     const bound = input.threadId && targets.length && hive.adaptiveTopology.hasActive(actor) &&
-      hive.db.prepare('SELECT status FROM threads WHERE id=?').get(input.threadId)?.status !== 'done'
+      hive.messageQueries.threadStatus(input.threadId) !== 'done'
       ? new Set(targets.map(worker => {
         const row = hive.db.prepare(`SELECT execution_id FROM adaptive_topology_messages WHERE root_id=? AND worker_id=?`).get(input.threadId!, worker.id) ??
           hive.db.prepare(`SELECT a.execution_id FROM adaptive_topology_tasks a JOIN task_records t ON t.id=a.task_id
@@ -111,7 +111,7 @@ export function sendAdaptiveAgentMessage(hive: Hive, actor: Agent, channelRef: s
       // Continuing a known thread may be attributed implicitly; new delegation must name its execution.
       executionId: executionId ?? (continuing && !newWork ? threadExecution! : undefined),
     });
-    const credential = hive.db.prepare('SELECT token_hash FROM agents WHERE id=?').get(actor.id)?.token_hash;
+    const credential = hive.identity.sessionFingerprint(actor.id);
     const policy = await hive.adaptiveTopology.beforeBrainAction(actor, coordination);
     reauthorize(hive, actor, credential, token);
     const message = hive.postMessage(actor, messageInput, newWork
@@ -207,7 +207,7 @@ export function setAdaptiveThreadStatus(hive: Hive, actor: Agent, threadId: stri
   return coordinateMutation(hive, actor, async defer => {
     authenticate(hive, actor, token);
     const root = hive.getMessageById(threadId);
-    const before = hive.db.prepare('SELECT status FROM threads WHERE id=?').get(threadId)?.status;
+    const before = hive.messageQueries.threadStatus(threadId);
     const thread = hive.setThreadStatus(actor, threadId, status);
     if (before === status || actor.role !== 'brain') return { thread, adaptiveRouting: null } as { thread: typeof thread } & PostCommitRouting;
     const coordination = event(actor, 'thread-status', `${threadId}:${status}:${randomUUID()}`, {
