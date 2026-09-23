@@ -5,7 +5,7 @@ import path from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { createApp } from './app.ts';
 import { Hive } from './hive.ts';
-import { TYPESAFE_ENDPOINT } from './adaptive-routing.ts';
+import { TYPESAFE_ENDPOINT } from './adaptive-config.ts';
 import type { JevDiagnosticResult, JevDiagnosticState } from '../shared/jev-diagnostics.ts';
 
 const endpoint = '/api/ui/adaptive-routing/connection-test';
