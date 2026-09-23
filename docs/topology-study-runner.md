@@ -54,12 +54,28 @@ Each attempt then gets a fresh `trials/<trialId>/attempt-NNN/` directory with it
 
 1. A new `hivemind serve` from this checkout starts on an ephemeral loopback port with that home.
 2. **Auto** saves Jev enabled with the key and pinned model. **Fixed** conditions save Jev **disabled**. The settings are read back.
-3. One brain and exactly `freeWorkers` worker seats are launched. The Human request is sent only when exactly one brain and `freeWorkers` online workers are present. Anything else is `aborted_before_request: capacity_mismatch`.
+3. One brain and exactly `freeWorkers` worker seats are launched **one at a time**. Each seat must be online in the hive before the next one starts, because opencode processes that start together fail on opencode's own local database (`database is locked`).
+   - A seat that exits with that error before joining is retried once after a short backoff.
+   - Any other exit, a second lock failure or the `joinTimeoutMs` bound for the whole start-up (default 5 min) is `aborted_before_request: seats_did_not_join`, and the journal detail names the seat.
+   - Every start and retry is retained in `seat-launch.json`, with retry logs in `<seat>.retry-N.{stdout,stderr}.log`.
+   - The Human request is sent only when exactly one brain and `freeWorkers` online workers are present. Anything else is `aborted_before_request: capacity_mismatch`.
+   - Seats keep opencode's shared data directory. Isolating it per seat would mean copying opencode's `auth.json` credentials into every retained attempt, so it is not done.
 4. The workload input is sent verbatim to the brain's DM. Auto uses `routing: auto`. Fixed conditions use the condition as a Human topology with `lockScope: task`, so a clean baseline is never a monitored lock.
 5. The runner waits for the execution to complete (the brain marks the request thread done), the wall budget, the token budget (sum of live cumulative seat totals) or a Human interrupt, then stops seats and server.
 6. Evidence is read from the trial database read-only: the #131 export for the Auto execution, and a count of Jev calls, which must be zero for fixed trials. The acceptance check then runs.
 
 End-to-end `wallMs` runs from sending the Human request to completion. It already includes the initial classification wait, so summed Jev latency is never added. `workloadTokens` is the sum of provider-reported seat totals (Jev usage is only in the router evidence); one unknown seat makes the total `null` with `workloadUsageSource: unknown`.
+
+### Watching a run live (`--watch`)
+
+`run --watch` (or `HIVEMIND_STUDY_WATCH=1`) opens a read-only live view in the tmux session `hivemind-study`. The runner uses `/opt/homebrew/bin/tmux` when present, otherwise `tmux` on `PATH`; `HIVEMIND_STUDY_TMUX` overrides both.
+
+- Each trial gets a window named `<condition>-<trialId prefix>`.
+- Each seat gets one pane. The pane runs `scripts/seat-log-viewer.mjs`, which follows that seat's logs, including retry logs, and renders opencode JSON events as lines: `say` for assistant text, `$` for shell commands, `write`/`edit`/`read` for file operations, `hive` for Hivemind tools, `!` for tool errors, plus `tokens` usage lines and `stderr|` lines. One more pane tails `server.log`.
+- On the first trial, if no client is attached, macOS opens a Terminal window attached to the session. This never happens in CI.
+- The trial's window is killed when the trial ends. The session is kept.
+
+Seats stay non-interactive `opencode --pure run … --auto --format json` processes, so usage parsing does not change. The viewer only reads retained logs. It is best effort: a missing or failing tmux has no effect on the trial, the journal or the evidence.
 
 ## Checkpoints, resume and ambiguity
 
@@ -107,7 +123,7 @@ The exported study passes `benchmark-topology.mjs validate`. It carries only rel
      --run-dir <run> --authorize-paid-run <studyId> [--max-trials 1]
    ```
 
-   `--max-trials 1` runs a single trial, which makes a sensible retained smoke step.
+   `--max-trials 1` runs a single trial, which makes a sensible retained smoke step. Add `--watch` to follow the seats live.
 5. `export`, have the results independently reviewed, then `summarize`.
 
 No real run, provider call or result is part of this change.

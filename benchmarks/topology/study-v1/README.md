@@ -82,12 +82,14 @@ In your own shell, from that clean checkout at `$REV`, with the pinned `opencode
 ```sh
 # smoke: exactly one trial (the first in manifest order)
 HIVEMIND_STUDY_TYPESAFE_KEY=<key> npm run benchmark:topology:study -- run \
-  --run-dir <run dir> --authorize-paid-run <studyId> --max-trials 1
+  --run-dir <run dir> --authorize-paid-run <studyId> --max-trials 1 --watch
 
 # full cohort; resumes after the smoke, skipping completed trials
 HIVEMIND_STUDY_TYPESAFE_KEY=<key> npm run benchmark:topology:study -- run \
-  --run-dir <run dir> --authorize-paid-run <studyId>
+  --run-dir <run dir> --authorize-paid-run <studyId> --watch
 ```
+
+`--watch` is optional. It opens a read-only tmux view (`hivemind-study`) with one pane per seat and has no effect on trials ([runner doc](../../../docs/topology-study-runner.md#watching-a-run-live---watch)).
 
 Then run `export`, have the results reviewed independently, and run `summarize` ([runner doc](../../../docs/topology-study-runner.md#export-and-review)). The key is only required while Auto trials remain. It is never passed to seats and is scrubbed from retained homes.
 
