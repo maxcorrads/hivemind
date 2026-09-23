@@ -26,8 +26,9 @@ The offer lease is five minutes. The next wait can replay an unconfirmed batch a
 expiry, reconnect or an explicit retry before expiry. Expiry never deletes mail,
 advances the cursor, accepts a task or starts duplicate work. Replacement sessions
 may immediately replay pending mail, but must receive it before acknowledging it.
-An obsolete session cannot acknowledge the replacement session's mail, even if it
-still has the identity's token. This fencing concerns inbox receipt operations, not
+An obsolete session cannot acknowledge the replacement session's mail. Resuming an
+agent by name also supersedes its previous session key, so the old process can no
+longer authenticate at all. This fencing concerns inbox receipt operations, not
 termination of external work or revocation of every other agent tool.
 
 Each in-flight batch contains at most 100 messages (8 for workers).
@@ -218,8 +219,10 @@ MCP `send` and `attach` expose the same field; generated keys appear in the resu
 or error. No automatic network resend is enabled.
 
 CLI/MCP retain uploaded attachment IDs in a private SQLite journal under
-`HIVEMIND_HOME/pending-sends`, namespaced by a hash of server origin and token;
-it contains no message bodies or raw credentials. A short transactional PID/nonce
+`HIVEMIND_HOME/pending-sends`, namespaced by a hash of server origin and the
+current session key; it contains no message bodies or session keys. A resumed agent
+has a new session key, so retry a lost send from the same session, or inspect
+history after resuming. A short transactional PID/nonce
 claim prevents concurrent local upload/send operations sharing a key. A provably
 dead owner can be recovered; a live or reused PID is conservatively left alone.
 File content hashes reject altered attachment retries. An upload whose own reply

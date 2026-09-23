@@ -27,7 +27,9 @@ reports. `get_room(history=true, beforeRevision=...)` pages up to 20 audit snaps
 including the actor, reason and referenced Human instruction. `contractVersion`
 changes only on configuration/reopen; `revision` changes on every room event.
 
-`room_event` takes `channel`, stable `requestId`, `expectedRevision` and an `action`.
+`room_event` takes `channel`, stable `requestId`, `expectedRevision` and an `action`,
+plus `executionId` for a brain's `configure`/`staff` while adaptive routing is active
+(see [Adaptive routing (Jev)](#adaptive-routing-jev)).
 Retries with the same ID and payload do not repeat effects. A changed payload or stale
 revision conflicts; reread before deciding what to retry.
 
@@ -165,6 +167,33 @@ Resume sources only when `reopen.resumeSources=true`. With false, sources remain
 paused even though the room reopens. A plugin owns retry/backfill policy and must not
 silently discard provider events rejected while archived. Hivemind does not promise
 exactly-once external effects; use stable bot event IDs and task action keys.
+
+## Adaptive routing (Jev)
+
+With adaptive routing enabled, each Human request addressed to a brain opens an
+execution with its own `executionId`, announced in the
+`[Hivemind adaptive topology · MODE · EXECUTION_ID]` directive (also listed as
+`adaptiveExecutions` in `wait`/`whoami`). Naming room participants is delegation:
+while the brain has an active execution, `configure` and `staff` must carry that
+`executionId`, or they are rejected with 400 listing the active executions (403 for
+another brain's execution, 404 unknown, 409 finished). Participants must fit the
+applied worker budget and be available to that execution. New room work (including
+`assign_task` with `room`) is allowed only when the applied mode is Room. Other room
+actions (acknowledge, reconcile, summarize, archive, reopen) do not need it. Workers
+never pass `executionId`.
+
+```json
+{
+  "requestId": "sensor-room-staff-1",
+  "expectedRevision": 4,
+  "action": { "type": "staff", "participants": [{ "name": "Forge", "boundary": "Schema checks only" }],
+    "reason": "Add the schema reviewer" },
+  "executionId": "EXECUTION_ID"
+}
+```
+
+See [task protocol](TASK-PROTOCOL.md#adaptive-routing-jev) and
+[adaptive orchestration routing](docs/adaptive-routing.md).
 
 ## Bounds and persistence
 

@@ -36,6 +36,7 @@ type InboxBox = "unread" | "all";
 type Sel =
   | { kind: "inbox"; project: string; box?: InboxBox }
   | { kind: "decisions"; project: string }
+  /** Routing log: every Jev exchange of a project. Hash `#/routing-log/<project>`; `#/jev/<project>` is an alias. */
   | { kind: "jev"; project: string }
   | { kind: "channel"; id: string; thread?: string | null };
 
@@ -52,7 +53,7 @@ function parseHash(): Sel {
     };
   }
   if (parts[0] === "decisions") return { kind: "decisions", project: parts[1] ? decodeURIComponent(parts[1]) : "" };
-  if (parts[0] === "jev") return { kind: "jev", project: parts[1] ? decodeURIComponent(parts[1]) : "" };
+  if (parts[0] === "routing-log" || parts[0] === "jev") return { kind: "jev", project: parts[1] ? decodeURIComponent(parts[1]) : "" };
   if (parts[1]) {
     const thread = parts[2] === "t" && parts[3] ? decodeURIComponent(parts[3]) : undefined;
     return { kind: "channel", id: decodeURIComponent(parts[1]), thread };
@@ -70,7 +71,7 @@ function setHash(sel: Sel) {
     sel.kind === "inbox"
       ? `${sel.project ? `/inbox/${encodeURIComponent(sel.project)}` : "/inbox"}${sel.box === "all" ? "/all" : ""}`
       : sel.kind === "decisions" || sel.kind === "jev"
-        ? `/${sel.kind}${sel.project ? `/${encodeURIComponent(sel.project)}` : ""}`
+        ? `/${sel.kind === "jev" ? "routing-log" : sel.kind}${sel.project ? `/${encodeURIComponent(sel.project)}` : ""}`
         : `/c/${encodeURIComponent(sel.id)}${sel.thread ? `/t/${encodeURIComponent(sel.thread)}` : ""}`;
 }
 
@@ -155,6 +156,9 @@ export function App() {
   const [agentBusy, setAgentBusy] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [launchOpen, setLaunchOpen] = useState(false);
+  /** Project preselected in the Launch sheet when it is opened from a project's roster. */
+  const [launchProject, setLaunchProject] = useState<string | null>(null);
+  const openLaunch = (project: string | null = null) => { setLaunchProject(project); setLaunchOpen(true); };
   const [telegramOpen, setTelegramOpen] = useState(false);
   const [adaptiveRoutingOpen, setAdaptiveRoutingOpen] = useState(false);
   const [telegram, setTelegram] = useState<TelegramSettings | null>(null);
@@ -194,6 +198,7 @@ export function App() {
   const threadOpenAnchor = useRef<{
     channelId: string; threadId: string; button: HTMLButtonElement; bottom: number; atBottom: boolean;
   } | null>(null);
+  const threadAnchorHold = useRef<{ channelId: string; threadId: string; release: () => void } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const threadBottomRef = useRef<HTMLDivElement>(null);
   const selRef = useRef(sel);
@@ -615,18 +620,44 @@ export function App() {
   useLayoutEffect(() => {
     const stream = channelStream.current;
     const anchor = threadOpenAnchor.current;
+    const hold = threadAnchorHold.current;
+    if (hold && (hold.channelId !== selectedChannelId || hold.threadId !== threadId)) hold.release();
     if (anchor && (anchor.channelId !== selectedChannelId || anchor.threadId !== threadId)) threadOpenAnchor.current = null;
     if (stream && anchor && anchor.channelId === selectedChannelId && anchor.threadId === threadPane?.threadId) {
       // A held snapshot can still be scrolled to its bottom. Otherwise keep the
       // clicked reply link at the same height after the message wraps.
-      if (anchor.atBottom) stream.scrollTop = stream.scrollHeight;
-      else if (anchor.button.isConnected) stream.scrollTop += anchor.button.getBoundingClientRect().bottom - anchor.bottom;
+      const correct = () => {
+        if (anchor.atBottom) stream.scrollTop = stream.scrollHeight;
+        else if (anchor.button.isConnected) stream.scrollTop += anchor.button.getBoundingClientRect().bottom - anchor.bottom;
+      };
+      correct();
       threadOpenAnchor.current = null;
+      // Late reflow (a web font swapping in, an image decoding) re-wraps the
+      // messages after this first correction: keep the anchor briefly and
+      // re-apply it until the layout settles or the user scrolls on their own.
+      threadAnchorHold.current?.release();
+      const resize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(correct);
+      resize?.observe(stream);
+      for (const child of Array.from(stream.children)) resize?.observe(child);
+      const fonts = document.fonts as FontFaceSet | undefined;
+      const userScroll = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
+      const timer = window.setTimeout(() => release(), 2_000);
+      const release = () => {
+        window.clearTimeout(timer);
+        resize?.disconnect();
+        fonts?.removeEventListener?.("loadingdone", correct);
+        for (const type of userScroll) stream.removeEventListener(type, release);
+        if (threadAnchorHold.current?.release === release) threadAnchorHold.current = null;
+      };
+      fonts?.addEventListener?.("loadingdone", correct);
+      for (const type of userScroll) stream.addEventListener(type, release, { passive: true });
+      threadAnchorHold.current = { channelId: anchor.channelId, threadId: anchor.threadId, release };
     } else if (stickBottom.current && pane?.historyThrough === undefined && stream) {
       stream.scrollTop = stream.scrollHeight;
     }
     stickBottom.current = true;
   }, [pane, threadVisible, selectedChannelId, threadId, threadPane?.threadId]);
+  useEffect(() => () => threadAnchorHold.current?.release(), []);
   useLayoutEffect(() => {
     if (threadPane?.historyThrough === undefined && threadStream.current)
       threadStream.current.scrollTop = threadStream.current.scrollHeight;
@@ -936,7 +967,7 @@ export function App() {
             >
               Adaptive routing
             </button>
-            <button type="button" className="tool-action" title="Launch agent" onClick={() => setLaunchOpen(true)}>
+            <button type="button" className="tool-action" title="Launch agent" onClick={() => openLaunch()}>
               Launch agent
             </button>
             <button type="button" className="tool-action" title="How to join" onClick={() => setHelpOpen(true)}>
@@ -961,6 +992,11 @@ export function App() {
           }}
           placeholder="Search projects and messages" aria-label="Search projects and messages"
         />
+        {projects.length > 0 && (
+          <button type="button" className="launch-cta" onClick={() => openLaunch()}>
+            <span aria-hidden="true">+</span> Launch agent
+          </button>
+        )}
 
         <div className="group-h">
           <span>Projects</span>
@@ -1041,9 +1077,9 @@ export function App() {
                   <button
                     className={`nav ${sel.kind === "jev" && sel.project === project.slug ? "active" : ""}`}
                     onClick={() => go({ kind: "jev", project: project.slug })}
-                    title="Every request sent to Jev and its answer"
+                    title="Every request Hivemind sent to Jev (TypeSafe) and its answer"
                   >
-                    <span>Jev</span>
+                    <span>Routing log</span>
                   </button>
                   <div className="group">
                     <div className="group-h">
@@ -1152,6 +1188,7 @@ export function App() {
                       agents={hiveAgents}
                       projectName={project.name}
                       onCreateBot={() => setBotProject(project.id)}
+                      onLaunch={() => openLaunch(project.slug)}
                       onManageBot={setCredentialBot}
                       queued={snap.queued ?? {}}
                       inbox={snap.inbox}
@@ -1886,8 +1923,8 @@ export function App() {
         <LaunchSheet
           projects={projects}
           agents={snap.agents}
-          defaultProject={selectedProject}
-          onClose={() => setLaunchOpen(false)}
+          defaultProject={launchProject ?? selectedProject}
+          onClose={() => { setLaunchOpen(false); setLaunchProject(null); }}
         />
       )}
 
@@ -1936,17 +1973,23 @@ export function App() {
           <div className="sheet" onClick={(e) => e.stopPropagation()}>
             <h2>How to join</h2>
             <p className="help-p">
-              You open Codex, Claude, or Cursor yourself, pick the model, then register that terminal. Hivemind never wakes a closed session. Or use Launch to copy a command plus prompt.
+              You open Codex, Claude, or Cursor yourself and pick the model; Hivemind never wakes a closed session.
+              The quickest path is <strong>Launch agent</strong>: it copies a command and prompt for a new brain or worker.
             </p>
-            <pre>{`npx tsx src/cli.ts mcp-config
-npx tsx src/cli.ts join --as brain
-npx tsx src/cli.ts join --as worker --seniority senior
-export HIVEMIND_TOKEN=hm_…
-npx tsx src/cli.ts wait`}</pre>
             <p className="help-p">
-              Workers talk to brains only. Brains ask @Human here. Click an agent to DM them — including workers.
+              Agents join through the Hivemind MCP server and call <code>join</code>. There is no token to copy or keep:
+              to bring an agent back, join again with <code>resume=NAME</code> and it picks up its queued work.
+            </p>
+            <pre>{`npx tsx src/cli.ts mcp-config   # add the MCP server to your agent host
+join role=brain                  # in the agent: a new brain
+join role=worker seniority=senior resume=Forge   # in the agent: come back as Forge`}</pre>
+            <p className="help-p">
+              Workers only start conversations with brains; you can DM anyone. Brains ask @Human here.
             </p>
             <div className="row">
+              <button type="button" onClick={() => { setHelpOpen(false); openLaunch(); }}>
+                Launch agent
+              </button>
               <button type="button" className="primary" onClick={() => setHelpOpen(false)}>
                 Close
               </button>
@@ -2496,6 +2539,7 @@ export function AgentList({
   projectName,
   onCreateBot,
   onManageBot,
+  onLaunch,
   queued,
   inbox = {},
   onOpen,
@@ -2506,6 +2550,8 @@ export function AgentList({
   projectName: string;
   onCreateBot: () => void;
   onManageBot?: (a: Agent) => void;
+  /** Opens the Launch sheet for this project; shown as the call to action when no brain or worker has joined. */
+  onLaunch?: () => void;
   queued: Record<string, number>;
   inbox?: Record<string, InboxStatus>;
   onOpen: (a: Agent) => void;
@@ -2523,6 +2569,12 @@ export function AgentList({
   return (
     <div className="agents">
       {human && <PersonRow agent={human} onOpen={() => undefined} self />}
+      {brains.length + workers.length === 0 && (
+        <div className="roster-empty">
+          <p>No brains or workers in {projectName} yet. Launch one to start working here.</p>
+          {onLaunch && <button type="button" className="launch-cta" onClick={onLaunch}>Launch an agent</button>}
+        </div>
+      )}
       {brains.length > 0 && <div className="subh">brain</div>}
       {brains.map((a) => (
         <PersonRow
@@ -2573,12 +2625,6 @@ export function AgentList({
           onMenu={onManageBot ? () => setMenu(menu === a.name ? null : a.name) : undefined}
           onCloseMenu={() => setMenu(null)} />
       ))}
-      {brains.length + workers.length === 0 && (
-        <p className="empty-mini">
-          Open Codex, Claude, or Cursor, then <code>hivemind join --as brain</code> or{" "}
-          <code>--as worker --seniority senior</code>
-        </p>
-      )}
     </div>
   );
 }

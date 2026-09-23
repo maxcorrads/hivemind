@@ -172,9 +172,15 @@ jobs:
           if-no-files-found: ignore
 
   unit_node22:
-    name: Unit / Node 22.13.0
+    name: Unit / Node ${{ matrix.node }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22.13.0 is the engines floor; 22.x tracks the latest Node 22 release
+        # so node:sqlite / runtime changes in newer 22 minors are caught early.
+        node: ['22.13.0', '22.x']
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -182,7 +188,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '22.13.0'
+          node-version: ${{ matrix.node }}
           cache: npm
           cache-dependency-path: package-lock.json
 
@@ -190,24 +196,25 @@ jobs:
         run: npm ci
 
       - name: Unit contracts
-        run: node scripts/run-logged.mjs artifacts/unit-node22.log npm run test:unit
+        run: node scripts/run-logged.mjs artifacts/unit-node${{ matrix.node }}.log npm run test:unit
 
       - name: Retain redacted failing unit log
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: tests-node-22-unit
-          path: artifacts/unit-node22.log
+          name: tests-node-${{ matrix.node }}-unit
+          path: artifacts/unit-node${{ matrix.node }}.log
           retention-days: 7
           if-no-files-found: ignore
 
   integration_node22:
-    name: Integration / Node 22.13.0 / shard ${{ matrix.shard }}/4
+    name: Integration / Node ${{ matrix.node }} / shard ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
+        node: ['22.13.0', '22.x']
         shard: [1, 2, 3, 4]
     steps:
       - name: Checkout
@@ -216,7 +223,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '22.13.0'
+          node-version: ${{ matrix.node }}
           cache: npm
           cache-dependency-path: package-lock.json
 
@@ -225,34 +232,36 @@ jobs:
 
       - name: Integration shard
         run: |
-          node scripts/run-logged.mjs artifacts/integration-node22-${{ matrix.shard }}.log npm run test:integration -- \
+          node scripts/run-logged.mjs artifacts/integration-node${{ matrix.node }}-${{ matrix.shard }}.log npm run test:integration -- \
             --hivemind-shard=${{ matrix.shard }}/4
 
       - name: Retain redacted failing integration log
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: tests-node-22-integration-${{ matrix.shard }}
-          path: artifacts/integration-node22-${{ matrix.shard }}.log
+          name: tests-node-${{ matrix.node }}-integration-${{ matrix.shard }}
+          path: artifacts/integration-node${{ matrix.node }}-${{ matrix.shard }}.log
           retention-days: 7
           if-no-files-found: ignore
 
   tests_node24:
     name: Tests / Node 24
-    needs: [unit_node24, integration_node24, macos_compat]
+    needs: [unit_node24, integration_node24, macos_compat, browser]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Require every Node 24 test shard and macOS compatibility
+      - name: Require every Node 24 test shard, macOS compatibility and the browser suite
         env:
           UNIT_RESULT: ${{ needs.unit_node24.result }}
           INTEGRATION_RESULT: ${{ needs.integration_node24.result }}
           MACOS_RESULT: ${{ needs.macos_compat.result }}
+          BROWSER_RESULT: ${{ needs.browser.result }}
         run: |
           test "$UNIT_RESULT" = success
           test "$INTEGRATION_RESULT" = success
           test "$MACOS_RESULT" = success
+          test "$BROWSER_RESULT" = success
 
   tests_node22:
     name: Tests / Node 22.13.0
@@ -261,7 +270,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Require every Node 22.13.0 test shard
+      # Historical required check name; it gates both the 22.13.0 floor and
+      # the 22.x latest lane so a regression in a newer Node 22 release blocks.
+      - name: Require every Node 22 (22.13.0 floor and 22.x latest) test shard
         env:
           UNIT_RESULT: ${{ needs.unit_node22.result }}
           INTEGRATION_RESULT: ${{ needs.integration_node22.result }}
@@ -309,7 +320,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: browser-chromium-failures
-          path: artifacts/browser.log
+          path: |
+            artifacts/browser.log
+            artifacts/playwright
           retention-days: 7
           if-no-files-found: ignore
 

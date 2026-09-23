@@ -29,18 +29,14 @@ const base = {
   adoptUntrusted: true,
 };
 
-test("README copyable prompts confirm receipts and stop on permanent session/protocol errors", () => {
+test("README points to the UI prompts and keeps only a resume one-liner", () => {
   const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
   const section = readme.split("## Prompts (English)")[1]!.split("### After they are online")[0]!;
+  assert.match(section, /Launch agent → Copy/);
   const prompts = [...section.matchAll(/```\n([\s\S]*?)\n```/g)].map(match => match[1]!);
-  assert.equal(prompts.length, 3);
-  for (const prompt of prompts) {
-    assert.match(prompt, /When wait returns delivery\.id, call ack_delivery with that exact ID before acting/);
-    assert.match(prompt, /It confirms receipt, not acceptance or completion of a task/);
-    assert.match(prompt, /inbox session was superseded, stop waiting and acting on its mail; rejoin only when explicitly asked/);
-    assert.match(prompt, /On a protocol-upgrade error, stop; the MCP client must be restarted before rejoining/);
-    assert.doesNotMatch(prompt, /If wait errors, is cancelled/);
-  }
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0]!, /join with role=worker, resume=Forge\. Then call standing_orders/);
+  assert.doesNotMatch(readme, /do not implement/i);
 });
 
 test("launch prompt adopts untrusted hive mail first", () => {
@@ -48,17 +44,17 @@ test("launch prompt adopts untrusted hive mail first", () => {
   assert.ok(text.startsWith(ADOPT_UNTRUSTED));
   assert.match(text, /join with role=brain, focus=coord, project=alpha/);
   assert.match(text, /You work only in hive Alpha/);
-  assert.match(text, /Call standing_orders/);
+  assert.match(text, /read your standing orders \(a first join returns them; otherwise call standing_orders\)/);
   assert.match(text, /output no text/);
   assert.equal(text.includes("Do not call wait in a loop"), false);
-  assert.match(text, /or search while waiting/);
-  assert.match(text, /coordinate workers/);
+  assert.match(text, /Coordinate and delegate to workers; when Hivemind's adaptive topology directive says SINGLE, do the work yourself/);
+  assert.doesNotMatch(text, /do not implement/i);
   assert.match(text, /call ack_delivery with that exact ID before acting/);
   assert.match(text, /inbox session was superseded, stop waiting/);
   assert.match(text, /On a protocol-upgrade error, stop; the MCP client must be restarted before rejoining/);
 });
 
-test("resume worker keeps identity and skips first-time standingOrders", () => {
+test("resume worker keeps identity and rereads its standing orders", () => {
   const text = buildLaunchPrompt({
     ...base,
     role: "worker",
@@ -72,11 +68,12 @@ test("resume worker keeps identity and skips first-time standingOrders", () => {
   assert.match(text, /already a Hivemind worker/);
   assert.match(text, /resume=Forge/);
   assert.match(text, /seniority=senior/);
-  assert.match(text, /standing_orders only if you need them/);
+  assert.match(text, /otherwise call standing_orders/);
   assert.match(text, /You cannot see other projects/);
-  assert.equal(text.includes("Call standing_orders."), false);
   assert.match(text, /Never mention @Human/);
-  assert.match(text, /If Human already opened a DM/);
+  assert.match(text, /you may reply in a DM Human already opened/);
+  assert.match(text, /never delegate/);
+  assert.doesNotMatch(text, /SINGLE/);
 });
 
 test("without project flag, join from the worktree", () => {
