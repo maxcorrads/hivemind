@@ -19,34 +19,6 @@ type DeliveryRow = {
 
 export class TimelineStore {
   constructor(private hive: Hive) {
-    hive.db.exec(`
-      CREATE TABLE IF NOT EXISTS message_provenance (
-        message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
-        trace_id TEXT NOT NULL,
-        parent_message_id TEXT,
-        cause_message_id TEXT,
-        source TEXT NOT NULL CHECK(source IN ('hive','telegram','bot')),
-        created_at INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS timeline_trace_created ON message_provenance(trace_id, created_at, message_id);
-      CREATE TABLE IF NOT EXISTS timeline_deliveries (
-        delivery_id TEXT NOT NULL,
-        agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-        message_seq INTEGER NOT NULL,
-        wake_reason TEXT NOT NULL,
-        offered_at INTEGER NOT NULL,
-        last_offered_at INTEGER NOT NULL,
-        acknowledged_at INTEGER,
-        attempt INTEGER NOT NULL,
-        PRIMARY KEY(delivery_id, agent_id, message_seq)
-      );
-      CREATE INDEX IF NOT EXISTS timeline_delivery_seq ON timeline_deliveries(message_seq, offered_at);
-      CREATE TRIGGER IF NOT EXISTS timeline_message_default AFTER INSERT ON messages
-      BEGIN
-        INSERT OR IGNORE INTO message_provenance(message_id, trace_id, parent_message_id, cause_message_id, source, created_at)
-        VALUES (NEW.id, COALESCE(NEW.thread_id, NEW.id), NEW.thread_id, NULL, 'hive', NEW.created_at);
-      END;
-    `);
     this.prune();
   }
 

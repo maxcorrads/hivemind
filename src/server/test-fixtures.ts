@@ -6,6 +6,7 @@
 // this module. Production code must never import this file.
 // See src/server/test-sql-budget.unit.test.ts for the enforced raw-SQL budget.
 import { DatabaseSync, type SQLInputValue, type SQLOutputValue, type StatementSync } from "node:sqlite";
+import { LEGACY_PROJECT_STORAGE_VERSION, MIGRATIONS } from "./migrations/index.ts";
 import { Storage } from "./storage.ts";
 
 /** Anything that owns a SQLite handle: a Hive, a store, or the database itself. */
@@ -238,8 +239,8 @@ export function markInboxRead(owner: DbOwner, agentId?: string): void {
 
 /**
  * Simulates a pre-counter hive with `size` acknowledged deliveries for an agent:
- * drops the receipt totals table and back-fills the delivery ledger.
- * Callers construct a new InboxDeliveryStore (or reopen the hive) to rebuild totals.
+ * drops the receipt totals table, back-fills the delivery ledger and re-runs the
+ * receipt-totals migration, as an upgrade of such a hive would.
  */
 export function seedAgedInboxReceipts(owner: DbOwner, agentId: string, sessionId: string, size: number): void {
   const db = dbOf(owner);
@@ -247,6 +248,27 @@ export function seedAgedInboxReceipts(owner: DbOwner, agentId: string, sessionId
   db.prepare(`WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i + 1 FROM n WHERE i < ?)
     INSERT INTO inbox_deliveries(id, agent_id, session_id, through_seq, seqs, attempts, offered_at, lease_until, acknowledged_at)
     SELECT 'aged-' || i, ?, ?, 0, '[0]', 1, 1, 2, 100 FROM n`).run(size, agentId, sessionId);
+  rerunMigration(db, "inbox_receipt_totals");
+}
+
+// ---------------------------------------------------------------------------
+// Schema and migrations
+// ---------------------------------------------------------------------------
+
+/**
+ * Marks the database as a pre-migration (legacy) hive, so the next Hive reruns the
+ * whole idempotent baseline. Use it after reshaping a schema into a legacy layout.
+ */
+export function markLegacyStorage(owner: DbOwner, version = LEGACY_PROJECT_STORAGE_VERSION): void {
+  dbOf(owner).exec(`PRAGMA user_version = ${Number(version)}`);
+}
+
+/** Re-runs one named baseline migration in its own transaction without changing the version. */
+export function rerunMigration(owner: DbOwner, name: string): void {
+  const migration = MIGRATIONS.find(candidate => candidate.name === name);
+  if (!migration) throw new Error(`Unknown migration ${name}`);
+  const db = dbOf(owner);
+  Storage.for(db).transaction(() => migration.up(db));
 }
 
 // ---------------------------------------------------------------------------
@@ -310,7 +332,8 @@ export function failWrites(owner: DbOwner, table: string, options: FailureOption
   return () => db.exec(`DROP TRIGGER IF EXISTS ${name}`);
 }
 
-/** Drops a table so tests can simulate a legacy schema before reopening the hive. */
+/** Drops a table and marks the database legacy, simulating an older schema before reopening the hive. */
 export function dropTable(owner: DbOwner, table: string): void {
   dbOf(owner).exec(`DROP TABLE ${ident(table)}`);
+  markLegacyStorage(owner);
 }

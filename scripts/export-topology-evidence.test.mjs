@@ -5,6 +5,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { AdaptiveEvidenceStore } from '../src/server/adaptive-evidence.ts';
+import { rerunMigration } from '../src/server/test-fixtures.ts';
 import { main } from './export-topology-evidence.mjs';
 
 test('offline export opens existing SQLite read-only and writes a new private file', t => {
@@ -12,6 +13,7 @@ test('offline export opens existing SQLite read-only and writes a new private fi
   const file = path.join(dir, 'hive.db'), output = path.join(dir, 'evidence.json');
   const db = new DatabaseSync(file);
   db.exec("PRAGMA foreign_keys=ON; CREATE TABLE channels(id TEXT PRIMARY KEY); INSERT INTO channels VALUES('c');");
+  rerunMigration(db, 'adaptive_observations');
   const store = new AdaptiveEvidenceStore(db);
   store.begin({ executionId: 'e', projectId: 'p', channelId: 'c', phase: 'initial' },
     { topology: null, workers: 0, usableWorkers: 2, policyVersion: 'topology-policy-v2.1' });

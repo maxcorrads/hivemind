@@ -10,30 +10,7 @@ type DecisionRow = { id: string; snapshot: string };
 type MutationRow = { decision_id: string; message_id: string | null; request_hash: string };
 
 export class DecisionStore {
-  constructor(private hive: Hive, private atomic: <T>(work: () => T) => T) {
-    hive.db.exec(`CREATE TABLE IF NOT EXISTS decision_requests (
-      id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
-      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-      channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
-      task_id TEXT NOT NULL REFERENCES task_records(id) ON DELETE CASCADE,
-      requester_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-      request_id TEXT NOT NULL,
-      request_hash TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
-      snapshot TEXT NOT NULL,
-      UNIQUE(requester_id, request_id)
-    );
-    CREATE INDEX IF NOT EXISTS decision_project_created ON decision_requests(project_id, created_at DESC);
-    CREATE INDEX IF NOT EXISTS decision_task_created ON decision_requests(task_id, created_at DESC);
-    CREATE TABLE IF NOT EXISTS decision_mutations (
-      actor_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-      request_id TEXT NOT NULL,
-      decision_id TEXT NOT NULL REFERENCES decision_requests(id) ON DELETE CASCADE,
-      request_hash TEXT NOT NULL,
-      message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
-      PRIMARY KEY(actor_id, request_id)
-    );`);
-  }
+  constructor(private hive: Hive, private atomic: <T>(work: () => T) => T) {}
 
   private hash(value: unknown) { return createHash('sha256').update(JSON.stringify(value)).digest('hex'); }
   private row(id: string): DecisionRow {

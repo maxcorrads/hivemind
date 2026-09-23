@@ -7,18 +7,7 @@ import type { TaskSnapshot } from '../shared/tasks.ts';
 type TaskLink = { task_id: string; channel_id: string; version: number; action_key: string; payload_hash: string; status: 'active' | 'stop_requested' | 'stopped' };
 const finished = (t: TaskSnapshot) => ['accepted_complete', 'rejected'].includes(t.state);
 export class RoomStore {
-  constructor(private hive: Hive) {
-    this.db.exec(`CREATE TABLE IF NOT EXISTS rooms (channel_id TEXT PRIMARY KEY REFERENCES channels(id) ON DELETE CASCADE, snapshot TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS room_events (actor_id TEXT NOT NULL, request_id TEXT NOT NULL, channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
-        hash TEXT NOT NULL, message_id TEXT NOT NULL, revision INTEGER NOT NULL, snapshot TEXT NOT NULL, PRIMARY KEY(actor_id, request_id));
-      CREATE TABLE IF NOT EXISTS room_tasks (task_id TEXT PRIMARY KEY REFERENCES task_records(id) ON DELETE CASCADE,
-        channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE, version INTEGER NOT NULL, action_key TEXT NOT NULL, payload_hash TEXT NOT NULL,
-        status TEXT NOT NULL, UNIQUE(channel_id, action_key));
-      CREATE TABLE IF NOT EXISTS room_acks (channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
-        actor_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, version INTEGER NOT NULL, PRIMARY KEY(channel_id, actor_id));
-      CREATE TABLE IF NOT EXISTS source_links (channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
-        bot_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, id TEXT NOT NULL, snapshot TEXT NOT NULL, PRIMARY KEY(channel_id, bot_id, id));`);
-  }
+  constructor(private hive: Hive) {}
   private get db() { return this.hive.db; }
   private hash(v: unknown) { return createHash('sha256').update(JSON.stringify(v)).digest('hex'); }
   peek(channel: string): Room | null {
