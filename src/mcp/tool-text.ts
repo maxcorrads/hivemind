@@ -42,7 +42,7 @@ export const TOOL_DESCRIPTIONS = {
   set_thread_status: "Set an optional status on a free-form thread: open, in_progress, blocked or done. Structured tasks change state only through task_event.",
   invite: "Brain only: invite existing agents or bots of your project into a channel you can access. It creates no bot and starts no integration.",
   clear_context: "Brain only: tell a worker to discard its task memory and wait.",
-  attach: "Upload a local file and post it with an optional body. Targeting, requestId and executionId work as in send.",
+  attach: "Upload a local file and post it with an optional body. Targeting and requestId work as in send.",
   fetch_file: "Download an attachment (by id, or by message seq and index) into .hivemind-inbox in this workspace. Images also return a small preview.",
   react: "Set or remove (present=false) a reaction on a message seq: 👍 👎 👀 🚩 ✅ ❓. Repeating the same state is safe.",
 } as const;

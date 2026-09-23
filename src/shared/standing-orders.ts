@@ -17,8 +17,8 @@ export const WAIT_LOOP = [
   "Never ask the person at this terminal prompt: they are not Human. Human and brains speak only in Hivemind (web UI or Telegram).",
 ] as const;
 
-/** The SINGLE exception every brain text must carry (#149). */
-export const BRAIN_ROLE = "Coordinate and delegate to workers; when Hivemind's adaptive topology directive says SINGLE, do the work yourself.";
+/** Every brain text carries it (#149): a brain may always do the work itself (#211: Jev only advises). */
+export const BRAIN_ROLE = "Coordinate and delegate to workers, or do the work yourself when that serves the request better: you decide.";
 
 const section = (title: string, lines: readonly string[]) => `## ${title}\n${lines.map(line => `- ${line}`).join("\n")}`;
 
@@ -105,16 +105,10 @@ export function standingOrders(agent: Agent): string {
         "Human (admin) sees every conversation; treat DMs as private from workers' point of view.",
         "Invite a bot to a channel only when Human asks; the invitation does not start its integration.",
       ]),
-      section("Adaptive topology", [
-        "Jev routes every Human message addressed to you, in any channel or thread; workers never go through Jev. Its \"[Hivemind adaptive topology · ...]\" directive is the server-enforced mode for that one request and never changes your permanent brain role.",
-        "Several requests may run at once, each with its own executionId: pass it on every coordination action for that request. Delegation (send/attach to a worker, assign_task, task_event revise, room_event configure/staff) without it is rejected while you have an active execution. Never reuse or invent one.",
-        "SINGLE: do the work yourself in this session; do not delegate.",
-        "BRAIN+1: at most one active worker.",
-        "MULTI-DM: separate structured tasks/DMs within the worker budget; no new room work.",
-        "ROOM: new delegated work only through the scoped room contract, within the worker budget. Older DM tasks may finish, but start no new or replacement DM work.",
-        "Hivemind revalidates Jev at coordination boundaries and may switch mode, even between non-adjacent modes. Never bypass a 409 adaptive-routing rejection: retry only after the routing state or a Human lock changes.",
-        "A pending de-escalation means: finish or reconcile useful running work, start no new delegation.",
-        "Human task/conversation locks override automatic changes; Jev recommendations stay advisory until the lock is removed.",
+      section("Jev advice", [
+        "Jev advises you on every Human message addressed to you and on each of your actions (send, attach, assign_task, task_event, room_event, set_thread_status, wait): the response carries its suggestion as jevAdvice. Workers never get Jev advice.",
+        "jevAdvice is advisory only: decide the plan yourself from the task. Human instructions always override it, and Hivemind never blocks or reshapes an action because of it.",
+        "SINGLE, BRAIN+1, MULTI-DM and ROOM are suggestions, not enforced modes: there is no worker budget, lock or executionId. Treat an uncertain, incoherent, unavailable or rejected jevAdvice as no advice.",
       ]),
       section("Coordinating rooms", [
         "Assign in a contracted room with assign_task plus room.contractVersion and a stable room.actionKey per intended action; reuse the key after redelivery or restart.",

@@ -90,7 +90,7 @@ export const AGENT_RULES = [
   { id: "worker.stop-request", roles: worker, rule: "On a stop request stop incompatible activity and send room_event stopped, not a result; Hivemind cannot interrupt external tools." },
 
   // Brain
-  { id: "brain.coordinate", roles: brain, rule: "Brains coordinate and delegate; when the adaptive directive says SINGLE they do the work themselves." },
+  { id: "brain.coordinate", roles: brain, rule: "Brains coordinate and delegate, or do the work themselves when that serves the request better; they decide." },
   { id: "brain.talk", roles: brain, rule: "Talk to Human, other brains (#brains) and workers in the project; public channels for hive-visible progress." },
   { id: "brain.assign", roles: brain, rule: "Delegate to a specific worker (choose seniority) in a DM thread or authorized scoped room; one task = one thread." },
   { id: "brain.offline-worker", roles: brain, rule: "Leave work for an offline worker; do not try to wake it." },
@@ -101,19 +101,10 @@ export const AGENT_RULES = [
   { id: "brain.clear-context", roles: brain, rule: "clear_context only for a worker stuck in a long session; never automatically at done or after a report." },
   { id: "brain.human-admin", roles: brain, rule: "Human sees every conversation; treat DMs as private from workers' view." },
 
-  // Adaptive topology (brain)
-  { id: "topology.directive", roles: brain, rule: "The [Hivemind adaptive topology · ...] directive is the server-enforced mode for that Human request only and never changes the permanent role." },
-  { id: "topology.jev-routing", roles: brain, rule: "Jev routes every Human message addressed to a brain in any channel/thread; workers never go through Jev." },
-  { id: "topology.concurrent", roles: brain, rule: "Several requests may run at once, each with its own executionId." },
-  { id: "topology.execution-id", roles: brain, rule: "Pass executionId on every coordination action; delegation (send/attach to a worker, assign_task, task_event revise, room_event configure/staff) is rejected without it while an execution is active; never reuse or invent one." },
-  { id: "topology.single", roles: brain, rule: "SINGLE: do the work yourself; do not delegate." },
-  { id: "topology.brain-plus-one", roles: brain, rule: "BRAIN+1: at most one active worker." },
-  { id: "topology.multi-dm", roles: brain, rule: "MULTI-DM: separate structured tasks/DMs within the worker budget; no new room work." },
-  { id: "topology.room", roles: brain, rule: "ROOM: new delegated work only through the scoped room contract within budget; older DM tasks may finish; no new or replacement DM work." },
-  { id: "topology.revalidation", roles: brain, rule: "Hivemind revalidates Jev at coordination boundaries and may switch modes, even non-adjacent ones." },
-  { id: "topology.409", roles: brain, rule: "Never bypass a 409 adaptive-routing rejection; retry only after the routing state or a Human lock changes." },
-  { id: "topology.de-escalation", roles: brain, rule: "Pending de-escalation: finish/reconcile useful running work, start no new delegation." },
-  { id: "topology.locks", roles: brain, rule: "Human locks override automatic changes; Jev recommendations stay advisory until the lock is removed." },
+  // Jev advice (brain), advisory-only since #211
+  { id: "jev.advice", roles: brain, rule: "Brains receive Jev advice (jevAdvice) with the response to each action and wait; workers never trigger Jev." },
+  { id: "jev.advisory", roles: brain, rule: "Jev advice is advisory: the brain decides from the task; Human instructions always override it; nothing is blocked because of it." },
+  { id: "jev.not-enforced", roles: brain, rule: "SINGLE/BRAIN+1/MULTI-DM/ROOM are suggestions, not enforced: no worker budget, lock or executionId; non-ok advice counts as no advice." },
 
   // Structured tasks
   { id: "task.optional", roles: both, rule: "Structured tasks are optional; free-form chat never changes task state." },
