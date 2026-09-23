@@ -116,28 +116,9 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
         ))(entry.message))}
         <div />
       </div>
-      {activeBrainChannel && routingView && routingView.state && routingView.state.channelId === activeChannel?.id && (
-        <div className={`routing-strip ${routingView.state.warning ? "warning" : ""}`}>
-          <button type="button" onClick={onOpenRouting}>
-            <strong>{topologyLabel(routingView.state.currentTopology)}</strong>
-            {routingView.state.workerBudget > 0
-              ? ` · ${routingView.state.workerBudget} worker${routingView.state.workerBudget === 1 ? "" : "s"}`
-              : ""}
-            {routingView.state.lockScope !== "none" ? ` · locked ${routingView.state.lockScope}` : ""}
-            {activeExecutions > 1 ? ` · ${brainNames[routingView.state.brainId] ?? "brain"} · ${activeExecutions} brains` : ""}
-            {finishingExecutions > 0 ? ` · +${finishingExecutions} finishing` : ""}
-          </button>
-          <span>
-            {routingView.state.monitoring === "completed" ? "Execution completed" : routingView.state.monitoring === "disabled"
-              ? "Jev disabled · automatic verification is off" : routingView.state.monitoring === "pending"
-              ? "Jev enabled · awaiting next coordination event" : routingView.state.warning
-              ? `⚠ ${routingView.state.warning}`
-              : (() => {
-                  const last = [...routingView.events].reverse().find(event => event.kind === "transition");
-                  return last ? routingEventLabel(last) : "Jev continuous routing active";
-                })()}
-          </span>
-        </div>
+      {activeBrainChannel && routingView && (
+        <RoutingStrip view={routingView} channelId={activeChannel?.id} activeExecutions={activeExecutions}
+          finishingExecutions={finishingExecutions} brainNames={brainNames} onOpen={onOpenRouting} />
       )}
       <Composer
         agents={roomAgents}
@@ -157,5 +138,48 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
         onSend={compose.sendChannel}
       />
     </>
+  );
+}
+
+/**
+ * The compact routing summary above the composer: the primary execution, how many brains run here and how many
+ * older requests are still finishing. It also shows when only draining executions remain (no current one).
+ */
+export function RoutingStrip({ view, channelId, activeExecutions, finishingExecutions, brainNames, onOpen }: {
+  view: AdaptiveRoutingView;
+  channelId: string | undefined;
+  activeExecutions: number;
+  finishingExecutions: number;
+  brainNames: Record<string, string>;
+  onOpen: () => void;
+}) {
+  const state = view.state && view.state.channelId === channelId ? view.state : null;
+  if (!state && finishingExecutions === 0) return null;
+  const finishing = finishingExecutions > 0 ? `+${finishingExecutions} finishing` : "";
+  return (
+    <div className={`routing-strip ${state?.warning ? "warning" : ""}`}>
+      <button type="button" onClick={onOpen}>
+        {state ? (
+          <>
+            <strong>{topologyLabel(state.currentTopology)}</strong>
+            {state.workerBudget > 0 ? ` · ${state.workerBudget} worker${state.workerBudget === 1 ? "" : "s"}` : ""}
+            {state.lockScope !== "none" ? ` · locked ${state.lockScope}` : ""}
+            {activeExecutions > 1 ? ` · ${brainNames[state.brainId] ?? "brain"} · ${activeExecutions} brains` : ""}
+            {finishing ? ` · ${finishing}` : ""}
+          </>
+        ) : <strong>{finishing}</strong>}
+      </button>
+      <span>
+        {!state ? "Earlier requests are finishing their delegated work"
+          : state.monitoring === "completed" ? "Execution completed" : state.monitoring === "disabled"
+          ? "Jev disabled · automatic verification is off" : state.monitoring === "pending"
+          ? "Jev enabled · awaiting next coordination event" : state.warning
+          ? `⚠ ${state.warning}`
+          : (() => {
+              const last = [...view.events].reverse().find(event => event.kind === "transition");
+              return last ? routingEventLabel(last) : "Jev continuous routing active";
+            })()}
+      </span>
+    </div>
   );
 }
