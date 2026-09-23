@@ -5,21 +5,24 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const source = path.join(root, "src/cli.ts");
 const compiled = path.join(root, "dist/node/cli.js");
 const args = process.argv.slice(2);
 
-// Installed packages ship compiled JavaScript (npm run build:server): load it in
-// this process, with no TypeScript loader and no second node startup.
-// HIVEMIND_FROM_SOURCE=1 forces the tsx path in a checkout with a stale build.
-if (existsSync(compiled) && process.env.HIVEMIND_FROM_SOURCE !== "1") {
+// A source checkout always runs src/ through tsx, so a stale dist/node build is
+// never used silently; HIVEMIND_FROM_DIST=1 opts in to the compiled build there.
+// An installed package ships no src/ and runs its compiled JavaScript in this
+// process: no TypeScript loader and no second node startup.
+const useCompiled = existsSync(compiled) && (!existsSync(source) || process.env.HIVEMIND_FROM_DIST === "1");
+
+if (useCompiled) {
   const { runCli } = await import(pathToFileURL(compiled).href);
   runCli(args).catch((err) => {
     console.error(String(err?.message || err));
     process.exit(1);
   });
 } else {
-  // Source checkout without a build: run the TypeScript CLI through tsx (a devDependency).
-  const child = spawn(process.execPath, ["--import", "tsx", path.join(root, "src/cli.ts"), ...args], {
+  const child = spawn(process.execPath, ["--import", "tsx", source, ...args], {
     stdio: "inherit",
     cwd: root,
   });
