@@ -95,12 +95,19 @@ test("missing tools fall back to metadata; a stalled converter consumes one shar
   let calls = 0;
   let ticks = 0;
   const timer = setInterval(() => ticks++, 1);
+  // Only the preview's timeouts run on the mock clock: the deadline expires when the test says so, never
+  // because a loaded machine was slow to reach the first converter. The heartbeat above stays real.
+  t.mock.timers.enable({ apis: ["setTimeout"] });
   try {
     const command: [string, () => string[]] = [process.execPath, () => { calls++; return ["-e", "setInterval(() => {}, 1000)"]; }];
-    assert.equal(await imagePreview(input, "image/png", { commands: [command, command], timeoutMs: 80 }), null);
-    assert.equal(calls, 1);
+    const preview = imagePreview(input, "image/png", { commands: [command, command], timeoutMs: 10_000 });
+    // The first converter is spawned (and its kill timer armed) synchronously after its arguments are built.
+    while (calls === 0) await new Promise((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(10_000);
+    assert.equal(await preview, null);
+    assert.equal(calls, 1, "the stalled converter consumed the whole deadline; the second never started");
     assert.ok(ticks > 0, "heartbeat/event loop kept running");
-  } finally { clearInterval(timer); }
+  } finally { clearInterval(timer); t.mock.timers.reset(); }
 });
 
 test("parallel previews have two slots, cancellation kills children and releases slots/listeners", async (t) => {
