@@ -34,6 +34,7 @@ export class JevCallLog {
       targetTopology: decision.targetTopology, targetWorkers: decision.targetWorkers, confidence: decision.confidence,
       reason: decision.reason, error: exchange.error, requestedModel: decision.requestedModel ?? null, model: decision.model, latencyMs: decision.latencyMs,
       inputTokens: decision.inputTokens, outputTokens: decision.outputTokens, outcome: null,
+      ...(decision.incoherent ? { incoherent: decision.incoherent } : {}),
     };
     this.db.prepare(`INSERT INTO jev_calls(id,route_id,project_id,channel_id,execution_id,created_at,summary,sent,received)
       VALUES(?,?,?,?,?,?,?,?,?)`).run(summary.id, summary.routeId, summary.projectId, summary.channelId, summary.executionId,

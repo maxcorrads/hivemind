@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
 import { test } from 'node:test';
 import { evaluateAdaptiveTopology, topologyQuestions, MAX_PLAN_WORKERS, type TopologyEvaluationSnapshot } from './adaptive-topology-provider.ts';
-import { jevTopologyResponse } from './fixtures/jev-topology.ts';
+import { contradictoryJevAnswer, jevTopologyResponse } from './fixtures/jev-topology.ts';
 
 function snapshot(usable = 3, only = false): TopologyEvaluationSnapshot {
   return { request: 'Complete this phase.', project: { slug: 'test', name: 'Test' },
@@ -130,13 +130,6 @@ test('malformed or inconsistent provider replies are rejected with a specific re
     ['probability negative', p => { p.answers.complexity.probabilities['0'] = -1; return p; }, 'probabilities_invalid:complexity', true],
     ['probability sum', p => { p.answers.complexity.probabilities = { '0': 1, '1': 1, '2': 1 }; return p; }, 'probabilities_invalid:complexity', true],
     ['choice not maximum', p => { p.answers.plan.choice = 'brain_multi_dm_2'; return p; }, 'probabilities_invalid:plan', true],
-    ['contradictory sufficiency', p => {
-      p.answers.plan = { type: 'choice', choice: 'single', confidence: 0.99,
-        probabilities: Object.fromEntries(Object.keys(p.answers.plan.probabilities).map(k => [k, k === 'single' ? 0.95 : 0.01])) };
-      p.answers.single_agent_sufficiency = { type: 'choice', choice: 'insufficient', confidence: 0.99,
-        probabilities: { insufficient: 0.99, sufficient: 0.01 } };
-      return p;
-    }, 'plan_contradicts_sufficiency', true],
   ];
   for (const [label, mutate, code, withModel] of mutations) {
     const result = await evaluateAdaptiveTopology(snapshot(), { apiKey: 'never-log-secret' }, {
@@ -160,6 +153,28 @@ test('malformed or inconsistent provider replies are rejected with a specific re
     },
   });
   assert.equal(delegating.providerStatus, 'ok'); assert.equal(delegating.singleSufficient, true); assert.equal(delegating.needsOrchestration, false);
+  assert.equal(delegating.incoherent, null);
+});
+
+test('a Single plan that contradicts "insufficient" is accepted as a valid but incoherent answer, not rejected', async () => {
+  const exchanges: Array<{ error: string | null }> = [];
+  const result = await evaluateAdaptiveTopology(snapshot(), { apiKey: 'unit-fixture' }, {
+    onExchange: exchange => exchanges.push(exchange),
+    fetchImpl: async (_url, init) => Response.json(contradictoryJevAnswer(jevTopologyResponse(String(init?.body), 'brain_multi_room', 2, 0.99))),
+  });
+  assert.equal(result.providerStatus, 'ok');
+  assert.equal(result.incoherent, 'plan_vs_sufficiency');
+  assert.equal(result.reason, 'incoherent_plan_vs_sufficiency');
+  assert.equal(result.error, null); assert.equal(exchanges[0]!.error, null);
+  assert.equal(result.targetTopology, 'single'); assert.equal(result.targetWorkers, 0);
+  // Jev's own (high) confidence is kept for transparency; routing treats the answer as uncertain regardless.
+  assert.equal(result.confidence, 0.99);
+  assert.equal(result.singleSufficient, false);
+  // With no usable worker, Single is the only feasible plan: "insufficient" is then coherent.
+  const alone = await evaluateAdaptiveTopology({ ...snapshot(0), current: null }, { apiKey: 'unit-fixture' }, {
+    fetchImpl: async (_url, init) => Response.json(contradictoryJevAnswer(jevTopologyResponse(String(init?.body), 'single', 0))),
+  });
+  assert.equal(alone.providerStatus, 'ok'); assert.equal(alone.incoherent, null);
 });
 
 test('HTTP errors, empty bodies, malformed JSON, size budgets and request failures are bounded, specific fallbacks', async () => {

@@ -33,3 +33,17 @@ export function jevTopologyResponse(
   }
   return { model: 'jev-topology-fixture', answers, usage: { input_tokens: 80, output_tokens: 20 } };
 }
+
+/**
+ * Makes a fixture response incoherent (#209): Jev chooses the Single plan while answering that delegation materially
+ * helps. It is incoherent only while workers are usable. Both changed answers carry `confidence`.
+ */
+export function contradictoryJevAnswer<T>(response: T, confidence = 0.99): T {
+  const answers = (response as { answers: Record<string, unknown> }).answers;
+  const options = Object.keys((answers.plan as { probabilities: Record<string, number> }).probabilities);
+  answers.plan = { type: 'choice', choice: 'single', confidence,
+    probabilities: Object.fromEntries(options.map(key => [key, key === 'single' ? 0.95 : 0.05 / (options.length - 1)])) };
+  answers.single_agent_sufficiency = { type: 'choice', choice: 'insufficient', confidence,
+    probabilities: { insufficient: 0.95, sufficient: 0.05 } };
+  return response;
+}

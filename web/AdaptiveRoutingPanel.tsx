@@ -7,12 +7,14 @@ import type {
   AdaptiveExecutionState, AdaptiveLockScope, AdaptiveRoutingEvent,
   AdaptiveRoutingView, AdaptiveTopology,
 } from "../src/shared/adaptive-topology.ts";
+import { jevNotUsedLabel, topologyName } from "../src/shared/jev-outcome.ts";
 
 export function topologyLabel(topology: AdaptiveTopology): string {
-  if (topology === "single") return "Single";
-  if (topology === "brain_one_worker") return "Brain + 1";
-  if (topology === "brain_multi_dm") return "Multi-DM";
-  return "Room";
+  return topologyName(topology);
+}
+/** Why Jev's answer behind an event was not acted on (#209); events carry no resolved model or tokens. */
+function notUsed(event: Pick<AdaptiveRoutingEvent, "providerStatus" | "confidence" | "reason" | "incoherent">): string | null {
+  return jevNotUsedLabel({ ...event, model: null, inputTokens: null });
 }
 export function routingEventLabel(event: AdaptiveRoutingEvent): string {
   const confidence = event.confidence == null ? "" : ` · ${Math.round(event.confidence * 100)}%`;
@@ -25,6 +27,8 @@ export function routingEventLabel(event: AdaptiveRoutingEvent): string {
   if (event.kind === "observation")
     return `Jev observed · no single owning brain · would choose ${topologyLabel(event.targetTopology)}${workers}${confidence} · not enforced`;
   if (event.providerStatus === "bypassed") return `Manual · ${topologyLabel(event.appliedTopology)} · Jev not called`;
+  const uncertain = notUsed(event);
+  if (uncertain) return `${uncertain} · would choose ${topologyLabel(event.targetTopology)}${workers} · kept ${topologyLabel(event.appliedTopology)}`;
   return `Jev recommends ${topologyLabel(event.targetTopology)}${workers}${confidence} · ${event.reason}`;
 }
 
@@ -133,6 +137,7 @@ function RoutingPanelContent({ channelId, view, state, events, tabs, finishing, 
             Latest Jev recommendation: <strong>{topologyLabel(state.recommendation.targetTopology)}</strong>
             {state.recommendation.targetWorkers > 0 ? ` · ${state.recommendation.targetWorkers} worker${state.recommendation.targetWorkers === 1 ? "" : "s"}` : ""}
             {state.recommendation.confidence != null ? ` · ${Math.round(state.recommendation.confidence * 100)}%` : ""}
+            {notUsed(state.recommendation) ? ` · ${notUsed(state.recommendation)} · not acted on` : ""}
             {state.lockedTopology ? " · recommendation only; Human override remains authoritative" : ""}
           </p>}
           {state.recommendation?.providerStatus === "bypassed" && <p className="help-p">Manual selection · Jev was not called for this decision.</p>}

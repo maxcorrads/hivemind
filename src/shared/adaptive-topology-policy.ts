@@ -10,6 +10,11 @@ export type TopologyEvidence = {
   target: TopologyTarget;
   confidence: number | null;
   available: boolean;
+  /**
+   * The answer contradicted itself (#209). It is a valid answer, not a provider failure, but it is never a vote for a
+   * change: the policy treats it exactly like one below MIN_TOPOLOGY_CONFIDENCE, whatever confidence Jev reported.
+   */
+  incoherent?: boolean;
 };
 export type TopologyConfirmation = {
   target: TopologyTarget | null;
@@ -111,7 +116,7 @@ export function advanceTopologyPolicy(
     } else state.pending = null;
     return result('human_override');
   }
-  if (evidence.confidence < MIN_TOPOLOGY_CONFIDENCE || evidence.confidence > 1) {
+  if (evidence.incoherent || evidence.confidence < MIN_TOPOLOGY_CONFIDENCE || evidence.confidence > 1) {
     reset();
     // Keep existing execution and a previously confirmed drain target, but do not apply it.
     return result('low_confidence');

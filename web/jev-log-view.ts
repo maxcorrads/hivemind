@@ -2,12 +2,21 @@ import type { AdaptiveTopology } from '../src/shared/adaptive-topology.ts';
 import type { JevCall, JevCallLogView, JevCallSummary, JevCallTrigger, JevRequestGroup } from '../src/shared/jev-calls.ts';
 import { parseTopologyPlan } from '../src/shared/adaptive-topology-policy.ts';
 import { topologyLabel } from './AdaptiveRoutingPanel.tsx';
+import { incoherenceLabel, jevAnswerState, jevModelDisplay } from '../src/shared/jev-outcome.ts';
 
 /** The identifier Hivemind asked for; calls recorded before #134 only have it in the exact sent payload. */
 export function requestedModel(call: JevCall): string | null {
   if (call.requestedModel !== undefined) return call.requestedModel;
   const model = (call.sent as { model?: unknown } | null)?.model;
   return typeof model === 'string' ? model : null;
+}
+
+/**
+ * Requested and resolved model in one line (#209): the default alias resolving to a concrete version is normal
+ * (`jev-latest → jev-1.13.0`); only a pinned identifier that resolved to something else is flagged.
+ */
+export function modelLabel(call: JevCall): { text: string; mismatch: boolean } {
+  return jevModelDisplay(requestedModel(call), call.model);
 }
 
 export function workersLabel(n: number): string { return `${n} worker${n === 1 ? '' : 's'}`; }
@@ -33,6 +42,7 @@ const REASONS: Record<string, string> = {
   parallel_workstreams: 'Independent parallel workstreams',
   shared_coordination_pressure: 'Workers need shared coordination',
   orchestration_needed_no_capacity: 'Needs workers, but none are available',
+  incoherent_plan_vs_sufficiency: 'Jev chose Single while saying delegation helps (incoherent)',
   provider_timeout_preserve_current: 'Jev timed out · mode kept',
   provider_unavailable_preserve_current: 'Jev unavailable · mode kept',
   response_rejected_preserve_current: 'Jev answer rejected · mode kept',
@@ -43,6 +53,7 @@ export function reasonLabel(reason: string): string { return REASONS[reason] ?? 
 
 const ERRORS: Record<string, string> = {
   plan_not_offered: 'Jev chose a plan that was not offered',
+  // Rejected before #209; such answers are now accepted as incoherent (uncertain). Kept for calls recorded earlier.
   plan_contradicts_sufficiency: 'Jev chose Single while saying the brain alone is not enough',
   model_missing: 'The answer did not name the resolved model',
   missing_usage: 'The answer did not report token usage',
@@ -71,14 +82,22 @@ export function errorLabel(error: string | null | undefined): string {
 }
 
 /** Whether Jev's response arrived and was read: it was then rejected, not missing. */
-export function answerRejected(call: Pick<JevCallSummary, 'status' | 'model' | 'inputTokens' | 'reason'>): boolean {
-  return call.status === 'unavailable' && (call.reason === 'response_rejected_preserve_current' || call.model !== null || call.inputTokens !== null);
+export function answerRejected(call: Pick<JevCallSummary, 'status' | 'model' | 'inputTokens' | 'reason' | 'confidence'>): boolean {
+  return jevAnswerState({ ...call, providerStatus: call.status }) === 'rejected';
+}
+
+/** Why a valid answer was not acted on (#209), or null when routing could act on it. */
+export function uncertaintyLabel(call: Pick<JevCallSummary, 'status' | 'model' | 'inputTokens' | 'reason' | 'confidence' | 'incoherent'>): string | null {
+  const state = jevAnswerState({ ...call, providerStatus: call.status });
+  if (state === 'incoherent') return `uncertain · incoherent: ${incoherenceLabel(call.incoherent!)}`;
+  return state === 'uncertain' ? 'uncertain' : null;
 }
 
 /** Jev's answer in one line. */
-export function answerLabel(call: Pick<JevCallSummary, 'status' | 'targetTopology' | 'targetWorkers' | 'confidence' | 'error' | 'model' | 'inputTokens' | 'reason'>): string {
+export function answerLabel(call: Pick<JevCallSummary, 'status' | 'targetTopology' | 'targetWorkers' | 'confidence' | 'error' | 'model' | 'inputTokens' | 'reason' | 'incoherent'>): string {
   if (call.status === 'unavailable') return `${answerRejected(call) ? 'Answer rejected' : 'No answer'} · ${errorLabel(call.error)}`;
-  return `${topologyLabel(call.targetTopology)}${call.targetWorkers ? ` · ${workersLabel(call.targetWorkers)}` : ''} · ${percent(call.confidence)}`;
+  const uncertain = uncertaintyLabel(call);
+  return `${topologyLabel(call.targetTopology)}${call.targetWorkers ? ` · ${workersLabel(call.targetWorkers)}` : ''} · ${percent(call.confidence)}${uncertain ? ` · ${uncertain}` : ''}`;
 }
 
 /** What Hivemind did with the answer. */

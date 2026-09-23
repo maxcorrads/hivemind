@@ -9,7 +9,7 @@ const MAX_RESPONSE_BYTES = 128 * 1024;
 
 /**
  * A specific, local failure class for a Jev call (#207). It never carries a provider body, header or credential:
- * `plan_not_offered`, `plan_contradicts_sufficiency`, `malformed_answer:<question>`, `probabilities_invalid:<question>`,
+ * `plan_not_offered`, `malformed_answer:<question>`, `probabilities_invalid:<question>`,
  * `model_missing`, `missing_usage`, `malformed_response`, `response_too_large`, `request_too_large`, `http_<status>`,
  * `timeout`, `cancelled`, `network`, `invalid_model_setting`, `invalid_timeout`, `invalid_snapshot`, `internal_error`.
  */
@@ -214,20 +214,22 @@ export async function evaluateAdaptiveTopology(
     // Every offered plan is consistent by construction; this only guards the option builder itself.
     ensure(plan !== null && validTopologyTarget(target, usable), 'plan_not_offered');
     const singleSufficient = sufficiency.choice === 'sufficient';
-    // "Delegation materially helps" together with a zero-worker plan while workers are usable is not repaired into
-    // either reading. The reverse (sufficient, yet a delegating plan) is coherent: delegation can still pay off.
-    ensure(blocked || target.topology !== 'single' || singleSufficient || usable === 0, 'plan_contradicts_sufficiency');
+    // "Delegation materially helps" together with a zero-worker plan while workers are usable cannot both be followed
+    // and is not repaired into either reading (#209). It is still a valid answer, uncertain by definition: it is kept
+    // with this flag, and routing never acts on it (jevDecisionActionable). The reverse (sufficient, yet a delegating
+    // plan) is coherent: delegation can still pay off.
+    const incoherent = !blocked && target.topology === 'single' && !singleSufficient && usable > 0 ? 'plan_vs_sufficiency' as const : null;
     const confidence = Math.min(sufficiency.confidence, chosen.confidence, ...scores.map(s => s.confidence));
     options.onExchange?.({ sent, received, error: null });
     return {
       routeId, contractVersion: ADAPTIVE_TOPOLOGY_CONTRACT_VERSION,
       targetTopology: target.topology, targetWorkers: target.workers, confidence,
-      reason: blocked ? 'orchestration_needed_no_capacity' : target.topology === 'single' ? 'single_sufficient'
+      reason: incoherent ? 'incoherent_plan_vs_sufficiency' : blocked ? 'orchestration_needed_no_capacity' : target.topology === 'single' ? 'single_sufficient'
         : target.topology === 'brain_multi_room' ? 'shared_coordination_pressure'
           : target.topology === 'brain_multi_dm' ? 'parallel_workstreams' : 'one_worker_sufficient',
       // The resolved model may differ from the requested one (alias drift); both are kept, neither is rewritten.
       providerStatus: 'ok', requestedModel, model, latencyMs: Date.now() - started,
-      inputTokens, outputTokens, singleSufficient, needsOrchestration: blocked || !singleSufficient, error: null,
+      inputTokens, outputTokens, singleSufficient, needsOrchestration: blocked || !singleSufficient, error: null, incoherent,
     };
   } catch (error) {
     // Only local failure classes are kept: never a provider error body or header.

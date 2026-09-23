@@ -8,7 +8,7 @@ import { ADAPTIVE_TOPOLOGIES, type AdaptiveExecutionState, type AdaptiveLockScop
   type AdaptiveTopology, type AdaptiveTopologyDecision, type AdaptiveWorkerCapacity } from '../shared/adaptive-topology.ts';
 import { loadAdaptiveRouting, type AdaptiveRoutingFile } from './adaptive-config.ts';
 import { advanceTopologyPolicy, initialTopologyPolicy, minimumTopologyWorkers, topologyCheckpointSafe,
-  topologyIsEscalation, validTopologyTarget, MIN_TOPOLOGY_CONFIDENCE,
+  topologyIsEscalation, validTopologyTarget,
   type TopologyTarget, type TopologyPolicyState, type TopologySafety } from '../shared/adaptive-topology-policy.ts';
 import { ADAPTIVE_TOPOLOGY_CONTRACT_VERSION,
   type TopologyCapacitySnapshot, type TopologyEvaluationSnapshot } from './adaptive-topology-provider.ts';
@@ -17,6 +17,7 @@ import { openDelegations, readAdaptiveCapacity } from './adaptive-topology-capac
 import { AdaptiveAdmission, coordinationEventId } from './adaptive-topology-admission.ts';
 import { AdaptiveTopologyStore } from './adaptive-topology-store.ts';
 import type { JevCallSummary } from '../shared/jev-calls.ts';
+import { jevDecisionActionable, jevNotUsedLabel, topologyName } from '../shared/jev-outcome.ts';
 
 export { evaluateAdaptiveTopology, ADAPTIVE_TOPOLOGY_CONTRACT_VERSION } from './adaptive-topology-provider.ts';
 // Workers never drive Jev: only Human requests and brain coordination are evaluated.
@@ -286,7 +287,7 @@ export class AdaptiveTopologyRuntime {
       createdAt: state.updatedAt, kind, fromTopology: from, targetTopology: decision.targetTopology,
       appliedTopology: state.currentTopology, targetWorkers: decision.targetWorkers, appliedWorkers: state.workerBudget,
       confidence: decision.confidence, reason: decision.reason, providerStatus: decision.providerStatus, applied: changed, warning: state.warning,
-      routeId: decision.routeId };
+      routeId: decision.routeId, ...(decision.incoherent ? { incoherent: decision.incoherent } : {}) };
   }
   private readonly callRecorded = (summary: JevCallSummary) => this.deps.bus.emit('jev-call', summary);
   private saveEvent(event: AdaptiveRoutingEvent) {
@@ -401,14 +402,15 @@ export class AdaptiveTopologyRuntime {
     const forced: TopologyTarget | null = state.lockedTopology ? { topology: state.lockedTopology,
       workers: state.lockedTopology === 'single' ? 0 : state.lockedTopology === state.currentTopology ? state.workerBudget : Math.max(minimumTopologyWorkers(state.lockedTopology), state.desiredWorkers ?? 0) } : null;
     const next = advanceTopologyPolicy(policyOf(state), { target: { topology: decision.targetTopology, workers: decision.targetWorkers },
-      confidence: decision.confidence, available: decision.providerStatus === 'ok' }, safetyOf(capacity), forced);
+      confidence: decision.confidence, available: decision.providerStatus === 'ok', incoherent: Boolean(decision.incoherent) }, safetyOf(capacity), forced);
     state.currentTopology = next.applied.topology; state.workerBudget = next.applied.workers;
     state.desiredTopology = next.pending?.topology ?? null; state.desiredWorkers = next.pending?.workers ?? null;
     state.confirmations = next.confirmation.count; state.confirmationHighCount = next.confirmation.highCount;
     state.confirmationTopology = next.confirmation.target?.topology ?? null; state.confirmationWorkers = next.confirmation.target?.workers ?? null;
     state.eventsSinceChange = next.eventsSinceChange; state.recommendation = decision;
+    // An uncertain or incoherent answer is still an answer: Jev stays available and the policy simply keeps the mode.
     state.providerAvailable = decision.providerStatus === 'ok';
-    state.warning = !state.providerAvailable ? 'Jev unavailable · execution mode is not being revalidated' : null;
+    state.warning = !state.providerAvailable ? `${jevNotUsedLabel(decision) ?? 'Jev answer not used'} · current mode kept, not revalidated` : null;
     if (!forced && decision.providerStatus === 'ok' && capacity.workers.usableForExecution === 0 && (decision.needsOrchestration || state.orchestratedOnly)) {
       state.warning = 'Orchestration needed · no workers available'; state.desiredTopology = config.topologyFallback; state.desiredWorkers = minimumTopologyWorkers(config.topologyFallback);
     }
@@ -667,7 +669,8 @@ export class AdaptiveTopologyRuntime {
         if (fingerprint(previous) !== fingerprint(this.row(channel.id, brain.id)) || inherited !== (manual ? null : this.conversationLock(channel.id, brain.id))) throw new HiveError(409, 'Human routing state changed; review and retry the request');
         if (decision.providerStatus === 'ok' && (!plan.stable || !validTopologyTarget({ topology: decision.targetTopology, workers: decision.targetWorkers }, capacity.workers.usableForExecution)))
           decision = { ...decision, providerStatus: 'unavailable', confidence: null, reason: 'capacity_changed_during_initial_routing', targetTopology: 'single', targetWorkers: 0 };
-        const uncertain = decision.providerStatus !== 'ok' || (decision.confidence ?? 0) < MIN_TOPOLOGY_CONFIDENCE;
+        // Unavailable, rejected, stale, below MIN_TOPOLOGY_CONFIDENCE or incoherent: the fallback applies (#209).
+        const uncertain = !jevDecisionActionable(decision);
         let actual = locked ?? decision.targetTopology;
         if (!locked && uncertain) actual = currentConfig?.fallback === 'single' ? 'single' : currentConfig ? this.feasibleFallback(currentConfig, capacity.workers) : 'single';
         if (!locked && mode === 'orchestrated_auto' && actual === 'single' && capacity.workers.usableForExecution > 0) actual = currentConfig ? this.feasibleFallback(currentConfig, capacity.workers) : 'brain_one_worker';
@@ -675,7 +678,11 @@ export class AdaptiveTopologyRuntime {
         if (manual && required > capacity.workers.usableForExecution) throw new HiveError(409, `${manual} needs ${required} available workers; only ${capacity.workers.usableForExecution} are available`);
         let budget = locked || uncertain || actual !== decision.targetTopology ? this.manualBudget(actual, decision.targetWorkers, capacity.workers) : decision.targetWorkers;
         let desired: TopologyTarget | null = null;
-        let warning = decision.providerStatus === 'unavailable' ? 'Jev unavailable · initial mode used fallback' : null;
+        // Says precisely why Jev's answer was not used, and which mode was used instead. A Human lock is authoritative:
+        // an uncertain answer is then irrelevant, and only a failed call is surfaced.
+        const notUsed = jevNotUsedLabel(decision);
+        let warning = !notUsed ? null : !locked ? `${notUsed} · used fallback ${topologyName(actual)}`
+          : decision.providerStatus === 'unavailable' ? `${notUsed} · your ${topologyName(locked)} lock applies` : null;
         if (required > capacity.workers.usableForExecution || budget > capacity.workers.usableForExecution) {
           desired = { topology: actual, workers: required }; actual = 'single'; budget = 0; warning = 'Requested topology is waiting for worker capacity';
         }

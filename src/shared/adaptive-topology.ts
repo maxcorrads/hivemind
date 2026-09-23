@@ -59,7 +59,15 @@ export type AdaptiveTopologyDecision = {
    * `malformed_answer:<question>`, `http_503`, `timeout`). Absent or null on success and on decisions made before #207.
    */
   error?: string | null;
+  /**
+   * Set when Jev's answers were valid one by one but contradict each other (#209). Such an answer is accepted and
+   * recorded, but it is uncertain by definition: Hivemind never applies a transition from it. Absent or null otherwise.
+   */
+  incoherent?: AdaptiveIncoherence | null;
 };
+
+/** `plan_vs_sufficiency`: a zero-worker plan while saying delegation materially helps and workers are usable. */
+export type AdaptiveIncoherence = "plan_vs_sufficiency";
 
 export type AdaptiveRoutingEvent = {
   id: string;
@@ -81,6 +89,8 @@ export type AdaptiveRoutingEvent = {
   warning: string | null;
   /** The Jev decision this event consumed; links it to the Human-only call log. */
   routeId?: string;
+  /** Copied from the decision: its answers contradicted each other, so it was treated as uncertain (#209). */
+  incoherent?: AdaptiveIncoherence | null;
 };
 
 export type AdaptiveMonitoring = "active" | "pending" | "disabled" | "unavailable" | "completed";

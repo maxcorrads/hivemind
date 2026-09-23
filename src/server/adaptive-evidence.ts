@@ -5,6 +5,7 @@ import { classifyCapture, type EvidenceCaptureReason, type EvidenceCaptureView }
 import { Storage } from './storage.ts';
 import { validJevModel } from './adaptive-config.ts';
 import { ADAPTIVE_TOPOLOGY_CONTRACT_VERSION } from './adaptive-topology-provider.ts';
+import { jevAnswerState } from '../shared/jev-outcome.ts';
 
 export const EVIDENCE_VERSION = 'adaptive-evidence-v1';
 export const EVIDENCE_RUN_LIMIT = 50;
@@ -14,11 +15,18 @@ export type EvidenceScope = { executionId: string; channelId: string; projectId:
 export type EvidenceInput = { topology: string | null; workers: number; usableWorkers: number; policyVersion: string };
 type RunRow = { execution_id: string; snapshot: string };
 type Totals = { started: number; finished: number; ok: number; unavailable: number; usageObservations: number;
-  inputTokens: number; outputTokens: number; latencyMs: number; latencyObservations: number; prunedAttempts: number };
+  inputTokens: number; outputTokens: number; latencyMs: number; latencyObservations: number; prunedAttempts: number;
+  /**
+   * Subsets of `ok` (#209): answers below MIN_TOPOLOGY_CONFIDENCE or incoherent (`uncertain`), and of those the
+   * incoherent ones. Absent on runs recorded before #209.
+   */
+  uncertain?: number; incoherent?: number };
 export type EvidenceAttempt = { ordinal: number; phase: EvidenceScope['phase']; status: 'pending' | 'ok' | 'unavailable';
   currentTopology: string | null; currentWorkers: number; usableWorkers: number;
   targetTopology: string | null; targetWorkers: number | null; confidence: number | null;
   latencyMs: number | null; inputTokens: number | null; outputTokens: number | null; model: string | null;
+  /** `ok` attempts only (#209): whether routing could act on the answer. Absent on attempts recorded before it. */
+  certainty?: 'confident' | 'uncertain' | 'incoherent' | null;
   /** Requested Jev identifier (alias or pinned), kept apart from the resolved `model`. Absent before #134. */
   requestedModel?: string | null };
 type RunState = { policyVersion: string; firstRecordedAt: number; lastRecordedAt: number; totals: Totals; models: string[]; modelsTruncated: boolean;
@@ -96,7 +104,7 @@ export class AdaptiveEvidenceStore {
         requestedModels: [], requestedModelsTruncated: false, contractVersions: [],
         capture: newCapture(scope.phase),
         totals: { started: 0, finished: 0, ok: 0, unavailable: 0, usageObservations: 0,
-          inputTokens: 0, outputTokens: 0, latencyMs: 0, latencyObservations: 0, prunedAttempts: 0 },
+          inputTokens: 0, outputTokens: 0, latencyMs: 0, latencyObservations: 0, prunedAttempts: 0, uncertain: 0, incoherent: 0 },
       };
       if (state.policyVersion !== input.policyVersion) throw new Error('Evidence policy changed within execution');
       state.totals.started = add(state.totals.started, 1); state.lastRecordedAt = Date.now();
@@ -143,6 +151,13 @@ export class AdaptiveEvidenceStore {
       const known = safeInt(decision.inputTokens) && safeInt(decision.outputTokens);
       attempt.inputTokens = known ? decision.inputTokens : null; attempt.outputTokens = known ? decision.outputTokens : null;
       totals.finished = add(totals.finished, 1); totals[attempt.status] = add(totals[attempt.status], 1);
+      // An uncertain or incoherent answer is a successful call (#209): counted as `ok`, and in these subsets.
+      if (attempt.status === 'ok') {
+        const state = jevAnswerState(decision);
+        attempt.certainty = state === 'incoherent' ? 'incoherent' : state === 'uncertain' ? 'uncertain' : 'confident';
+        if (attempt.certainty !== 'confident' && totals.uncertain !== undefined) totals.uncertain = add(totals.uncertain, 1);
+        if (attempt.certainty === 'incoherent' && totals.incoherent !== undefined) totals.incoherent = add(totals.incoherent, 1);
+      }
       if (known) {
         totals.usageObservations = add(totals.usageObservations, 1);
         totals.inputTokens = add(totals.inputTokens, decision.inputTokens!);
@@ -172,7 +187,7 @@ export class AdaptiveEvidenceStore {
         policyVersion, firstRecordedAt: gap.firstAt, lastRecordedAt: gap.lastAt, models: [], modelsTruncated: false,
         requestedModels: [], requestedModelsTruncated: false, contractVersions: [], capture: newCapture(null),
         totals: { started: 0, finished: 0, ok: 0, unavailable: 0, usageObservations: 0,
-          inputTokens: 0, outputTokens: 0, latencyMs: 0, latencyObservations: 0, prunedAttempts: 0 },
+          inputTokens: 0, outputTokens: 0, latencyMs: 0, latencyObservations: 0, prunedAttempts: 0, uncertain: 0, incoherent: 0 },
       };
       state.capture ??= { ...newCapture(null), legacy: true };
       state.capture.gap = mergeGap(state.capture.gap, gap);
@@ -242,7 +257,8 @@ export function exportAdaptiveEvidence(db: DatabaseSync, executionId: string) {
       return { ordinal: a.ordinal, phase: a.phase, status: a.status, currentTopology: a.currentTopology,
         currentWorkers: a.currentWorkers, usableWorkers: a.usableWorkers, targetTopology: a.targetTopology,
         targetWorkers: a.targetWorkers, confidence: a.confidence, latencyMs: a.latencyMs,
-        inputTokens: a.inputTokens, outputTokens: a.outputTokens, requestedModel: a.requestedModel ?? null, model: a.model };
+        inputTokens: a.inputTokens, outputTokens: a.outputTokens, requestedModel: a.requestedModel ?? null, model: a.model,
+        certainty: a.certainty ?? null };
     });
   const hasPolicyEvents = Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='adaptive_topology_events'").get());
   const policyEvents = hasPolicyEvents ? db.prepare('SELECT snapshot FROM adaptive_topology_events WHERE execution_id=? ORDER BY rowid LIMIT 500')
@@ -272,6 +288,8 @@ export function exportAdaptiveEvidence(db: DatabaseSync, executionId: string) {
       capture: capture.capture, captureReasons: capture.reasons, aggregateCapture: aggregate.capture,
       collectionGap: gap && { missedBegins: gap.missedBegins, missedFinishes: gap.missedFinishes, unattributed: gap.unattributed } },
     overhead: { successfulAttempts: t.ok, unavailableAttempts: t.unavailable,
+      // Subsets of successfulAttempts (#209); null on runs recorded before these counters existed.
+      uncertainAttempts: t.uncertain ?? null, incoherentAttempts: t.incoherent ?? null,
       tokenObservations: t.usageObservations, unknownUsageAttempts: t.started - t.usageObservations,
       knownInputTokens: t.inputTokens, knownOutputTokens: t.outputTokens,
       totalInputTokens: usageComplete ? t.inputTokens : null, totalOutputTokens: usageComplete ? t.outputTokens : null,
