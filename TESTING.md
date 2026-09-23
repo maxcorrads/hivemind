@@ -24,7 +24,9 @@ its effective scope:
 - Node 24 unit and four historically timing-balanced integration shards run independently.
 - Node 22.13.0 runs the same full unit/integration scope with four timing-balanced integration shards; Ubuntu concurrency now makes the full 4-way split useful without the former macOS queue penalty.
 - The existing required gate names `Tests / Node 24` and `Tests / Node 22.13.0`
-  are aggregation jobs over all corresponding shards.
+  are aggregation jobs over all corresponding shards. `Tests / Node 24` also
+  requires `Browser / Chromium`, so a failing browser contract blocks merging
+  (Playwright retries stay at 0 so flakes remain visible).
 - Node 24 test jobs collect LCOV during their normal execution. `Coverage` merges
   those artifacts and enforces the unchanged 80% line / 75% branch / 75% function
   thresholds, so CI no longer executes the complete suite a third time.
@@ -76,11 +78,15 @@ in free prose: keep credentials out of test output and fixtures.
 CI uploads only sanitized text logs, with separate unit/integration/browser
 artifacts and seven-day retention. LCOV artifacts contain source paths and numeric
 coverage data only; the intermediate shard artifacts are short-lived and the
-merged report is retained for seven days. Raw Playwright trace/video/screenshot
-archives are deliberately **not uploaded**: binary visual data cannot be reliably
-redacted by a text filter. Developers may inspect the failure-only local synthetic
-trace under artifacts/playwright after reviewing its contents. No raw environments,
-credentials, provider reasoning or user workspace files are fixture inputs.
+merged report is retained for seven days. On a browser failure CI also uploads the
+failure-only Playwright trace/video/screenshot directory (artifacts/playwright) with
+the same seven-day retention. Binary visual data cannot be redacted by a text
+filter, so this is safe only because the browser suite is fully synthetic and
+hermetic: every `/api` call is answered by an in-test fixture and the shared
+fixture (tests/browser/fixtures.ts) aborts, and fails the test on, any request to
+a non-local host. Keep it that way: never feed real data into a browser fixture.
+No raw environments, credentials, provider reasoning or user workspace files are
+fixture inputs.
 
 ## Synthetic storage performance evidence
 
