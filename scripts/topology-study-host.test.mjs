@@ -32,11 +32,11 @@ function seedStartingWith(config, first) {
   throw new Error('no seed');
 }
 
-function setup({ wallMs = 20_000, expectedResolvedModel = null, first = null } = {}) {
+function setup({ wallMs = 20_000, expectedResolvedModel = null, first = null, repeats = 1 } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hivemind-study-host-'));
   writeFileSync(path.join(dir, 'input.txt'), 'sort 3 1 2\n');
   writeFileSync(path.join(dir, 'acceptance.mjs'), ACCEPTANCE);
-  const config = { evidenceKind: 'synthetic', versions, repeats: 1, seed: 29, freeWorkers: 2,
+  const config = { evidenceKind: 'synthetic', versions, repeats, seed: 29, freeWorkers: 2,
     workloads: [{ id: 'sort-fixture', version: 'v1', inputDigest: sha256(readFileSync(path.join(dir, 'input.txt'))),
       acceptanceDigest: sha256(readFileSync(path.join(dir, 'acceptance.mjs'))) }],
     limits: { wallMs, workloadTokens: 1_000 } };
@@ -58,7 +58,8 @@ function setup({ wallMs = 20_000, expectedResolvedModel = null, first = null } =
     serverImports: [path.join(here, 'fixtures/topology-study-fake-jev.mjs')], serverEnv,
     seatEnv: { FAKE_SEAT_CONTROL: control }, probeCheckout: () => ({ revision: REVISION, clean: true }),
     joinTimeoutMs: 20_000, pollMs: 100, acceptanceTimeoutMs: 10_000, seatRetryBackoffMs: 200 });
-  const execute = (options = {}) => runStudy({ runDir, host: host(options.serverEnv, options.hostOptions), authorization: study.studyId, maxTrials: options.maxTrials ?? Infinity });
+  const execute = (options = {}) => runStudy({ runDir, host: host(options.serverEnv, options.hostOptions), authorization: study.studyId, maxTrials: options.maxTrials ?? Infinity,
+    concurrency: options.concurrency ?? 1, availableMemory: options.availableMemory ?? (() => 64 * 1024 ** 3) });
   return { dir, runDir, study, setBehavior, execute, control, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
@@ -208,7 +209,8 @@ const fakeTmux = path.join(here, 'fixtures/topology-study-fake-tmux.mjs');
 const tmuxCalls = log => readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line));
 
 test('--watch opens one tmux window per trial with a pane per seat and never changes outcomes', { timeout: 120_000 }, async () => {
-  assert.equal(parseArgs(['run', '--run-dir', 'r', '--authorize-paid-run', 's', '--watch', '--max-trials', '1']).options['--watch'], true);
+  assert.deepEqual(parseArgs(['run', '--run-dir', 'r', '--authorize-paid-run', 's', '--watch', '--concurrency', '10']).options,
+    { '--run-dir': 'r', '--authorize-paid-run': 's', '--watch': true, '--concurrency': '10' });
   const ctx = setup();
   try {
     const log = path.join(ctx.dir, 'tmux.log');
@@ -241,4 +243,42 @@ test('--watch opens one tmux window per trial with a pane per seat and never cha
     const journal = readFileSync(path.join(broken.runDir, 'trials', broken.study.trials[0].id, 'journal.jsonl'), 'utf8');
     assert.ok(!/tmux|watch/i.test(journal), 'the viewer leaves no trace in the journal');
   } finally { broken.cleanup(); }
+});
+
+const journalRecords = (ctx, trialId) => readFileSync(path.join(ctx.runDir, 'trials', trialId, 'journal.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
+
+test('concurrent blocks share the load, and seat launches stay serialized across every running trial', { timeout: 180_000 }, async () => {
+  const ctx = setup({ repeats: 2 });
+  try {
+    assert.deepEqual(await ctx.execute({ concurrency: 10 }), { status: 'complete', trialId: null, executed: 10 });
+    const { study, report } = exportRun({ runDir: ctx.runDir });
+    assert.ok(study.trials.every(t => t.observed.outcome === 'passed'));
+    // Across all ten trials (two blocks at once), no opencode seat starts until the previous one has joined.
+    const trace = readFileSync(`${ctx.control}.trace-trials`, 'utf8').trim().split('\n').map(l => l.split(' '));
+    assert.equal(trace.filter(([kind]) => kind === 'start').length, 30);
+    for (let i = 0; i < trace.length; i += 2) assert.deepEqual([trace[i][0], trace[i + 1][0], trace[i + 1][1]], ['start', 'joined', trace[i][1]], `launch ${i / 2}`);
+    assert.equal(new Set(trace.map(([, seat]) => seat.split('/')[0])).size, 10);
+    for (const [index, t] of report.trials.entries()) {
+      assert.equal(t.load.concurrency, 10); assert.equal(t.load.blockIndex, Math.floor(index / 5));
+      assert.ok(t.load.concurrentWith.length >= 4 && !t.load.concurrentWith.includes(t.id), `${t.id} overlapped its block`);
+      assert.equal(journalRecords(ctx, t.id).find(r => r.type === 'started').concurrency, 10);
+    }
+    assert.ok(report.trials.some(t => t.load.concurrentWith.some(id => report.trials.find(o => o.id === id).load.blockIndex !== t.load.blockIndex)),
+      'two blocks ran side by side');
+    assert.deepEqual(report.concurrency.downgrades, []);
+  } finally { ctx.cleanup(); }
+});
+
+test('a provider 429 reported by a seat downgrades later scheduling to one block without touching running trials', { timeout: 180_000 }, async () => {
+  const ctx = setup({ repeats: 3 });
+  try {
+    ctx.setBehavior('complete', 40, { rateLimited: true });
+    assert.equal((await ctx.execute({ concurrency: 10 })).status, 'complete');
+    const { study, report } = exportRun({ runDir: ctx.runDir });
+    assert.ok(study.trials.every(t => t.observed.outcome === 'passed'), 'running trials are never killed');
+    assert.equal(report.concurrency.downgrades[0].reason, 'rate_limited');
+    assert.deepEqual([report.concurrency.downgrades[0].from, report.concurrency.downgrades[0].to], [10, 5]);
+    assert.ok(journalRecords(ctx, study.trials[0].id).find(r => r.type === 'completed').rateLimited);
+    assert.ok(report.trials.slice(10).every(t => t.load.concurrency === 5), 'the third block ran alone');
+  } finally { ctx.cleanup(); }
 });

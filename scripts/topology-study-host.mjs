@@ -39,7 +39,7 @@ export function workerPrompt(spec, index) {
   return [
     'Seat: worker',
     `You are worker seat ${index + 1} of a Hivemind topology-study trial. Use only the hivemind MCP tools and the workspace directory you were started in.`,
-    'Call join with role "worker" and then wait. Do only the work a brain assigns to you, report the outcome in its thread, and call wait again.',
+    'Call join with role "worker" and seniority "senior", then wait. Do only the work a brain assigns to you, report the outcome in its thread, and call wait again.',
     'Do not read files outside the workspace.',
     `Trial ${spec.trialId}; attempt ${spec.attempt}.`,
   ].join('\n');
@@ -117,19 +117,43 @@ function startSeat({ command, args, stdin, env, cwd, attemptDir, name, logName =
   const err = createWriteStream(path.join(attemptDir, `${logName}.stderr.log`), { flags: 'wx', mode: 0o600 });
   const child = spawn(command[0], [...command.slice(1), ...args], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
   const usage = liveUsage();
-  let spawnError = null, stderrTail = '';
-  child.stdout.on('data', chunk => { out.write(chunk); usage.push(chunk); });
-  child.stderr.on('data', chunk => { err.write(chunk); stderrTail = (stderrTail + chunk.toString('utf8')).slice(-8_192); });
+  let spawnError = null, stderrTail = '', rateLimited = false, pendingOut = '';
+  // Provider throttling shows up as opencode `error` events or on stderr; agent text and tool output are never scanned
+  // (a workload may legitimately talk about rate limits).
+  const scanOut = chunk => {
+    const lines = (pendingOut + chunk.toString('utf8')).split(/\r?\n/);
+    pendingOut = lines.pop() ?? '';
+    for (const line of lines) {
+      if (!line.startsWith('{"type":"error"')) continue;
+      try { if (RATE_LIMIT_ERROR.test(JSON.stringify(JSON.parse(line).error ?? ''))) rateLimited = true; } catch { /* not an event */ }
+    }
+  };
+  child.stdout.on('data', chunk => { out.write(chunk); usage.push(chunk); scanOut(chunk); });
+  child.stderr.on('data', chunk => {
+    err.write(chunk); stderrTail = (stderrTail + chunk.toString('utf8')).slice(-8_192);
+    if (RATE_LIMIT_ERROR.test(chunk.toString('utf8'))) rateLimited = true;
+  });
   child.stdin.on('error', () => undefined);
   child.stdin.end(stdin ?? undefined);
   child.on('error', error => { spawnError = error; });
   const closed = new Promise(resolve => child.on('close', () => { out.end(); err.end(); usage.finish(); resolve(); }));
-  return { name, child, closed, spawnError: () => spawnError, tokens: () => usage.latest(), stderrTail: () => stderrTail,
+  return { name, child, closed, spawnError: () => spawnError, tokens: () => usage.latest(), stderrTail: () => stderrTail, rateLimited: () => rateLimited,
     exited: () => child.exitCode !== null || child.signalCode !== null };
 }
 
 /** OpenCode keeps one local SQLite store per user; seats started at the same instant can fail on its lock. */
 export const SEAT_LOCK_ERROR = /database is locked/i;
+/** Provider throttling or quota exhaustion reported by a seat; the runner then schedules one block at a time. */
+export const RATE_LIMIT_ERROR = /\b429\b|rate[ _-]?limit|too many requests|quota/i;
+
+// Process-wide: concurrent trials never start two opencode processes at the same instant. The lock is held from a
+// seat's spawn until it joins, exits or `seatLaunchHoldMs` passes, whichever comes first.
+let seatLaunchChain = Promise.resolve();
+export function withSeatLaunchLock(fn) {
+  const run = seatLaunchChain.then(fn, fn);
+  seatLaunchChain = run.then(() => undefined, () => undefined);
+  return run;
+}
 
 function readEvidence(dbPath, executionId) {
   if (!existsSync(dbPath)) return { evidence: null, jevAttempts: 0 };
@@ -184,12 +208,13 @@ async function runAcceptance(acceptancePath, workspace, timeoutMs) {
  * @param {number} [options.joinTimeoutMs]  bound for the whole sequential seat start-up (all seats online)
  * @param {number} [options.seatLockRetries]  retries of a seat that exits on opencode's "database is locked" before joining
  * @param {number} [options.seatRetryBackoffMs]  wait before such a retry
+ * @param {number} [options.seatLaunchHoldMs]  longest time the process-wide launch lock is held for one seat start
  * @param {boolean} [options.watch]  open the live tmux viewer (also HIVEMIND_STUDY_WATCH=1); never affects trials
  * @param {object} [options.watcher]  injected viewer (tests)
  */
 export function createHivemindHost({ repoRoot, plan, env, seatCommand, serverImports = [], seatEnv = {}, serverEnv = {},
-  evidenceKind = 'live', probeCheckout = gitCheckout, joinTimeoutMs = 300_000, pollMs = 500, acceptanceTimeoutMs = 120_000,
-  seatLockRetries = 1, seatRetryBackoffMs = 2_000, watch = false, watcher = null }) {
+  evidenceKind = 'live', probeCheckout = gitCheckout, joinTimeoutMs = 600_000, pollMs = 500, acceptanceTimeoutMs = 120_000,
+  seatLockRetries = 1, seatRetryBackoffMs = 2_000, seatLaunchHoldMs = 5_000, watch = false, watcher = null }) {
   if (plan.host.name !== 'opencode') throw new Error('Only the opencode seat host is wired for live runs');
   const command = seatCommand ?? [String(env.OPENCODE_BIN ?? '').trim() || 'opencode'];
   const jevKey = String(env[JEV_KEY_ENV] ?? '').trim();
@@ -225,7 +250,8 @@ export function createHivemindHost({ repoRoot, plan, env, seatCommand, serverImp
     let server = null;
     const seats = [];
     const artifacts = ['server.log'];
-    const aborted = (reason, drift = [], detail = null) => ({ phase: 'aborted_before_request', reason, drift, detail });
+    const aborted = (reason, drift = [], detail = null) => ({ phase: 'aborted_before_request', reason, drift, detail,
+      rateLimited: seats.some(seat => seat.rateLimited()) });
     let requestSent = false;
     const cleanup = async () => {
       await Promise.all(seats.map(seat => stopChild(seat.child)));
@@ -276,10 +302,20 @@ export function createHivemindHost({ repoRoot, plan, env, seatCommand, serverImp
       let brain = null;
       for (const [name, prompt, role] of planned) {
         const before = (await online(role)).length; // this seat has joined once its role count grows past this
-        const entry = { seat: name, starts: 1, retries: [], joined: false, failure: null };
+        const entry = { seat: name, starts: 1, retries: [], joined: false, failure: null, lockWaitMs: [] };
         launchLog.push(entry);
-        let seat = launch(name, prompt);
-        seats.push(seat);
+        // `register` records the spawned process immediately, so cleanup stops it even if polling fails while locked.
+        const startLocked = (logName, register) => {
+          const queued = Date.now();
+          return withSeatLaunchLock(async () => {
+            entry.lockWaitMs.push(Date.now() - queued);
+            const started = launch(name, prompt, logName), heldUntil = Date.now() + seatLaunchHoldMs;
+            register(started);
+            while (Date.now() < heldUntil && !started.exited() && !signal?.aborted && (await online(role)).length <= before) await delay(pollMs);
+            return started;
+          });
+        };
+        let seat = await startLocked(name, spawned => seats.push(spawned));
         for (;;) {
           if (signal?.aborted) { writeLaunchLog(); return aborted('interrupted_before_request'); }
           const lost = seats.slice(0, -1).find(earlier => earlier.exited());
@@ -301,8 +337,7 @@ export function createHivemindHost({ repoRoot, plan, env, seatCommand, serverImp
             entry.retries.push({ reason: 'database_locked', exitCode: seat.child.exitCode, backoffMs: seatRetryBackoffMs });
             await delay(seatRetryBackoffMs);
             entry.starts++;
-            seat = launch(name, prompt, `${name}.retry-${entry.retries.length}`);
-            seats[seats.length - 1] = seat;
+            seat = await startLocked(`${name}.retry-${entry.retries.length}`, spawned => { seats[seats.length - 1] = spawned; });
             continue;
           }
           if (Date.now() >= deadline) {
@@ -375,7 +410,8 @@ export function createHivemindHost({ repoRoot, plan, env, seatCommand, serverImp
         jevAttempts, initialTopology, routingOverrides, outcome, interruption, wallMs,
         seatUsage: seats.map(seat => ({ seat: seat.name, tokens: seat.tokens() })),
         // opencode output does not expose a resolved provider model we can verify; unknown, never assumed.
-        resolvedWorkloadModels: null, acceptance, routerEvidence: spec.jevEnabled ? evidence : null, collectorWarnings, artifacts };
+        resolvedWorkloadModels: null, acceptance, routerEvidence: spec.jevEnabled ? evidence : null, collectorWarnings, artifacts,
+        rateLimited: seats.some(seat => seat.rateLimited()) };
     } catch (error) {
       // Before the Human request, nothing ran: retain the attempt as aborted. After it, the outcome is unknown.
       if (!requestSent) return aborted('harness_setup_failed', [], String(error?.message ?? error));

@@ -21,7 +21,12 @@ const behavior = control.behavior ?? 'complete';
 //   "lockFailOnce": ["brain", ...]   first start of that seat exits 1 with "database is locked", later starts succeed
 //   "lockFailAlways": ["worker-1"]   every start of that seat fails that way
 //   "exitBeforeJoin": ["worker-2"]   that seat exits 1 with an unrelated error
-const trace = line => appendFileSync(`${process.env.FAKE_SEAT_CONTROL}.trace`, `${line} ${seatName}\n`);
+//   "rateLimited": true              the brain reports a provider 429 as an opencode error event (it still completes)
+const trialTag = /Trial (\S+);/.exec(prompt)?.[1] ?? '?';
+const trace = line => {
+  appendFileSync(`${process.env.FAKE_SEAT_CONTROL}.trace`, `${line} ${seatName}\n`);
+  appendFileSync(`${process.env.FAKE_SEAT_CONTROL}.trace-trials`, `${line} ${trialTag}/${seatName}\n`);
+};
 trace('start');
 const lockMarker = `${process.env.FAKE_SEAT_CONTROL}.locked-${seatName}`;
 if ((control.lockFailAlways ?? []).includes(seatName) || ((control.lockFailOnce ?? []).includes(seatName) && !existsSync(lockMarker))) {
@@ -41,6 +46,7 @@ const usage = tokens => { if (behavior !== 'no_usage') console.log(JSON.stringif
 
 const joined = await call('/api/agent/join', { role, ...(role === 'worker' ? { seniority: 'mid' } : {}) });
 trace('joined');
+if (control.rateLimited && role === 'brain') console.log(JSON.stringify({ type: 'error', error: { name: 'APIError', data: { message: '429 Too Many Requests' } } }));
 usage(Math.floor((control.tokens ?? 40) / 2));
 if (role === 'worker') {
   if (behavior === 'double_join') await call('/api/agent/join', { role, seniority: 'junior' });
