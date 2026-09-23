@@ -1,6 +1,6 @@
 # Adaptive orchestration routing
 
-Hivemind's optional TypeSafe Jev integration is configured from **⇄ Adaptive routing** in the Human UI. The Phase 2 implementation in #128/#129 extends Phase 1 (#120/#126) from a one-time `single | orchestrated` recommendation to continuously evaluated execution topology.
+Hivemind's optional TypeSafe Jev integration is configured from **Settings → Adaptive routing** in the Human UI. The Phase 2 implementation in #128/#129 extends Phase 1 (#120/#126) from a one-time `single | orchestrated` recommendation to continuously evaluated execution topology.
 
 ## Which messages are routed
 
@@ -68,7 +68,7 @@ Delegation is evaluated **before** committing the new assignment, including when
 
 The same mutation is not counted twice merely because both pre- and post-action hooks exist. Stable event identities distinguish independent evidence from a retry. Retrying a committed send or task event reuses the existing operation and does not add another confidence vote.
 
-Agent mutation controllers serialize the classifier check and mutation boundary. Credentials are revalidated after asynchronous waits; a credential rotation cannot authorize a pending write through an old identity.
+Agent mutation controllers serialize the classifier check and mutation boundary. The agent's session key is revalidated after asynchronous waits; a session superseded by a resume cannot complete a pending write.
 
 This is execution policy, not a replacement for task, claim, channel or room authorization. In particular, existing claim conflict/revision semantics remain owned by TaskStore. Free-form messages still depend on accurate event/thread semantics; Hivemind cannot infer arbitrary off-platform tool use or work performed outside its coordination APIs.
 
