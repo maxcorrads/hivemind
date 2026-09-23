@@ -59,4 +59,22 @@ export type JevRequestGroup = {
   calls: JevCallSummary[];
 };
 
-export type JevCallLogView = { requests: JevRequestGroup[]; hasMore: boolean };
+/** `nextCursor` is opaque: pass it back as `cursor` to load the next (older) page; null when there is none. */
+export type JevCallLogView = { requests: JevRequestGroup[]; hasMore: boolean; nextCursor: string | null };
+
+/** Position after the last group of a page: groups are ordered by lastAt DESC, then executionId ASC. */
+export type JevCallCursor = { lastAt: number; executionId: string | null };
+
+export function encodeJevCallCursor(cursor: { lastAt: number; executionId: string }): string {
+  return `${cursor.lastAt}:${cursor.executionId}`;
+}
+
+/** Accepts `<lastAt>:<executionId>` or a legacy bare `<lastAt>` (boundary millisecond excluded). */
+export function decodeJevCallCursor(raw: string | null | undefined): JevCallCursor | null {
+  if (!raw) return null;
+  const colon = raw.indexOf(":");
+  const lastAt = Number(colon === -1 ? raw : raw.slice(0, colon));
+  if (!Number.isSafeInteger(lastAt) || lastAt < 0) return null;
+  const executionId = colon === -1 ? null : raw.slice(colon + 1);
+  return { lastAt, executionId: executionId || null };
+}

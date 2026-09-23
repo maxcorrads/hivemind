@@ -5,9 +5,9 @@ import path from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { Hive } from './hive.ts';
 import { createApp } from './app.ts';
-import { saveAdaptiveRouting } from './adaptive-routing.ts';
+import { saveAdaptiveRouting } from './adaptive-config.ts';
 import { jevTopologyResponse } from './fixtures/jev-topology.ts';
-import { JEV_CALLS_PER_PROJECT, jevCallLog } from './jev-call-log.ts';
+import { GROUPS_PER_PAGE, JEV_CALLS_PER_PROJECT, jevCallLog } from './jev-call-log.ts';
 import type { JevCall, JevCallLogView } from '../shared/jev-calls.ts';
 
 function fixture(t: TestContext) {
@@ -101,4 +101,46 @@ test('observations are logged without a brain and the history is bounded per pro
   f.hive.createProject(f.human, { slug: 'other', name: 'Other' });
   f.hive.deleteProject(f.human, 'chapter');
   assert.equal(Number(f.hive.db.prepare('SELECT COUNT(*) AS n FROM jev_calls').get()!.n), 0, 'Project deletion removes its Jev history');
+});
+
+test('pagination returns every request exactly once when groups share the page-boundary millisecond', async t => {
+  const f = fixture(t);
+  await f.hive.adaptiveTopology.stop();
+  const log = jevCallLog(f.hive.db);
+  const decision = { routeId: '', providerStatus: 'ok' as const, contractVersion: 'adaptive-routing-v2' as const, targetTopology: 'single' as const,
+    targetWorkers: 0, confidence: 0.9, reason: 'single_sufficient', model: 'jev-latest', latencyMs: 1, inputTokens: null, outputTokens: null,
+    singleSufficient: true, needsOrchestration: false } as unknown as Parameters<typeof log.record>[2];
+  let now = 5_000;
+  t.mock.method(Date, 'now', () => now);
+  const record = (executionId: string, at: number) => {
+    now = at;
+    log.record({ executionId, channelId: f.dm.id, projectId: f.dm.projectId, brainId: null, phase: 'observation',
+      trigger: { kind: 'observation', eventType: null } }, { sent: null, received: null, error: null }, { ...decision, routeId: `route-${executionId}-${at}` });
+  };
+  // Ten newer requests, then many requests whose last call lands on the same millisecond, straddling the first page boundary.
+  for (let i = 0; i < 10; i++) record(`newer-${String(i).padStart(3, '0')}`, 9_000 + i);
+  for (let i = 0; i < GROUPS_PER_PAGE + 20; i++) record(`tie-${String(i).padStart(3, '0')}`, 7_000);
+  record('tie-000', 6_000); // an earlier call does not move the group's lastAt
+  for (let i = 0; i < 5; i++) record(`older-${i}`, 1_000 + i);
+  const expected = 10 + GROUPS_PER_PAGE + 20 + 5;
+
+  const seen: string[] = [];
+  let cursor: string | null = null;
+  for (let page = 0; page < 10; page++) {
+    const query: string = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
+    const { status, body } = await f.get<JevCallLogView>(`/projects/chapter/jev-calls${query}`);
+    assert.equal(status, 200);
+    seen.push(...body.requests.map(group => group.executionId));
+    assert.equal(body.hasMore, body.nextCursor !== null, 'nextCursor is present exactly when more pages exist');
+    if (!body.nextCursor) break;
+    cursor = body.nextCursor;
+  }
+  assert.equal(seen.length, expected, 'No request is skipped or repeated across pages');
+  assert.equal(new Set(seen).size, expected);
+  assert.equal(seen.filter(id => id.startsWith('tie-')).length, GROUPS_PER_PAGE + 20);
+  assert.deepEqual(seen.slice(-5), ['older-4', 'older-3', 'older-2', 'older-1', 'older-0'], 'Newest activity first');
+
+  // Legacy `before=<ms>` keeps working and excludes the boundary millisecond.
+  const legacy = await f.get<JevCallLogView>('/projects/chapter/jev-calls?before=7000');
+  assert.deepEqual(legacy.body.requests.map(group => group.executionId), ['older-4', 'older-3', 'older-2', 'older-1', 'older-0']);
 });

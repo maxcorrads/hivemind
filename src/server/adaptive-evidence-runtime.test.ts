@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { Hive } from './hive.ts';
-import { saveAdaptiveRouting } from './adaptive-routing.ts';
+import { saveAdaptiveRouting } from './adaptive-config.ts';
 import { exportAdaptiveEvidence, EVIDENCE_RUN_LIMIT } from './adaptive-evidence.ts';
 import { jevTopologyResponse } from './fixtures/jev-topology.ts';
 
