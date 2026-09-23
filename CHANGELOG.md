@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.3.0](https://github.com/maxcorrads/hivemind/compare/v0.2.0...v0.3.0) (2026-09-23)
+
+
+### ⚠ BREAKING CHANGES
+
+* **routing:** nothing is enforced any more; clients relying on 409 admission, the lock endpoint, routing/lockScope, the directive or adaptiveRouting must stop doing so.
+* **mcp:** rewrite agent instructions with one home per rule ([#185](https://github.com/maxcorrads/hivemind/issues/185))
+* **identity:** resume no longer requires or reads a saved token, and the agent credential endpoints under /api/ui/projects/:project/agents are removed.
+
+### Features
+
+* add explicit Human-only Jev connection diagnostics ([#140](https://github.com/maxcorrads/hivemind/issues/140)) ([e30184c](https://github.com/maxcorrads/hivemind/commit/e30184c3412fe7666c64e0c28b531da6f48b80d9))
+* **benchmark:** add isolated paired-study runner for the Phase 2 topology protocol ([#197](https://github.com/maxcorrads/hivemind/issues/197)) ([b76c692](https://github.com/maxcorrads/hivemind/commit/b76c692c53d0ac2eb8d80a67796da58e502d0ee4))
+* **identity:** resume brains and workers by name without credentials ([#144](https://github.com/maxcorrads/hivemind/issues/144)) ([6797431](https://github.com/maxcorrads/hivemind/commit/67974310ff1b69938b23ecfd378ec1c7d24d71ef))
+* **mcp:** rewrite agent instructions with one home per rule ([#185](https://github.com/maxcorrads/hivemind/issues/185)) ([e66d281](https://github.com/maxcorrads/hivemind/commit/e66d281e696f7cadf64dd772fca19ebbd7a72043)), closes [#149](https://github.com/maxcorrads/hivemind/issues/149) [#165](https://github.com/maxcorrads/hivemind/issues/165)
+* **observability:** surface evidence-collector health and capture completeness ([#196](https://github.com/maxcorrads/hivemind/issues/196)) ([362bd6d](https://github.com/maxcorrads/hivemind/commit/362bd6dfe364324888bc643eceb19edd8fe960b7))
+* raise message body limit to 20,000 characters ([#206](https://github.com/maxcorrads/hivemind/issues/206)) ([4059e5b](https://github.com/maxcorrads/hivemind/commit/4059e5b51392c3ac0b0545bff0f91a0df563e8bf))
+* **routing:** make Jev advisory-only ([#212](https://github.com/maxcorrads/hivemind/issues/212)) ([c410336](https://github.com/maxcorrads/hivemind/commit/c410336b82d3e220156816e6afbf6756efbf5307))
+* **routing:** route every Human request to a brain through Jev ([#142](https://github.com/maxcorrads/hivemind/issues/142)) ([d9e64a1](https://github.com/maxcorrads/hivemind/commit/d9e64a1a60f0277b56317987a63665e8729c7ca7))
+* **routing:** support a pinned Jev model identifier for reproducible evaluation ([#194](https://github.com/maxcorrads/hivemind/issues/194)) ([3f9768b](https://github.com/maxcorrads/hivemind/commit/3f9768bd5a4669b6e5d141e795b2ddca09954921))
+* **ui:** add a Human-only Jev call history section ([#143](https://github.com/maxcorrads/hivemind/issues/143)) ([294cf1c](https://github.com/maxcorrads/hivemind/commit/294cf1c2ed0ac2bae1d71dc1323cec61b9103b3d))
+* **ui:** add a Routing log, a visible Launch agent entry and cursor paging for Jev history ([#176](https://github.com/maxcorrads/hivemind/issues/176)) ([768bc5b](https://github.com/maxcorrads/hivemind/commit/768bc5b9777ddd44f40c5d5efe50b7dd602b6405)), closes [#164](https://github.com/maxcorrads/hivemind/issues/164) [#153](https://github.com/maxcorrads/hivemind/issues/153) [#161](https://github.com/maxcorrads/hivemind/issues/161)
+* **ui:** keep archived channels in a collapsible sidebar section ([#213](https://github.com/maxcorrads/hivemind/issues/213)) ([f1858c2](https://github.com/maxcorrads/hivemind/commit/f1858c293d47bd12307d235fefe195daf3cecbee))
+* **ui:** show draining executions in the Routing panel ([#186](https://github.com/maxcorrads/hivemind/issues/186)) ([9ff5d95](https://github.com/maxcorrads/hivemind/commit/9ff5d95589c70810951b5504262f600f45a065d5))
+
+
+### Bug Fixes
+
+* **coordination:** unblock workers and report committed agent actions ([#180](https://github.com/maxcorrads/hivemind/issues/180)) ([cc8a3a0](https://github.com/maxcorrads/hivemind/commit/cc8a3a0a09f577325cdad5711b2935f38dec3f26))
+* **mcp:** spell out action shapes for task_event, room_event and decision_event ([#205](https://github.com/maxcorrads/hivemind/issues/205)) ([fc18e0d](https://github.com/maxcorrads/hivemind/commit/fc18e0d35b424d0c50c54553397763bc3262893c))
+* **routing:** ask Jev for one joint plan instead of topology and budget separately ([#208](https://github.com/maxcorrads/hivemind/issues/208)) ([e9b7609](https://github.com/maxcorrads/hivemind/commit/e9b7609030f5f9641dbf72b60dcd9b39364fcd4c)), closes [#207](https://github.com/maxcorrads/hivemind/issues/207)
+* **routing:** let superseded executions drain instead of blocking Human requests ([#182](https://github.com/maxcorrads/hivemind/issues/182)) ([2e3e6d8](https://github.com/maxcorrads/hivemind/commit/2e3e6d8de34a0ac1c6ed939eb1363df99fb94011))
+* **routing:** treat incoherent Jev answers as uncertain and label fallbacks precisely ([#210](https://github.com/maxcorrads/hivemind/issues/210)) ([3c6934c](https://github.com/maxcorrads/hivemind/commit/3c6934c2d8dd5ada8b4ce050c2eca5cd444730d1)), closes [#209](https://github.com/maxcorrads/hivemind/issues/209)
+* **ui:** self-host fonts, hold the thread-open scroll anchor and gate merges on the browser suite ([#177](https://github.com/maxcorrads/hivemind/issues/177)) ([5f70bcc](https://github.com/maxcorrads/hivemind/commit/5f70bcc99b503b66bcf1d0d6e739d7a648bc7688)), closes [#154](https://github.com/maxcorrads/hivemind/issues/154) [#155](https://github.com/maxcorrads/hivemind/issues/155)
+* **ui:** show sent messages and preserve thread scroll position ([#139](https://github.com/maxcorrads/hivemind/issues/139)) ([f881039](https://github.com/maxcorrads/hivemind/commit/f881039a60144e3c3894190a3e2e3d55a250d0c5))
+
 ## [0.2.0](https://github.com/maxcorrads/hivemind/compare/v0.1.0...v0.2.0) (2026-09-22)
 
 
