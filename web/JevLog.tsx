@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { JevCall, JevCallLogView, JevCallSummary, JevRequestGroup } from '../src/shared/jev-calls.ts';
 import { api } from './api.ts';
 import { topologyLabel } from './AdaptiveRoutingPanel.tsx';
-import { answerLabel, contextRows, outcomeLabel, percent, questionRows, reasonLabel, triggerLabel, workersLabel } from './jev-log-view.ts';
+import { answerLabel, appendOlderPage, contextRows, mergeRefreshedPage, outcomeLabel, percent, questionRows, reasonLabel, triggerLabel, workersLabel } from './jev-log-view.ts';
 
 type Props = {
   project: string;
@@ -15,7 +15,7 @@ type Props = {
 
 const time = (at: number) => new Date(at).toLocaleString([], { dateStyle: 'short', timeStyle: 'medium' });
 
-/** Human-only history of every exchange with Jev, grouped by the request that caused it. */
+/** Routing log: Human-only history of every exchange with Jev, grouped by the request that caused it. */
 export function JevLog({ project, tick, channelLabel, agentName, onOpenChannel }: Props) {
   const [view, setView] = useState<JevCallLogView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -30,39 +30,33 @@ export function JevLog({ project, tick, channelLabel, agentName, onOpenChannel }
   useEffect(() => {
     const controller = new AbortController();
     api.jevCalls(project, undefined, controller.signal).then(next => {
-      // A live refresh replaces the first page but keeps older pages already loaded.
-      setView(current => {
-        if (!current) return next;
-        const seen = new Set(next.requests.map(group => group.executionId));
-        return { requests: [...next.requests, ...current.requests.filter(group => !seen.has(group.executionId) &&
-          group.lastAt < (next.requests.at(-1)?.lastAt ?? 0))], hasMore: current.hasMore || next.hasMore };
-      });
+      setView(current => mergeRefreshedPage(current, next));
       setError(null);
     }).catch(reason => { if ((reason as Error)?.name !== 'AbortError') setError(String((reason as Error)?.message ?? reason)); });
     return () => controller.abort();
   }, [project, tick]);
   const older = () => {
-    const last = view?.requests.at(-1);
-    if (!last || loadingMore) return;
+    const cursor = view?.nextCursor;
+    if (!cursor || loadingMore) return;
     setLoadingMore(true);
-    api.jevCalls(project, last.lastAt).then(next => setView(current => current ? {
-      requests: [...current.requests, ...next.requests.filter(group => !current.requests.some(item => item.executionId === group.executionId))],
-      hasMore: next.hasMore } : next)).catch(reason => setError(String((reason as Error)?.message ?? reason)))
+    api.jevCalls(project, cursor).then(next => setView(current => appendOlderPage(current, next)))
+      .catch(reason => setError(String((reason as Error)?.message ?? reason)))
       .finally(() => setLoadingMore(false));
   };
   const calls = view?.requests.reduce((total, group) => total + group.callCount, 0) ?? 0;
   return <>
-    <header className="desk-h"><div><h1>Jev</h1>
-      <p>Every request Hivemind sent to Jev and its answer, grouped by your request. {view ? `${view.requests.length} request${view.requests.length === 1 ? '' : 's'} · ${calls} call${calls === 1 ? '' : 's'} shown.` : ''} Only you can see this history; it stays on this machine.</p>
+    <header className="desk-h"><div><h1>Routing log</h1>
+      <p className="desk-sub">Every request Hivemind sent to Jev (TypeSafe) and its answer.</p>
+      <p>Grouped by your request. {view ? `${view.requests.length} request${view.requests.length === 1 ? '' : 's'} · ${calls} call${calls === 1 ? '' : 's'} shown.` : ''} Only you can see this history; it stays on this machine.</p>
     </div></header>
     <div className="jev-log">
-      <div className="jev-requests" aria-label="Requests sent to Jev">
+      <div className="jev-requests" aria-label="Routing log requests">
         {error && <p className="err" role="alert">{error}</p>}
-        {!view && !error && <p className="empty">Loading Jev history…</p>}
-        {view?.requests.length === 0 && <p className="empty">No calls to Jev yet in this project. Enable Jev in Adaptive routing and write to a brain.</p>}
+        {!view && !error && <p className="empty">Loading the routing log…</p>}
+        {view?.requests.length === 0 && <p className="empty">Nothing in the routing log yet for this project. Enable Jev in Adaptive routing and write to a brain.</p>}
         {view?.requests.map(group => <RequestCard key={group.executionId} group={group} selected={selected}
           channelLabel={channelLabel} agentName={agentName} onSelect={setSelected} onOpenChannel={onOpenChannel} />)}
-        {view?.hasMore && <button type="button" className="text-btn" disabled={loadingMore} onClick={older}>
+        {view?.hasMore && view.nextCursor && <button type="button" className="text-btn" disabled={loadingMore} onClick={older}>
           {loadingMore ? 'Loading…' : 'Older requests'}</button>}
       </div>
       <div className="jev-detail" ref={detail}>

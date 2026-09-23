@@ -12,7 +12,7 @@ import {
   currentToken,
   hiveUrl,
 } from "./client/http.ts";
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync } from "node:fs";
 import type { Agent, Channel, Message, WaitResult } from "./shared/types.ts";
 import { parseJoinArgs } from "./shared/join-args.ts";
 
@@ -66,13 +66,13 @@ Environment: HIVEMIND_URL (default ${hiveUrl()})  HIVEMIND_TOKEN  HIVEMIND_HOME
 `);
 }
 
-function arg(args: string[], name: string): string | undefined {
+export function arg(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
   if (i === -1) return undefined;
   return args[i + 1];
 }
 
-function argRest(args: string[], name: string): string | undefined {
+export function argRest(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
   if (i === -1) return undefined;
   const parts: string[] = [];
@@ -84,8 +84,8 @@ function argRest(args: string[], name: string): string | undefined {
   return parts.join(" ") || undefined;
 }
 
-async function main() {
-  const argv = process.argv.slice(2);
+/** Runs one CLI command; exported so tests can drive every branch in-process. */
+export async function runCli(argv: string[]): Promise<void> {
   const cmd = argv[0];
   if (!cmd || cmd === "help" || cmd === "-h" || cmd === "--help") {
     help();
@@ -462,7 +462,19 @@ async function main() {
   throw new Error(`unknown command ${cmd}`);
 }
 
-main().catch((err) => {
-  console.error(String(err.message || err));
-  process.exit(1);
-});
+/** True only when this module is the process entrypoint (`tsx src/cli.ts …`), not when imported. */
+export function isCliEntrypoint(entry = process.argv[1], self = fileURLToPath(import.meta.url)): boolean {
+  if (!entry) return false;
+  try {
+    return realpathSync(entry) === realpathSync(self);
+  } catch {
+    return false;
+  }
+}
+
+if (isCliEntrypoint()) {
+  runCli(process.argv.slice(2)).catch((err) => {
+    console.error(String(err.message || err));
+    process.exit(1);
+  });
+}
