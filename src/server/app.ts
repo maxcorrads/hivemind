@@ -14,6 +14,7 @@ import { launchContext, projectPlugins, saveProjectPlugin, setProjectPluginAvail
 import { BotIngressBudget, readLimitedJson, assertLocalHumanRequest, BOT_JSON_BYTES, PLUGIN_REQUEST_BYTES, CREDENTIAL_JSON_BYTES } from "./ingress.ts";
 import { adaptiveRoutingPublic, saveAdaptiveRouting } from "./adaptive-routing.ts";
 import { jevCallLog } from "./jev-call-log.ts";
+import { decodeJevCallCursor } from "../shared/jev-calls.ts";
 import { installJevDiagnostics } from './adaptive-routing-diagnostics.ts';
 import { assignAdaptiveTask, mutateAdaptiveTask, mutateAdaptiveRoom, sendAdaptiveAgentMessage, setAdaptiveThreadStatus } from './adaptive-topology-actions.ts';
 
@@ -87,8 +88,8 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   // Human-only history of every Jev exchange, grouped by the request that caused it.
   const projectRef = (ref: string) => { try { return hive.getProjectBySlug(ref); } catch { return hive.getProject(ref); } };
   ui.get('/projects/:id/jev-calls', c => {
-    const before = c.req.query('before');
-    return c.json(jevCallLog(hive.db).view(projectRef(c.req.param('id')).id, before ? Number(before) : undefined));
+    const cursor = decodeJevCallCursor(c.req.query('cursor') ?? c.req.query('before'));
+    return c.json(jevCallLog(hive.db).view(projectRef(c.req.param('id')).id, cursor));
   });
   ui.get('/projects/:id/jev-calls/:callId', c => c.json({ call: jevCallLog(hive.db).get(projectRef(c.req.param('id')).id, c.req.param('callId')) }));
   ui.get("/channels/:id/adaptive-routing", c => c.json(hive.adaptiveTopology.view(hive.getAgent("human"), c.req.param("id"))));
