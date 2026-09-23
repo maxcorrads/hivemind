@@ -13,9 +13,11 @@ import { parseProjectSlug } from "../shared/project.ts";
 import { launchContext, projectPlugins, saveProjectPlugin, setProjectPluginAvailability, pluginErrorMessage } from "./plugins.ts";
 import { BotIngressBudget, readLimitedJson, assertLocalHumanRequest, BOT_JSON_BYTES, PLUGIN_REQUEST_BYTES, CREDENTIAL_JSON_BYTES } from "./ingress.ts";
 import { adaptiveRoutingPublic, saveAdaptiveRouting, shouldRouteHumanMessage } from "./adaptive-routing.ts";
+import { installJevDiagnostics } from './adaptive-routing-diagnostics.ts';
 import { assignAdaptiveTask, mutateAdaptiveTask, mutateAdaptiveRoom, sendAdaptiveAgentMessage, setAdaptiveThreadStatus } from './adaptive-topology-actions.ts';
 
 export type AppHooks = {
+  jevDiagnosticFetch?: typeof fetch;
   telegramRunning?: () => boolean;
   reloadTelegram?: () => boolean | Promise<boolean>;
   configureTelegram?: (input: TelegramFileInput) => Promise<boolean>;
@@ -46,6 +48,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     await validateRequest(c.req.raw);
     await next();
   });
+  const jevDiagnostics = installJevDiagnostics(ui, hive, hooks.jevDiagnosticFetch);
   ui.get("/launch-context", c => {
     const slug = c.req.query("project");
     return c.json(launchContext(hive.home, c.req.url, slug ? hive.getProjectBySlug(slug) : undefined));
@@ -77,6 +80,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     hive.getAgent("human");
     const saved = saveAdaptiveRouting(hive.home, await readLimitedJson(c.req.raw, CREDENTIAL_JSON_BYTES));
     hive.adaptiveTopology.settingsChanged();
+    jevDiagnostics.settingsChanged();
     return c.json(saved);
   });
   ui.get("/channels/:id/adaptive-routing", c => c.json(hive.adaptiveTopology.view(hive.getAgent("human"), c.req.param("id"))));

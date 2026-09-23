@@ -2,6 +2,7 @@ import { Modal } from "./Modal.tsx";
 import { useEffect, useState } from "react";
 import { api, type AdaptiveRoutingSettings } from "./api.ts";
 import type { AdaptiveTopology } from "../src/shared/adaptive-topology.ts";
+import { JevConnectionTest } from "./JevConnectionTest.tsx";
 
 export function AdaptiveRoutingSettings({ onClose, onSaved }: { onClose: () => void; onSaved?: () => void }) {
   const [settings, setSettings] = useState<AdaptiveRoutingSettings | null>(null);
@@ -28,6 +29,8 @@ export function AdaptiveRoutingSettings({ onClose, onSaved }: { onClose: () => v
   }, []);
 
   const canSave = Boolean(settings) && !busy && (!enabled || settings!.apiKeySet || apiKey.trim().length > 0);
+  const dirty = !settings || Boolean(apiKey.trim()) || enabled !== settings.enabled ||
+    fallback !== settings.fallback || topologyFallback !== settings.topologyFallback;
 
   return (
     <Modal onClose={() => { if (!busy) onClose(); }}>
@@ -80,6 +83,7 @@ export function AdaptiveRoutingSettings({ onClose, onSaved }: { onClose: () => v
           />
         </label>
         <p className="help-p">The API key stays in your private local configuration.</p>
+        <JevConnectionTest savedSettings={settings} disabled={busy || dirty} />
         <details className="settings-disclosure"><summary>Fallback and advanced options</summary>
         <label>
           Initial fallback when Jev is uncertain or unavailable
@@ -109,7 +113,7 @@ export function AdaptiveRoutingSettings({ onClose, onSaved }: { onClose: () => v
         </details>
         <details className="settings-disclosure"><summary>What data is sent to Jev?</summary>
         <p className="help-p">New brain DMs send your request and project name/slug to TypeSafe. Ongoing checks send the current topology, worker capacity, task/dependency/blocker counts, recent coordination events, locks and the previous decision.</p>
-        <p className="help-p">Repository contents, full message history and Hivemind credentials are not sent. Thread replies and ordinary channel messages are not routed.</p>
+        <p className="help-p">Repository contents, full message history and Hivemind credentials are not sent. Thread replies and channel coordination events can trigger ongoing checks, but do not start a new routed Human request.</p>
         </details>
         {error && <p className="err">{error}</p>}
         {enabled && settings && !settings.apiKeySet && !apiKey.trim() && (
