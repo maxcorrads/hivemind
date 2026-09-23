@@ -1,4 +1,4 @@
-import type { TaskCoordinationHost } from './services/ports.ts';
+import type { TaskCoordinationDeps } from './services/ports.ts';
 import { HiveError, type Agent } from '../shared/types.ts';
 import type { TaskContract, TaskSnapshot } from '../shared/tasks.ts';
 import { CLAIM_LIMITS, claimState, overlappingPaths, type ClaimAction, type TaskClaim, type TaskCoordinationView } from '../shared/task-claims.ts';
@@ -7,15 +7,15 @@ type ClaimRow = { id: string; claim: string; worker_id: string; contract_version
 
 /** Advisory metadata only. All mutations are called inside TaskStore's writer transaction. */
 export class TaskCoordination {
-  constructor(private hive: TaskCoordinationHost) {}
-  private get db() { return this.hive.storage.db; }
+  constructor(private readonly deps: TaskCoordinationDeps) {}
+  private get db() { return this.deps.storage.db; }
   private snapshot(id: string, projectId: string | null): TaskSnapshot | undefined {
     const row = this.db.prepare(`SELECT r.snapshot FROM task_records r JOIN channels c ON c.id = r.channel_id
       WHERE r.id = ? AND c.project_id = ?`).get(id, projectId) as { snapshot: string } | undefined;
     return row ? JSON.parse(row.snapshot) as TaskSnapshot : undefined;
   }
   private visible(actor: Agent, task: TaskSnapshot | undefined): task is TaskSnapshot {
-    return !!task && actor.role !== 'bot' && this.hive.canSeeChannel(actor, this.hive.getChannel(task.channelId));
+    return !!task && actor.role !== 'bot' && this.deps.channels.canSeeChannel(actor, this.deps.channels.getChannel(task.channelId));
   }
   /** Walk only a bounded same-project graph, never expose invisible ancestor content. */
   validateDependencies(actor: Agent, contract: TaskContract, targetId?: string) {
@@ -39,7 +39,7 @@ export class TaskCoordination {
     }
   }
   private visibleClaims(actor: Agent, task: TaskSnapshot): ClaimRow[] {
-    const projectId = this.hive.getChannel(task.channelId).projectId;
+    const projectId = this.deps.channels.getChannel(task.channelId).projectId;
     return this.db.prepare(`SELECT r.id, r.worker_id, json_extract(r.snapshot, '$.contractVersion') AS contract_version, json_extract(r.snapshot, '$.claim') AS claim
       FROM channels c JOIN task_records r ON r.channel_id = c.id
       WHERE c.project_id = ? AND r.id != ? AND json_extract(r.snapshot, '$.claim.state') = 'held'
@@ -59,14 +59,14 @@ export class TaskCoordination {
     return { items: items.slice(0, 12), truncated: rows.length > CLAIM_LIMITS.project || items.length > 12 };
   }
   preview(actor: Agent, task: TaskSnapshot, paths: string[]) {
-    if (actor.role !== 'brain' || !this.hive.canPost(actor, this.hive.getChannel(task.channelId)))
+    if (actor.role !== 'brain' || !this.deps.channels.canPost(actor, this.deps.channels.getChannel(task.channelId)))
       throw new HiveError(403, 'Only a brain with task-channel access can preview advisory claims');
     const conflicts = this.overlaps(actor, task, paths, []);
     return { taskId: task.id, revision: task.revision, overlaps: conflicts.items, truncated: conflicts.truncated,
       warning: 'Read-only advisory preview; no ownership reserved. Only visible declared intents are compared. Recheck on claim; references do not grant access.' };
   }
   view(actor: Agent, task: TaskSnapshot): TaskCoordinationView {
-    const projectId = this.hive.getChannel(task.channelId).projectId;
+    const projectId = this.deps.channels.getChannel(task.channelId).projectId;
     const dependencies = task.contract.dependencies.map(taskId => {
       const dependency = this.snapshot(taskId, projectId);
       return { taskId, status: !this.visible(actor, dependency) ? 'unavailable' as const :
@@ -77,7 +77,7 @@ export class TaskCoordination {
     return { dependencies, claim: claimState(task), overlaps: overlaps.items, truncated: overlaps.truncated };
   }
   assertReady(task: TaskSnapshot) {
-    const projectId = this.hive.getChannel(task.channelId).projectId;
+    const projectId = this.deps.channels.getChannel(task.channelId).projectId;
     if (task.contract.dependencies.some(id => this.snapshot(id, projectId)?.state !== 'accepted_complete'))
       throw new HiveError(409, 'An immediate prerequisite is not accepted-complete; inspect the task dependency view');
     if (claimState(task) === 'uncertain')
@@ -116,7 +116,7 @@ export class TaskCoordination {
       COALESCE(SUM(json_extract(r.snapshot, '$.claim.workerId') = ?), 0) AS worker
       FROM channels c JOIN task_records r ON r.channel_id = c.id WHERE c.project_id = ? AND r.id != ?
         AND json_extract(r.snapshot, '$.claim.state') = 'held'`).get(actor.id, task.workerId,
-      this.hive.getChannel(task.channelId).projectId, task.id) as { total: number; coordinator: number; worker: number };
+      this.deps.channels.getChannel(task.channelId).projectId, task.id) as { total: number; coordinator: number; worker: number };
     if (counts.total >= CLAIM_LIMITS.project || counts.coordinator >= CLAIM_LIMITS.coordinator || counts.worker >= CLAIM_LIMITS.worker)
       throw new HiveError(429, 'Advisory claim capacity reached; explicitly release finished or uncertain claims');
     task.claim = { version: (old?.version ?? 0) + 1, coordinatorId: actor.id, coordinatorName: actor.name,
