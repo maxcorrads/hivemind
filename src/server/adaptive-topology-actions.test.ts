@@ -8,6 +8,8 @@ import { createApp } from './app.ts';
 import { saveAdaptiveRouting } from './adaptive-config.ts';
 import { jevTopologyResponse } from './fixtures/jev-topology.ts';
 import { readAdaptiveCapacity } from './adaptive-topology-capacity.ts';
+import { coordinationEventId, settleAdaptiveFollowUps } from './adaptive-topology-admission.ts';
+import { HiveError } from '../shared/types.ts';
 import type { AdaptiveTopology } from '../shared/adaptive-topology.ts';
 import type { TaskSnapshot } from '../shared/tasks.ts';
 
@@ -27,13 +29,24 @@ async function fixture(t: TestContext) {
   const app = createApp(hive);
   let target: AdaptiveTopology = 'single';
   let calls = 0;
+  // A held Jev call models a slow classifier: it answers only once the test releases it.
+  const held: Array<{ matches: (call: number, body: string) => boolean; gate: Promise<void>; release: () => void }> = [];
   t.mock.method(globalThis, 'fetch', async (url: unknown, init?: RequestInit) => {
     assert.equal(String(url), 'https://api.typesafe.ai/v1/systemone');
-    calls++;
-    return Response.json(jevTopologyResponse(String(init?.body), target));
+    const call = ++calls, body = String(init?.body);
+    await Promise.all(held.filter(item => item.matches(call, body)).map(item => item.gate));
+    return Response.json(jevTopologyResponse(body, target));
   });
+  const hold = (matches: (call: number, body: string) => boolean) => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    held.push({ matches, gate, release });
+    return release;
+  };
   saveAdaptiveRouting(dir, { enabled: true, apiKey: 'fixture-not-a-live-key' });
   t.after(async () => {
+    for (const item of held) item.release();
+    await settleAdaptiveFollowUps(hive);
     await hive.adaptiveTopology.stop();
     hive.db.close(); rmSync(dir, { recursive: true, force: true });
   });
@@ -60,7 +73,7 @@ async function fixture(t: TestContext) {
   });
   const state = () => hive.adaptiveTopology.view(human, dm.id).state!;
   return { hive, human, brain, otherBrain, workers, dm, otherDm, workerDm, app, post, start, assign, taskEvent, exec,
-    state, calls: () => calls, choose: (mode: AdaptiveTopology) => { target = mode; } };
+    state, hold, calls: () => calls, choose: (mode: AdaptiveTopology) => { target = mode; } };
 }
 
 test('a Single delegation is checked once, then admitted and linked atomically; committed retry does not reclassify', async t => {
@@ -251,4 +264,106 @@ test('delegation must name one of the brain\'s active executions; parallel reque
   const task = (await allowed.json() as { task: TaskSnapshot }).task;
   const linked = f.hive.db.prepare('SELECT execution_id FROM adaptive_topology_tasks WHERE task_id=?').get(task.id);
   assert.equal(linked?.execution_id, direct.executionId);
+});
+
+test('a brain report naming a worker who cannot read the channel is a reference, not a delegation', async t => {
+  const f = await fixture(t);
+  f.choose('brain_one_worker'); await f.start();
+  const worker = f.workers[0]!.agent.name;
+  const report = await f.post(f.brain.token, `/channels/${f.dm.id}/messages`, {
+    body: `Update: @${worker} finished the parser.`, requestId: 'report-worker',
+  });
+  assert.equal(report.status, 200, await report.clone().text());
+  assert.equal(Number(f.hive.db.prepare('SELECT count(*) AS n FROM adaptive_topology_messages').get()!.n), 0);
+  assert.equal(readAdaptiveCapacity(f.hive, f.state()).activeWorkers, 0, 'A reference reserves no worker');
+  const group = f.hive.createChannel(f.human, { name: 'crew', type: 'private', project: 'chapter',
+    memberNames: [f.brain.agent.name, worker] });
+  const unnamed = await f.post(f.brain.token, `/channels/${group.id}/messages`, {
+    body: `@${worker} please take the parser.`, requestId: 'group-mention',
+  });
+  assert.equal(unnamed.status, 400, 'A mention the worker receives is still a delegation');
+  assert.match(await unnamed.text(), /executionId is required/);
+  const delegated = await f.post(f.brain.token, `/channels/${group.id}/messages`, {
+    body: `@${worker} please take the parser.`, requestId: 'group-mention-named', executionId: f.exec(),
+  });
+  assert.equal(delegated.status, 200, await delegated.clone().text());
+  assert.equal(readAdaptiveCapacity(f.hive, f.state()).activeWorkers, 1);
+});
+
+/** Fails instead of hanging when a send is (wrongly) queued behind a held Jev call. */
+async function within<T>(pending: T | Promise<T>, what: string, ms = 2_000): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error(`${what} waited for another brain's Jev call`)), ms); });
+  try { return await Promise.race([pending, timeout]); } finally { clearTimeout(timer); }
+}
+
+test('a slow Jev call for one brain never delays workers or other brains in the same project', async t => {
+  const f = await fixture(t);
+  f.choose('brain_one_worker');
+  await f.start(); await f.start(f.otherBrain, f.otherDm);
+  const first = f.calls() + 1, release = f.hold(call => call === first);
+  let slowSettled = false;
+  const slow = Promise.resolve(f.post(f.brain.token, `/channels/${f.dm.id}/messages`, {
+    body: 'Checking in on the plan.', eventType: 'progress', requestId: 'slow-brain',
+  })).finally(() => { slowSettled = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  const worker = await within(f.post(f.workers[0]!.token, `/channels/${f.workerDm.id}/messages`, {
+    body: 'Unrelated status update.', requestId: 'worker-dm',
+  }), 'A worker send');
+  assert.equal(worker.status, 200, await worker.clone().text());
+  const other = await within(f.post(f.otherBrain.token, `/channels/${f.otherDm.id}/messages`, {
+    body: 'Independent progress.', eventType: 'progress', requestId: 'other-brain',
+  }), 'Another brain\'s send');
+  assert.equal(other.status, 200, await other.clone().text());
+  assert.equal(slowSettled, false, 'The slow brain is still waiting for Jev');
+  release();
+  assert.equal((await slow).status, 200);
+});
+
+test('project-wide capacity revalidation runs after the assignment is answered', async t => {
+  const f = await fixture(t);
+  f.choose('brain_one_worker');
+  await f.start(); await f.start(f.otherBrain, f.otherDm);
+  const otherExecution = f.exec(f.otherBrain)!;
+  const evaluated = () => Boolean(f.hive.db.prepare('SELECT 1 FROM adaptive_topology_evaluated WHERE execution_id=? AND event_id=?')
+    .get(otherExecution, coordinationEventId(f.brain.agent.id, 'capacity', 'capacity-after-lane')));
+  // Only the capacity revalidation (of the other execution) is slow.
+  const release = f.hold((_call, body) => body.includes('"capacity_change"'));
+  const assigned = await within(f.assign('capacity-after-lane'), 'The assignment');
+  assert.equal(assigned.status, 200, await assigned.clone().text());
+  const next = await within(f.post(f.brain.token, `/channels/${f.dm.id}/messages`, {
+    body: 'Still tracking the delegated work.', eventType: 'progress', requestId: 'lane-free',
+  }), 'The next brain action');
+  assert.equal(next.status, 200, 'The brain lane is not held by other executions\' revalidation');
+  assert.equal(evaluated(), false, 'Revalidation is still waiting for Jev');
+  release();
+  await settleAdaptiveFollowUps(f.hive);
+  assert.equal(evaluated(), true, 'The other execution saw the capacity change');
+});
+
+test('a committed task review or thread close is reported as committed when post-commit routing fails', async t => {
+  const f = await fixture(t);
+  f.choose('brain_one_worker'); await f.start();
+  const assigned = await f.assign('warned-task');
+  assert.equal(assigned.status, 200, await assigned.clone().text());
+  const task = (await assigned.json() as { task: TaskSnapshot }).task;
+  assert.equal((await f.taskEvent(task, f.workers[0]!.token, 'warned-accept', { type: 'accept' })).status, 200);
+  assert.equal((await f.taskEvent(task, f.workers[0]!.token, 'warned-result', { type: 'result', result })).status, 200);
+  t.mock.method(f.hive.adaptiveTopology, 'afterAgentAction', async () => { throw new HiveError(409, 'Adaptive execution changed'); });
+  const reviewed = await f.taskEvent(task, f.brain.token, 'warned-review', {
+    type: 'review', decision: 'accepted', summary: 'Verified fixture result.', evidenceSeqs: [],
+  });
+  assert.equal(reviewed.status, 200, await reviewed.clone().text());
+  const body = await reviewed.json() as { adaptiveRouting: unknown; routingWarning?: string };
+  assert.equal(body.adaptiveRouting, null);
+  assert.match(body.routingWarning ?? '', /Adaptive execution changed/);
+  assert.equal(f.hive.tasks.get(f.human, task.id).state, 'accepted_complete');
+  const sent = await f.post(f.brain.token, `/channels/${f.dm.id}/messages`, { body: 'Wrapping up.', requestId: 'warned-thread' });
+  const root = (await sent.json() as { id: string }).id;
+  const closed = await f.post(f.brain.token, `/threads/${root}/status`, { status: 'done' });
+  assert.equal(closed.status, 200, await closed.clone().text());
+  const thread = await closed.json() as { thread: { status: string }; adaptiveRouting: unknown; routingWarning?: string };
+  assert.equal(thread.thread.status, 'done');
+  assert.equal(thread.adaptiveRouting, null);
+  assert.match(thread.routingWarning ?? '', /Adaptive execution changed/);
 });
