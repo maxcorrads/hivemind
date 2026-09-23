@@ -41,7 +41,7 @@ async function mount(t: import('node:test').TestContext, hash: string) {
     await hive.adaptiveTopology.stop(); hive.db.close(); rmSync(dir, { recursive: true, force: true });
   });
   await act(async () => root.render(<App />));
-  const slug = hive.listProjects()[0]!.slug;
+  const slug = hive.projects.listProjects()[0]!.slug;
   const button = (text: string | RegExp, scope: ParentNode = host) => [...scope.querySelectorAll('button')]
     .find(item => typeof text === 'string' ? item.textContent?.trim() === text : text.test(item.textContent ?? '')) as HTMLButtonElement | undefined;
   return { hive, host, slug, button };

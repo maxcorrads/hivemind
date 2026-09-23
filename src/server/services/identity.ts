@@ -75,6 +75,18 @@ export class IdentityService implements AgentDirectory {
     return this.mapAgent(row);
   }
 
+  /** The agent, or null when it does not exist (e.g. removed since it was referenced). */
+  findAgent(id: string): Agent | null {
+    const row = this.db.prepare("SELECT * FROM agents WHERE id = ?").get(id) as AgentRow | undefined;
+    return row ? this.mapAgent(row) : null;
+  }
+
+  /** Ids of a project's workers. */
+  projectWorkerIds(projectId: string): string[] {
+    return (this.db.prepare("SELECT id FROM agents WHERE project_id = ? AND role = 'worker'").all(projectId) as { id: string }[])
+      .map((row) => row.id);
+  }
+
   getAgentByName(name: string): Agent | null {
     const row = this.db.prepare("SELECT * FROM agents WHERE lower(name) = lower(?)").get(name) as
       | AgentRow

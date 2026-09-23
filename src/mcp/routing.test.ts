@@ -34,7 +34,7 @@ test('real CLI and MCP share opt-in cards and advisory choices without changing 
   const server = startServer({ hive, port: 0, telegram: false }), client = new Client({ name: 'routing-fixture', version: '1' });
   let transport: StdioClientTransport | undefined;
   try {
-    const port = await server.ready, brain = hive.join({ role: 'brain' }), worker = hive.join({ role: 'worker', seniority: 'mid' });
+    const port = await server.ready, brain = hive.identity.join({ role: 'brain' }), worker = hive.identity.join({ role: 'worker', seniority: 'mid' });
     const task = hive.tasks.assign(brain.agent, { requestId: 'one-task', worker: worker.agent.name,
       contract: { objective: 'Fixture', scope: [], nonGoals: [], acceptanceCriteria: ['Review'], evidenceSeqs: [], dependencies: [] } }).task;
     const env = (token: string) => childEnv({ PATH: process.env.PATH ?? '', HIVEMIND_TOKEN: token, HIVEMIND_URL: `http://127.0.0.1:${port}`, HIVEMIND_HOME: path.join(dir, 'client') });

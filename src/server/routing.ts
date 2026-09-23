@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import type { RoutingHost } from './services/ports.ts';
+import type { RoutingDeps } from './services/ports.ts';
 import type { Agent } from '../shared/types.ts';
 import { HiveError } from '../shared/types.ts';
 import { validated } from '../shared/api-contract.ts';
@@ -9,15 +9,15 @@ import { ROUTING_LIMITS, setCapabilitiesSchema, suggestWorkersSchema, routingOut
 
 /** Opt-in declarations and limited, explicitly classified review evidence; never an assignment engine. */
 export class RoutingStore {
-  constructor(private hive: RoutingHost) {}
-  private get db() { return this.hive.storage.db; }
+  constructor(private readonly deps: RoutingDeps) {}
+  private get db() { return this.deps.storage.db; }
   private configuration(card: CapabilityCard) {
     return createHash('sha256').update(JSON.stringify([card.model, card.host,
       [...card.capabilities].sort(), [...card.modes].sort(), card.availableContext])).digest('hex');
   }
   private worker(actor: Agent, id: string) {
     validated(z.string().uuid(), id);
-    const worker = this.hive.getAgent(id);
+    const worker = this.deps.identity.getAgent(id);
     if (worker.role !== 'worker' || (actor.role !== 'human' && actor.projectId !== worker.projectId) || actor.role === 'bot')
       throw new HiveError(403, 'Worker capability is unavailable in this scope');
     if (actor.role === 'worker' && actor.id !== id) throw new HiveError(403, 'Workers can read only their own capability card');
@@ -32,7 +32,7 @@ export class RoutingStore {
   set(actor: Agent, raw: unknown): CapabilityView {
     if (actor.role !== 'worker' || !actor.projectId) throw new HiveError(403, 'Only a worker can opt in with its own capability card');
     const input = validated(setCapabilitiesSchema, raw);
-    return this.hive.storage.transaction(() => {
+    return this.deps.storage.transaction(() => {
       const previous = this.get(actor, actor.id);
       if ((previous?.revision ?? 0) !== input.expectedRevision) throw new HiveError(409, 'Capability changed; read its revision before saving');
       const count = Number(this.db.prepare('SELECT COUNT(*) AS n FROM worker_capabilities WHERE project_id = ?').get(actor.projectId)!.n);
@@ -48,18 +48,18 @@ export class RoutingStore {
   private task(actor: Agent, id: string) {
     if (actor.role !== 'brain' && actor.role !== 'human') throw new HiveError(403, 'Only Human or a brain can inspect routing');
     validated(z.string().uuid(), id);
-    return this.hive.tasks.get(actor, id);
+    return this.deps.tasks.get(actor, id);
   }
   recordOutcome(actor: Agent, id: string, raw: unknown) {
     const input = validated(routingOutcomeSchema, raw);
-    return this.hive.storage.transaction(() => {
+    return this.deps.storage.transaction(() => {
       const task = this.task(actor, id);
       if (actor.id !== task.assignerId || actor.role !== 'brain') throw new HiveError(403, 'Only the assigning reviewer can classify a task outcome');
       if (task.revision !== input.expectedRevision) throw new HiveError(409, 'Task revision changed');
       if (!task.review || !['accepted_complete', 'changes_requested'].includes(task.state)) throw new HiveError(409, 'An actual assigning-brain review is required');
       const capability = this.get(actor, task.workerId);
       if (!capability || !capability.card.enabled || capability.revision !== input.capabilityRevision) throw new HiveError(409, 'Read the opted-in capability revision and explicitly confirm its declared configuration');
-      const configuration = this.configuration(capability.card), project = this.hive.getChannel(task.channelId).projectId;
+      const configuration = this.configuration(capability.card), project = this.deps.channels.getChannel(task.channelId).projectId;
       const old = this.db.prepare('SELECT review_revision, category, configuration FROM routing_outcomes WHERE task_id = ?').get(id);
       if (old && (old.category !== input.category || old.configuration !== configuration)) throw new HiveError(409, 'An outcome cannot be relabelled as another category or configuration');
       if (old?.review_revision === task.revision) return { recorded: true, duplicate: true };
@@ -76,37 +76,40 @@ export class RoutingStore {
   }
   suggest(actor: Agent, id: string, raw: unknown): RoutingSuggestions {
     const input = validated(suggestWorkersSchema, raw), requiredCapabilities = input.requiredCapabilities ?? [], task = this.task(actor, id);
-    const channel = this.hive.getChannel(task.channelId), project = channel.projectId;
-    const rows = this.db.prepare(`SELECT c.worker_id, c.revision, c.card, c.configuration, a.name FROM worker_capabilities c
-      JOIN agents a ON a.id = c.worker_id WHERE c.project_id = ? AND a.project_id = ? AND a.role = 'worker'
-      ORDER BY c.worker_id LIMIT ?`).all(project, project, ROUTING_LIMITS.cards + 1) as
-      Array<{ worker_id: string; revision: number; card: string; configuration: string; name: string }>;
+    const channel = this.deps.channels.getChannel(task.channelId), project = channel.projectId;
+    const workers = JSON.stringify(project ? this.deps.identity.projectWorkerIds(project) : []);
+    const rows = this.db.prepare(`SELECT c.worker_id, c.revision, c.card, c.configuration FROM worker_capabilities c
+      WHERE c.project_id = ? AND c.worker_id IN (SELECT value FROM json_each(?))
+      ORDER BY c.worker_id LIMIT ?`).all(project, workers, ROUTING_LIMITS.cards + 1) as
+      Array<{ worker_id: string; revision: number; card: string; configuration: string }>;
+    // Caller-visible scope: Human sees every channel; others only channels they are a member of.
+    const memberOf = JSON.stringify(actor.role === 'human' ? [] : this.deps.channels.memberChannelIds(actor.id));
+    const visibleInProject = JSON.stringify(this.deps.channels.channelIdsIn(project, actor));
     if (rows.length > ROUTING_LIMITS.cards) throw new HiveError(429, 'Legacy capability roster exceeds budget');
     const candidates: WorkerSuggestion[] = [];
     for (const row of rows) {
       const card = JSON.parse(row.card) as CapabilityCard;
-      const worker = this.hive.getAgent(row.worker_id);
+      const worker = this.deps.identity.getAgent(row.worker_id);
       if (!card.enabled || card.availability === 'unavailable' || !card.modes.includes(input.mode) ||
         !requiredCapabilities.every(tag => card.capabilities.includes(tag)) ||
         (input.minContext !== undefined && (card.availableContext === null || card.availableContext < input.minContext)) ||
         (input.mode === 'review' && task.workerId === worker.id) ||
-        !this.hive.canSeeChannel(worker, channel) || !this.hive.canPost(worker, channel)) continue;
+        !this.deps.channels.canSeeChannel(worker, channel) || !this.deps.channels.canPost(worker, channel)) continue;
       // Caller-visible evidence only, not private task metadata or a cross-project score.
       const evidence = this.db.prepare(`SELECT o.accepted FROM routing_outcomes o JOIN task_records r ON r.id=o.task_id
-        JOIN channels c ON c.id=r.channel_id WHERE o.project_id=? AND o.worker_id=? AND o.category=? AND o.configuration=?
+        WHERE o.project_id=? AND o.worker_id=? AND o.category=? AND o.configuration=?
           AND r.worker_id=o.worker_id AND json_extract(r.snapshot,'$.revision')=o.review_revision
-          AND o.recorded_at>=? AND (?='human' OR EXISTS(SELECT 1 FROM channel_members m WHERE m.channel_id=c.id AND m.agent_id=?))
+          AND o.recorded_at>=? AND (?='human' OR r.channel_id IN (SELECT value FROM json_each(?)))
         ORDER BY o.recorded_at DESC, o.task_id LIMIT ?`).all(project, worker.id, input.category, row.configuration,
-          Date.now() - ROUTING_LIMITS.retentionMs, actor.role, actor.id, ROUTING_LIMITS.evidence) as Array<{ accepted: number }>;
+          Date.now() - ROUTING_LIMITS.retentionMs, actor.role, memberOf, ROUTING_LIMITS.evidence) as Array<{ accepted: number }>;
       const accepted = evidence.reduce((n, e) => n + e.accepted, 0), interval = outcomeInterval(accepted, evidence.length);
       if (evidence.length < (input.minReviewedResults ?? 0) ||
         (input.minimumAcceptedRate !== undefined && (!interval || interval[0] < input.minimumAcceptedRate))) continue;
-      const workload = this.db.prepare(`SELECT COUNT(*) AS n FROM task_records r JOIN channels c ON c.id=r.channel_id
-        WHERE c.project_id=? AND r.worker_id=? AND r.id!=? AND json_extract(r.snapshot,'$.state') NOT IN ('accepted_complete','rejected')
-          AND (?='human' OR EXISTS(SELECT 1 FROM channel_members m WHERE m.channel_id=c.id AND m.agent_id=?))`)
-        .get(project, worker.id, task.id, actor.role, actor.id) as { n: number };
+      const workload = this.db.prepare(`SELECT COUNT(*) AS n FROM task_records r
+        WHERE r.channel_id IN (SELECT value FROM json_each(?)) AND r.worker_id=? AND r.id!=? AND json_extract(r.snapshot,'$.state') NOT IN ('accepted_complete','rejected')`)
+        .get(visibleInProject, worker.id, task.id) as { n: number };
       if (workload.n >= card.maxInProgress) continue;
-      candidates.push({ workerId: worker.id, name: row.name, capabilityRevision: row.revision, card,
+      candidates.push({ workerId: worker.id, name: worker.name, capabilityRevision: row.revision, card,
         visibleInProgress: workload.n, workloadIncomplete: actor.role !== 'human', providerCost: null,
         evidence: { reviewed: evidence.length, accepted, acceptedRate: evidence.length ? accepted / evidence.length : null,
           interval95: interval, basis: 'Caller-visible, reviewer-classified outcomes for the declared configuration and category; not independent verification of runtime model or code quality.' },
@@ -128,9 +131,9 @@ export class RoutingStore {
     const input = validated(routingOverrideSchema, raw), task = this.task(actor, id);
     if (actor.role !== 'human' && actor.id !== task.assignerId) throw new HiveError(403, 'Only Human or the assigning brain may record a routing override');
     if (task.revision !== input.expectedRevision) throw new HiveError(409, 'Task changed; reread before recording a choice');
-    const worker = this.worker(actor, input.workerId), channel = this.hive.getChannel(task.channelId);
-    if (worker.projectId !== channel.projectId || !this.hive.canSeeChannel(worker, channel)) throw new HiveError(403, 'Selected worker lacks task-channel access');
-    const message = this.hive.postMessage(actor, { channel: task.channelId, threadId: task.id,
+    const worker = this.worker(actor, input.workerId), channel = this.deps.channels.getChannel(task.channelId);
+    if (worker.projectId !== channel.projectId || !this.deps.channels.canSeeChannel(worker, channel)) throw new HiveError(403, 'Selected worker lacks task-channel access');
+    const message = this.deps.messages.postMessage(actor, { channel: task.channelId, threadId: task.id,
       requestId: 'routing-' + createHash('sha256').update(input.requestId).digest('hex'), eventType: 'decision',
       body: `Advisory routing choice: ${worker.name}\nTask revision ${task.revision}\nReason: ${input.reason}\nThis records a preference only; task ownership, claims, contract and running terminals are unchanged.` });
     return { message, assigned: false };

@@ -4,7 +4,7 @@ import { claimActionSchema, claimPreviewSchema, isClaimAction } from '../shared/
 import { validated } from '../shared/api-contract.ts';
 import { checkpointFreshness, type HandoffSummary } from '../shared/handoffs.ts';
 import { createHash, randomUUID } from 'node:crypto';
-import type { TaskStoreHost } from './services/ports.ts';
+import type { TaskStoreDeps } from './services/ports.ts';
 import { BODY_MAX, HiveError, type Agent, type Channel } from '../shared/types.ts';
 import { assignTaskSchema, taskEventSchema, taskBody, type TaskContract, type TaskEnvelope, type TaskSnapshot } from '../shared/tasks.ts';
 import { admitAdaptiveTask, linkAdaptiveTask } from './adaptive-topology-admission.ts';
@@ -14,10 +14,10 @@ type StoredEvent = { message_id: string; task_id: string; request_hash: string }
 
 export class TaskStore {
   private coordination: TaskCoordination;
-  constructor(private hive: TaskStoreHost) {
-    this.coordination = new TaskCoordination(hive);
+  constructor(private readonly deps: TaskStoreDeps) {
+    this.coordination = new TaskCoordination(deps);
   }
-  private get db() { return this.hive.storage.db; }
+  private get db() { return this.deps.storage.db; }
   private row(id: string): Row {
     const row = this.db.prepare('SELECT * FROM task_records WHERE id = ?').get(id) as Row | undefined;
     if (!row) throw new HiveError(404, 'Task not found');
@@ -26,10 +26,10 @@ export class TaskStore {
   has(id: string) { return Boolean(this.db.prepare('SELECT 1 FROM task_records WHERE id = ?').get(id)); }
   get(actor: Agent, id: string): TaskSnapshot {
     const row = this.row(id);
-    if (actor.role === 'bot' || !this.hive.canSeeChannel(actor, this.hive.getChannel(row.channel_id)))
+    if (actor.role === 'bot' || !this.deps.channels.canSeeChannel(actor, this.deps.channels.getChannel(row.channel_id)))
       throw new HiveError(403, 'Cannot read this task');
     const task = JSON.parse(row.snapshot) as TaskSnapshot;
-    return { ...task, room: this.hive.rooms.taskInfo(task), coordination: this.coordination.view(actor, task), receivedAt: row.received_at,
+    return { ...task, room: this.deps.rooms.taskInfo(task), coordination: this.coordination.view(actor, task), receivedAt: row.received_at,
       state: task.state === 'sent' && row.received_at !== null ? 'delivered' : task.state };
   }
   previewClaim(actor: Agent, id: string, raw: unknown) {
@@ -42,9 +42,7 @@ export class TaskStore {
     validated(z.string().uuid(), id);
     const task = this.get(actor, id);
     const checkpoint = task.checkpoint ?? null;
-    const newerMessages = checkpoint ? Boolean(this.db.prepare(
-      'SELECT 1 FROM messages WHERE channel_id = ? AND thread_id = ? AND seq > ? LIMIT 1',
-    ).get(task.channelId, task.id, checkpoint.messageSeq)) : false;
+    const newerMessages = checkpoint ? this.deps.messageQueries.hasNewerInThread(task.channelId, task.id, checkpoint.messageSeq) : false;
     const handoff = { taskId: task.id, channelId: task.channelId, workerId: task.workerId,
       objective: task.contract.objective, revision: task.revision, contractVersion: task.contractVersion,
       state: task.state, checkpoint, ...(task.claim ? { claim: task.claim, coordination: task.coordination } : {}), ...checkpointFreshness(task), newerMessages,
@@ -58,14 +56,13 @@ export class TaskStore {
     if (actor.role !== 'brain' && actor.role !== 'worker') throw new HiveError(403, 'Only task participants have a resume inbox');
     if (before !== undefined) validated(z.string().uuid(), before);
     const participant = actor.role === 'worker' ? 'r.worker_id' : "json_extract(r.snapshot, '$.assignerId')";
+    // Channels of the actor's project it is a member of; only brains see brains-type channels.
+    const channels = JSON.stringify(this.deps.channels.channelIdsIn(actor.projectId, actor, true));
     const rows = this.db.prepare(`SELECT r.id FROM task_records r
-      JOIN channels c ON c.id = r.channel_id
-      WHERE ${participant} = ? AND c.project_id = ?
-        AND EXISTS (SELECT 1 FROM channel_members cm WHERE cm.channel_id = r.channel_id AND cm.agent_id = ?)
-        AND (? = 'brain' OR c.type != 'brains')
+      WHERE ${participant} = ? AND r.channel_id IN (SELECT value FROM json_each(?))
         AND json_extract(r.snapshot, '$.state') != 'accepted_complete'
         ${before ? 'AND r.id < ?' : ''}
-      ORDER BY r.id DESC LIMIT 6`).all(actor.id, actor.projectId, actor.id, actor.role, ...(before ? [before] : [])) as { id: string }[];
+      ORDER BY r.id DESC LIMIT 6`).all(actor.id, channels, ...(before ? [before] : [])) as { id: string }[];
     const page = rows.slice(0, 5);
     const items: HandoffSummary[] = page.map(row => {
       const task = this.get(actor, row.id);
@@ -79,13 +76,13 @@ export class TaskStore {
       next: 'Read get_handoff for the current task before acting. An identity resume does not restore model memory or verify saved work.' };
   }
   private worker(actor: Agent, name: string) {
-    const worker = this.hive.getAgentByName(name);
+    const worker = this.deps.identity.getAgentByName(name);
     if (!worker || worker.role !== 'worker' || worker.projectId !== actor.projectId)
       throw new HiveError(400, 'Choose a worker in your project');
     return worker;
   }
   private evidence(actor: Agent, sequences: number[]) {
-    for (const seq of sequences) this.hive.getVisibleMessage(actor, seq);
+    for (const seq of sequences) this.deps.messageQueries.getVisibleMessage(actor, seq);
   }
   private workerEvidence(worker: Agent, sequences: number[]) {
     try { this.evidence(worker, sequences); }
@@ -100,8 +97,8 @@ export class TaskStore {
     this.coordination.validateDependencies(actor, contract, taskId);
   }
   private writable(actor: Agent, worker: Agent, channel: Channel) {
-    if (!this.hive.canSeeChannel(actor, channel) || !this.hive.canPost(actor, channel) ||
-      !this.hive.canSeeChannel(worker, channel) || !this.hive.canPost(worker, channel))
+    if (!this.deps.channels.canSeeChannel(actor, channel) || !this.deps.channels.canPost(actor, channel) ||
+      !this.deps.channels.canSeeChannel(worker, channel) || !this.deps.channels.canPost(worker, channel))
       throw new HiveError(403, 'Both participants must already have access to the task channel');
   }
   private hash(input: unknown) { return createHash('sha256').update(JSON.stringify(input)).digest('hex'); }
@@ -112,13 +109,13 @@ export class TaskStore {
     if (!old) return;
     const task = this.get(actor, old.task_id);
     if (old.request_hash !== hash) throw new HiveError(409, 'requestId was already used for a different task event');
-    return { task, message: this.hive.getMessageById(old.message_id), duplicate: true };
+    return { task, message: this.deps.messageQueries.getMessageById(old.message_id), duplicate: true };
   }
-  private transaction<T>(f: () => T): T { return this.hive.storage.transaction(f); }
+  private transaction<T>(f: () => T): T { return this.deps.storage.transaction(f); }
   private write(actor: Agent, task: TaskSnapshot, envelope: TaskEnvelope, requestId: string, hash: string, initial: boolean) {
     // Admission observes live capacity inside this transaction; a stale preflight cannot oversubscribe workers.
     const adaptiveExecution = envelope.action.type === 'assign' || envelope.action.type === 'revise'
-      ? admitAdaptiveTask(this.hive, actor, task, requestId) : null;
+      ? admitAdaptiveTask(this.deps, actor, task, requestId) : null;
     const body = taskBody(envelope);
     if (body.length > BODY_MAX || Buffer.byteLength(JSON.stringify(envelope)) > 16000)
       throw new HiveError(400, 'Task envelope is too large; use a compact contract and evidence references');
@@ -127,16 +124,14 @@ export class TaskStore {
     const now = Date.now();
     const recipients = JSON.stringify([...new Set([target, ...(envelope.previousWorkerId ? [envelope.previousWorkerId] : []),
       ...(isClaimAction(envelope.action.type) ? [task.assignerId, task.workerId] : [])])]);
-    this.db.prepare(`INSERT INTO messages(id, channel_id, thread_id, author_id, body, kind, event_type, mentions, created_at, recipients)
-      VALUES (?, ?, ?, ?, ?, 'chat', ?, ?, ?, ?)`)
-      .run(id, task.channelId, initial ? null : task.id, actor.id, body,
-        envelope.action.type === 'block' || envelope.action.type === 'reject' ? 'blocker' :
-          envelope.action.type === 'assign' || envelope.action.type === 'revise' ? 'assignment' :
-            envelope.action.type === 'review' ? 'decision' :
-              envelope.action.type === 'accept' ? 'acknowledgement' :
-                envelope.action.type === 'checkpoint' ? 'progress' : 'action_required',
-        recipients, now, recipients);
-    const seq = Number(this.db.prepare('SELECT seq FROM messages WHERE id = ?').get(id)!.seq);
+    const seq = this.deps.messages.insertCoordinationMessage({ id, channelId: task.channelId, threadId: initial ? null : task.id,
+      authorId: actor.id, body,
+      eventType: envelope.action.type === 'block' || envelope.action.type === 'reject' ? 'blocker' :
+        envelope.action.type === 'assign' || envelope.action.type === 'revise' ? 'assignment' :
+          envelope.action.type === 'review' ? 'decision' :
+            envelope.action.type === 'accept' ? 'acknowledgement' :
+              envelope.action.type === 'checkpoint' ? 'progress' : 'action_required',
+      mentions: recipients, createdAt: now, recipients });
     task.lastEventSeq = seq; task.updatedAt = now;
     if (envelope.action.type === 'checkpoint' && task.checkpoint) {
       task.checkpoint.messageId = id; task.checkpoint.messageSeq = seq;
@@ -146,10 +141,10 @@ export class TaskStore {
       ON CONFLICT(id) DO UPDATE SET worker_id=excluded.worker_id, dispatch_seq=excluded.dispatch_seq,
         received_at=excluded.received_at, snapshot=excluded.snapshot`)
       .run(task.id, task.channelId, task.workerId, task.dispatchSeq, task.receivedAt, JSON.stringify(this.record(task)));
-    linkAdaptiveTask(this.hive, task.id, adaptiveExecution);
+    linkAdaptiveTask(this.deps, task.id, adaptiveExecution);
     this.db.prepare('INSERT INTO task_events(message_id, task_id, actor_id, request_id, request_hash, envelope) VALUES (?, ?, ?, ?, ?, ?)')
       .run(id, task.id, actor.id, requestId, hash, JSON.stringify(envelope));
-    this.db.prepare('INSERT OR IGNORE INTO threads(id, channel_id, status) VALUES (?, ?, NULL)').run(task.id, task.channelId);
+    this.deps.messages.ensureThread(task.id, task.channelId);
     return id;
   }
   private record(task: TaskSnapshot) {
@@ -157,8 +152,8 @@ export class TaskStore {
     return record;
   }
   private published(actor: Agent, taskId: string, messageId: string) {
-    const task = this.get(actor, taskId), message = this.hive.getMessageById(messageId);
-    this.hive.publishTaskMessage(message); this.hive.bus.emit('task', task);
+    const task = this.get(actor, taskId), message = this.deps.messageQueries.getMessageById(messageId);
+    this.deps.messages.publishTaskMessage(message); this.deps.bus.emit('task', task);
     return { task, message, duplicate: false };
   }
   assign(actor: Agent, raw: unknown) {
@@ -171,13 +166,13 @@ export class TaskStore {
       duplicate = this.retry(actor, input.requestId, hash); if (duplicate) return;
       const worker = this.worker(actor, input.worker);
       this.contract(actor, input.contract); this.workerEvidence(worker, input.contract.evidenceSeqs);
-      const channel = input.channel ? this.hive.getChannel(input.channel, actor.projectId) : this.hive.openDm(actor, worker.name);
+      const channel = input.channel ? this.deps.channels.getChannel(input.channel, actor.projectId) : this.deps.channels.openDm(actor, worker.name);
       this.writable(actor, worker, channel);
-      const room = this.hive.rooms.assignment(actor, channel, worker, input);
+      const room = this.deps.rooms.assignment(actor, channel, worker, input);
       if (room?.existing) {
         this.db.prepare('INSERT INTO task_request_aliases(actor_id,request_id,request_hash,task_id) VALUES(?,?,?,?)')
           .run(actor.id, input.requestId, hash, room.existing);
-        duplicate = { task: this.get(actor, room.existing), message: this.hive.getMessageById(room.existing), duplicate: true };
+        duplicate = { task: this.get(actor, room.existing), message: this.deps.messageQueries.getMessageById(room.existing), duplicate: true };
         return;
       }
       taskId = randomUUID();
@@ -186,10 +181,10 @@ export class TaskStore {
         dispatchSeq: 0, receivedAt: null, lastEventSeq: 0, updatedAt: 0, result: null, review: null };
       this.write(actor, task, { taskId, channelId: channel.id, revision: 1, contractVersion: 1, actorId: actor.id,
         actorRole: 'brain', assignerId: actor.id, workerId: worker.id, action: { type: 'assign', contract: input.contract } }, input.requestId, hash, true);
-      if (input.room && room) this.hive.rooms.linkTask(task, input.room, room.hash);
+      if (input.room && room) this.deps.rooms.linkTask(task, input.room, room.hash);
     });
     if (duplicate!) return duplicate;
-    this.hive.bus.emit('channel', this.hive.getChannel(this.row(taskId).channel_id));
+    this.deps.bus.emit('channel', this.deps.channels.getChannel(this.row(taskId).channel_id));
     return this.published(actor, taskId, taskId);
   }
   event(actor: Agent, taskId: string, raw: unknown) {
@@ -204,16 +199,16 @@ export class TaskStore {
       const brainAction = action.type === 'revise' || action.type === 'review';
       if (!isClaimAction(action.type) && (brainAction ? actor.role !== 'brain' || actor.id !== task.assignerId : actor.role !== 'worker' || actor.id !== task.workerId))
         throw new HiveError(403, 'This event belongs to the assigning brain or the assigned worker');
-      if (!this.hive.canPost(actor, this.hive.getChannel(task.channelId))) throw new HiveError(403, 'Cannot post in this task channel');
+      if (!this.deps.channels.canPost(actor, this.deps.channels.getChannel(task.channelId))) throw new HiveError(403, 'Cannot post in this task channel');
       if (input.expectedRevision !== task.revision) throw new HiveError(409, 'Task changed; get_task and use its current revision');
-      this.hive.rooms.checkTask(actor, task, action.type);
+      this.deps.rooms.checkTask(actor, task, action.type);
       const previousWorkerId = task.workerId;
       if (action.type === 'accept' || action.type === 'result' || (action.type === 'review' && action.decision === 'accepted')) this.coordination.assertReady(task);
       if (isClaimAction(action.type)) this.coordination.apply(actor, task, claimActionSchema.parse(action));
       else if (action.type === 'revise') {
-        const worker = this.worker(actor, action.worker), room = this.hive.rooms.peek(task.channelId);
+        const worker = this.worker(actor, action.worker), room = this.deps.rooms.peek(task.channelId);
         if (room && !room.participantIds.includes(worker.id)) throw new HiveError(403, 'Replacement worker must be a declared room participant');
-        this.writable(actor, worker, this.hive.getChannel(task.channelId));
+        this.writable(actor, worker, this.deps.channels.getChannel(task.channelId));
         this.contract(actor, action.contract, task.id); this.workerEvidence(worker, action.contract.evidenceSeqs);
         task.workerId = worker.id; task.workerName = worker.name;
         task.contract = action.contract; task.contractVersion++; task.state = 'sent'; task.result = null; task.review = null;
@@ -221,7 +216,7 @@ export class TaskStore {
         if (task.state !== 'result_submitted') throw new HiveError(409, 'Review requires a submitted result');
         this.evidence(actor, action.evidenceSeqs);
         if (action.decision === 'changes_requested' && action.evidenceSeqs.length) {
-          try { this.evidence(this.hive.getAgent(task.workerId), action.evidenceSeqs); }
+          try { this.evidence(this.deps.identity.getAgent(task.workerId), action.evidenceSeqs); }
           catch (error) {
             if (error instanceof HiveError && error.status === 403) throw new HiveError(403, 'Changes-requested review evidence must be readable by the assigned worker; use a reference in a shared channel');
             throw error;
@@ -238,7 +233,7 @@ export class TaskStore {
         if (action.type === 'block') task.state = 'blocked';
         else if (action.type === 'checkpoint') {
           const references = [...action.checkpoint.evidenceSeqs, ...action.checkpoint.checks.flatMap(check => check.evidenceSeqs)];
-          this.evidence(actor, references); this.evidence(this.hive.getAgent(task.assignerId), references);
+          this.evidence(actor, references); this.evidence(this.deps.identity.getAgent(task.assignerId), references);
           task.checkpoint = { version: (task.checkpoint?.version ?? 0) + 1,
             taskRevision: task.revision + 1, contractVersion: task.contractVersion, workerId: task.workerId,
             objective: task.contract.objective, worktree: task.contract.worktree, branch: task.contract.branch,
@@ -246,7 +241,7 @@ export class TaskStore {
         } else {
           if (action.type !== 'result') throw new HiveError(400, 'Unknown task action');
           this.evidence(actor, [...action.result.evidenceSeqs, ...action.result.checks.flatMap(c => c.evidenceSeqs)]);
-          this.evidence(this.hive.getAgent(task.assignerId), [...action.result.evidenceSeqs, ...action.result.checks.flatMap(c => c.evidenceSeqs)]);
+          this.evidence(this.deps.identity.getAgent(task.assignerId), [...action.result.evidenceSeqs, ...action.result.checks.flatMap(c => c.evidenceSeqs)]);
           task.result = action.result; task.review = null; task.state = 'result_submitted';
         }
       }
@@ -259,6 +254,42 @@ export class TaskStore {
         ...(task.claim ? { claimVersion: task.claim.version } : {}), action }, input.requestId, hash, false);
     });
     return duplicate! ?? this.published(actor, taskId, messageId);
+  }
+  /** True when the actor already used `requestId` for a task event (or an aliased room assignment). */
+  hasRequest(actorId: string, requestId: string): boolean {
+    return Boolean(this.db.prepare('SELECT 1 FROM task_events WHERE actor_id=? AND request_id=?').get(actorId, requestId) ||
+      this.db.prepare('SELECT 1 FROM task_request_aliases WHERE actor_id=? AND request_id=?').get(actorId, requestId));
+  }
+  /** True when the task is assigned to the worker and neither accepted-complete nor rejected. */
+  isOpenFor(taskId: string, workerId: string): boolean {
+    return Boolean(this.db.prepare(`SELECT 1 FROM task_records t WHERE t.id=? AND t.worker_id=?
+      AND json_extract(t.snapshot,'$.state') NOT IN ('accepted_complete','rejected')`).get(taskId, workerId));
+  }
+  /** Work that occupies a worker in a project: unfinished tasks not stopped by their room, and held claims. */
+  capacityWork(projectId: string): Array<{ id: string; workerId: string; state: string; held: boolean; dependencies: string[] }> {
+    return this.db.prepare(`SELECT t.id,t.worker_id,
+        json_extract(t.snapshot,'$.state') AS state,
+        json_extract(t.snapshot,'$.claim.state') AS claim_state,
+        json_extract(t.snapshot,'$.contract.dependencies') AS dependencies
+      FROM task_records t
+      LEFT JOIN room_tasks room ON room.task_id=t.id
+      WHERE t.channel_id IN (SELECT value FROM json_each(?)) AND ((json_extract(t.snapshot,'$.state') NOT IN ('accepted_complete','rejected')
+        AND COALESCE(room.status,'active')!='stopped') OR json_extract(t.snapshot,'$.claim.state')='held')`)
+      .all(JSON.stringify(this.deps.channels.channelIdsIn(projectId))).map(row => ({
+        id: String(row.id), workerId: String(row.worker_id), state: String(row.state), held: row.claim_state === 'held',
+        dependencies: row.dependencies ? JSON.parse(String(row.dependencies)) as string[] : [],
+      }));
+  }
+  /** The subset of `ids` that are accepted-complete tasks. */
+  completedAmong(ids: string[]): string[] {
+    return (this.db.prepare(`SELECT id FROM task_records
+      WHERE id IN (SELECT value FROM json_each(?)) AND json_extract(snapshot,'$.state')='accepted_complete'`)
+      .all(JSON.stringify(ids)) as { id: string }[]).map(row => String(row.id));
+  }
+  /** The subset of `ids` that are tasks not yet accepted-complete. */
+  unfinished(ids: string[]): string[] {
+    return (this.db.prepare(`SELECT id FROM task_records WHERE id IN (SELECT value FROM json_each(?))
+      AND json_extract(snapshot,'$.state')!='accepted_complete'`).all(JSON.stringify(ids)) as { id: string }[]).map(row => row.id);
   }
   recordReceipt(workerId: string, seqs: number[], at: number): string[] {
     return (this.db.prepare(`UPDATE task_records SET received_at = ? WHERE worker_id = ? AND received_at IS NULL

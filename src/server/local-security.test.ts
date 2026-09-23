@@ -117,7 +117,7 @@ test("real WebSocket handshakes reject unauthorized combinations before any subs
     body: JSON.stringify({ name: "Security test", slug: "security-test" }),
   });
   assert.equal(created.status, 200);
-  assert.ok(f.hive.listProjects().some((p) => p.slug === "security-test"));
+  assert.ok(f.hive.projects.listProjects().some((p) => p.slug === "security-test"));
   // Current Hive emits a project event on deletion, not on creation.
   const event = nextEvent(live.ws, "project");
   const deleted = await json(f.base, "/api/ui/projects/security-test", {
@@ -125,12 +125,12 @@ test("real WebSocket handshakes reject unauthorized combinations before any subs
   });
   assert.equal(deleted.status, 200);
   assert.deepEqual((await event).payload, { deleted: "security-test" });
-  assert.equal(f.hive.listProjects().some((p) => p.slug === "security-test"), false);
+  assert.equal(f.hive.projects.listProjects().some((p) => p.slug === "security-test"), false);
 
-  const brain = f.hive.join({ role: "brain", project: "chapter" }).agent;
-  const dm = f.hive.openDm(f.hive.getAgent("human"), brain.name);
+  const brain = f.hive.identity.join({ role: "brain", project: "chapter" }).agent;
+  const dm = f.hive.channels.openDm(f.hive.identity.getAgent("human"), brain.name);
   const dmEvent = nextEvent(live.ws, "message", (event) => (event.payload as { channelId: string }).channelId === dm.id);
-  f.hive.postMessage(f.hive.getAgent("human"), { channel: dm.id, body: "private Human message" });
+  f.hive.messages.postMessage(f.hive.identity.getAgent("human"), { channel: dm.id, body: "private Human message" });
   assert.equal(((await dmEvent).payload as { body: string }).body, "private Human message");
 });
 
@@ -163,7 +163,7 @@ test("browser join/resume cannot create identities or rotate tokens; native flow
 
 test("restart revokes HTTP/WS sessions, closes subscriptions and preserves data/native tokens", { timeout: 15000 }, async (t) => {
   const f = await fixture(t);
-  const native = f.hive.join({ role: "brain" });
+  const native = f.hive.identity.join({ role: "brain" });
   const oldCookie = await bootstrap(f.base);
   const live = await handshake(t, f.base, { cookie: oldCookie, origin: f.base });
   const closed = once(live.ws, "close");
@@ -171,7 +171,7 @@ test("restart revokes HTTP/WS sessions, closes subscriptions and preserves data/
   await f.restart();
   await closed;
   assert.equal(originalBus.listenerCount("message"), 0);
-  const before = f.hive.listProjects().length;
+  const before = f.hive.projects.listProjects().length;
   for (const method of ["GET", "POST"]) {
     const denied = await json(f.base, method === "GET" ? "/api/ui/snapshot" : "/api/ui/projects", {
       method, headers: { cookie: oldCookie, origin: f.base, "content-type": "application/json" },
@@ -180,7 +180,7 @@ test("restart revokes HTTP/WS sessions, closes subscriptions and preserves data/
     assert.equal(denied.status, 401);
     assert.equal(denied.headers.get("x-hivemind-session-required"), "1");
   }
-  assert.equal(f.hive.listProjects().length, before);
+  assert.equal(f.hive.projects.listProjects().length, before);
   assert.equal((await handshake(t, f.base, { cookie: oldCookie, origin: f.base })).status, 403);
   const cookie = await bootstrap(f.base);
   assert.equal(cookie.split("=")[0], oldCookie.split("=")[0]);

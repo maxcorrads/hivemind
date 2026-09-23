@@ -29,13 +29,13 @@ test("real concurrent/repeated MCP joins reuse the active identity without expos
   };
   const [a,b] = await Promise.all([call<{ name:string;created:boolean }>("join",{ role:"brain" }), call<{ name:string;created:boolean }>("join",{ role:"brain" })]);
   assert.equal(a.name,b.name); assert.equal([a,b].filter(x=>x.created).length,1);
-  assert.equal(hive.listAgents().filter(a=>a.role==="brain").length,1);
-  const agent = hive.getAgentByName(a.name)!, human = hive.getAgent("human");
-  const dm = hive.openDm(human,agent.name); hive.postMessage(human,{channel:dm.id,body:"do not reset this delivery session"});
+  assert.equal(hive.identity.listAgents().filter(a=>a.role==="brain").length,1);
+  const agent = hive.identity.getAgentByName(a.name)!, human = hive.identity.getAgent("human");
+  const dm = hive.channels.openDm(human,agent.name); hive.messages.postMessage(human,{channel:dm.id,body:"do not reset this delivery session"});
   const mail = await call<WaitResult>("wait"); const session = hive.inbox.currentSession(agent.id);
   await call("join",{role:"brain",resume:agent.name});
   assert.equal(hive.inbox.currentSession(agent.id),session);
   await call("ack_delivery",{deliveryId:mail.delivery!.id});
   const bad = await client.callTool({name:"join",arguments:{role:"worker",seniority:"mid"}});
-  assert.equal(bad.isError,true); assert.equal(hive.listAgents().filter(a=>a.role!=="human").length,1);
+  assert.equal(bad.isError,true); assert.equal(hive.identity.listAgents().filter(a=>a.role!=="human").length,1);
 });

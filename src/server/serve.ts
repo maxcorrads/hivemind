@@ -90,7 +90,7 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
   server.headersTimeout = REQUEST_HEADER_MS;
   server.maxHeadersCount = 100;
   server.timeout = 0;
-  const sweep = setInterval(() => hive.sweepPresence(), 15_000);
+  const sweep = setInterval(() => hive.identity.sweepPresence(), 15_000);
   sweep.unref();
   const heartbeat = setInterval(() => heartbeatClients(clients, responsive), WS_HEARTBEAT_MS);
   heartbeat.unref();
@@ -119,7 +119,7 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
     clearInterval(sweep);
     clearInterval(heartbeat);
     for (const [type, forward] of forwarders) hive.bus.off(type, forward);
-    hive.cancelWaits();
+    hive.delivery.cancelWaits();
     for (const ws of clients) ws.close(1001, "server shutdown");
     const wsClosed = new Promise<void>(resolve => wss.close(() => resolve()));
     const bridgeStopped = telegram.stop();
@@ -136,7 +136,7 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
       }, grace);
     });
     const drained = Promise.allSettled([bridgeStopped, routingStopped, httpClosed, wsClosed]).then(results => {
-      if (!opts.hive) hive.db.close();
+      if (!opts.hive) hive.close();
       const failed = results.find(result => result.status === "rejected");
       if (failed?.status === "rejected") throw failed.reason;
     });

@@ -17,9 +17,9 @@ test('real MCP and CLI room lifecycle shares durable rules, task fences, source 
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-room-clients-'));
   const hive = new Hive(path.join(dir, 'hive.db')), server = startServer({ port: 0, hive, telegram: false });
   const port = await server.ready, clients: Client[] = [];
-  const brain = hive.join({ role: 'brain' }), worker = hive.join({ role: 'worker', seniority: 'mid' });
-  const channel = hive.createChannel(brain.agent, { name: 'generic-events', type: 'private', memberNames: [worker.agent.name] });
-  const humanInstructionSeq = hive.postMessage(hive.getAgent('human'), { channel: channel.id, body: 'Follow synthetic events and ask the worker to inspect anomalies. No external writes.' }).seq;
+  const brain = hive.identity.join({ role: 'brain' }), worker = hive.identity.join({ role: 'worker', seniority: 'mid' });
+  const channel = hive.channels.createChannel(brain.agent, { name: 'generic-events', type: 'private', memberNames: [worker.agent.name] });
+  const humanInstructionSeq = hive.messages.postMessage(hive.identity.getAgent('human'), { channel: channel.id, body: 'Follow synthetic events and ask the worker to inspect anomalies. No external writes.' }).seq;
   const env = (token: string) => childEnv({ PATH: process.env.PATH ?? '', HIVEMIND_TOKEN: token, HIVEMIND_HOME: path.join(dir, 'identities'), HIVEMIND_URL: `http://127.0.0.1:${port}` });
   const args = ['--import', path.join(root, 'node_modules/tsx/dist/loader.mjs'), path.join(root, 'src/cli.ts')];
   const connect = async (token: string) => {
@@ -49,7 +49,7 @@ test('real MCP and CLI room lifecycle shares durable rules, task fences, source 
     const delivery = await call(w, 'wait', {}); await call(w, 'ack_delivery', { deliveryId: delivery.delivery.id });
     await call(w, 'task_event', { taskId: assigned.task.id, requestId: 'accept', expectedRevision: 1, action: { type: 'accept' } });
     const file = path.join(dir, 'archive.json'); writeFileSync(file, JSON.stringify({ requestId: 'cli-archive', expectedRevision: hive.rooms.peek(channel.id)!.revision,
-      humanInstructionSeq: hive.postMessage(hive.getAgent('human'), { channel: channel.id, body: 'Archive and request interruption.' }).seq,
+      humanInstructionSeq: hive.messages.postMessage(hive.identity.getAgent('human'), { channel: channel.id, body: 'Archive and request interruption.' }).seq,
       action: { type: 'archive', running: 'stop', reason: 'Human ended monitoring' } }));
     const cli = await promisify(execFile)(process.execPath, [...args, 'room', 'event', '--channel', channel.id, '--input', file], { cwd: dir, env: env(brain.token), timeout: 10000 });
     assert.equal(JSON.parse(cli.stdout).room.state, 'archived');

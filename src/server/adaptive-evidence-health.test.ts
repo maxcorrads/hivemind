@@ -121,10 +121,10 @@ test('an unattributed marker covers running executions and records touched since
 function runtime(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-evidence-health-'));
   let hive = new Hive(path.join(dir, 'hive.db'));
-  const human = hive.getAgent('human');
-  const brain = hive.join({ role: 'brain', project: 'chapter' }).agent;
-  const worker = hive.join({ role: 'worker', seniority: 'senior', project: 'chapter' }).agent;
-  const dm = hive.openDm(human, brain.name);
+  const human = hive.identity.getAgent('human');
+  const brain = hive.identity.join({ role: 'brain', project: 'chapter' }).agent;
+  const worker = hive.identity.join({ role: 'worker', seniority: 'senior', project: 'chapter' }).agent;
+  const dm = hive.channels.openDm(human, brain.name);
   saveAdaptiveRouting(dir, { enabled: true, apiKey: 'never-export-this-key' });
   let calls = 0;
   t.mock.method(globalThis, 'fetch', async (_url: unknown, init?: RequestInit) => {
@@ -200,8 +200,8 @@ test('a gap marker for a deleted channel is discarded without recreating evidenc
   const heal = failWrites(f.hive, 'adaptive_evidence_runs', { persistent: true });
   await f.check('lost-before-delete');
   assert.equal(f.hive.adaptiveTopology.observations.collectorHealth().status, 'degraded');
-  for (const agent of [f.brain, f.worker]) f.hive.setOffline(agent.id);
-  f.hive.deleteProject(f.human, 'chapter');
+  for (const agent of [f.brain, f.worker]) f.hive.identity.setOffline(agent.id);
+  f.hive.projects.deleteProject(f.human, 'chapter');
   heal();
   const health = f.hive.adaptiveTopology.observations.collectorHealth();
   assert.equal(health.status, 'recovered'); assert.equal(health.discardedGaps, 1); assert.equal(health.persistedGaps, 0);

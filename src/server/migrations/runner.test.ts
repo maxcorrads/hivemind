@@ -100,8 +100,8 @@ test("a populated current-main (user_version 2) hive upgrades with every row and
 
   const hive = open(t, file);
   assert.equal(schemaVersion(hive.db), LATEST_VERSION);
-  const human = hive.getAgent("human");
-  assert.ok(hive.listMessages(human, "general").messages.length > 0);
+  const human = hive.identity.getAgent("human");
+  assert.ok(hive.messageQueries.listMessages(human, "general").messages.length > 0);
   hive.db.close();
 
   const after = inspect(file, db => ({ schema: schemaOf(db), rows: rowsOf(db) }));
@@ -155,7 +155,7 @@ test("the version bump shares each step's transaction: a failure at any step rol
 test("a real SQLite failure inside a legacy step rolls back its data changes; a restart completes it", t => {
   const file = temp(t);
   const hive = open(t, file);
-  const brain = hive.join({ role: "brain" }).agent;
+  const brain = hive.identity.join({ role: "brain" }).agent;
   // Reshape into a legacy hive without a project, so project_storage seeds one on upgrade.
   updateRows(hive, "agents", { project_id: null });
   updateRows(hive, "channels", { project_id: null });
@@ -176,5 +176,5 @@ test("a real SQLite failure inside a legacy step rolls back its data changes; a 
   saboteur.close();
   const upgraded = open(t, file);
   assert.equal(schemaVersion(upgraded.db), LATEST_VERSION);
-  assert.equal(upgraded.getAgent(brain.id).projectId, upgraded.listProjects()[0]!.id);
+  assert.equal(upgraded.identity.getAgent(brain.id).projectId, upgraded.projects.listProjects()[0]!.id);
 });

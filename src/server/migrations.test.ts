@@ -93,7 +93,7 @@ for (const chatColumn of [false, true]) {
       ]);
       assert.equal(hive.db.prepare("SELECT channel_id FROM telegram_out WHERE thread_id = 'root'").get()?.channel_id, "general");
       assert.equal(hive.db.prepare("SELECT telegram_chat_id FROM telegram_topics WHERE channel_id = 'general'").get()?.telegram_chat_id, chatColumn ? -123 : null);
-      assert.equal(hive.getAgent("worker").projectId, hive.getChannel("general").projectId);
+      assert.equal(hive.identity.getAgent("worker").projectId, hive.channels.getChannel("general").projectId);
     } finally { hive.db.close(); }
     const once = snapshot(file);
     new Hive(file).db.close();
@@ -212,10 +212,10 @@ test("project, channel, DM, join and invitation failures roll back all rows and 
   const { file } = temp(t);
   const hive = new Hive(file);
   t.after(() => hive.db.close());
-  const human = hive.getAgent("human");
-  const brain = hive.join({ role: "brain" }).agent;
-  const worker = hive.join({ role: "worker", seniority: "mid" }).agent;
-  const room = hive.createChannel(brain, { name: "private", type: "private" });
+  const human = hive.identity.getAgent("human");
+  const brain = hive.identity.join({ role: "brain" }).agent;
+  const worker = hive.identity.join({ role: "worker", seniority: "mid" }).agent;
+  const room = hive.channels.createChannel(brain, { name: "private", type: "private" });
   const events: string[] = [];
   for (const event of ["agent", "channel", "message", "queued"] as const) hive.bus.on(event, () => events.push(event));
   const check = (operation: () => unknown, pattern: RegExp) => {
@@ -225,18 +225,18 @@ test("project, channel, DM, join and invitation failures roll back all rows and 
     assert.deepEqual(snapshot(file), before);
     assert.deepEqual(events, []);
   };
-  check(() => hive.invite(brain, room.id, [worker.name, "missing-fixture"]), /No agent named/);
+  check(() => hive.channels.invite(brain, room.id, [worker.name, "missing-fixture"]), /No agent named/);
   const restoreMembership = failWrites(hive, "channel_members", {
     when: `NEW.agent_id = '${worker.id}'`, message: "injected membership failure", persistent: true,
   });
-  check(() => hive.createChannel(brain, { name: "public-fault", type: "public" }), /membership failure/);
-  check(() => hive.openDm(brain, worker.name), /membership failure/);
+  check(() => hive.channels.createChannel(brain, { name: "public-fault", type: "public" }), /membership failure/);
+  check(() => hive.channels.openDm(brain, worker.name), /membership failure/);
   restoreMembership();
   failWrites(hive, "channel_members", {
     when: "(SELECT type FROM channels WHERE id = NEW.channel_id) = 'brains'", message: "injected brains failure", persistent: true,
   });
-  check(() => hive.createProject(human, { name: "Fault", slug: "fault" }), /brains failure/);
-  check(() => hive.join({ role: "brain" }), /brains failure/);
+  check(() => hive.projects.createProject(human, { name: "Fault", slug: "fault" }), /brains failure/);
+  check(() => hive.identity.join({ role: "brain" }), /brains failure/);
 });
 
 test("nested creation events are emitted only after another connection can see the committed state", (t) => {
@@ -255,8 +255,8 @@ test("nested creation events are emitted only after another connection can see t
     messages++;
     assert.ok(observer.prepare("SELECT 1 FROM messages WHERE id = ?").get(message.id));
   });
-  const brain = hive.join({ role: "brain" }).agent;
-  hive.createChannel(brain, { name: "committed", type: "private" });
+  const brain = hive.identity.join({ role: "brain" }).agent;
+  hive.channels.createChannel(brain, { name: "committed", type: "private" });
   assert.equal(channels, 1);
   assert.equal(messages, 2);
 });
@@ -266,9 +266,9 @@ test("the documented stopped-home WAL-aware backup restores messages, attachment
   const restored = temp(t);
   const hive = new Hive(file);
   try {
-    const human = hive.getAgent("human");
-    const attachment = await hive.createFileFromBytes(human, { name: "fixture.txt", mime: "text/plain", bytes: Buffer.from("backup fixture") });
-    const message = hive.postMessage(human, { channel: "general", body: "backup", attachmentIds: [attachment.id] });
+    const human = hive.identity.getAgent("human");
+    const attachment = await hive.files.createFileFromBytes(human, { name: "fixture.txt", mime: "text/plain", bytes: Buffer.from("backup fixture") });
+    const message = hive.messages.postMessage(human, { channel: "general", body: "backup", attachmentIds: [attachment.id] });
     insertRow(hive, "telegram_out", { telegram_chat_id: -100, telegram_message_id: 7, seq: message.seq, channel_id: "general", thread_id: null });
     insertRow(hive, "telegram_topics", { channel_id: "general", telegram_thread_id: 11, telegram_chat_id: -100 });
     insertRow(hive, "telegram_hold", { telegram_chat_id: -100, telegram_message_id: 8, telegram_thread_id: 11, payload: "{}" });
@@ -281,7 +281,7 @@ test("the documented stopped-home WAL-aware backup restores messages, attachment
     assert.deepEqual(snapshot(restored.file), snapshot(file));
     const row = findRow(copy, "attachments", {}, ["id", "sha256"]) as { id: string; sha256: string };
     assert.equal(readFileSync(path.join(restored.dir, "files", row.sha256), "utf8"), "backup fixture");
-    assert.equal(copy.getAttachment(copy.getAgent("human"), row.id).channelId, "general");
-    assert.equal(readValue(copy, "telegram_out", "seq", { telegram_message_id: 7 }), copy.getVisibleMessage(copy.getAgent("human"), 1).seq);
+    assert.equal(copy.files.getAttachment(copy.identity.getAgent("human"), row.id).channelId, "general");
+    assert.equal(readValue(copy, "telegram_out", "seq", { telegram_message_id: 7 }), copy.messageQueries.getVisibleMessage(copy.identity.getAgent("human"), 1).seq);
   } finally { copy.db.close(); }
 });

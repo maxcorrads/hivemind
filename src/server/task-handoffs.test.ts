@@ -14,7 +14,7 @@ function fixture(t: TestContext) {
   const file = path.join(dir, 'hive.db');
   let hive = new Hive(file), sequence = 0;
   t.after(() => { hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
-  const brain = hive.join({ role: 'brain' }), worker = hive.join({ role: 'worker', seniority: 'mid' });
+  const brain = hive.identity.join({ role: 'brain' }), worker = hive.identity.join({ role: 'worker', seniority: 'mid' });
   const contract = { objective: 'Finish the parser', scope: ['parser'], nonGoals: ['No deployment'],
     acceptanceCriteria: ['A regression reproduces the bug'], dependencies: [], evidenceSeqs: [],
     worktree: 'worktrees/parser', branch: 'fix/parser' };
@@ -62,18 +62,18 @@ test('checkpoints version and persist reports without accepting or completing wo
   assert.ok(handoff.ageMs !== null && handoff.ageMs >= 0);
   assert.match(handoff.warning, /unsaved work/);
   assert.ok(Buffer.byteLength(JSON.stringify(handoff)) < 32 * 1024);
-  const checkpoints = f.hive.listMessages(f.worker.agent, task.channelId, { threadId: task.id }).messages
+  const checkpoints = f.hive.messageQueries.listMessages(f.worker.agent, task.channelId, { threadId: task.id }).messages
     .filter(message => message.taskEvent?.action.type === 'checkpoint');
   assert.deepEqual(checkpoints.map(message => message.taskEvent!.checkpointVersion), [1, 2]);
   assert.equal(f.hive.tasks.event(f.worker.agent, task.id, input).duplicate, true);
   assert.equal(f.hive.tasks.get(f.worker.agent, task.id).checkpoint?.version, 2);
-  f.hive.postMessage(f.brain.agent, { channel: task.channelId, threadId: task.id, body: 'A later decision needs reconciliation' });
+  f.hive.messages.postMessage(f.brain.agent, { channel: task.channelId, threadId: task.id, body: 'A later decision needs reconciliation' });
   assert.equal(f.hive.tasks.handoff(f.worker.agent, task.id).newerMessages, true);
 });
 
 test('a contract revision/reassignment retains but invalidates the old worker checkpoint', t => {
-  const f = fixture(t), next = f.hive.join({ role: 'worker', seniority: 'senior' }).agent;
-  const room = f.hive.createChannel(f.brain.agent, { name: 'handoff-room', type: 'private', memberNames: [f.worker.agent.name, next.name] });
+  const f = fixture(t), next = f.hive.identity.join({ role: 'worker', seniority: 'senior' }).agent;
+  const room = f.hive.channels.createChannel(f.brain.agent, { name: 'handoff-room', type: 'private', memberNames: [f.worker.agent.name, next.name] });
   const task = f.assign(room.id).task;
   f.event(task.id, f.worker.agent, { type: 'accept' });
   const checkpoint = f.event(task.id, f.worker.agent, { type: 'checkpoint', checkpoint: data() }).task.checkpoint;
@@ -114,11 +114,11 @@ test('only the current accepted worker can save bounded checkpoint evidence', as
   const f = fixture(t), task = f.assign().task;
   assert.throws(() => f.event(task.id, f.worker.agent, { type: 'checkpoint', checkpoint: data() }), /Accept the current/);
   f.event(task.id, f.worker.agent, { type: 'accept' });
-  const other = f.hive.join({ role: 'brain' }).agent;
-  const notes = f.hive.createChannel(other, { name: 'private-notes', type: 'private', memberNames: [f.worker.agent.name] });
-  const secret = f.hive.postMessage(other, { channel: notes.id, body: 'private checkpoint evidence' });
+  const other = f.hive.identity.join({ role: 'brain' }).agent;
+  const notes = f.hive.channels.createChannel(other, { name: 'private-notes', type: 'private', memberNames: [f.worker.agent.name] });
+  const secret = f.hive.messages.postMessage(other, { channel: notes.id, body: 'private checkpoint evidence' });
   const before = f.hive.tasks.get(f.worker.agent, task.id);
-  for (const actor of [f.brain.agent, other, f.hive.getAgent('human')])
+  for (const actor of [f.brain.agent, other, f.hive.identity.getAgent('human')])
     assert.throws(() => f.event(task.id, actor, { type: 'checkpoint', checkpoint: data() }));
   assert.throws(() => f.event(task.id, f.worker.agent, { type: 'checkpoint', checkpoint: { ...data(), evidenceSeqs: [secret.seq] } }), /Cannot/);
   for (const payload of [
@@ -146,10 +146,10 @@ test('only the current accepted worker can save bounded checkpoint evidence', as
 test('resume discovery pages unfinished authorized tasks and cannot enumerate other participants', t => {
   const f = fixture(t), all: string[] = [];
   for (let i = 0; i < 12; i++) all.push(f.assign().task.id);
-  const hidden = f.assign(f.hive.createChannel(f.brain.agent,
+  const hidden = f.assign(f.hive.channels.createChannel(f.brain.agent,
     { name: 'removed-access', type: 'private', memberNames: [f.worker.agent.name] }).id).task;
   removeChannelMember(f.hive, hidden.channelId, f.worker.agent.id);
-  const outsider = f.hive.join({ role: 'worker', seniority: 'mid' }).agent;
+  const outsider = f.hive.identity.join({ role: 'worker', seniority: 'mid' }).agent;
   assert.deepEqual(f.hive.tasks.handoffs(outsider).items, []);
   const visited: string[] = []; let before: string | undefined;
   do {
@@ -164,9 +164,9 @@ test('resume discovery pages unfinished authorized tasks and cannot enumerate ot
   assert.equal(new Set(visited).size, all.length);
   assert.throws(() => f.hive.tasks.handoff(f.worker.agent, hidden.id), /Cannot read/);
   assert.throws(() => f.hive.tasks.handoffs(f.worker.agent, 'not-a-cursor'), /Invalid request/);
-  const human = f.hive.getAgent('human');
-  f.hive.createProject(human, { name: 'Beta', slug: 'beta' });
-  const beta = f.hive.join({ role: 'brain', project: 'beta' }).agent;
+  const human = f.hive.identity.getAgent('human');
+  f.hive.projects.createProject(human, { name: 'Beta', slug: 'beta' });
+  const beta = f.hive.identity.join({ role: 'brain', project: 'beta' }).agent;
   assert.deepEqual(f.hive.tasks.handoffs(beta).items, []);
   assert.throws(() => f.hive.tasks.handoff(beta, all[0]!), /Cannot read/);
 });
@@ -175,14 +175,14 @@ test('checkpoint events remain recoverable inside bounded compact delivery; clea
   const f = fixture(t), task = f.assign().task;
   f.event(task.id, f.worker.agent, { type: 'accept' });
   const checkpoint = f.event(task.id, f.worker.agent, { type: 'checkpoint', checkpoint: data() });
-  const sessionId = f.hive.openInboxSession(f.brain.agent, crypto.randomUUID());
-  const mail = await f.hive.wait(f.brain.agent, 1, undefined, { sessionId, compact: true });
+  const sessionId = f.hive.delivery.openInboxSession(f.brain.agent, crypto.randomUUID());
+  const mail = await f.hive.delivery.wait(f.brain.agent, 1, undefined, { sessionId, compact: true });
   assert.ok(Buffer.byteLength(JSON.stringify(mail)) <= WAIT_MAX_BYTES);
   const entry = mail.mail!.find(item => item.messageId === checkpoint.message.id);
   assert.equal(entry?.taskEvent?.action.type, 'checkpoint');
-  f.hive.acknowledgeInbox(f.brain.agent, sessionId, mail.delivery!.id);
+  f.hive.delivery.acknowledgeInbox(f.brain.agent, sessionId, mail.delivery!.id);
   assert.equal(f.hive.tasks.handoff(f.brain.agent, task.id).checkpoint?.messageId, checkpoint.message.id);
-  const control = f.hive.clearContext(f.brain.agent, f.worker.agent.name);
+  const control = f.hive.messages.clearContext(f.brain.agent, f.worker.agent.name);
   assert.match(control.body, /save a checkpoint/);
   assert.match(control.body, /has not erased host context or stopped execution/);
   assert.match(control.body, /Do not clear automatically/);

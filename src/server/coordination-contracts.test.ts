@@ -26,8 +26,8 @@ async function fixture(t: TestContext) {
     events.removeAllListeners(); hive.db.close(); rmSync(dir, { recursive: true, force: true });
   });
   const port = await server.ready, base = `http://127.0.0.1:${port}`;
-  const brain = hive.join({ role: 'brain' }), worker = hive.join({ role: 'worker', seniority: 'mid' });
-  const channel = hive.createChannel(brain.agent, { name: 'coordination-contract', type: 'private', memberNames: [worker.agent.name] });
+  const brain = hive.identity.join({ role: 'brain' }), worker = hive.identity.join({ role: 'worker', seniority: 'mid' });
+  const channel = hive.channels.createChannel(brain.agent, { name: 'coordination-contract', type: 'private', memberNames: [worker.agent.name] });
   const session = await fetch(`${base}/api/ui/session`, { method: 'POST',
     headers: { origin: base, 'content-type': 'application/json' }, body: '{}' });
   assert.equal(session.status, 200);
@@ -105,9 +105,9 @@ test('HTTP and Human WebSocket expose the same typed task/room contract through 
 });
 
 test('HTTP rejects missing credentials, cross-project reads and forged coordination authority without partial state', { timeout: 15000 }, async t => {
-  const f = await fixture(t), human = f.hive.getAgent('human');
-  const project = f.hive.createProject(human, { name: 'Other fixture', slug: 'other-wire-fixture' });
-  const outsider = f.hive.join({ role: 'brain', project: project.slug });
+  const f = await fixture(t), human = f.hive.identity.getAgent('human');
+  const project = f.hive.projects.createProject(human, { name: 'Other fixture', slug: 'other-wire-fixture' });
+  const outsider = f.hive.identity.join({ role: 'brain', project: project.slug });
   const assigned = f.hive.tasks.assign(f.brain.agent, { requestId: 'private-task', worker: f.worker.agent.name,
     channel: f.channel.id, contract: f.taskContract });
   const url = `/api/agent/tasks/${assigned.task.id}`;
@@ -169,8 +169,8 @@ test('Human UI creation and explicit invitation remain separate from declaring r
   assert.deepEqual(workerView.body.room, configured.body.room);
   const humanHistory = await f.request<{ history: unknown[] }>(`${url}/history`);
   assert.equal(humanHistory.status, 200);
-  assert.deepEqual(humanHistory.body.history, f.hive.rooms.history(f.hive.getAgent('human'), channel.id));
-  const outsider = f.hive.join({ role: 'worker', seniority: 'mid' });
+  assert.deepEqual(humanHistory.body.history, f.hive.rooms.history(f.hive.identity.getAgent('human'), channel.id));
+  const outsider = f.hive.identity.join({ role: 'worker', seniority: 'mid' });
   assert.equal((await f.request(`/api/agent/channels/${channel.id}/room`, outsider.token)).status, 403);
 });
 

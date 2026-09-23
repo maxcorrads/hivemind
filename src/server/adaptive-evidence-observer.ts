@@ -1,4 +1,4 @@
-import type { DatabaseSync } from 'node:sqlite';
+import type { Storage } from './storage.ts';
 import { TOPOLOGY_POLICY_VERSION } from '../shared/adaptive-topology-policy.ts';
 import { AdaptiveEvidenceStore, evidenceCapture, type EvidenceScope } from './adaptive-evidence.ts';
 import { EvidenceCollectorMonitor } from './adaptive-evidence-health.ts';
@@ -17,11 +17,11 @@ export class AdaptiveObservationStores {
   #jevCalls: JevCallLog | undefined;
   /** Evidence-collector health (Human-only), independent of whether Jev itself answered. */
   readonly collector: EvidenceCollectorMonitor;
-  constructor(private readonly db: DatabaseSync, healthChanged?: (health: EvidenceCollectorHealth) => void) {
+  constructor(private readonly storage: Pick<Storage, 'db'>, healthChanged?: (health: EvidenceCollectorHealth) => void) {
     this.collector = new EvidenceCollectorMonitor(healthChanged);
   }
-  get evidence(): AdaptiveEvidenceStore { return this.#evidence ??= new AdaptiveEvidenceStore(this.db); }
-  get jevCalls(): JevCallLog { return this.#jevCalls ??= new JevCallLog(this.db); }
+  get evidence(): AdaptiveEvidenceStore { return this.#evidence ??= new AdaptiveEvidenceStore(this.storage.db); }
+  get jevCalls(): JevCallLog { return this.#jevCalls ??= new JevCallLog(this.storage.db); }
   /** Retries persisting held gap markers, then reports health. Never throws. */
   collectorHealth(): EvidenceCollectorHealth {
     this.collector.flush(() => this.evidence);
@@ -30,7 +30,7 @@ export class AdaptiveObservationStores {
   /** Human-only capture state of one execution; unknown when the store cannot be read. */
   capture(executionId: string, jevCalled: boolean): EvidenceCaptureView | null {
     try {
-      const view = evidenceCapture(this.db, executionId, this.collector.pendingFor(executionId));
+      const view = evidenceCapture(this.storage.db, executionId, this.collector.pendingFor(executionId));
       return view ?? (jevCalled ? { capture: 'unknown', reasons: ['not_recorded'] } : null);
     } catch { return { capture: 'unknown', reasons: ['recorder_unavailable'] }; }
   }

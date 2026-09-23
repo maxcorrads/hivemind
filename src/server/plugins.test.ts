@@ -147,7 +147,7 @@ test("launch instructions apply to brains, survive quoting, and MCP is bound to 
   registerPlugin(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
-  const project = hive.createProject(hive.getAgent("human"), {
+  const project = hive.projects.createProject(hive.identity.getAgent("human"), {
     name: "Example",
     slug: "example",
   });
@@ -234,15 +234,15 @@ test("HTTP launch context exposes only generic installed instructions and exact 
   const plugins = ((await view.json()) as any).plugins;
   assert.equal(plugins[0].configured, false);
   assert.equal(plugins[0].enabled, false);
-  assert.equal(hive.listAgents().filter((a) => a.role === "bot").length, 0);
+  assert.equal(hive.identity.listAgents().filter((a) => a.role === "bot").length, 0);
 });
 test("project settings round trip through local configure; profiles and launch instructions are isolated", async (t) => {
   const f = setup(t);
   registerPlugin(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
-  const a = hive.getProjectBySlug("chapter"),
-    b = hive.createProject(hive.getAgent("human"), {
+  const a = hive.projects.getProjectBySlug("chapter"),
+    b = hive.projects.createProject(hive.identity.getAgent("human"), {
       name: "Example",
       slug: "example",
     });
@@ -306,7 +306,7 @@ test("project settings round trip through local configure; profiles and launch i
   assert.equal(launchContext(f.home, url, a).plugins.length, 0);
   assert.equal(launchContext(f.home, url, b).plugins.length, 1);
   assert.equal(launchContext(f.home, url).plugins.length, 0);
-  assert.equal(hive.listAgents().filter((x) => x.role === "bot").length, 0);
+  assert.equal(hive.identity.listAgents().filter((x) => x.role === "bot").length, 0);
   assert.equal(
     (await app.request(url + "/api/ui/launch-context?project=missing")).status,
     404,
@@ -327,7 +327,7 @@ test("HTTP load and unchanged save retain exact list values in the plugin profil
   registerPlugin(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
-  const project = hive.getProjectBySlug("chapter");
+  const project = hive.projects.getProjectBySlug("chapter");
   const app = createApp(hive);
   const url = "http://127.0.0.1:23456";
   const endpoint = url + `/api/ui/projects/${project.slug}/plugins`;
@@ -406,8 +406,8 @@ test("configure failure does not enable a profile, and an adopted profile cannot
   registerPlugin(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
-  const a = hive.getProjectBySlug("chapter"),
-    b = hive.createProject(hive.getAgent("human"), {
+  const a = hive.projects.getProjectBySlug("chapter"),
+    b = hive.projects.createProject(hive.identity.getAgent("human"), {
       name: "Example",
       slug: "example",
     }),
@@ -460,7 +460,7 @@ test("availability changes never run configure and a broken or unregistered plug
   registerPlugin(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
-  const project = hive.getProjectBySlug("chapter");
+  const project = hive.projects.getProjectBySlug("chapter");
   await saveProjectPlugin(
     f.home,
     project,
@@ -498,8 +498,8 @@ test("profile aliases cannot bind one profile to different projects", async (t) 
   registerPlugin(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
-  const a = hive.getProjectBySlug("chapter");
-  const b = hive.createProject(hive.getAgent("human"), {
+  const a = hive.projects.getProjectBySlug("chapter");
+  const b = hive.projects.createProject(hive.identity.getAgent("human"), {
     name: "Other",
     slug: "other",
   });
@@ -538,7 +538,7 @@ test("concurrent stale saves configure a profile only once and registries are pr
   registerPlugin(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
-  const project = hive.getProjectBySlug("chapter");
+  const project = hive.projects.getProjectBySlug("chapter");
   let calls = 0;
   const configure = async (...args: Parameters<typeof configurePlugin>) => {
     calls++;
@@ -577,7 +577,7 @@ test("plugins without fields can still configure an isolated profile", async (t)
   registerPlugin(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
-  const project = hive.getProjectBySlug("chapter");
+  const project = hive.projects.getProjectBySlug("chapter");
   assert.equal(existsSync(path.join(f.home, "profiles")), false);
   const saved = await saveProjectPlugin(
     f.home,
@@ -597,7 +597,7 @@ test("launch fails visibly for invalid retained settings or a profile pointing a
   registerPlugin(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
-  const project = hive.getProjectBySlug("chapter");
+  const project = hive.projects.getProjectBySlug("chapter");
   const saved = await saveProjectPlugin(
     f.home,
     project,
@@ -638,7 +638,7 @@ test("configuration byte limits include defaults and hiveUrl before invoking the
     registerPlugin(f.home, f.manifest);
     const hive = new Hive(path.join(f.home, "hive.db"));
     t.after(() => hive.db.close());
-    const project = hive.getProjectBySlug("chapter");
+    const project = hive.projects.getProjectBySlug("chapter");
     const valuesOfSize = (bytes: number) => {
       const values = { filters: Array.from({ length: 20 }, () => "x") };
       const serialized = () =>
@@ -792,7 +792,7 @@ test("persisted output is still size-checked if the external plugin expands vali
   await assert.rejects(
     saveProjectPlugin(
       f.home,
-      hive.getProjectBySlug("chapter"),
+      hive.projects.getProjectBySlug("chapter"),
       "http://127.0.0.1:23456",
       "invented-source",
       {
@@ -819,7 +819,7 @@ test("schema upgrades retain repairable form values and can be saved through the
   registerPlugin(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
-  const project = hive.getProjectBySlug("chapter");
+  const project = hive.projects.getProjectBySlug("chapter");
   const url = "http://127.0.0.1:23456";
   const saved = await saveProjectPlugin(
     f.home,
@@ -894,7 +894,7 @@ test("unreadable saved settings remain repairable without treating defaults as a
   registerPlugin(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
-  const project = hive.getProjectBySlug("chapter");
+  const project = hive.projects.getProjectBySlug("chapter");
   const url = "http://127.0.0.1:23456";
   const saved = await saveProjectPlugin(
     f.home,
@@ -976,7 +976,7 @@ test("worker launch keeps exact MCP binding when packages, profiles or registrie
     registerPlugin(f.home, f.manifest);
     const hive = new Hive(path.join(f.home, "hive.db"));
     t.after(() => hive.db.close());
-    const project = hive.getProjectBySlug("chapter");
+    const project = hive.projects.getProjectBySlug("chapter");
     const url = "http://127.0.0.1:23456";
     const saved = await saveProjectPlugin(
       f.home,
@@ -1032,7 +1032,7 @@ test("configure failures and invalid receipts never enable the plugin", async (t
   registerPlugin(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
-  const project = hive.getProjectBySlug("chapter");
+  const project = hive.projects.getProjectBySlug("chapter");
   for (const code of [
     'console.log(JSON.stringify({configured:false,error:"Invented rejection"}));process.exit(2);',
     'console.log("not a receipt");',
@@ -1082,8 +1082,8 @@ test("fresh and resumed launch uses only the selected project across all CLI fam
   registerPlugin(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
-  const project = hive.getProjectBySlug("chapter");
-  const other = hive.createProject(hive.getAgent("human"), {
+  const project = hive.projects.getProjectBySlug("chapter");
+  const other = hive.projects.createProject(hive.identity.getAgent("human"), {
     name: "Other",
     slug: "other",
   });
@@ -1182,7 +1182,7 @@ test("localhost uses the same numeric-loopback profile and non-local origins nev
   registerPlugin(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
-  const project = hive.getProjectBySlug("chapter");
+  const project = hive.projects.getProjectBySlug("chapter");
   const change = {
     enabled: true,
     values: { host: "example.invalid" },
@@ -1221,7 +1221,7 @@ test("a server update and another CLI process cannot mutate the catalog or profi
   registerPlugin(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
-  const project = hive.getProjectBySlug("chapter");
+  const project = hive.projects.getProjectBySlug("chapter");
   const configure = async (...args: Parameters<typeof configurePlugin>) => {
     const result = spawnSync(
       process.execPath,
@@ -1261,7 +1261,7 @@ test("CLI binds an existing profile without copying or erasing retained state", 
   const f = setup(t);
   registerPlugin(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
-  const project = hive.getProjectBySlug("chapter");
+  const project = hive.projects.getProjectBySlug("chapter");
   hive.db.close();
   const profile = path.join(f.dir, "retained profile");
   mkdirSync(profile);

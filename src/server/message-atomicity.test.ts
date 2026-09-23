@@ -32,27 +32,27 @@ test("failed attachment sends are atomic and emit no recipient-visible side effe
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const human = hive.getAgent("human");
-  const worker = hive.join({ role: "worker", seniority: "mid" }).agent;
-  const dm = hive.openDm(human, worker.name);
-  const root = hive.postMessage(human, { channel: dm.id, body: "thread root" });
+  const human = hive.identity.getAgent("human");
+  const worker = hive.identity.join({ role: "worker", seniority: "mid" }).agent;
+  const dm = hive.channels.openDm(human, worker.name);
+  const root = hive.messages.postMessage(human, { channel: dm.id, body: "thread root" });
 
-  const reusable = await hive.createFileFromBytes(human, {
+  const reusable = await hive.files.createFileFromBytes(human, {
     name: "reusable.txt",
     mime: "text/plain",
     bytes: new TextEncoder().encode("reusable"),
   });
-  const foreign = await hive.createFileFromBytes(worker, {
+  const foreign = await hive.files.createFileFromBytes(worker, {
     name: "foreign.txt",
     mime: "text/plain",
     bytes: new TextEncoder().encode("foreign"),
   });
-  const bound = await hive.createFileFromBytes(human, {
+  const bound = await hive.files.createFileFromBytes(human, {
     name: "bound.txt",
     mime: "text/plain",
     bytes: new TextEncoder().encode("bound"),
   });
-  hive.postMessage(human, { channel: dm.id, body: "bind once", attachmentIds: [bound.id] });
+  hive.messages.postMessage(human, { channel: dm.id, body: "bind once", attachmentIds: [bound.id] });
 
   const messageEvents: Message[] = [];
   const queuedEvents: unknown[] = [];
@@ -74,7 +74,7 @@ test("failed attachment sends are atomic and emit no recipient-visible side effe
 
     assert.throws(
       () =>
-        hive.postMessage(human, {
+        hive.messages.postMessage(human, {
           channel: dm.id,
           threadId: root.id,
           body: fixture.name,
@@ -99,7 +99,7 @@ test("failed attachment sends are atomic and emit no recipient-visible side effe
   };
   hive.bus.on("message", verifyCommit);
 
-  const sent = hive.postMessage(human, {
+  const sent = hive.messages.postMessage(human, {
     channel: dm.id,
     threadId: root.id,
     body: "committed send",
@@ -123,16 +123,16 @@ test("mid-transaction attachment failure rolls back message, thread, and earlier
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const human = hive.getAgent("human");
-  const worker = hive.join({ role: "worker", seniority: "mid" }).agent;
-  const dm = hive.openDm(human, worker.name);
-  const root = hive.postMessage(human, { channel: dm.id, body: "thread root" });
-  const first = await hive.createFileFromBytes(human, {
+  const human = hive.identity.getAgent("human");
+  const worker = hive.identity.join({ role: "worker", seniority: "mid" }).agent;
+  const dm = hive.channels.openDm(human, worker.name);
+  const root = hive.messages.postMessage(human, { channel: dm.id, body: "thread root" });
+  const first = await hive.files.createFileFromBytes(human, {
     name: "first.txt",
     mime: "text/plain",
     bytes: new TextEncoder().encode("first"),
   });
-  const second = await hive.createFileFromBytes(human, {
+  const second = await hive.files.createFileFromBytes(human, {
     name: "second.txt",
     mime: "text/plain",
     bytes: new TextEncoder().encode("second"),
@@ -156,7 +156,7 @@ test("mid-transaction attachment failure rolls back message, thread, and earlier
 
   assert.throws(
     () =>
-      hive.postMessage(human, {
+      hive.messages.postMessage(human, {
         channel: dm.id,
         threadId: root.id,
         body: "must roll back",

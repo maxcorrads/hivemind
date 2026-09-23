@@ -10,9 +10,9 @@ import { now } from "./rows.ts";
 
 export type BotServiceDeps = Core & {
   readonly projects: Pick<ProjectDirectory, "requireActorProject">;
-  readonly agents: AgentDirectory;
+  readonly identity: AgentDirectory;
   readonly channels: ChannelAccess;
-  readonly reader: Pick<MessageReader, "getMessageById">;
+  readonly messageQueries: Pick<MessageReader, "getMessageById">;
   readonly files: Pick<FileService, "validateAttachments" | "bindAttachments">;
   readonly delivery: Pick<DeliveryService, "wakeMembers">;
   readonly rooms: Pick<RoomStore, "peek">;
@@ -32,21 +32,21 @@ export class BotService {
     const parsed = createBotSchema.safeParse(raw);
     if (!parsed.success) throw new HiveError(400, "Bot name must be 1–40 letters, digits, underscores or dashes, starting with a letter");
     const { name } = parsed.data;
-    if (this.deps.agents.getAgentByName(name)) throw new HiveError(409, "This identity name is already in use");
+    if (this.deps.identity.getAgentByName(name)) throw new HiveError(409, "This identity name is already in use");
     const id = crypto.randomUUID();
     const token = newToken();
     const t = now();
     this.db.prepare(`INSERT INTO agents
       (id, name, role, token_hash, online, last_seen_at, created_at, project_id)
       VALUES (?, ?, 'bot', ?, 0, ?, ?, ?)`).run(id, name, hashToken(token), t, t, project.id);
-    const bot = this.deps.agents.getAgent(id);
+    const bot = this.deps.identity.getAgent(id);
     this.deps.bus.emit("agent", bot);
     return { bot, token };
   }
 
   botCredential(actor: Agent, projectRef: string, botId: string): BotCredentialView {
     if (actor.role !== 'human') throw new HiveError(403, 'Only Human can manage bot credentials');
-    const project = this.deps.projects.requireActorProject(actor, projectRef), bot = this.deps.agents.getAgent(botId);
+    const project = this.deps.projects.requireActorProject(actor, projectRef), bot = this.deps.identity.getAgent(botId);
     if (bot.role !== 'bot' || bot.projectId !== project.id) throw new HiveError(404, 'Bot not found in this project');
     const row = this.db.prepare('SELECT revision, revoked FROM bot_credentials WHERE bot_id=?').get(bot.id);
     return { bot, credential: { revision: row ? Number(row.revision) : 1, revoked: Boolean(row?.revoked) } };
@@ -110,7 +110,7 @@ export class BotService {
         .run(input.threadId, ch.id);
       return { messageId, duplicate: false };
     });
-    const message = this.deps.reader.getMessageById(messageId);
+    const message = this.deps.messageQueries.getMessageById(messageId);
     if (!duplicate) {
       this.deps.bus.emit("message", message);
       this.deps.delivery.wakeMembers(ch, message);

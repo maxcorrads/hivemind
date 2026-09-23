@@ -52,11 +52,11 @@ test("actual polling observes the full rate-limit deadline and stop cancels the 
 test("multipart 429 preserves confirmed parts, serves another chat and resumes on its own deadline", async t => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-rate-parts-"));
   const hive = new Hive(path.join(dir, "hive.db"));
-  const human = hive.getAgent("human");
-  const project = hive.createProject(human, { name: "Other", slug: "other" });
-  const other = hive.getChannel("general", project.id);
-  const a = await hive.createFileFromBytes(human, { name: "a.txt", mime: "text/plain", bytes: Buffer.from("a") });
-  const b = await hive.createFileFromBytes(human, { name: "b.txt", mime: "text/plain", bytes: Buffer.from("b") });
+  const human = hive.identity.getAgent("human");
+  const project = hive.projects.createProject(human, { name: "Other", slug: "other" });
+  const other = hive.channels.getChannel("general", project.id);
+  const a = await hive.files.createFileFromBytes(human, { name: "a.txt", mime: "text/plain", bytes: Buffer.from("a") });
+  const b = await hive.files.createFileFromBytes(human, { name: "b.txt", mime: "text/plain", bytes: Buffer.from("b") });
   t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 100_000 });
   const sent: string[] = [];
   let rateLimited = false;
@@ -76,8 +76,8 @@ test("multipart 429 preserves confirmed parts, serves another chat and resumes o
   const bridge = new TelegramBridge(hive, { botToken: "fixture", allowUserIds: [1], groups: { chapter: -1001, other: -1002 } });
   bridge.start();
   try {
-    hive.postMessage(human, { channel: "general", body: "x".repeat(1100), attachmentIds: [a.id, b.id] });
-    hive.postMessage(human, { channel: other.id, body: "unrelated work" });
+    hive.messages.postMessage(human, { channel: "general", body: "x".repeat(1100), attachmentIds: [a.id, b.id] });
+    hive.messages.postMessage(human, { channel: other.id, body: "unrelated work" });
     await until(() => sent.length === 4);
     assert.deepEqual(sent, ["-1001:text", "-1001:a.txt", "-1001:b.txt", "-1002:text"]);
     t.mock.timers.tick(1_000); // normal inter-job pacing, then earliest cooldown is scheduled

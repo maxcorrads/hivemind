@@ -22,7 +22,7 @@ async function flush() { for (let i = 0; i < 30; i++) await nextTurn(); }
 function setup(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-tg-handoff-"));
   const hive = new Hive(path.join(dir, "hive.db"));
-  hive.createProject(hive.getAgent("human"), { name: "Other", slug: "other" });
+  hive.projects.createProject(hive.identity.getAgent("human"), { name: "Other", slug: "other" });
   writeTelegramFile({ botToken: "handoff-fixture", allowUserIds: [1], projects: { chapter: -1001 } }, dir);
   t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
   const batch = [
@@ -52,7 +52,7 @@ function setup(t: TestContext) {
 
 test("remap during an accepted batch preserves the original project of its entire unfinished remainder", async t => {
   const f = setup(t);
-  const originalProject = f.hive.findProjectBySlug("chapter")!.id;
+  const originalProject = f.hive.projects.findProjectBySlug("chapter")!.id;
   await until(() => f.calls.files === 1);
   await f.handle.configure({ allowUserIds: [1], projects: { other: -1001 } });
   await until(() => f.calls.polls >= 2); await flush();

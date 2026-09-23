@@ -12,10 +12,10 @@ function setup(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-queries-"));
   const hive = new Hive(path.join(dir, "hive.db"));
   t.after(() => { hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
-  const human = hive.getAgent("human");
-  const worker = hive.join({ role: "worker", seniority: "mid" }).agent;
-  const project = hive.getProject(worker.projectId!);
-  const other = hive.createProject(human, { name: "Other", slug: "other" });
+  const human = hive.identity.getAgent("human");
+  const worker = hive.identity.join({ role: "worker", seniority: "mid" }).agent;
+  const project = hive.projects.getProject(worker.projectId!);
+  const other = hive.projects.createProject(human, { name: "Other", slug: "other" });
   return { hive, human, worker, project, other };
 }
 
@@ -55,15 +55,15 @@ function plan(hive: Hive, call: Call): string {
 test("50,000 unrelated agents and 2,000 channels do not enter scoped hydration; both roster OR arms use indexes", (t) => {
   const { hive, worker, project, other } = setup(t);
   const initial = record(t, hive);
-  const expectedAgents = hive.listAgents(worker);
-  const expectedChannels = hive.listChannels(worker);
+  const expectedAgents = hive.identity.listAgents(worker);
+  const expectedChannels = hive.channels.listChannels(worker);
   const baseline = initial.calls.map(({ count }) => count);
   initial.restore();
   fillAgents(hive, other.id, 50_000, "other-agent-");
   fillChannels(hive, other.id, "other-agent-0", 2_000, "other-channel-");
   const observed = record(t, hive);
-  assert.deepEqual(hive.listAgents(worker), expectedAgents);
-  assert.deepEqual(hive.listChannels(worker), expectedChannels);
+  assert.deepEqual(hive.identity.listAgents(worker), expectedAgents);
+  assert.deepEqual(hive.channels.listChannels(worker), expectedChannels);
   assert.deepEqual(observed.calls.map(({ count }) => count), baseline);
   assert.equal(observed.calls.length, 3, "one roster query and two channel queries, regardless of unrelated project size");
   const rosterCall = observed.calls[0]!;
@@ -80,7 +80,7 @@ test("33,000 visible channels hydrate in two constant-parameter statements and i
   const { hive, human, worker, project } = setup(t);
   fillChannels(hive, project.id, worker.id, 33_000, "room-");
   const listing = record(t, hive);
-  const channels = hive.listChannels(worker);
+  const channels = hive.channels.listChannels(worker);
   assert.equal(channels.length, 33_001); // includes the built-in general channel
   assert.equal(listing.calls.length, 2);
   assert.ok(listing.calls.every((call) => call.args.length === 3));
@@ -89,7 +89,7 @@ test("33,000 visible channels hydrate in two constant-parameter statements and i
   // Insert a single deliverable row directly to avoid generating a notification recount for every fixture room.
   seedMessages(hive, [{ id: "large-inbox", channelId: "room-32999", authorId: "human", body: "fixture", createdAt: 2 }]);
   const inbox = record(t, hive);
-  const result = await hive.wait(worker, 100);
+  const result = await hive.delivery.wait(worker, 100);
   const captured = [...inbox.calls]; inbox.restore();
   assert.deepEqual(result.messages.map((m) => m.id), ["large-inbox"]);
   assert.ok(captured.every((call) => call.args.length <= 400));
@@ -99,7 +99,7 @@ test("33,000 visible channels hydrate in two constant-parameter statements and i
   assert.match(scan.sql, /FROM messages WHERE seq > \? ORDER BY seq LIMIT \?/);
   assert.doesNotMatch(scan.sql, /channel_id IN \(\?(?:,\?)+/);
   const search = record(t, hive);
-  assert.deepEqual(hive.searchMessages(worker, { q: "fixture" }).hits.map((hit) => hit.body), ["fixture"]);
+  assert.deepEqual(hive.messageQueries.searchMessages(worker, { q: "fixture" }).hits.map((hit) => hit.body), ["fixture"]);
   assert.ok(search.calls.every((call) => call.args.length <= 400));
   search.restore();
 });
@@ -110,36 +110,36 @@ test("SQL visibility matches point authorization across projects, private rooms,
   const file = path.join(dir, "hive.db");
   let hive = new Hive(file);
   try {
-    const human = hive.getAgent("human");
-    const brain = hive.join({ role: "brain" }).agent;
-    const worker = hive.join({ role: "worker", seniority: "mid" }).agent;
-    const other = hive.createProject(human, { name: "Other", slug: "other" });
-    const foreign = hive.createChannel(human, { name: "foreign", type: "private", project: other.slug });
-    const privateRoom = hive.createChannel(brain, { name: "secret", type: "private" });
-    const brains = hive.getChannel("brains", brain.projectId);
+    const human = hive.identity.getAgent("human");
+    const brain = hive.identity.join({ role: "brain" }).agent;
+    const worker = hive.identity.join({ role: "worker", seniority: "mid" }).agent;
+    const other = hive.projects.createProject(human, { name: "Other", slug: "other" });
+    const foreign = hive.channels.createChannel(human, { name: "foreign", type: "private", project: other.slug });
+    const privateRoom = hive.channels.createChannel(brain, { name: "secret", type: "private" });
+    const brains = hive.channels.getChannel("brains", brain.projectId);
     addChannelMember(hive, foreign.id, worker.id);
     addChannelMember(hive, brains.id, worker.id);
     for (const actor of [human, brain, worker, { ...worker, projectId: null }]) {
-      const listed = hive.listChannels(actor).map((c) => c.id).sort();
-      const allowed = hive.listChannels(human).filter((c) => hive.canSeeChannel(actor, c)).map((c) => c.id).sort();
+      const listed = hive.channels.listChannels(actor).map((c) => c.id).sort();
+      const allowed = hive.channels.listChannels(human).filter((c) => hive.channels.canSeeChannel(actor, c)).map((c) => c.id).sort();
       assert.deepEqual(listed, allowed);
       for (const id of [foreign.id, privateRoom.id, brains.id]) {
-        if (!allowed.includes(id)) assert.throws(() => hive.listMessages(actor, id), /Cannot read|not found/i);
+        if (!allowed.includes(id)) assert.throws(() => hive.messageQueries.listMessages(actor, id), /Cannot read|not found/i);
       }
     }
-    hive.invite(brain, privateRoom.id, [worker.name]);
-    assert.ok(hive.listChannels(worker).some((c) => c.id === privateRoom.id));
+    hive.channels.invite(brain, privateRoom.id, [worker.name]);
+    assert.ok(hive.channels.listChannels(worker).some((c) => c.id === privateRoom.id));
     hive.db.close(); hive = new Hive(file);
-    assert.ok(hive.listChannels(hive.getAgent(worker.id)).some((c) => c.id === privateRoom.id));
-    assert.ok(!hive.listChannels(hive.getAgent(worker.id)).some((c) => c.id === foreign.id || c.id === brains.id));
+    assert.ok(hive.channels.listChannels(hive.identity.getAgent(worker.id)).some((c) => c.id === privateRoom.id));
+    assert.ok(!hive.channels.listChannels(hive.identity.getAgent(worker.id)).some((c) => c.id === foreign.id || c.id === brains.id));
   } finally { hive.db.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
 for (const compact of [false, true]) {
   test(`600-message brain wait keeps bounded scoped hydration across receipt pages (compact=${compact})`, async (t) => {
     const { hive, human, project, other } = setup(t);
-    const brain = hive.join({ role: "brain", project: project.slug }).agent;
-    const room = hive.createChannel(brain, { name: "work", type: "private" });
+    const brain = hive.identity.join({ role: "brain", project: project.slug }).agent;
+    const room = hive.channels.createChannel(brain, { name: "work", type: "private" });
     markInboxRead(hive);
     const mail = Array.from({ length: 600 }, (_, i) => i);
     fillAgents(hive, project.id, 600, "author-");
@@ -161,7 +161,7 @@ for (const compact of [false, true]) {
     let lastMore = -1;
     while (receivedCount < 600) {
       assert.ok(++pages <= 6, "100-message receipt cap should require exactly six pages");
-      const result = await hive.wait(brain, 100, undefined, { compact });
+      const result = await hive.delivery.wait(brain, 100, undefined, { compact });
       assert.equal(result.idle, false);
       assert.ok(result.delivery);
       assert.ok(result.delivery.messageSeqs.length <= 100);
@@ -169,7 +169,7 @@ for (const compact of [false, true]) {
       if (compact) receivedCompact.push(...(result.mail ?? []));
       else receivedRaw.push(...result.messages);
       receivedCount += result.delivery.messageSeqs.length;
-      hive.acknowledgeInbox(brain, result.delivery.sessionId, result.delivery.id);
+      hive.delivery.acknowledgeInbox(brain, result.delivery.sessionId, result.delivery.id);
     }
     const calls = [...observed.calls];
     observed.restore();
@@ -197,7 +197,7 @@ for (const compact of [false, true]) {
         { id: "attachment-20", name: "20.txt", mime: "text/plain", bytes: 3 },
       ]);
       assert.equal(receivedRaw[20]!.reactions, undefined, "wait omits reaction rosters by design");
-      assert.deepEqual(hive.getVisibleMessage(brain, receivedRaw[20]!.seq).reactions,
+      assert.deepEqual(hive.messageQueries.getVisibleMessage(brain, receivedRaw[20]!.seq).reactions,
         [{ emoji: "👍", count: 1, mine: false }], "history preserves the complete reaction state");
     }
 
@@ -217,6 +217,6 @@ for (const compact of [false, true]) {
     assert.ok(calls.every((call) => call.args.length <= 16));
     assert.ok(calls.every((call) => !call.args.includes("outsider-0")));
     // The unrelated 10k-message backlog is never hydrated into delivery metadata.
-    assert.ok(hive.listAgents(human).some((a) => a.projectId === other.id));
+    assert.ok(hive.identity.listAgents(human).some((a) => a.projectId === other.id));
   });
 }

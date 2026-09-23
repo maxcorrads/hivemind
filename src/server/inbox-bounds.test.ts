@@ -16,17 +16,17 @@ function fixture(t: TestContext, role: "brain" | "worker" = "brain") {
   // Byte/scan-limit tests are independent of the routine batching timer.
   const hive = new Hive(file, { routineBatchMs: 0 });
   t.after(() => { try { hive.db.close(); } catch {} rmSync(dir, { recursive: true, force: true }); });
-  const reader = hive.join(role === "brain" ? { role } : { role, seniority: "mid" });
-  const writer = hive.join({ role: "brain" });
-  const dm = hive.openDm(writer.agent, reader.agent.name);
+  const reader = hive.identity.join(role === "brain" ? { role } : { role, seniority: "mid" });
+  const writer = hive.identity.join({ role: "brain" });
+  const dm = hive.channels.openDm(writer.agent, reader.agent.name);
   markInboxRead(hive, reader.agent.id);
-  const sessionId = hive.openInboxSession(reader.agent, crypto.randomUUID());
+  const sessionId = hive.delivery.openInboxSession(reader.agent, crypto.randomUUID());
   const bulk = (n: number, body = "ordinary", channel = dm.id, kind = "chat", mentions: string[] = []) => {
     return seedMessages(hive, Array.from({ length: n }, () => ({ channelId: channel, authorId: writer.agent.id, body,
       kind, control: kind === "control" ? "clear_context" : null, mentions })));
   };
-  const wait = (compact = true) => hive.wait(reader.agent, 1, undefined, { sessionId, compact });
-  const ack = (result: WaitResult) => hive.acknowledgeInbox(reader.agent, sessionId, result.delivery!.id);
+  const wait = (compact = true) => hive.delivery.wait(reader.agent, 1, undefined, { sessionId, compact });
+  const ack = (result: WaitResult) => hive.delivery.acknowledgeInbox(reader.agent, sessionId, result.delivery!.id);
   return { dir, file, hive, reader, writer, dm, sessionId, bulk, wait, ack };
 }
 
@@ -71,15 +71,15 @@ function observeScans(hive: Hive) {
 for (const role of ["brain", "worker"] as const) test(`${role} compact mail preserves channel identity across label clipping and replay`, async t => {
   const f = fixture(t, role);
   const channels = [199, 200, 201, 210, 1_000].map(length => {
-    const ch = f.hive.createChannel(f.writer.agent, { name: `legacy-${length}`, type: "private", memberNames: [f.reader.agent.name] });
+    const ch = f.hive.channels.createChannel(f.writer.agent, { name: `legacy-${length}`, type: "private", memberNames: [f.reader.agent.name] });
     // Admission now rejects oversized NEW names; existing persisted names must
     // still be represented/recoverable without losing canonical channel IDs.
     updateRows(f.hive, "channels", { name: "a".repeat(length) }, { id: ch.id });
-    return f.hive.getChannel(ch.id);
+    return f.hive.channels.getChannel(ch.id);
   });
   markInboxRead(f.hive, f.reader.agent.id);
   for (const channel of channels) {
-    const sent = f.hive.postMessage(f.writer.agent, { channel: channel.id, body: "Reply in this channel." });
+    const sent = f.hive.messages.postMessage(f.writer.agent, { channel: channel.id, body: "Reply in this channel." });
     const compact = await f.wait(); bounded(compact, role === "worker" ? WAIT_MAIL_CAP : INBOX_BATCH_MAX);
     const item = compact.mail![0];
     assert.equal(item.channelId, channel.id);
@@ -91,28 +91,28 @@ for (const role of ["brain", "worker"] as const) test(`${role} compact mail pres
     const replay = await f.wait(); bounded(replay);
     assert.equal(replay.delivery!.id, compact.delivery!.id);
     assert.deepEqual(replay.mail, compact.mail);
-    const history = f.hive.listMessages(f.reader.agent, item.channelId).messages;
+    const history = f.hive.messageQueries.listMessages(f.reader.agent, item.channelId).messages;
     assert.ok(history.some(message => message.seq === sent.seq));
     f.ack(replay);
-    const reply = f.hive.postMessage(f.reader.agent, { channel: item.channelId, body: "Received." });
+    const reply = f.hive.messages.postMessage(f.reader.agent, { channel: item.channelId, body: "Received." });
     assert.equal(reply.channelId, channel.id);
   }
 });
 
 test("compact digests retain distinct channel IDs when abbreviated labels coincide", async t => {
   const f = fixture(t);
-  const worker = f.hive.join({ role: "worker", seniority: "mid" });
+  const worker = f.hive.identity.join({ role: "worker", seniority: "mid" });
   const prefix = "a".repeat(200);
   const channels = [prefix, `${prefix}-one`, `${prefix}-two`].map((name, index) => {
-    const ch = f.hive.createChannel(f.writer.agent, { name: `legacy-digest-${index}`, type: "private", memberNames: [f.reader.agent.name, worker.agent.name] });
+    const ch = f.hive.channels.createChannel(f.writer.agent, { name: `legacy-digest-${index}`, type: "private", memberNames: [f.reader.agent.name, worker.agent.name] });
     updateRows(f.hive, "channels", { name }, { id: ch.id });
-    return f.hive.getChannel(ch.id);
+    return f.hive.channels.getChannel(ch.id);
   });
   markInboxRead(f.hive, f.reader.agent.id);
   const expected = new Map<string, number[]>();
   for (const channel of channels) {
-    const root = f.hive.postMessage(worker.agent, { channel: channel.id, body: "Report 0", eventType: "progress" });
-    const reply = f.hive.postMessage(worker.agent, { channel: channel.id, threadId: root.id, body: "Report 1", eventType: "progress" });
+    const root = f.hive.messages.postMessage(worker.agent, { channel: channel.id, body: "Report 0", eventType: "progress" });
+    const reply = f.hive.messages.postMessage(worker.agent, { channel: channel.id, threadId: root.id, body: "Report 1", eventType: "progress" });
     expected.set(channel.id, [root.seq, reply.seq]);
   }
   const compact = await f.wait(); bounded(compact);
@@ -123,7 +123,7 @@ test("compact digests retain distinct channel IDs when abbreviated labels coinci
     assert.equal(item.excerpt, "Report 1");
     assert.equal(item.body, undefined);
     assert.equal(item.ch, `#${prefix}${index === 0 ? "" : "…"}`);
-    const history = f.hive.listMessages(f.reader.agent, item.channelId, { threadId: item.rootId }).messages;
+    const history = f.hive.messageQueries.listMessages(f.reader.agent, item.channelId, { threadId: item.rootId }).messages;
     assert.ok(expected.get(item.channelId)!.every(seq => history.some(message => message.seq === seq)));
   }
   const raw = await f.wait(false); bounded(raw);
@@ -137,7 +137,7 @@ test("NUL-containing text survives raw delivery, compact replay and ACK unchange
   const bodies = ["before\0important instruction", "\0leading", "trailing\0", "\0",
     "界\0😀".repeat(1000)];
   for (const body of bodies) {
-    const sent = f.hive.postMessage(f.writer.agent, { channel: f.dm.id, body });
+    const sent = f.hive.messages.postMessage(f.writer.agent, { channel: f.dm.id, body });
     const raw = await f.wait(false); bounded(raw);
     assert.equal(raw.messages[0].body, body);
     assert.equal(raw.messages[0].recovery, undefined);
@@ -145,7 +145,7 @@ test("NUL-containing text survives raw delivery, compact replay and ACK unchange
     assert.equal(compact.delivery!.id, raw.delivery!.id);
     assert.equal(compact.mail![0].body, body);
     assert.equal(compact.mail![0].recovery, undefined);
-    assert.equal(f.hive.getVisibleMessage(f.reader.agent, sent.seq).body, body);
+    assert.equal(f.hive.messageQueries.getVisibleMessage(f.reader.agent, sent.seq).body, body);
     f.ack(compact);
   }
   assert.equal((await f.wait()).idle, true);
@@ -163,17 +163,17 @@ test("byte-bounded control reads preserve NUL and recover Unicode safely at eith
     const expected = original.slice(0, BODY_MAX).replace(/[\uD800-\uDBFF]$/, "");
     assert.equal(item.body, expected);
     assert.ok(item.recovery);
-    assert.equal(f.hive.getVisibleMessage(f.reader.agent, seq).body, original);
+    assert.equal(f.hive.messageQueries.getVisibleMessage(f.reader.agent, seq).body, original);
     f.ack(result);
   }
 });
 
 test("initial scan and timeout scan share one budget and report their actual combined work", async t => {
   const f = fixture(t);
-  const general = f.hive.getChannel("general", f.reader.agent.projectId);
+  const general = f.hive.channels.getChannel("general", f.reader.agent.projectId);
   f.bulk(123, "initial public noise", general.id);
   const observed = observeScans(f.hive); t.after(observed.restore);
-  const pending = f.hive.wait(f.reader.agent, 10, undefined, { sessionId: f.sessionId, compact: true });
+  const pending = f.hive.delivery.wait(f.reader.agent, 10, undefined, { sessionId: f.sessionId, compact: true });
   f.bulk(WAIT_SCAN_MAX, "new public noise", general.id);
   const target = f.bulk(1, "mail beyond the request budget");
   const page = await pending; bounded(page);
@@ -190,10 +190,10 @@ test("initial scan and timeout scan share one budget and report their actual com
 
 test("a fully spent initial scan returns without reserving another scan after sleep", async t => {
   const f = fixture(t);
-  const general = f.hive.getChannel("general", f.reader.agent.projectId);
+  const general = f.hive.channels.getChannel("general", f.reader.agent.projectId);
   f.bulk(WAIT_SCAN_MAX, "initial public noise", general.id);
   const observed = observeScans(f.hive); t.after(observed.restore);
-  const pending = f.hive.wait(f.reader.agent, 10, undefined, { sessionId: f.sessionId, compact: true });
+  const pending = f.hive.delivery.wait(f.reader.agent, 10, undefined, { sessionId: f.sessionId, compact: true });
   const target = f.bulk(1, "mail for the next request");
   const page = await pending; bounded(page);
   assert.deepEqual(observed.rows, [WAIT_SCAN_MAX]);
@@ -207,10 +207,10 @@ test("a fully spent initial scan returns without reserving another scan after sl
 
 test("a receipt offered during sleep is retained if it cannot fit the residual scan budget", async t => {
   const f = fixture(t);
-  const general = f.hive.getChannel("general", f.reader.agent.projectId);
+  const general = f.hive.channels.getChannel("general", f.reader.agent.projectId);
   f.bulk(WAIT_SCAN_MAX - 1, "initial noise", general.id);
   const observed = observeScans(f.hive); t.after(observed.restore);
-  const waiting = f.hive.wait(f.reader.agent, 10, undefined, { sessionId: f.sessionId, compact: true });
+  const waiting = f.hive.delivery.wait(f.reader.agent, 10, undefined, { sessionId: f.sessionId, compact: true });
   const seqs = f.bulk(2, "concurrently offered mail");
   const receipt = f.hive.inbox.offer(f.reader.agent.id, f.sessionId, seqs, seqs.at(-1)!);
   const page = await waiting; bounded(page);
@@ -283,29 +283,29 @@ test("reserved mentions and control cannot skip ordinary mail; sparse receipts s
   const restarted = new Hive(f.file); t.after(() => restarted.db.close());
   restarted.db.function("json_array_length", () => { throw new Error("unexpected restart aggregation"); });
   assert.equal(restarted.inbox.status(f.reader.agent.id).acknowledgedMessages, historical + WAIT_MAIL_CAP);
-  const sessionId = restarted.openInboxSession(f.reader.agent, crypto.randomUUID());
+  const sessionId = restarted.delivery.openInboxSession(f.reader.agent, crypto.randomUUID());
   const seen = [...first.delivery!.messageSeqs];
   while (seen.length < normal.length + urgent.length) {
-    const next = await restarted.wait(f.reader.agent, 1, undefined, { sessionId, compact: true });
+    const next = await restarted.delivery.wait(f.reader.agent, 1, undefined, { sessionId, compact: true });
     bounded(next, WAIT_MAIL_CAP); assert.ok(next.delivery);
     seen.push(...next.delivery.messageSeqs);
-    restarted.acknowledgeInbox(f.reader.agent, sessionId, next.delivery.id);
+    restarted.delivery.acknowledgeInbox(f.reader.agent, sessionId, next.delivery.id);
   }
   assert.deepEqual(seen.sort((a, b) => a - b), [...normal, ...urgent]);
   assert.equal(countRows(restarted, "inbox_early_receipts"), 0);
-  assert.equal(restarted.inboxStatuses()[f.reader.agent.id].acknowledgedMessages, historical + normal.length + urgent.length);
+  assert.equal(restarted.delivery.inboxStatuses()[f.reader.agent.id].acknowledgedMessages, historical + normal.length + urgent.length);
 });
 
 test("public noise uses bounded empty continuations; the MCP loop only returns actual mail", async t => {
   const f = fixture(t);
-  const general = f.hive.getChannel("general", f.reader.agent.projectId);
+  const general = f.hive.channels.getChannel("general", f.reader.agent.projectId);
   f.bulk(1200, "public chatter", general.id);
   const target = f.bulk(1, "addressed after noise");
-  assert.deepEqual(f.hive.inboxStatuses()[f.reader.agent.id].queued, { atLeast: 0, exact: false });
+  assert.deepEqual(f.hive.delivery.inboxStatuses()[f.reader.agent.id].queued, { atLeast: 0, exact: false });
   const started = Date.now(); let calls = 0;
   const result = await waitUntilMail(async () => {
     calls++;
-    const page = await f.hive.wait(f.reader.agent, 60_000, undefined, { sessionId: f.sessionId, compact: true });
+    const page = await f.hive.delivery.wait(f.reader.agent, 60_000, undefined, { sessionId: f.sessionId, compact: true });
     bounded(page);
     if (page.idle) {
       assert.equal(page.page!.continuation, true);
@@ -318,7 +318,7 @@ test("public noise uses bounded empty continuations; the MCP loop only returns a
   assert.ok(Date.now() - started < 5000, "No long-poll sleep between progress pages");
   assert.deepEqual(result.delivery!.messageSeqs, target);
   f.ack(result);
-  assert.deepEqual(f.hive.inboxStatuses()[f.reader.agent.id].queued, { atLeast: 0, exact: true });
+  assert.deepEqual(f.hive.delivery.inboxStatuses()[f.reader.agent.id].queued, { atLeast: 0, exact: true });
 });
 
 test("queue lower bound excludes pending and early-confirmed messages", async t => {
@@ -326,9 +326,9 @@ test("queue lower bound excludes pending and early-confirmed messages", async t 
   f.bulk(300);
   const first = await f.wait(); bounded(first, WAIT_MAIL_CAP);
   assert.deepEqual(first.page!.remaining, { atLeast: WAIT_SCAN_MAX - WAIT_MAIL_CAP, exact: false });
-  assert.deepEqual(f.hive.inboxStatuses()[f.reader.agent.id].queued, first.page!.remaining);
+  assert.deepEqual(f.hive.delivery.inboxStatuses()[f.reader.agent.id].queued, first.page!.remaining);
   f.ack(first);
-  assert.deepEqual(f.hive.inboxStatuses()[f.reader.agent.id].queued, { atLeast: WAIT_SCAN_MAX, exact: false });
+  assert.deepEqual(f.hive.delivery.inboxStatuses()[f.reader.agent.id].queued, { atLeast: WAIT_SCAN_MAX, exact: false });
 });
 
 test("legacy oversize pending batch is atomically split; its old ACK cannot discard the tail", async t => {
@@ -349,13 +349,13 @@ test("legacy oversize pending batch is atomically split; its old ACK cannot disc
   assert.equal(upgraded.inbox.status(f.reader.agent.id).acknowledgedMessages, historical);
   const seen: number[] = [];
   while (seen.length < all.length) {
-    const result = await upgraded.wait(f.reader.agent, 1, undefined, { sessionId: f.sessionId }); bounded(result);
+    const result = await upgraded.delivery.wait(f.reader.agent, 1, undefined, { sessionId: f.sessionId }); bounded(result);
     assert.ok(result.delivery); assert.notEqual(result.delivery.id, old.id);
-    assert.throws(() => upgraded.acknowledgeInbox(f.reader.agent, f.sessionId, old.id), /Delivery was split/);
+    assert.throws(() => upgraded.delivery.acknowledgeInbox(f.reader.agent, f.sessionId, old.id), /Delivery was split/);
     assert.equal(upgraded.inbox.status(f.reader.agent.id).acknowledgedMessages, historical + seen.length);
     seen.push(...result.delivery.messageSeqs);
-    upgraded.acknowledgeInbox(f.reader.agent, f.sessionId, result.delivery.id);
-    assert.equal(upgraded.acknowledgeInbox(f.reader.agent, f.sessionId, result.delivery.id).duplicate, true);
+    upgraded.delivery.acknowledgeInbox(f.reader.agent, f.sessionId, result.delivery.id);
+    assert.equal(upgraded.delivery.acknowledgeInbox(f.reader.agent, f.sessionId, result.delivery.id).duplicate, true);
   }
   assert.deepEqual(seen, all);
   assert.equal(upgraded.inbox.status(f.reader.agent.id).acknowledgedMessages, historical + all.length);
@@ -372,7 +372,7 @@ test("control bodies, UTF-8 and JSON escapes obey byte caps; truncated originals
   assert.equal(control.recovery!.channel, f.dm.id);
   assert.equal(control.recovery!.since, seq - 1);
   f.bulk(3, "later unrelated mail");
-  const history = f.hive.listMessages(f.reader.agent, control.recovery!.channel,
+  const history = f.hive.messageQueries.listMessages(f.reader.agent, control.recovery!.channel,
     { threadId: control.recovery!.threadId, afterSeq: control.recovery!.since, limit: control.recovery!.limit });
   assert.equal(history.messages[0].body, original);
   f.ack(result);
@@ -421,15 +421,15 @@ test("a flood made entirely of mentions/control still paginates by bytes", async
 
 test("thread reply fallback recovers the exact original, even with newer replies", async t => {
   const f = fixture(t);
-  const root = f.hive.postMessage(f.writer.agent, { channel: f.dm.id, body: "root" });
-  const reply = f.hive.postMessage(f.writer.agent, { channel: f.dm.id, threadId: root.id, body: "reply" });
+  const root = f.hive.messages.postMessage(f.writer.agent, { channel: f.dm.id, body: "root" });
+  const reply = f.hive.messages.postMessage(f.writer.agent, { channel: f.dm.id, threadId: root.id, body: "reply" });
   const original = "😀".repeat(BODY_MAX);
   updateRows(f.hive, "messages", { body: original, kind: "control", control: "clear_context" }, { seq: reply.seq });
-  f.hive.postMessage(f.writer.agent, { channel: f.dm.id, threadId: root.id, body: "later reply" });
+  f.hive.messages.postMessage(f.writer.agent, { channel: f.dm.id, threadId: root.id, body: "later reply" });
   const page = await f.wait(); bounded(page);
   const item = page.control.find(m => m.seq === reply.seq)!;
   const recovery = item.recovery!; assert.ok(recovery);
-  const recovered = f.hive.listMessages(f.reader.agent, recovery.channel,
+  const recovered = f.hive.messageQueries.listMessages(f.reader.agent, recovery.channel,
     { threadId: recovery.threadId, afterSeq: recovery.since, limit: recovery.limit });
   assert.equal(recovered.messages[0].seq, reply.seq);
   assert.equal(recovered.messages[0].body, original);
