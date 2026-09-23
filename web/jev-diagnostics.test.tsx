@@ -41,7 +41,11 @@ test('render and save do not test Jev; a click makes exactly one explicit test',
     await act(async () => view.root.render(<AdaptiveRoutingSettings onClose={() => undefined} />));
     assert.equal(calls, 0);
     assert.match(view.host.textContent!, /can consume provider usage/);
-    await act(async () => { view.host.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true })); });
+    await act(async () => {
+      const event = document.createEvent('Event');
+      event.initEvent('submit', true, true);
+      view.host.querySelector('form')!.dispatchEvent(event);
+    });
     assert.equal(calls, 0);
     await act(async () => button(view.host, 'Test Jev connection').click());
     assert.equal(calls, 1);
