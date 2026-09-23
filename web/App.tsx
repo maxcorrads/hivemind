@@ -15,7 +15,7 @@ import { AdaptiveRoutingPanel, routingEventLabel, topologyLabel } from "./Adapti
 import type { AdaptiveExecutionState, AdaptiveRoutingEvent } from "../src/shared/adaptive-topology.ts";
 import { useAdaptiveRouting } from "./use-adaptive-routing.ts";
 import { JevLog } from "./JevLog.tsx";
-import { routingStreamEntries } from "./adaptive-routing-view.ts";
+import { routingStreamEntries, routingStripCounts } from "./adaptive-routing-view.ts";
 import { InboxReceipt, QueueBadge } from "./InboxReceipt.tsx";
 import { loadClosedDms, saveClosedDms } from "./closed-dms.ts";
 import { loadMailLog, mergeMailLog, saveMailLog } from "./mail-log.ts";
@@ -697,7 +697,7 @@ export function App() {
     id => snap?.agents.some(agent => agent.id === id && agent.role === "brain"),
   ));
   const brainNames = Object.fromEntries((snap?.agents ?? []).filter(agent => agent.role === "brain").map(agent => [agent.id, agent.name]));
-  const activeExecutions = (routingView?.executions ?? []).filter(item => item.channelId === activeChannel?.id && !item.completedAt).length;
+  const { brains: activeExecutions, finishing: finishingExecutions } = routingStripCounts(routingView, activeChannel?.id);
   useEffect(() => { setRoutingPanelOpen(false); }, [activeChannel?.id]);
   const selectedProject =
     sel.kind === "inbox" || sel.kind === "decisions" || sel.kind === "jev" ? sel.project : (activeChannel?.project ?? projects[0]?.slug ?? "chapter");
@@ -1382,6 +1382,7 @@ export function App() {
                     : ""}
                   {routingView.state.lockScope !== "none" ? ` · locked ${routingView.state.lockScope}` : ""}
                   {activeExecutions > 1 ? ` · ${brainNames[routingView.state.brainId] ?? "brain"} · ${activeExecutions} brains` : ""}
+                  {finishingExecutions > 0 ? ` · +${finishingExecutions} finishing` : ""}
                 </button>
                 <span>
                   {routingView.state.monitoring === "completed" ? "Execution completed" : routingView.state.monitoring === "disabled"

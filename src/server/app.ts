@@ -13,7 +13,6 @@ import { parseProjectSlug } from "../shared/project.ts";
 import { launchContext, projectPlugins, saveProjectPlugin, setProjectPluginAvailability, pluginErrorMessage } from "./plugins.ts";
 import { BotIngressBudget, readLimitedJson, assertLocalHumanRequest, BOT_JSON_BYTES, PLUGIN_REQUEST_BYTES, CREDENTIAL_JSON_BYTES } from "./ingress.ts";
 import { adaptiveRoutingPublic, saveAdaptiveRouting } from "./adaptive-config.ts";
-import { jevCallLog } from "./jev-call-log.ts";
 import { decodeJevCallCursor } from "../shared/jev-calls.ts";
 import { installJevDiagnostics } from './adaptive-routing-diagnostics.ts';
 import { assignAdaptiveTask, mutateAdaptiveTask, mutateAdaptiveRoom, sendAdaptiveAgentMessage, setAdaptiveThreadStatus } from './adaptive-topology-actions.ts';
@@ -89,9 +88,9 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   const projectRef = (ref: string) => { try { return hive.getProjectBySlug(ref); } catch { return hive.getProject(ref); } };
   ui.get('/projects/:id/jev-calls', c => {
     const cursor = decodeJevCallCursor(c.req.query('cursor') ?? c.req.query('before'));
-    return c.json(jevCallLog(hive.db).view(projectRef(c.req.param('id')).id, cursor));
+    return c.json(hive.adaptiveTopology.observations.jevCalls.view(projectRef(c.req.param('id')).id, cursor));
   });
-  ui.get('/projects/:id/jev-calls/:callId', c => c.json({ call: jevCallLog(hive.db).get(projectRef(c.req.param('id')).id, c.req.param('callId')) }));
+  ui.get('/projects/:id/jev-calls/:callId', c => c.json({ call: hive.adaptiveTopology.observations.jevCalls.get(projectRef(c.req.param('id')).id, c.req.param('callId')) }));
   ui.get("/channels/:id/adaptive-routing", c => c.json(hive.adaptiveTopology.view(hive.getAgent("human"), c.req.param("id"))));
   ui.put("/channels/:id/adaptive-routing/lock", async c => c.json(hive.adaptiveTopology.setLock(hive.getAgent("human"), c.req.param("id"), await readLimitedJson(c.req.raw, CREDENTIAL_JSON_BYTES))));
   ui.get("/snapshot", c => {

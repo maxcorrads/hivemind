@@ -11,7 +11,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
-import { EventEmitter } from "node:events";
+import { HiveBus } from "./hive-events.ts";
 import {
   BODY_MAX,
   DEFAULT_WAIT_MS,
@@ -68,6 +68,9 @@ import { AdaptiveTopologyRuntime } from './adaptive-topology.ts';
 import type { TaskEnvelope } from '../shared/tasks.ts';
 
 export { hiveHome } from "./paths.ts";
+import { parseMentions } from "../shared/mentions.ts";
+// Kept for callers that historically imported the helper from the Hive module.
+export { parseMentions };
 
 type AgentRow = {
   id: string;
@@ -143,7 +146,8 @@ type Waiter = {
 
 export class Hive {
   db: DatabaseSync;
-  bus = new EventEmitter();
+  /** Post-commit change notifications; see HiveEvents for every event and payload. */
+  readonly bus = new HiveBus();
   readonly home: string;
   readonly inbox!: InboxDeliveryStore;
   private readonly inboxReader!: InboxReader;
@@ -164,7 +168,6 @@ export class Hive {
 
   constructor(dbPath = path.join(hiveHome(), "hive.db"), options: { routineBatchMs?: number; uploadLimits?: Partial<UploadLimits> } = {}) {
     this.home = path.dirname(dbPath);
-    this.bus.setMaxListeners(200);
     mkdirSync(path.dirname(dbPath), { recursive: true, mode: 0o700 });
     preparePrivateDatabase(dbPath);
     this.db = new DatabaseSync(dbPath);
@@ -2312,16 +2315,4 @@ function slugify(name: string): string {
 
 function dmLabel(a: Agent, b: Agent): string {
   return [a.name, b.name].sort((x, y) => x.localeCompare(y)).join(" · ");
-}
-
-export function parseMentions(body: string, agents: Agent[]): string[] {
-  const ids = new Set<string>();
-  const re = /@([A-Za-z][A-Za-z0-9_-]*)/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(body))) {
-    const name = m[1]!;
-    const agent = agents.find((a) => a.role !== "bot" && a.name.toLowerCase() === name.toLowerCase());
-    if (agent) ids.add(agent.id);
-  }
-  return [...ids];
 }

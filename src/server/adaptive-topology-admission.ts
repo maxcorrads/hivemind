@@ -11,7 +11,20 @@ export function coordinationEventId(actorId: string, family: string, requestId: 
 
 type Permit = { executionId: string; revision: number; workerId: string; channelId: string | null;
   requestId: string; contractHash: string; expiresAt: number };
-const permits = new WeakMap<Hive, Map<string, Permit>>();
+
+/**
+ * In-memory admission state of one AdaptiveTopologyRuntime (`hive.adaptiveTopology.admission`):
+ * - `permits`: the short-lived pre-action capability per brain (see permitAdaptiveTask);
+ * - `lanes`: each brain's serialized coordination tail (see coordinateMutation);
+ * - `followUps`: post-commit routing tasks still running (see settleAdaptiveFollowUps).
+ */
+export class AdaptiveAdmission {
+  readonly permits = new Map<string, Permit>();
+  readonly lanes = new Map<string, Promise<void>>();
+  readonly followUps = new Set<Promise<void>>();
+  /** A stopped runtime issues no capability: pending permits are dropped. Lanes and follow-ups drain themselves. */
+  dispose(): void { this.permits.clear(); }
+}
 function contractHash(contract: TaskContract): string {
   return createHash('sha256').update(JSON.stringify(contract)).digest('hex');
 }
@@ -30,14 +43,12 @@ export function permitAdaptiveTask(hive: Hive, actor: Agent, input: {
   const worker = hive.getAgentByName(input.worker);
   if (!worker || worker.role !== 'worker' || worker.projectId !== actor.projectId)
     throw new HiveError(400, 'Select a worker in this project');
-  const byActor = permits.get(hive) ?? new Map<string, Permit>();
-  permits.set(hive, byActor);
-  byActor.set(actor.id, { executionId: policy.executionId, revision: stateRevision(hive, policy.executionId),
+  hive.adaptiveTopology.admission.permits.set(actor.id, { executionId: policy.executionId, revision: stateRevision(hive, policy.executionId),
     workerId: worker.id, channelId: input.channel ? hive.getChannel(input.channel, actor.projectId).id : null,
     requestId: input.requestId, contractHash: contractHash(input.contract), expiresAt: Date.now() + 10_000 });
 }
 export function clearAdaptivePermit(hive: Hive, actorId: string): void {
-  permits.get(hive)?.delete(actorId);
+  hive.adaptiveTopology?.admission.permits.delete(actorId);
 }
 
 export function assertAdaptiveWorkerAdmission(hive: Hive, actor: Agent, channel: Channel,
@@ -65,7 +76,7 @@ export function assertAdaptiveWorkerAdmission(hive: Hive, actor: Agent, channel:
 /** Called inside TaskStore's existing write transaction, before any task/message row is inserted. */
 export function admitAdaptiveTask(hive: Hive, actor: Agent, task: TaskSnapshot, requestId: string): string | null {
   if (!hive.adaptiveTopology?.hasActive(actor)) return null;
-  const permit = permits.get(hive)?.get(actor.id);
+  const permit = hive.adaptiveTopology.admission.permits.get(actor.id);
   // The permit names the execution this assignment was verified against.
   const policy = permit ? hive.adaptiveTopology.forAgent(actor, permit.executionId) : null;
   if (!permit || !policy || permit.expiresAt < Date.now() ||
@@ -113,11 +124,9 @@ export function bindAdaptiveMessage(hive: Hive, actor: Agent, message: Message,
 
 /** Post-commit routing that must not hold a brain's lane (e.g. project-wide revalidation after capacity changes). */
 export type DeferRouting = (label: string, task: () => Promise<unknown>) => void;
-const followUps = new WeakMap<Hive, Set<Promise<void>>>();
 function startFollowUps(hive: Hive, tasks: Array<[string, () => Promise<unknown>]>): void {
   if (!tasks.length) return;
-  const running = followUps.get(hive) ?? new Set<Promise<void>>();
-  followUps.set(hive, running);
+  const running = hive.adaptiveTopology.admission.followUps;
   for (const [label, task] of tasks) {
     const pending: Promise<void> = Promise.resolve().then(task).then(() => undefined, (error: unknown) => {
       console.error(`Adaptive ${label} failed after commit`, error instanceof Error ? error.message : String(error));
@@ -127,8 +136,8 @@ function startFollowUps(hive: Hive, tasks: Array<[string, () => Promise<unknown>
 }
 /** Deterministic hook for tests and shutdown: resolves once every started post-commit routing task settled. */
 export async function settleAdaptiveFollowUps(hive: Hive): Promise<void> {
-  const running = followUps.get(hive);
-  while (running?.size) await Promise.all(running);
+  const running = hive.adaptiveTopology.admission.followUps;
+  while (running.size) await Promise.all(running);
 }
 
 /**
@@ -148,14 +157,12 @@ export async function settleAdaptiveFollowUps(hive: Hive): Promise<void> {
  * brains without an active (enabled or locked) execution and no pending coordination of their own.
  * Work registered through `defer` runs after the lane is released, fire-and-forget with error logging.
  */
-const lanes = new WeakMap<Hive, Map<string, Promise<void>>>();
 export function coordinateMutation<T>(hive: Hive, actor: Agent, work: (defer: DeferRouting) => Promise<T>): Promise<T> {
-  const map = lanes.get(hive) ?? new Map<string, Promise<void>>();
-  lanes.set(hive, map);
+  const map = hive.adaptiveTopology.admission.lanes;
   const deferred: Array<[string, () => Promise<unknown>]> = [];
   const run = () => work((label, task) => { deferred.push([label, task]); });
   const key = actor.id;
-  const bypass = actor.role !== 'brain' || (!map.has(key) && !hive.adaptiveTopology?.hasActive(actor));
+  const bypass = actor.role !== 'brain' || (!map.has(key) && !hive.adaptiveTopology.hasActive(actor));
   let result: Promise<T>;
   if (bypass) result = run();
   else {
