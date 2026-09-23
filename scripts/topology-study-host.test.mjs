@@ -2,14 +2,14 @@
 // calls are answered by a local fixture (network to anything but loopback throws), and fake `opencode` seats that
 // speak the agent HTTP API. No provider, credential or paid call is involved.
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { prepareStudy, validateStudy } from './benchmark-topology.mjs';
 import { exportRun, parseArgs, prepareRun, runStudy, sha256 } from './topology-study-runner.mjs';
-import { createHivemindHost, liveUsage } from './topology-study-host.mjs';
+import { createHivemindHost, findStalledSeat, liveUsage, SEAT_DATA_PREFIX, sweepStaleSeatDataDirs } from './topology-study-host.mjs';
 import { createWatcher, windowName } from './topology-study-watch.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url)), repoRoot = path.resolve(here, '..');
@@ -35,6 +35,8 @@ function seedStartingWith(config, first) {
 function setup({ wallMs = 20_000, expectedResolvedModel = null, first = null, repeats = 1 } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hivemind-study-host-'));
   writeFileSync(path.join(dir, 'input.txt'), 'sort 3 1 2\n');
+  mkdirSync(path.join(dir, '.local/share/opencode'), { recursive: true });
+  writeFileSync(path.join(dir, '.local/share/opencode/auth.json'), '{"fixture":"not-a-credential"}\n');
   writeFileSync(path.join(dir, 'acceptance.mjs'), ACCEPTANCE);
   const config = { evidenceKind: 'synthetic', versions, repeats, seed: 29, freeWorkers: 2,
     workloads: [{ id: 'sort-fixture', version: 'v1', inputDigest: sha256(readFileSync(path.join(dir, 'input.txt'))),
@@ -281,4 +283,77 @@ test('a provider 429 reported by a seat downgrades later scheduling to one block
     assert.ok(journalRecords(ctx, study.trials[0].id).find(r => r.type === 'completed').rateLimited);
     assert.ok(report.trials.slice(10).every(t => t.load.concurrency === 5), 'the third block ran alone');
   } finally { ctx.cleanup(); }
+});
+
+test('the stall watchdog flags only a seat silent on stdout and in the hive past the timeout (fake clock)', () => {
+  const base = { name: 'brain', exited: false, lastOutputAt: 1_000, lastEvent: 'step_start', lastEventAt: 1_000, hiveSeenAt: 900 };
+  assert.equal(findStalledSeat({ now: 301_000, stallTimeoutMs: 300_000, seats: [base] }), null, 'not yet past the timeout');
+  const stall = findStalledSeat({ now: 301_001, stallTimeoutMs: 300_000, seats: [base] });
+  assert.deepEqual([stall.reason, stall.seat, stall.openStep, stall.silentMs], ['provider_stall', 'brain', true, 300_001]);
+  assert.equal(findStalledSeat({ now: 400_000, stallTimeoutMs: 300_000, seats: [{ ...base, hiveSeenAt: 380_000 }] }), null,
+    'a seat blocked in hivemind wait polls every 20 s, keeps its presence fresh and is never a stall');
+  assert.equal(findStalledSeat({ now: 400_000, stallTimeoutMs: 300_000, seats: [{ ...base, hiveSeenAt: 330_000 }] }).seat, 'brain',
+    'presence refreshed only by the 150 s MCP heartbeat is not activity');
+  assert.equal(findStalledSeat({ now: 400_000, stallTimeoutMs: 300_000, seats: [{ ...base, exited: true }] }), null);
+  assert.equal(findStalledSeat({ now: 400_000, stallTimeoutMs: 300_000, seats: [{ ...base, lastEvent: 'tool_use', hiveSeenAt: null }] }).openStep, false);
+});
+
+test('a provider stall is retained as harness evidence and retried once; the retry is the observation', { timeout: 120_000 }, async () => {
+  const ctx = setup({ first: 'brain_one_worker' });
+  try {
+    ctx.setBehavior('complete', 40, { stallOnce: ['brain'], idleHeartbeatMs: 150 });
+    const result = await ctx.execute({ maxTrials: 1, hostOptions: { stallTimeoutMs: 1_500, hiveActiveMs: 500 } });
+    assert.equal(result.status, 'paused');
+    const trialId = ctx.study.trials[0].id;
+    const records = journalRecords(ctx, trialId);
+    assert.deepEqual(records.map(r => r.type), ['started', 'stalled', 'started', 'completed']);
+    const stalled = records.find(r => r.type === 'stalled');
+    assert.deepEqual([stalled.attempt, stalled.stall.seat, stalled.stall.openStep, stalled.stall.lastEvent], [1, 'brain', true, 'step_start']);
+    assert.ok(existsSync(path.join(ctx.runDir, 'trials', trialId, 'attempt-001', 'stall.json')), 'stall evidence retained');
+    const { study, report } = exportRun({ runDir: ctx.runDir });
+    assert.equal(study.trials[0].observed.outcome, 'passed');
+    assert.equal(study.trials[0].observed.evidenceRef, `trials/${trialId}/attempt-002`);
+    assert.deepEqual([report.stalls.stalledAttempts, report.stalls.retriedAttempts, report.stalls.completedAfterRetry, report.stalls.harnessFailedAfterRetry],
+      [1, 1, 1, 0]);
+  } finally { ctx.cleanup(); }
+});
+
+test('a trial that stalls again after its retry is a harness failure and the cohort continues', { timeout: 120_000 }, async () => {
+  const ctx = setup({ first: 'brain_one_worker' });
+  try {
+    ctx.setBehavior('complete', 40, { stallAlways: ['brain'], idleHeartbeatMs: 150 });
+    const result = await ctx.execute({ maxTrials: 2, hostOptions: { stallTimeoutMs: 1_500, hiveActiveMs: 500 } });
+    assert.deepEqual([result.status, result.executed], ['paused', 2], 'the cohort was not stopped');
+    const { study, report } = exportRun({ runDir: ctx.runDir });
+    assert.deepEqual(study.trials.slice(0, 2).map(t => t.observed.outcome), ['harness_failed', 'harness_failed']);
+    assert.ok(report.trials[0].notes.includes('provider_stall'));
+    assert.deepEqual(journalRecords(ctx, study.trials[0].id).map(r => r.type), ['started', 'stalled', 'started', 'completed']);
+    assert.equal(report.stalls.harnessFailedAfterRetry, 2);
+  } finally { ctx.cleanup(); }
+});
+
+test('every seat gets private opencode data with auth.json symlinked (never copied), removed when the seat stops', { timeout: 120_000 }, async () => {
+  const stale = path.join(os.tmpdir(), `${SEAT_DATA_PREFIX}999999-stale`), live = path.join(os.tmpdir(), `${SEAT_DATA_PREFIX}${process.ppid}-live`);
+  mkdirSync(stale, { recursive: true }); mkdirSync(live, { recursive: true });
+  const ctx = setup();
+  try {
+    assert.equal((await ctx.execute({ maxTrials: 1 })).status, 'paused');
+    assert.ok(!existsSync(stale), 'a dir left by a dead runner is swept when the host starts');
+    assert.ok(existsSync(live), 'a live runner\'s dirs are never touched');
+    const seats = readFileSync(`${ctx.control}.seat-env`, 'utf8').trim().split('\n').map(l => JSON.parse(l));
+    assert.equal(seats.length, 3);
+    assert.equal(new Set(seats.map(s => s.dataHome)).size, 3, 'one private dir per seat');
+    for (const seat of seats) {
+      assert.ok(seat.dataHome.startsWith(path.join(os.tmpdir(), SEAT_DATA_PREFIX)), seat.dataHome);
+      assert.ok(!seat.dataHome.startsWith(ctx.runDir), 'outside the retained attempt');
+      assert.equal(seat.authLink, path.join(ctx.dir, '.local/share/opencode/auth.json'), 'auth.json is a symlink to the real file');
+      assert.equal(seat.configHome, null, 'XDG_CONFIG_HOME is left untouched');
+      assert.ok(seat.stateHome.startsWith(path.dirname(seat.dataHome)));
+      assert.ok(!existsSync(path.dirname(seat.dataHome)), 'removed after the seat stopped');
+    }
+    const launch = JSON.parse(readFileSync(path.join(ctx.runDir, 'trials', ctx.study.trials[0].id, 'attempt-001', 'seat-launch.json'), 'utf8'));
+    assert.ok(launch.opencodeData.every(d => d.isolated && d.authLinked));
+    assert.ok(existsSync(path.join(ctx.dir, '.local/share/opencode/auth.json')), 'the real credentials file is untouched');
+  } finally { ctx.cleanup(); rmSync(live, { recursive: true, force: true }); rmSync(stale, { recursive: true, force: true }); }
+  assert.deepEqual(sweepStaleSeatDataDirs(path.join(os.tmpdir(), 'no-such-dir-for-sweep')), []);
 });

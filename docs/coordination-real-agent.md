@@ -84,6 +84,13 @@ For `noisy-room`, the 12 unrelated observations apply only to `brain_multi_room`
 
 ### Optional Codex / OpenCode cohort executor
 
+Seat start-up is the same as in the Phase 2 runner.
+
+- **Sequential start:** workers start one at a time, and each must have joined before the next worker (and finally the brain) starts. The prompts, their order and the final capacity are unchanged.
+- **Lock retry:** a seat that exits on opencode's `database is locked` before joining is retried once. Every start is recorded in `run-*.json` under `seatLaunch`.
+- **Private opencode data:** OpenCode seats get their own `XDG_DATA_HOME`/`XDG_STATE_HOME` with `auth.json` symlinked, never copied, removed when the seat stops.
+- **Wall time:** multi-agent wall time now includes this sequential start-up. Do not pool cohorts run before and after this change.
+
 The core benchmark remains provider-neutral. The local executor supports both Codex and OpenCode cohorts. It runs the fixed-workflow `pilot-v1` / `clarification-v1` cohorts only. The Phase 2 Auto-vs-fixed controller comparison has its own [paired-study runner](topology-study-runner.md); do not relabel these results as controller evidence.
 
 ```sh

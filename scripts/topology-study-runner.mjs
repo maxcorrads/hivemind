@@ -172,17 +172,18 @@ const cohortFile = ctx => path.join(ctx.dir, 'cohort.jsonl');
 export function trialState(ctx, trialId) {
   const { records, torn } = readJournal(journalFile(ctx, trialId));
   let open = null, state = 'pending', attempts = 0, completed = null, reconciled = null;
-  const aborted = [], drift = [], ambiguous = [], starts = [];
+  const aborted = [], drift = [], ambiguous = [], starts = [], stalls = [];
   for (const r of records) {
     if (r.type === 'started') { attempts = Math.max(attempts, r.attempt); open = r.attempt; starts.push(r); }
     else if (r.type === 'preflight_drift') drift.push(r);
     else if (r.type === 'aborted_before_request') { aborted.push(r); if (open === r.attempt) open = null; }
+    else if (r.type === 'stalled') { stalls.push(r); if (open === r.attempt) open = null; }
     else if (r.type === 'ambiguous') { ambiguous.push(r); if (open === r.attempt) open = null; state = 'ambiguous'; }
     else if (r.type === 'completed') { completed = r; if (open === r.attempt) open = null; state = 'completed'; }
     else if (r.type === 'reconciled') { reconciled = r; state = 'reconciled'; }
   }
   if (!['completed', 'reconciled'].includes(state) && open !== null) state = 'started_unresolved';
-  return { state, attempts, open, completed, reconciled, aborted, drift, ambiguous, starts, torn };
+  return { state, attempts, open, completed, reconciled, aborted, drift, ambiguous, starts, stalls, torn };
 }
 
 function cohortPin(ctx) {
@@ -194,7 +195,9 @@ function cohortPin(ctx) {
 
 const RESULT_KEYS = ['phase', 'reason', 'drift', 'detail', 'observedFreeWorkers', 'jevEnabled', 'jevRequestedModel', 'jevAttempts',
   'initialTopology', 'routingOverrides', 'outcome', 'interruption', 'wallMs', 'seatUsage', 'resolvedWorkloadModels',
-  'acceptance', 'routerEvidence', 'collectorWarnings', 'artifacts', 'rateLimited'];
+  'acceptance', 'routerEvidence', 'collectorWarnings', 'artifacts', 'rateLimited', 'stall'];
+/** A provider stall is retried once in a fresh attempt; the retried attempt is the observation. */
+export const STALL_RETRIES = 1;
 
 /** Strict shape check. A result that fails this is treated as ambiguous, never guessed into an observation. */
 export function validateHostResult(r) {
@@ -202,6 +205,9 @@ export function validateHostResult(r) {
   assert.ok(Object.keys(r).every(k => RESULT_KEYS.includes(k)), 'Host result contains an unknown field');
   assert.ok(['completed', 'aborted_before_request', 'ambiguous'].includes(r.phase), 'Unknown host result phase');
   assert.ok(r.rateLimited === undefined || typeof r.rateLimited === 'boolean', 'rateLimited must be a boolean');
+  assert.ok(r.stall === undefined || r.stall === null || (typeof r.stall === 'object' && r.stall.reason === 'provider_stall' && typeof r.stall.seat === 'string'),
+    'stall must be null or provider_stall evidence');
+  assert.ok(!r.stall || (r.phase === 'completed' && r.outcome === 'harness_failed'), 'A provider stall is a harness failure');
   if (r.phase !== 'completed') { assert.equal(typeof r.reason, 'string', 'Aborted/ambiguous results need a reason code'); return r; }
   assert.ok(r.observedFreeWorkers === null || count(r.observedFreeWorkers));
   assert.equal(typeof r.jevEnabled, 'boolean'); assert.ok(r.jevRequestedModel === null || typeof r.jevRequestedModel === 'string');
@@ -270,6 +276,7 @@ export function observationFrom({ study, trial, result, attempt, pin, run }) {
     routerEvidence.coverage.pendingAttempts === 0 && routerEvidence.coverage.historyComplete : result.jevAttempts === 0;
   const instrumentationHealthy = known && result.wallMs !== null && result.collectorWarnings === 0 && collectorHealthy;
   if (result.collectorWarnings > 0) notes.push('collector_warnings');
+  if (result.stall) notes.push('provider_stall');
   const observation = {
     evidenceKind: config.evidenceKind, versions: { ...config.versions }, freeWorkers: config.freeWorkers,
     jevEnabled: auto, initialTopology: result.initialTopology ?? (auto ? null : trial.condition), routingOverrides: 0,
@@ -345,7 +352,14 @@ export const blocksForConcurrency = concurrency => Math.max(1, Math.floor(concur
  * Runs one pending trial end to end and journals it. Returns the halt status it implies (`completed` when the cohort
  * may continue). `load` ({ concurrency, blockIndex, concurrentWith() }) is retained in the journal for analysis.
  */
-async function executeOne(ctx, { trial, index, host, signal, secrets, load, onRateLimited }) {
+async function executeOne(ctx, options) {
+  for (;;) {
+    const outcome = await executeAttempt(ctx, options);
+    if (outcome.status !== 'stalled') return outcome;
+  }
+}
+
+async function executeAttempt(ctx, { trial, index, host, signal, secrets, load, onRateLimited }) {
   const journal = journalFile(ctx, trial.id), state = trialState(ctx, trial.id);
   mkdirSync(path.dirname(journal), { recursive: true, mode: 0o700 });
   loadRun(ctx.dir); // manifest bytes and identity are re-verified before every trial
@@ -371,6 +385,12 @@ async function executeOne(ctx, { trial, index, host, signal, secrets, load, onRa
   // Everything below is synchronous, so concurrent trials never interleave between reading and appending the cohort pin.
   const finalLoad = { ...loadAtStart, concurrentWith: load.concurrentWith() };
   if (result.rateLimited) onRateLimited(trial);
+  if (result.phase === 'completed' && result.stall && state.stalls.length < STALL_RETRIES && !signal?.aborted) {
+    // Provider stall: retained with its evidence, then retried once in a fresh attempt (never a topology/quality failure).
+    appendDurable(journal, { type: 'stalled', attempt, stall: result.stall, artifacts: result.artifacts, seatUsage: result.seatUsage,
+      wallMs: result.wallMs, load: finalLoad });
+    return { status: 'stalled' };
+  }
   if (result.phase === 'ambiguous') {
     appendDurable(journal, { type: 'ambiguous', attempt, reason: result.reason, load: finalLoad });
     return { status: 'ambiguous', detail: { reason: result.reason } };
@@ -383,7 +403,8 @@ async function executeOne(ctx, { trial, index, host, signal, secrets, load, onRa
   const mapped = observationFrom({ study: ctx.study, trial, result, attempt, pin: cohortPin(ctx), run: ctx.run });
   appendDurable(journal, { type: 'completed', attempt, observation: mapped.observation, withheld: mapped.withheld,
     exclusions: mapped.exclusions, notes: mapped.notes, budget: mapped.budget, artifacts: result.artifacts,
-    jevAttempts: result.jevAttempts, seatUsage: result.seatUsage, load: finalLoad, rateLimited: result.rateLimited === true });
+    jevAttempts: result.jevAttempts, seatUsage: result.seatUsage, load: finalLoad, rateLimited: result.rateLimited === true,
+    stall: result.stall ?? null });
   if (mapped.newPin && !mapped.exclusions.length) appendDurable(cohortFile(ctx), { type: 'jev_resolved_model_pinned', model: mapped.newPin, trialId: trial.id });
   if (mapped.exclusions.length) return { status: 'configuration_drift', executed: true, detail: { exclusions: mapped.exclusions } };
   if (result.interruption === 'signal') return { status: 'interrupted', executed: true };
@@ -537,6 +558,8 @@ export function exportRun({ runDir }) {
       ambiguousAttempts: s.ambiguous.map(a => ({ attempt: a.attempt, reason: a.reason })),
       abortedAttempts: s.aborted.map(a => ({ attempt: a.attempt, reason: a.reason, drift: (a.drift ?? []).map(d => d.field) })),
       preflightDrift: s.drift.flatMap(d => d.drift.map(x => x.field)),
+      stalledAttempts: [...s.stalls.map(r => ({ r, retried: true })), ...(s.completed?.stall ? [{ r: s.completed, retried: false }] : [])]
+        .map(({ r, retried }) => ({ attempt: r.attempt, retried, seat: r.stall.seat, openStep: r.stall.openStep, lastEvent: r.stall.lastEvent, silentMs: r.stall.silentMs })),
       load: loadOf(s) });
   }
   const coverage = validateStudy(study);
@@ -545,6 +568,11 @@ export function exportRun({ runDir }) {
     jev: { requestedModel: ctx.run.jev.requestedModel, resolvedModelPin: cohortPin(ctx) },
     independentReview: 'pending: automated runs are never marked independently reviewed; routingReview stays null',
     captureCompleteness: 'required: Auto instrumentation is healthy only when the router export states coverage.capture = complete (#135)',
+    stalls: { stalledAttempts: trials.reduce((n, t) => n + t.stalledAttempts.length, 0),
+      retriedAttempts: trials.reduce((n, t) => n + t.stalledAttempts.filter(a => a.retried).length, 0),
+      completedAfterRetry: trials.filter(t => t.stalledAttempts.some(a => a.retried) && !t.stalledAttempts.some(a => !a.retried) && t.outcome !== null).length,
+      harnessFailedAfterRetry: trials.filter(t => t.stalledAttempts.some(a => !a.retried)).length,
+      note: 'provider_stall = a seat silent on stdout and in the hive past --stall-timeout-ms; retried once in a fresh attempt, which is the observation' },
     concurrency: { blockSize: BLOCK_SIZE, maxObserved: Math.max(1, ...trials.map(t => t.load?.concurrency ?? 1)),
       downgrades: readJournal(cohortFile(ctx)).records.filter(r => r.type === 'concurrency_downgraded')
         .map(({ reason, from, to, trialId = null, blockIndex = null, availableBytes = null, thresholdBytes = null, at }) =>
@@ -626,11 +654,11 @@ const USAGE = `Usage (all but run are credential-free and offline):
   prepare   --plan <plan.json> --run-dir <new dir>
   validate  --run-dir <dir>
   dry-run   --run-dir <dir>
-  run       --run-dir <dir> --authorize-paid-run <studyId> [--max-trials <n>] [--concurrency <n>] [--min-free-memory-gb <gb>] [--watch]
+  run       --run-dir <dir> --authorize-paid-run <studyId> [--max-trials <n>] [--concurrency <n>] [--min-free-memory-gb <gb>] [--stall-timeout-ms <ms>] [--watch]
   reconcile --run-dir <dir> --trial <id> --resolution interrupted|harness_failed [--initial-topology <t>] [--note <text>]
   export    --run-dir <dir> --output <new study.json> --report <new report.json>`;
 const FLAGS = { prepare: ['--plan', '--run-dir'], validate: ['--run-dir'], 'dry-run': ['--run-dir'],
-  run: ['--run-dir', '--authorize-paid-run', '--max-trials', '--concurrency', '--min-free-memory-gb'], reconcile: ['--run-dir', '--trial', '--resolution', '--initial-topology', '--note'],
+  run: ['--run-dir', '--authorize-paid-run', '--max-trials', '--concurrency', '--min-free-memory-gb', '--stall-timeout-ms'], reconcile: ['--run-dir', '--trial', '--resolution', '--initial-topology', '--note'],
   export: ['--run-dir', '--output', '--report'] };
 const SWITCHES = { run: ['--watch'] };
 
@@ -674,12 +702,14 @@ export async function main(argv = process.argv.slice(2), { env = process.env, cr
   assert.ok(Number.isSafeInteger(concurrency) && concurrency >= 1, '--concurrency must be a positive integer');
   const minFreeGb = options['--min-free-memory-gb'] === undefined ? DEFAULT_MIN_FREE_MEMORY_BYTES / 1024 ** 3 : Number(options['--min-free-memory-gb']);
   assert.ok(Number.isFinite(minFreeGb) && minFreeGb >= 0, '--min-free-memory-gb must be a non-negative number');
+  const stallTimeoutMs = options['--stall-timeout-ms'] === undefined ? 300_000 : Number(options['--stall-timeout-ms']);
+  assert.ok(Number.isSafeInteger(stallTimeoutMs) && stallTimeoutMs >= 1_000, '--stall-timeout-ms must be an integer of at least 1000');
   assert.ok(maxTrials === Infinity || (Number.isSafeInteger(maxTrials) && maxTrials >= 1), '--max-trials must be a positive integer');
   const pendingAuto = ctx.study.trials.some(t => t.condition === 'auto' && !TERMINAL.has(trialState(ctx, t.id).state));
   assert.ok(!pendingAuto || String(env.HIVEMIND_STUDY_TYPESAFE_KEY ?? '').trim(), 'Auto trials need HIVEMIND_STUDY_TYPESAFE_KEY; refusing before any paid trial starts');
   const factory = createHost ?? (await import('./topology-study-host.mjs')).createHivemindHost;
   // --watch only opens the read-only tmux viewer; it never changes what a trial does or records.
-  const host = factory({ repoRoot: root, plan: ctx.run, env, watch: options['--watch'] === true });
+  const host = factory({ repoRoot: root, plan: ctx.run, env, watch: options['--watch'] === true, stallTimeoutMs });
   const controller = new AbortController();
   const stop = () => controller.abort();
   process.once('SIGINT', stop); process.once('SIGTERM', stop);

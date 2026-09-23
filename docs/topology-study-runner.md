@@ -59,12 +59,27 @@ Each attempt then gets a fresh `trials/<trialId>/attempt-NNN/` directory with it
    - Any other exit, a second lock failure or the `joinTimeoutMs` bound for the whole start-up (default 5 min) is `aborted_before_request: seats_did_not_join`, and the journal detail names the seat.
    - Every start and retry is retained in `seat-launch.json`, with retry logs in `<seat>.retry-N.{stdout,stderr}.log`.
    - The Human request is sent only when exactly one brain and `freeWorkers` online workers are present. Anything else is `aborted_before_request: capacity_mismatch`.
-   - Seats keep opencode's shared data directory. Isolating it per seat would mean copying opencode's `auth.json` credentials into every retained attempt, so it is not done.
+   - Each seat gets **private opencode data** instead of the Human's shared, multi-GB `~/.local/share/opencode` store.
+     - `XDG_DATA_HOME` (database, logs, snapshots) and `XDG_STATE_HOME` point at a temp dir named `hivemind-study-seat-<pid>-*`. It lives outside the retained attempt.
+     - The dir holds a **symlink** to the real `auth.json`. Credentials are never copied.
+     - `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` are left alone, so providers, config and the model cache still resolve. This was checked with `opencode debug paths` and `opencode auth list`, without any model call.
+     - The dir is deleted when the seat stops. Dirs left by a runner that died are removed when the next host starts; the pid in the name keeps dirs of live runners safe. `seat-launch.json` records `opencodeData` for each start.
 4. The workload input is sent verbatim to the brain's DM. Auto uses `routing: auto`. Fixed conditions use the condition as a Human topology with `lockScope: task`, so a clean baseline is never a monitored lock.
 5. The runner waits for the execution to complete (the brain marks the request thread done), the wall budget, the token budget (sum of live cumulative seat totals) or a Human interrupt, then stops seats and server.
 6. Evidence is read from the trial database read-only: the #131 export for the Auto execution, and a count of Jev calls, which must be zero for fixed trials. The acceptance check then runs.
 
 End-to-end `wallMs` runs from sending the Human request to completion. It already includes the initial classification wait, so summed Jev latency is never added. `workloadTokens` is the sum of provider-reported seat totals (Jev usage is only in the router evidence); one unknown seat makes the total `null` with `workloadUsageSource: unknown`.
+
+### Provider stall watchdog (`--stall-timeout-ms`, default 300000)
+
+OpenCode has no stream timeout. A hung provider stream, where the last event is `step_start` and nothing follows, would otherwise hold a trial until the wall budget.
+
+- **What counts as a stall:** while a trial runs, a seat is stalled when it has written nothing on stdout for longer than the stall timeout **and** is not active in the hive.
+  - A seat blocked in `hivemind wait` polls every 20 s, so its `lastSeenAt` stays within `HIVE_ACTIVE_MS` (60 s). It is never a stall.
+  - The MCP heartbeat pings only every 150 s, so presence kept alive by that ping alone does not count as activity.
+- **What happens:** the trial is stopped and retained as a `stalled` journal record. `stall.json` in the attempt names the seat, whether an LLM step was open, the last event and the timestamps. The trial is then retried automatically **once** in a fresh attempt of the same trial, in the same block.
+- **Which attempt counts:** the retried attempt is the observation. If the retry stalls too, the trial is recorded as `harness_failed` with the note `provider_stall`, and the cohort continues.
+- **Reporting:** a stall is never a topology or quality failure. The run report counts stalled attempts, retries, completions after a retry and harness failures after a retry under `stalls`, and lists each trial's `stalledAttempts`.
 
 ### Parallel blocks (`--concurrency N`)
 
