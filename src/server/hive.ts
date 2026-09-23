@@ -7,6 +7,8 @@ import { SendRequests } from "./send-requests.ts";
 import { pruneTelegramUpdates, type TelegramUpdateScope } from "./telegram-inbox.ts";
 import { pruneTelegramFailures, type TelegramDestination } from "./telegram-outbox.ts";
 import { TelegramAdminService } from "./services/telegram-admin.ts";
+import { FileService } from "./services/files.ts";
+import type { ChannelAccess, Core, MessageReader } from "./services/ports.ts";
 import { Storage } from './storage.ts';
 import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync } from "node:fs";
@@ -60,7 +62,6 @@ import { packWait } from "./wait-format.ts";
 import { digestExpansionSchema } from "../shared/digest.ts";
 import { botMessageSchema, createBotSchema, botCredentialSchema } from "../shared/bot-message.ts";
 import { applyMigrations, assertSupportedVersion } from "./migrations/index.ts";
-import { assertAllowedMime, commitUpload, openBlob, removeOrphanBlobs, removeUploadTemp, streamUpload } from "./files.ts";
 import { TaskStore } from './tasks.ts';
 import { NotificationStore } from './notifications.ts';
 import { RoomStore } from './rooms.ts';
@@ -145,6 +146,16 @@ type Waiter = {
   supersede: () => void;
 };
 
+/** Every service's dependencies; filled in construction order, read by services at call time. */
+type ServiceRegistry = Core & {
+  home: string;
+  uploads: UploadBudget;
+  telegram: TelegramAdminService;
+  files: FileService;
+  messages: MessageReader;
+  channels: ChannelAccess;
+};
+
 export class Hive {
   db: DatabaseSync;
   /** Post-commit change notifications; see HiveEvents for every event and payload. */
@@ -166,6 +177,9 @@ export class Hive {
   private readonly readState!: ReadState;
   readonly storage: Storage;
   readonly telegramAdmin!: TelegramAdminService;
+  readonly files!: FileService;
+  /** The registry every service receives, typed down to its own dependencies (services/ports.ts). */
+  private readonly services: ServiceRegistry;
 
   constructor(dbPath = path.join(hiveHome(), "hive.db"), options: { routineBatchMs?: number; uploadLimits?: Partial<UploadLimits> } = {}) {
     this.home = path.dirname(dbPath);
@@ -173,6 +187,9 @@ export class Hive {
     preparePrivateDatabase(dbPath);
     this.db = new DatabaseSync(dbPath);
     this.storage = Storage.for(this.db);
+    // Transitional: domains not yet extracted are served by Hive itself.
+    const registry: Partial<ServiceRegistry> = { storage: this.storage, bus: this.bus, home: this.home, messages: this, channels: this };
+    this.services = registry as ServiceRegistry;
     this.bus.bindStorage(this.storage);
     try {
       // Refuse a newer or unknown schema before anything (even the journal mode) writes to the file.
@@ -188,6 +205,10 @@ export class Hive {
       this.readState = new ReadState(this.db);
       this.sendRequests = new SendRequests(this.db);
       this.uploads = new UploadBudget({ db: this.db, transaction: work => this.transaction(work) }, options.uploadLimits);
+      const services = this.services;
+      services.uploads = this.uploads;
+      services.telegram = this.telegramAdmin;
+      this.files = services.files = new FileService(services);
       this.tasks = new TaskStore(this);
       this.rooms = new RoomStore(this);
       this.notifications = new NotificationStore(this);
@@ -366,7 +387,7 @@ export class Hive {
         this.db.prepare("DELETE FROM channel_members WHERE agent_id = ?").run(agent.id);
         this.db.prepare("DELETE FROM reads WHERE agent_id = ?").run(agent.id);
         this.db.prepare("DELETE FROM reactions WHERE agent_id = ?").run(agent.id);
-        this.db.prepare("DELETE FROM attachments WHERE created_by = ? AND message_id IS NULL").run(agent.id);
+        this.files.deleteUnsentBy(agent.id);
         this.db.prepare("DELETE FROM agents WHERE id = ?").run(agent.id);
       }
 
@@ -374,7 +395,7 @@ export class Hive {
     });
 
     try {
-      this.collectUnusedBlobs();
+      this.files.collectUnusedBlobs();
     } catch {
       /* sweep can drop leftover blobs later */
     }
@@ -483,7 +504,7 @@ export class Hive {
     this.db.prepare("DELETE FROM channel_members WHERE agent_id = ?").run(target.id);
     this.db.prepare("DELETE FROM reads WHERE agent_id = ?").run(target.id);
     this.db.prepare("DELETE FROM reactions WHERE agent_id = ?").run(target.id);
-    this.db.prepare("DELETE FROM attachments WHERE created_by = ? AND message_id IS NULL").run(target.id);
+    this.files.deleteUnsentBy(target.id);
     this.db.prepare("DELETE FROM agents WHERE id = ?").run(target.id);
     if (target.projectId) {
       const general = this.db.prepare(
@@ -939,7 +960,7 @@ export class Hive {
         return { messageId: previous.message_id, duplicate: true };
       }
       if (this.rooms.peek(ch.id)?.state === 'archived') throw new HiveError(409, 'Channel is archived; suspend this source link. Do not discard undelivered source events.');
-      this.validateAttachments(actor, input.attachmentIds);
+      this.files.validateAttachments(actor, input.attachmentIds);
       const messageId = crypto.randomUUID();
       this.db.prepare(`INSERT INTO messages (id, channel_id, thread_id, author_id, body, kind, mentions, created_at, event_type)
         VALUES (?, ?, ?, ?, ?, 'chat', '[]', ?, ?)`)
@@ -948,7 +969,7 @@ export class Hive {
         VALUES (?, ?, ?, ?, ?, ?, ?)`)
         .run(messageId, actor.id, ch.id, input.threadId ?? "", input.eventId, JSON.stringify(event), payloadHash);
       this.timeline.recordMessage(messageId, { source: 'bot' });
-      this.bindAttachments(messageId, input.attachmentIds);
+      this.files.bindAttachments(messageId, input.attachmentIds);
       if (input.threadId) this.db.prepare("INSERT OR IGNORE INTO threads (id, channel_id, status) VALUES (?, ?, 'open')")
         .run(input.threadId, ch.id);
       return { messageId, duplicate: false };
@@ -1042,7 +1063,7 @@ export class Hive {
         [ch.id, body, input.threadId ?? null, kind, input.control ?? null, input.source ?? "hive",
           input.eventType ?? null, attachmentIds, [...recipients].sort(), trace.traceId, trace.causeMessageId],
         () => this.postMessage(actor, { ...input, requestId: undefined }, persistReceipt), id => this.getMessageById(id));
-      if (attachmentIds.length) this.validateAttachments(actor, attachmentIds);
+      if (attachmentIds.length) this.files.validateAttachments(actor, attachmentIds);
       if (actor.role === "human" && !ch.memberIds.includes(actor.id)) {
         this.addMember(ch.id, actor.id);
         ch.memberIds.push(actor.id);
@@ -1058,7 +1079,7 @@ export class Hive {
           `INSERT OR IGNORE INTO threads (id, channel_id, status) VALUES (?, ?, 'open')`,
         ).run(input.threadId, ch.id);
       }
-      if (attachmentIds.length) this.bindAttachments(id, attachmentIds);
+      if (attachmentIds.length) this.files.bindAttachments(id, attachmentIds);
       // Transport receipts participate in the same message/attachment transaction.
       persistReceipt?.(this.getMessageById(id));
       this.touch(actor.id, true);
@@ -1786,117 +1807,11 @@ export class Hive {
     this.waiters.clear();
   }
 
-  async createFile(
-    actor: Agent,
-    input: { name: string; mime: string; body: ReadableStream<Uint8Array> | null; signal?: AbortSignal; declaredBytes?: number; authorize?: () => Agent },
-  ): Promise<AttachmentMeta> {
-    assertAllowedMime(input.mime);
-    if (typeof input.name !== "string" || !input.name.length || input.name.length > 180) throw new HiveError(400, "Invalid file name");
-    input.signal?.throwIfAborted();
-    const lease = this.uploads.acquire(actor.id, input.declaredBytes);
-    const deadline = new AbortController();
-    const timer = setTimeout(() => deadline.abort(new HiveError(408, "Upload deadline exceeded")), this.uploads.limits.deadlineMs);
-    const signal = input.signal ? AbortSignal.any([input.signal, deadline.signal]) : deadline.signal;
-    try {
-      const uploaded = await streamUpload(input.body, input.mime, this.home, signal, input.declaredBytes);
-      try {
-        signal.throwIfAborted();
-        return this.transaction(() => {
-          lease.require(uploaded.bytes);
-          if (input.authorize && input.authorize().id !== actor.id) throw new HiveError(403, "Upload actor changed");
-          if (input.declaredBytes !== undefined && uploaded.bytes !== input.declaredBytes) throw new HiveError(400, "Upload length mismatch");
-          commitUpload(uploaded.tmp, uploaded.sha256, this.home);
-          const id = crypto.randomUUID();
-          this.db.prepare(
-            `INSERT INTO attachments (id, message_id, name, mime, bytes, sha256, created_by, created_at)
-             VALUES (?, NULL, ?, ?, ?, ?, ?, ?)`,
-          ).run(id, input.name, input.mime, uploaded.bytes, uploaded.sha256, actor.id, now());
-          return { id, name: input.name, mime: input.mime, bytes: uploaded.bytes };
-        });
-      } finally { removeUploadTemp(uploaded.tmp); }
-    } catch (error) {
-      if (deadline.signal.aborted) throw deadline.signal.reason;
-      if ((error as NodeJS.ErrnoException).code === 'ENOSPC') throw new HiveError(507, "Upload disk is full");
-      throw error;
-    } finally { clearTimeout(timer); lease.release(); }
-  }
-
-  async createFileFromBytes(
-    actor: Agent,
-    input: { name: string; mime: string; bytes: Uint8Array },
-  ): Promise<AttachmentMeta> {
-    const { Readable } = await import("node:stream");
-    const stream = Readable.toWeb(Readable.from(Buffer.from(input.bytes)));
-    return this.createFile(actor, { name: input.name, mime: input.mime, body: stream as ReadableStream<Uint8Array>, declaredBytes: input.bytes.byteLength });
-  }
-
-  private validateAttachments(actor: Agent, ids: string[]) {
-    if (new Set(ids).size !== ids.length) throw new HiveError(400, "Duplicate attachment");
-    for (const id of ids) {
-      const row = this.db.prepare("SELECT id, message_id, created_by FROM attachments WHERE id = ?").get(id) as
-        | { id: string; message_id: string | null; created_by: string }
-        | undefined;
-      if (!row) throw new HiveError(404, "Attachment not found");
-      if (row.created_by !== actor.id) throw new HiveError(403, "Attachment is not yours");
-      if (row.message_id) throw new HiveError(409, "Attachment already sent");
-    }
-  }
-
-  private bindAttachments(messageId: string, ids: string[]) {
-    const bind = this.db.prepare("UPDATE attachments SET message_id = ? WHERE id = ? AND message_id IS NULL");
-    for (const id of ids) {
-      const result = bind.run(messageId, id);
-      if (result.changes !== 1) throw new HiveError(409, "Attachment already sent");
-    }
-  }
-
-  getAttachment(actor: Agent, id: string): { meta: AttachmentMeta; sha256: string; channelId: string | null } {
-    const row = this.db.prepare("SELECT * FROM attachments WHERE id = ?").get(id) as
-      | {
-          id: string;
-          message_id: string | null;
-          name: string;
-          mime: string;
-          bytes: number;
-          sha256: string;
-        }
-      | undefined;
-    if (!row) throw new HiveError(404, "Attachment not found");
-    if (row.message_id) {
-      const msg = this.getMessageById(row.message_id);
-      const ch = this.getChannel(msg.channelId);
-      if (!this.canSeeChannel(actor, ch)) throw new HiveError(403, "Cannot access file");
-      return { meta: { id: row.id, name: row.name, mime: row.mime, bytes: row.bytes }, sha256: row.sha256, channelId: ch.id };
-    }
-    if (row.message_id === null) {
-      const owner = this.db.prepare("SELECT created_by FROM attachments WHERE id = ?").get(id) as { created_by: string };
-      if (owner.created_by !== actor.id && actor.role !== "human") throw new HiveError(403, "Cannot access file");
-    }
-    return { meta: { id: row.id, name: row.name, mime: row.mime, bytes: row.bytes }, sha256: row.sha256, channelId: null };
-  }
-
-  openAttachment(actor: Agent, id: string) {
-    const att = this.getAttachment(actor, id);
-    return { ...att, ...openBlob(att.sha256, this.home) };
-  }
-
-  private collectUnusedBlobs(): number {
-    // Acquire the same cross-process writer lock as publication BEFORE reading the live set.
-    return this.transaction(() => {
-      const used = new Set(
-        (this.db.prepare("SELECT DISTINCT sha256 AS h FROM attachments").all() as { h: string }[]).map((r) => r.h),
-      );
-      return removeOrphanBlobs(used, this.home);
-    });
-  }
-
-  gcFiles(): { attachments: number; blobs: number } {
-    // Commit metadata removal first. A failed COMMIT must never resurrect references to unlinked blobs.
-    const attachments = this.transaction(() => Number(this.db.prepare(
-      "DELETE FROM attachments WHERE message_id IS NULL AND created_at < ?",
-    ).run(now() - 86_400_000).changes));
-    return { attachments, blobs: this.collectUnusedBlobs() };
-  }
+  createFile(...args: Parameters<FileService["createFile"]>) { return this.files.createFile(...args); }
+  createFileFromBytes(...args: Parameters<FileService["createFileFromBytes"]>) { return this.files.createFileFromBytes(...args); }
+  getAttachment(actor: Agent, id: string) { return this.files.getAttachment(actor, id); }
+  openAttachment(actor: Agent, id: string) { return this.files.openAttachment(actor, id); }
+  gcFiles() { return this.files.gcFiles(); }
 
   toggleReaction(actor: Agent, seq: number, emoji: string): { message: Message; added: boolean } {
     return this.setReaction(actor, seq, emoji);
