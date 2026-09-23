@@ -37,6 +37,9 @@ export type AdaptiveTopologyDecision = {
   confidence: number | null;
   reason: string;
   providerStatus: "ok" | "unavailable" | "bypassed";
+  /** Jev model identifier Hivemind requested (alias or pinned). Absent on decisions made before #134 or without a call. */
+  requestedModel?: string | null;
+  /** Model the provider reports it resolved to; may differ from the requested identifier. */
   model: string | null;
   latencyMs: number;
   inputTokens: number | null;

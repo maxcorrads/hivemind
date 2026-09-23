@@ -21,7 +21,7 @@ export class AdaptiveObservationStores {
 /** Observe every attempt, BEFORE capacity/configuration fencing can discard its result. */
 export async function observeTopologyEvaluation(
   stores: AdaptiveObservationStores, scope: EvidenceScope, snapshot: TopologyEvaluationSnapshot,
-  config: { apiKey: string }, options: Parameters<typeof evaluateAdaptiveTopology>[2] = {},
+  config: { apiKey: string; model?: string }, options: Parameters<typeof evaluateAdaptiveTopology>[2] = {},
   call?: { context: Omit<JevCallContext, 'executionId' | 'channelId' | 'projectId'>; recorded?: (summary: JevCallSummary) => void },
 ) {
   let store: AdaptiveEvidenceStore | undefined, id: string | undefined;

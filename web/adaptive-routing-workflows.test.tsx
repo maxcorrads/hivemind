@@ -6,6 +6,7 @@ import { useAdaptiveRouting } from './use-adaptive-routing.ts';
 import { mergeRoutingView, routingStreamEntries, routingStripCounts } from './adaptive-routing-view.ts';
 import { AdaptiveRoutingPanel, routingEventLabel } from './AdaptiveRoutingPanel.tsx';
 import { AdaptiveRoutingSettings } from './AdaptiveRoutingSettings.tsx';
+import { RoutingStrip } from './ChannelDesk.tsx';
 import { api } from './api.ts';
 import type { AdaptiveExecutionState, AdaptiveRoutingEvent, AdaptiveRoutingView } from '../src/shared/adaptive-topology.ts';
 import type { Message } from '../src/shared/types.ts';
@@ -126,13 +127,43 @@ test('panel labels disabled, pending, manual, locked, warning and completed stat
 
 test('settings save resets the secret input and refreshes monitoring without returning the key', async t => {
   const f = mounted(t); let saved = 0, notified = 0;
-  const settings = { enabled: true, apiKeySet: true, apiKeyHint: '…1234', model: 'jev-latest', fallback: 'orchestrated' as const, topologyFallback: 'brain_one_worker' as const };
+  const settings = { enabled: true, apiKeySet: true, apiKeyHint: '…1234', model: 'jev-latest', defaultModel: 'jev-latest', modelPinned: false, fallback: 'orchestrated' as const, topologyFallback: 'brain_one_worker' as const };
   t.mock.method(api, 'adaptiveRouting', async () => settings);
   t.mock.method(api, 'saveAdaptiveRouting', async () => { saved++; return settings; });
   await f.render(<AdaptiveRoutingSettings onClose={() => {}} onSaved={() => { notified++; }} />);
   assert.equal(f.host.querySelector<HTMLInputElement>('input[type=password]')?.value, '');
   await act(async () => f.host.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }) as unknown as Event));
   assert.equal(saved, 1); assert.equal(notified, 1); assert.equal(f.host.querySelector<HTMLInputElement>('input[type=password]')?.value, '');
+});
+
+test('settings explain alias vs pinned model, validate the identifier and can reset to the alias', async t => {
+  const f = mounted(t); const bodies: unknown[] = [];
+  const pinned = { enabled: false, apiKeySet: true, apiKeyHint: '…1234', model: 'jev-2026-09-01', defaultModel: 'jev-latest', modelPinned: true,
+    fallback: 'orchestrated' as const, topologyFallback: 'brain_one_worker' as const };
+  t.mock.method(api, 'adaptiveRouting', async () => pinned);
+  t.mock.method(api, 'saveAdaptiveRouting', async (body: unknown) => { bodies.push(body);
+    return { ...pinned, model: 'jev-latest', modelPinned: false }; });
+  await f.render(<AdaptiveRoutingSettings onClose={() => {}} />);
+  const input = f.host.querySelector<HTMLInputElement>('input[placeholder^="jev-latest"]');
+  assert.ok(input); assert.equal(input.value, 'jev-2026-09-01');
+  assert.match(f.host.textContent!, /pinned identifier/);
+  assert.match(f.host.textContent!, /may resolve to a different model over time/);
+  assert.match(f.host.textContent!, /does not list models or prices/);
+  assert.match(f.host.textContent!, /model jev-2026-09-01/, 'the connection test names the saved model it uses');
+  assert.doesNotMatch(f.host.textContent!, /\$|USD|per token/i, 'no hard-coded price');
+  const type = async (value: string) => act(async () => {
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!.call(input, value);
+    input.dispatchEvent(new window.Event('input', { bubbles: true }) as unknown as Event);
+  });
+  await type('https://evil.example/v1');
+  assert.match(f.host.textContent!, /not a URL/);
+  assert.equal(f.button('Save').disabled, true);
+  await type('');
+  assert.equal(f.button('Save').disabled, false);
+  assert.match(f.host.textContent!, /Save pending changes before testing/);
+  await act(async () => f.host.querySelector('form')!.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }) as unknown as Event));
+  assert.deepEqual(bodies, [{ enabled: false, fallback: 'orchestrated', topologyFallback: 'brain_one_worker', model: null }]);
+  assert.match(f.host.textContent!, /default alias/);
 });
 
 test('a channel keeps one execution per brain, shows observations and locks the selected brain', async t => {
@@ -186,6 +217,7 @@ test('draining executions stay beside the current one: merge, realtime and a rea
   const finished = mergeRoutingView(replaced, { state: { ...update, updatedAt: 25, revision: 25, completedAt: 25, openWork: undefined }, events: [] }, 'a');
   assert.deepEqual(routingStripCounts(finished, 'a'), { brains: 1, finishing: 0 });
   assert.equal(finished.state?.executionId, 'run-third');
+  assert.deepEqual(finished.executions?.map(item => item.executionId), ['run-third'], 'a completed draining execution is dropped');
 
   const f = mounted(t); const bodies: unknown[] = [];
   t.mock.method(api, 'setAdaptiveRoutingLock', (_channel: string, body: unknown) => { bodies.push(body); return new Promise<AdaptiveRoutingView>(() => {}); });
@@ -200,4 +232,48 @@ test('draining executions stay beside the current one: merge, realtime and a rea
   assert.equal((bodies[0] as { expectedExecutionId: string }).expectedExecutionId, 'run-new');
   await f.render(<AdaptiveRoutingPanel channelId="a" view={finished} onChange={() => {}} onClose={() => {}} />);
   assert.equal(f.host.querySelector('[aria-label="Still finishing"]'), null, 'a drained execution leaves the list');
+});
+
+test('a drained execution stays dropped: its completion event fences a delayed snapshot', () => {
+  const current = { ...state('a', 10, 'run-new'), current: true };
+  const draining = { ...state('a', 8, 'run-old'), current: false, openWork: { tasks: 1, delegations: 0 } };
+  const merged = mergeRoutingView(null, { state: current, executions: [draining, current], events: [] }, 'a');
+  assert.deepEqual(routingStripCounts(merged, 'a'), { brains: 1, finishing: 1 });
+  // Realtime: the server completes the drained execution and publishes it with its status event.
+  const done = { ...draining, updatedAt: 12, revision: 12, completedAt: 12, openWork: undefined };
+  const drained = mergeRoutingView(merged, { state: done, events: [{ ...event(done, 'drained', 'status'), reason: 'delegated_work_drained' }] }, 'a');
+  assert.deepEqual(drained.executions?.map(item => item.executionId), ['run-new']);
+  assert.deepEqual(routingStripCounts(drained, 'a'), { brains: 1, finishing: 0 });
+  // A delayed HTTP snapshot from before the completion does not bring it back.
+  const delayed = mergeRoutingView(drained, { state: current, executions: [draining, current], events: [] }, 'a');
+  assert.deepEqual(delayed.executions?.map(item => item.executionId), ['run-new']);
+  // A Human closing the request completes a draining execution the same way.
+  const closed = { ...draining, updatedAt: 9, revision: 9, completedAt: 9 };
+  const other = { ...state('a', 7, 'run-closed'), current: false };
+  const withOther = mergeRoutingView(delayed, { state: current, executions: [other, current], events: [] }, 'a');
+  assert.deepEqual(routingStripCounts(withOther, 'a'), { brains: 1, finishing: 1 });
+  const closedView = mergeRoutingView(withOther, { state: null,
+    events: [{ ...event({ ...closed, executionId: 'run-closed' }, 'closed', 'status'), reason: 'execution_completed' }] }, 'a');
+  assert.deepEqual(routingStripCounts(closedView, 'a'), { brains: 1, finishing: 0 });
+});
+
+test('the routing strip shows older requests finishing even without a current execution', async t => {
+  const f = mounted(t); let opened = 0;
+  const draining = { ...state('a', 8, 'run-old'), current: false, openWork: { tasks: 1, delegations: 0 } };
+  const view = mergeRoutingView(null, { state: null, executions: [draining], events: [] }, 'a');
+  assert.equal(view.state, null);
+  const counts = routingStripCounts(view, 'a');
+  assert.deepEqual(counts, { brains: 0, finishing: 1 });
+  const strip = (v: AdaptiveRoutingView, finishing: number) => <RoutingStrip view={v} channelId="a" activeExecutions={0}
+    finishingExecutions={finishing} brainNames={{}} onOpen={() => { opened++; }} />;
+  await f.render(strip(view, counts.finishing));
+  assert.match(f.host.querySelector('.routing-strip')?.textContent ?? '', /\+1 finishing.*Earlier requests are finishing/);
+  await act(async () => f.button('+1 finishing').click());
+  assert.equal(opened, 1, 'the strip opens the routing panel');
+  // With a current execution the count follows its summary; with nothing left the strip disappears.
+  const current = { ...state('a', 10, 'run-new'), current: true };
+  await f.render(strip({ state: current, executions: [draining, current], events: [] }, 1));
+  assert.match(f.host.querySelector('.routing-strip')?.textContent ?? '', /^Single · \+1 finishing/);
+  await f.render(strip({ state: null, executions: [], events: [] }, 0));
+  assert.equal(f.host.querySelector('.routing-strip'), null);
 });

@@ -16,7 +16,7 @@ const { createRoot } = await import('react-dom/client');
 after(() => window.happyDOM.close());
 const revision = '11111111-1111-4111-8111-111111111111';
 const state = { revision, apiKeySet: true };
-const saved = { enabled: false, apiKeySet: true, apiKeyHint: null, model: 'jev-latest',
+const saved = { enabled: false, apiKeySet: true, apiKeyHint: null, model: 'jev-latest', defaultModel: 'jev-latest', modelPinned: false,
   fallback: 'orchestrated' as const, topologyFallback: 'brain_one_worker' as const };
 function mount() {
   const host = document.createElement('div');

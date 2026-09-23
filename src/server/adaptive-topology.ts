@@ -116,6 +116,8 @@ export function topologyDirective(state: Pick<AdaptiveExecutionState,
 }
 
 const parseExecution = (row: Record<string, unknown>) => JSON.parse(String(row.snapshot)) as StoredExecution;
+/** Other executions revalidated at once after a capacity change; each channel still runs one at a time. */
+const PROJECT_REVALIDATION_CONCURRENCY = 4;
 
 export class AdaptiveTopologyRuntime {
   private serial = new Map<string, Promise<void>>();
@@ -440,13 +442,24 @@ export class AdaptiveTopologyRuntime {
     const latest = this.byExecution(state.executionId);
     return latest ? this.revalidateStored(latest, event) : state;
   }
+  /**
+   * Revalidates every other execution of the project, at most PROJECT_REVALIDATION_CONCURRENCY Jev calls at a time.
+   * Each still goes through its channel queue; one failure never stops the others and is reported once all settle.
+   */
   private async revalidateProject(projectId: string, event: AdaptiveCoordinationEvent, exceptExecution?: string) {
-    const rows = this.hive.db.prepare('SELECT snapshot FROM adaptive_topology_executions WHERE project_id=?').all(projectId);
-    for (const row of rows) {
-      const state = JSON.parse(String(row.snapshot)) as StoredExecution;
-      if (state.executionId === exceptExecution) continue;
-      await this.revalidateQueued(state, event);
-    }
+    const states = this.hive.db.prepare('SELECT snapshot FROM adaptive_topology_executions WHERE project_id=?').all(projectId)
+      .map(parseExecution).filter(state => state.executionId !== exceptExecution);
+    const failures: unknown[] = [];
+    let next = 0;
+    const lane = async () => {
+      while (next < states.length) {
+        const state = states[next++]!;
+        try { await this.revalidateQueued(state, event); } catch (error) { failures.push(error); }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(PROJECT_REVALIDATION_CONCURRENCY, states.length) }, lane));
+    if (failures.length === 1) throw failures[0];
+    if (failures.length) throw new AggregateError(failures, `${failures.length} executions failed capacity revalidation`);
   }
   private assertDelegation(state: StoredExecution, event: AdaptiveCoordinationEvent) {
     if (event.kind !== 'delegation_attempt' || !this.enabledOrLocked(state)) return;
@@ -477,9 +490,30 @@ export class AdaptiveTopologyRuntime {
   /** Only brain coordination changes capacity for routing; worker activity never triggers Jev. */
   async capacityChanged(actor: Agent, eventId: string, exceptExecution?: string): Promise<void> {
     if (!actor.projectId || actor.role !== 'brain') return;
-    await this.revalidateProject(actor.projectId, { kind: 'capacity_change', actorId: actor.id,
-      actorRole: 'brain', eventId: coordinationEventId(actor.id, 'capacity', eventId) }, exceptExecution);
-    this.settleDrained(actor.projectId);
+    try {
+      await this.revalidateProject(actor.projectId, { kind: 'capacity_change', actorId: actor.id,
+        actorRole: 'brain', eventId: coordinationEventId(actor.id, 'capacity', eventId) }, exceptExecution);
+    } finally { this.settleDrained(actor.projectId); }
+  }
+  /**
+   * Routing that follows a committed action failed: the Human audit gets a `warning` event on the execution the
+   * action belongs to, when it can still be resolved. The execution itself is not changed. Never throws.
+   */
+  recordRoutingWarning(actor: Agent, event: AdaptiveCoordinationEvent, warning: string): AdaptiveRoutingEvent | null {
+    if (this.stopped || actor.role !== 'brain') return null;
+    try {
+      const state = this.resolveState(actor, event);
+      if (!state) return null;
+      const decision = { ...fallbackDecision(state.currentTopology, state.workerBudget), reason: 'post_commit_routing_failed' };
+      const item: AdaptiveRoutingEvent = { ...this.record(state, decision, state.currentTopology, 'warning'),
+        createdAt: Math.max(Date.now(), state.updatedAt), warning };
+      this.hive.storage.transaction(() => this.saveEvent(item));
+      this.publish(state, item);
+      return item;
+    } catch (error) {
+      console.error(`Adaptive routing warning for ${actor.name} was not recorded`, error instanceof Error ? error.message : String(error));
+      return null;
+    }
   }
   /** Compact policy for one execution, or the brain's only active execution when none is named. */
   forAgent(actor: Agent, executionId?: string): AdaptiveAgentPolicy | null {

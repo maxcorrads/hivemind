@@ -641,7 +641,7 @@ test("settings stay inside the viewport and backdrop dismissal requires a comple
   await installSocketHarness(page);
   await installMessages(page, async route => fulfillJson(route, payload(a, [])));
   await page.route("**/api/ui/adaptive-routing", route => fulfillJson(route, {
-    enabled: false, apiKeySet: false, apiKeyHint: null, model: "jev-latest", fallback: "orchestrated", topologyFallback: "brain_one_worker",
+    enabled: false, apiKeySet: false, apiKeyHint: null, model: "jev-latest", defaultModel: "jev-latest", modelPinned: false, fallback: "orchestrated", topologyFallback: "brain_one_worker",
   }));
   await page.route("**/api/ui/telegram", route => fulfillJson(route, {
     configured: false, running: false, tokenSet: false, tokenHint: null, allowUserIds: [], projects: {},

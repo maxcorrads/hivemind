@@ -40,12 +40,14 @@ type PostCommitRouting = { adaptiveRouting: AdaptiveAgentPolicy | null; routingW
  * The mutation already committed: routing that follows it may degrade, but must never turn a committed
  * mutation into a reported failure (a retry would find nothing left to evaluate).
  */
-async function afterCommit(actor: Agent, evaluate: () => Promise<AdaptiveAgentPolicy | null>): Promise<PostCommitRouting> {
-  try { return { adaptiveRouting: await evaluate() }; } catch (error) {
+async function afterCommit(hive: Hive, actor: Agent, coordination: AdaptiveCoordinationEvent): Promise<PostCommitRouting> {
+  try { return { adaptiveRouting: await hive.adaptiveTopology.afterAgentAction(actor, coordination) }; } catch (error) {
     console.error(`Adaptive routing after a committed action by ${actor.name} failed`, error instanceof Error ? error.message : String(error));
-    // Only public HiveError reasons reach the agent; anything else stays in the server log.
+    // Only public HiveError reasons reach the agent and the Human audit; anything else stays in the server log.
     const reason = error instanceof HiveError ? error.message : 'internal routing error';
-    return { adaptiveRouting: null, routingWarning: `Committed; adaptive routing was not updated: ${reason}` };
+    const routingWarning = `Committed; adaptive routing was not updated: ${reason}`;
+    hive.adaptiveTopology.recordRoutingWarning(actor, coordination, routingWarning);
+    return { adaptiveRouting: null, routingWarning };
   }
 }
 
@@ -165,7 +167,7 @@ export function mutateAdaptiveTask(hive: Hive, actor: Agent, taskId: string, raw
     try { result = hive.tasks.event(actor, taskId, input); } finally { clearAdaptivePermit(hive, actor.id); }
     // Committed. The brain's review is evaluated after the mutation reaches its safe checkpoint.
     const routing = coordination && action.type !== 'revise'
-      ? await afterCommit(actor, () => hive.adaptiveTopology.afterAgentAction(actor, coordination)) : { adaptiveRouting: policy };
+      ? await afterCommit(hive, actor, coordination) : { adaptiveRouting: policy };
     deferCapacityChange(hive, actor, defer, input.requestId, routing.adaptiveRouting?.executionId);
     return { ...result, ...routing };
   });
@@ -197,7 +199,7 @@ export function mutateAdaptiveRoom(hive: Hive, actor: Agent, channelId: string, 
     }
     const result = hive.rooms.event(actor, channelId, input);
     if (participants) return { ...result, adaptiveRouting: policy };
-    return { ...result, ...await afterCommit(actor, () => hive.adaptiveTopology.afterAgentAction(actor, coordination)) };
+    return { ...result, ...await afterCommit(hive, actor, coordination) };
   });
 }
 
@@ -212,7 +214,7 @@ export function setAdaptiveThreadStatus(hive: Hive, actor: Agent, threadId: stri
       kind: 'task_event', channelId: root.channelId, summary: `thread status ${status}`,
       taskId: hive.tasks.has(threadId) ? threadId : undefined, threadId,
     });
-    const routing = await afterCommit(actor, () => hive.adaptiveTopology.afterAgentAction(actor, coordination));
+    const routing = await afterCommit(hive, actor, coordination);
     deferCapacityChange(hive, actor, defer, coordination.eventId!, routing.adaptiveRouting?.executionId);
     return { thread, ...routing };
   });

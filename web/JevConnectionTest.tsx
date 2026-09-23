@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { JEV_DIAGNOSTIC_MESSAGES, type JevDiagnosticCode } from '../src/shared/jev-diagnostics.ts';
 import { jevDiagnosticsApi } from './jev-diagnostics-api.ts';
 
-export function JevConnectionTest({ savedSettings, disabled }: { savedSettings: object | null; disabled: boolean }) {
+export function JevConnectionTest({ savedSettings, disabled }: { savedSettings: { model?: string } | null; disabled: boolean }) {
   const active = useRef<AbortController | null>(null);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<JevDiagnosticCode | null>(null);
@@ -57,7 +57,7 @@ export function JevConnectionTest({ savedSettings, disabled }: { savedSettings: 
   }
 
   return <section aria-label="Jev connection test">
-    <p className="help-p">Test the current saved settings with one small synthetic request to TypeSafe. This can consume provider usage. No project data is sent and no work, topology or locks are changed.</p>
+    <p className="help-p">Test the current saved settings{savedSettings?.model ? <> (model <code>{savedSettings.model}</code>)</> : null} with one small synthetic request to TypeSafe. This can consume provider usage. No project data is sent and no work, topology or locks are changed.</p>
     <button type="button" disabled={!savedSettings || disabled || running} onClick={() => { void run(); }}>
       {running ? 'Testing Jev…' : 'Test Jev connection'}
     </button>

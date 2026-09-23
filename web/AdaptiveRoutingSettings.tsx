@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { api, type AdaptiveRoutingSettings } from "./api.ts";
 import type { AdaptiveTopology } from "../src/shared/adaptive-topology.ts";
 import { JevConnectionTest } from "./JevConnectionTest.tsx";
+import { JEV_MODEL_ALIAS, validJevModel } from "../src/shared/jev-model.ts";
 
 export function AdaptiveRoutingSettings({ onClose, onSaved }: { onClose: () => void; onSaved?: () => void }) {
   const [settings, setSettings] = useState<AdaptiveRoutingSettings | null>(null);
@@ -11,6 +12,8 @@ export function AdaptiveRoutingSettings({ onClose, onSaved }: { onClose: () => v
   const [fallback, setFallback] = useState<"single" | "orchestrated">("orchestrated");
   const [topologyFallback, setTopologyFallback] =
     useState<Exclude<AdaptiveTopology, "single">>("brain_one_worker");
+  /** Empty means the default alias; otherwise the exact identifier to pin. */
+  const [model, setModel] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -23,14 +26,18 @@ export function AdaptiveRoutingSettings({ onClose, onSaved }: { onClose: () => v
         setEnabled(value.enabled);
         setFallback(value.fallback);
         setTopologyFallback(value.topologyFallback);
+        setModel(value.modelPinned ? value.model : "");
       })
       .catch(err => { if (active) setError(String(err.message || err)); });
     return () => { active = false; };
   }, []);
 
-  const canSave = Boolean(settings) && !busy && (!enabled || settings!.apiKeySet || apiKey.trim().length > 0);
+  const pinned = model.trim();
+  const modelValid = !pinned || validJevModel(pinned);
+  const canSave = Boolean(settings) && !busy && modelValid && (!enabled || settings!.apiKeySet || apiKey.trim().length > 0);
   const dirty = !settings || Boolean(apiKey.trim()) || enabled !== settings.enabled ||
-    fallback !== settings.fallback || topologyFallback !== settings.topologyFallback;
+    fallback !== settings.fallback || topologyFallback !== settings.topologyFallback ||
+    pinned !== (settings.modelPinned ? settings.model : "");
 
   return (
     <Modal onClose={() => { if (!busy) onClose(); }}>
@@ -46,12 +53,14 @@ export function AdaptiveRoutingSettings({ onClose, onSaved }: { onClose: () => v
             enabled,
             fallback,
             topologyFallback,
+            model: pinned || null,
             ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
           }).then(value => {
             setSettings(value);
             setEnabled(value.enabled);
             setFallback(value.fallback);
             setTopologyFallback(value.topologyFallback);
+            setModel(value.modelPinned ? value.model : "");
             setApiKey("");
             onSaved?.();
           }).catch(err => setError(String(err.message || err)))
@@ -109,7 +118,22 @@ export function AdaptiveRoutingSettings({ onClose, onSaved }: { onClose: () => v
           </select>
         </label>
         <p className="help-p">If Jev is unavailable, new requests use these fallbacks. Existing work keeps its current team and shows a warning.</p>
-        <p className="help-p">Model: <code>{settings?.model ?? "jev-latest"}</code>. Manual routing can apply once or stay locked to a task or conversation.</p>
+        <label>
+          Jev model identifier
+          <input
+            value={model}
+            onChange={e => setModel(e.target.value)}
+            placeholder={`${settings?.defaultModel ?? JEV_MODEL_ALIAS} (default alias)`}
+            maxLength={64}
+            autoComplete="off"
+            spellCheck={false}
+            aria-invalid={!modelValid}
+            disabled={!settings || busy}
+          />
+        </label>
+        <p className="help-p">Requested model: <code>{settings?.model ?? JEV_MODEL_ALIAS}</code> · {settings?.modelPinned ? "pinned identifier" : "default alias"}. Leave empty to use the alias <code>{settings?.defaultModel ?? JEV_MODEL_ALIAS}</code>, which TypeSafe may resolve to a different model over time. Enter an exact identifier from your provider to pin it for reproducible routing evaluation. Hivemind does not list models or prices and does not verify that an identifier exists or never changes: if TypeSafe rejects it, Jev calls fail visibly and current teams are kept. The Routing log records the requested and the resolved model separately. The TypeSafe endpoint never changes.</p>
+        {!modelValid && <p className="err">Use only letters, digits, dot, underscore or hyphen (at most 64 characters), not a URL.</p>}
+        <p className="help-p">Manual routing can apply once or stay locked to a task or conversation.</p>
         </details>
         <details className="settings-disclosure"><summary>What data is sent to Jev?</summary>
         <p className="help-p">Every message you address to a brain — in any channel, thread or via Telegram — sends that request and the project name/slug to TypeSafe before delivery. Messages without a brain and worker activity are never sent. Ongoing checks send the current topology, worker capacity, task/dependency/blocker counts, recent coordination events, locks and the previous decision.</p>

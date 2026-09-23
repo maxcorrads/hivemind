@@ -17,7 +17,7 @@ export function installJevDiagnostics(ui: Hono, hive: Hive, fetchImpl: typeof fe
         const stat = statSync(path.join(hive.home, 'adaptive-routing.json'), { bigint: true });
         stamp = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
       }
-      return { apiKey: config?.apiKey ?? '', model: TYPESAFE_MODEL, configuration: { config, stamp } };
+      return { apiKey: config?.apiKey ?? '', model: config?.model ?? TYPESAFE_MODEL, configuration: { config, stamp } };
     } catch {
       // A failed configuration read cannot establish a successful test or expose a filesystem error.
       return { apiKey: '', model: TYPESAFE_MODEL, configuration: 'unavailable' };
