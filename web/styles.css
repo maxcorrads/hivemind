@@ -1275,3 +1275,13 @@ summary:focus-visible, .tool-action:focus-visible { outline: 2px solid var(--wax
   .jev-requests { border-right: 0; border-bottom: 1px solid var(--line); }
   .jev-context > div { grid-template-columns: 1fr; gap: 0.05rem; }
 }
+
+/* Launch agent stays one click away: a sidebar button plus the empty-roster call to action. */
+.launch-cta { display: flex; align-items: center; justify-content: center; gap: 0.35rem; width: 100%; margin: 0 0 0.7rem; padding: 0.45rem 0.7rem; border-radius: 10px; background: var(--ink); color: var(--paper); font-weight: 700; font-size: 0.84rem; }
+html.dark .launch-cta { background: var(--wax); color: #1b2017; }
+.launch-cta:hover { filter: brightness(1.08); }
+.launch-cta:focus-visible { outline: 2px solid var(--wax); outline-offset: 2px; }
+.roster-empty { margin: 0.35rem 0 0.6rem; padding: 0.6rem; border: 1px dashed var(--line); border-radius: 10px; }
+.roster-empty p { margin: 0 0 0.5rem; color: var(--rail-mute); font-size: 0.82rem; line-height: 1.4; }
+.roster-empty .launch-cta { margin: 0; }
+.desk-h p.desk-sub { color: var(--ink); }

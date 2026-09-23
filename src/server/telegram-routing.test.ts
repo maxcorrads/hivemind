@@ -8,7 +8,7 @@ import { test } from "node:test";
 import { Hive } from "./hive.ts";
 import { TelegramBridge, startTelegram, writeTelegramFile, readTelegramFile, loadTelegramConfig, telegramConfigKey } from "./telegram.ts";
 import { enqueueTelegramPending } from "./telegram-outbox.ts";
-import { saveAdaptiveRouting } from "./adaptive-routing.ts";
+import { saveAdaptiveRouting } from "./adaptive-config.ts";
 import { jevTopologyResponse } from "./fixtures/jev-topology.ts";
 
 async function until(predicate: () => boolean) {
