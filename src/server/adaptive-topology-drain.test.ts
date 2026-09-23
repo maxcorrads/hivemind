@@ -9,10 +9,10 @@ import { saveAdaptiveRouting } from './adaptive-config.ts';
 import { readAdaptiveCapacity } from './adaptive-topology-capacity.ts';
 import { jevTopologyResponse } from './fixtures/jev-topology.ts';
 import { TelegramBridge, telegramConfigKey } from './telegram.ts';
-import type { AdaptiveTopology } from '../shared/adaptive-topology.ts';
+import type { AdaptiveExecutionState, AdaptiveTopology } from '../shared/adaptive-topology.ts';
 
 type Stored = { completedAt?: number | null; supersededBy?: string | null; revision?: number };
-/** Draining executions are not listed in the Human panel view; read them where they live. */
+/** Reads the stored snapshot, including executions already dropped from the Human panel view. */
 function stored(hive: Hive, executionId: string): Stored | undefined {
   const row = hive.db.prepare('SELECT snapshot FROM adaptive_topology_executions WHERE execution_id=?').get(executionId);
   return row ? JSON.parse(String(row.snapshot)) as Stored : undefined;
@@ -94,6 +94,9 @@ test('an unrouted Human request drains, not strands, the previous execution with
 test('a new Human request with open free-form delegation starts a new execution beside the draining one', async t => {
   const f = fixture(t); const original = await f.start();
   const root = await f.delegate(original.state.executionId);
+  const published: Array<{ state: AdaptiveExecutionState | null; event: { reason: string } }> = [];
+  const listener = (payload: typeof published[number]) => published.push(payload);
+  f.hive.bus.on('adaptive-routing', listener); t.after(() => f.hive.bus.off('adaptive-routing', listener));
   const next = await f.start('A different follow-up request.');
   assert.notEqual(next.state.executionId, original.state.executionId);
   assert.equal(next.routing.providerStatus, 'ok', 'the new request gets its own initial Jev classification');
@@ -102,7 +105,17 @@ test('a new Human request with open free-form delegation starts a new execution 
   assert.equal(old?.completedAt, null); assert.equal(old?.supersededBy, next.state.executionId);
   const panel = f.hive.adaptiveTopology.view(f.human, f.dm.id);
   assert.equal(panel.state?.executionId, next.state.executionId, 'the panel leads with the current request');
-  assert.deepEqual(panel.executions?.map(item => item.executionId), [next.state.executionId], 'one execution per brain in the panel');
+  assert.equal(panel.state?.current, true);
+  const draining = panel.executions?.find(item => item.executionId === original.state.executionId);
+  assert.deepEqual(panel.executions?.map(item => [item.executionId, item.current]),
+    [[original.state.executionId, false], [next.state.executionId, true]], 'the draining execution is listed beside the current one');
+  assert.equal(draining?.requestExcerpt, 'Execute the Human request.');
+  assert.deepEqual(draining?.openWork, { tasks: 0, delegations: 1 });
+  assert.equal(panel.executions?.find(item => item.current)?.openWork, undefined, 'open work is reported for draining executions only');
+  const retired = published.find(item => item.event.reason === 'superseded_draining_delegated_work');
+  assert.equal(retired?.state?.executionId, original.state.executionId, 'the draining execution publishes its own state');
+  assert.equal(retired?.state?.current, false);
+  assert.deepEqual(retired?.state?.openWork, { tasks: 0, delegations: 1 });
   assert.ok(panel.events.some(event => event.executionId === original.state.executionId && event.reason === 'superseded_draining_delegated_work'));
   // Both executions bind the brain; the old executionId stays valid for its own work.
   assert.deepEqual(f.hive.adaptiveTopology.policiesFor(f.brain.agent).map(policy => policy.executionId).sort(),
@@ -117,6 +130,10 @@ test('a new Human request with open free-form delegation starts a new execution 
   assert.equal((await f.reply(root, { eventType: 'decision' })).status, 200);
   assert.equal(f.commitments(), 0);
   assert.ok(f.execution(original.state.executionId)?.completedAt);
+  const drained = published.find(item => item.event.reason === 'delegated_work_drained');
+  assert.equal(drained?.state?.current, false); assert.ok(drained?.state?.completedAt);
+  assert.equal(drained?.state?.openWork, undefined);
+  assert.equal(f.hive.adaptiveTopology.view(f.human, f.dm.id).state?.executionId, next.state.executionId);
   assert.equal(f.hive.adaptiveTopology.forAgent(f.brain.agent)?.executionId, next.state.executionId);
   assert.equal(f.execution(next.state.executionId)?.completedAt, null, 'the current execution is untouched');
   // The finished predecessor is dropped on the brain's next request, as replaced executions always were.
