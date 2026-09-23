@@ -1,4 +1,4 @@
-import type { Hive } from './hive.ts';
+import type { CapacityHost } from './services/ports.ts';
 import { PRESENCE_IDLE_MS } from '../shared/types.ts';
 import type { TopologyCapacitySnapshot } from './adaptive-topology-provider.ts';
 
@@ -6,9 +6,9 @@ import type { TopologyCapacitySnapshot } from './adaptive-topology-provider.ts';
  * Free-form delegation is active until its thread is done or the worker reports it finished (the commitment row is
  * then deleted). A completed or deleted execution holds no worker: its commitments are released with it.
  */
-export function openDelegations(hive: Hive, of: { projectId: string } | { executionId: string }) {
+export function openDelegations(hive: CapacityHost, of: { projectId: string } | { executionId: string }) {
   const [column, value] = 'projectId' in of ? ['a.project_id', of.projectId] : ['a.execution_id', of.executionId];
-  return hive.db.prepare(`SELECT a.root_id,a.worker_id,a.execution_id,threads.status
+  return hive.storage.db.prepare(`SELECT a.root_id,a.worker_id,a.execution_id,threads.status
       FROM adaptive_topology_messages a LEFT JOIN threads ON threads.id=a.root_id
       JOIN adaptive_topology_executions e ON e.execution_id=a.execution_id AND json_extract(e.snapshot,'$.completedAt') IS NULL
       WHERE ${column}=? AND COALESCE(threads.status,'open')!='done'`).all(value);
@@ -18,10 +18,10 @@ type Work = { id: string; workerId: string; executionId: string | null; state: s
 export type ExecutionCapacityScope = { projectId: string; executionId: string };
 
 /** One authority for provider snapshots AND synchronous delegation admission. */
-export function readAdaptiveCapacity(hive: Hive, scope: ExecutionCapacityScope): TopologyCapacitySnapshot {
+export function readAdaptiveCapacity(hive: CapacityHost, scope: ExecutionCapacityScope): TopologyCapacitySnapshot {
   const now = Date.now();
   const workers = hive.listAgents().filter(agent => agent.role === 'worker' && agent.projectId === scope.projectId);
-  const work = hive.db.prepare(`SELECT t.id,t.worker_id,link.execution_id,
+  const work = hive.storage.db.prepare(`SELECT t.id,t.worker_id,link.execution_id,
       json_extract(t.snapshot,'$.state') AS state,
       json_extract(t.snapshot,'$.claim.state') AS claim_state,
       json_extract(t.snapshot,'$.contract.dependencies') AS dependencies
@@ -47,7 +47,7 @@ export function readAdaptiveCapacity(hive: Hive, scope: ExecutionCapacityScope):
   const committed = workers.filter(worker => isLive(worker) && ownWorkers.has(worker.id) && !otherWorkers.has(worker.id));
   const active = own.filter(task => !['accepted_complete','rejected'].includes(task.state));
   const dependencyIds = [...new Set(active.flatMap(task => task.dependencies))];
-  const completed = new Set(hive.db.prepare(`SELECT id FROM task_records
+  const completed = new Set(hive.storage.db.prepare(`SELECT id FROM task_records
     WHERE id IN (SELECT value FROM json_each(?)) AND json_extract(snapshot,'$.state')='accepted_complete'`)
     .all(JSON.stringify(dependencyIds)).map(row => String(row.id)));
   const available = [...committed.map(worker => ({ ...worker, committed: true })), ...free.map(worker => ({ ...worker, committed: false }))]
