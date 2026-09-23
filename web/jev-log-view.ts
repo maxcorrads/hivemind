@@ -1,5 +1,6 @@
 import type { AdaptiveTopology } from '../src/shared/adaptive-topology.ts';
 import type { JevCall, JevCallLogView, JevCallSummary, JevCallTrigger, JevRequestGroup } from '../src/shared/jev-calls.ts';
+import { parseTopologyPlan } from '../src/shared/adaptive-topology-policy.ts';
 import { topologyLabel } from './AdaptiveRoutingPanel.tsx';
 
 /** The identifier Hivemind asked for; calls recorded before #134 only have it in the exact sent payload. */
@@ -34,14 +35,49 @@ const REASONS: Record<string, string> = {
   orchestration_needed_no_capacity: 'Needs workers, but none are available',
   provider_timeout_preserve_current: 'Jev timed out · mode kept',
   provider_unavailable_preserve_current: 'Jev unavailable · mode kept',
+  response_rejected_preserve_current: 'Jev answer rejected · mode kept',
   capacity_changed_during_evaluation_preserve_current: 'Capacity kept changing · mode kept',
   capacity_changed_during_initial_routing: 'Capacity changed during the call',
 };
 export function reasonLabel(reason: string): string { return REASONS[reason] ?? reason.replaceAll('_', ' '); }
 
+const ERRORS: Record<string, string> = {
+  plan_not_offered: 'Jev chose a plan that was not offered',
+  plan_contradicts_sufficiency: 'Jev chose Single while saying the brain alone is not enough',
+  model_missing: 'The answer did not name the resolved model',
+  missing_usage: 'The answer did not report token usage',
+  malformed_response: 'The response was not a readable Jev answer',
+  response_too_large: 'The response exceeded the size limit',
+  request_too_large: 'The routing request exceeded the size limit (not sent)',
+  timeout: 'Jev did not answer in time',
+  cancelled: 'Call cancelled while Hivemind was stopping',
+  network: 'TypeSafe could not be reached (network error)',
+  invalid_model_setting: 'The saved Jev model identifier is invalid (not sent)',
+  invalid_timeout: 'Invalid call timeout (not sent)',
+  invalid_snapshot: 'Invalid worker capacity (not sent)',
+  internal_error: 'Internal error while calling Jev',
+};
+/** A recorded failure class in plain words. Unknown or legacy values (before #207) are shown as recorded. */
+export function errorLabel(error: string | null | undefined): string {
+  if (!error) return 'Jev unavailable';
+  if (ERRORS[error]) return ERRORS[error];
+  const http = /^http_(\d{3})$/.exec(error);
+  if (http) return `TypeSafe returned HTTP ${http[1]}`;
+  const [kind, question] = error.split(':', 2);
+  const label = question ? QUESTIONS[question] ?? question.replaceAll('_', ' ') : null;
+  if (kind === 'malformed_answer' && label) return `Malformed answer to “${label}”`;
+  if (kind === 'probabilities_invalid' && label) return `Invalid probabilities for “${label}”`;
+  return error;
+}
+
+/** Whether Jev's response arrived and was read: it was then rejected, not missing. */
+export function answerRejected(call: Pick<JevCallSummary, 'status' | 'model' | 'inputTokens' | 'reason'>): boolean {
+  return call.status === 'unavailable' && (call.reason === 'response_rejected_preserve_current' || call.model !== null || call.inputTokens !== null);
+}
+
 /** Jev's answer in one line. */
-export function answerLabel(call: Pick<JevCallSummary, 'status' | 'targetTopology' | 'targetWorkers' | 'confidence' | 'error'>): string {
-  if (call.status === 'unavailable') return `No answer · ${call.error ?? 'unavailable'}`;
+export function answerLabel(call: Pick<JevCallSummary, 'status' | 'targetTopology' | 'targetWorkers' | 'confidence' | 'error' | 'model' | 'inputTokens' | 'reason'>): string {
+  if (call.status === 'unavailable') return `${answerRejected(call) ? 'Answer rejected' : 'No answer'} · ${errorLabel(call.error)}`;
   return `${topologyLabel(call.targetTopology)}${call.targetWorkers ? ` · ${workersLabel(call.targetWorkers)}` : ''} · ${percent(call.confidence)}`;
 }
 
@@ -68,6 +104,8 @@ const QUESTIONS: Record<string, string> = {
   coupling: 'How coupled are the workstreams?',
   specialization_need: 'How much does specialist expertise help?',
   coordination_need: 'How much coordination do workers need?',
+  plan: 'Plan for the next phase',
+  // Contract v2 (before #207): still shown for calls recorded then.
   target_topology: 'Best way to organize the work',
   worker_budget: 'How many workers are needed?',
 };
@@ -78,7 +116,10 @@ function choiceLabel(choice: string): string {
   if (choice === 'insufficient') return 'No, delegation helps';
   if (choice === 'capacity_blocked') return 'Needs workers, none available';
   if (choice.startsWith('workers_')) return workersLabel(Number(choice.slice('workers_'.length)));
-  return ['single', 'brain_one_worker', 'brain_multi_dm', 'brain_multi_room'].includes(choice) ? topologyLabel(choice as AdaptiveTopology) : choice;
+  if (['single', 'brain_one_worker', 'brain_multi_dm', 'brain_multi_room'].includes(choice)) return topologyLabel(choice as AdaptiveTopology);
+  // Joint plan ids (contract v3): `brain_multi_dm_3` → "Multi-DM · 3 workers".
+  const plan = parseTopologyPlan(choice);
+  return plan && plan !== 'capacity_blocked' ? `${topologyLabel(plan.topology)} · ${workersLabel(plan.workers)}` : choice;
 }
 
 export type QuestionRow = {

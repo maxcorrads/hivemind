@@ -4,7 +4,7 @@ import { Window } from 'happy-dom';
 import { act } from 'react';
 import { JevLog } from './JevLog.tsx';
 import { api } from './api.ts';
-import { answerLabel, appendOlderPage, mergeRefreshedPage, outcomeLabel, questionRows, requestedModel, triggerLabel } from './jev-log-view.ts';
+import { answerLabel, appendOlderPage, errorLabel, mergeRefreshedPage, outcomeLabel, questionRows, requestedModel, triggerLabel } from './jev-log-view.ts';
 import type { JevCall, JevCallSummary, JevRequestGroup } from '../src/shared/jev-calls.ts';
 
 const window = new Window({ url: 'http://localhost/' });
@@ -35,7 +35,11 @@ test('labels explain triggers, answers and outcomes in plain words', () => {
   assert.equal(triggerLabel({ kind: 'human_message', eventType: null }, 'continuous'), 'Your reply in the thread');
   assert.equal(triggerLabel({ kind: 'task_event', eventType: 'review' }, 'continuous'), 'Brain task update · review');
   assert.equal(answerLabel(summary('a')), 'Brain + 1 · 1 worker · 93%');
-  assert.match(answerLabel(summary('b', { status: 'unavailable', error: 'timeout' })), /No answer · timeout/);
+  const noAnswer = { status: 'unavailable' as const, model: null, inputTokens: null, outputTokens: null, reason: 'provider_timeout_preserve_current' };
+  assert.equal(answerLabel(summary('b', { ...noAnswer, error: 'timeout' })), 'No answer · Jev did not answer in time');
+  assert.equal(answerLabel(summary('b', { ...noAnswer, error: 'Invalid Jev response' })), 'No answer · Invalid Jev response', 'Calls logged before #207 keep their text');
+  assert.equal(answerLabel(summary('b', { status: 'unavailable', error: 'plan_not_offered', reason: 'response_rejected_preserve_current' })),
+    'Answer rejected · Jev chose a plan that was not offered');
   assert.equal(outcomeLabel(summary('a')).tone, 'applied');
   assert.match(outcomeLabel(summary('c', { outcome: null })).text, /Not used/);
   assert.match(outcomeLabel(summary('d', { outcome: { kind: 'observation', applied: false, appliedTopology: 'single', appliedWorkers: 0, warning: null } })).text, /not enforced/);
@@ -43,6 +47,61 @@ test('labels explain triggers, answers and outcomes in plain words', () => {
   assert.deepEqual(rows.map(row => row.answer), ['No, delegation helps', 'High (1.60 / 2)', 'Brain + 1']);
   assert.equal(rows[1]!.options.find(option => option.chosen)?.label, 'High');
   assert.deepEqual(questionRows(sent, null).map(row => row.answer), ['No answer', 'No answer', 'No answer'], 'Malformed or missing answers never crash');
+});
+
+test('every rejection reason reads in plain words', () => {
+  assert.equal(errorLabel('plan_not_offered'), 'Jev chose a plan that was not offered');
+  assert.equal(errorLabel('plan_contradicts_sufficiency'), 'Jev chose Single while saying the brain alone is not enough');
+  assert.equal(errorLabel('malformed_answer:plan'), 'Malformed answer to “Plan for the next phase”');
+  assert.equal(errorLabel('probabilities_invalid:coupling'), 'Invalid probabilities for “How coupled are the workstreams?”');
+  assert.equal(errorLabel('malformed_answer:novel_question'), 'Malformed answer to “novel question”');
+  assert.equal(errorLabel('missing_usage'), 'The answer did not report token usage');
+  assert.equal(errorLabel('model_missing'), 'The answer did not name the resolved model');
+  assert.equal(errorLabel('response_too_large'), 'The response exceeded the size limit');
+  assert.equal(errorLabel('http_503'), 'TypeSafe returned HTTP 503');
+  assert.equal(errorLabel('network'), 'TypeSafe could not be reached (network error)');
+  assert.equal(errorLabel(null), 'Jev unavailable');
+  assert.equal(errorLabel('something_new'), 'something_new');
+});
+
+test('joint plan answers (contract v3) and topology/budget answers (v2) both render', () => {
+  const plans = { single: 0.01, brain_one_worker: 0.01, brain_multi_dm_2: 0.01, brain_multi_room_2: 0.01, brain_multi_dm_3: 0.95, brain_multi_room_3: 0.01 };
+  const rows = questionRows({ questions: { plan: { type: 'choice' } } },
+    { answers: { plan: { type: 'choice', choice: 'brain_multi_dm_3', confidence: 0.9, probabilities: plans } } });
+  assert.equal(rows[0]!.question, 'Plan for the next phase');
+  assert.equal(rows[0]!.answer, 'Multi-DM · 3 workers');
+  assert.deepEqual(rows[0]!.options.map(option => option.label),
+    ['Single', 'Brain + 1', 'Multi-DM · 2 workers', 'Room · 2 workers', 'Multi-DM · 3 workers', 'Room · 3 workers']);
+  const blocked = questionRows({ questions: { plan: { type: 'choice' } } }, { answers: { plan: { type: 'choice', choice: 'capacity_blocked' } } });
+  assert.equal(blocked[0]!.answer, 'Needs workers, none available');
+  const legacy = questionRows({ questions: { target_topology: { type: 'choice' }, worker_budget: { type: 'choice' } } },
+    { answers: { target_topology: { choice: 'brain_one_worker' }, worker_budget: { choice: 'workers_2' } } });
+  assert.deepEqual(legacy.map(row => [row.question, row.answer]),
+    [['Best way to organize the work', 'Brain + 1'], ['How many workers are needed?', '2 workers']]);
+});
+
+test('a rejected call shows its specific reason with the resolved model and tokens', async t => {
+  const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
+  t.after(async () => { await act(async () => root.unmount()); host.remove(); });
+  const rejected = summary('rejected', { status: 'unavailable', confidence: null, reason: 'response_rejected_preserve_current',
+    error: 'plan_not_offered', model: 'jev-1.13.0', inputTokens: 2851, outputTokens: 248, requestedModel: 'jev-latest',
+    targetTopology: 'single', targetWorkers: 0, outcome: null });
+  t.mock.method(api, 'jevCalls', async () => ({ hasMore: false, nextCursor: null, requests: [{ executionId: 'exec-1', channelId: 'dm', brainId: 'brain-1',
+    request: 'Refactor the parser.', firstAt: 1_000, lastAt: 1_000, callCount: 1, calls: [rejected] }] }));
+  const plan = { type: 'choice', choice: 'brain_one_worker_2', confidence: 0.9, probabilities: { single: 0.05, brain_one_worker: 0.95 } };
+  t.mock.method(api, 'jevCall', async () => ({ call: { ...rejected, sent: { ...sent, questions: { plan: { type: 'choice' } } },
+    received: { model: 'jev-1.13.0', answers: { plan }, usage: { input_tokens: 2851, output_tokens: 248 } } } }));
+  await act(async () => root.render(<JevLog project="chapter" tick={0} channelLabel={() => 'dm'} agentName={() => 'Atlas'} onOpenChannel={() => {}} />));
+  const text = () => host.textContent ?? '';
+  assert.match(text(), /Answer rejected · Jev chose a plan that was not offered/);
+  assert.doesNotMatch(text(), /Invalid Jev response/);
+  await act(async () => (host.querySelector('button.jev-call') as HTMLElement).click());
+  assert.match(text(), /Jev answered, but Hivemind rejected the answer: Jev chose a plan that was not offered\./);
+  assert.match(text(), /Why it was rejectedJev chose a plan that was not offered \(plan_not_offered\)/);
+  assert.match(text(), /Jev answer rejected · mode kept/);
+  assert.match(text(), /jev-1\.13\.0/);
+  assert.match(text(), /2851 in \/ 248 out/);
+  assert.match(text(), /Plan for the next phase/);
 });
 
 test('requested model comes from the summary, or from the exact sent payload for calls recorded before pinning', () => {

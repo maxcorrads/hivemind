@@ -90,7 +90,7 @@ test("enabled topology routing changes real Human delivery while disabled Auto a
   assert.equal(calls, 1);
   assert.equal(activeJson.routing.targetTopology, "single");
   assert.equal(activeJson.routing.providerStatus, "ok", "A malformed mock must not make a fallback look like successful routing");
-  assert.equal(activeJson.routing.contractVersion, "adaptive-routing-v2");
+  assert.equal(activeJson.routing.contractVersion, "adaptive-routing-v3");
   assert.equal(activeJson.adaptiveState.currentTopology, "single");
   assert.equal(activeJson.adaptiveState.lockedTopology, null);
   assert.match(activeJson.routing.routeId, /^route-/);

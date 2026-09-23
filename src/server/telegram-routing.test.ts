@@ -152,7 +152,7 @@ test("Telegram Human replies in a brain DM use active Jev routing and keep recei
     assert.deepEqual(routingRequests, ["Small Telegram request"], "Sender display name is not classifier context");
     const state = hive.adaptiveTopology.view(human, dm.id).state!;
     assert.equal(state.recommendation?.providerStatus, "ok", "A malformed fixture must not silently pass via fallback");
-    assert.equal(state.recommendation?.contractVersion, "adaptive-routing-v2");
+    assert.equal(state.recommendation?.contractVersion, "adaptive-routing-v3");
     assert.equal(state.currentTopology, "single");
     assert.equal(hive.messages.fromTelegram(original.id), true);
     assert.equal(hive.messages.fromTelegram(directive.id), false);

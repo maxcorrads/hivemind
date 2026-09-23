@@ -7,7 +7,7 @@ import { rerunMigration } from './test-fixtures.ts';
 
 const input = { topology: 'single', workers: 0, usableWorkers: 2, policyVersion: 'topology-policy-v2.1' };
 const scope = { executionId: 'e1', channelId: 'c1', projectId: 'p1', phase: 'continuous' as const };
-const decision: AdaptiveTopologyDecision = { routeId: 'r1', contractVersion: 'adaptive-routing-v2', targetTopology: 'brain_multi_room',
+const decision: AdaptiveTopologyDecision = { routeId: 'r1', contractVersion: 'adaptive-routing-v3', targetTopology: 'brain_multi_room',
   targetWorkers: 2, confidence: 0.95, reason: 'shared_coordination_pressure', providerStatus: 'ok', model: 'jev-fixture',
   latencyMs: 10, inputTokens: 40, outputTokens: 5, singleSufficient: false, needsOrchestration: true };
 function fixture() {
@@ -172,4 +172,29 @@ test('policy event export is allowlisted and explicitly only the retained tail',
   assert.equal(report.policyEventCoverage, 'retained_tail_only'); assert.equal(report.policyEvents[0]!.changed, true);
   assert.doesNotMatch(JSON.stringify(report), /secret-warning|secret-body|secret-key/);
   assert.deepEqual(report.models, ['jev-fixture']);
+});
+
+test('exports name the Jev contract of the run: v3 now, v2 for legacy runs, mixed when a run straddles both', t => {
+  const { db, store } = fixture(); t.after(() => db.close());
+  const pending = store.begin({ ...scope, executionId: 'e-new' }, input);
+  assert.equal(exportAdaptiveEvidence(db, 'e-new').contractVersion, 'adaptive-routing-v3', 'begun under the current contract');
+  store.finish(pending, decision);
+  assert.equal(exportAdaptiveEvidence(db, 'e-new').contractVersion, 'adaptive-routing-v3');
+  // A rejected answer still counts its tokens and resolved model.
+  store.finish(store.begin({ ...scope, executionId: 'e-new' }, input), { ...decision, providerStatus: 'unavailable', confidence: null,
+    reason: 'response_rejected_preserve_current', error: 'plan_not_offered', model: 'jev-1.13.0', inputTokens: 2851, outputTokens: 248 });
+  const rejected = exportAdaptiveEvidence(db, 'e-new');
+  assert.equal(rejected.overhead.unavailableAttempts, 1); assert.equal(rejected.overhead.tokenObservations, 2);
+  assert.equal(rejected.overhead.knownInputTokens, 40 + 2851); assert.deepEqual(rejected.models, ['jev-fixture', 'jev-1.13.0']);
+  // A run recorded before #207 has no contract list: it was v2 throughout.
+  store.finish(store.begin(scope, input), decision);
+  const row = db.prepare('SELECT snapshot FROM adaptive_evidence_runs WHERE execution_id=?').get('e1')!;
+  const legacy = JSON.parse(String(row.snapshot)) as Record<string, unknown>; delete legacy.contractVersions;
+  db.prepare('UPDATE adaptive_evidence_runs SET snapshot=? WHERE execution_id=?').run(JSON.stringify(legacy), 'e1');
+  assert.equal(exportAdaptiveEvidence(db, 'e1').contractVersion, 'adaptive-routing-v2');
+  store.finish(store.begin(scope, input), decision);
+  assert.equal(exportAdaptiveEvidence(db, 'e1').contractVersion, 'mixed');
+  const v2 = store.begin({ ...scope, executionId: 'e-v2' }, input);
+  store.finish(v2, { ...decision, contractVersion: 'adaptive-routing-v2' });
+  assert.equal(exportAdaptiveEvidence(db, 'e-v2').contractVersion, 'adaptive-routing-v2');
 });

@@ -4,7 +4,7 @@ import { api } from './api.ts';
 import { topologyLabel } from './AdaptiveRoutingPanel.tsx';
 import { CollectorHealthNotice } from './EvidenceHealth.tsx';
 import type { EvidenceCollectorHealth } from '../src/shared/evidence-health.ts';
-import { answerLabel, appendOlderPage, contextRows, mergeRefreshedPage, outcomeLabel, percent, questionRows, reasonLabel, requestedModel, triggerLabel, workersLabel } from './jev-log-view.ts';
+import { answerLabel, answerRejected, appendOlderPage, errorLabel, contextRows, mergeRefreshedPage, outcomeLabel, percent, questionRows, reasonLabel, requestedModel, triggerLabel, workersLabel } from './jev-log-view.ts';
 
 type Props = {
   project: string;
@@ -97,7 +97,8 @@ function RequestCard({ group, selected, channelLabel, agentName, onSelect, onOpe
 function badgeLabel(call: JevCallSummary): string {
   if (call.phase === 'observation') return 'Observed';
   if (call.outcome) return topologyLabel(call.outcome.appliedTopology);
-  return call.status === 'unavailable' ? 'Jev unavailable' : 'Not applied';
+  if (call.status === 'unavailable') return answerRejected(call) ? 'Answer rejected' : 'Jev unavailable';
+  return 'Not applied';
 }
 
 function CallRow({ call, active, onSelect }: { call: JevCallSummary; active: boolean; onSelect: () => void }) {
@@ -142,8 +143,10 @@ function CallDetail({ project, id, channelLabel, agentName }: { project: string;
 
     <section>
       <h3>2 · Jev's answers</h3>
-      {call.status === 'unavailable' ? <p className="routing-warning">No answer: {call.error ?? 'Jev unavailable'}. Hivemind kept the current mode.</p>
-        : <table className="jev-answers">
+      {call.status === 'unavailable' && <p className="routing-warning">{answerRejected(call)
+        ? <>Jev answered, but Hivemind rejected the answer: {errorLabel(call.error)}. Hivemind kept the current mode.</>
+        : <>No answer: {errorLabel(call.error)}. Hivemind kept the current mode.</>}</p>}
+      {(call.status !== 'unavailable' || call.received !== null) && <table className="jev-answers">
           <thead><tr><th>Question</th><th>Answer</th><th>Confidence</th></tr></thead>
           <tbody>{questionRows(call.sent, call.received).map(row => <tr key={row.id}>
             <td>{row.question}</td>
@@ -167,6 +170,8 @@ function CallDetail({ project, id, channelLabel, agentName }: { project: string;
         <div><dt>Jev recommends</dt><dd>{call.status === 'ok' ? `${topologyLabel(call.targetTopology)}${call.targetWorkers ? ` · ${workersLabel(call.targetWorkers)}` : ''}` : '—'}</dd></div>
         <div><dt>Overall confidence</dt><dd>{percent(call.confidence)} <small>(lowest answer confidence)</small></dd></div>
         <div><dt>Reason</dt><dd>{reasonLabel(call.reason)}</dd></div>
+        {call.status === 'unavailable' && <div><dt>{answerRejected(call) ? 'Why it was rejected' : 'Failure'}</dt>
+          <dd>{errorLabel(call.error)}{call.error ? <small> ({call.error})</small> : null}</dd></div>}
         <div><dt>What Hivemind did</dt><dd className={`jev-outcome ${outcome.tone}`}>{outcome.text}</dd></div>
         <div><dt>Requested model</dt><dd>{requestedModel(call) ?? '—'}</dd></div>
         <div><dt>Resolved model · time · tokens</dt><dd>{call.model ?? '—'}{call.model && requestedModel(call) && call.model !== requestedModel(call)
