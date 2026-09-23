@@ -9,6 +9,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { Hive } from '../server/hive.ts';
 import { startServer } from '../server/serve.ts';
+import { childEnv } from '../test-support/child-process.ts';
 
 test('real MCP brain requests a Human decision and Telegram-root reply resolves that exact request', { timeout: 20000 }, async t => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -20,7 +21,7 @@ test('real MCP brain requests a Human decision and Telegram-root reply resolves 
   const task = hive.tasks.assign(brain.agent, { requestId: 'task', worker: worker.agent.name, channel: channel.id,
     contract: { objective: 'Choose parser policy', scope: ['parser'], nonGoals: [], acceptanceCriteria: ['Decision'], dependencies: [], evidenceSeqs: [] } }).task;
   const port = await server.ready, clients: Client[] = [], transports: StdioClientTransport[] = [];
-  const env = (token: string) => ({ PATH: process.env.PATH ?? '', HIVEMIND_TOKEN: token,
+  const env = (token: string) => childEnv({ PATH: process.env.PATH ?? '', HIVEMIND_TOKEN: token,
     HIVEMIND_HOME: path.join(dir, 'identity'), HIVEMIND_URL: `http://127.0.0.1:${port}` });
   const args = ['--import', path.join(root, 'node_modules/tsx/dist/loader.mjs'), path.join(root, 'src/cli.ts')];
   const connect = async (token: string) => {

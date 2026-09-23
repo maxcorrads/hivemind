@@ -10,6 +10,7 @@ import { CallToolResultSchema, type CallToolResult } from "@modelcontextprotocol
 import { Hive } from "../server/hive.ts";
 import { startServer } from "../server/serve.ts";
 import { countTables } from "../server/test-fixtures.ts";
+import { childEnv } from "../test-support/child-process.ts";
 
 function textResult(result: CallToolResult): Record<string, unknown> {
   assert.notEqual(result.isError, true, JSON.stringify(result));
@@ -44,7 +45,7 @@ test("production MCP schemas and calls retain their observable contracts", { tim
     command: process.execPath,
     args: ["--import", "tsx", path.join(root, "src/cli.ts"), "mcp"],
     cwd: root,
-    env: { HIVEMIND_HOME: path.join(dir, "client"), HIVEMIND_URL: `http://127.0.0.1:${port}`, HIVEMIND_TOKEN: "" },
+    env: childEnv({ HIVEMIND_HOME: path.join(dir, "client"), HIVEMIND_URL: `http://127.0.0.1:${port}`, HIVEMIND_TOKEN: "" }),
     stderr: "pipe",
   });
   let diagnostic = "";

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { childEnv } from "../test-support/child-process.ts";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
@@ -155,7 +156,7 @@ test("Claude launch requests eager loading only for Hivemind without changing pe
         // Capture argv using a shell function, never launch the real model.
         const capture = `function ${software}() { ${shSingleQuote(process.execPath)} -e 'console.log(JSON.stringify(process.argv.slice(1)))' -- "$@"; }\n`;
         const shell = process.platform === "darwin" ? "zsh" : "/bin/bash";
-        const result = spawnSync(shell, ["-f"], { input: capture + block, encoding: "utf8" });
+        const result = spawnSync(shell, ["-f"], { input: capture + block, encoding: "utf8", env: childEnv() });
         assert.equal(result.status, 0, result.stderr);
         const argv = JSON.parse(result.stdout) as string[];
         assert.deepEqual(argv.slice(0, 3), ["--mcp-config", JSON.stringify({
@@ -291,7 +292,7 @@ test("roster paste is a macOS script that opens one Terminal window per employee
   assert.match(text, /'Alpha - Ada'/);
   assert.equal(text.includes("does not launch anyone"), false);
   if (process.platform === "darwin") {
-    const chk = spawnSync("zsh", ["-n"], { input: text, encoding: "utf8" });
+    const chk = spawnSync("zsh", ["-n"], { input: text, encoding: "utf8", env: childEnv() });
     assert.equal(chk.status, 0, chk.stderr);
   }
   const empty = buildRosterPaste([]);

@@ -10,6 +10,7 @@ import { HiveError, type Agent } from '../shared/types.ts';
 import { claimActionSchema, overlappingPaths, CLAIM_LIMITS } from '../shared/task-claims.ts';
 import type { TaskAction, TaskContract, TaskSnapshot } from '../shared/tasks.ts';
 import { countRows, failWrites, insertRow, removeChannelMember, storedSnapshot } from './test-fixtures.ts';
+import { childEnv, stopChild } from '../test-support/child-process.ts';
 
 function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-claims-')), file = path.join(dir, 'hive.db');
@@ -285,7 +286,7 @@ test('separate SQLite processes serialize the same claim revision with one expli
   const children = actors.map((_, index) => {
     const child = spawn(process.execPath,
       ['--import', path.join(root, 'node_modules/tsx/dist/loader.mjs'), file, path.join(f.hive.home, 'hive.db')],
-      { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+      { stdio: ['ignore', 'pipe', 'pipe', 'ipc'], env: childEnv() });
     exits[index] = once(child, 'close');
     const state = { phase: 'spawned', stderr: '' };
     states[index] = state;
@@ -389,10 +390,10 @@ test('separate SQLite processes serialize the same claim revision with one expli
   } finally {
     for (const [index, child] of children.entries()) {
       if (child.exitCode === null && child.signalCode === null) {
-        states[index]!.phase = `${states[index]!.phase} -> killed by parent`;
-        child.kill('SIGKILL');
+        states[index]!.phase = `${states[index]!.phase} -> stopped by parent`;
       }
     }
+    await Promise.allSettled(children.map(child => stopChild(child)));
     await Promise.allSettled(exits);
   }
 });

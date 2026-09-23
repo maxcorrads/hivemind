@@ -10,6 +10,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { Hive } from '../server/hive.ts';
 import { startServer } from '../server/serve.ts';
+import { childEnv } from '../test-support/child-process.ts';
 
 test('real MCP clients assign/receive/accept/result/review and CLI reads the same durable task', { timeout: 25_000 }, async () => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -18,7 +19,7 @@ test('real MCP clients assign/receive/accept/result/review and CLI reads the sam
   const server = startServer({ port: 0, hive, telegram: false }); const port = await server.ready;
   const brain = hive.join({ role: 'brain' }), worker = hive.join({ role: 'worker', seniority: 'mid' });
   const clients: Client[] = [];
-  const env = (token: string) => ({ PATH: process.env.PATH ?? '', HIVEMIND_TOKEN: token,
+  const env = (token: string) => childEnv({ PATH: process.env.PATH ?? '', HIVEMIND_TOKEN: token,
     HIVEMIND_HOME: path.join(dir, 'identities'), HIVEMIND_URL: `http://127.0.0.1:${port}` });
   const args = ['--import', path.join(root, 'node_modules/tsx/dist/loader.mjs'), path.join(root, 'src/cli.ts')];
   const connect = async (token: string) => {

@@ -12,6 +12,7 @@ import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { Hive } from '../server/hive.ts';
 import { startServer } from '../server/serve.ts';
 import type { HandoffList } from '../shared/handoffs.ts';
+import { childEnv } from '../test-support/child-process.ts';
 
 test('fresh real stdio and CLI sessions recover bounded handoffs without token disclosure or state transitions', { timeout: 20_000 }, async t => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -28,8 +29,8 @@ test('fresh real stdio and CLI sessions recover bounded handoffs without token d
   const task = hive.tasks.assign(brain.agent, { requestId: 'handoff-assignment', worker: worker.agent.name,
     contract: { objective: 'Repair parser', scope: ['parser'], nonGoals: [], acceptanceCriteria: ['Regression test'], dependencies: [], evidenceSeqs: [] } }).task;
   hive.tasks.event(worker.agent, task.id, { requestId: 'accept', expectedRevision: 1, action: { type: 'accept' } });
-  const env = { PATH: process.env.PATH ?? '', HIVEMIND_TOKEN: worker.token,
-    HIVEMIND_HOME: path.join(dir, 'identities'), HIVEMIND_URL: `http://127.0.0.1:${port}` };
+  const env = childEnv({ PATH: process.env.PATH ?? '', HIVEMIND_TOKEN: worker.token,
+    HIVEMIND_HOME: path.join(dir, 'identities'), HIVEMIND_URL: `http://127.0.0.1:${port}` });
   const args = ['--import', path.join(root, 'node_modules/tsx/dist/loader.mjs'), path.join(root, 'src/cli.ts')];
   const connect = async () => {
     const client = new Client({ name: 'handoff-fixture', version: '1' }); clients.push(client);
