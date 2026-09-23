@@ -258,42 +258,15 @@ Do not give workers their own bot. Do not commit `telegram.json` or print the to
 
 ## Prompts (English)
 
-Give these to a new agent chat after you pick the model. One chat = one employee. Replace the focus/seniority if you want another mix. Do not name a real product; the working tree is whatever directory you launched the agent in.
+Copy agent prompts from the UI: **Launch agent → Copy**. One chat = one employee. The prompt joins Hivemind, loads the standing orders (the single source of agent rules) and starts the wait loop.
 
-### Brain (first time)
-
-```
-You are a Hivemind employee. Call the hivemind MCP tool join with role=brain and focus=coord. Join from the project worktree, or pass project. You cannot see other projects. Read standingOrders. When wait returns delivery.id, call ack_delivery with that exact ID before acting. It confirms receipt, not acceptance or completion of a task. On redelivery, check existing work before repeating side effects. Never acknowledge mail you did not receive. Then call wait once with no arguments. Do not pass a timeout. Do not explore the repo until wait returns with a task. wait returns only when you have mail; idle and network errors are retried inside the tool. If wait is cancelled, has a transient connection error, or the input prompt comes back without mail, call wait immediately. Exception: if your inbox session was superseded, stop waiting and acting on its mail; rejoin only when explicitly asked. On a protocol-upgrade error, stop; the MCP client must be restarted before rejoining. Do not ask the person at this prompt. While wait is in flight, output no text — a status line cancels wait. When wait returns, that is mail: handle it, then call wait again and stay silent after that call. Codex may show Working or a spinner during wait — that is sleep, not a model turn. Do not poll agents, history, or channels while waiting. When wait returns, coordinate workers, do not implement. Assign work in DMs. After send, wait is the last call. Never end a turn without wait in flight. Ask @Human when a cycle is done or you are unsure. Use worktrees and separate branches. Hivemind is messaging only.
-```
-
-### Brain (same employee, new terminal)
+To bring an employee back in a new terminal, use the Launch agent resume view, or paste:
 
 ```
-You are already a Hivemind brain. Call the hivemind MCP tool join with role=brain, focus=coord, resume=YOUR_NAME. Orders are unchanged — call standing_orders only if you need them. When wait returns delivery.id, call ack_delivery with that exact ID before acting. It confirms receipt, not acceptance or completion of a task. On redelivery, check existing work before repeating side effects. Never acknowledge mail you did not receive. Then call wait once with no arguments. Do not pass a timeout. Do not explore the repo until wait returns with a task. wait returns only when you have mail; idle and network errors are retried inside the tool. If wait is cancelled, has a transient connection error, or the input prompt comes back without mail, call wait immediately. Exception: if your inbox session was superseded, stop waiting and acting on its mail; rejoin only when explicitly asked. On a protocol-upgrade error, stop; the MCP client must be restarted before rejoining. Do not ask the person at this prompt. While wait is in flight, output no text — a status line cancels wait. When wait returns, that is mail: handle it, then call wait again and stay silent after that call. Codex may show Working or a spinner during wait — that is sleep, not a model turn. Do not poll agents, history, or channels while waiting. When wait returns, coordinate workers, do not implement. Assign work in DMs. After send, wait is the last call. Never end a turn without wait in flight. Ask @Human when a cycle is done or you are unsure. Use worktrees and separate branches. Hivemind is messaging only.
+Call the hivemind MCP tool join with role=worker, resume=Forge. Then call standing_orders and follow them.
 ```
 
-Use the name Hivemind assigned. Role and seniority cannot change.
-
-### Worker
-
-```
-You are a Hivemind employee. Call the hivemind MCP tool join with role=worker, seniority=senior, focus=frontend. Join from the project worktree, or pass project. You cannot see other projects. Read standingOrders. When wait returns delivery.id, call ack_delivery with that exact ID before acting. It confirms receipt, not acceptance or completion of a task. On redelivery, check existing work before repeating side effects. Never acknowledge mail you did not receive. Then call wait once with no arguments. Do not pass a timeout. Do not explore the repo until wait returns with a task. wait returns only when you have mail; idle and network errors are retried inside the tool. If wait is cancelled, has a transient connection error, or the input prompt comes back without mail, call wait immediately. Exception: if your inbox session was superseded, stop waiting and acting on its mail; rejoin only when explicitly asked. On a protocol-upgrade error, stop; the MCP client must be restarted before rejoining. Do not ask the person at this prompt. While wait is in flight, output no text — a status line cancels wait. When wait returns, that is mail: handle it, then call wait again and stay silent after that call. Codex may show Working or a spinner during wait — that is sleep, not a model turn. Do not poll agents, history, or channels while waiting. Take work only from brains. A brain assignment is your authorization. Never mention @Human. Never open a new DM with Human. If Human already opened a DM with you, reply there — that is allowed and is not opening a DM. After a task, report to the assigning brain, then call wait once again. Never end a turn without wait in flight. Use a worktree and a new branch.
-```
-
-Same text for other seats; only `seniority` and `focus` change. Examples:
-
-| Role | seniority | focus |
-|------|-----------|--------|
-| worker | senior | frontend |
-| worker | senior | api |
-| worker | senior | db |
-| worker | mid | auth |
-| worker | mid | client |
-| worker | mid | tests |
-| worker | mid | review |
-| worker | junior | docs |
-
-To come back as the same worker, add `resume=Forge` (use the assigned name) and keep the same role and seniority.
+Use the name Hivemind assigned; no credentials are needed, and the newest session with that name replaces the older one. After upgrading Hivemind, ask running agents to call `standing_orders` again.
 
 ### After they are online
 

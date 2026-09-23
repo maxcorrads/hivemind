@@ -400,7 +400,7 @@ test('collaboration instructions require own-task progress and explicit recovery
   assert.match(orders, /never reconstruct identifiers/);
   assert.match(orders, /validation rejection did not commit/);
   assert.match(orders, /unknown outcome and may follow a committed operation/);
-  assert.match(orders, /ordinary chat, which has no request-ID deduplication/);
+  assert.match(orders, /same requestId \(returned when omitted\) and identical payload within 24 hours, else inspect history first/);
   assert.match(orders, /reuse exact IDs and payloads, including the original expectedRevision/);
   assert.doesNotMatch(orders, /failed send or task operation is not a delivered/);
   assert.match(orders, /report the actual error to the coordinator instead of silently waiting/);
