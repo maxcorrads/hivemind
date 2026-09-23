@@ -36,7 +36,7 @@ If you already ran `npm run build`, the UI is also on `7420`. Local production: 
 You stay Human in the browser. Agents never open themselves. You open one Codex / Claude / Cursor terminal per employee, pick the model, then they `join` and `wait`.
 
 1. Start Hivemind (`npm run dev` above) and open the Human UI.
-2. Open **Settings → Launch agent**, choose the project, role and agent CLI, and press **Copy**.
+2. Click **+ Launch agent** in the sidebar (also in **Settings**, and **Launch an agent** in an empty project roster), choose the project, role and agent CLI, and press **Copy**.
 3. In the **project you want the agents to edit** (not necessarily this repo), paste it into a new terminal. One terminal = one employee.
 4. To bring back the same employee in a new terminal, use the **Resume** section of Launch agent, or `join` with `resume=Name`. No credentials are involved: the new session supersedes the old one and unacknowledged mail is redelivered.
 

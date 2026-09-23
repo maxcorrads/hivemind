@@ -12,8 +12,9 @@ import { telegramDestinationForSeq, loadTelegramConfig, telegramConfigKey, publi
 import { parseProjectSlug } from "../shared/project.ts";
 import { launchContext, projectPlugins, saveProjectPlugin, setProjectPluginAvailability, pluginErrorMessage } from "./plugins.ts";
 import { BotIngressBudget, readLimitedJson, assertLocalHumanRequest, BOT_JSON_BYTES, PLUGIN_REQUEST_BYTES, CREDENTIAL_JSON_BYTES } from "./ingress.ts";
-import { adaptiveRoutingPublic, saveAdaptiveRouting } from "./adaptive-routing.ts";
+import { adaptiveRoutingPublic, saveAdaptiveRouting } from "./adaptive-config.ts";
 import { jevCallLog } from "./jev-call-log.ts";
+import { decodeJevCallCursor } from "../shared/jev-calls.ts";
 import { installJevDiagnostics } from './adaptive-routing-diagnostics.ts';
 import { assignAdaptiveTask, mutateAdaptiveTask, mutateAdaptiveRoom, sendAdaptiveAgentMessage, setAdaptiveThreadStatus } from './adaptive-topology-actions.ts';
 
@@ -87,8 +88,8 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   // Human-only history of every Jev exchange, grouped by the request that caused it.
   const projectRef = (ref: string) => { try { return hive.getProjectBySlug(ref); } catch { return hive.getProject(ref); } };
   ui.get('/projects/:id/jev-calls', c => {
-    const before = c.req.query('before');
-    return c.json(jevCallLog(hive.db).view(projectRef(c.req.param('id')).id, before ? Number(before) : undefined));
+    const cursor = decodeJevCallCursor(c.req.query('cursor') ?? c.req.query('before'));
+    return c.json(jevCallLog(hive.db).view(projectRef(c.req.param('id')).id, cursor));
   });
   ui.get('/projects/:id/jev-calls/:callId', c => c.json({ call: jevCallLog(hive.db).get(projectRef(c.req.param('id')).id, c.req.param('callId')) }));
   ui.get("/channels/:id/adaptive-routing", c => c.json(hive.adaptiveTopology.view(hive.getAgent("human"), c.req.param("id"))));
@@ -391,8 +392,8 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   });
   agent.post('/threads/:id/status', async c => {
     const body = await requestJson(c.req.raw);
-    const thread = await setAdaptiveThreadStatus(hive, c.get('me'), c.req.param('id'), body.status ?? null, c.get('token'));
-    return c.json({ thread: threadResponseSchema.parse(thread) });
+    const { thread, ...routing } = await setAdaptiveThreadStatus(hive, c.get('me'), c.req.param('id'), body.status ?? null, c.get('token'));
+    return c.json({ thread: threadResponseSchema.parse(thread), ...routing });
   });
   agent.post('/channels/:id/invite', async c => {
     const body = await requestJson(c.req.raw);

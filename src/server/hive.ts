@@ -8,7 +8,7 @@ import { initTelegramInbox, telegramQuarantine, retryTelegramUpdate, discardTele
 import { initTelegramOutbox, retryTelegramOutboxFailure, pruneTelegramFailures, type TelegramDestination } from "./telegram-outbox.ts";
 import { immediateTransaction } from './transaction.ts';
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { EventEmitter } from "node:events";
@@ -54,6 +54,7 @@ import { InboxReader } from "./inbox-reader.ts";
 import type { MentionPage, ReadSnapshot } from "../shared/read-state.ts";
 import { hiveHome } from "./paths.ts";
 import { preparePrivateDatabase } from "./private-database.ts";
+import { removeLegacyIdentityDirs } from "./legacy-identities.ts";
 import { packWait } from "./wait-format.ts";
 import { digestExpansionSchema } from "../shared/digest.ts";
 import { botMessageSchema, createBotSchema, botCredentialSchema } from "../shared/bot-message.ts";
@@ -194,9 +195,8 @@ export class Hive {
       this.readState = new ReadState(this.db);
       this.sendRequests = new SendRequests(this.db);
       this.uploads = new UploadBudget({ db: this.db, transaction: work => this.transaction(work) }, options.uploadLimits);
-      this.db.exec(`CREATE TABLE IF NOT EXISTS agent_credentials (
-        agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
-        revision INTEGER NOT NULL, revoked INTEGER NOT NULL);`);
+      // Agent credentials were removed in #144; drop the table left by older hives.
+      this.db.exec("DROP TABLE IF EXISTS agent_credentials");
       this.tasks = new TaskStore(this);
       this.rooms = new RoomStore(this);
       this.notifications = new NotificationStore(this);
@@ -210,6 +210,7 @@ export class Hive {
       try { this.db.close(); } catch { /* preserve the initialization failure */ }
       throw error;
     }
+    removeLegacyIdentityDirs(this.home);
   }
 
   /** Synchronous transactions compose through savepoints. Effects wait for the outer commit. */
@@ -796,7 +797,6 @@ export class Hive {
     this.db.prepare("DELETE FROM reactions WHERE agent_id = ?").run(target.id);
     this.db.prepare("DELETE FROM attachments WHERE created_by = ? AND message_id IS NULL").run(target.id);
     this.db.prepare("DELETE FROM agents WHERE id = ?").run(target.id);
-    this.forgetIdentityFiles(target.name);
     if (target.projectId) {
       const general = this.db.prepare(
         "SELECT id FROM channels WHERE project_id = ? AND lower(name) = 'general'",
@@ -805,23 +805,6 @@ export class Hive {
     }
     this.bus.emit("project", { removed: target.name });
     return target;
-  }
-
-  private forgetIdentityFiles(name: string) {
-    const idFile = path.join(this.home, "identities", `${name}.json`);
-    try {
-      if (existsSync(idFile)) unlinkSync(idFile);
-    } catch {
-      /* leave the roster delete in place */
-    }
-    const last = path.join(this.home, "last-join.json");
-    try {
-      if (!existsSync(last)) return;
-      const raw = JSON.parse(readFileSync(last, "utf8")) as { name?: string };
-      if (raw.name && raw.name.toLowerCase() === name.toLowerCase()) unlinkSync(last);
-    } catch {
-      /* last-join is best-effort */
-    }
   }
 
   getAgent(id: string): Agent {

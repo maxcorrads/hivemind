@@ -5,7 +5,7 @@ import { HiveError, type Agent, type Channel, type Message, type ThreadStatus } 
 import { ADAPTIVE_TOPOLOGIES, type AdaptiveExecutionState, type AdaptiveLockScope,
   type AdaptiveRoutingEvent, type AdaptiveRoutingMode, type AdaptiveRoutingView,
   type AdaptiveTopology, type AdaptiveTopologyDecision, type AdaptiveWorkerCapacity } from '../shared/adaptive-topology.ts';
-import { loadAdaptiveRouting, type AdaptiveRoutingFile } from './adaptive-routing.ts';
+import { loadAdaptiveRouting, type AdaptiveRoutingFile } from './adaptive-config.ts';
 import { advanceTopologyPolicy, initialTopologyPolicy, minimumTopologyWorkers, topologyCheckpointSafe,
   topologyIsEscalation, validTopologyTarget, MIN_TOPOLOGY_CONFIDENCE,
   type TopologyTarget, type TopologyPolicyState, type TopologySafety } from '../shared/adaptive-topology-policy.ts';

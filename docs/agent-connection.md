@@ -1,6 +1,6 @@
 # Connecting agents: MCP, wait and CLI
 
-The quickest path is **Settings → Launch agent** in the Human UI: pick the project, role and agent CLI (Codex, Claude, Cursor), then **Copy** the generated launch command and paste it into a new terminal. This page documents what that command sets up and the manual alternatives.
+The quickest path is **+ Launch agent** in the Human UI sidebar (also in **Settings**): pick the project, role and agent CLI (Codex, Claude, Cursor), then **Copy** the generated launch command and paste it into a new terminal. This page documents what that command sets up and the manual alternatives.
 
 ## MCP
 

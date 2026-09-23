@@ -84,3 +84,13 @@ Do not infer the target from the topology alone. Record successful attempt-1 run
 Two successful Ubuntu attempt-1 runs of the four-shard Node 24 plan measured materially different shard runtimes from the original scheduling signal. A trial that immediately rescaled and reassigned files improved balance, but also changed the merged LCOV branch universe enough to produce **74.9968%** raw branch coverage (displayed as 75.00%), correctly failing the unchanged 75% threshold. The threshold was not rounded down or weakened.
 
 The final topology therefore keeps the previously validated Node 24 assignment while retaining the measured Ubuntu timings as evidence for a follow-up adaptive balancer coupled to coverage-stable source identity. Node 22 still moves from two to **four** Ubuntu shards because that cuts its critical path without affecting the Node 24 coverage producer partition.
+
+## Node version lanes and minimum-version plan
+
+Issue #160 adds a `22.x` lane next to the `22.13.0` floor: the Node 22 unit job and its four integration shards run as a `node × shard` matrix, so CI tests 22.13.0 (the `engines` minimum), the latest Node 22 release and Node 24. Storage relies on `node:sqlite` (`DatabaseSync`), which is still experimental in Node 22; the latest lane surfaces behaviour changes in newer 22 minors before users hit them. Both Node 22 lanes feed the historical required check `Tests / Node 22.13.0`, whose name is kept for branch protection. The extra lane adds five short Ubuntu jobs that run in parallel with the existing ones: more runner-minutes, no extra critical-path latency.
+
+Node 22 reaches end of life in **April 2027**. Plan:
+
+- Until then, keep `engines.node` at `>=22.13.0` and keep both the floor and the `22.x` lane.
+- At Node 22 EOL, raise `engines.node` to the tested Node 24 floor, replace the Node 22 lanes with that floor plus a `24.x` latest lane, add the next LTS line as the current lane, and update the required status checks in the `main` ruleset in the same change.
+- Dependabot (`.github/dependabot.yml`) opens weekly grouped patch/minor PRs for runtime and development npm dependencies, plus GitHub Actions updates; major updates arrive as individual PRs.
