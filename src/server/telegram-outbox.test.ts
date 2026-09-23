@@ -47,15 +47,15 @@ test("real bridge resumes only the failed part after restart and Human retry wak
     return Response.json({ ok: true, result: { message_id: id++ } });
   });
   try {
-    const human = hive.getAgent("human");
-    const a = await hive.createFileFromBytes(human, { name: "a.txt", mime: "text/plain", bytes: Buffer.from("a") });
-    const b = await hive.createFileFromBytes(human, { name: "b.txt", mime: "text/plain", bytes: Buffer.from("b") });
+    const human = hive.identity.getAgent("human");
+    const a = await hive.files.createFileFromBytes(human, { name: "a.txt", mime: "text/plain", bytes: Buffer.from("a") });
+    const b = await hive.files.createFileFromBytes(human, { name: "b.txt", mime: "text/plain", bytes: Buffer.from("b") });
     const health: number[] = [];
     hive.bus.on("telegram-health", value => health.push(value.failures));
     bridge = new TelegramBridge(hive, cfg);
     bridge.start();
-    hive.postMessage(human, { channel: "general", body: "x".repeat(1100), attachmentIds: [a.id, b.id] });
-    await until(() => hive.telegramFailureCount() === 1);
+    hive.messages.postMessage(human, { channel: "general", body: "x".repeat(1100), attachmentIds: [a.id, b.id] });
+    await until(() => hive.telegramAdmin.failureCount() === 1);
     assert.deepEqual(sent, ["text", "a.txt", "b.txt"]);
     assert.ok(health.includes(1));
     await bridge.stop();
@@ -66,12 +66,12 @@ test("real bridge resumes only the failed part after restart and Human retry wak
     bridge = new TelegramBridge(hive, cfg);
     bridge.start();
     await nextTurn(); // dispatcher has reached idle before the explicit retry
-    const failure = hive.telegramFailures()[0]!;
+    const failure = hive.telegramAdmin.failures()[0]!;
     const response = await createApp(hive).request(`/api/ui/telegram/failures/${failure.id}/retry`, { method: "POST" });
     assert.equal(response.status, 200);
     await until(() => sent.length === 4);
     assert.deepEqual(sent, ["text", "a.txt", "b.txt", "b.txt"]);
-    assert.equal(hive.telegramFailureCount(), 0);
+    assert.equal(hive.telegramAdmin.failureCount(), 0);
     assert.equal(readValue(hive, "telegram_failures", "resolution", { id: failure.id }), "retried");
   } finally {
     await bridge?.stop();
@@ -82,34 +82,34 @@ test("real bridge resumes only the failed part after restart and Human retry wak
 
 test("retry rejects changed bot/chat and rolls back queue insertion on an audit failure", t => {
   const { hive } = fixture(t);
-  const message = hive.postMessage(hive.getAgent("human"), { channel: "general", body: "private original" });
+  const message = hive.messages.postMessage(hive.identity.getAgent("human"), { channel: "general", body: "private original" });
   const original = { botKey: telegramBotKey("a"), chatId: -1001 };
   recordTelegramFailure(hive.db, message.seq, "message", "fixture", 1, original.chatId, original.botKey);
-  const failure = hive.telegramFailures()[0]!;
+  const failure = hive.telegramAdmin.failures()[0]!;
   for (const dest of [undefined, { ...original, chatId: -1002 }, { ...original, botKey: telegramBotKey("b") }]) {
-    assert.throws(() => hive.retryTelegramFailure(failure.id, () => dest), /destination changed or unknown/);
+    assert.throws(() => hive.telegramAdmin.retryFailure(failure.id, () => dest), /destination changed or unknown/);
   }
   const restoreAudit = failWrites(hive, "telegram_failures", { on: "update", message: "fixture audit failure" });
-  assert.throws(() => hive.retryTelegramFailure(failure.id, () => original), /fixture audit failure/);
+  assert.throws(() => hive.telegramAdmin.retryFailure(failure.id, () => original), /fixture audit failure/);
   assert.equal(hasRow(hive, "telegram_pending", { seq: message.seq }), false);
-  assert.equal(hive.telegramFailureCount(), 1);
+  assert.equal(hive.telegramAdmin.failureCount(), 1);
   restoreAudit();
   let wake = 0;
   hive.bus.on("telegram-outbox-wake", () => { wake++; assert.ok(hasRow(hive, "telegram_pending", { seq: message.seq })); });
-  hive.retryTelegramFailure(failure.id, () => original);
+  hive.telegramAdmin.retryFailure(failure.id, () => original);
   assert.equal(wake, 1);
 });
 
 test("failure diagnostics are bounded and expirations remain visible in an aggregate", t => {
   const { hive } = fixture(t);
   for (let i = 0; i < TELEGRAM_FAILURE_CAP + 7; i++) recordTelegramFailure(hive.db, i, "message", "fixture");
-  assert.equal(hive.telegramFailureCount(), TELEGRAM_FAILURE_CAP);
-  assert.equal(hive.telegramOutboxHealth().diagnosticsPruned, 7);
+  assert.equal(hive.telegramAdmin.failureCount(), TELEGRAM_FAILURE_CAP);
+  assert.equal(hive.telegramAdmin.outboxHealth().diagnosticsPruned, 7);
 });
 
 test("old destination jobs are quarantined rather than sent under a new bridge", async t => {
   const { hive } = fixture(t);
-  const message = hive.postMessage(hive.getAgent("human"), { channel: "general", body: "keep original audience" });
+  const message = hive.messages.postMessage(hive.identity.getAgent("human"), { channel: "general", body: "keep original audience" });
   enqueueTelegramPending(hive.db, message.seq, "message", undefined, { botKey: telegramBotKey("a"), chatId: -1001 });
   let sends = 0;
   t.mock.method(globalThis, "fetch", async (url: unknown, init?: RequestInit) => {
@@ -120,8 +120,8 @@ test("old destination jobs are quarantined rather than sent under a new bridge",
   const bridge = new TelegramBridge(hive, { botToken: "b", allowUserIds: [1], groups: { chapter: -1002 } });
   bridge.start();
   try {
-    await until(() => hive.telegramFailureCount() === 1);
+    await until(() => hive.telegramAdmin.failureCount() === 1);
     assert.equal(sends, 0);
-    assert.equal(hive.telegramFailures()[0]?.telegramChatId, -1001);
+    assert.equal(hive.telegramAdmin.failures()[0]?.telegramChatId, -1001);
   } finally { await bridge.stop(); }
 });

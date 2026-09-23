@@ -23,10 +23,10 @@ test('real stdio MCP preserves HTTP task/room payloads across client reconnect a
     hive.db.close(); rmSync(dir, { recursive: true, force: true });
   });
   const port = await server.ready, url = `http://127.0.0.1:${port}`;
-  const human = hive.getAgent('human'), brain = hive.join({ role: 'brain' }), worker = hive.join({ role: 'worker', seniority: 'mid' });
-  const other = hive.createProject(human, { name: 'Other MCP fixture', slug: 'other-mcp-fixture' });
-  const foreign = hive.join({ role: 'brain', project: other.slug });
-  const channel = hive.createChannel(brain.agent, { name: 'contract-fixture', type: 'private', memberNames: [worker.agent.name] });
+  const human = hive.identity.getAgent('human'), brain = hive.identity.join({ role: 'brain' }), worker = hive.identity.join({ role: 'worker', seniority: 'mid' });
+  const other = hive.projects.createProject(human, { name: 'Other MCP fixture', slug: 'other-mcp-fixture' });
+  const foreign = hive.identity.join({ role: 'brain', project: other.slug });
+  const channel = hive.channels.createChannel(brain.agent, { name: 'contract-fixture', type: 'private', memberNames: [worker.agent.name] });
   hive.rooms.event(human, channel.id, { requestId: 'setup', expectedRevision: 0, action: { type: 'configure', reason: 'Fixture',
     contract: { mode: 'ongoing', purpose: 'Private shared fixture', rules: ['Inspect only'], limits: ['No external writes'],
       coordinator: brain.agent.name, participants: [{ name: worker.agent.name, boundary: 'Inspect' }], completion: ['Human archives'], originTaskId: null } } });

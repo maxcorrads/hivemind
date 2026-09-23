@@ -17,9 +17,9 @@ const contract = { objective: 'Complete bounded work.', scope: [], nonGoals: [],
 function fixture(t: TestContext, enabled = true) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-topology-channels-'));
   const hive = new Hive(path.join(dir, 'hive.db'));
-  const human = hive.getAgent('human');
-  const brains = [0, 1].map(() => hive.join({ role: 'brain', project: 'chapter' }));
-  const workers = [0, 1].map(() => hive.join({ role: 'worker', seniority: 'senior', project: 'chapter' }));
+  const human = hive.identity.getAgent('human');
+  const brains = [0, 1].map(() => hive.identity.join({ role: 'brain', project: 'chapter' }));
+  const workers = [0, 1].map(() => hive.identity.join({ role: 'worker', seniority: 'senior', project: 'chapter' }));
   const app = createApp(hive);
   let target: AdaptiveTopology = 'single', calls = 0;
   t.mock.method(globalThis, 'fetch', async (_url: unknown, init?: RequestInit) => {
@@ -28,7 +28,7 @@ function fixture(t: TestContext, enabled = true) {
   });
   saveAdaptiveRouting(dir, { enabled, apiKey: 'fixture-key' });
   t.after(async () => { await hive.adaptiveTopology.stop(); hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
-  const channel = (name: string, members: string[]) => hive.createChannel(human, { name, type: 'private', project: 'chapter', memberNames: members });
+  const channel = (name: string, members: string[]) => hive.channels.createChannel(human, { name, type: 'private', project: 'chapter', memberNames: members });
   const send = async (channelId: string, body: Record<string, unknown>) => {
     const response = await app.request(`/api/ui/channels/${channelId}/messages`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
@@ -51,8 +51,8 @@ test('a Human request in a group channel routes to its only brain with a directi
   assert.match(directive.body, new RegExp(`Brain: @${f.brains[0]!.agent.name}`));
   assert.match(directive.body, new RegExp(`executionId "${routed.adaptiveStates![0]!.executionId}"`));
   assert.deepEqual(directive.recipientIds, [f.brains[0]!.agent.id], 'Workers in the channel are not addressed by the directive');
-  assert.equal(f.hive.isFor(f.workers[0]!.agent, directive), false);
-  assert.equal(f.hive.isFor(f.brains[0]!.agent, directive), true);
+  assert.equal(f.hive.delivery.isFor(f.workers[0]!.agent, directive), false);
+  assert.equal(f.hive.delivery.isFor(f.brains[0]!.agent, directive), true);
 });
 
 test('several brains: no mention is observed only, mentioned brains each get their own execution', async t => {
@@ -89,7 +89,7 @@ test('several brains: no mention is observed only, mentioned brains each get the
 test('Human replies revalidate, reopen or start the execution of their thread', async t => {
   const f = fixture(t);
   const brain = f.brains[0]!;
-  const dm = f.hive.openDm(f.human, brain.agent.name);
+  const dm = f.hive.channels.openDm(f.human, brain.agent.name);
   const request = await f.send(dm.id, { body: 'Summarize the incident.', requestId: 'request' });
   const executionId = request.adaptiveStates![0]!.executionId;
 
@@ -97,7 +97,7 @@ test('Human replies revalidate, reopen or start the execution of their thread', 
   assert.equal(f.calls(), 2);
   assert.equal(f.hive.adaptiveTopology.view(f.human, dm.id).state?.executionId, executionId);
 
-  f.hive.setThreadStatus(brain.agent, request.message.id, 'done');
+  f.hive.messages.setThreadStatus(brain.agent, request.message.id, 'done');
   assert.equal(f.hive.adaptiveTopology.view(f.human, dm.id).state?.monitoring, 'completed');
   await f.send(dm.id, { body: 'One more thing.', threadId: request.message.id, requestId: 'reply-2' });
   const reopened = f.hive.adaptiveTopology.view(f.human, dm.id);
@@ -107,9 +107,9 @@ test('Human replies revalidate, reopen or start the execution of their thread', 
   assert.equal(f.calls(), 3);
 
   // A thread without its own execution, after the brain's execution was superseded, starts a new one there.
-  const brainNote = f.hive.postMessage(brain.agent, { channel: dm.id, body: 'Background notes.' });
+  const brainNote = f.hive.messages.postMessage(brain.agent, { channel: dm.id, body: 'Background notes.' });
   const second = await f.send(dm.id, { body: 'New topic.', requestId: 'second-root' });
-  f.hive.setThreadStatus(f.human, second.message.id, 'done');
+  f.hive.messages.setThreadStatus(f.human, second.message.id, 'done');
   const started = await f.send(dm.id, { body: 'Please act on these notes.', threadId: brainNote.id, requestId: 'reply-3' });
   assert.equal(started.adaptiveStates?.length, 1);
   assert.equal(started.routingMessages![0]!.threadId, brainNote.id, 'The directive precedes the reply in its thread');
@@ -120,14 +120,14 @@ test('Human replies revalidate, reopen or start the execution of their thread', 
 
 test('messages without a brain and worker activity never call Jev', async t => {
   const f = fixture(t);
-  const workerDm = f.hive.openDm(f.human, f.workers[0]!.agent.name);
+  const workerDm = f.hive.channels.openDm(f.human, f.workers[0]!.agent.name);
   const direct = await f.send(workerDm.id, { body: 'Quick question for you.', requestId: 'to-worker' });
   assert.equal(direct.routing, null);
   assert.equal(f.calls(), 0);
 
   f.choose('brain_one_worker');
   const brain = f.brains[0]!;
-  const dm = f.hive.openDm(f.human, brain.agent.name);
+  const dm = f.hive.channels.openDm(f.human, brain.agent.name);
   const request = await f.send(dm.id, { body: 'Delegate this.', requestId: 'delegate' });
   const assigned = await f.app.request('/api/agent/tasks', { method: 'POST', headers: { authorization: `Bearer ${brain.token}`,
     'content-type': 'application/json' }, body: JSON.stringify({ requestId: 'task', worker: f.workers[0]!.agent.name, contract,
@@ -141,7 +141,7 @@ test('messages without a brain and worker activity never call Jev', async t => {
   const reply = await f.app.request(`/api/agent/channels/${task.channelId}/messages`, { method: 'POST', headers: { authorization: `Bearer ${f.workers[0]!.token}`,
     'content-type': 'application/json' }, body: JSON.stringify({ body: 'Working on it.', threadId: task.id, requestId: 'worker-reply' }) });
   assert.equal(reply.status, 200, await reply.clone().text());
-  f.hive.setOffline(f.workers[1]!.agent.id);
+  f.hive.identity.setOffline(f.workers[1]!.agent.id);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.calls(), before, 'Worker lifecycle, messages and presence are not classified');
   const declared = await f.app.request(`/api/agent/channels/${task.channelId}/messages`, { method: 'POST', headers: { authorization: `Bearer ${f.workers[0]!.token}`,
@@ -154,9 +154,9 @@ test('legacy channel-keyed executions and locks migrate to per-brain keys', asyn
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const file = path.join(dir, 'hive.db');
   let hive = new Hive(file);
-  const human = hive.getAgent('human'), brain = hive.join({ role: 'brain', project: 'chapter' });
-  const dm = hive.openDm(human, brain.agent.name);
-  const root = hive.postMessage(human, { channel: dm.id, body: 'Legacy request.' });
+  const human = hive.identity.getAgent('human'), brain = hive.identity.join({ role: 'brain', project: 'chapter' });
+  const dm = hive.channels.openDm(human, brain.agent.name);
+  const root = hive.messages.postMessage(human, { channel: dm.id, body: 'Legacy request.' });
   const snapshot = JSON.stringify({ executionId: 'execution-legacy', channelId: dm.id, projectId: dm.projectId, brainId: brain.agent.id,
     rootMessageId: root.id, currentTopology: 'single', workerBudget: 0, desiredTopology: null, desiredWorkers: null, lockScope: 'conversation',
     lockedTopology: 'single', orchestratedOnly: false, providerAvailable: false, warning: null, recommendation: null, confirmations: 0,
@@ -180,7 +180,7 @@ test('legacy channel-keyed executions and locks migrate to per-brain keys', asyn
   assert.deepEqual(keys('adaptive_topology_locks'), ['channel_id', 'brain_id']);
   assert.equal(readValue(hive, 'adaptive_topology_locks', 'brain_id', { channel_id: dm.id }), brain.agent.id);
   assert.equal(hive.adaptiveTopology.view(human, dm.id).state?.executionId, 'execution-legacy');
-  assert.equal(hive.adaptiveTopology.forAgent(hive.getAgent(brain.agent.id))?.executionId, 'execution-legacy');
+  assert.equal(hive.adaptiveTopology.forAgent(hive.identity.getAgent(brain.agent.id))?.executionId, 'execution-legacy');
   assert.ok(hive.db.prepare("SELECT 1 FROM sqlite_master WHERE type='trigger' AND name='adaptive_channel_deleted'").get(), 'Deletion cleanup survives the migration');
 });
 
@@ -189,9 +189,9 @@ test('per-brain executions migrate to execution keys and stay current', async t 
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const file = path.join(dir, 'hive.db');
   let hive = new Hive(file);
-  const human = hive.getAgent('human'), brain = hive.join({ role: 'brain', project: 'chapter' });
-  const dm = hive.openDm(human, brain.agent.name);
-  const root = hive.postMessage(human, { channel: dm.id, body: 'Per-brain request.' });
+  const human = hive.identity.getAgent('human'), brain = hive.identity.join({ role: 'brain', project: 'chapter' });
+  const dm = hive.channels.openDm(human, brain.agent.name);
+  const root = hive.messages.postMessage(human, { channel: dm.id, body: 'Per-brain request.' });
   const snapshot = JSON.stringify({ executionId: 'execution-v2', channelId: dm.id, projectId: dm.projectId, brainId: brain.agent.id,
     rootMessageId: root.id, currentTopology: 'single', workerBudget: 0, desiredTopology: null, desiredWorkers: null, lockScope: 'task',
     lockedTopology: 'single', orchestratedOnly: false, providerAvailable: false, warning: null, recommendation: null, confirmations: 0,
@@ -210,7 +210,7 @@ test('per-brain executions migrate to execution keys and stay current', async t 
   const keys = hive.db.prepare('PRAGMA table_info(adaptive_topology_executions)').all().filter(c => Number(c.pk) > 0).map(c => String(c.name));
   assert.deepEqual(keys, ['execution_id']);
   assert.equal(hive.adaptiveTopology.view(human, dm.id).state?.executionId, 'execution-v2');
-  assert.equal(hive.adaptiveTopology.forAgent(hive.getAgent(brain.agent.id))?.executionId, 'execution-v2');
+  assert.equal(hive.adaptiveTopology.forAgent(hive.identity.getAgent(brain.agent.id))?.executionId, 'execution-v2');
   assert.ok(hive.db.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_adaptive_topology_current'").get());
   assert.ok(hive.db.prepare("SELECT 1 FROM sqlite_master WHERE type='trigger' AND name='adaptive_channel_deleted'").get());
 });

@@ -43,8 +43,8 @@ test("invalid or duplicate routes cannot replace the previous config", () => {
 test("configuration drains late old topic work before publishing, and never retargets queued old messages", async t => {
   const { hive, dir, close } = fixture();
   writeTelegramFile({ botToken: "fixture", allowUserIds: [1], projects: { chapter: -1001 } }, dir);
-  const human = hive.getAgent("human");
-  const channel = hive.createChannel(human, { name: "room", type: "private", project: "chapter" });
+  const human = hive.identity.getAgent("human");
+  const channel = hive.channels.createChannel(human, { name: "room", type: "private", project: "chapter" });
   let release!: (response: Response) => void;
   let oldSignal: AbortSignal | null | undefined;
   const sentChats: number[] = [];
@@ -63,22 +63,22 @@ test("configuration drains late old topic work before publishing, and never reta
   });
   const handle = startTelegram(hive);
   try {
-    hive.postMessage(human, { channel: channel.id, body: "old audience" });
+    hive.messages.postMessage(human, { channel: channel.id, body: "old audience" });
     await until(() => Boolean(release));
     const change = handle.configure({ botToken: "fixture", allowUserIds: [1], projects: { chapter: -1002 } });
     await until(() => Boolean(oldSignal?.aborted));
     assert.equal(readTelegramFile(dir)?.projects.chapter, -1001);
-    hive.postMessage(human, { channel: channel.id, body: "arrived while draining" });
+    hive.messages.postMessage(human, { channel: channel.id, body: "arrived while draining" });
     release(Response.json({ ok: true, result: { message_thread_id: 11 } }));
     await change;
-    await until(() => hive.telegramFailureCount() === 2);
+    await until(() => hive.telegramAdmin.failureCount() === 2);
     assert.equal(readTelegramFile(dir)?.projects.chapter, -1002);
     assert.equal(hasRow(hive, "telegram_topics", { telegram_thread_id: 11 }), false);
     assert.equal(sentChats.length, 0);
-    hive.postMessage(human, { channel: channel.id, body: "new audience" });
+    hive.messages.postMessage(human, { channel: channel.id, body: "new audience" });
     await until(() => sentChats.length === 1);
     assert.deepEqual(sentChats, [-1002]);
-    assert.ok(hive.telegramFailures().every(row => row.telegramChatId === -1001));
+    assert.ok(hive.telegramAdmin.failures().every(row => row.telegramChatId === -1001));
   } finally { await handle.stop(); close(); }
 });
 
@@ -105,16 +105,16 @@ test("different bots process colliding update and message IDs without inheriting
     assert.equal(pollOffsets.get("second")![0], undefined);
     assert.equal(countRows(hive, "telegram_out", { telegram_message_id: 7 }), 2);
     assert.equal(countRows(hive, "telegram_in", { update_id: 900 }), 2);
-    const bodies = hive.listMessages(hive.getAgent("human"), "general").messages.map(m => m.body);
+    const bodies = hive.messageQueries.listMessages(hive.identity.getAgent("human"), "general").messages.map(m => m.body);
     assert.ok(bodies.some(body => body.endsWith("first")) && bodies.some(body => body.endsWith("second")));
   } finally { await bridge.stop(); close(); }
 });
 
 test("Telegram Human replies in a brain DM use active Jev routing and keep receipt on the original request", async t => {
   const { hive, dir, close } = fixture();
-  const human = hive.getAgent("human");
-  const brain = hive.join({ role: "brain", project: "chapter" }).agent;
-  const dm = hive.openDm(human, brain.name);
+  const human = hive.identity.getAgent("human");
+  const brain = hive.identity.join({ role: "brain", project: "chapter" }).agent;
+  const dm = hive.channels.openDm(human, brain.name);
   const cfg = { botToken: "fixture", botId: 77, allowUserIds: [1], groups: { chapter: -1001 } };
   const botKey = telegramConfigKey(cfg);
   const bridge = new TelegramBridge(hive, cfg);
@@ -145,7 +145,7 @@ test("Telegram Human replies in a brain DM use active Jev routing and keep recei
     bridge.start();
     await until(() => jevCalls === 1 && rowsContaining(hive, "messages", "body", "Small Telegram request", "channel_id")
       .filter(row => row.channel_id === dm.id).length === 1);
-    const messages = hive.listMessages(human, dm.id).messages.filter(m => m.kind === "chat");
+    const messages = hive.messageQueries.listMessages(human, dm.id).messages.filter(m => m.kind === "chat");
     const original = messages.find(m => m.body.endsWith("Small Telegram request"))!;
     const directive = messages.find(m => m.body.includes("adaptive topology · SINGLE"))!;
     assert.ok(original && directive);
@@ -154,8 +154,8 @@ test("Telegram Human replies in a brain DM use active Jev routing and keep recei
     assert.equal(state.recommendation?.providerStatus, "ok", "A malformed fixture must not silently pass via fallback");
     assert.equal(state.recommendation?.contractVersion, "adaptive-routing-v2");
     assert.equal(state.currentTopology, "single");
-    assert.equal(hive.fromTelegram(original.id), true);
-    assert.equal(hive.fromTelegram(directive.id), false);
+    assert.equal(hive.messages.fromTelegram(original.id), true);
+    assert.equal(hive.messages.fromTelegram(directive.id), false);
     assert.equal(readValue(hive, "telegram_out", "seq", { telegram_chat_id: -1001, telegram_message_id: 88, bot_key: botKey }), original.seq);
   } finally {
     await bridge.stop();
@@ -172,7 +172,7 @@ test("verified same-bot rotation preserves its namespace and publication failure
   try {
     await handle.configure({ botToken: "original", allowUserIds: [1], projects: { chapter: -1001 } });
     const first = telegramConfigKey(loadTelegramConfig(dir)!);
-    const message = hive.postMessage(hive.getAgent("human"), { channel: "general", body: "same bot" });
+    const message = hive.messages.postMessage(hive.identity.getAgent("human"), { channel: "general", body: "same bot" });
     enqueueTelegramPending(hive.db, message.seq, "message", undefined, { botKey: first, chatId: -1001 });
     await handle.configure({ botToken: "rotated", allowUserIds: [1], projects: { chapter: -1001 } });
     assert.equal(telegramConfigKey(loadTelegramConfig(dir)!), first);

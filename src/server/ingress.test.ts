@@ -14,15 +14,15 @@ function fixture(t: TestContext) {
   const dbPath = path.join(dir, "hive.db");
   let hive = new Hive(dbPath);
   t.after(() => { hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
-  const human = hive.getAgent("human");
-  const a = hive.listProjects()[0]!;
-  const b = hive.createProject(human, { slug: "other", name: "Other" });
-  const channelA = hive.createChannel(human, { project: a.slug, name: "scope-a", type: "private" });
-  const channelB = hive.createChannel(human, { project: b.slug, name: "scope-b", type: "private" });
-  const botA = hive.createBot(human, a.id, { name: "SourceA" });
-  const botB = hive.createBot(human, b.id, { name: "SourceB" });
-  hive.invite(human, channelA.id, [botA.bot.name]);
-  hive.invite(human, channelB.id, [botB.bot.name]);
+  const human = hive.identity.getAgent("human");
+  const a = hive.projects.listProjects()[0]!;
+  const b = hive.projects.createProject(human, { slug: "other", name: "Other" });
+  const channelA = hive.channels.createChannel(human, { project: a.slug, name: "scope-a", type: "private" });
+  const channelB = hive.channels.createChannel(human, { project: b.slug, name: "scope-b", type: "private" });
+  const botA = hive.bots.createBot(human, a.id, { name: "SourceA" });
+  const botB = hive.bots.createBot(human, b.id, { name: "SourceB" });
+  hive.channels.invite(human, channelA.id, [botA.bot.name]);
+  hive.channels.invite(human, channelB.id, [botB.bot.name]);
   return { get hive() { return hive; }, human, a, b, channelA, channelB, botA, botB, dbPath,
     restart() { hive.db.close(); hive = new Hive(dbPath); },
   };
@@ -165,7 +165,7 @@ test("a credential revoked while JSON is streaming cannot commit an observation"
   } as RequestInit & { duplex: string });
   const result = app.request(request);
   await reading;
-  f.hive.changeBotCredential(f.human, f.a.id, f.botA.bot.id, { action: "revoke", expectedRevision: 1 });
+  f.hive.bots.changeBotCredential(f.human, f.a.id, f.botA.bot.id, { action: "revoke", expectedRevision: 1 });
   controller.enqueue(new TextEncoder().encode(JSON.stringify({ eventId: "in-flight", body: "denied" })));
   controller.close();
   assert.equal((await result).status, 401);
@@ -191,12 +191,12 @@ test("parallel retries publish one event, retry conflicts do not poison the next
   assert.deepEqual(responses.map(r => r.status).sort(), [200, 200, 200, 201]);
   assert.equal((await app.request(jsonRequest(url, { eventId: "same", body: "different" }, f.botA.token))).status, 409);
   assert.equal((await app.request(jsonRequest(url, { eventId: "next", body: "ok" }, f.botA.token))).status, 201);
-  assert.throws(() => f.hive.changeBotCredential(f.human, f.a.id, f.botA.bot.id, { action: "revoke", expectedRevision: 99 }), status(409));
-  const rotated = f.hive.changeBotCredential(f.human, f.a.id, f.botA.bot.id, { action: "rotate", expectedRevision: 1 });
-  assert.equal(f.hive.agentByToken(rotated.token!).id, f.botA.bot.id);
+  assert.throws(() => f.hive.bots.changeBotCredential(f.human, f.a.id, f.botA.bot.id, { action: "revoke", expectedRevision: 99 }), status(409));
+  const rotated = f.hive.bots.changeBotCredential(f.human, f.a.id, f.botA.bot.id, { action: "rotate", expectedRevision: 1 });
+  assert.equal(f.hive.identity.agentByToken(rotated.token!).id, f.botA.bot.id);
   f.restart();
   assert.equal((await createApp(f.hive).request(jsonRequest(url, { eventId: "same", body: "same" }, rotated.token))).status, 200);
-  assert.throws(() => f.hive.agentByToken(f.botA.token), status(401));
+  assert.throws(() => f.hive.identity.agentByToken(f.botA.token), status(401));
 });
 
 test("bot HTTP credentials cannot enumerate another project, use Human/plugin settings, or cross-route events", async t => {
@@ -233,7 +233,7 @@ test("credentials remain hashes across restart; HTTP and internal error diagnost
   const f = fixture(t), app = createApp(f.hive);
   const logs: unknown[][] = [];
   t.mock.method(console, "error", (...args: unknown[]) => { logs.push(args); });
-  t.mock.method(f.hive, "postBotMessage", () => { throw new Error(`provider error ${f.botA.token}`); });
+  t.mock.method(f.hive.bots, "postBotMessage", () => { throw new Error(`provider error ${f.botA.token}`); });
   const url = `http://localhost/api/bot/channels/${f.channelA.id}/messages`;
   const result = await app.request(jsonRequest(url, { eventId: "no-log", body: "safe" }, f.botA.token));
   assert.equal(result.status, 500);
@@ -244,5 +244,5 @@ test("credentials remain hashes across restart; HTTP and internal error diagnost
   assert.ok(statSync(f.dbPath).size > 0);
   assert.equal(statSync(f.dbPath).mode & 0o777, 0o600);
   f.restart();
-  assert.equal(f.hive.agentByToken(f.botA.token).id, f.botA.bot.id);
+  assert.equal(f.hive.identity.agentByToken(f.botA.token).id, f.botA.bot.id);
 });

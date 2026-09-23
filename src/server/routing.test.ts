@@ -18,14 +18,14 @@ function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-routing-')), file = path.join(dir, 'hive.db');
   let hive = new Hive(file), serial = 0;
   t.after(() => { hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
-  const brain = hive.join({ role: 'brain' }), other = hive.join({ role: 'brain' });
-  const workers = [0, 1, 2].map(() => hive.join({ role: 'worker', seniority: 'mid' }));
-  const room = hive.createChannel(brain.agent, { name: 'routing', type: 'private', memberNames: [...workers.map(w => w.agent.name), other.agent.name] });
+  const brain = hive.identity.join({ role: 'brain' }), other = hive.identity.join({ role: 'brain' });
+  const workers = [0, 1, 2].map(() => hive.identity.join({ role: 'worker', seniority: 'mid' }));
+  const room = hive.channels.createChannel(brain.agent, { name: 'routing', type: 'private', memberNames: [...workers.map(w => w.agent.name), other.agent.name] });
   const contract = { objective: 'Synthetic parser task', scope: [], nonGoals: [], acceptanceCriteria: ['Explicit review'], dependencies: [], evidenceSeqs: [] };
   const assign = (index = 0, channel = room.id) => hive.tasks.assign(brain.agent,
     { requestId: `a-${++serial}`, worker: workers[index]!.agent.name, channel, contract }).task;
   const complete = (task: TaskSnapshot, accepted = true) => {
-    const worker = hive.getAgent(task.workerId);
+    const worker = hive.identity.getAgent(task.workerId);
     hive.tasks.event(worker, task.id, { requestId: `e-${++serial}`, expectedRevision: task.revision, action: { type: 'accept' } });
     hive.tasks.event(worker, task.id, { requestId: `e-${++serial}`, expectedRevision: task.revision + 1,
       action: { type: 'result', result: { summary: 'Fixture result', artifacts: [], checks: [], gaps: [], evidenceSeqs: [] } } });
@@ -71,15 +71,15 @@ test('cold starts stay eligible, independent review and explicit context/quality
 
 test('routing never crosses project or private task boundaries', t => {
   const f = fixture(t), task = f.assign(); f.set(0); f.set(1);
-  const human = f.hive.getAgent('human'); f.hive.createProject(human, { name: 'Other', slug: 'other' });
-  const stranger = f.hive.join({ role: 'brain', project: 'other' }), outsider = f.hive.join({ role: 'worker', seniority: 'mid', project: 'chapter' });
+  const human = f.hive.identity.getAgent('human'); f.hive.projects.createProject(human, { name: 'Other', slug: 'other' });
+  const stranger = f.hive.identity.join({ role: 'brain', project: 'other' }), outsider = f.hive.identity.join({ role: 'worker', seniority: 'mid', project: 'chapter' });
   f.hive.routing.set(outsider.agent, { expectedRevision: 0, card });
   assert.throws(() => f.hive.routing.get(stranger.agent, f.workers[0]!.agent.id), status(403));
   assert.throws(() => f.hive.routing.suggest(stranger.agent, task.id, query), status(403));
   assert.throws(() => f.hive.routing.suggest(f.workers[0]!.agent, task.id, query), status(403));
   assert.throws(() => f.hive.routing.get(f.workers[0]!.agent, f.workers[1]!.agent.id), status(403));
   assert.equal(f.hive.routing.suggest(f.brain.agent, task.id, query).candidates.some(c => c.workerId === outsider.agent.id), false);
-  const privateRoom = f.hive.createChannel(f.brain.agent, { name: 'private-evidence', type: 'private', memberNames: [f.workers[0]!.agent.name] });
+  const privateRoom = f.hive.channels.createChannel(f.brain.agent, { name: 'private-evidence', type: 'private', memberNames: [f.workers[0]!.agent.name] });
   const reviewed = f.complete(f.assign(0, privateRoom.id));
   f.hive.routing.recordOutcome(f.brain.agent, reviewed.id, { expectedRevision: reviewed.revision, category: 'parser', capabilityRevision: 1 });
   assert.equal(f.hive.routing.suggest(f.brain.agent, task.id, query).candidates.find(c => c.workerId === f.workers[0]!.agent.id)!.evidence.reviewed, 1);
@@ -126,7 +126,7 @@ test('visible workload and declared availability affect suggestions without chan
   const list = f.hive.routing.suggest(f.brain.agent, task.id, query);
   assert.equal(list.candidates[0]!.workerId, f.workers[0]!.agent.id);
   assert.equal(list.candidates[0]!.workloadIncomplete, true);
-  assert.equal(f.hive.routing.suggest(f.hive.getAgent('human'), task.id, query).candidates[0]!.workloadIncomplete, false);
+  assert.equal(f.hive.routing.suggest(f.hive.identity.getAgent('human'), task.id, query).candidates[0]!.workloadIncomplete, false);
 });
 
 test('an explicit override records one inspectable note and never assigns or punishes a worker', t => {
@@ -164,7 +164,7 @@ test('card roster admission is bounded and paginated suggestions do not silently
     const id = randomUUID();
     cloneAgent(f.hive, original.id, [id], () => ({ name: `CardFixture${n}`, token_hash: randomUUID() }));
     addChannelMember(f.hive, f.room.id, id);
-    const actor = f.hive.getAgent(id); f.hive.routing.set(actor, { expectedRevision: 0, card });
+    const actor = f.hive.identity.getAgent(id); f.hive.routing.set(actor, { expectedRevision: 0, card });
   }
   assert.throws(() => f.set(1), status(429));
   const seen = new Set<string>(); let offset: number | null = 0;

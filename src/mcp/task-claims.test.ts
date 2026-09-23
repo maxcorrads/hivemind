@@ -22,7 +22,7 @@ test('real MCP claim retries and CLI release share one versioned advisory ledger
   let transport: StdioClientTransport | undefined;
   try {
     const port = await server.ready;
-    const brain = hive.join({ role: 'brain' }), worker = hive.join({ role: 'worker', seniority: 'mid' });
+    const brain = hive.identity.join({ role: 'brain' }), worker = hive.identity.join({ role: 'worker', seniority: 'mid' });
     const task = hive.tasks.assign(brain.agent, { requestId: 'fixture', worker: worker.agent.name,
       contract: { objective: 'Check advisory fixture', scope: [], nonGoals: [], acceptanceCriteria: ['Inspected'], dependencies: [], evidenceSeqs: [] } }).task;
     const env = { PATH: process.env.PATH ?? '', HIVEMIND_TOKEN: brain.token, HIVEMIND_HOME: path.join(dir, 'client'), HIVEMIND_URL: `http://127.0.0.1:${port}` };

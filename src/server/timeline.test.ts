@@ -13,8 +13,8 @@ function fixture(t: TestContext) {
   const dir=mkdtempSync(path.join(os.tmpdir(),'hive-timeline-')), file=path.join(dir,'hive.db');
   let hive=new Hive(file);
   t.after(()=>{ try { hive.db.close(); } catch {} rmSync(dir,{recursive:true,force:true}); });
-  const human=hive.getAgent('human'), brain=hive.join({role:'brain'}), worker=hive.join({role:'worker',seniority:'mid'});
-  const channel=hive.createChannel(brain.agent,{name:'trace-room',type:'private',memberNames:[worker.agent.name]});
+  const human=hive.identity.getAgent('human'), brain=hive.identity.join({role:'brain'}), worker=hive.identity.join({role:'worker',seniority:'mid'});
+  const channel=hive.channels.createChannel(brain.agent,{name:'trace-room',type:'private',memberNames:[worker.agent.name]});
   const task=hive.tasks.assign(brain.agent,{requestId:'trace-task',worker:worker.agent.name,channel:channel.id,
     contract:{objective:'Trace a parser change',scope:['src/parser'],nonGoals:[],acceptanceCriteria:['Result reviewed'],dependencies:[],evidenceSeqs:[]}}).task;
   return { get hive(){return hive;}, file, human, brain, worker, channel, task,
@@ -24,12 +24,12 @@ const status=(code:number)=>(error:unknown)=>error instanceof HiveError&&error.s
 
 test('task timeline traces assignment through delivery acknowledgement result and review, then replays fake-only', async t => {
   const f=fixture(t);
-  const session=f.hive.openInboxSession(f.worker.agent,randomUUID());
-  const mail=await f.hive.wait(f.worker.agent,5,undefined,{sessionId:session,compact:true});
+  const session=f.hive.delivery.openInboxSession(f.worker.agent,randomUUID());
+  const mail=await f.hive.delivery.wait(f.worker.agent,5,undefined,{sessionId:session,compact:true});
   assert.ok(mail.delivery); assert.ok(mail.delivery.messageSeqs.includes(f.task.dispatchSeq));
   let timeline=f.hive.timeline.traceForTask(f.brain.agent,f.task.id);
   assert.ok(timeline.events.some(event=>event.kind==='delivery'&&event.stage==='offered'&&event.wakeReason==='targeted'));
-  f.hive.acknowledgeInbox(f.worker.agent,session,mail.delivery.id);
+  f.hive.delivery.acknowledgeInbox(f.worker.agent,session,mail.delivery.id);
   f.hive.tasks.event(f.worker.agent,f.task.id,{requestId:'accept',expectedRevision:1,action:{type:'accept'}});
   f.hive.tasks.event(f.worker.agent,f.task.id,{requestId:'result',expectedRevision:2,action:{type:'result',result:{
     summary:'Parser checked',artifacts:['dist/report.txt'],checks:[{name:'unit',outcome:'passed',evidenceSeqs:[]}],gaps:[],evidenceSeqs:[]}}});
@@ -50,9 +50,9 @@ test('task timeline traces assignment through delivery acknowledgement result an
 
 test('Telegram source and explicit/inferred causality survive restart', t => {
   const f=fixture(t);
-  const telegram=f.hive.postMessage(f.human,{channel:f.channel.id,threadId:f.task.id,body:'Telegram-origin answer',source:'telegram'});
-  const inferred=f.hive.postMessage(f.brain.agent,{channel:f.channel.id,threadId:f.task.id,body:'Follow-up with thread causality'});
-  const explicit=f.hive.postMessage(f.brain.agent,{channel:f.channel.id,threadId:f.task.id,body:'Follow-up with explicit cause',causeMessageId:telegram.id});
+  const telegram=f.hive.messages.postMessage(f.human,{channel:f.channel.id,threadId:f.task.id,body:'Telegram-origin answer',source:'telegram'});
+  const inferred=f.hive.messages.postMessage(f.brain.agent,{channel:f.channel.id,threadId:f.task.id,body:'Follow-up with thread causality'});
+  const explicit=f.hive.messages.postMessage(f.brain.agent,{channel:f.channel.id,threadId:f.task.id,body:'Follow-up with explicit cause',causeMessageId:telegram.id});
   let timeline=f.hive.timeline.traceForTask(f.brain.agent,f.task.id);
   const byId=(id:string)=>timeline.events.find(event=>event.kind==='message'&&event.messageId===id);
   assert.equal(byId(telegram.id)?.kind,'message');
@@ -60,24 +60,24 @@ test('Telegram source and explicit/inferred causality survive restart', t => {
   assert.deepEqual((byId(inferred.id) as any).relation,{kind:'inferred',messageId:f.task.id});
   assert.deepEqual((byId(explicit.id) as any).relation,{kind:'explicit',messageId:telegram.id});
   f.reopen();
-  assert.equal(f.hive.fromTelegram(telegram.id),true);
+  assert.equal(f.hive.messages.fromTelegram(telegram.id),true);
   timeline=f.hive.timeline.traceForTask(f.brain.agent,f.task.id);
   assert.equal((timeline.events.find(event=>event.kind==='message'&&event.messageId===telegram.id) as any).source,'telegram');
 });
 
 test('generic trace metadata is opt-in and rejects invisible cross-project causal references', t => {
   const f=fixture(t), traceId=randomUUID();
-  const root=f.hive.postMessage(f.brain.agent,{channel:f.channel.id,body:'trace root',traceId});
-  const child=f.hive.postMessage(f.brain.agent,{channel:f.channel.id,threadId:root.id,body:'explicit child',traceId,causeMessageId:root.id});
+  const root=f.hive.messages.postMessage(f.brain.agent,{channel:f.channel.id,body:'trace root',traceId});
+  const child=f.hive.messages.postMessage(f.brain.agent,{channel:f.channel.id,threadId:root.id,body:'explicit child',traceId,causeMessageId:root.id});
   const trace=f.hive.timeline.trace(f.brain.agent,traceId);
   assert.equal(trace.taskId,null);
   assert.deepEqual((trace.events.find(event=>event.kind==='message'&&event.messageId===child.id) as any).relation,{kind:'explicit',messageId:root.id});
 
-  const other=f.hive.createProject(f.human,{name:'Other',slug:'other'});
-  const otherBrain=f.hive.join({role:'brain',project:other.slug});
-  const otherChannel=f.hive.createChannel(otherBrain.agent,{name:'other-room',type:'private'});
-  const hidden=f.hive.postMessage(otherBrain.agent,{channel:otherChannel.id,body:'hidden cause'});
-  assert.throws(()=>f.hive.postMessage(f.brain.agent,{channel:f.channel.id,body:'bad cause',causeMessageId:hidden.id}),status(403));
+  const other=f.hive.projects.createProject(f.human,{name:'Other',slug:'other'});
+  const otherBrain=f.hive.identity.join({role:'brain',project:other.slug});
+  const otherChannel=f.hive.channels.createChannel(otherBrain.agent,{name:'other-room',type:'private'});
+  const hidden=f.hive.messages.postMessage(otherBrain.agent,{channel:otherChannel.id,body:'hidden cause'});
+  assert.throws(()=>f.hive.messages.postMessage(f.brain.agent,{channel:f.channel.id,body:'bad cause',causeMessageId:hidden.id}),status(403));
 });
 
 test('retention pruning never deletes active-task provenance or changes live task state', t => {
@@ -101,7 +101,7 @@ test('retention pruning never deletes active-task provenance or changes live tas
 
 test('timeline stats publish hard row/event caps and logical storage overhead', t => {
   const f=fixture(t);
-  for(let i=0;i<50;i++) f.hive.postMessage(f.brain.agent,{channel:f.channel.id,threadId:f.task.id,body:'progress '+i,eventType:'progress'});
+  for(let i=0;i<50;i++) f.hive.messages.postMessage(f.brain.agent,{channel:f.channel.id,threadId:f.task.id,body:'progress '+i,eventType:'progress'});
   const stats=f.hive.timeline.stats();
   assert.equal(stats.caps.provenance,50_000); assert.equal(stats.caps.deliveries,100_000); assert.equal(stats.caps.eventsPerTrace,500);
   assert.ok(stats.provenance>=51); assert.ok(stats.logicalBytes>0);

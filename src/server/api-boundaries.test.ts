@@ -18,7 +18,7 @@ function fixture(t: TestContext, limits: Partial<UploadLimits> = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-api-boundary-'));
   const hive = new Hive(path.join(dir, 'hive.db'), { uploadLimits: limits });
   t.after(() => { hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
-  return { dir, hive, app: createApp(hive), human: hive.getAgent('human') };
+  return { dir, hive, app: createApp(hive), human: hive.identity.getAgent('human') };
 }
 function body(value: string): ReadableStream<Uint8Array> {
   return new ReadableStream({ start(controller) { controller.enqueue(Buffer.from(value)); controller.close(); } });
@@ -30,7 +30,7 @@ function paused() {
 }
 
 test('invalid HTTP values fail before presence, session, membership or message mutation', async t => {
-  const f = fixture(t), agent = f.hive.join({ role: 'brain' });
+  const f = fixture(t), agent = f.hive.identity.join({ role: 'brain' });
   setAgentPresence(f.hive, agent.agent.id, { lastSeenAt: 1 });
   const state = () => snapshotTables(f.hive, ['agents', 'messages', 'channel_members', 'inbox_sessions']);
   const before = state();
@@ -62,10 +62,10 @@ test('invalid HTTP values fail before presence, session, membership or message m
 });
 
 test('huge/nonfinite direct wait durations do not create timers, sessions or presence changes', async t => {
-  const f = fixture(t), agent = f.hive.join({ role: 'worker', seniority: 'mid' }).agent;
+  const f = fixture(t), agent = f.hive.identity.join({ role: 'worker', seniority: 'mid' }).agent;
   const before = findRow(f.hive, 'agents', { id: agent.id });
   for (const invalid of [NaN, Infinity, -1, 0, 0.2, MAX_WAIT_MS + 1, 2 ** 40]) {
-    await assert.rejects(f.hive.wait(agent, invalid), /Invalid request field/);
+    await assert.rejects(f.hive.delivery.wait(agent, invalid), /Invalid request field/);
     assert.equal(f.hive.inbox.currentSession(agent.id), undefined);
     assert.deepEqual(findRow(f.hive, 'agents', { id: agent.id }), before);
   }
@@ -96,12 +96,12 @@ test('ordinary JSON is byte bounded, rejects null/malformed UTF-8, and slow read
 test('upload limits are shared by database instances, permit another actor, and release all reservations on completion', async t => {
   const f = fixture(t), other = new Hive(path.join(f.dir, 'hive.db'));
   t.after(() => other.db.close());
-  const worker = other.join({ role: 'worker', seniority: 'mid' }).agent;
+  const worker = other.identity.join({ role: 'worker', seniority: 'mid' }).agent;
   const one = paused(), two = paused(), three = paused();
-  const a = f.hive.createFile(f.human, { name: 'one', mime: 'text/plain', body: one.stream, declaredBytes: 1 });
-  const b = other.createFile(f.human, { name: 'two', mime: 'text/plain', body: two.stream, declaredBytes: 1 });
-  await assert.rejects(other.createFile(f.human, { name: 'three', mime: 'text/plain', body: body('x'), declaredBytes: 1 }), /concurrency/);
-  const c = other.createFile(worker, { name: 'three', mime: 'text/plain', body: three.stream, declaredBytes: 1 });
+  const a = f.hive.files.createFile(f.human, { name: 'one', mime: 'text/plain', body: one.stream, declaredBytes: 1 });
+  const b = other.files.createFile(f.human, { name: 'two', mime: 'text/plain', body: two.stream, declaredBytes: 1 });
+  await assert.rejects(other.files.createFile(f.human, { name: 'three', mime: 'text/plain', body: body('x'), declaredBytes: 1 }), /concurrency/);
+  const c = other.files.createFile(worker, { name: 'three', mime: 'text/plain', body: three.stream, declaredBytes: 1 });
   one.finish(); two.finish(); three.finish();
   assert.equal((await Promise.all([a,b,c])).length, 3);
   assert.equal(countRows(f.hive, 'upload_reservations'), 0);
@@ -110,14 +110,14 @@ test('upload limits are shared by database instances, permit another actor, and 
 
 test('quota accounts for committed metadata and in-flight reservation; lying lengths never overcommit', async t => {
   const f = fixture(t, { totalBytes: 4 });
-  await f.hive.createFile(f.human, { name: 'small', mime: 'text/plain', body: body('xx'), declaredBytes: 2 });
+  await f.hive.files.createFile(f.human, { name: 'small', mime: 'text/plain', body: body('xx'), declaredBytes: 2 });
   const hold = paused();
-  const uploading = f.hive.createFile(f.human, { name: 'held', mime: 'text/plain', body: hold.stream, declaredBytes: 2 });
-  await assert.rejects(f.hive.createFile(f.human, { name: 'too-much', mime: 'text/plain', body: body('x'), declaredBytes: 1 }), /quota/);
+  const uploading = f.hive.files.createFile(f.human, { name: 'held', mime: 'text/plain', body: hold.stream, declaredBytes: 2 });
+  await assert.rejects(f.hive.files.createFile(f.human, { name: 'too-much', mime: 'text/plain', body: body('x'), declaredBytes: 1 }), /quota/);
   hold.finish('xx'); await uploading;
   assert.equal(readValue(f.hive, 'upload_usage', 'bytes'), 4);
   deleteRows(f.hive, 'attachments');
-  await assert.rejects(f.hive.createFile(f.human, { name: 'lie', mime: 'text/plain', body: body('xxx'), declaredBytes: 2 }), /large|reservation/);
+  await assert.rejects(f.hive.files.createFile(f.human, { name: 'lie', mime: 'text/plain', body: body('xxx'), declaredBytes: 2 }), /large|reservation/);
   assert.equal(countRows(f.hive, 'upload_reservations'), 0);
   assert.equal(readValue(f.hive, 'upload_usage', 'bytes'), 0);
 });
@@ -130,7 +130,7 @@ test('stalled uploads enforce deadlines and remove temporary files and quota res
     if (ms === 733) timeout = callback;
     return original(callback, ms);
   });
-  const uploading = f.hive.createFile(f.human, { name: 'stalled', mime: 'text/plain', declaredBytes: 10,
+  const uploading = f.hive.files.createFile(f.human, { name: 'stalled', mime: 'text/plain', declaredBytes: 10,
     body: new ReadableStream({ start(controller) { controller.enqueue(Buffer.from('x')); } }),
   });
   timeout();
@@ -145,17 +145,17 @@ test('body/header deadlines do not shorten an already admitted long-poll respons
   assert.equal(service.server.headersTimeout, REQUEST_HEADER_MS);
   assert.equal(service.server.requestTimeout, REQUEST_BODY_MS);
   assert.equal(service.server.timeout, 0, 'response inactivity is governed by explicit wait deadline');
-  const worker = f.hive.join({ role: 'worker', seniority: 'mid' }).agent;
+  const worker = f.hive.identity.join({ role: 'worker', seniority: 'mid' }).agent;
   const abort = new AbortController();
-  const wait = f.hive.wait(worker, MAX_WAIT_MS, abort.signal);
+  const wait = f.hive.delivery.wait(worker, MAX_WAIT_MS, abort.signal);
   abort.abort(); assert.equal((await wait).idle, true);
 });
 
 test('upload global concurrency stops a fifth actor without stranding its body', async t => {
   const f = fixture(t), streams = Array.from({ length: 4 }, () => paused());
-  const workers = Array.from({ length: 5 }, () => f.hive.join({ role: 'worker', seniority: 'mid' }).agent);
-  const pending = streams.map((stream, i) => f.hive.createFile(workers[i]!, { name: 'bounded', mime: 'text/plain', body: stream.stream, declaredBytes: 1 }));
-  await assert.rejects(f.hive.createFile(workers[4]!, { name: 'fifth', mime: 'text/plain', body: body('x'), declaredBytes: 1 }), /concurrency/);
+  const workers = Array.from({ length: 5 }, () => f.hive.identity.join({ role: 'worker', seniority: 'mid' }).agent);
+  const pending = streams.map((stream, i) => f.hive.files.createFile(workers[i]!, { name: 'bounded', mime: 'text/plain', body: stream.stream, declaredBytes: 1 }));
+  await assert.rejects(f.hive.files.createFile(workers[4]!, { name: 'fifth', mime: 'text/plain', body: body('x'), declaredBytes: 1 }), /concurrency/);
   for (const stream of streams) stream.finish(); await Promise.all(pending);
   assert.equal(countRows(f.hive, 'upload_reservations'), 0);
 });
@@ -166,7 +166,7 @@ test('upload deadline does not await an uncooperative producer cancel promise', 
   t.mock.method(globalThis, 'setTimeout', (callback: () => void, ms: number) => {
     if (ms === 739) timeout = callback; return original(callback, ms);
   });
-  const pending = f.hive.createFile(f.human, { name: 'stalled', mime: 'text/plain', declaredBytes: 1,
+  const pending = f.hive.files.createFile(f.human, { name: 'stalled', mime: 'text/plain', declaredBytes: 1,
     body: new ReadableStream({ cancel() { return new Promise<void>(() => {}); } }),
   });
   timeout(); await assert.rejects(pending, /deadline/);
@@ -175,11 +175,11 @@ test('upload deadline does not await an uncooperative producer cancel promise', 
 });
 
 test('a session replaced by a resume during upload cannot authorize its final commit', async t => {
-  const f = fixture(t), joined = f.hive.join({ role: 'brain' });
+  const f = fixture(t), joined = f.hive.identity.join({ role: 'brain' });
   const stream = paused();
-  const upload = f.hive.createFile(joined.agent, { name: 'old-token', mime: 'text/plain', body: stream.stream,
-    declaredBytes: 1, authorize: () => f.hive.agentByToken(joined.token) });
-  f.hive.join({ role: 'brain', resumeName: joined.agent.name });
+  const upload = f.hive.files.createFile(joined.agent, { name: 'old-token', mime: 'text/plain', body: stream.stream,
+    declaredBytes: 1, authorize: () => f.hive.identity.agentByToken(joined.token) });
+  f.hive.identity.join({ role: 'brain', resumeName: joined.agent.name });
   stream.finish(); await assert.rejects(upload, /token/i);
   assert.equal(countRows(f.hive, 'attachments'), 0);
   assert.equal(countRows(f.hive, 'upload_reservations'), 0);

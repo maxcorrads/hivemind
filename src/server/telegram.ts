@@ -327,8 +327,8 @@ export function telegramGeneralThreadId(ch: Channel | string): number | null {
 export function telegramDestinationForSeq(hive: Hive, seq: number, cfg = loadTelegramConfig(hive.home)): TelegramDestination | undefined {
   if (!cfg) return undefined;
   try {
-    const msg = hive.getMessageBySeq(seq);
-    const channel = hive.getChannel(msg.channelId);
+    const msg = hive.messageQueries.getMessageBySeq(seq);
+    const channel = hive.channels.getChannel(msg.channelId);
     const chatId = cfg.groups[channel.project];
     if (!Number.isSafeInteger(chatId) || chatId === 0) return undefined;
     return { botKey: telegramConfigKey(cfg), chatId: chatId! };
@@ -359,7 +359,7 @@ export function startTelegram(hive: Hive, enabled = true): TelegramHandle {
       bridge = null;
       if (!(error instanceof HiveError)) throw error;
       store.setConfigurationError("Invalid Telegram project configuration; edit Telegram settings to recover");
-      hive.publishTelegramHealth();
+      hive.telegramAdmin.publishHealth();
       return false;
     }
   };
@@ -385,7 +385,7 @@ export function startTelegram(hive: Hive, enabled = true): TelegramHandle {
       stopped.signal.throwIfAborted();
       // Validate and verify before stopping the existing healthy bridge or publishing anything.
       const next = prepareTelegramFile(input, hive.home);
-      for (const slug of Object.keys(next.projects)) if (!hive.findProjectBySlug(slug)) throw new HiveError(404, `No project named ${slug}`);
+      for (const slug of Object.keys(next.projects)) if (!hive.projects.findProjectBySlug(slug)) throw new HiveError(404, `No project named ${slug}`);
       const botId = await verifyBot(next.botToken, stopped.signal);
       stopped.signal.throwIfAborted();
       const previous = loadTelegramConfig(hive.home);
@@ -404,7 +404,7 @@ export function startTelegram(hive: Hive, enabled = true): TelegramHandle {
       } finally {
         detach?.();
         boot(); // On publication failure the intact old file restarts; after publication the new file wins.
-        hive.publishTelegramHealth();
+        hive.telegramAdmin.publishHealth();
       }
       return Boolean(bridge);
     }),
@@ -438,7 +438,7 @@ export class TelegramBridge {
     if (!cfg.botToken || !cfg.allowUserIds.length || cfg.allowUserIds.some(id => !Number.isSafeInteger(id) || id <= 0) ||
         Object.values(cfg.groups).some(id => !Number.isSafeInteger(id) || id === 0) ||
         new Set(Object.values(cfg.groups)).size !== Object.keys(cfg.groups).length ||
-        Object.keys(cfg.groups).some(slug => !hive.findProjectBySlug(slug))) {
+        Object.keys(cfg.groups).some(slug => !hive.projects.findProjectBySlug(slug))) {
       throw new HiveError(400, "Invalid or ambiguous Telegram configuration");
     }
     this.cfg = { ...cfg, groups: { ...cfg.groups }, allowUserIds: [...cfg.allowUserIds] };
@@ -471,7 +471,7 @@ export class TelegramBridge {
       const rows = this.store.channelRoutes(table, botKey);
       for (const row of rows) {
         let matches = false;
-        try { matches = this.cfg.groups[this.hive.getChannel(row.channelId).project] === row.chatId; } catch { /* deleted channel */ }
+        try { matches = this.cfg.groups[this.hive.channels.getChannel(row.channelId).project] === row.chatId; } catch { /* deleted channel */ }
         if (!matches) this.store.deleteChannelRoute(table, row.rowId);
       }
     }
@@ -483,7 +483,7 @@ export class TelegramBridge {
       if (destination) this.store.enqueuePending(seq, kind, destination);
     };
     const message = (msg: Message) => {
-      if (msg.kind === "chat" && !this.hive.fromTelegram(msg.id)) capture(msg.seq, "message");
+      if (msg.kind === "chat" && !this.hive.messages.fromTelegram(msg.id)) capture(msg.seq, "message");
     };
     const reaction = (body: { seq?: number; message?: Message }) => {
       const seq = body.message?.seq ?? body.seq;
@@ -545,7 +545,7 @@ export class TelegramBridge {
 
   private onHiveMessage = (payload: unknown) => {
     const msg = payload as Message;
-    if (!msg?.id || this.hive.fromTelegram(msg.id)) return;
+    if (!msg?.id || this.hive.messages.fromTelegram(msg.id)) return;
     if (msg.kind !== "chat") return;
     this.queuePending(msg.seq, "message");
   };
@@ -622,13 +622,13 @@ export class TelegramBridge {
     const chatId = Number(value?.chat?.id);
     const slug = projectSlugForChat(this.cfg, chatId);
     return { botKey: telegramConfigKey(this.cfg), chatId: Number.isSafeInteger(chatId) ? chatId : null,
-      projectId: slug ? this.hive.findProjectBySlug(slug)?.id ?? null : null };
+      projectId: slug ? this.hive.projects.findProjectBySlug(slug)?.id ?? null : null };
   }
 
   private scopeMatches(scope: TelegramUpdateScope): boolean {
     if (scope.botKey !== telegramConfigKey(this.cfg) || scope.chatId === null || !scope.projectId) return false;
     const slug = projectSlugForChat(this.cfg, scope.chatId);
-    return Boolean(slug && this.hive.findProjectBySlug(slug)?.id === scope.projectId);
+    return Boolean(slug && this.hive.projects.findProjectBySlug(slug)?.id === scope.projectId);
   }
 
   private async processUpdate(update: TelegramUpdate, allowed: () => boolean = () => true) {
@@ -660,7 +660,7 @@ export class TelegramBridge {
       permanent: error instanceof TelegramPermanentUpdateError,
       retryAt: error instanceof TelegramRateLimitError ? error.retryAt : undefined,
     });
-    this.hive.publishTelegramHealth();
+    this.hive.telegramAdmin.publishHealth();
     this.inboundRetries.wake();
   }
 
@@ -677,7 +677,7 @@ export class TelegramBridge {
         failures = 0;
         this.setState("poll:last_success", String(Date.now()));
         this.setState("poll:last_error", "");
-        this.hive.publishTelegramHealth();
+        this.hive.telegramAdmin.publishHealth();
         let malformedEnvelope = false;
         // Freeze all original project identities before the first processing await.
         const accepted: Array<{ update: TelegramUpdate; scope: TelegramUpdateScope }> = [];
@@ -723,7 +723,7 @@ export class TelegramBridge {
         failures++;
         const description = this.safeError(error);
         this.setState("poll:last_error", description);
-        this.hive.publishTelegramHealth();
+        this.hive.telegramAdmin.publishHealth();
         console.error("telegram poll", description);
         if (error instanceof TelegramRateLimitError) await this.waitForRateLimit(error);
         else await sleep(telegramPollBackoffMs(failures, Math.random, isTelegramTerminalPollError(description)), this.abort.signal);
@@ -758,7 +758,7 @@ export class TelegramBridge {
         if (!allowed()) return;
         if (row.invalidated || !this.scopeMatches(row)) {
           this.store.quarantineChangedUpdate(row.id);
-          this.hive.publishTelegramHealth();
+          this.hive.telegramAdmin.publishHealth();
           return;
         }
         let update: TelegramUpdate;
@@ -767,7 +767,7 @@ export class TelegramBridge {
           if (!update || update.update_id !== row.updateId) throw new Error("Invalid stored update");
         } catch {
           this.store.quarantineInvalidPayload(row.id);
-          this.hive.publishTelegramHealth();
+          this.hive.telegramAdmin.publishHealth();
           return;
         }
         try {
@@ -778,7 +778,7 @@ export class TelegramBridge {
           if (this.stopped) throw error;
           if (allowed()) this.recordUpdateError(row, update, error);
         }
-        this.hive.publishTelegramHealth();
+        this.hive.telegramAdmin.publishHealth();
       });
     }
   }
@@ -801,7 +801,7 @@ export class TelegramBridge {
     this.ensureActive();
     if (!channelId) {
       const slug = projectSlugForChat(this.cfg, chatId);
-      if (slug && !this.hive.findProjectBySlug(slug)) return;
+      if (slug && !this.hive.projects.findProjectBySlug(slug)) return;
       this.holdMessage(message, updateId);
       return;
     }
@@ -816,7 +816,7 @@ export class TelegramBridge {
       const mapped = this.store.mappedMessage(replyId, chatId, telegramConfigKey(this.cfg));
       let original: Message | null = null;
       if (mapped) {
-        try { original = this.hive.getMessageBySeq(mapped.seq); } catch { /* stale mapping */ }
+        try { original = this.hive.messageQueries.getMessageBySeq(mapped.seq); } catch { /* stale mapping */ }
       }
       threadId = telegramReplyThreadId(mapped, original, channelId);
       if (threadId && !this.hive.messageQueries.isInChannel(threadId, channelId)) threadId = null;
@@ -829,7 +829,7 @@ export class TelegramBridge {
     const replyUnavailable = Boolean(replyId && !threadId);
     const routingText = replyUnavailable ? `[Original reply unavailable] ${text}`.slice(0, 3900) : text;
     const body = inboundPostBody(message.from?.first_name, routingText, attachmentIds.length > 0);
-    const human = this.hive.getAgent(HUMAN_ID);
+    const human = this.hive.identity.getAgent(HUMAN_ID);
     const persistReceipt = (posted: Message) => {
       this.store.saveInboundMapping(chatId, message.message_id, posted.seq, posted.channelId, posted.threadId, telegramConfigKey(this.cfg));
     };
@@ -843,7 +843,7 @@ export class TelegramBridge {
         persistReceipt,
         routingText,
       );
-      if (!routed) this.hive.postMessage(human, {
+      if (!routed) this.hive.messages.postMessage(human, {
         channel: channelId, body, threadId, source: "telegram", attachmentIds,
       }, persistReceipt);
     } catch (error) { this.discardUnboundAttachments(attachmentIds); throw error; }
@@ -857,8 +857,8 @@ export class TelegramBridge {
     const mapped = this.store.inboundSeq(update.message_id, Number(update.chat?.id), telegramConfigKey(this.cfg));
     if (!mapped) return;
     try {
-      const original = this.hive.getMessageBySeq(mapped.seq);
-      const channel = this.hive.getChannel(original.channelId);
+      const original = this.hive.messageQueries.getMessageBySeq(mapped.seq);
+      const channel = this.hive.channels.getChannel(original.channelId);
       if (channel.project !== projectSlugForChat(this.cfg, Number(update.chat?.id))) return;
     } catch { return; }
     const next = new Set(hiveEmojisOf(update.new_reaction));
@@ -867,15 +867,15 @@ export class TelegramBridge {
     const ignoredAt = this.ignoreReaction.get(key);
     if (ignoredAt != null && Date.now() - ignoredAt < 120_000) return;
     this.pruneIgnoreReactions();
-    const human = this.hive.getAgent(HUMAN_ID);
+    const human = this.hive.identity.getAgent(HUMAN_ID);
     for (const emoji of REACTION_EMOJIS) {
       const nowOn = next.has(emoji);
       const wasOn = prev.has(emoji);
       if (nowOn === wasOn) continue;
-      const current = this.hive.getMessageBySeq(mapped.seq);
-      const mine = this.hive.hasReaction(HUMAN_ID, current.id, emoji);
-      if (nowOn && !mine) this.hive.toggleReaction(human, mapped.seq, emoji);
-      if (!nowOn && mine) this.hive.toggleReaction(human, mapped.seq, emoji);
+      const current = this.hive.messageQueries.getMessageBySeq(mapped.seq);
+      const mine = this.hive.messageQueries.hasReaction(HUMAN_ID, current.id, emoji);
+      if (nowOn && !mine) this.hive.messages.toggleReaction(human, mapped.seq, emoji);
+      if (!nowOn && mine) this.hive.messages.toggleReaction(human, mapped.seq, emoji);
     }
   }
 
@@ -894,8 +894,8 @@ export class TelegramBridge {
     }
     if (cmd === "/who") {
       const slug = projectSlugForChat(this.cfg, Number(message.chat?.id));
-      const project = slug ? this.hive.findProjectBySlug(slug) : null;
-      const lines = this.hive.listAgents().filter((a) => {
+      const project = slug ? this.hive.projects.findProjectBySlug(slug) : null;
+      const lines = this.hive.identity.listAgents().filter((a) => {
         if (a.role === "human") return true;
         return project ? a.projectId === project.id : false;
       }).map((a) => `${a.online ? "•" : "○"} ${a.name} ${a.role}`);
@@ -920,13 +920,13 @@ export class TelegramBridge {
     if (mapped) return mapped;
     const slug = projectSlugForChat(this.cfg, chatId);
     if (!slug) return null;
-    const project = this.hive.findProjectBySlug(slug);
+    const project = this.hive.projects.findProjectBySlug(slug);
     if (!project) return null;
     const name =
       message.forum_topic_created?.name ?? message.reply_to_message?.forum_topic_created?.name ?? null;
     if (!name || message.message_thread_id == null) return null;
-    const human = this.hive.getAgent(HUMAN_ID);
-    const ch = this.hive.listChannels(human).find(
+    const human = this.hive.identity.getAgent(HUMAN_ID);
+    const ch = this.hive.channels.listChannels(human).find(
       (c) =>
         c.projectId === project.id &&
         (channelLabel(c) === name || c.name === name || `#${c.name}` === name),
@@ -942,11 +942,11 @@ export class TelegramBridge {
     const thread = message.message_thread_id;
     const chatId = Number(message.chat?.id);
     if (thread == null || !Number.isFinite(chatId)) return;
-    this.store.holdMessage(chatId, message.message_id, thread, JSON.stringify(message), telegramConfigKey(this.cfg), this.hive.findProjectBySlug(projectSlugForChat(this.cfg, chatId) ?? "")?.id ?? null, updateId ?? null);
+    this.store.holdMessage(chatId, message.message_id, thread, JSON.stringify(message), telegramConfigKey(this.cfg), this.hive.projects.findProjectBySlug(projectSlugForChat(this.cfg, chatId) ?? "")?.id ?? null, updateId ?? null);
   }
 
   private async flushHolds(chatId: number, telegramThreadId: number) {
-    const rows = this.store.heldMessages(telegramThreadId, chatId, telegramConfigKey(this.cfg), this.hive.findProjectBySlug(projectSlugForChat(this.cfg, chatId) ?? "")?.id ?? null);
+    const rows = this.store.heldMessages(telegramThreadId, chatId, telegramConfigKey(this.cfg), this.hive.projects.findProjectBySlug(projectSlugForChat(this.cfg, chatId) ?? "")?.id ?? null);
     for (const row of rows) {
       try {
         const message = JSON.parse(row.payload) as TelegramMessage;
@@ -962,7 +962,7 @@ export class TelegramBridge {
         } else {
           // Older held messages lack update provenance: retain them rather than silently acknowledging loss.
           this.setState("poll:last_error", "Legacy held Telegram message failed; manual reconciliation required");
-          this.hive.publishTelegramHealth();
+          this.hive.telegramAdmin.publishHealth();
           continue;
         }
       }
@@ -975,10 +975,10 @@ export class TelegramBridge {
   private channelForTopic(chatId: number, threadId: number | undefined): string | null {
     const slug = projectSlugForChat(this.cfg, chatId);
     if (!slug) return null;
-    const project = this.hive.findProjectBySlug(slug);
+    const project = this.hive.projects.findProjectBySlug(slug);
     if (!project) return null;
     if (threadId == null || threadId === 1) {
-      const general = this.hive.listChannels(this.hive.getAgent(HUMAN_ID)).find(
+      const general = this.hive.channels.listChannels(this.hive.identity.getAgent(HUMAN_ID)).find(
         (c) => c.projectId === project.id && c.name === "general" && c.type === "public",
       );
       return general?.id ?? null;
@@ -986,7 +986,7 @@ export class TelegramBridge {
     const row = this.store.channelForTopic(threadId, chatId, telegramConfigKey(this.cfg));
     if (row === undefined) return null;
     try {
-      const ch = this.hive.getChannel(row);
+      const ch = this.hive.channels.getChannel(row);
       return ch.projectId === project.id ? ch.id : null;
     } catch {
       return null;
@@ -1017,13 +1017,13 @@ export class TelegramBridge {
     const destination = telegramDestinationForSeq(this.hive, seq, this.cfg);
     if (!destination) return;
     this.store.enqueuePending(seq, kind, destination);
-    this.hive.publishTelegramHealth();
+    this.hive.telegramAdmin.publishHealth();
     this.kickPump();
   }
 
   private chatForSeq(seq: number): number | undefined {
     try {
-      return this.chatForChannel(this.hive.getChannel(this.hive.getMessageBySeq(seq).channelId));
+      return this.chatForChannel(this.hive.channels.getChannel(this.hive.messageQueries.getMessageBySeq(seq).channelId));
     } catch {
       return undefined;
     }
@@ -1090,18 +1090,18 @@ export class TelegramBridge {
       try {
         if (job.firstAttemptAt && Date.now() >= job.firstAttemptAt + 86_400_000) {
           this.store.failJob(job, "delivery_retry_age_exhausted", job.attempts ?? 0);
-          this.hive.publishTelegramHealth();
+          this.hive.telegramAdmin.publishHealth();
           continue;
         }
         const destination = telegramDestinationForSeq(this.hive, job.seq, this.cfg);
         if (!sameTelegramDestination(job, destination)) {
           this.store.failJob(job, "destination_changed_or_unknown", 0);
-          this.hive.publishTelegramHealth();
+          this.hive.telegramAdmin.publishHealth();
           continue;
         }
         if (this.store.hasLegacyParts(job.seq)) {
           this.store.failJob(job, "legacy_part_destination_unknown", 0);
-          this.hive.publishTelegramHealth();
+          this.hive.telegramAdmin.publishHealth();
           continue;
         }
         if (job.kind === "reaction") await this.sendPendingReaction(job.seq);
@@ -1123,7 +1123,7 @@ export class TelegramBridge {
         const limit = err instanceof TelegramRateLimitError ? 20 : TELEGRAM_PENDING_GIVE_UP;
         if (isTelegramPermanentOutError(err) || attempts >= limit) {
           this.store.failJob(job, this.safeError(err), attempts);
-          this.hive.publishTelegramHealth();
+          this.hive.telegramAdmin.publishHealth();
           continue;
         }
         if (isTelegramTopicRightsError(err)) this.hintTopicRights();
@@ -1141,12 +1141,12 @@ export class TelegramBridge {
     let msg: Message;
     let ch: Channel;
     try {
-      msg = this.hive.getMessageBySeq(seq);
-      ch = this.hive.getChannel(msg.channelId);
+      msg = this.hive.messageQueries.getMessageBySeq(seq);
+      ch = this.hive.channels.getChannel(msg.channelId);
     } catch {
       return;
     }
-    if (msg.kind !== "chat" || this.hive.fromTelegram(msg.id)) return;
+    if (msg.kind !== "chat" || this.hive.messages.fromTelegram(msg.id)) return;
     const chatId = this.chatForChannel(ch);
     if (chatId == null) return;
     const thread = await this.ensureTopic(ch);
@@ -1185,12 +1185,12 @@ export class TelegramBridge {
       this.recordOut(sent, msg, chatId, "text");
     }
 
-    const human = this.hive.getAgent(HUMAN_ID);
+    const human = this.hive.identity.getAgent(HUMAN_ID);
     for (let i = 0; i < atts.length; i += 1) {
       const att = atts[i]!;
       const partKey = `attachment:${att.id}`;
       if (this.store.partDelivered(msg.seq, partKey, chatId, telegramConfigKey(this.cfg))) continue;
-      const opened = this.hive.getAttachment(human, att.id);
+      const opened = this.hive.files.getAttachment(human, att.id);
       const disk = filePathForHash(opened.sha256, this.hive.home);
       const caption = text.length <= 1000 && i === 0 ? text : `${msg.authorName} · ${att.name}`;
       const sent = requireTelegramOk(
@@ -1205,8 +1205,8 @@ export class TelegramBridge {
     let msg: Message;
     let ch: Channel;
     try {
-      msg = this.hive.getMessageBySeq(seq);
-      ch = this.hive.getChannel(msg.channelId);
+      msg = this.hive.messageQueries.getMessageBySeq(seq);
+      ch = this.hive.channels.getChannel(msg.channelId);
     } catch {
       return;
     }
@@ -1302,7 +1302,7 @@ export class TelegramBridge {
       throw new Error("Telegram attachment download failed");
     }
     this.ensureActive();
-    const created = await this.hive.createFile(this.hive.getAgent(HUMAN_ID), { name, mime, body: res.body });
+    const created = await this.hive.files.createFile(this.hive.identity.getAgent(HUMAN_ID), { name, mime, body: res.body });
     if (this.stopped) { this.discardUnboundAttachments([created.id]); this.ensureActive(); }
     return created.id;
   }

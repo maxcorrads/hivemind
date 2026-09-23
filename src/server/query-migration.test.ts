@@ -33,7 +33,7 @@ for (const legacy of [false, true]) {
         for (const index of ["idx_agents_project_role", "idx_agents_role", "idx_channels_project_type_name", "idx_channel_members_agent_channel"]) {
           assert.ok(hive.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?").get(index)); // schema-level assertion
         }
-        assert.equal(hive.getAgent("human").role, "human");
+        assert.equal(hive.identity.getAgent("human").role, "human");
       } finally { hive.db.close(); }
     }
   });
@@ -44,25 +44,25 @@ test("real wait admits and counts overflow through restart without duplicate or 
   const file = path.join(dir, "hive.db");
   let hive = new Hive(file);
   t.after(() => { hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
-  const brain = hive.join({ role: "brain" }).agent;
-  const worker = hive.join({ role: "worker", seniority: "mid" }).agent;
-  const channel = hive.openDm(brain, worker.name);
-  const expected = Array.from({ length: 25 }, (_, i) => hive.postMessage(brain, { channel: channel.id, body: `work ${i}` }).id);
-  const first = await hive.wait(worker, 100);
+  const brain = hive.identity.join({ role: "brain" }).agent;
+  const worker = hive.identity.join({ role: "worker", seniority: "mid" }).agent;
+  const channel = hive.channels.openDm(brain, worker.name);
+  const expected = Array.from({ length: 25 }, (_, i) => hive.messages.postMessage(brain, { channel: channel.id, body: `work ${i}` }).id);
+  const first = await hive.delivery.wait(worker, 100);
   assert.equal(first.idle, false);
   assert.ok((first.more ?? 0) > 0);
   assert.ok(first.delivery);
   const received = first.messages.map((m) => m.id);
-  hive.acknowledgeInbox(worker, first.delivery.sessionId, first.delivery.id);
+  hive.delivery.acknowledgeInbox(worker, first.delivery.sessionId, first.delivery.id);
   hive.db.close(); hive = new Hive(file);
   for (let page = 0; page < 5 && received.length < expected.length; page++) {
-    const current = hive.getAgent(worker.id);
-    const batch = await hive.wait(current, 100);
+    const current = hive.identity.getAgent(worker.id);
+    const batch = await hive.delivery.wait(current, 100);
     assert.equal(batch.idle, false);
     assert.ok(batch.delivery);
     received.push(...batch.messages.map((m) => m.id));
-    hive.acknowledgeInbox(current, batch.delivery.sessionId, batch.delivery.id);
+    hive.delivery.acknowledgeInbox(current, batch.delivery.sessionId, batch.delivery.id);
   }
   assert.deepEqual(received, expected);
-  assert.equal(hive.queuedCounts()[worker.id], 0);
+  assert.equal(hive.delivery.queuedCounts()[worker.id], 0);
 });

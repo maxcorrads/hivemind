@@ -49,15 +49,15 @@ async function postJson(base: string, url: string, body: unknown, token: string)
 test("thread creation/list/update/reset stays camelCase across Hive HTTP and WebSocket", async (t) => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-thread-contract-"));
   const hive = new Hive(path.join(dir, "hive.db"));
-  const human = hive.getAgent("human");
-  const root = hive.postMessage(human, { channel: "general", body: "root" });
-  hive.postMessage(human, { channel: "general", threadId: root.id, body: "reply creates thread" });
+  const human = hive.identity.getAgent("human");
+  const root = hive.messages.postMessage(human, { channel: "general", body: "root" });
+  hive.messages.postMessage(human, { channel: "general", threadId: root.id, body: "reply creates thread" });
 
-  const created = hive.threadsInChannel("general").find((thread) => thread.id === root.id);
+  const created = hive.messageQueries.threadsInChannel("general").find((thread) => thread.id === root.id);
   assert.deepEqual(created && { ...created }, { id: root.id, channelId: "general", status: "open" });
   assert.equal((created as unknown as Record<string, unknown>).channel_id, undefined);
 
-  const reader = hive.join({ role: "brain", focus: "thread-reader" });
+  const reader = hive.identity.join({ role: "brain", focus: "thread-reader" });
   const started = startServer({ port: 0, hive, telegram: false });
   const port = await started.ready;
   const base = `http://127.0.0.1:${port}`;

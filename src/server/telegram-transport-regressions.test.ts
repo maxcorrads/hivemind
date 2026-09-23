@@ -32,9 +32,9 @@ async function until(predicate: () => boolean) {
 }
 
 test("per-chat HTTP Retry-After survives restart while another chat progresses", async t => {
-  const f = fixture(t); const human = f.hive.getAgent("human");
-  const project = f.hive.createProject(human, { name: "Other", slug: "other" });
-  const other = f.hive.getChannel("general", project.id);
+  const f = fixture(t); const human = f.hive.identity.getAgent("human");
+  const project = f.hive.projects.createProject(human, { name: "Other", slug: "other" });
+  const other = f.hive.channels.getChannel("general", project.id);
   const config = { ...cfg, groups: { chapter: -1001, other: -1002 } };
   const calls: number[] = [];
   t.mock.method(globalThis, "fetch", async (url: unknown, init?: RequestInit) => {
@@ -44,11 +44,11 @@ test("per-chat HTTP Retry-After survives restart while another chat progresses",
     return Response.json({ ok: true, result: { message_id: calls.length } });
   });
   f.bridge = new TelegramBridge(f.hive, config); f.bridge.start();
-  const a = f.hive.postMessage(human, { channel: "general", body: "A" });
+  const a = f.hive.messages.postMessage(human, { channel: "general", body: "A" });
   await until(() => calls.length === 1); await flush(); await f.bridge.stop();
   f.hive.db.close(); f.hive = new Hive(path.join(f.dir, "hive.db"));
   f.bridge = new TelegramBridge(f.hive, config); f.bridge.start();
-  f.hive.postMessage(f.hive.getAgent("human"), { channel: other.id, body: "B" });
+  f.hive.messages.postMessage(f.hive.identity.getAgent("human"), { channel: other.id, body: "B" });
   await until(() => calls.length === 2);
   assert.deepEqual(calls, [-1001, -1002]);
   assert.equal(readValue(f.hive, "telegram_pending", "attempts", { seq: a.seq }), 1);
@@ -58,8 +58,8 @@ test("per-chat HTTP Retry-After survives restart while another chat progresses",
 });
 
 test("transient failure backoff is per chat and retry attempts cannot reset across restarts", async t => {
-  const f = fixture(t); const human = f.hive.getAgent("human");
-  const project = f.hive.createProject(human, { name: "Other", slug: "other" });
+  const f = fixture(t); const human = f.hive.identity.getAgent("human");
+  const project = f.hive.projects.createProject(human, { name: "Other", slug: "other" });
   const config = { ...cfg, groups: { chapter: -1001, other: -1002 } };
   const calls: number[] = [];
   t.mock.method(globalThis, "fetch", async (url: unknown, init?: RequestInit) => {
@@ -69,21 +69,21 @@ test("transient failure backoff is per chat and retry attempts cannot reset acro
       : Response.json({ ok: true, result: { message_id: calls.length } });
   });
   f.bridge = new TelegramBridge(f.hive, config); f.bridge.start();
-  f.hive.postMessage(human, { channel: "general", body: "retry me" });
-  f.hive.postMessage(human, { channel: f.hive.getChannel("general", project.id).id, body: "independent" });
+  f.hive.messages.postMessage(human, { channel: "general", body: "retry me" });
+  f.hive.messages.postMessage(human, { channel: f.hive.channels.getChannel("general", project.id).id, body: "independent" });
   await until(() => calls.length === 2); assert.deepEqual(calls, [-1001, -1002]);
   for (const delay of [2000, 4000, 8000, 16000]) {
     await f.bridge.stop(); f.bridge = new TelegramBridge(f.hive, config); f.bridge.start();
     t.mock.timers.tick(delay); await flush();
   }
   assert.equal(calls.filter(chat => chat === -1001).length, 5);
-  assert.equal(f.hive.telegramFailures()[0]?.attempts, 5);
+  assert.equal(f.hive.telegramAdmin.failures()[0]?.attempts, 5);
   t.mock.timers.tick(100_000); await flush(); assert.equal(calls.length, 6);
 });
 
 test("eligible chats get round-robin turns without reordering a chat", async t => {
-  const f = fixture(t); const human = f.hive.getAgent("human");
-  const project = f.hive.createProject(human, { name: "Other", slug: "other" });
+  const f = fixture(t); const human = f.hive.identity.getAgent("human");
+  const project = f.hive.projects.createProject(human, { name: "Other", slug: "other" });
   const sent: string[] = [];
   t.mock.method(globalThis, "fetch", async (url: unknown, init?: RequestInit) => {
     if (String(url).endsWith("getUpdates")) return blocked(init?.signal);
@@ -91,16 +91,16 @@ test("eligible chats get round-robin turns without reordering a chat", async t =
     return Response.json({ ok: true, result: { message_id: sent.length } });
   });
   f.bridge = new TelegramBridge(f.hive, { ...cfg, groups: { chapter: -1001, other: -1002 } }); f.bridge.start();
-  for (const body of ["A1", "A2", "A3"]) f.hive.postMessage(human, { channel: "general", body });
-  f.hive.postMessage(human, { channel: f.hive.getChannel("general", project.id).id, body: "B1" });
+  for (const body of ["A1", "A2", "A3"]) f.hive.messages.postMessage(human, { channel: "general", body });
+  f.hive.messages.postMessage(human, { channel: f.hive.channels.getChannel("general", project.id).id, body: "B1" });
   await until(() => sent.length === 1); await flush();
   for (let i = 0; i < 3; i++) { t.mock.timers.tick(1000); await flush(); }
   assert.deepEqual(sent, ["A1", "B1", "A2", "A3"]);
 });
 
 test("a newer reaction queued during an in-flight send is not deleted with the old job", async t => {
-  const f = fixture(t); const human = f.hive.getAgent("human");
-  const original = f.hive.postMessage(human, { channel: "general", body: "reaction target" });
+  const f = fixture(t); const human = f.hive.identity.getAgent("human");
+  const original = f.hive.messages.postMessage(human, { channel: "general", body: "reaction target" });
   let release!: (response: Response) => void;
   const sent: string[] = [];
   t.mock.method(globalThis, "fetch", async (url: unknown, init?: RequestInit) => {
@@ -115,8 +115,8 @@ test("a newer reaction queued during an in-flight send is not deleted with the o
     bot_key: telegramConfigKey(cfg), telegram_chat_id: -1001, telegram_message_id: 10, seq: original.seq, channel_id: original.channelId, thread_id: null,
   });
   f.bridge.start();
-  f.hive.toggleReaction(human, original.seq, "👍"); await until(() => Boolean(release));
-  f.hive.toggleReaction(human, original.seq, "👍"); f.hive.toggleReaction(human, original.seq, "👀");
+  f.hive.messages.toggleReaction(human, original.seq, "👍"); await until(() => Boolean(release));
+  f.hive.messages.toggleReaction(human, original.seq, "👍"); f.hive.messages.toggleReaction(human, original.seq, "👀");
   release(Response.json({ ok: true, result: true })); await flush();
   assert.ok(hasRow(f.hive, "telegram_pending", { seq: original.seq }));
   t.mock.timers.tick(1000); await until(() => sent.length === 2);
@@ -124,20 +124,20 @@ test("a newer reaction queued during an in-flight send is not deleted with the o
 });
 
 test("route removal and restoration cannot revive cancelled outbound or inbound history", t => {
-  const f = fixture(t); const human = f.hive.getAgent("human");
-  const m = f.hive.postMessage(human, { channel: "general", body: "original audience" });
+  const f = fixture(t); const human = f.hive.identity.getAgent("human");
+  const m = f.hive.messages.postMessage(human, { channel: "general", body: "original audience" });
   f.bridge = new TelegramBridge(f.hive, cfg);
   const destination = { botKey: telegramConfigKey(cfg), chatId: -1001 };
   enqueueTelegramPending(f.hive.db, m.seq, "message", undefined, destination);
-  recordTelegramUpdateFailure(f.hive.db, { ...destination, projectId: f.hive.findProjectBySlug("chapter")!.id },
+  recordTelegramUpdateFailure(f.hive.db, { ...destination, projectId: f.hive.projects.findProjectBySlug("chapter")!.id },
     { update_id: 4, message: { message_id: 40, chat: { id: -1001 }, from: { id: 1 }, text: "old input" } }, "temporary");
   f.bridge = new TelegramBridge(f.hive, { ...cfg, groups: { chapter: -1002 } });
-  assert.equal(f.hive.telegramFailureCount(), 1);
+  assert.equal(f.hive.telegramAdmin.failureCount(), 1);
   f.bridge = new TelegramBridge(f.hive, cfg);
-  assert.throws(() => f.hive.retryTelegramFailure(f.hive.telegramFailures()[0]!.id, () => destination), /invalidated/);
-  const inbound = f.hive.telegramQuarantine()[0]!;
+  assert.throws(() => f.hive.telegramAdmin.retryFailure(f.hive.telegramAdmin.failures()[0]!.id, () => destination), /invalidated/);
+  const inbound = f.hive.telegramAdmin.quarantine()[0]!;
   assert.equal(inbound.replayable, false);
-  assert.throws(() => f.hive.retryTelegramUpdate(inbound.id, () => true), /original bot/);
+  assert.throws(() => f.hive.telegramAdmin.retryUpdate(inbound.id, () => true), /original bot/);
 });
 
 test("legacy configuration validation rejects duplicate ownership and non-integer users", t => {
@@ -152,8 +152,8 @@ test("legacy configuration validation rejects duplicate ownership and non-intege
 test("raw reload captures both messages and reactions while the old poller drains", async t => {
   const f = fixture(t);
   writeTelegramFile({ botToken: cfg.botToken, allowUserIds: [1], projects: cfg.groups }, f.dir);
-  const human = f.hive.getAgent("human");
-  const root = f.hive.postMessage(human, { channel: "general", body: "root" });
+  const human = f.hive.identity.getAgent("human");
+  const root = f.hive.messages.postMessage(human, { channel: "general", body: "root" });
   let release!: (response: Response) => void, oldSignal: AbortSignal | null | undefined;
   let polls = 0;
   t.mock.method(globalThis, "fetch", async (url: unknown, init?: RequestInit) => {
@@ -166,8 +166,8 @@ test("raw reload captures both messages and reactions while the old poller drain
   const handle = startTelegram(f.hive);
   try {
     const reload = handle.reload(); await until(() => Boolean(oldSignal?.aborted));
-    const m = f.hive.postMessage(human, { channel: "general", body: "during drain" });
-    f.hive.toggleReaction(human, root.seq, "👍");
+    const m = f.hive.messages.postMessage(human, { channel: "general", body: "during drain" });
+    f.hive.messages.toggleReaction(human, root.seq, "👍");
     assert.ok(hasRow(f.hive, "telegram_pending", { seq: m.seq, kind: "message" }));
     assert.ok(hasRow(f.hive, "telegram_pending", { seq: root.seq, kind: "reaction" }));
     release(Response.json({ ok: true, result: [] })); await reload;

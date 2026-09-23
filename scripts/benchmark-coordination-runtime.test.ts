@@ -17,8 +17,8 @@ function runtime(t: TestContext, workers = 3) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-coordination-benchmark-'));
   const hive = new Hive(path.join(dir, 'hive.db')); let serial = 0;
   t.after(() => { hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
-  const human = hive.getAgent('human'), brain = hive.join({ role: 'brain' }).agent;
-  const pool = Array.from({ length: workers }, () => hive.join({ role: 'worker', seniority: 'mid' }).agent);
+  const human = hive.identity.getAgent('human'), brain = hive.identity.join({ role: 'brain' }).agent;
+  const pool = Array.from({ length: workers }, () => hive.identity.join({ role: 'worker', seniority: 'mid' }).agent);
   const next = (prefix: string) => `${prefix}-${++serial}`;
   const event = (task: TaskSnapshot, actor: Agent, action: TaskAction) => hive.tasks.event(actor, task.id,
     { requestId: next('event'), expectedRevision: hive.tasks.get(actor, task.id).revision, action });
@@ -50,7 +50,7 @@ test('benchmark recovery fixture traverses real task, checkpoint, handoff and re
   assert.equal(f.hive.tasks.handoff(f.brain, task.id).freshness, 'current');
   f.event(task, worker, { type: 'block', needed: 'Deterministic coordinator decision' });
   const current = f.hive.tasks.get(f.brain, task.id);
-  f.hive.postMessage(f.brain, { channel: current.channelId, threadId: task.id, body: 'Deterministic decision supplied.' });
+  f.hive.messages.postMessage(f.brain, { channel: current.channelId, threadId: task.id, body: 'Deterministic decision supplied.' });
   f.event(task, worker, { type: 'accept' });
   f.event(task, worker, { type: 'result', result: f.result });
   task = f.event(task, f.brain, { type: 'review', decision: 'accepted', summary: 'Reviewed recovery evidence', evidenceSeqs: [] }).task;
@@ -61,7 +61,7 @@ test('benchmark recovery fixture traverses real task, checkpoint, handoff and re
 test('benchmark coupled fixture traverses real room, dependencies and advisory claim overlap', t => {
   const fixture = fixtures.get('shared-interface-coupled')!; assert.ok(fixture);
   const f = runtime(t, 3);
-  const room = f.hive.createChannel(f.brain, { name: 'benchmark-coupled', type: 'private', memberNames: f.pool.map(worker => worker.name) });
+  const room = f.hive.channels.createChannel(f.brain, { name: 'benchmark-coupled', type: 'private', memberNames: f.pool.map(worker => worker.name) });
   const configured = f.hive.rooms.event(f.human, room.id, { requestId: f.next('room'), expectedRevision: 0,
     action: { type: 'configure', reason: 'Benchmark fixture', contract: { mode: 'ongoing', purpose: fixture.description,
       rules: ['Deterministic fake agents only'], limits: ['No external writes'], coordinator: f.brain.name,
@@ -97,7 +97,7 @@ test('benchmark room fixture traverses real capability routing and keeps provide
       modes: ['implementation', 'review'], model: fixture.modelVersion, host: 'benchmark', availableContext: 128000,
       availability: 'available', maxInProgress: 8 } });
   }
-  const room = f.hive.createChannel(f.brain, { name: 'benchmark-routing', type: 'private', memberNames: f.pool.map(worker => worker.name) });
+  const room = f.hive.channels.createChannel(f.brain, { name: 'benchmark-routing', type: 'private', memberNames: f.pool.map(worker => worker.name) });
   const task = f.hive.tasks.assign(f.brain, { requestId: f.next('assign'), channel: room.id, worker: f.pool[0]!.name,
     contract: contract('Route deterministic API work', ['src/api']) }).task;
   const suggestions = f.hive.routing.suggest(f.brain, task.id, { requiredCapabilities: ['api'], mode: 'implementation', category: 'coordination-benchmark' });

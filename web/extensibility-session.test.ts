@@ -42,15 +42,15 @@ process.stdin.on('end', () => {
     try { await started.shutdown(); } finally { hive.db.close(); rmSync(home, { recursive: true, force: true }); }
   });
   const port = await started.ready, base = `http://127.0.0.1:${port}`;
-  const human = hive.getAgent("human"), a = hive.listProjects()[0]!;
-  const b = hive.createProject(human, { name: "Other project", slug: "other" });
-  const bot = hive.createBot(human, a.id, { name: "SessionFeed" });
-  const botB = hive.createBot(human, b.id, { name: "OtherFeed" });
-  const worker = hive.join({ role: "worker", seniority: "mid", project: a.slug });
-  const channel = hive.createChannel(human, { name: "source", type: "private", project: a.slug });
-  const channelB = hive.createChannel(human, { name: "other-source", type: "private", project: b.slug });
-  hive.invite(human, channel.id, [bot.bot.name]);
-  hive.invite(human, channelB.id, [botB.bot.name]);
+  const human = hive.identity.getAgent("human"), a = hive.projects.listProjects()[0]!;
+  const b = hive.projects.createProject(human, { name: "Other project", slug: "other" });
+  const bot = hive.bots.createBot(human, a.id, { name: "SessionFeed" });
+  const botB = hive.bots.createBot(human, b.id, { name: "OtherFeed" });
+  const worker = hive.identity.join({ role: "worker", seniority: "mid", project: a.slug });
+  const channel = hive.channels.createChannel(human, { name: "source", type: "private", project: a.slug });
+  const channelB = hive.channels.createChannel(human, { name: "other-source", type: "private", project: b.slug });
+  hive.channels.invite(human, channel.id, [bot.bot.name]);
+  hive.channels.invite(human, channelB.id, [botB.bot.name]);
   const credentialPath = `/api/ui/projects/${a.id}/bots/${bot.bot.id}/credential`;
   const pluginPath = `/api/ui/projects/${a.slug}/plugins/session-fixture`;
   const profile = (project = a) => projectPlugins(home, project)[0]!;
@@ -65,7 +65,7 @@ process.stdin.on('end', () => {
     registry: file(path.join(home, "plugins.json")), bindings: file(path.join(home, "project-plugins.json")),
     profiles: [a, b].map(p => ({ config: file(path.join(profile(p).home, "config.json")), calls: executions(p) })),
   });
-  const status = () => hive.botCredential(human, a.id, bot.bot.id).credential;
+  const status = () => hive.bots.botCredential(human, a.id, bot.bot.id).credential;
   return { home, base, port, human, a, b, bot, botB, worker, channel, channelB, credentialPath, pluginPath,
     profile, executions, state, status,
     get hive() { return hive; },
@@ -236,7 +236,7 @@ test("network loss after real creation/rotation/configure never causes automatic
   const creationPath = `/api/ui/projects/${f.a.id}/bots`;
   c.loseNextResponse(creationPath);
   await assert.rejects(c.session.request(creationPath, change({ name: "LostCreation" }, {})), /response lost/);
-  assert.equal(f.hive.listAgents(f.human).filter(agent => agent.name === "LostCreation").length, 1);
+  assert.equal(f.hive.identity.listAgents(f.human).filter(agent => agent.name === "LostCreation").length, 1);
   c.loseNextResponse(f.credentialPath);
   await assert.rejects(c.session.request(f.credentialPath, change({ action: "rotate", expectedRevision: 1 }, {})), /response lost/);
   assert.equal(f.status().revision, 2);

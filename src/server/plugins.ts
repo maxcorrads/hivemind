@@ -605,7 +605,7 @@ export async function pluginsMain(args: string[]) {
       throw new Error("Bind requires an existing Hivemind database");
     const hive = new Hive(path.join(home, "hive.db"));
     try {
-      const project = hive.getProjectBySlug(values.project);
+      const project = hive.projects.getProjectBySlug(values.project);
       const configHome = realpathSync(values["config-home"]);
       const { hiveUrl, ...config } = json(path.join(configHome, "config.json"));
       const current = projectPlugins(home, project).find(
@@ -631,7 +631,7 @@ export async function pluginsMain(args: string[]) {
         }),
       );
     } finally {
-      hive.db.close();
+      hive.close();
     }
     return;
   }

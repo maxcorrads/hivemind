@@ -235,7 +235,7 @@ test("telegram queue overflow dead-letters reactions before messages", () => {
   enqueueTelegramPending(hive.db, 2, "message", 2);
   const pending = listRows(hive, "telegram_pending", { columns: ["seq", "kind"], orderBy: ["seq", "kind"] });
   assert.deepEqual(pending, [{ seq: 1, kind: "message" }, { seq: 2, kind: "message" }]);
-  const failure = hive.telegramFailures(10)[0];
+  const failure = hive.telegramAdmin.failures(10)[0];
   assert.equal(failure?.seq, 1);
   assert.equal(failure?.kind, "reaction");
   assert.equal(failure?.reason, "queue_overflow");
@@ -251,9 +251,9 @@ test("telegram delivery checkpoints survive restart and dead letters are retryab
   });
   assert.equal(telegramPartDelivered(hive.db, 9, "attachment:a", -1001, "fixture-key"), true);
   recordTelegramFailure(hive.db, 9, "message", "boom", 5, -1001, "fixture-key");
-  const failure = hive.telegramFailures(10)[0]!;
-  hive.retryTelegramFailure(failure.id, () => ({ botKey: "fixture-key", chatId: -1001 }));
-  assert.equal(hive.telegramFailureCount(), 0);
+  const failure = hive.telegramAdmin.failures(10)[0]!;
+  hive.telegramAdmin.retryFailure(failure.id, () => ({ botKey: "fixture-key", chatId: -1001 }));
+  assert.equal(hive.telegramAdmin.failureCount(), 0);
   assert.ok(hasRow(hive, "telegram_pending", { seq: 9, kind: "message" }));
   assert.equal(readValue(hive, "telegram_failures", "resolution", { id: failure.id }), "retried");
   hive.db.close();

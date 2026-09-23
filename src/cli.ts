@@ -327,8 +327,8 @@ export async function runCli(argv: string[]): Promise<void> {
   if (cmd === "gc") {
     const { Hive } = await import("./server/hive.ts");
     const hive = new Hive();
-    const result = hive.gcFiles();
-    hive.db.close();
+    const result = hive.files.gcFiles();
+    hive.close();
     console.log(`gc attachments=${result.attachments} blobs=${result.blobs}`);
     return;
   }

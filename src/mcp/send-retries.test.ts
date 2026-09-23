@@ -19,8 +19,8 @@ import { countRows } from "../server/test-fixtures.ts";
 test("CLI and MCP preserve send keys and uploaded IDs across lost replies and process restarts", { timeout: 25_000 }, async t => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.."), dir = mkdtempSync(path.join(os.tmpdir(), "hive-send-transports-"));
   const hive = new Hive(path.join(dir, "hive.db"));
-  const brain = hive.join({ role: "brain" }), worker = hive.join({ role: "worker", seniority: "mid" });
-  const dm = hive.openDm(brain.agent, worker.agent.name);
+  const brain = hive.identity.join({ role: "brain" }), worker = hive.identity.join({ role: "worker", seniority: "mid" });
+  const dm = hive.channels.openDm(brain.agent, worker.agent.name);
   const listener = getRequestListener(createApp(hive).fetch);
   let drop = true, uploads = 0;
   const server = createServer((req, res) => {
