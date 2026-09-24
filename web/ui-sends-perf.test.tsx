@@ -178,6 +178,8 @@ test('mention autocomplete: arrows move, Enter/Tab insert, Escape closes, Enter 
 test('typing re-renders only the composer; a live update re-renders only the changed message', async t => {
   let rendered = 0;
   t.mock.method(api, 'fileUrl', (id: string) => { rendered++; return `/files/${id}`; });
+  t.mock.method(api, 'channelTasks', async () => ({ items: [], hasMore: false }));
+  t.mock.method(api, 'decisions', async () => ({ items: [], awaiting: 0, warning: '' }));
   const f = mount(t);
   const go = () => {};
   const compose = { sendChannel: async () => true, sendThread: async () => true };
@@ -190,7 +192,7 @@ test('typing re-renders only the composer; a live update re-renders only the cha
     const channelPane = { pane, setPane, channelStream: useRef(null), channelJournal: useRef(null),
       loadChannel: async () => {} } as unknown as ChannelPane;
     return <ChannelDesk channelId={channel.id} activeChannel={channel} agents={[]} roomAgents={[]} channel={channelPane}
-      threadPaneId={null} stickBottom={useRef(true)} threadOpenAnchor={useRef(null)} go={go} roomTick={0} routingView={null}
+      threadPaneId={null} stickBottom={useRef(true)} threadOpenAnchor={useRef(null)} go={go} roomTick={0} decisionTick={0} onDecisionAnswered={go} routingView={null}
       activeBrainChannel={false} brainNames={{}} onOpenRouting={go} onInvite={go} onBack={go} compose={compose} setErr={go} onMarkUnread={async () => {}} />;
   }
   await f.render(<Desk />);

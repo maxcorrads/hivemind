@@ -121,6 +121,11 @@ export type AgentWork = {
   /** Submitted results waiting for this agent's review. */
   toReview: number;
 };
+/** One row of a channel's task list (the Human UI Tasks tab); the thread holds the full snapshot. */
+export type TaskSummary = Pick<TaskSnapshot, 'id' | 'channelId' | 'state' | 'workerName' | 'assignerName' | 'revision' | 'updatedAt'> & {
+  objective: string;
+};
+export type ChannelTaskPage = { items: TaskSummary[]; hasMore: boolean };
 
 /** Human-readable chat stays the primary record; metadata is authenticated by the server. */
 export function taskBody(envelope: TaskEnvelope): string {

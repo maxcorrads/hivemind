@@ -124,18 +124,21 @@ test('mounted Human App follows task review and contract history without offerin
   const thread = () => host.querySelector('aside.thread');
   assert.ok(thread(), 'the URL opens the persisted task thread');
   assert.match(thread()!.textContent!, /Review the mounted fixture/);
+  const contractTab = [...host.querySelectorAll<HTMLButtonElement>('[role=tab]')].find(tab => tab.textContent === 'Contract');
+  assert.ok(contractTab, 'rooms show their contract in a tab');
+  await act(async () => contractTab.click());
   assert.match(host.textContent!, /A visible shared contract/);
-  assert.equal(thread()!.querySelector('.thread-tools select'), null, 'Human cannot use generic status to accept-complete a task');
+  assert.equal(thread()!.querySelector('.thread-tools [data-thread-status]'), null, 'Human cannot use generic status to accept-complete a task');
   const event = async (requestId: string, action: unknown, actor = worker) => {
     await act(async () => { hive.tasks.event(actor, initial.id, { requestId,
       expectedRevision: hive.tasks.get(actor, initial.id).revision, action }); });
   };
   await event('app-accept', { type: 'accept' });
-  assert.match(thread()!.querySelector('.st')!.textContent!, /^accepted$/);
+  assert.match(thread()!.querySelector('.thread-tools .task-chip')!.textContent!, /^accepted$/);
   await event('app-result', { type: 'result', result: { summary: 'Fixture inspected', artifacts: [], checks: [], gaps: [], evidenceSeqs: [] } });
-  assert.match(thread()!.querySelector('.st')!.textContent!, /result submitted/);
+  assert.match(thread()!.querySelector('.thread-tools .task-chip')!.textContent!, /result submitted/);
   await event('app-review', { type: 'review', decision: 'accepted', summary: 'Independent brain review', evidenceSeqs: [] }, brain);
-  assert.match(thread()!.querySelector('.st')!.textContent!, /accepted complete/);
+  assert.match(thread()!.querySelector('.thread-tools .task-chip')!.textContent!, /accepted complete/);
   assert.match(thread()!.textContent!, /Independent brain review/);
   const history = [...host.querySelectorAll('button')].find(button => button.textContent === 'Show recent contract history');
   assert.ok(history);
@@ -144,7 +147,7 @@ test('mounted Human App follows task review and contract history without offerin
   assert.ok(requests.some(url => new URL(url, 'http://localhost').pathname.endsWith('/room/history')));
   // A hello/reconnect must reconcile from current HTTP state, not reset review.
   await act(async () => BrowserSocket.current.event('hello', {}));
-  assert.match(thread()!.querySelector('.st')!.textContent!, /accepted complete/);
+  assert.match(thread()!.querySelector('.thread-tools .task-chip')!.textContent!, /accepted complete/);
   assert.equal(hive.rooms.peek(channel.id)!.state, 'active');
 
   // Completing a structured task must not break normal Human replies/reactions,
@@ -171,6 +174,8 @@ test('mounted Human App follows task review and contract history without offerin
   assert.ok(close);
   await act(async () => close.click());
   assert.equal(thread(), null);
+  const messagesTab = [...host.querySelectorAll<HTMLButtonElement>('[role=tab]')].find(tab => tab.textContent === 'Messages')!;
+  await act(async () => messagesTab.click());
   await type('main.desk textarea', 'Ordinary channel chat still works.');
   const ordinary = hive.messageQueries.listMessages(human, channel.id).messages.find(message => message.body === 'Ordinary channel chat still works.');
   assert.ok(ordinary); assert.equal(hive.tasks.has(ordinary.id), false);
@@ -178,6 +183,6 @@ test('mounted Human App follows task review and contract history without offerin
   const reopen = rootMessage?.querySelector<HTMLButtonElement>('button.replies');
   assert.ok(reopen);
   await act(async () => reopen.click());
-  assert.match(thread()!.querySelector('.st')!.textContent!, /accepted complete/);
-  assert.equal(thread()!.querySelector('.thread-tools select'), null);
+  assert.match(thread()!.querySelector('.thread-tools .task-chip')!.textContent!, /accepted complete/);
+  assert.equal(thread()!.querySelector('.thread-tools [data-thread-status]'), null);
 });

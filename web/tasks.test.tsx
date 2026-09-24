@@ -5,7 +5,11 @@ import { TaskCard } from './TaskCard.tsx';
 import type { TaskSnapshot } from '../src/shared/tasks.ts';
 import type { Message } from '../src/shared/types.ts';
 import type { ChannelPayload } from './api.ts';
-import { selectThread, beginThreadLoad, failThreadLoad, receiveThreadMessage, receiveThreadTask, receiveThreadSnapshot, reconcileTask } from './thread-state.ts';
+import { selectThread, beginThreadLoad, failThreadLoad, receiveThreadMessage, receiveThreadTask, receiveThreadSnapshot, reconcileTask, threadRedirect } from './thread-state.ts';
+import { ApiError } from './api.ts';
+import { relativeTime } from './RelativeTime.tsx';
+import { isOpenTask, taskSteps } from './task-progress.ts';
+import { TaskList } from './ChannelDesk.tsx';
 
 const task: TaskSnapshot = { id: 'fixture', channelId: 'room', assignerId: 'b', assignerName: 'Brain', workerId: 'w', workerName: 'Worker',
   revision: 1, contractVersion: 1, state: 'sent', dispatchSeq: 1, receivedAt: null, lastEventSeq: 1, updatedAt: 0,
@@ -15,7 +19,7 @@ test('task UI distinguishes each lifecycle state without inferring completion fr
   for (const state of ['sent', 'delivered', 'accepted', 'rejected', 'blocked', 'result_submitted', 'changes_requested', 'accepted_complete'] as const) {
     const html = renderToStaticMarkup(<TaskCard task={{ ...task, state }} />);
     assert.ok(html.includes(state.replaceAll('_', ' ')));
-    assert.ok(html.includes('receipt is not acceptance'));
+    assert.ok(html.includes('Receipt is not acceptance'));
   }
   assert.ok(renderToStaticMarkup(<TaskCard task={{ ...task, state: 'delivered', receivedAt: 1 }} />).includes('Worker confirmed receipt'));
 });
@@ -220,7 +224,8 @@ test('latest checkpoint renders next action, age and stale-contract warnings wit
   const current = { ...task, revision: 5, state: 'accepted' as const, checkpoint };
   const html = renderToStaticMarkup(<TaskCard task={current} />);
   assert.match(html, /Latest checkpoint/); assert.match(html, /Matches current task revision/);
-  assert.match(html, /Later unsaved work may exist/); assert.match(html, /Age at render/);
+  assert.match(html, /Later unsaved work may exist/); assert.match(html, /saved <time[^>]*>just now<\/time>/);
+  assert.ok(!html.includes('Age at render'));
   assert.ok(!html.includes('<script>inspect</script>'));
   const changed = { ...current, revision: 6, contractVersion: 2 };
   assert.match(renderToStaticMarkup(<TaskCard task={changed} />), /Outdated report/);
@@ -237,4 +242,56 @@ test('advisory task UI labels expiry and inaccessible prerequisites without gran
   assert.ok(html.includes('uncertain')); assert.ok(html.includes('unavailable'));
   assert.ok(html.includes('not a filesystem lock')); assert.ok(html.includes('No execution or reassignment'));
   assert.ok(html.includes('&lt;script&gt;')); assert.ok(!html.includes('<script>'));
+});
+
+test('task stepper walks sent → accepted → blocked/result → reviewed and never passes Accepted on receipt alone', () => {
+  const shape = (state: TaskSnapshot['state']) => taskSteps(state).map(step => `${step.label}:${step.state}`).join(' ');
+  assert.equal(shape('sent'), 'Sent:current Accepted:todo Result:todo Reviewed:todo');
+  assert.equal(shape('delivered'), 'Delivered:current Accepted:todo Result:todo Reviewed:todo');
+  assert.equal(shape('accepted'), 'Sent:done Accepted:current Result:todo Reviewed:todo');
+  assert.equal(shape('rejected'), 'Sent:done Rejected:fail Result:todo Reviewed:todo');
+  assert.equal(shape('blocked'), 'Sent:done Accepted:done Blocked:warn Reviewed:todo');
+  assert.equal(shape('result_submitted'), 'Sent:done Accepted:done Result:current Reviewed:todo');
+  assert.equal(shape('changes_requested'), 'Sent:done Accepted:done Result:done Changes requested:warn');
+  assert.equal(shape('accepted_complete'), 'Sent:done Accepted:done Result:done Reviewed:done');
+  assert.equal(shape('cancelled'), 'Sent:todo Accepted:todo Result:todo Cancelled:fail');
+  const html = renderToStaticMarkup(<TaskCard task={{ ...task, state: 'blocked', updatedAt: 1_000 }} now={1_000 + 5 * 60_000} />);
+  assert.match(html, /aria-label="Task progress"/);
+  assert.match(html, /<li class="step-warn" aria-current="step">/);
+  assert.match(html, /updated <time[^>]*>5m ago<\/time>/);
+  assert.match(html, /class="task-chip tone-warn">blocked</);
+  // The disclaimers live in one info tooltip instead of repeating under every section.
+  assert.equal(html.match(/role="note"/g)?.length, 1);
+  assert.equal(isOpenTask('blocked'), true); assert.equal(isOpenTask('accepted_complete'), false); assert.equal(isOpenTask('rejected'), false);
+  assert.equal(isOpenTask('cancelled'), false);
+  const cancelled = renderToStaticMarkup(<TaskCard task={{ ...task, state: 'cancelled', cancellation: { reason: 'Superseded by #12', at: 1 } }} />);
+  assert.match(cancelled, /tone-fail">cancelled</); assert.match(cancelled, /Cancelled: Superseded by #12/);
+});
+
+test('relative times read as distances from now', () => {
+  assert.equal(relativeTime(1_000, 30_000), 'just now');
+  assert.equal(relativeTime(0, 3 * 60_000 + 59_000), '3m ago');
+  assert.equal(relativeTime(0, 2 * 3_600_000), '2h ago');
+  assert.equal(relativeTime(0, 3 * 86_400_000), '3d ago');
+  assert.equal(relativeTime(10 * 60_000, 0), 'in 10m');
+});
+
+test('channel Tasks tab lists each task with its chip and opens its thread', () => {
+  const html = renderToStaticMarkup(<TaskList now={600_000} activeId="b" onOpen={() => undefined} error={null} page={{ hasMore: true, items: [
+    { id: 'a', channelId: 'room', state: 'accepted', workerName: 'Worker', assignerName: 'Brain', revision: 2, updatedAt: 0, objective: 'Parse <b>input</b>' },
+    { id: 'b', channelId: 'room', state: 'accepted_complete', workerName: 'Worker', assignerName: 'Brain', revision: 4, updatedAt: 540_000, objective: 'Ship' },
+  ] }} />);
+  assert.match(html, /tone-active">accepted</); assert.match(html, /tone-done">accepted complete</);
+  assert.ok(html.includes('Parse &lt;b&gt;input&lt;/b&gt;')); assert.match(html, /10m ago/); assert.match(html, /1m ago/);
+  assert.match(html, /aria-current="true"/); assert.match(html, /100 most recently updated/);
+  assert.match(renderToStaticMarkup(<TaskList page={{ items: [], hasMore: false }} error={null} activeId={null} onOpen={() => undefined} />), /No structured tasks/);
+});
+
+test('a thread opened under the wrong channel redirects to the channel that owns it', () => {
+  const conflict = new ApiError(409, 'This thread belongs to another channel', { channelId: 'engineering', threadId: 'task-root' });
+  assert.deepEqual(threadRedirect(conflict, 'dm-a'), { kind: 'channel', id: 'engineering', thread: 'task-root' });
+  assert.equal(threadRedirect(conflict, 'engineering'), null, 'never redirects to the channel already open');
+  assert.equal(threadRedirect(new ApiError(404, 'Thread not found in this channel', {}), 'dm-a'), null);
+  assert.equal(threadRedirect(new ApiError(409, 'Other conflict', { error: 'x' }), 'dm-a'), null);
+  assert.equal(threadRedirect(new Error('offline'), 'dm-a'), null);
 });

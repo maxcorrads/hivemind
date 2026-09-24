@@ -341,6 +341,31 @@ test('HTTP exposes authenticated tasks and read-only UI state; bots and forged f
   assert.equal((await post('/api/agent/tasks', bot.token, {})).status, 403);
 });
 
+test('UI lists a channel\'s tasks newest first and redirects a thread opened under another channel', async t => {
+  const f = fixture(t); const app = createApp(f.hive); const human = f.hive.identity.getAgent('human');
+  const first = f.assign().task; const second = f.assign().task;
+  f.event(second.id, f.worker.agent, { type: 'accept' });
+  const listed = await app.request(`/api/ui/channels/${first.channelId}/tasks`);
+  assert.equal(listed.status, 200);
+  const page = await listed.json() as { items: Array<{ id: string; state: string; objective: string }>; hasMore: boolean };
+  assert.deepEqual(page.items.map(item => item.id), [second.id, first.id]);
+  assert.equal(page.items[0]!.state, 'accepted'); assert.equal(page.items[1]!.objective, contract().objective);
+  assert.equal(page.hasMore, false);
+  // #224: a task thread from one channel opened next to an unrelated DM names its real channel instead of rendering there.
+  const dm = f.hive.channels.openDm(human, f.brain.agent.name);
+  assert.notEqual(dm.id, first.channelId);
+  const wrong = await app.request(`/api/ui/channels/${dm.id}/messages?threadId=${first.id}`);
+  assert.equal(wrong.status, 409);
+  assert.deepEqual(await wrong.json(), { error: 'This thread belongs to another channel', channelId: first.channelId, threadId: first.id });
+  const reply = f.hive.messages.postMessage(f.worker.agent, { channel: first.channelId, threadId: first.id, body: 'Working on it' });
+  const byReply = await app.request(`/api/ui/channels/${dm.id}/messages?threadId=${reply.id}`);
+  assert.equal(((await byReply.json()) as { threadId: string }).threadId, first.id);
+  const right = await app.request(`/api/ui/channels/${first.channelId}/messages?threadId=${first.id}`);
+  assert.equal(((await right.json()) as { task: TaskSnapshot }).task.id, first.id);
+  const unknown = await app.request(`/api/ui/channels/${dm.id}/messages?threadId=${crypto.randomUUID()}`);
+  assert.equal(unknown.status, 200);
+});
+
 test('project deletion removes task events and snapshots', t => {
   const f = fixture(t); f.assign();
   f.hive.identity.setOffline(f.brain.agent.id); f.hive.identity.setOffline(f.worker.agent.id);

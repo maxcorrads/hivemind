@@ -3,13 +3,14 @@ import type { Agent, Message, ThreadStatus } from "../src/shared/types.ts";
 import { api, type ChannelPayload } from "./api.ts";
 import { Composer } from "./Composer.tsx";
 import { DecisionCard } from './DecisionQueue.tsx';
-import { STATUSES } from "./labels.ts";
+import { channelTitle, STATUSES } from "./labels.ts";
 import { BackButton } from "./MobileNav.tsx";
 import { MessageRow } from "./MessageRow.tsx";
 import { streamRows } from "./message-stream.ts";
 import { holdLivePane, isReadingHistory } from "./pane-window.ts";
+import { Popover } from "./Popover.tsx";
 import { StreamDivider } from "./StreamCards.tsx";
-import { TaskCard } from './TaskCard.tsx';
+import { TaskCard, TaskChip } from './TaskCard.tsx';
 import type { useSend } from "./use-send.ts";
 import type { ThreadPane } from "./use-thread-pane.ts";
 
@@ -37,21 +38,13 @@ export function ThreadAside({ channelId, threadId, threadPane, thread, onClose, 
       <header className="desk-h">
         <BackButton label="Back to channel" onBack={onClose} />
         <div>
-          <h1>Thread</h1>
-          <p>replies on this message</p>
+          <h1>Thread · {channelTitle(threadPane.channel)}</h1>
         </div>
         <div className="thread-tools">
-          {threadPane.task ? <span className="st">{threadPane.task.state.replaceAll('_', ' ')}</span> : <select
-            aria-label="Thread status"
+          {threadPane.task ? <TaskChip state={threadPane.task.state} /> : <StatusMenu
             value={threadPane.threads.find((t) => t.id === threadId)?.status ?? "open"}
-            onChange={(e) => thread.setStatus(channelId, threadId, e.target.value as ThreadStatus)}
-          >
-            {STATUSES.map((s) => (
-              <option key={s} value={s}>
-                {s.replace("_", " ")}
-              </option>
-            ))}
-          </select>}
+            onChange={(status) => thread.setStatus(channelId, threadId, status)}
+          />}
           <button
             type="button"
             className="plus"
@@ -99,5 +92,25 @@ export function ThreadAside({ channelId, threadId, threadPane, thread, onClose, 
         onSend={onSend}
       />
     </aside>
+  );
+}
+
+/** The thread status as a chip; its menu sets another status. */
+export function StatusMenu({ value, onChange }: { value: ThreadStatus; onChange: (status: ThreadStatus) => void }) {
+  const label = (status: ThreadStatus) => status.replace("_", " ");
+  return (
+    <Popover className="status-menu" label={`Thread status: ${label(value)}. Change status`}
+      summary={<span className={`status-chip st-${value}`} data-thread-status={value}>{label(value)}</span>}>
+      {(close) => (
+        <div role="menu" aria-label="Thread status">
+          {STATUSES.map((status) => (
+            <button key={status} type="button" role="menuitemradio" aria-checked={status === value}
+              onClick={() => { close(); if (status !== value) onChange(status); }}>
+              <span className={`status-dot st-${status}`} aria-hidden="true" />{label(status)}
+            </button>
+          ))}
+        </div>
+      )}
+    </Popover>
   );
 }

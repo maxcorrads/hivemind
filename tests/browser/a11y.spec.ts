@@ -52,6 +52,8 @@ async function install(page: Page, fixture: Partial<Fixture> = {}): Promise<Fixt
   const room: RoomView = { room: null, tasks: [], activeTaskCount: 0, tasksHasMore: false, nextTaskCursor: null, links: [],
     unmanagedBots: [] };
   await page.route("**/api/ui/channels/*/room", route => json(route, room));
+  await page.route("**/api/ui/channels/*/tasks", route => json(route, { items: [], hasMore: false }));
+  await page.route("**/api/ui/decisions?*", route => json(route, { items: [], awaiting: 0, warning: "" }));
   await page.route("**/api/ui/adaptive-routing*", route => json(route, { executions: [], events: [], state: null }));
   await page.route("**/api/ui/channels/*/messages*", async route => {
     const id = decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-2) ?? "");
