@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { Message, ThreadStatus } from "../src/shared/types.ts";
 import { REACTION_EMOJIS } from "../src/shared/types.ts";
 import { api } from "./api.ts";
@@ -5,7 +6,8 @@ import { Avatar } from "./Avatar.tsx";
 import { BotOrigin } from "./Bots.tsx";
 import { renderBody } from "./markdown.tsx";
 
-export function Msg({
+/** Memoized: a row re-renders only when its message, counts or (stable) handlers change. */
+export const Msg = memo(function Msg({
   m,
   replies,
   status,
@@ -95,4 +97,4 @@ export function Msg({
       </div>
     </article>
   );
-}
+});

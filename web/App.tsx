@@ -75,7 +75,7 @@ export function App() {
     threadLoad: threadState.threadLoad, setThreadView: threadState.setThreadView, threadReads: hive.threadReads,
     inboxLoad: inbox.inboxLoad,
   });
-  const { live, roomTick, decisionTick, setDecisionTick, jevTick } = useRealtime({
+  const { live, roomTick, decisionTick, setDecisionTick, jevTick, subscribeJev } = useRealtime({
     selection, hive, channel: channelPane, thread: threadState, inboxLoad: inbox.inboxLoad, changeSelection,
     reopenDm: dms.reopenDm, onActivity: inbox.receive, refreshRoutingView, onRoutingEvent, setErr,
   });
@@ -212,7 +212,8 @@ export function App() {
             onClear={() => search.setQuery("")}
           />
         ) : sel.kind === "jev" ? (
-          <JevLog project={sel.project} tick={jevTick}
+          <JevLog project={sel.project} tick={jevTick} subscribe={subscribeJev}
+            projectId={projects.find(p => p.slug === sel.project || p.id === sel.project)?.id}
             channelLabel={id => { const channel = channels.find(item => item.id === id); return channel ? channelTitle(channel) : "Deleted channel"; }}
             agentName={id => snap.agents.find(agent => agent.id === id)?.name ?? "Removed brain"}
             onOpenChannel={id => go({ kind: "channel", id })} />

@@ -17,10 +17,13 @@ export function useSearch({ selectedProject, projects, setErr }: {
   const searchDelayRef = useRef(280);
   const hitsNeedleRef = useRef("");
   const hitsProjectRef = useRef("");
+  const olderLoad = useRef<AbortController | null>(null);
   const searching = isLiveSearchQuery(query);
   const searchProjectOk = projects.some((p) => p.slug === selectedProject);
 
   useEffect(() => {
+    olderLoad.current?.abort();
+    olderLoad.current = null;
     if (!searching || !searchProjectOk) {
       hitsNeedleRef.current = "";
       hitsProjectRef.current = "";
@@ -67,19 +70,31 @@ export function useSearch({ selectedProject, projects, setErr }: {
     setSearchTick((n) => n + 1);
   };
 
+  /** One older page at a time; a new query aborts it. */
   const loadOlderHits = () => {
     const needle = hitsNeedleRef.current;
     const project = hitsProjectRef.current;
     const oldest = hits[hits.length - 1]?.seq;
-    if (!needle || !project || !oldest) return;
+    if (!needle || !project || !oldest || olderLoad.current) return;
+    const ac = new AbortController();
+    olderLoad.current = ac;
     api
-      .search(needle, project, oldest)
+      .search(needle, project, oldest, undefined, ac.signal)
       .then((page) => {
-        if (hitsNeedleRef.current !== needle || hitsProjectRef.current !== project) return;
-        setHits((cur) => [...cur, ...page.hits.filter((h) => !cur.some((x) => x.seq === h.seq))]);
+        if (ac.signal.aborted || hitsNeedleRef.current !== needle || hitsProjectRef.current !== project) return;
+        setHits((cur) => {
+          const seen = new Set(cur.map((x) => x.seq));
+          return [...cur, ...page.hits.filter((h) => !seen.has(h.seq))];
+        });
         setHitsMore(page.hasMore);
       })
-      .catch((e) => setErr(String(e.message || e)));
+      .catch((e) => {
+        if (ac.signal.aborted || e.name === "AbortError") return;
+        setErr(String(e.message || e));
+      })
+      .finally(() => {
+        if (olderLoad.current === ac) olderLoad.current = null;
+      });
   };
 
   return { query, setQuery, hits, hitsMore, hitsBusy, searching, searchNow, loadOlderHits };
