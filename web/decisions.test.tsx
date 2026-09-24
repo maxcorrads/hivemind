@@ -8,7 +8,7 @@ import type { DecisionPage, DecisionView } from '../src/shared/decisions.ts';
 
 const window = new Window({ url: 'http://localhost/' });
 Object.assign(globalThis, { window, document: window.document, HTMLElement: window.HTMLElement,
-  HTMLTextAreaElement: window.HTMLTextAreaElement, IS_REACT_ACT_ENVIRONMENT: true });
+  HTMLTextAreaElement: window.HTMLTextAreaElement, HTMLInputElement: window.HTMLInputElement, IS_REACT_ACT_ENVIRONMENT: true });
 const { createRoot } = await import('react-dom/client');
 after(() => window.happyDOM.close());
 
@@ -45,11 +45,28 @@ test('mounted decision queue exposes impact, uncertainty and sends an explicit H
     await act(async () => root.render(<DecisionQueue project="chapter" tick={0} onOpen={() => undefined} />));
     assert.match(host.textContent!, /Reject old payloads/); assert.match(host.textContent!, /Lower migration risk/);
     assert.match(host.textContent!, /production distribution is unknown/);
-    const option = [...host.querySelectorAll('button')].find(button => button.textContent?.includes('Compatible'))!;
-    await act(async () => option.click());
-    const submit = [...host.querySelectorAll('button')].find(button => button.textContent === 'Answer')!;
-    await act(async () => submit.click());
-    assert.equal(answers.length, 1); assert.equal(answers[0]!.body, 'compat: Compatible');
+    // The recommended option is tagged on its card and named by label, not id.
+    const option = (label: string) => [...host.querySelectorAll('.decision-options button')].find(button => button.textContent?.includes(label))!;
+    assert.match(option('Compatible').textContent!, /Recommended/); assert.doesNotMatch(option('Strict').textContent!, /Recommended/);
+    assert.match(host.textContent!, /Recommended: Compatible\. Lower migration risk/); assert.doesNotMatch(host.textContent!, /Option compat/);
+    // One click selects and asks for confirmation; nothing is sent until Confirm, and Cancel backs out.
+    await act(async () => (option('Strict') as HTMLButtonElement).click());
+    assert.equal(option('Strict').getAttribute('aria-pressed'), 'true');
+    const confirmBox = () => host.querySelector('.decision-confirm');
+    assert.match(confirmBox()!.textContent!, /Answer Strict/);
+    const button = (text: string) => [...host.querySelectorAll('button')].find(item => item.textContent === text)!;
+    await act(async () => button('Cancel').click());
+    assert.equal(confirmBox(), null); assert.equal(answers.length, 0);
+    await act(async () => (option('Compatible') as HTMLButtonElement).click());
+    assert.match(confirmBox()!.textContent!, /Answer Compatible \(recommended\)/);
+    assert.ok(host.querySelector('textarea[aria-label="Decision answer"]'), 'a free-text answer stays available');
+    const note = host.querySelector<HTMLInputElement>('input[aria-label="Optional note"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!.call(note, 'Ship behind a flag');
+      note.dispatchEvent(new window.Event('input', { bubbles: true }) as unknown as Event);
+    });
+    await act(async () => button('Confirm').click());
+    assert.equal(answers.length, 1); assert.equal(answers[0]!.body, 'compat: Compatible\n\nShip behind a flag');
     assert.match(host.textContent!, /Human answer/); assert.match(host.textContent!, /Worker: pending/);
   } finally { await act(async () => root.unmount()); host.remove(); }
 });

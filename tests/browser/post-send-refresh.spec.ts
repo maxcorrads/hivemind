@@ -98,6 +98,8 @@ async function fixture(page: Page, inThread: boolean) {
   await page.route('**/api/ui/activity?*', route => json(route, { ...snap(), items: [], hasMore: false }));
   await page.route('**/api/ui/channels/*/room', route => json(route, { room: null, tasks: [], activeTaskCount: 0,
     tasksHasMore: false, nextTaskCursor: null, links: [], unmanagedBots: [] }));
+  await page.route('**/api/ui/channels/*/tasks', route => json(route, { items: [], hasMore: false }));
+  await page.route('**/api/ui/decisions?*', route => json(route, { items: [], awaiting: 0, warning: '' }));
   // Mounting TaskCard also mounts its timeline. Keep this expected read local;
   // the catch-all above must still fail any genuinely unexpected API request.
   const timeline: TimelineView = { traceId: root.id, taskId: root.id,

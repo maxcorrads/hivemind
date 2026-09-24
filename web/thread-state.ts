@@ -1,6 +1,7 @@
 import type { Message, Thread } from '../src/shared/types.ts';
 import type { TaskSnapshot } from '../src/shared/tasks.ts';
-import type { ChannelPayload } from './api.ts';
+import { ApiError, type ChannelPayload } from './api.ts';
+import type { Sel } from './selection.ts';
 import { retainNewest } from '../src/shared/realtime.ts';
 import { boundLivePane } from './pane-window.ts';
 import { mergeConfirmations } from './message-confirmations.ts';
@@ -131,4 +132,15 @@ export function receiveThreadSnapshot(view: ThreadView | null, threadId: string,
       hasOlder: data.hasOlder || (!returnToLive && view.historyTruncated) || view.pendingLoad.truncated,
       task: reconcileTask(view.pane?.task ?? view.pendingTask, data.task) }),
   };
+}
+
+/**
+ * Where to go when a thread was opened under a channel it does not belong to (#224): the server answers 409 with the
+ * owning channel and root. Null for every other failure, and when the answer names the channel already open.
+ */
+export function threadRedirect(error: unknown, channelId: string): Sel | null {
+  if (!(error instanceof ApiError) || error.status !== 409) return null;
+  const owner = error.body?.channelId, root = error.body?.threadId;
+  if (typeof owner !== 'string' || typeof root !== 'string' || owner === channelId) return null;
+  return { kind: 'channel', id: owner, thread: root };
 }

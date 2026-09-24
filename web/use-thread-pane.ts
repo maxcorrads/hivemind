@@ -5,7 +5,8 @@ import { api, type ChannelPayload } from "./api.ts";
 import { upsertById } from "./labels.ts";
 import { holdLivePane, isReadingHistory } from "./pane-window.ts";
 import type { Selection } from "./use-selection.ts";
-import { selectThread, beginThreadLoad, cancelThreadLoad, failThreadLoad, receiveThreadConfirmation, receiveThreadMessage, receiveThreadSnapshot, type ThreadView } from './thread-state.ts';
+import { hashFor } from "./selection.ts";
+import { selectThread, beginThreadLoad, cancelThreadLoad, failThreadLoad, receiveThreadConfirmation, receiveThreadMessage, receiveThreadSnapshot, threadRedirect, type ThreadView } from './thread-state.ts';
 
 /** The open side thread: its pane, the fenced loads that fill it and the paging actions of the thread aside. */
 export function useThreadPane({ sel, threadId, selRef, threadIdRef, viewingThread }: Selection, setErr: (error: string) => void) {
@@ -34,6 +35,9 @@ export function useThreadPane({ sel, threadId, selRef, threadIdRef, viewingThrea
     } catch (error) {
       if (load.valid() && viewingThread(channelId, root) && requestId === threadLoadIdRef.current) {
         setThreadView(view => failThreadLoad(view, requestId));
+        // A link that pairs a thread with the wrong channel moves to the owning channel; the hash listener follows.
+        const redirect = threadRedirect(error, channelId);
+        if (redirect) { location.replace(`#${hashFor(redirect)}`); return; }
         setErr("Thread could not refresh. Refresh thread to retry.");
         throw error;
       }

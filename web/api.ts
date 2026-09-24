@@ -8,14 +8,15 @@ import { resolveUploadMime } from "../src/shared/mime.ts";
 import type { LaunchContext } from "../src/shared/launch-prompt.ts";
 import type { ProjectPluginView, SettingsValues } from "../src/shared/plugin-settings.ts";
 import { humanSession, connectHumanWs } from "./human-session.ts";
-import type { AgentWork, TaskSnapshot } from '../src/shared/tasks.ts';
+import type { AgentWork, ChannelTaskPage, TaskSnapshot } from '../src/shared/tasks.ts';
 import type { RoomView, Room } from '../src/shared/rooms.ts';
 import type { DecisionPage, DecisionView } from '../src/shared/decisions.ts';
 import type { TimelineExport, TimelineView } from '../src/shared/timeline.ts';
 import type { AdaptiveRoutingView } from '../src/shared/adaptive-topology.ts';
 
 export class ApiError extends Error {
-  constructor(readonly status: number, message: string) { super(message); }
+  /** `body` is the parsed error response, for errors that carry more than a message (e.g. a thread's real channel). */
+  constructor(readonly status: number, message: string, readonly body?: Record<string, unknown>) { super(message); }
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -24,7 +25,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { "content-type": "application/json", ...init?.headers },
   });
   const data = await res.json();
-  if (!res.ok) throw new ApiError(res.status, data.error || `HTTP ${res.status}`);
+  if (!res.ok) throw new ApiError(res.status, data.error || `HTTP ${res.status}`, data);
   return data as T;
 }
 
@@ -128,6 +129,8 @@ export const api = {
   changeBotCredential: (project: string, bot: string, action: 'rotate' | 'revoke', expectedRevision: number) =>
     req<BotCredentialView & { token?: string }>(`/api/ui/projects/${encodeURIComponent(project)}/bots/${encodeURIComponent(bot)}/credential`,
       { method: 'POST', body: JSON.stringify({ action, expectedRevision }) }),
+  channelTasks: (channel: string, signal?: AbortSignal) =>
+    req<ChannelTaskPage>(`/api/ui/channels/${encodeURIComponent(channel)}/tasks`, { signal }),
   room: (channel: string) => req<RoomView>(`/api/ui/channels/${encodeURIComponent(channel)}/room`),
   roomHistory: (channel: string, before?: number) => req<{ history: Room[] }>(`/api/ui/channels/${encodeURIComponent(channel)}/room/history?before=${before ?? Number.MAX_SAFE_INTEGER}`),
   roomEvent: (channel: string, body: unknown) => req<RoomView>(`/api/ui/channels/${encodeURIComponent(channel)}/room`, { method: 'POST', body: JSON.stringify(body) }),
