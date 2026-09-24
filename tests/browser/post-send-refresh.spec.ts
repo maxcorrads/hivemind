@@ -94,7 +94,7 @@ async function fixture(page: Page, inThread: boolean) {
   await page.route('**/api/ui/snapshot', route => json(route, snap()));
   await page.route('**/api/ui/read-state', route => json(route, snap()));
   await page.route('**/api/ui/read', route => { revision++; return json(route, snap()); });
-  await page.route('**/api/ui/mentions?*', route => json(route, { ...snap(), messages: [], hasMore: false }));
+  await page.route('**/api/ui/activity?*', route => json(route, { ...snap(), items: [], hasMore: false }));
   await page.route('**/api/ui/channels/*/room', route => json(route, { room: null, tasks: [], activeTaskCount: 0,
     tasksHasMore: false, nextTaskCursor: null, links: [], unmanagedBots: [] }));
   // Mounting TaskCard also mounts its timeline. Keep this expected read local;

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type MutableRefObject } from "react";
 import type { AdaptiveExecutionState, AdaptiveRoutingEvent } from "../src/shared/adaptive-topology.ts";
 import type { DecisionView } from '../src/shared/decisions.ts';
 import type { createRequestGate } from "../src/shared/read-client.ts";
+import type { ActivityItem } from "../src/shared/read-state.ts";
 import type { TaskSnapshot } from '../src/shared/tasks.ts';
 import type { Agent, Channel, InboxStatus, Message, Thread } from "../src/shared/types.ts";
 import { connectWs } from "./api.ts";
@@ -21,7 +22,7 @@ import type { ThreadPane } from "./use-thread-pane.ts";
  * snapshot, panes, read state and view ticks. A `hello` (reconnect) or
  * `project` event drops every in-flight read and reloads from scratch.
  */
-export function useRealtime({ selection, hive, channel, thread, inboxLoad, changeSelection, reopenDm, mergeMail,
+export function useRealtime({ selection, hive, channel, thread, inboxLoad, changeSelection, reopenDm, onActivity,
   refreshRoutingView, onRoutingEvent, setErr }: {
   selection: Pick<Selection, "selRef" | "threadIdRef" | "viewingThread">;
   hive: HiveSnapshot;
@@ -30,7 +31,7 @@ export function useRealtime({ selection, hive, channel, thread, inboxLoad, chang
   inboxLoad: MutableRefObject<ReturnType<typeof createRequestGate>>;
   changeSelection: (next: Sel) => void;
   reopenDm: (channelId: string) => void;
-  mergeMail: (incoming: Message[]) => void;
+  onActivity: (item: ActivityItem) => void;
   refreshRoutingView: (baseline?: boolean) => void;
   onRoutingEvent: (payload: { channelId: string; event: AdaptiveRoutingEvent; state: AdaptiveExecutionState | null }) => void;
   setErr: (error: string) => void;
@@ -94,7 +95,10 @@ export function useRealtime({ selection, hive, channel, thread, inboxLoad, chang
         readFence.current.observe(msg.seq);
         readRefresh.current?.request();
         reopenDm(msg.channelId);
-        mergeMail([msg]);
+        return;
+      }
+      if (ev.type === "activity") {
+        onActivity(ev.payload as ActivityItem);
         return;
       }
       if (ev.type === "reaction") {
