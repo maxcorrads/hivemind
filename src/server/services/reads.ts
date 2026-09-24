@@ -51,6 +51,41 @@ export class ReadService {
     this.deps.readState.markMessages(actor.id, channel.id, seqs, threadId);
   }
 
+  /** Oldest unread root message of the channel, for the UI's "New messages" divider; null when all are read. */
+  firstUnreadSeq(actor: Agent, channelId: string): number | null {
+    const row = this.db.prepare(`SELECT MIN(m.seq) AS seq FROM messages m
+      LEFT JOIN reads r ON r.agent_id = ? AND r.channel_id = m.channel_id
+      LEFT JOIN message_reads seen ON seen.agent_id = ? AND seen.message_id = m.id
+      WHERE m.channel_id = ? AND m.thread_id IS NULL AND m.author_id != ?
+        AND m.seq > COALESCE(r.last_read_seq, 0) AND seen.message_id IS NULL`)
+      .get(actor.id, actor.id, channelId, actor.id) as { seq: number | null } | undefined;
+    return row?.seq ?? null;
+  }
+
+  /**
+   * "Mark unread from here": root messages from `fromSeq` on become unread again. Thread replies keep
+   * their read state, so a lowered channel cursor is backed by explicit receipts for replies it covered.
+   */
+  markUnreadFrom(actor: Agent, channelId: string, fromSeq: number) {
+    const channel = this.deps.channels.getChannel(channelId, actor.projectId);
+    if (!this.deps.channels.canSeeChannel(actor, channel)) throw new HiveError(403, "Cannot read this channel");
+    const root = this.db.prepare("SELECT thread_id FROM messages WHERE channel_id = ? AND seq = ?").get(channel.id, fromSeq) as
+      { thread_id: string | null } | undefined;
+    if (!root || root.thread_id !== null) throw new HiveError(400, "Mark unread needs a root message of this channel");
+    this.deps.readState.atomic(() => {
+      const cursor = (this.db.prepare("SELECT last_read_seq FROM reads WHERE agent_id = ? AND channel_id = ?")
+        .get(actor.id, channel.id) as { last_read_seq: number } | undefined)?.last_read_seq ?? 0;
+      if (cursor >= fromSeq) {
+        this.db.prepare(`INSERT OR IGNORE INTO message_reads (agent_id, message_id)
+          SELECT ?, id FROM messages WHERE channel_id = ? AND thread_id IS NOT NULL AND seq >= ? AND seq <= ?`)
+          .run(actor.id, channel.id, fromSeq, cursor);
+        this.db.prepare("UPDATE reads SET last_read_seq = ? WHERE agent_id = ? AND channel_id = ?").run(fromSeq - 1, actor.id, channel.id);
+      }
+      this.db.prepare(`DELETE FROM message_reads WHERE agent_id = ? AND message_id IN
+        (SELECT id FROM messages WHERE channel_id = ? AND thread_id IS NULL AND seq >= ?)`).run(actor.id, channel.id, fromSeq);
+    });
+  }
+
   markMentionsSeen(actor: Agent, projectId?: string) {
     this.deps.readState.markMentions(actor.id, this.deps.channels.listChannels(actor).map((channel) => channel.id), projectId);
   }

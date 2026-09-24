@@ -113,6 +113,8 @@ export function reconcileChannelSnapshot(
   for (const thread of journal.threads.values()) threads.set(thread.id, thread);
   const pane = boundLivePane({ ...data,
     messages: [...byId.values()].sort((a, b) => a.seq - b.seq),
+    // The divider marks what was unread when the channel was opened; refreshes see it already read.
+    firstUnreadSeq: previous ? previous.firstUnreadSeq : data.firstUnreadSeq,
     historyThrough: held ? previous!.historyThrough : undefined,
     deferredLive: held ? previous!.deferredLive : undefined,
     hasOlder: older ? data.hasOlder : held ? previous!.hasOlder : data.hasOlder,

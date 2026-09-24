@@ -191,7 +191,7 @@ test('typing re-renders only the composer; a live update re-renders only the cha
       loadChannel: async () => {} } as unknown as ChannelPane;
     return <ChannelDesk channelId={channel.id} activeChannel={channel} agents={[]} roomAgents={[]} channel={channelPane}
       threadPaneId={null} stickBottom={useRef(true)} threadOpenAnchor={useRef(null)} go={go} roomTick={0} routingView={null}
-      activeBrainChannel={false} brainNames={{}} onOpenRouting={go} onInvite={go} onBack={go} compose={compose} setErr={go} />;
+      activeBrainChannel={false} brainNames={{}} onOpenRouting={go} onInvite={go} onBack={go} compose={compose} setErr={go} onMarkUnread={async () => {}} />;
   }
   await f.render(<Desk />);
   assert.equal(f.host.querySelectorAll('article.msg').length, 50);

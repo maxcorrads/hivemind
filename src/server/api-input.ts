@@ -21,6 +21,7 @@ const project = z.object({ name: z.string().trim().min(1).max(160), slug: z.stri
 const read = z.object({ channelId: referenceSchema, threadId: z.string().uuid().nullish(),
   messageSeqs: z.array(sequenceSchema).max(200).optional(), seq: sequenceSchema.optional() }).strict()
   .refine(v => (v.messageSeqs !== undefined) !== (v.seq !== undefined));
+const unread = z.object({ channelId: referenceSchema, fromSeq: sequenceSchema }).strict();
 const expand = z.object({ channel: referenceSchema, messageIds: z.array(z.string().uuid()).max(100).min(1),
   afterSeq: cursorSchema.optional() }).strict();
 const wait = z.object({ sessionId: z.string().uuid().optional(), compact: z.boolean().optional(), timeoutMs: waitDurationSchema.optional() }).strict();
@@ -46,6 +47,7 @@ function schemaFor(path: string, method: string): z.ZodType | undefined {
   if (/\/api\/ui\/projects\/[^/]+$/.test(path) && method === 'PATCH') return project.pick({ name: true, worktree: true }).partial();
   if (path === '/api/ui/telegram') return telegram;
   if (path === '/api/ui/read') return read;
+  if (path === '/api/ui/unread') return unread;
   if (path === '/api/ui/mentions/seen') return z.object({ project: z.string().min(1).max(32).optional() }).strict();
   if (path === '/api/agent/wait') return wait;
   if (path === '/api/agent/inbox/session') return z.object({ sessionId: z.string().uuid() }).strict();

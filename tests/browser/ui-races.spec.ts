@@ -714,7 +714,7 @@ for (const inThread of [false, true]) {
     await page.clock.runFor(20);
     through = 582;
     for (const seq of [581, 581, 582]) sockets[0]!.send(JSON.stringify({ type: "message", payload: row(seq) }));
-    const refresh = scope.getByRole("button", { name: inThread ? "New replies — refresh thread" : "New messages — return to live", exact: true });
+    const refresh = scope.getByRole("button", { name: inThread ? "New replies — refresh thread" : "New messages — jump to recent", exact: true });
     await expect(refresh).toBeVisible();
     await expect(scope.locator(".msg-b")).toHaveCount(580);
     expect(await handle!.evaluate(el => el.isConnected && window.getSelection()?.toString() === el.textContent)).toBe(true);
@@ -936,7 +936,7 @@ for (const inThread of [false, true]) {
     await expect(scope.locator(".msg")).toHaveCount(40);
     const stream = scope.locator(".stream");
     await stream.evaluate(element => { element.scrollTop = 0; });
-    await expect(scope.getByRole("button", { name: inThread ? "Refresh thread" : "Return to live", exact: true })).toBeVisible();
+    await expect(scope.getByRole("button", { name: inThread ? "Refresh thread" : "Jump to recent", exact: true })).toBeVisible();
     const composer = scope.locator(".composer textarea");
     await composer.fill("My confirmed message");
     await composer.press("Enter");
@@ -966,7 +966,7 @@ for (const reading of ["live", "held-bottom", "held-middle"] as const) {
     await expect.poll(() => stream.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(3);
     if (reading !== "live") {
       await stream.evaluate(el => { el.scrollTop = 0; });
-      await expect(page.locator("main").getByRole("button", { name: "Return to live", exact: true })).toBeVisible();
+      await expect(page.locator("main").getByRole("button", { name: "Jump to recent", exact: true })).toBeVisible();
       if (reading === "held-bottom") await stream.evaluate(el => { el.scrollTop = el.scrollHeight; });
     }
     const reply = page.locator("main .msg").filter({ has: page.getByText(last.body, { exact: true }) }).getByRole("button", { name: "1 reply", exact: true });
@@ -982,7 +982,7 @@ for (const reading of ["live", "held-bottom", "held-middle"] as const) {
     } else {
       await expect.poll(() => stream.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(3);
     }
-    await expect(page.locator("main").getByRole("button", { name: "Return to live", exact: true })).toHaveCount(reading === "live" ? 0 : 1);
+    await expect(page.locator("main").getByRole("button", { name: "Jump to recent", exact: true })).toHaveCount(reading === "live" ? 0 : 1);
   });
 }
 
@@ -1006,7 +1006,7 @@ test("opening a side thread keeps the main chat anchored when web fonts swap in 
   const stream = page.locator("main .stream");
   await expect(page.locator("main .msg")).toHaveCount(20);
   await stream.evaluate(el => { el.scrollTop = 0; });
-  await expect(page.locator("main").getByRole("button", { name: "Return to live", exact: true })).toBeVisible();
+  await expect(page.locator("main").getByRole("button", { name: "Jump to recent", exact: true })).toBeVisible();
   const reply = page.locator("main .msg").filter({ has: page.getByText(last.body, { exact: true }) }).getByRole("button", { name: "1 reply", exact: true });
   await reply.evaluate(el => el.scrollIntoView({ block: "center" }));
   const replyBottom = await reply.evaluate(el => el.getBoundingClientRect().bottom);

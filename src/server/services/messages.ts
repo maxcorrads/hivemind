@@ -4,7 +4,7 @@ import {
   BODY_MAX,
   FILES_PER_MESSAGE,
   MESSAGE_EVENT_TYPES,
-  REACTION_EMOJIS,
+  isReactionEmoji,
   HiveError,
   HUMAN_ID,
   type Agent,
@@ -245,7 +245,7 @@ export class MessageService implements MessagePoster {
 
   /** Omitted present retains legacy toggle; retryable clients use explicit state. */
   setReaction(actor: Agent, seq: number, emoji: string, present?: boolean): { message: Message; added: boolean } {
-    if (!Number.isSafeInteger(seq) || seq < 1 || !REACTION_EMOJIS.includes(emoji as (typeof REACTION_EMOJIS)[number]) ||
+    if (!Number.isSafeInteger(seq) || seq < 1 || !isReactionEmoji(emoji) ||
       (present !== undefined && typeof present !== "boolean")) throw new HiveError(400, "Invalid reaction");
     return this.deps.storage.transaction(() => {
       const msg = this.deps.messageQueries.getMessageBySeq(seq), ch = this.deps.channels.getChannel(msg.channelId);

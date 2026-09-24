@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import type { Agent, Message, ThreadStatus } from "../src/shared/types.ts";
 import { api, type ChannelPayload } from "./api.ts";
 import { Composer } from "./Composer.tsx";
@@ -6,7 +6,9 @@ import { DecisionCard } from './DecisionQueue.tsx';
 import { STATUSES } from "./labels.ts";
 import { BackButton } from "./MobileNav.tsx";
 import { MessageRow } from "./MessageRow.tsx";
+import { streamRows } from "./message-stream.ts";
 import { holdLivePane, isReadingHistory } from "./pane-window.ts";
+import { StreamDivider } from "./StreamCards.tsx";
 import { TaskCard } from './TaskCard.tsx';
 import type { useSend } from "./use-send.ts";
 import type { ThreadPane } from "./use-thread-pane.ts";
@@ -29,6 +31,7 @@ export function ThreadAside({ channelId, threadId, threadPane, thread, onClose, 
   }, [onThreadMessage]);
   const { sendThread } = compose;
   const onSend = useCallback((body: string, files: File[]) => sendThread(threadId, body, files), [sendThread, threadId]);
+  const rows = useMemo(() => streamRows(threadPane.messages), [threadPane.messages]);
   return (
     <aside className="thread">
       <header className="desk-h">
@@ -78,8 +81,10 @@ export function ThreadAside({ channelId, threadId, threadPane, thread, onClose, 
             Load earlier replies
           </button>
         )}
-        {threadPane.messages.map((m) => (
-          <MessageRow key={m.id} m={m} replies={0} status={null} onReact={onReact} />
+        {rows.map((row) => row.type === "date" ? <StreamDivider key={row.key} label={row.label} /> : row.type === "new" ? null : (
+          <MessageRow key={row.key} m={row.message} grouped={row.grouped} replies={0} status={null} onReact={onReact}
+            taskRoute={row.message.taskEvent && threadPane.task?.id === row.message.taskEvent.taskId
+              ? `${threadPane.task.assignerName} → ${threadPane.task.workerName}` : undefined} />
         ))}
         {threadPane.hasNewer && (
           <button type="button" className="older" onClick={() => thread.loadNewer(threadPane, channelId, threadId)}>
