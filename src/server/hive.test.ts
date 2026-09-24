@@ -74,6 +74,20 @@ test("workers cannot see or post in #brains", () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+test("channel references accept a display #name everywhere the server resolves them (#218)", () => {
+  const { hive, dir } = tempHive();
+  const brain = hive.identity.join({ role: "brain" });
+  const worker = hive.identity.join({ role: "worker", seniority: "mid" });
+  const general = hive.channels.getChannel("general", brain.agent.projectId);
+  assert.equal(hive.channels.getChannel("#general", brain.agent.projectId).id, general.id);
+  assert.equal(hive.channels.getChannel(" #General ").id, general.id);
+  const room = hive.channels.createChannel(brain.agent, { name: "ops", type: "private" });
+  hive.channels.invite(brain.agent, "#ops", [worker.agent.name]);
+  assert.ok(hive.channels.getChannel(room.id).memberIds.includes(worker.agent.id));
+  assert.equal(hive.messages.postMessage(brain.agent, { channel: "#ops", body: "hi" }).channelId, room.id);
+  rmSync(dir, { recursive: true, force: true });
+});
+
 test("role is sticky and offline work waits", async () => {
   const { hive, dir } = tempHive();
   const first = hive.identity.join({ role: "worker", seniority: "junior", focus: "frontend" });

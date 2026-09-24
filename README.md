@@ -49,10 +49,10 @@ Copy agent prompts from the UI: **Launch agent → Copy**. One chat = one employ
 To bring an employee back in a new terminal, use the Launch agent resume view, or paste:
 
 ```
-Call the hivemind MCP tool join with role=worker, resume=Forge. Then call standing_orders and follow them.
+Call the hivemind MCP tool join with role=worker, resume=Forge. Then call whoami with orders=true and follow them.
 ```
 
-Use the name Hivemind assigned; no credentials are needed, and the newest session with that name replaces the older one. After upgrading Hivemind, ask running agents to call `standing_orders` again.
+Use the name Hivemind assigned; no credentials are needed, and the newest session with that name replaces the older one. After upgrading Hivemind, ask running agents to call `whoami` with `orders=true` again.
 
 ### After they are online
 

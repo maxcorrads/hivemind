@@ -1,4 +1,9 @@
-# Opt-in worker routing (prototype)
+# Opt-in worker matching (prototype)
+
+Capability matching is unrelated to [Jev advice](adaptive-routing.md): its MCP
+tools are named `worker_match_*` (renamed from `suggest_workers`,
+`record_routing_outcome` and `record_routing_override` in #218) so they are not
+confused with Jev routing.
 
 A worker may publish a versioned capability card using `set_capabilities`, or
 `hivemind capabilities set --input card.json`. Read it first with
@@ -13,7 +18,7 @@ These are declarations, not a way to change a model or start a terminal.
 {"expectedRevision":0,"card":{"enabled":true,"capabilities":["typescript","parser"],"modes":["implementation","review"],"model":null,"host":null,"availableContext":128000,"availability":"available","maxInProgress":2}}
 ```
 
-A brain can call `suggest_workers` for a task it can read, with
+A brain can call `worker_match_suggest` for a task it can read, with
 `requiredCapabilities`, `mode` and `category`. The CLI equivalent is
 `hivemind task suggest --id TASK_UUID --input query.json`. Human has the same
 explicit read-only form in the structured task card. There is no automatic call
@@ -31,7 +36,7 @@ means the visible count is incomplete: confirm real capacity with the worker.
 
 ## Evidence is narrow and inspectable
 
-Only the assigning brain can `record_routing_outcome` after its real review. The
+Only the assigning brain can `worker_match_outcome` after its real review. The
 call confirms task revision, category and the current opted-in capability revision.
 The verdict and worker come from the existing task, not a submitted score. A task
 contributes at most one current observation; later review changes replace, not add
@@ -49,7 +54,7 @@ constraint. No break-even task size is claimed: consider a direct workflow for
 small or tightly coupled tasks and use controlled evaluations before inferring
 benefit. Operational prototypes are separate from real-provider quality evidence.
 
-`record_routing_override` / `task routing-override` records a reason in the task
+`worker_match_override` / `task routing-override` records a reason in the task
 thread using an idempotent request ID and expected task revision. Human can do the
 same in the UI. It is a preference only; the assigning brain still explicitly
 revises a contract/worker through the normal task protocol, and all claims,

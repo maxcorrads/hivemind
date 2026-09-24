@@ -51,12 +51,12 @@ test('real CLI and MCP share opt-in cards and advisory choices without changing 
     };
     assert.deepEqual((await call('get_worker_capabilities', { workerId: worker.agent.id })).capability.card, card);
     assert.deepEqual((await call('get_worker_capabilities', { workerId: worker.agent.name })).capability.card, card);
-    const suggestion = await call('suggest_workers', { taskId: task.id, requiredCapabilities: ['parser'], mode: 'implementation', category: 'parsing' }) as RoutingSuggestions;
+    const suggestion = await call('worker_match_suggest', { taskId: task.id, requiredCapabilities: ['parser'], mode: 'implementation', category: 'parsing' }) as RoutingSuggestions;
     assert.equal(suggestion.candidates[0]!.workerId, worker.agent.id); assert.equal(suggestion.candidates[0]!.evidence.reviewed, 0);
-    const unfiltered = await call('suggest_workers', { taskId: task.id, mode: 'implementation', category: 'general' }) as RoutingSuggestions;
+    const unfiltered = await call('worker_match_suggest', { taskId: task.id, mode: 'implementation', category: 'general' }) as RoutingSuggestions;
     assert.equal(unfiltered.candidates[0]!.workerId, worker.agent.id);
     const choice = { taskId: task.id, expectedRevision: 1, workerId: worker.agent.id, requestId: 'one-preference', reason: 'Inspect this worker first' };
-    const first = await call('record_routing_override', choice), second = await call('record_routing_override', choice);
+    const first = await call('worker_match_override', choice), second = await call('worker_match_override', choice);
     assert.equal(first.message.id, second.message.id); assert.equal(first.assigned, false);
     assert.equal(hive.tasks.get(brain.agent, task.id).revision, 1);
     const denied = await client.callTool({ name: 'set_capabilities', arguments: { expectedRevision: 0, card } });

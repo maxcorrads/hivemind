@@ -39,9 +39,15 @@ test('real MCP and CLI configure the same scoped subscriptions and deliver targe
     { cwd: dir, env: env(token), timeout: 10_000 })).stdout;
   try {
     const reader = await connect(brain.token), writer = await connect(worker.token);
-    await call(reader, 'set_subscription', { channel: general.id, eventTypes: ['blocker'] });
+    await call(reader, 'subscriptions', { mode: 'set', channel: '#general', eventTypes: ['blocker'] });
     const listed = JSON.parse(await cli(brain.token, ['subscriptions', 'list']));
-    assert.deepEqual(listed, await call(reader, 'subscriptions'));
+    assert.deepEqual(listed, await call(reader, 'subscriptions', { mode: 'list' }));
+    assert.equal(listed.subscriptions[0].channel, general.id);
+    for (const [input, error] of [[{ mode: 'set', channel: general.id }, /needs eventTypes/], [{ mode: 'reset' }, /needs channel/],
+      [{ mode: 'list', channel: general.id }, /takes no other fields/], [{ mode: 'reset', channel: general.id, eventTypes: [] }, /takes no eventTypes/]] as const) {
+      const rejected = await reader.callTool({ name: 'subscriptions', arguments: input });
+      assert.equal(rejected.isError, true); assert.match(JSON.stringify(rejected.content), error);
+    }
     await call(writer, 'send', { channel: general.id, body: 'Thanks', eventType: 'acknowledgement', recipients: [brain.agent.name] });
     await call(writer, 'send', { channel: general.id, body: 'Non-actionable update', eventType: 'progress' });
     const blocker = await call(writer, 'send', { channel: general.id, body: 'Input needed', eventType: 'blocker' });
@@ -50,7 +56,7 @@ test('real MCP and CLI configure the same scoped subscriptions and deliver targe
     assert.equal(hive.inbox.status(brain.agent.id).awaitingReceipt, 1);
     await call(reader, 'ack_delivery', { deliveryId: first.delivery!.id });
     await cli(brain.token, ['subscriptions', 'set', '--channel', general.id, '--mute']);
-    assert.deepEqual((await call(reader, 'subscriptions')).subscriptions[0].eventTypes, []);
+    assert.deepEqual((await call(reader, 'subscriptions', { mode: 'list' })).subscriptions[0].eventTypes, []);
     const sent = await cli(worker.token, ['send', '--channel', general.id, '--recipients', brain.agent.name,
       '--event-type', 'decision', '--body', 'Explicit target despite mute']);
     const seq = Number(/seq (\d+)/.exec(sent)![1]);
@@ -58,8 +64,8 @@ test('real MCP and CLI configure the same scoped subscriptions and deliver targe
     assert.deepEqual(direct.delivery!.messageSeqs, [seq]);
     assert.deepEqual(direct.mail![0].recipientIds, [brain.agent.id]);
     await call(reader, 'ack_delivery', { deliveryId: direct.delivery!.id });
-    await call(reader, 'reset_subscription', { channel: general.id });
-    assert.deepEqual((await call(reader, 'subscriptions')).subscriptions, []);
+    await call(reader, 'subscriptions', { mode: 'reset', channel: general.id });
+    assert.deepEqual((await call(reader, 'subscriptions', { mode: 'list' })).subscriptions, []);
   } finally {
     for (const client of clients) await client.close();
     server.shutdown(); server.server.closeAllConnections(); hive.db.close(); rmSync(dir, { recursive: true, force: true });

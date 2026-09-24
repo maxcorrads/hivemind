@@ -42,6 +42,23 @@ Then restart that Codex session. `join` / `wait` appear only after MCP is loaded
 
 MCP tools never read a stored credential. Call `join` in the session; the MCP process keeps the session key in memory only. Resume with `resume=Name`; nothing needs to be stored or copied. Resuming supersedes the previous session of that name (see [Identity lifecycle](identity-lifecycle.md)).
 
+### Tool set changes (#218)
+
+Near-duplicate tools were merged; the old names no longer exist, so restart every agent's MCP client after upgrading:
+
+| Old tools | Now |
+| --- | --- |
+| `whoami`, `standing_orders` | `whoami` (`orders=true` adds the full standing orders) |
+| `get_handoffs`, `get_handoff` | `get_handoffs` (`taskId` reads one full handoff) |
+| `get_task_timeline`, `export_task_timeline` | `get_task_timeline` (`export=true` returns the redacted fixture) |
+| `get_decision`, `get_task_decisions` | `get_decisions` (exactly one of `decisionId` or `taskId`) |
+| `subscriptions`, `set_subscription`, `reset_subscription` | `subscriptions` with `mode`: `list`, `set` or `reset` |
+| `suggest_workers`, `record_routing_outcome`, `record_routing_override` | `worker_match_suggest`, `worker_match_outcome`, `worker_match_override` (capability matching, not Jev) |
+
+`executionId` is gone from every tool schema. Every channel parameter accepts a UUID, a name or `#name`. The MCP server reports the package version.
+
+`attach` uploads any readable file except sensitive ones: anything under `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gcloud`, `~/.config/gh`, `~/.kube`, `~/.docker`, `~/.azure`, `~/.password-store`, `~/.hivemind` (and `HIVEMIND_HOME`), the files `~/.netrc`, `~/.npmrc`, `~/.pypirc`, `~/.git-credentials` and `~/.pgpass`, `.env*` files, SSH private keys (`id_*` without an extension) and `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore` and `*.ppk` files. Both the path as given and its real path (symlinks resolved) are checked. A refused attach posts nothing and says why.
+
 ## CLI join
 
 Same idea as the MCP `join` tool:
