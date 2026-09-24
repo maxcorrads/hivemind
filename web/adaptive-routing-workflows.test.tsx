@@ -101,6 +101,7 @@ test('advice labels say what Jev suggested or why there is no advice (#211)', ()
   assert.equal(routingEventLabel(event(s, 'x', 'advice', 'wait')), 'Brain received mail · Jev suggested Multi-DM · 2 workers (72%)');
   assert.match(routingEventLabel(event(s, 'x', 'observation', 'observation')), /^No single owning brain · .* · recorded only$/);
   assert.equal(routingEventLabel({ ...event(s, 'x', 'status'), reason: 'execution_completed' }), 'Hivemind · request closed · no more advice');
+  assert.equal(routingEventLabel({ ...event(s, 'x', 'status'), reason: 'execution_expired' }), 'Hivemind · request closed after inactivity');
   for (const label of [routingEventLabel(event(s)), adviceSummary(decision())]) assert.doesNotMatch(label, /applied|fallback|lock|mode kept/i);
 });
 
@@ -128,7 +129,7 @@ test('the Routing panel shows advice per brain and has no lock controls', async 
   assert.match(f.host.textContent!, /No request to a brain has been sent to Jev/);
 });
 
-test('the strip above the composer shows Jev\'s advice (or its state) and opens the panel; the composer has no mode selector', async t => {
+test('the strip above the composer shows usable Jev advice only and opens the panel; the composer has no mode selector', async t => {
   const f = mounted(t); let opened = 0;
   const strip = (v: AdaptiveRoutingView) => <RoutingStrip view={v} channelId="a" brainNames={{ brain: 'Ada' }} onOpen={() => { opened++; }} />;
   await f.render(strip(view(state())));
@@ -140,7 +141,13 @@ test('the strip above the composer shows Jev\'s advice (or its state) and opens 
     reason: 'provider_timeout_preserve_current', error: 'timeout' }));
   await f.render(strip(view({ ...failed, advice: { plan: null, topology: null, workers: null, confidence: null, state: 'unavailable',
     reason: 'timeout', at: 2, note: 'Advisory only — you decide; Human instructions take precedence.' } })));
-  assert.match(f.host.querySelector('.routing-strip.warning')?.textContent ?? '', /^Jev unavailable \(timeout\)/);
+  assert.equal(f.host.querySelector('.routing-strip'), null, 'a failed Jev call is shown in the Routing log only (#214)');
+  await f.render(strip(view({ ...state(), monitoring: 'disabled' })));
+  assert.equal(f.host.querySelector('.routing-strip'), null, 'nothing about Jev while it is disabled (#214)');
+  await f.render(strip(view({ ...state(), recommendation: null, advice: null })));
+  assert.equal(f.host.querySelector('.routing-strip'), null, 'nothing before Jev has advised');
+  await f.render(strip(view({ ...state(), monitoring: 'completed', completedAt: 2 })));
+  assert.match(f.host.querySelector('.routing-strip')?.textContent ?? '', /Request closed · no further advice$/);
   const second = { ...state('a', 3, 'run-b'), brainId: 'other' };
   await f.render(strip({ state: second, executions: [state(), second], events: [] }));
   assert.match(f.host.querySelector('.routing-strip')?.textContent ?? '', /· brain · 2 brains/);

@@ -11,6 +11,7 @@ import { exportAdaptiveEvidence } from './adaptive-evidence.ts';
 import { jevTopologyResponse } from './fixtures/jev-topology.ts';
 import type { AdaptiveTopology } from '../shared/adaptive-topology.ts';
 import type { JevDiagnosticResult, JevDiagnosticState } from '../shared/jev-diagnostics.ts';
+import { sendHumanRequest } from './fixtures/jev-human.ts';
 
 const PINNED = 'jev-2026-09-01';
 
@@ -108,7 +109,7 @@ function runtime(t: TestContext) {
   });
   t.after(async () => { await hive.adaptiveTopology.stop(); hive.db.close(); });
   return { hive, human, brain, dm, dir, requested,
-    start: () => hive.adaptiveTopology.routeHumanRequest(human,
+    start: () => sendHumanRequest(hive, human,
       { channel: dm.id, body: 'Do the bounded Human request.', requestId: `request-${++serial}` }),
     recheck: () => hive.adaptiveTopology.adviseBrainAction(brain, { kind: 'brain_message', channelId: dm.id, summary: `event-${++serial}` }),
     choose: (topology: AdaptiveTopology) => { target = topology; },
@@ -150,7 +151,7 @@ test('Routing log and evidence export record requested and resolved models indep
   assert.doesNotMatch(JSON.stringify(report), /fixture-key/);
 });
 
-test('an unavailable pinned model fails visibly as unavailable advice without falling back to the alias', async t => {
+test('an unavailable pinned model is recorded as unavailable without falling back to the alias', async t => {
   const f = runtime(t);
   saveAdaptiveRouting(f.dir, { enabled: true, apiKey: 'fixture-key' });
   const started = await f.start(); assert.ok(started);
@@ -158,7 +159,7 @@ test('an unavailable pinned model fails visibly as unavailable advice without fa
   f.makeUnavailable(PINNED); f.choose('brain_multi_room');
   const advice = await f.recheck();
   assert.deepEqual(f.requested, [TYPESAFE_MODEL, PINNED], 'no silent retry with another identifier');
-  assert.deepEqual([advice?.state, advice?.reason, advice?.plan], ['unavailable', 'http_404', null]);
+  assert.equal(advice, null, 'the failure is recorded in the Routing log only (#214)');
   assert.equal(f.view().state?.advice?.state, 'unavailable');
   const failed = f.calls().at(-1)!;
   assert.equal(failed.status, 'unavailable');

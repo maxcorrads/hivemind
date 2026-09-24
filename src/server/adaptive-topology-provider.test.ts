@@ -91,7 +91,7 @@ test('a plan that was not offered is rejected as plan_not_offered, keeping the r
     });
     assert.equal(result.providerStatus, 'unavailable', choice);
     assert.equal(result.error, 'plan_not_offered', choice);
-    assert.equal(result.reason, 'response_rejected_preserve_current');
+    assert.equal(result.reason, 'response_rejected');
     assert.equal(result.model, 'jev-1.13.0');
     assert.equal(result.inputTokens, 2851); assert.equal(result.outputTokens, 248);
     assert.equal(result.targetTopology, 'single'); assert.equal(result.targetWorkers, 0);
@@ -128,7 +128,7 @@ test('malformed or inconsistent provider replies are rejected with a specific re
     });
     assert.equal(result.providerStatus, 'unavailable', label);
     assert.equal(result.error, code, label);
-    assert.equal(result.reason, 'response_rejected_preserve_current', label);
+    assert.equal(result.reason, 'response_rejected', label);
     assert.equal(result.model !== null, withModel, label);
     assert.equal(result.targetTopology, 'single', label);
     assert.equal(result.targetWorkers, 0);
@@ -179,7 +179,7 @@ test('HTTP errors, empty bodies, malformed JSON, size budgets and request failur
     const result = await evaluateAdaptiveTopology(snapshot(), { apiKey: 'fixture-key' }, { fetchImpl: async () => transport() });
     assert.equal(result.providerStatus, 'unavailable'); assert.equal(result.targetWorkers, 0);
     assert.equal(result.error, code); assert.equal(result.model, null); assert.equal(result.inputTokens, null);
-    assert.equal(result.reason, 'provider_unavailable_preserve_current');
+    assert.equal(result.reason, 'provider_unavailable');
     assert.doesNotMatch(JSON.stringify(result), /private diagnostic/);
   }
   for (const timeoutMs of [0, -1, 10_001, 1.5]) {

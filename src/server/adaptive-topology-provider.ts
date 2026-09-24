@@ -235,8 +235,8 @@ export async function evaluateAdaptiveTopology(
       routeId, contractVersion: ADAPTIVE_TOPOLOGY_CONTRACT_VERSION,
       targetTopology: 'single', targetWorkers: 0,
       confidence: null,
-      reason: code === 'timeout' ? 'provider_timeout_preserve_current'
-        : responded ? 'response_rejected_preserve_current' : 'provider_unavailable_preserve_current',
+      reason: code === 'timeout' ? 'provider_timeout'
+        : responded ? 'response_rejected' : 'provider_unavailable',
       providerStatus: 'unavailable', requestedModel, model, latencyMs: Date.now() - started,
       inputTokens, outputTokens, singleSufficient: null, needsOrchestration: null, error: code,
     };

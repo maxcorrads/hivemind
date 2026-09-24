@@ -6,7 +6,7 @@ import type { AdaptiveExecutionState, AdaptiveRoutingEvent, AdaptiveRoutingView,
   AdaptiveTopologyDecision, JevAdvice } from '../shared/adaptive-topology.ts';
 import type { JevCallSummary, JevCallTrigger } from '../shared/jev-calls.ts';
 import { jevAdvice } from '../shared/jev-outcome.ts';
-import { loadAdaptiveRouting, type AdaptiveRoutingFile } from './adaptive-config.ts';
+import { cachedAdaptiveRouting, type AdaptiveRoutingFile } from './adaptive-config.ts';
 import type { TopologyEvaluationSnapshot } from './adaptive-topology-provider.ts';
 import { AdaptiveObservationStores, observeTopologyEvaluation } from './adaptive-evidence-observer.ts';
 import { readAdaptiveCapacity } from './adaptive-topology-capacity.ts';
@@ -19,44 +19,47 @@ export { evaluateAdaptiveTopology, ADAPTIVE_TOPOLOGY_CONTRACT_VERSION } from './
  * Human request the action belongs to; nothing is checked or enforced.
  */
 export type BrainAction = {
-  kind: Exclude<JevCallTrigger['kind'], 'human_request' | 'human_message' | 'capacity_change' | 'observation'>;
+  kind: Exclude<JevCallTrigger['kind'], 'human_request' | 'human_message' | 'capacity_change' | 'observation' | 'wait'>;
   channelId?: string; threadId?: string; taskId?: string; eventType?: string; summary?: string;
 };
+/** Where an action happened: only used to find the request it belongs to (#214: never another channel's). */
+export type ActionHint = Pick<BrainAction, 'channelId' | 'threadId'>;
 type StoredExecution = AdaptiveExecutionState & {
   /** The Human message classified as the request; rootMessageId is its thread root. */
   requestMessageId?: string;
   /** The last brain actions Jev saw for this request (kind, eventType and a short summary only). */
   recentEvents: Array<{ kind: string; eventType?: string; summary?: string }>;
+  /** When the call behind `recommendation` started: an older call answering late never replaces newer advice (#214). */
+  adviceRequestedAt?: number;
 };
-export type RoutedHumanMessage = {
-  message: Message;
-  /** One per brain that owns the request, with the advice Jev gave it. */
-  states: AdaptiveExecutionState[];
-};
-type HumanMessageInput = {
-  channel: string; body: string; requestId?: string; threadId?: string | null;
-  eventType?: Message['eventType']; traceId?: string; causeMessageId?: string;
-  attachmentIds?: string[]; recipients?: string[]; source?: 'hive' | 'telegram';
-};
+
+/** An open request with no Human reply, brain action or advice for this long is closed (#214). */
+export const EXECUTION_IDLE_MS = 4 * 60 * 60_000;
 
 function requestText(message: Pick<Message, 'body' | 'source'>): string {
   return message.source === 'telegram' ? message.body.replace(/^\[[^\]\r\n]*\]\s?/, '') : message.body;
 }
 const parse = (row: Record<string, unknown>) => JSON.parse(String(row.snapshot)) as StoredExecution;
 const summary = (text: string | undefined) => text?.trim().slice(0, 400) || undefined;
+/** Advice a brain can use; a failed call is recorded in the Routing log only and never reaches a brain (#214). */
+const usable = (advice: JevAdvice | null) => advice && advice.state !== 'unavailable' && advice.state !== 'rejected' ? advice : null;
+const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 /**
- * Jev as a non-binding advisor to brains (#211).
+ * Jev as a non-binding, optional advisor to brains (#211, #214).
  *
- * Every Human message addressed to a brain and every brain action is sent to Jev synchronously (bounded by the provider
- * timeout); the advice is returned to the brain in the response to its action. Hivemind never applies, enforces or
- * locks a topology, never blocks an action because of Jev, and posts no message of its own. Calls are grouped per
- * Human request (execution) only for the Human-only Routing log and evidence.
+ * A Human message is committed and broadcast first; Jev is asked in the background and its advice reaches the owning
+ * brain as `jevAdvice` in the response to its next action. A brain action attributed to an open request (same thread
+ * or channel) is sent to Jev after it has been performed and the advice is returned with it. Hivemind never applies,
+ * enforces or locks a topology, never blocks an action because of Jev, and posts no message of its own. Calls are
+ * grouped per Human request (execution) only for the Human-only Routing log and evidence. With Jev disabled nothing
+ * here calls the provider or adds anything to a response.
  */
 export class AdaptiveTopologyRuntime {
   private stopped = false;
   private readonly abort = new AbortController();
   private readonly inFlight = new Set<Promise<unknown>>();
+  private lastRequested = 0;
   /** Evidence and Jev call history stores for this hive's database. */
   readonly observations: AdaptiveObservationStores;
   /** Executions (the request each brain serves, with the latest advice) and the Human-only advice audit. */
@@ -74,6 +77,11 @@ export class AdaptiveTopologyRuntime {
     this.observations.collector.flush(() => this.observations.evidence);
   }
 
+  /** Resolves once every Jev call started so far, including background advice for Human messages, is recorded. */
+  async settled(): Promise<void> {
+    while (this.inFlight.size) await Promise.allSettled(this.inFlight);
+  }
+
   /** Which brains own a Human request: room coordinator, then mentioned brains, then the only brain. */
   requestOwners(channel: Channel, body: string): { brains: Agent[]; owners: Agent[] } {
     const brains = channel.memberIds.map(id => this.deps.identity.getAgent(id)).filter(agent => agent.role === 'brain');
@@ -88,7 +96,7 @@ export class AdaptiveTopologyRuntime {
   }
 
   private enabled(): AdaptiveRoutingFile | null {
-    const config = loadAdaptiveRouting(this.deps.home);
+    const config = cachedAdaptiveRouting(this.deps.home);
     return config?.enabled && !this.stopped ? config : null;
   }
   private track<T>(work: Promise<T>): Promise<T> {
@@ -96,6 +104,11 @@ export class AdaptiveTopologyRuntime {
     void work.finally(() => this.inFlight.delete(work)).catch(() => undefined);
     return work;
   }
+  private background(work: Promise<unknown>) {
+    this.track(work.catch(error => { if (!this.stopped) console.error('Background Jev advice failed', message(error)); }));
+  }
+  /** A strictly increasing start time, so overlapping calls for one request can be ordered. */
+  private requestedAt() { return this.lastRequested = Math.max(Date.now(), this.lastRequested + 1); }
   private readonly callRecorded = (call: JevCallSummary) => this.deps.bus.emit('jev-call', call);
 
   /** One Jev call for one execution, recorded in the evidence store and the Human-only call log. */
@@ -131,9 +144,9 @@ export class AdaptiveTopologyRuntime {
     this.deps.bus.emit('adaptive-routing', { channelId: event.channelId, state: state ? this.displayState(state) : null, event });
   }
   private displayState(state: StoredExecution): AdaptiveExecutionState {
-    const { recentEvents: _recent, requestMessageId: _request, ...rest } = state;
+    const { recentEvents: _recent, requestMessageId: _request, adviceRequestedAt: _requested, ...rest } = state;
     const display: AdaptiveExecutionState = { ...rest,
-      monitoring: state.completedAt ? 'completed' : loadAdaptiveRouting(this.deps.home)?.enabled ? 'active' : 'disabled',
+      monitoring: state.completedAt ? 'completed' : cachedAdaptiveRouting(this.deps.home)?.enabled ? 'active' : 'disabled',
       advice: state.recommendation ? jevAdvice(state.recommendation, state.updatedAt) : null };
     const evidence = this.observations.capture(state.executionId, Boolean(state.recommendation));
     if (evidence) display.evidence = evidence;
@@ -144,51 +157,43 @@ export class AdaptiveTopologyRuntime {
   }
 
   /**
-   * Every Human message addressed to a brain is sent to Jev before it is posted; the advice is kept for the brain.
-   * Returns null when the caller should post the message itself (Jev off, no brain, or no single owning brain).
+   * Called once a Human message has been committed and broadcast (UI and Telegram); Jev is never on the send path
+   * (#214). Records the request for its owning brain(s) at once, so their next actions are attributed to it, then asks
+   * Jev in the background. Callers skip it for a retried send. Never throws; does nothing while Jev is off.
+   * `routingRequest` is the text Jev sees when it differs from the stored body (Telegram).
    */
-  async routeHumanRequest(human: Agent, input: HumanMessageInput, persistReceipt?: (message: Message) => void,
-    routingRequest?: string): Promise<RoutedHumanMessage | null> {
-    if (human.role !== 'human') throw new HiveError(403, 'Only Human sends requests to brains');
-    const config = this.enabled();
-    if (!config) return null;
-    const channel = this.deps.channels.getChannel(input.channel);
-    const { brains, owners } = this.requestOwners(channel, input.body);
-    if (!brains.length || this.deps.messages.hasActiveSendRequest(human, channel.id, input.requestId)) return null;
-    const request = routingRequest ?? requestText(input);
-    // A reply in a request's thread continues that request; any other message starts a new one per owning brain.
-    const rooted = input.threadId ? this.store.rootedExecutions(input.threadId).map(parse).filter(state => state.channelId === channel.id) : [];
-    const targets: Array<{ brain: Agent; existing: StoredExecution | null }> = rooted.length
-      ? rooted.map(state => ({ brain: this.deps.identity.getAgent(state.brainId), existing: state }))
-      : owners.map(brain => ({ brain, existing: null }));
-    if (!targets.length) { await this.observe(config, channel, request); return null; }
-    // Owners are asked in parallel: a Human send waits for the slowest brain, not the sum.
-    const planned = await Promise.all(targets.map(async ({ brain, existing }) => {
-      const base = existing ?? { executionId: `execution-${randomUUID()}`, channelId: channel.id, projectId: channel.projectId, recommendation: null };
-      const trigger = { kind: existing || input.threadId ? 'human_message' as const : 'human_request' as const, eventType: null,
-        ...(existing ? { summary: summary(request) } : {}) };
-      const decision = await this.evaluate(config, base, brain.id,
-        existing ? this.requestOf(existing) : request, existing ? 'continuous' : 'initial', trigger);
-      return { brain, existing, base, decision, trigger: trigger.kind };
-    }));
-    if (this.stopped) throw new HiveError(503, 'Server is shutting down');
-    const saved: Array<[StoredExecution, AdaptiveRoutingEvent]> = [];
-    const message = this.deps.messages.postMessage(human, input, posted => {
-      persistReceipt?.(posted);
-      for (const { brain, existing, base, decision, trigger } of planned) {
-        const latest = existing ? this.store.execution(existing.executionId) : undefined;
-        const state: StoredExecution = latest ? parse(latest) : existing ?? { executionId: base.executionId, channelId: channel.id,
-          projectId: channel.projectId, brainId: brain.id, rootMessageId: posted.threadId ?? posted.id, requestMessageId: posted.id,
-          recommendation: null, recentEvents: [], updatedAt: 0, revision: 0, completedAt: null };
-        // A Human reply reopens a request whose thread was marked done.
-        state.completedAt = null; state.recommendation = decision; this.touch(state);
-        const event = this.auditEvent(state, 'advice', decision, trigger);
-        this.store.saveExecution(state); this.store.saveEvent(event);
-        saved.push([state, event]);
+  humanMessagePosted(human: Agent, posted: Message, routingRequest?: string): void {
+    try {
+      if (human.role !== 'human') return;
+      const config = this.enabled();
+      if (!config) return;
+      const channel = this.deps.channels.getChannel(posted.channelId);
+      const { brains, owners } = this.requestOwners(channel, posted.body);
+      if (!brains.length) return;
+      const request = routingRequest ?? requestText(posted);
+      const requestedAt = this.requestedAt();
+      // A reply in a request's thread continues that request; any other message starts a new one per owning brain.
+      const rooted = posted.threadId ? this.store.rootedExecutions(posted.threadId).map(parse).filter(state => state.channelId === channel.id) : [];
+      if (!rooted.length && !owners.length) { this.background(this.observe(config, channel, request)); return; }
+      const states: StoredExecution[] = rooted.length ? rooted : owners.map(brain => ({ executionId: `execution-${randomUUID()}`,
+        channelId: channel.id, projectId: channel.projectId, brainId: brain.id, rootMessageId: posted.threadId ?? posted.id,
+        requestMessageId: posted.id, recommendation: null, recentEvents: [], updatedAt: 0, revision: 0, completedAt: null }));
+      this.deps.storage.transaction(() => {
+        // A Human reply reopens a request whose thread was marked done or that was closed after inactivity.
+        for (const state of states) { state.completedAt = null; this.touch(state); this.store.saveExecution(state); }
+      });
+      const continued = rooted.length > 0;
+      const trigger = { kind: continued || posted.threadId ? 'human_message' as const : 'human_request' as const, eventType: null,
+        ...(continued ? { summary: summary(request) } : {}) };
+      for (const state of states) {
+        this.background(this.evaluate(config, state, state.brainId, continued ? this.requestOf(state) : request,
+          continued ? 'continuous' : 'initial', trigger).then(decision => {
+          if (!this.stopped) this.remember(state.executionId, decision, requestedAt, trigger.kind);
+        }));
       }
-    });
-    for (const [state, event] of saved) this.publish(state, event);
-    return { message, states: saved.map(([state]) => this.displayState(state)) };
+    } catch (error) {
+      console.error('Jev advice for a Human message failed', message(error));
+    }
   }
 
   private requestOf(state: StoredExecution): string {
@@ -206,20 +211,36 @@ export class AdaptiveTopologyRuntime {
     this.publish(null, event);
   }
 
-  /** The request a brain action belongs to: its thread's request, the channel's, else the brain's latest open one. */
-  private resolve(actor: Agent, action: Pick<BrainAction, 'channelId' | 'threadId'>): StoredExecution | null {
+  /**
+   * The open request a brain action belongs to: its thread's request, else the brain's request in the same channel;
+   * never one in another channel (#214). A request idle for EXECUTION_IDLE_MS is closed here and yields nothing.
+   */
+  private resolve(actor: Agent, hint: ActionHint): StoredExecution | null {
     if (actor.role !== 'brain' || !actor.projectId) return null;
-    const all = this.store.brainExecutions(actor.id, actor.projectId).map(parse);
     // An action in a request's own thread belongs to that request, even once it is closed (then there is no advice).
-    const rooted = action.threadId ? all.find(state => state.rootMessageId === action.threadId) : undefined;
-    if (rooted) return rooted.completedAt ? null : rooted;
-    const open = all.filter(state => !state.completedAt);
-    return (action.channelId ? open.find(state => state.channelId === action.channelId) : undefined) ?? open[0] ?? null;
+    const rooted = hint.threadId ? this.store.rootedExecutions(hint.threadId).map(parse).find(state => state.brainId === actor.id) : undefined;
+    const row = rooted || !hint.channelId ? undefined : this.store.currentExecution(hint.channelId, actor.id);
+    const state = rooted ?? (row ? parse(row) : null);
+    if (!state || state.completedAt || this.expireIfIdle(state)) return null;
+    return state;
+  }
+  /** Closes an open request nobody touched for EXECUTION_IDLE_MS; returns whether it did. */
+  private expireIfIdle(state: StoredExecution): boolean {
+    if (Date.now() - state.updatedAt < EXECUTION_IDLE_MS) return false;
+    const event = this.deps.storage.transaction(() => {
+      this.touch(state); state.completedAt = state.updatedAt;
+      const expired = this.statusEvent(state, 'execution_expired');
+      this.store.saveExecution(state); this.store.saveEvent(expired);
+      return expired;
+    });
+    this.publish(state, event);
+    return true;
   }
 
   /**
    * Asks Jev about one brain action and returns its advice; the caller has already performed the action. Never throws:
-   * a provider failure yields `unavailable` advice, and null means Jev is off or the brain serves no open request.
+   * null means Jev is off, the brain serves no open request in that thread or channel, or Jev gave no usable answer
+   * (a failure is recorded in the Routing log only).
    */
   async adviseBrainAction(actor: Agent, action: BrainAction): Promise<JevAdvice | null> {
     if (actor.role !== 'brain') return null;
@@ -228,37 +249,48 @@ export class AdaptiveTopologyRuntime {
       const state = config ? this.resolve(actor, action) : null;
       if (!config || !state) return null;
       const trigger = { kind: action.kind, eventType: action.eventType ?? null, summary: summary(action.summary) };
+      const requestedAt = this.requestedAt();
       const decision = await this.evaluate(config, state, actor.id, this.requestOf(state), 'continuous', trigger);
       const at = Date.now();
-      if (!this.stopped) this.remember(state.executionId, decision, { kind: action.kind, eventType: action.eventType, summary: trigger.summary });
-      return jevAdvice(decision, at);
+      if (!this.stopped) this.remember(state.executionId, decision, requestedAt, action.kind,
+        { kind: action.kind, eventType: action.eventType, summary: trigger.summary });
+      return usable(jevAdvice(decision, at));
     } catch (error) {
-      console.error(`Jev advice for ${actor.name} failed`, error instanceof Error ? error.message : String(error));
+      console.error(`Jev advice for ${actor.name} failed`, message(error));
       return null;
     }
   }
-  private remember(executionId: string, decision: AdaptiveTopologyDecision, event: StoredExecution['recentEvents'][number]) {
+  private remember(executionId: string, decision: AdaptiveTopologyDecision, requestedAt: number, trigger: string,
+    event?: StoredExecution['recentEvents'][number]) {
     let saved: [StoredExecution, AdaptiveRoutingEvent] | null = null;
     this.deps.storage.transaction(() => {
       const row = this.store.execution(executionId);
-      // Replaced by a newer Human request while Jev was answering: the call stays in the log, the advice is returned.
+      // Replaced by a newer Human request while Jev was answering: the call stays in the log only.
       if (!row) return;
       const state = parse(row);
-      state.recommendation = decision; state.recentEvents = [...(state.recentEvents ?? []), event].slice(-8);
+      // Overlapping calls (a Human message and a brain action) can answer out of order: the newest call's advice wins.
+      if ((state.adviceRequestedAt ?? 0) <= requestedAt) { state.recommendation = decision; state.adviceRequestedAt = requestedAt; }
+      if (event) state.recentEvents = [...(state.recentEvents ?? []), event].slice(-8);
       this.touch(state);
-      const item = this.auditEvent(state, 'advice', decision, event.kind);
+      const item = this.auditEvent(state, 'advice', decision, trigger);
       this.store.saveExecution(state); this.store.saveEvent(item);
       saved = [state, item];
     });
     if (saved) this.publish(...(saved as [StoredExecution, AdaptiveRoutingEvent]));
   }
 
-  /** The latest advice for the request an action belongs to, without calling Jev (retries, idle waits). */
-  latestAdvice(actor: Agent, action: Pick<BrainAction, 'channelId' | 'threadId'> = {}): JevAdvice | null {
-    if (actor.role !== 'brain' || !loadAdaptiveRouting(this.deps.home)?.enabled) return null;
+  /**
+   * The latest usable advice for the request an action belongs to, without calling Jev (retries and waits). With
+   * several hints (the threads a wait delivered), the first one that belongs to an open request wins.
+   */
+  latestAdvice(actor: Agent, ...hints: ActionHint[]): JevAdvice | null {
+    if (actor.role !== 'brain' || !this.enabled()) return null;
     try {
-      const state = this.resolve(actor, action);
-      return state?.recommendation ? jevAdvice(state.recommendation, state.updatedAt) : null;
+      for (const hint of hints) {
+        const state = this.resolve(actor, hint);
+        if (state) return state.recommendation ? usable(jevAdvice(state.recommendation, state.updatedAt)) : null;
+      }
+      return null;
     } catch { return null; }
   }
 

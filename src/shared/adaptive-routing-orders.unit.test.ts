@@ -10,10 +10,11 @@ const brain: Agent = {
 };
 const worker: Agent = { ...brain, id: "worker-id", name: "Forge", role: "worker", seniority: "senior" };
 
-test("brain orders present Jev as advice returned with every action, overridden by Human (#211)", () => {
+test("brain orders present Jev as optional advice returned with the next action on a request, overridden by Human (#211, #214)", () => {
   const orders = standingOrders(brain);
   assert.match(orders, /## Jev advice/);
-  assert.match(orders, /send, attach, assign_task, task_event, room_event, set_thread_status, wait\): the response carries its suggestion as jevAdvice/);
+  assert.match(orders, /When Jev is enabled it advises you on the Human requests you own, after they are posted/);
+  assert.match(orders, /\(send, attach, assign_task, task_event, room_event, set_thread_status\), or a wait delivering its mail, carries the suggestion as jevAdvice\. Otherwise the field is absent\./);
   assert.match(orders, /jevAdvice is advisory only: decide the plan yourself from the task/);
   assert.match(orders, /Human instructions always override it/);
   assert.match(orders, /SINGLE, BRAIN\+1, MULTI-DM and ROOM are suggestions, not enforced modes/);

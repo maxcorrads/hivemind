@@ -172,7 +172,7 @@ const COVERAGE: Record<AgentRuleId, readonly Evidence[]> = {
     { where: "set_thread_status", phrase: "Set an optional status on a free-form thread" }],
   "brain.clear-context": [{ where: "orders", phrase: "Send clear_context only to a worker stuck in a long session, never automatically at done or after a report." }],
   "brain.human-admin": [{ where: "orders", phrase: "Human (admin) sees every conversation; treat DMs as private from workers' point of view." }],
-  "jev.advice": [{ where: "orders", phrase: "Jev advises you on every Human message addressed to you and on each of your actions (send, attach, assign_task, task_event, room_event, set_thread_status, wait): the response carries its suggestion as jevAdvice. Workers never get Jev advice." }],
+  "jev.advice": [{ where: "orders", phrase: "When Jev is enabled it advises you on the Human requests you own, after they are posted: your next action in the request's thread or channel (send, attach, assign_task, task_event, room_event, set_thread_status), or a wait delivering its mail, carries the suggestion as jevAdvice. Otherwise the field is absent. Workers never get Jev advice." }],
   "jev.advisory": [{ where: "orders", phrase: "jevAdvice is advisory only: decide the plan yourself from the task. Human instructions always override it, and Hivemind never blocks or reshapes an action because of it." }],
   "jev.not-enforced": [{ where: "orders", phrase: "SINGLE, BRAIN+1, MULTI-DM and ROOM are suggestions, not enforced modes: there is no worker budget, lock or executionId. Treat an uncertain, incoherent, unavailable or rejected jevAdvice as no advice." }],
   "task.optional": [{ where: "orders", phrase: "Tasks are optional; free-form chat never changes task state." },

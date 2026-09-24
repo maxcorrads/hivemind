@@ -23,7 +23,9 @@ export function jevAnswerState(decision: DecisionLike): JevAnswerState {
   if (decision.providerStatus === "unavailable") {
     if (decision.reason.startsWith("capacity_changed_during_")) return "stale";
     // A parsed response keeps its resolved model and tokens even when it is then rejected.
-    return decision.reason === "response_rejected_preserve_current" || decision.model !== null || decision.inputTokens !== null
+    // `response_rejected_preserve_current` is the same reason as recorded before #214.
+    return decision.reason === "response_rejected" || decision.reason === "response_rejected_preserve_current"
+      || decision.model !== null || decision.inputTokens !== null
       ? "rejected" : "unavailable";
   }
   if (decision.incoherent) return "incoherent";

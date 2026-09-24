@@ -13,6 +13,7 @@ import { jevTopologyResponse } from './fixtures/jev-topology.ts';
 import { countRows, deleteRows, failWrites, rerunMigration } from './test-fixtures.ts';
 import type { AdaptiveTopologyDecision } from '../shared/adaptive-topology.ts';
 import type { EvidenceCollectorHealth } from '../shared/evidence-health.ts';
+import { sendHumanRequest } from './fixtures/jev-human.ts';
 
 const input = { topology: 'single', workers: 0, usableWorkers: 2, policyVersion: 'topology-policy-v2.1' };
 const scope = { executionId: 'e1', channelId: 'c1', projectId: 'p1', phase: 'initial' as const };
@@ -137,7 +138,7 @@ function runtime(t: TestContext) {
   t.after(async () => { await hive.adaptiveTopology.stop(); hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
   return {
     get hive() { return hive; }, human, brain, worker, dm, errors, events, calls: () => calls,
-    start: () => hive.adaptiveTopology.routeHumanRequest(human, { channel: dm.id, body: 'Private original Human request', requestId: 'root' }),
+    start: () => sendHumanRequest(hive, human, { channel: dm.id, body: 'Private original Human request', requestId: 'root' }),
     check: (summary: string) => hive.adaptiveTopology.adviseBrainAction(brain, { kind: 'brain_message', channelId: dm.id, summary }),
     view: () => hive.adaptiveTopology.view(human, dm.id),
     restart: async () => { await hive.adaptiveTopology.stop(); hive.db.close(); hive = new Hive(path.join(dir, 'hive.db')); listen(); },

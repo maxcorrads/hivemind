@@ -2,7 +2,7 @@
 
 > **Enforced topologies were removed in #211.** Jev is now advisory-only: Hivemind no longer applies or locks a topology, so the fixed baselines below (`single`, `brain_one_worker`, `brain_multi_dm`, `brain_multi_room` as Human-selected, enforced modes) cannot be produced by the current server, and the `auto` condition no longer describes a controller that applies its choice. The validator and scorer keep working for manifests and observations recorded before #211 (policy version `topology-policy-v2.1`); evidence recorded since then carries `topology-advisory-v1` and must not be pooled with it. See [Jev advice](adaptive-routing.md).
 
-Related: #29, #33, #35 and #128/#129. `scripts/benchmark-topology.mjs` prepares an immutable randomized trial manifest, validates supplied observations and summarizes matched outcomes. **It does not launch agents, call Jev, collect Human timings, or execute paid trials.** Execution is the separate [paired-study runner](topology-study-runner.md) (#136); the older fixed-workflow host runner is not part of this protocol.
+Related: #29, #33, #35 and #128/#129. `scripts/benchmark-topology.mjs` prepares an immutable randomized trial manifest, validates supplied observations and summarizes matched outcomes. **It does not launch agents, call Jev, collect Human timings, or execute paid trials.** Execution was the separate paired-study runner (#136), removed in #214 because it needs the server-enforced topologies removed in #211; use a release before #211 to execute a manifest. The older fixed-workflow host runner is not part of this protocol.
 
 This protocol evaluates the continuous four-topology controller, not the old binary shadow predictor. Do not pool its observations with `pilot-v1` or `clarification-v1` results merely because some mode names resemble one another.
 
@@ -47,7 +47,7 @@ For a real study, create a separate configuration with:
 - one to ten repeats, a uint32 random seed, and the same initial free-worker count (2–254) for all conditions;
 - positive explicit `limits.wallMs` and `limits.workloadTokens`.
 
-The manifest pins the configuration digest and deterministic trial identities/order. This CLI does not dereference workload IDs, validate the real input files against the supplied hashes or enforce a host's runtime budget. The [paired-study runner](topology-study-runner.md) does: it copies and re-hashes the artifacts before every trial, enforces the budgets, reports overshoots and retains failed, interrupted and ambiguous trials.
+The manifest pins the configuration digest and deterministic trial identities/order. This CLI does not dereference workload IDs, validate the real input files against the supplied hashes or enforce a host's runtime budget. The paired-study runner of releases before #211 did: it copied and re-hashed the artifacts before every trial, enforced the budgets, reported overshoots and retained failed, interrupted and ambiguous trials.
 
 The recorded Hivemind revision must include whatever recorder/runner was actually used. The example's revision is only a synthetic scaffold; do not reuse it as a claim about a different live checkout.
 
@@ -111,6 +111,6 @@ The summary reports `auto_minus_fixed` for each matched workload/repeat, then de
 
 ## Boundaries still requiring real execution
 
-This document covers the offline protocol and scorer, not a ready-made real-agent result set; the [paired-study runner](topology-study-runner.md) is the execution adapter. The example and unit tests use synthetic observations explicitly labelled as such. Actual workload execution, independent review and provider configuration remain separate. #34's Human study stays deferred; it is not replaced by this agent-topology experiment. #73 remains draft until Human authorizes a release.
+This document covers the offline protocol and scorer, not a ready-made real-agent result set; the paired-study runner (#136, removed in #214) was the execution adapter. The example and unit tests use synthetic observations explicitly labelled as such. Actual workload execution, independent review and provider configuration remain separate. #34's Human study stays deferred; it is not replaced by this agent-topology experiment. #73 remains draft until Human authorizes a release.
 
 Run `node --test scripts/benchmark-topology.test.mjs` for the focused local software contracts. The ordinary repository CI remains the full lint/typecheck/unit/integration/browser/coverage gate.

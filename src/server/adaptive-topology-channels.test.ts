@@ -33,7 +33,11 @@ function fixture(t: TestContext, enabled = true) {
     const response = await app.request(`/api/ui/channels/${channelId}/messages`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
     assert.equal(response.status, 200, await response.clone().text());
-    return await response.json() as { message: Message; adaptiveStates?: Array<{ executionId: string; brainId: string }> };
+    const { message } = await response.json() as { message: Message };
+    // Jev advises after the send (#214): wait for it, then read the executions this message's request has.
+    await hive.adaptiveTopology.settled();
+    const root = message.threadId ?? message.id;
+    return { message, states: (hive.adaptiveTopology.view(human, channelId).executions ?? []).filter(state => state.rootMessageId === root) };
   };
   return { hive, human, brains, workers, app, channel, send, dir,
     calls: () => calls, choose: (mode: AdaptiveTopology) => { target = mode; } };
@@ -44,8 +48,8 @@ test('a Human request in a group channel is classified for its only brain; nothi
   const group = f.channel('planning', [f.brains[0]!.agent.name, f.workers[0]!.agent.name]);
   const routed = await f.send(group.id, { body: 'Plan the release.', requestId: 'group-request' });
   assert.equal(f.calls(), 1);
-  assert.equal(routed.adaptiveStates?.length, 1);
-  assert.equal(routed.adaptiveStates![0]!.brainId, f.brains[0]!.agent.id);
+  assert.equal(routed.states.length, 1);
+  assert.equal(routed.states[0]!.brainId, f.brains[0]!.agent.id);
   const messages = f.hive.messageQueries.listMessages(f.human, group.id).messages.filter(message => message.kind === 'chat');
   assert.deepEqual(messages.map(message => message.body), ['Plan the release.'], 'no directive message (#211)');
 });
@@ -55,7 +59,7 @@ test('several brains: no mention is observed only, mentioned brains each get the
   const [a, b] = f.brains as [typeof f.brains[0], typeof f.brains[0]];
   const group = f.channel('council', [a.agent.name, b.agent.name]);
   const ambiguous = await f.send(group.id, { body: 'Who can look at this?', requestId: 'ambiguous' });
-  assert.equal(ambiguous.adaptiveStates, undefined);
+  assert.equal(ambiguous.states.length, 0);
   assert.equal(f.calls(), 1, 'Jev still classifies the request');
   const observed = f.hive.adaptiveTopology.view(f.human, group.id);
   assert.equal(observed.state, null);
@@ -64,7 +68,7 @@ test('several brains: no mention is observed only, mentioned brains each get the
 
   const both = await f.send(group.id, { body: `@${a.agent.name} @${b.agent.name} review both halves.`, requestId: 'both' });
   assert.equal(f.calls(), 3, 'One classification per mentioned brain');
-  assert.deepEqual(new Set(both.adaptiveStates!.map(state => state.brainId)), new Set([a.agent.id, b.agent.id]));
+  assert.deepEqual(new Set(both.states.map(state => state.brainId)), new Set([a.agent.id, b.agent.id]));
   const view = f.hive.adaptiveTopology.view(f.human, group.id);
   assert.equal(view.executions?.length, 2);
   assert.ok(view.executions!.every(state => state.rootMessageId === both.message.id));
@@ -74,7 +78,7 @@ test('several brains: no mention is observed only, mentioned brains each get the
   const after = f.hive.adaptiveTopology.view(f.human, group.id).executions!;
   assert.equal(after.length, 2);
   const stateA = after.find(state => state.brainId === a.agent.id)!, stateB = after.find(state => state.brainId === b.agent.id)!;
-  assert.equal(stateA.executionId, onlyA.adaptiveStates![0]!.executionId);
+  assert.equal(stateA.executionId, onlyA.states[0]!.executionId);
   assert.equal(stateB.rootMessageId, both.message.id);
   assert.equal(stateB.completedAt ?? null, null);
 });
@@ -84,7 +88,7 @@ test('Human replies continue, reopen or start the execution of their thread', as
   const brain = f.brains[0]!;
   const dm = f.hive.channels.openDm(f.human, brain.agent.name);
   const request = await f.send(dm.id, { body: 'Summarize the incident.', requestId: 'request' });
-  const executionId = request.adaptiveStates![0]!.executionId;
+  const executionId = request.states[0]!.executionId;
 
   await f.send(dm.id, { body: 'Include the timeline.', threadId: request.message.id, requestId: 'reply-1' });
   assert.equal(f.calls(), 2);
@@ -104,10 +108,10 @@ test('Human replies continue, reopen or start the execution of their thread', as
   // A reply in a thread without its own execution starts a new request there.
   const brainNote = f.hive.messages.postMessage(brain.agent, { channel: dm.id, body: 'Background notes.' });
   const started = await f.send(dm.id, { body: 'Please act on these notes.', threadId: brainNote.id, requestId: 'reply-3' });
-  assert.equal(started.adaptiveStates?.length, 1);
+  assert.equal(started.states.length, 1);
   const fresh = f.hive.adaptiveTopology.view(f.human, dm.id).state!;
   assert.equal(fresh.rootMessageId, brainNote.id);
-  assert.equal(fresh.executionId, started.adaptiveStates![0]!.executionId);
+  assert.equal(fresh.executionId, started.states[0]!.executionId);
   assert.equal(f.hive.adaptiveTopology.view(f.human, dm.id).executions!.length, 1, 'the newer request replaces the older one');
 });
 
@@ -115,7 +119,7 @@ test('messages without a brain and worker activity never call Jev', async t => {
   const f = fixture(t);
   const workerDm = f.hive.channels.openDm(f.human, f.workers[0]!.agent.name);
   const direct = await f.send(workerDm.id, { body: 'Quick question for you.', requestId: 'to-worker' });
-  assert.equal(direct.adaptiveStates, undefined);
+  assert.equal(direct.states.length, 0);
   assert.equal(f.calls(), 0);
 
   f.choose('brain_one_worker');

@@ -110,7 +110,7 @@ test("different bots process colliding update and message IDs without inheriting
   } finally { await bridge.stop(); close(); }
 });
 
-test("Telegram Human replies in a brain DM use active Jev routing and keep receipt on the original request", async t => {
+test("Telegram Human replies in a brain DM are posted without waiting for Jev, which advises afterwards (#214)", async t => {
   const { hive, dir, close } = fixture();
   const human = hive.identity.getAgent("human");
   const brain = hive.identity.join({ role: "brain", project: "chapter" }).agent;
@@ -120,13 +120,16 @@ test("Telegram Human replies in a brain DM use active Jev routing and keep recei
   const bridge = new TelegramBridge(hive, cfg);
   insertRow(hive, "telegram_topics", { channel_id: dm.id, telegram_thread_id: 22, telegram_chat_id: -1001, bot_key: botKey });
   saveAdaptiveRouting(dir, { enabled: true, apiKey: "typesafe-fixture" });
-  let polls = 0, jevCalls = 0;
+  let polls = 0, jevCalls = 0, answerJev!: () => void;
+  const jevAnswered = new Promise<void>(resolve => { answerJev = resolve; });
   const routingRequests: unknown[] = [];
   t.mock.method(globalThis, "fetch", async (url: unknown, init?: RequestInit) => {
     if (String(url) === "https://api.typesafe.ai/v1/systemone") {
       jevCalls++;
       const request = JSON.parse(String(init?.body)) as { state?: { request?: string } };
       routingRequests.push(request.state?.request);
+      // Jev does not answer until the message has been checked: the inbound post must not wait for it.
+      await jevAnswered;
       return Response.json(jevTopologyResponse(String(init?.body), "single"));
     }
     const method = String(url).split("/").at(-1);
@@ -150,6 +153,9 @@ test("Telegram Human replies in a brain DM use active Jev routing and keep recei
     assert.ok(original);
     assert.equal(messages.length, 1, "Jev posts no directive (#211)");
     assert.deepEqual(routingRequests, ["Small Telegram request"], "Sender display name is not classifier context");
+    assert.equal(hive.adaptiveTopology.view(human, dm.id).state?.recommendation ?? null, null, "posted before Jev answered");
+    answerJev();
+    await hive.adaptiveTopology.settled();
     const state = hive.adaptiveTopology.view(human, dm.id).state!;
     assert.equal(state.recommendation?.providerStatus, "ok", "A malformed fixture must not silently pass via fallback");
     assert.equal(state.recommendation?.contractVersion, "adaptive-routing-v3");

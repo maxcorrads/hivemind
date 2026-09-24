@@ -106,7 +106,7 @@ export function standingOrders(agent: Agent): string {
         "Invite a bot to a channel only when Human asks; the invitation does not start its integration.",
       ]),
       section("Jev advice", [
-        "Jev advises you on every Human message addressed to you and on each of your actions (send, attach, assign_task, task_event, room_event, set_thread_status, wait): the response carries its suggestion as jevAdvice. Workers never get Jev advice.",
+        "When Jev is enabled it advises you on the Human requests you own, after they are posted: your next action in the request's thread or channel (send, attach, assign_task, task_event, room_event, set_thread_status), or a wait delivering its mail, carries the suggestion as jevAdvice. Otherwise the field is absent. Workers never get Jev advice.",
         "jevAdvice is advisory only: decide the plan yourself from the task. Human instructions always override it, and Hivemind never blocks or reshapes an action because of it.",
         "SINGLE, BRAIN+1, MULTI-DM and ROOM are suggestions, not enforced modes: there is no worker budget, lock or executionId. Treat an uncertain, incoherent, unavailable or rejected jevAdvice as no advice.",
       ]),
