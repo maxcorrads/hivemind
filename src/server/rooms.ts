@@ -5,7 +5,7 @@ import { roomEventSchema, sourceLinkSchema, sourceReportSchema, type Room, type 
 import type { TaskSnapshot } from '../shared/tasks.ts';
 
 type TaskLink = { task_id: string; channel_id: string; version: number; action_key: string; payload_hash: string; status: 'active' | 'stop_requested' | 'stopped' };
-const finished = (t: TaskSnapshot) => ['accepted_complete', 'rejected'].includes(t.state);
+const finished = (t: TaskSnapshot) => ['accepted_complete', 'rejected', 'cancelled'].includes(t.state);
 export class RoomStore {
   constructor(private readonly deps: RoomStoreDeps) {}
   private get db() { return this.deps.storage.db; }
@@ -37,7 +37,7 @@ export class RoomStore {
   }
   private running(channel: string): TaskSnapshot[] {
     return this.db.prepare(`SELECT t.snapshot FROM task_records t LEFT JOIN room_tasks r ON r.task_id=t.id
-      WHERE t.channel_id=? AND json_extract(t.snapshot,'$.state') NOT IN ('accepted_complete','rejected')
+      WHERE t.channel_id=? AND json_extract(t.snapshot,'$.state') NOT IN ('accepted_complete','rejected','cancelled')
       AND COALESCE(r.status,'active')!='stopped'`).all(channel).map(r => JSON.parse(String(r.snapshot)));
   }
   private links(channel: string): SourceLink[] {

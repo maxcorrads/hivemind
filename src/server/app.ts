@@ -220,7 +220,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     return c.json({ channel: ch, threadId, messages: listed.messages, hasOlder: listed.hasOlder, hasNewer: listed.hasNewer,
       cursors: listed.cursors, threads: hive.messageQueries.threadsInChannel(ch.id, roots).map(thread => threadResponseSchema.parse(thread)),
       replyCounts: hive.messageQueries.replyCounts(ch.id, roots), snapshotSeq: hive.messageQueries.latestSeq(ch.id),
-      task: threadId && hive.tasks.has(threadId) ? hive.tasks.get(human, threadId) : undefined,
+      task: threadId && hive.tasks.has(threadId) ? hive.tasks.view(human, threadId) : undefined,
       decision: threadId && hive.decisions.has(threadId) ? hive.decisions.get(human, threadId) : undefined,
       decisions: threadId && hive.tasks.has(threadId) ? hive.decisions.forTask(human, threadId) : undefined });
   });
@@ -389,7 +389,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   agent.get('/tasks/:id/handoff', c => c.json(hive.tasks.handoff(c.get('me'), c.req.param('id'))));
   agent.get('/tasks/:id/timeline', c => c.json({ timeline: hive.timeline.traceForTask(c.get('me'), c.req.param('id')) }));
   agent.get('/tasks/:id/timeline/export', c => c.json({ fixture: hive.timeline.exportTask(c.get('me'), c.req.param('id')) }));
-  agent.get('/tasks/:id', c => c.json({ task: hive.tasks.get(c.get('me'), c.req.param('id')) }));
+  agent.get('/tasks/:id', c => c.json({ task: hive.tasks.view(c.get('me'), c.req.param('id')) }));
   agent.post('/tasks/:id/events', async c => c.json(await mutateAdaptiveTask(hive, c.get('me'), c.req.param('id'), await requestJson(c.req.raw))));
   agent.post('/files', async c => {
     const name = c.req.header('x-file-name') || 'file';
