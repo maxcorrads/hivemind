@@ -107,6 +107,15 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       ...hive.reads.readSnapshot(human), ...hive.delivery.queueSnapshot(),
       telegram: { running: Boolean(hooks.telegramRunning?.()), configured: publicTelegramView(hive.home).configured, ...hive.telegramAdmin.health() } });
   });
+  // Sidebar badges and roster status lines, refreshed on task and decision events.
+  ui.get("/nav-status", c => {
+    const human = hive.identity.getAgent("human");
+    const awaiting = hive.decisions.awaitingCounts(human);
+    return c.json({
+      awaitingDecisions: Object.fromEntries(hive.projects.listProjects().map(project => [project.slug, awaiting[project.id] ?? 0])),
+      agentWork: hive.tasks.workStatus(),
+    });
+  });
   ui.get("/read-state", c => c.json(hive.reads.readSnapshot(hive.identity.getAgent("human"))));
   ui.get("/telegram", c => {
     hive.identity.getAgent("human");

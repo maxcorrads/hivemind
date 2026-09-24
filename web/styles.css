@@ -1348,3 +1348,48 @@ html.dark .launch-cta { background: var(--wax); color: #1b2017; }
 .roster-empty p { margin: 0 0 0.5rem; color: var(--rail-mute); font-size: 0.82rem; line-height: 1.4; }
 .roster-empty .launch-cta { margin: 0; }
 .desk-h p.desk-sub { color: var(--ink); }
+
+/* Slack-style navigation: a project icon rail, the selected project's sidebar, the quick switcher. */
+.shell { grid-template-columns: 64px 280px minmax(0, 1fr); }
+.shell:has(.thread) { grid-template-columns: 64px 280px minmax(0, 1fr) minmax(300px, 36vw); }
+.project-rail { display: flex; flex-direction: column; align-items: center; gap: 0.55rem; padding: 0.85rem 0 1rem; min-height: 0; overflow-y: auto; }
+.rail-project, .rail-add { position: relative; flex: none; width: 2.6rem; height: 2.6rem; border-radius: 12px; display: grid; place-items: center; font-weight: 800; font-size: 0.9rem; letter-spacing: -0.02em; color: var(--rail-ink); background: var(--pill); transition: border-radius 0.15s ease; }
+.rail-project:hover, .rail-add:hover { border-radius: 9px; }
+.rail-project.active { background: var(--ink); color: var(--paper); box-shadow: 0 0 0 2px var(--pill); }
+html.dark .rail-project.active { background: var(--wax); color: #1b2017; }
+.rail-project.active::before { content: ""; position: absolute; left: -0.6rem; top: 0.45rem; bottom: 0.45rem; width: 4px; border-radius: 0 4px 4px 0; background: var(--rail-ink); }
+.rail-project.unread:not(.active)::before { content: ""; position: absolute; left: -0.6rem; top: 1.05rem; height: 0.5rem; width: 4px; border-radius: 0 4px 4px 0; background: var(--rail-ink); }
+.rail-add { background: transparent; border: 1px dashed var(--rail-mute); color: var(--rail-mute); font-size: 1.2rem; font-weight: 500; }
+.rail-badge { position: absolute; top: -0.35rem; right: -0.4rem; min-width: 1.15rem; padding: 0.05rem 0.3rem; border-radius: 999px; background: var(--ember); color: #fff; font-style: normal; font-size: 0.66rem; font-weight: 800; line-height: 1.1rem; text-align: center; box-shadow: 0 0 0 2px var(--dusk); }
+.rail-dot { position: absolute; top: -0.15rem; right: -0.15rem; width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--rail-ink); box-shadow: 0 0 0 2px var(--dusk); }
+.rail-decision { position: absolute; bottom: -0.2rem; right: -0.2rem; width: 0.7rem; height: 0.7rem; border-radius: 3px; transform: rotate(45deg); background: var(--wax); box-shadow: 0 0 0 2px var(--dusk); }
+.rail-project:focus-visible, .rail-add:focus-visible, .switcher-open:focus-visible, .project-settings:focus-visible { outline: 2px solid var(--wax); outline-offset: 2px; }
+.project-sec { margin-top: 0.2rem; }
+.project-head { display: flex; align-items: center; gap: 0.4rem; padding: 0.2rem 0.2rem 0.45rem; }
+.project-head h2 { margin: 0 auto 0 0; min-width: 0; font-size: 1.02rem; font-weight: 800; letter-spacing: -0.02em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-settings { flex: none; min-height: 2rem; padding: 0 0.6rem; border-radius: 8px; font-size: 0.76rem; font-weight: 600; color: var(--rail-ink); background: var(--pill); }
+.switcher-open { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 2.25rem; margin: 0 0 0.45rem; padding: 0.4rem 0.7rem; border-radius: 10px; color: var(--rail-mute); background: var(--pill); }
+.switcher-open kbd, .switcher-keys kbd { font-family: var(--mono); font-size: 0.7rem; }
+.nav em.nav-alert { background: var(--ember); color: #fff; }
+.plus, .twist { width: 1.9rem; height: 1.9rem; font-size: 1rem; }
+.kebab { width: 2rem; height: 2rem; }
+.person-status { color: var(--rail-mute); font-size: 0.72rem; line-height: 1.3; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.person-status.blocked { color: var(--ember); font-weight: 600; }
+.queue-badge { white-space: nowrap; }
+.bot-h { display: flex; align-items: center; justify-content: space-between; }
+.switcher { width: min(36rem, 100%); gap: 0.5rem; }
+.switcher-input { width: 100%; padding: 0.7rem 0.8rem; border-radius: 10px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); font-size: 1rem; outline: none; }
+.switcher-input:focus-visible { outline: 2px solid var(--wax); outline-offset: 1px; }
+.switcher-options { list-style: none; margin: 0; padding: 0; max-height: min(24rem, 60dvh); overflow-y: auto; }
+.switcher-options li { display: flex; align-items: baseline; gap: 0.6rem; min-height: 2.4rem; padding: 0.5rem 0.65rem; border-radius: 8px; cursor: pointer; }
+.switcher-options li.active { background: color-mix(in srgb, var(--wax) 18%, transparent); }
+.switcher-label { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.switcher-hint { color: var(--mute); font-size: 0.78rem; margin-right: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.switcher-options em { font-style: normal; font-size: 0.68rem; font-weight: 700; padding: 0.05rem 0.35rem; border-radius: 999px; background: var(--ember); color: #fff; }
+.switcher-keys { margin: 0; color: var(--mute); font-size: 0.74rem; }
+@media (max-width: 960px) {
+  /* Phones (#223): the rail is a horizontal strip on the Home screen only. */
+  .shell:not([data-m="home"]) > .project-rail { display: none; }
+  .project-rail { flex: none; flex-direction: row; overflow-x: auto; overflow-y: hidden; padding: 0.5rem 0.75rem; background: linear-gradient(90deg, var(--pollen), var(--dusk)); }
+  .rail-project.active::before, .rail-project.unread:not(.active)::before { display: none; }
+}

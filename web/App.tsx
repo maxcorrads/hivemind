@@ -6,6 +6,7 @@ import { api } from "./api.ts";
 import { ChannelDesk } from "./ChannelDesk.tsx";
 import { CreateChannelSheet, InviteSheet } from "./ChannelSheets.tsx";
 import { DecisionQueue } from './DecisionQueue.tsx';
+import { useDesktopNotifications } from "./desktop-notifications.ts";
 import { AgentConfirmSheet, BotSheet, CredentialSheet, HelpSheet } from "./HiveSheets.tsx";
 import { Inbox } from "./Inbox.tsx";
 import { JevLog } from "./JevLog.tsx";
@@ -13,8 +14,10 @@ import { channelTitle } from "./labels.ts";
 import { LaunchSheet } from "./LaunchSheet.tsx";
 import { channelBack, mobileScreen, mobileTab, tabTarget, useMobile } from "./mobile-nav.ts";
 import { MobileDms, MobileTabs, projectDms } from "./MobileNav.tsx";
+import { attentionTotal, documentTitle, loadSelectedProject, projectLanding, saveProjectView, saveSelectedProject, type SwitchItem } from "./nav-model.ts";
 import { ProjectPlugins } from "./ProjectPlugins.tsx";
 import { CreateProjectSheet, ProjectSettingsSheet } from "./ProjectSheets.tsx";
+import { QuickSwitcher } from "./QuickSwitcher.tsx";
 import { SearchDesk } from "./SearchDesk.tsx";
 import { hashFor, type Sel } from "./selection.ts";
 import { Sidebar } from "./Sidebar.tsx";
@@ -27,6 +30,7 @@ import { useConversationLoads } from "./use-conversation-loads.ts";
 import { useDmNav } from "./use-dm-nav.ts";
 import { useHiveSnapshot } from "./use-hive-snapshot.ts";
 import { useInbox } from "./use-inbox.ts";
+import { useNavStatus } from "./use-nav-status.ts";
 import { useRealtime } from "./use-realtime.ts";
 import { useSearch } from "./use-search.ts";
 import { useChangeSelection, useSelection, useSelectionRepair } from "./use-selection.ts";
@@ -64,8 +68,9 @@ export function App() {
     id => snap?.agents.some(agent => agent.id === id && agent.role === "brain"),
   ));
   const brainNames = Object.fromEntries((snap?.agents ?? []).filter(agent => agent.role === "brain").map(agent => [agent.id, agent.name]));
-  const selectedProject =
-    sel.kind !== "channel" ? sel.project : (activeChannel?.project ?? projects[0]?.slug ?? "chapter");
+  const storedProject = loadSelectedProject();
+  const selectedProject = sel.kind !== "channel" ? sel.project
+    : (activeChannel?.project ?? projects.find(p => p.slug === storedProject)?.slug ?? projects[0]?.slug ?? "chapter");
 
   const search = useSearch({ selectedProject, projects, setErr });
   const inbox = useInbox({ sel, selRef, projects, hive, setErr });
@@ -75,9 +80,17 @@ export function App() {
     threadLoad: threadState.threadLoad, setThreadView: threadState.setThreadView, threadReads: hive.threadReads,
     inboxLoad: inbox.inboxLoad,
   });
+  // Leaving search for any destination closes its results view.
+  const navigate = (next: Parameters<typeof go>[0]) => {
+    if (search.query) search.setQuery("");
+    go(next);
+  };
+  const navStatus = useNavStatus();
+  const notifications = useDesktopNotifications(channels, navigate);
   const { live, roomTick, decisionTick, setDecisionTick, jevTick, subscribeJev } = useRealtime({
     selection, hive, channel: channelPane, thread: threadState, inboxLoad: inbox.inboxLoad, changeSelection,
     reopenDm: dms.reopenDm, onActivity: inbox.receive, refreshRoutingView, onRoutingEvent, setErr,
+    onLiveEvent: event => { navStatus.onLiveEvent(event); notifications.onLiveEvent(event); },
   });
   useSelectionRepair(snap, sel, changeSelection);
   // Phones show one screen at a time with bottom tabs (#223); the hash stays the single source of navigation.
@@ -122,13 +135,7 @@ export function App() {
   const [launchProject, setLaunchProject] = useState<string | null>(null);
   const openLaunch = (project: string | null = null) => { setLaunchProject(project); setLaunchOpen(true); };
 
-  const q = search.query.trim().toLowerCase();
-  const match = (name: string) => !q || name.toLowerCase().includes(q);
-  const roomAgents = (snap?.agents ?? []).filter((a) => {
-    if (a.role !== "human" && a.project && a.project !== selectedProject) return false;
-    if (!q) return true;
-    return match(a.name) || match(a.focus ?? "") || match(a.role);
-  });
+  const roomAgents = (snap?.agents ?? []).filter((a) => a.role === "human" || !a.project || a.project === selectedProject);
   const { inboxBox, inboxItems, inboxPage, inboxBusy } = inbox;
 
   const onAgent = async (agent: Agent) => {
@@ -137,7 +144,7 @@ export function App() {
       const { channel } = await api.openDm(agent.name);
       dms.reopenDm(channel.id);
       await refreshSnap();
-      go({ kind: "channel", id: channel.id });
+      navigate({ kind: "channel", id: channel.id });
     } catch (error) {
       setErr(String((error as Error)?.message || error));
     }
@@ -151,6 +158,33 @@ export function App() {
   // "Reconnecting" only after the socket was live once, so the first connect does not flash a banner.
   const [wasLive, setWasLive] = useState(false);
   useEffect(() => { if (live) setWasLive(true); }, [live]);
+
+  const selectProject = (slug: string) => { if (snap) navigate(projectLanding(slug, snap)); };
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const onSwitch = (item: SwitchItem) => {
+    setSwitcherOpen(false);
+    if (item.kind === "project") selectProject(item.project.slug);
+    else if (item.kind === "agent") void onAgent(item.agent);
+    else navigate({ kind: "channel", id: item.channel.id });
+  };
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== "k") return;
+      event.preventDefault();
+      setSwitcherOpen(open => !open);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  // The rail's selection and each project's last view are remembered in this browser.
+  const knownProject = projects.some(p => p.slug === selectedProject);
+  useEffect(() => {
+    if (!knownProject) return;
+    saveSelectedProject(selectedProject);
+    saveProjectView(selectedProject, sel.kind === "channel" ? { kind: "channel", id: sel.id } : sel);
+  }, [knownProject, selectedProject, sel]);
+  const attention = snap ? attentionTotal(snap) : 0;
+  useEffect(() => { document.title = documentTitle(attention); }, [attention]);
 
   if (!snap && err) {
     return (
@@ -172,12 +206,14 @@ export function App() {
 
   return (
     <div className="shell" data-m={screen}>
-      <Sidebar snap={snap} sel={sel} go={go} live={live} theme={theme}
+      <Sidebar snap={snap} sel={sel} go={navigate} live={live} theme={theme}
         onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
         query={search.query} setQuery={search.setQuery} onSearchNow={search.searchNow}
         onTelegram={() => telegramSheet.openTelegram(snap?.projects ?? [])}
         onAdaptiveRouting={() => setAdaptiveRoutingOpen(true)} onLaunch={openLaunch} onHelp={() => setHelpOpen(true)}
-        selectedProject={selectedProject} inboxBox={inboxBox} projectSheets={projectSheets}
+        selectedProject={selectedProject} onSelectProject={selectProject} onSwitcher={() => setSwitcherOpen(true)}
+        awaitingDecisions={navStatus.awaitingDecisions} agentWork={navStatus.agentWork} notifications={notifications}
+        inboxBox={inboxBox} projectSheets={projectSheets}
         onNewChannel={(project) => {
           channelSheets.setCreateIn(project);
           channelSheets.setCreating(true);
@@ -319,7 +355,8 @@ export function App() {
       )}
 
       {projectSheets.creatingProject && (
-        <CreateProjectSheet form={projectSheets} refreshSnap={refreshSnap} setErr={setErr} />
+        <CreateProjectSheet form={projectSheets} refreshSnap={refreshSnap} setErr={setErr}
+          onCreated={slug => navigate({ kind: "inbox", project: slug })} />
       )}
 
       {adaptiveRoutingOpen && (
@@ -357,6 +394,9 @@ export function App() {
         <AgentConfirmSheet target={agentConfirm.agentConfirm} busy={agentConfirm.agentBusy}
           onCancel={() => agentConfirm.setAgentConfirm(null)} onConfirm={agentConfirm.onAgentConfirm} />
       )}
+
+      {switcherOpen && <QuickSwitcher snap={snap} currentProject={selectedProject} onPick={onSwitch}
+        onClose={() => setSwitcherOpen(false)} />}
 
       {helpOpen && <HelpSheet onClose={() => setHelpOpen(false)} onLaunch={() => openLaunch()} />}
     </div>

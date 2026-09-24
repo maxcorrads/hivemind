@@ -36,7 +36,7 @@ const TICK_MS = 250;
  * of roster events and refetch ticks are coalesced (leading and trailing edge).
  */
 export function useRealtime({ selection, hive, channel, thread, inboxLoad, changeSelection, reopenDm, onActivity,
-  refreshRoutingView, onRoutingEvent, setErr }: {
+  refreshRoutingView, onRoutingEvent, onLiveEvent, setErr }: {
   selection: Pick<Selection, "selRef" | "threadIdRef" | "viewingThread">;
   hive: HiveSnapshot;
   channel: ChannelPane;
@@ -47,6 +47,8 @@ export function useRealtime({ selection, hive, channel, thread, inboxLoad, chang
   onActivity: (item: ActivityItem) => void;
   refreshRoutingView: (baseline?: boolean) => void;
   onRoutingEvent: (payload: { channelId: string; event: AdaptiveRoutingEvent; state: AdaptiveExecutionState | null }) => void;
+  /** Sees every live event first (badges, notifications); it must not change the snapshot or panes. */
+  onLiveEvent?: (event: { type: string; payload: unknown }) => void;
   setErr: (error: string) => void;
 }) {
   const { selRef, threadIdRef, viewingThread } = selection;
@@ -63,6 +65,8 @@ export function useRealtime({ selection, hive, channel, thread, inboxLoad, chang
     jevListeners.current.add(listener);
     return () => { jevListeners.current.delete(listener); };
   }, []);
+  const tap = useRef(onLiveEvent);
+  tap.current = onLiveEvent;
 
   const resetReadConnection = useCallback(() => {
     refreshRoutingView(true);
@@ -84,6 +88,7 @@ export function useRealtime({ selection, hive, channel, thread, inboxLoad, chang
     const decisionTicks = createThrottle(() => setDecisionTick(t => t + 1), TICK_MS);
     const jev = (event: JevLiveEvent) => { for (const listener of jevListeners.current) listener(event); };
     const off = connectWs((ev) => {
+      tap.current?.(ev);
       if (ev.type === "hello") {
         // The fresh snapshot supersedes queued roster updates from before the reconnect.
         snapUpdates.cancel();

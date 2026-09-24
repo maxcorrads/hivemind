@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
+import type { AgentWork } from "../src/shared/tasks.ts";
 import type { Agent, InboxStatus } from "../src/shared/types.ts";
 import { Avatar } from "./Avatar.tsx";
 import { InboxReceipt, QueueBadge } from "./InboxReceipt.tsx";
 import { seniorityBars } from "./labels.ts";
 import { focusFirstMenuItem, menuKeyDown } from "./menu-keys.ts";
+import { agentStatusLine } from "./nav-model.ts";
 
 export function AgentList({
   agents,
@@ -13,6 +15,7 @@ export function AgentList({
   onLaunch,
   queued,
   inbox = {},
+  work = {},
   onOpen,
   onAskClear,
   onAskRemove,
@@ -25,6 +28,8 @@ export function AgentList({
   onLaunch?: () => void;
   queued: Record<string, number>;
   inbox?: Record<string, InboxStatus>;
+  /** Open work per agent id, shown as each brain's and worker's status line. */
+  work?: Record<string, AgentWork>;
   onOpen: (a: Agent) => void;
   onAskClear: (name: string) => void;
   onAskRemove: (name: string) => void;
@@ -53,6 +58,7 @@ export function AgentList({
           agent={a}
           queued={queued[a.id] ?? 0}
           inbox={inbox[a.id]}
+          status={agentStatusLine(a, work[a.id])}
           onOpen={() => onOpen(a)}
           menuOpen={menu === a.name}
           onMenu={() => setMenu(menu === a.name ? null : a.name)}
@@ -70,6 +76,7 @@ export function AgentList({
           agent={a}
           queued={queued[a.id] ?? 0}
           inbox={inbox[a.id]}
+          status={agentStatusLine(a, work[a.id])}
           onOpen={() => onOpen(a)}
           menuOpen={menu === a.name}
           onMenu={() => setMenu(menu === a.name ? null : a.name)}
@@ -84,8 +91,8 @@ export function AgentList({
           }}
         />
       ))}
-      <div className="subh bot-h">
-        <span>bot · context only</span>
+      <div className="subh bot-h" title="Integrations that post updates into channels. Bots never take tasks.">
+        <span>Bots · post updates, no tasks</span>
         <button type="button" className="plus" title={`Create bot in ${projectName}`}
           aria-label={`Create bot in ${projectName}`} onClick={onCreateBot}>+</button>
       </div>
@@ -105,6 +112,7 @@ function PersonRow({
   agent,
   queued,
   inbox,
+  status,
   onOpen,
   self,
   menuOpen,
@@ -117,6 +125,8 @@ function PersonRow({
   agent: Agent;
   queued?: number;
   inbox?: InboxStatus;
+  /** What the agent is doing, e.g. "blocked: API contract". */
+  status?: string | null;
   onOpen: () => void;
   self?: boolean;
   menuOpen?: boolean;
@@ -164,6 +174,7 @@ function PersonRow({
               {agent.focus && <span className="focus" title={agent.focus}>{agent.focus}</span>}
             </span>
           )}
+          {status && <span className={`person-status ${status.startsWith("blocked:") ? "blocked" : ""}`} title={status}>{status}</span>}
           <InboxReceipt status={inbox} />
         </span>
       </button>
