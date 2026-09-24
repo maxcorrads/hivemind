@@ -190,6 +190,20 @@ test("restart revokes HTTP/WS sessions, closes subscriptions and preserves data/
   assert.equal((await json(f.base, "/api/agent/me", { headers: { authorization: `Bearer ${native.token}` } })).status, 200);
 });
 
+test("same-origin checks replace CORS: no port-specific allow-list, cross-origin reads get no CORS grant", async (t) => {
+  const f = await fixture(t);
+  for (const origin of ["http://127.0.0.1:7421", "http://localhost:7421", "http://127.0.0.1:7420"]) {
+    const health = await fetch(`${f.base}/api/health`, { headers: { origin } });
+    assert.equal(health.status, 403);
+    assert.equal(health.headers.get("access-control-allow-origin"), null);
+    await health.body?.cancel();
+  }
+  const same = await fetch(`${f.base}/api/health`, { headers: { origin: f.base } });
+  assert.equal(same.status, 200);
+  assert.equal(same.headers.get("access-control-allow-origin"), null, "same-origin needs no CORS header");
+  await same.body?.cancel();
+});
+
 test("simultaneous Hivemind instances and tabs keep distinct cookie namespaces", async (t) => {
   const a = await fixture(t);
   const b = await fixture(t);

@@ -2,7 +2,6 @@ import { Readable } from "node:stream";
 import { Hono } from "hono";
 import { requestJson, validateRequest } from "./api-input.ts";
 import { threadResponseSchema, uploadLength } from "../shared/api-contract.ts";
-import { cors } from "hono/cors";
 import { DEFAULT_WAIT_MS, HiveError, type Agent } from "../shared/types.ts";
 import { resolveUploadMime } from "../shared/mime.ts";
 import { standingOrders } from "../shared/standing-orders.ts";
@@ -38,7 +37,6 @@ function windowRoots(messages: readonly { id: string }[], threadId: string | nul
 
 export function createApp(hive: Hive, hooks: AppHooks = {}) {
   const app = new Hono();
-  app.use("*", cors({ origin: ["http://127.0.0.1:7421", "http://localhost:7421", "http://127.0.0.1:7420"] }));
   app.onError((err, c) => {
     if (err instanceof HiveError) {
       if (err.status === 429) c.header("Retry-After", "1");

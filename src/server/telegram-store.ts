@@ -20,6 +20,7 @@ export class TelegramStore {
   private get db() { return this.storage.db; }
 
   transaction<T>(work: () => T): T { return this.storage.transaction(work); }
+  afterCommit(effect: () => void) { this.storage.afterCommit(effect); }
 
   // Global bridge state
   clearConfigurationError() {
