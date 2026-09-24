@@ -8,7 +8,7 @@ import { resolveUploadMime } from "../src/shared/mime.ts";
 import type { LaunchContext } from "../src/shared/launch-prompt.ts";
 import type { ProjectPluginView, SettingsValues } from "../src/shared/plugin-settings.ts";
 import { humanSession, connectHumanWs } from "./human-session.ts";
-import type { TaskSnapshot } from '../src/shared/tasks.ts';
+import type { AgentWork, TaskSnapshot } from '../src/shared/tasks.ts';
 import type { RoomView, Room } from '../src/shared/rooms.ts';
 import type { DecisionPage, DecisionView } from '../src/shared/decisions.ts';
 import type { TimelineExport, TimelineView } from '../src/shared/timeline.ts';
@@ -38,6 +38,14 @@ export type Snapshot = ReadSnapshot & {
   queued: Record<string, number>;
   inbox?: Record<string, InboxStatus>;
   telegram?: { running: boolean; configured: boolean } & TelegramHealth;
+};
+
+/** Sidebar badges and roster status lines. */
+export type NavStatus = {
+  /** Awaiting decisions per project slug. */
+  awaitingDecisions: Record<string, number>;
+  /** Open work per agent id; agents without any are omitted. */
+  agentWork: Record<string, AgentWork>;
 };
 
 export type AdaptiveRoutingSettings = {
@@ -134,6 +142,7 @@ export const api = {
   ),
   snapshot: (signal?: AbortSignal) => req<Snapshot>("/api/ui/snapshot", { signal }),
   readState: (signal?: AbortSignal) => req<ReadSnapshot>("/api/ui/read-state", { signal }),
+  navStatus: (signal?: AbortSignal) => req<NavStatus>("/api/ui/nav-status", { signal }),
   markMessagesSeen: (channelId: string, threadId: string | null, messageSeqs: number[], signal?: AbortSignal) =>
     req<ReadSnapshot>("/api/ui/read", {
       method: "POST", body: JSON.stringify({ channelId, threadId, messageSeqs }), signal,

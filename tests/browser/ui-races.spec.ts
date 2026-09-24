@@ -135,6 +135,7 @@ async function installSnapshot(page: Page, current: () => Snapshot) {
   });
   await page.route("**/api/ui/snapshot", async route => fulfillJson(route, reads()));
   await page.route("**/api/ui/read-state", async route => fulfillJson(route, reads()));
+  await page.route("**/api/ui/nav-status", async route => fulfillJson(route, { awaitingDecisions: {}, agentWork: {} }));
   await page.route("**/api/ui/read", async route => {
     const receipt = route.request().postDataJSON() as { messageSeqs: number[] };
     harness.receipts.push(receipt.messageSeqs);
@@ -226,7 +227,7 @@ test("slow channel A cannot overwrite channel B after navigation", async ({ page
   await expect(page.getByRole("button", { name: "# Beta" })).toHaveClass(/active/);
 });
 
-test("archived channels are consultable, searchable and project-scoped without marking them read on expansion", async ({ page }, testInfo) => {
+test("archived channels are consultable, reachable from the switcher and project-scoped without marking them read on expansion", async ({ page }, testInfo) => {
   const alpha = project("alpha", "Alpha Hive"), beta = project("beta", "Beta Hive");
   const a = channel("a", "General", alpha), old = channel("old", "review-closed", alpha);
   const other = channel("other", "other-closed", beta);
@@ -266,34 +267,40 @@ test("archived channels are consultable, searchable and project-scoped without m
   await page.setViewportSize({ width: 1280, height: 900 });
   await summary.click();
   await expect(oldRow).toBeHidden();
-  await page.getByRole("textbox", { name: "Search projects and messages" }).fill("review-closed");
-  await expect(oldRow).toBeVisible();
-  await oldRow.click();
+  // Message search opens its own view and leaves the sidebar untouched.
+  await page.getByRole("textbox", { name: "Search messages" }).fill("review-closed");
+  await expect(page.getByRole("heading", { name: "Search", exact: true })).toBeVisible();
+  await expect(oldRow).toBeHidden();
+  await page.getByRole("textbox", { name: "Search messages" }).fill("");
+  await page.keyboard.press("ControlOrMeta+k");
+  const jump = page.getByRole("combobox", { name: "Jump to a channel, conversation, agent or project" });
+  await jump.fill("review-closed");
+  await expect(page.getByRole("option")).toHaveText([/# review-closed.*Alpha Hive · archived/]);
+  await jump.press("Enter");
   await expect(page).toHaveURL(/#\/c\/old$/);
+  await expect(oldRow).toBeVisible();
   await page.reload();
   await expect(oldRow).toBeVisible();
   await expect(oldRow).toHaveClass(/active/);
   expect(harnesses.get(page)!.receipts).toEqual([]);
 });
 
-for (const scenario of ["selected-search", "new-search", "direct-link", "remount"] as const) {
+for (const scenario of ["switcher", "direct-link", "remount"] as const) {
   test(`archived navigation reveals a new target after manual collapse (${scenario})`, async ({ page }) => {
-    const alpha = project("alpha", "Alpha Hive"), a = channel("a", "General", alpha);
-    const first = channel("first", "review-one", alpha), second = channel("second", "review-two", alpha);
-    const channels = [a, first, second];
-    const snap = { ...snapshot([alpha], channels), archivedChannelIds: [first.id, second.id], unread: { first: 7, second: 9 } };
+    const alpha = project("alpha", "Alpha Hive"), beta = project("beta", "Beta Hive"), a = channel("a", "General", alpha);
+    const first = channel("first", "review-one", alpha), second = channel("second", "review-two", alpha), b = channel("b", "Elsewhere", beta);
+    const channels = [a, first, second, b];
+    const snap = { ...snapshot([alpha, beta], channels), archivedChannelIds: [first.id, second.id], unread: { first: 7, second: 9 } };
     await installSnapshot(page, () => snap);
     const sockets = await installSocketHarness(page);
     await installMessages(page, (route, id) => fulfillJson(route, payload(channels.find(ch => ch.id === id)!, [])));
     await page.route("**/api/ui/search?*", route => fulfillJson(route, { hits: [], hasMore: false }));
-    await page.goto(scenario === "new-search" ? "/#/c/a" : "/#/c/first");
+    await page.goto("/#/c/first");
     const archived = page.locator(".archived-channels");
-    const search = page.getByRole("textbox", { name: "Search projects and messages" });
-    if (scenario === "new-search") await search.fill("review");
     await expect(archived).toHaveAttribute("open", "");
     const summary = archived.locator("summary");
     await summary.focus();
-    await page.keyboard.press(scenario === "new-search" ? "Space" : "Enter");
+    await page.keyboard.press("Enter");
     await expect(archived).not.toHaveAttribute("open", "");
     // Roster traffic must not override a deliberate collapse of this target.
     await expect.poll(() => sockets.length).toBe(1);
@@ -301,12 +308,16 @@ for (const scenario of ["selected-search", "new-search", "direct-link", "remount
     await expect(archived).not.toHaveAttribute("open", "");
     if (scenario === "direct-link") await page.evaluate(() => { location.hash = "#/c/second"; });
     else if (scenario === "remount") {
-      const projectToggle = page.locator(".project-sec .twist");
-      await projectToggle.click();
+      // Switching project on the rail unmounts this sidebar; switching back returns to the last view.
+      await page.getByRole("button", { name: /^Beta Hive/ }).click();
       await expect(archived).toHaveCount(0);
-      await projectToggle.click();
-    } else await search.fill(scenario === "selected-search" ? "review-one" : "review-two");
-    const target = scenario === "selected-search" || scenario === "remount" ? "# review-one 7" : "# review-two 9";
+      await page.getByRole("button", { name: /^Alpha Hive/ }).click();
+    } else {
+      await page.keyboard.press("ControlOrMeta+k");
+      await page.getByRole("combobox", { name: "Jump to a channel, conversation, agent or project" }).fill("review-two");
+      await page.keyboard.press("Enter");
+    }
+    const target = scenario === "remount" ? "# review-one 7" : "# review-two 9";
     await expect(archived.getByRole("button", { name: target, exact: true })).toBeVisible();
     if (scenario === "direct-link") await expect(archived.getByRole("button", { name: target, exact: true })).toHaveClass(/active/);
     expect(harnesses.get(page)!.receipts).toEqual([]);

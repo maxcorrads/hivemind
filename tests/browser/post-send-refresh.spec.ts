@@ -93,6 +93,7 @@ async function fixture(page: Page, inThread: boolean) {
   await page.route('**/api/ui/session', route => json(route, { ok: true }));
   await page.route('**/api/ui/snapshot', route => json(route, snap()));
   await page.route('**/api/ui/read-state', route => json(route, snap()));
+  await page.route('**/api/ui/nav-status', route => json(route, { awaitingDecisions: {}, agentWork: {} }));
   await page.route('**/api/ui/read', route => { revision++; return json(route, snap()); });
   await page.route('**/api/ui/activity?*', route => json(route, { ...snap(), items: [], hasMore: false }));
   await page.route('**/api/ui/channels/*/room', route => json(route, { room: null, tasks: [], activeTaskCount: 0,

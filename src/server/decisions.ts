@@ -9,6 +9,10 @@ import {
 
 type DecisionRow = { id: string; snapshot: string };
 type MutationRow = { decision_id: string; message_id: string | null; request_hash: string };
+/** An awaiting decision still bound to its task's current revision and not past its deadline (`?` = now). */
+const OPEN_DECISION = `json_extract(d.snapshot, '$.storedState') = 'awaiting_input'
+      AND CAST(json_extract(d.snapshot, '$.taskRevision') AS INTEGER) = CAST(json_extract(t.snapshot, '$.revision') AS INTEGER)
+      AND (json_extract(d.snapshot, '$.requestedByAt') IS NULL OR CAST(json_extract(d.snapshot, '$.requestedByAt') AS INTEGER) > ?)`;
 
 export class DecisionStore {
   constructor(private readonly deps: DecisionDeps, private atomic: <T>(work: () => T) => T) {}
@@ -90,12 +94,18 @@ export class DecisionStore {
     return this.views(actor, rows.map(row => JSON.parse(row.snapshot) as DecisionSnapshot));
   }
 
+  /** Currently applicable awaiting decisions per project id (the Decisions badge); projects with none are omitted. */
+  awaitingCounts(actor: Agent): Record<string, number> {
+    if (actor.role !== 'human') throw new HiveError(403, 'Only Human has the decision queue');
+    const rows = this.deps.storage.db.prepare(`SELECT d.project_id AS id, COUNT(*) AS n FROM decision_requests d
+      JOIN task_records t ON t.id = d.task_id WHERE ${OPEN_DECISION} GROUP BY d.project_id`).all(Date.now()) as { id: string; n: number }[];
+    return Object.fromEntries(rows.map(row => [row.id, Number(row.n)]));
+  }
+
   listHuman(actor: Agent, projectId: string, includeClosed = true): DecisionPage {
     if (actor.role !== 'human') throw new HiveError(403, 'Only Human has the decision queue');
     const now = Date.now();
-    const open = `json_extract(d.snapshot, '$.storedState') = 'awaiting_input'
-      AND CAST(json_extract(d.snapshot, '$.taskRevision') AS INTEGER) = CAST(json_extract(t.snapshot, '$.revision') AS INTEGER)
-      AND (json_extract(d.snapshot, '$.requestedByAt') IS NULL OR CAST(json_extract(d.snapshot, '$.requestedByAt') AS INTEGER) > ?)`;
+    const open = OPEN_DECISION;
     const awaiting = Number(this.deps.storage.db.prepare(`SELECT COUNT(*) AS n FROM decision_requests d
       JOIN task_records t ON t.id = d.task_id WHERE d.project_id = ? AND ${open}`).get(projectId, now)!.n);
     const openRows = this.deps.storage.db.prepare(`SELECT d.id, d.snapshot FROM decision_requests d

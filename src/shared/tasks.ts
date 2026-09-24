@@ -110,6 +110,18 @@ export type TaskSnapshot = {
   result: TaskResult | null; review: { reviewerId: string; decision: 'accepted' | 'changes_requested'; summary: string } | null;
 };
 
+/** What an agent is doing right now, for the Human roster status line. */
+export type AgentWork = {
+  /** The most recently updated unfinished task this agent works on, if any. */
+  task: { id: string; channelId: string; state: TaskState; objective: string; needed: string | null } | null;
+  /** Unfinished tasks assigned to this agent. */
+  assigned: number;
+  /** Unfinished tasks this agent assigned to others. */
+  delegated: number;
+  /** Submitted results waiting for this agent's review. */
+  toReview: number;
+};
+
 /** Human-readable chat stays the primary record; metadata is authenticated by the server. */
 export function taskBody(envelope: TaskEnvelope): string {
   const a = envelope.action;

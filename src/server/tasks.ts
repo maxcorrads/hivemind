@@ -6,7 +6,7 @@ import { checkpointFreshness, type HandoffSummary } from '../shared/handoffs.ts'
 import { createHash, randomUUID } from 'node:crypto';
 import type { TaskStoreDeps } from './services/ports.ts';
 import { agentLabel, BODY_MAX, HiveError, HUMAN_ID, type Agent, type Channel } from '../shared/types.ts';
-import { assignTaskSchema, taskEventSchema, taskBody, type TaskContract, type TaskEnvelope, type TaskSnapshot } from '../shared/tasks.ts';
+import { assignTaskSchema, taskEventSchema, taskBody, type AgentWork, type TaskContract, type TaskEnvelope, type TaskSnapshot, type TaskState } from '../shared/tasks.ts';
 
 type Row = { id: string; channel_id: string; worker_id: string; dispatch_seq: number; received_at: number | null; snapshot: string };
 type StoredEvent = { message_id: string; task_id: string; request_hash: string };
@@ -290,6 +290,35 @@ export class TaskStore {
         id: String(row.id), workerId: String(row.worker_id), assignerId: String(row.assigner_id), state: String(row.state), held: row.claim_state === 'held',
         dependencies: row.dependencies ? JSON.parse(String(row.dependencies)) as string[] : [],
       }));
+  }
+  /**
+   * Current work per agent id: unfinished tasks not stopped by their room, the
+   * newest one a worker holds (with the latest blocker when it is blocked), and
+   * what each assigner is waiting on. Agents without open work are omitted.
+   */
+  workStatus(): Record<string, AgentWork> {
+    const rows = this.db.prepare(`SELECT t.id, t.channel_id, t.worker_id,
+        json_extract(t.snapshot,'$.assignerId') AS assigner_id,
+        json_extract(t.snapshot,'$.state') AS state,
+        json_extract(t.snapshot,'$.contract.objective') AS objective,
+        CASE WHEN json_extract(t.snapshot,'$.state')='blocked' THEN (SELECT json_extract(e.envelope,'$.action.needed')
+          FROM task_events e WHERE e.task_id=t.id AND json_extract(e.envelope,'$.action.type')='block'
+          ORDER BY e.rowid DESC LIMIT 1) END AS needed
+      FROM task_records t
+      LEFT JOIN room_tasks room ON room.task_id=t.id
+      WHERE json_extract(t.snapshot,'$.state') NOT IN ('accepted_complete','rejected','cancelled') AND COALESCE(room.status,'active')!='stopped'
+      ORDER BY CAST(json_extract(t.snapshot,'$.updatedAt') AS INTEGER) DESC`).all() as Array<Record<string, unknown>>;
+    const work: Record<string, AgentWork> = {};
+    const of = (id: string) => work[id] ??= { task: null, assigned: 0, delegated: 0, toReview: 0 };
+    for (const row of rows) {
+      const worker = of(String(row.worker_id)), assigner = of(String(row.assigner_id));
+      worker.assigned++;
+      worker.task ??= { id: String(row.id), channelId: String(row.channel_id), state: row.state as TaskState,
+        objective: String(row.objective ?? ''), needed: row.needed == null ? null : String(row.needed) };
+      assigner.delegated++;
+      if (row.state === 'result_submitted') assigner.toReview++;
+    }
+    return work;
   }
   /** The subset of `ids` that are accepted-complete tasks. */
   completedAmong(ids: string[]): string[] {
