@@ -32,6 +32,7 @@ export function ThreadAside({ channelId, threadId, threadPane, thread, onClose, 
         </div>
         <div className="thread-tools">
           {threadPane.task ? <span className="st">{threadPane.task.state.replaceAll('_', ' ')}</span> : <select
+            aria-label="Thread status"
             value={threadPane.threads.find((t) => t.id === threadId)?.status ?? "open"}
             onChange={(e) => thread.setStatus(channelId, threadId, e.target.value as ThreadStatus)}
           >
@@ -44,6 +45,7 @@ export function ThreadAside({ channelId, threadId, threadPane, thread, onClose, 
           <button
             type="button"
             className="plus"
+            aria-label="Close thread"
             onClick={onClose}
           >
             ×
@@ -55,7 +57,7 @@ export function ThreadAside({ channelId, threadId, threadPane, thread, onClose, 
           {threadPane.deferredLive ? "New replies — refresh thread" : "Refresh thread"}
         </button>
       )}
-      <div className="stream" ref={threadStream} onScroll={() => {
+      <div className="stream" role="log" aria-label="Thread replies" ref={threadStream} onScroll={() => {
         if (isReadingHistory(threadStream.current)) setThreadPane((current) => current ? holdLivePane(current) : current);
       }}>
         {threadPane.task && <TaskCard task={threadPane.task} decisions={threadPane.decisions} />}

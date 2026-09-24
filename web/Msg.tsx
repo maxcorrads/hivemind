@@ -57,6 +57,7 @@ export function Msg({
                 key={hit.emoji}
                 type="button"
                 className={`react ${hit.mine ? "mine" : ""}`}
+                aria-pressed={Boolean(hit.mine)}
                 disabled={!onReact}
                 onClick={() => onReact?.(hit.emoji)}
               >
@@ -81,6 +82,8 @@ export function Msg({
                   type="button"
                   className={`react-pick-btn ${hit?.mine ? "mine" : ""}`}
                   title={emoji}
+                  aria-pressed={Boolean(hit?.mine)}
+                  aria-label={`React ${emoji}`}
                   onClick={() => onReact(emoji)}
                 >
                   {emoji}

@@ -3,6 +3,7 @@ import type { Agent, InboxStatus } from "../src/shared/types.ts";
 import { Avatar } from "./Avatar.tsx";
 import { InboxReceipt, QueueBadge } from "./InboxReceipt.tsx";
 import { seniorityBars } from "./labels.ts";
+import { focusFirstMenuItem, menuKeyDown } from "./menu-keys.ts";
 
 export function AgentList({
   agents,
@@ -129,7 +130,7 @@ function PersonRow({
   const bars = seniorityBars(agent);
 
   useEffect(() => {
-    if (menuOpen) menuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+    if (menuOpen) focusFirstMenuItem(menuRef.current);
   }, [menuOpen]);
 
   useEffect(() => {
@@ -182,23 +183,7 @@ function PersonRow({
       )}
       {menuOpen && (
         <div className="person-menu" role="menu" aria-label={`Actions for ${agent.name}`}
-          onKeyDown={(event) => {
-            if (event.key === "Escape") {
-              event.preventDefault();
-              onCloseMenu?.();
-              actionRef.current?.focus();
-            } else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
-              event.preventDefault();
-              const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'));
-              const index = items.indexOf(document.activeElement as HTMLButtonElement);
-              const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
-                : (index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
-              items[next]?.focus();
-            } else if (event.key === "Tab") {
-              actionRef.current?.focus();
-              onCloseMenu?.();
-            }
-          }}>
+          onKeyDown={(event) => menuKeyDown(event, actionRef, () => onCloseMenu?.())}>
           {onManageCredential && (
             <button type="button" role="menuitem" aria-label={`Manage credentials for ${agent.name}`}
               onClick={() => { onCloseMenu?.(); onManageCredential(); }}>

@@ -3,8 +3,13 @@ import type { Agent, Channel, Message } from "../src/shared/types.ts";
 import { Msg } from "./Msg.tsx";
 import type { InboxBox } from "./selection.ts";
 
-export function Inbox({ box, mentions, hasMore, channels, agents, onBox, onOpen, onOlder, onMarkSeen, onMarkMessage, onDecisions }: {
+export function Inbox({ box, mentions, loading = false, failed = false, hasMore, channels, agents, onBox, onOpen, onOlder, onMarkSeen,
+  onMarkMessage, onDecisions }: {
   box: InboxBox;
+  /** The unread page has not arrived yet. */
+  loading?: boolean;
+  /** The unread page could not be loaded (the error banner offers a retry). */
+  failed?: boolean;
   mentions: Message[];
   hasMore: boolean;
   channels: Channel[];
@@ -41,7 +46,9 @@ export function Inbox({ box, mentions, hasMore, channels, agents, onBox, onOpen,
     </header>
     <div className="stream inbox-stream">
       {error && <p className="inbox-error" role="alert">{error}</p>}
-      {visible.length === 0 && <div className="empty">{mentions.length ? "No messages in this category on this page." : box === "all" ? "No activity saved in this browser yet." : "You're all caught up."}</div>}
+      {loading ? <div className="loading" role="status">Loading unread messages…</div>
+        : failed && mentions.length === 0 ? <div className="empty">Unread messages could not be loaded.</div>
+        : visible.length === 0 && <div className="empty">{mentions.length ? "No messages in this category on this page." : box === "all" ? "No activity saved in this browser yet." : "You're all caught up."}</div>}
       {visible.map(m => {
         const ch = channels.find(c => c.id === m.channelId);
         const isExpanded = expanded.includes(m.id);

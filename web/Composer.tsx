@@ -77,7 +77,7 @@ export function Composer({
           {files.map((f, i) => (
             <li key={`${f.name}-${i}`}>
               {f.name}
-              <button type="button" onClick={() => setFiles(files.filter((_, j) => j !== i))}>
+              <button type="button" aria-label={`Remove ${f.name}`} onClick={() => setFiles(files.filter((_, j) => j !== i))}>
                 ×
               </button>
             </li>
@@ -96,13 +96,14 @@ export function Composer({
             e.target.value = "";
           }}
         />
-        <button type="button" className="clip" title="Attach" onClick={() => pick.current?.click()}>
-          📎
+        <button type="button" className="clip" title="Attach" aria-label="Attach files" onClick={() => pick.current?.click()}>
+          <span aria-hidden="true">📎</span>
         </button>
         <textarea
           rows={2}
           value={value}
           placeholder={placeholder}
+          aria-label={placeholder}
           onChange={(e) => onInput(e.target.value)}
           onKeyDown={onKey}
           onPaste={(e) => {
