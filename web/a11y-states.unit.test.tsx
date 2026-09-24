@@ -58,7 +58,8 @@ test("the theme follows the OS until the Human picks one, then keeps the saved c
 });
 
 const inbox = (props: Partial<Parameters<typeof Inbox>[0]>) => renderToStaticMarkup(createElement(Inbox, {
-  box: "unread", mentions: [], hasMore: false, channels: [], agents: [], onBox: () => undefined, onOpen: () => undefined,
+  box: "unread", items: [], unread: 0, filter: "all", onFilter: () => undefined, hasMore: false, channels: [], agents: [],
+  onBox: () => undefined, onOpen: () => undefined,
   onOlder: () => undefined, onMarkSeen: () => undefined, onMarkMessage: async () => undefined, onDecisions: () => undefined, ...props,
 }));
 
@@ -69,6 +70,9 @@ test("For you never claims the Human is caught up before the unread page arrived
   assert.match(inbox({ failed: true }), /Unread messages could not be loaded/);
   assert.doesNotMatch(inbox({ failed: true }), /caught up/);
   assert.match(inbox({}), /You&#x27;re all caught up/);
+  assert.match(inbox({ box: "all", loading: true }), /role="status"[^>]*>Loading activity…/);
+  assert.match(inbox({ box: "all", failed: true }), /Activity could not be loaded/);
+  assert.match(inbox({ box: "all" }), /No activity yet/);
 });
 
 test("the active sidebar entry is announced as the current page", () => {

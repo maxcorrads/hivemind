@@ -1,6 +1,6 @@
-import { HiveError, type Agent } from "../../shared/types.ts";
-import type { MentionPage, ReadSnapshot } from "../../shared/read-state.ts";
-import type { ReadState } from "../read-state.ts";
+import { HiveError, HUMAN_ID, type Agent, type Channel, type Message } from "../../shared/types.ts";
+import type { ActivityItem, ActivityPage, MentionPage, ReadSnapshot } from "../../shared/read-state.ts";
+import type { FeedOptions, ReadState } from "../read-state.ts";
 import type { ChannelService } from "./channels.ts";
 import type { MessageQueries } from "./message-queries.ts";
 import type { AgentDirectory, Core } from "./ports.ts";
@@ -12,7 +12,7 @@ export type ReadServiceDeps = Core & {
   readonly identity: AgentDirectory;
 };
 
-/** Per-reader state: channel read cursors, explicit message receipts, unread counts and the mention inbox. */
+/** Per-reader state: channel read cursors, explicit message receipts, unread counts and the For you feed. */
 export class ReadService {
   constructor(private readonly deps: ReadServiceDeps) {}
 
@@ -59,6 +59,40 @@ export class ReadService {
     return this.deps.readState.snapshot(() => {
       const page = this.deps.readState.page(actor.id, this.deps.channels.listChannels(actor).map((channel) => channel.id), limit, beforeSeq, projectId);
       return { messages: this.deps.messageQueries.loadMessagesByIds(page.ids, actor.id), hasMore: page.hasMore, ...this.deps.readState.stamp() };
+    });
+  }
+
+  /** One newest-first page of For you: every entry, or only unread ones (`unreadOnly`). */
+  activity(actor: Agent, options: Omit<FeedOptions, "messageId"> = {}): ActivityPage {
+    return this.deps.readState.snapshot(() => {
+      const channels = this.deps.channels.listChannels(actor);
+      const page = this.deps.readState.feed(actor.id, channels.map((channel) => channel.id), options);
+      return { items: this.items(actor, channels, page.rows), hasMore: page.hasMore, ...this.deps.readState.stamp() };
+    });
+  }
+
+  /** The For you entry for one committed message, or null when it is not For you. */
+  activityItem(actor: Agent, message: Pick<Message, "id" | "channelId">): ActivityItem | null {
+    const channel = this.deps.channels.getChannel(message.channelId);
+    if (!this.deps.channels.canSeeChannel(actor, channel)) return null;
+    const page = this.deps.readState.feed(actor.id, [channel.id], { messageId: message.id, unreadOnly: false, limit: 1 });
+    return this.items(actor, [channel], page.rows)[0] ?? null;
+  }
+
+  /** Publishes `activity` when a committed message is in the Human's For you feed (a `message` listener). */
+  publishActivity(message: Message) {
+    let item: ActivityItem | null;
+    // Listeners run after the sender's commit: a projection failure must never fail the send.
+    try { item = this.activityItem(this.deps.identity.getAgent(HUMAN_ID), message); } catch { return; }
+    if (item) this.deps.bus.emit("activity", item);
+  }
+
+  private items(actor: Agent, channels: Channel[], rows: ReturnType<ReadState["feed"]>["rows"]): ActivityItem[] {
+    const projects = new Map(channels.map((channel) => [channel.id, channel.project]));
+    const messages = new Map(this.deps.messageQueries.loadMessagesByIds(rows.map((row) => row.id), actor.id).map((m) => [m.id, m]));
+    return rows.flatMap((row) => {
+      const message = messages.get(row.id);
+      return message ? [{ message, project: projects.get(row.channelId) ?? "", reason: row.reason, read: row.read }] : [];
     });
   }
 

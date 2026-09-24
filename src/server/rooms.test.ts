@@ -84,6 +84,17 @@ test('sidebar archive metadata is read-only, visibility-scoped and survives rest
   assert.equal(f.hive.rooms.botLinks(bot, f.channel.id)[0]!.desired, 'paused', 'sidebar does not resume a monitor');
 });
 
+test('room events carry the archive state so the sidebar needs no snapshot refetch', t => {
+  const f = fixture(t); f.configure();
+  const events: { channelId: string; archived: boolean }[] = [];
+  const listener = (event: { channelId: string; archived: boolean }) => events.push(event);
+  f.hive.bus.on('room', listener);
+  t.after(() => f.hive.bus.off('room', listener));
+  f.event({ type: 'archive', reason: 'End fixture' }, f.human);
+  f.event({ type: 'reopen', reason: 'Continue', resumeSources: false }, f.human);
+  assert.deepEqual(events, [{ channelId: f.channel.id, archived: true }, { channelId: f.channel.id, archived: false }]);
+});
+
 test('Human can edit directly; bots, workers, other brains and quoted authority cannot change scope', t => {
   const f = fixture(t); f.configure(); const other = f.hive.identity.join({ role: 'brain' }).agent;
   f.hive.channels.invite(f.human, f.channel.id, [other.name]);

@@ -1,10 +1,11 @@
-import type { Agent, ThreadStatus } from "../src/shared/types.ts";
+import { useCallback } from "react";
+import type { Agent, Message, ThreadStatus } from "../src/shared/types.ts";
 import { api, type ChannelPayload } from "./api.ts";
 import { Composer } from "./Composer.tsx";
 import { DecisionCard } from './DecisionQueue.tsx';
 import { STATUSES } from "./labels.ts";
 import { BackButton } from "./MobileNav.tsx";
-import { Msg } from "./Msg.tsx";
+import { MessageRow } from "./MessageRow.tsx";
 import { holdLivePane, isReadingHistory } from "./pane-window.ts";
 import { TaskCard } from './TaskCard.tsx';
 import type { useSend } from "./use-send.ts";
@@ -22,6 +23,12 @@ export function ThreadAside({ channelId, threadId, threadPane, thread, onClose, 
   compose: ReturnType<typeof useSend>;
 }) {
   const { threadStream, setThreadPane, loadThread, onThreadMessage } = thread;
+  const onReact = useCallback((m: Message, emoji: string) => {
+    void api.react(m.seq, emoji, !m.reactions?.some(reaction => reaction.emoji === emoji && reaction.mine))
+      .then((r) => onThreadMessage(r.message));
+  }, [onThreadMessage]);
+  const { sendThread } = compose;
+  const onSend = useCallback((body: string, files: File[]) => sendThread(threadId, body, files), [sendThread, threadId]);
   return (
     <aside className="thread">
       <header className="desk-h">
@@ -72,13 +79,7 @@ export function ThreadAside({ channelId, threadId, threadPane, thread, onClose, 
           </button>
         )}
         {threadPane.messages.map((m) => (
-          <Msg
-            key={m.id}
-            m={m}
-            replies={0}
-            status={null}
-            onReact={(emoji) => api.react(m.seq, emoji, !m.reactions?.some(reaction => reaction.emoji === emoji && reaction.mine)).then((r) => onThreadMessage(r.message))}
-          />
+          <MessageRow key={m.id} m={m} replies={0} status={null} onReact={onReact} />
         ))}
         {threadPane.hasNewer && (
           <button type="button" className="older" onClick={() => thread.loadNewer(threadPane, channelId, threadId)}>
@@ -89,10 +90,8 @@ export function ThreadAside({ channelId, threadId, threadPane, thread, onClose, 
       </div>
       <Composer
         agents={roomAgents}
-        value={compose.threadDraft}
-        onChange={compose.setThreadDraft}
         placeholder="Reply in thread…"
-        onSend={(files) => compose.sendThread(threadId, files)}
+        onSend={onSend}
       />
     </aside>
   );
