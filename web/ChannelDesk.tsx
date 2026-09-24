@@ -1,6 +1,6 @@
-import type { MutableRefObject } from "react";
+import { useCallback, useMemo, type MutableRefObject } from "react";
 import type { AdaptiveRoutingView } from "../src/shared/adaptive-topology.ts";
-import type { Agent, Channel } from "../src/shared/types.ts";
+import type { Agent, Channel, Message, ThreadStatus } from "../src/shared/types.ts";
 import { adviceSummary } from "./AdaptiveRoutingPanel.tsx";
 import { adviceStrip } from "./adaptive-routing-view.ts";
 import { api } from "./api.ts";
@@ -8,7 +8,7 @@ import { applyChannelMessage, recordChannelMessage } from "./channel-state.ts";
 import { Composer } from "./Composer.tsx";
 import { channelTitle, memberNames } from "./labels.ts";
 import { BackButton } from "./MobileNav.tsx";
-import { Msg } from "./Msg.tsx";
+import { MessageRow } from "./MessageRow.tsx";
 import { holdLivePane, isReadingHistory } from "./pane-window.ts";
 import { RoomPanel } from './RoomPanel.tsx';
 import type { Sel } from "./selection.ts";
@@ -41,6 +41,24 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
 }) {
   const { pane, setPane, channelStream, channelJournal, loadChannel } = channel;
   const loaded = pane?.channel.id === channelId;
+  const statuses = useMemo(() => new Map<string, ThreadStatus | null>((pane?.threads ?? []).map((t) => [t.id, t.status])), [pane?.threads]);
+  const onThread = useCallback((m: Message, button: HTMLButtonElement) => {
+    const stream = channelStream.current;
+    if (stream && threadPaneId !== m.id) {
+      threadOpenAnchor.current = {
+        channelId, threadId: m.id, button, bottom: button.getBoundingClientRect().bottom,
+        atBottom: stream.scrollHeight - stream.clientHeight - stream.scrollTop <= 48,
+      };
+    }
+    go({ kind: "channel", id: channelId, thread: m.id });
+  }, [channelStream, threadOpenAnchor, threadPaneId, channelId, go]);
+  const onReact = useCallback((m: Message, emoji: string) => {
+    api.react(m.seq, emoji, !m.reactions?.some(reaction => reaction.emoji === emoji && reaction.mine)).then((r) => {
+      recordChannelMessage(channelJournal.current, r.message, false);
+      setPane((p) => applyChannelMessage(p, r.message, false));
+    }).catch((error) => setErr(String(error)));
+  }, [channelJournal, setPane, setErr]);
+  const sendChannel = compose.sendChannel;
   return (
     <>
       <header className="desk-h">
@@ -92,25 +110,13 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
         {!loaded && <div className="loading" role="status">Loading messages…</div>}
         {loaded && pane.messages.length === 0 && !pane.hasOlder && <div className="empty">No messages yet.</div>}
         {(loaded ? pane.messages : []).map((m) => (
-          <Msg
+          <MessageRow
             key={m.id}
             m={m}
             replies={pane?.replyCounts[m.id] ?? 0}
-            status={pane?.threads.find((t) => t.id === m.id)?.status ?? null}
-            onThread={(button) => {
-              const stream = channelStream.current;
-              if (stream && threadPaneId !== m.id) {
-                threadOpenAnchor.current = {
-                  channelId, threadId: m.id, button, bottom: button.getBoundingClientRect().bottom,
-                  atBottom: stream.scrollHeight - stream.clientHeight - stream.scrollTop <= 48,
-                };
-              }
-              go({ kind: "channel", id: channelId, thread: m.id });
-            }}
-            onReact={(emoji) => api.react(m.seq, emoji, !m.reactions?.some(reaction => reaction.emoji === emoji && reaction.mine)).then((r) => {
-              recordChannelMessage(channelJournal.current, r.message, false);
-              setPane((p) => applyChannelMessage(p, r.message, false));
-            })}
+            status={statuses.get(m.id) ?? null}
+            onThread={onThread}
+            onReact={onReact}
           />
         ))}
         <div />
@@ -120,14 +126,12 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
       )}
       <Composer
         agents={roomAgents}
-        value={compose.draft}
-        onChange={compose.setDraft}
         placeholder={
           activeChannel
             ? `Message ${channelTitle(activeChannel)}`
             : "Write…"
         }
-        onSend={compose.sendChannel}
+        onSend={sendChannel}
       />
     </>
   );

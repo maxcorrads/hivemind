@@ -133,13 +133,13 @@ test('HiveBus bound to a Storage emits after commit and drops events of rolled-b
   bus.bindStorage(storage);
   bus.on('room', ({ channelId }) => rooms.push(channelId));
   storage.transaction(() => {
-    bus.emit('room', { channelId: 'kept' });
+    bus.emit('room', { channelId: 'kept', archived: false });
     assert.deepEqual(rooms, []);
-    assert.throws(() => storage.transaction(() => { bus.emit('room', { channelId: 'dropped' }); throw new Error('x'); }));
+    assert.throws(() => storage.transaction(() => { bus.emit('room', { channelId: 'dropped', archived: false }); throw new Error('x'); }));
     insert('row');
   });
   assert.deepEqual(rooms, ['kept']);
-  bus.emit('room', { channelId: 'direct' });
+  bus.emit('room', { channelId: 'direct', archived: false });
   assert.deepEqual(rooms, ['kept', 'direct']);
 });
 

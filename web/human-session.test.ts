@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { connectHumanWs, createHumanSession } from "./human-session.ts";
+import { connectHumanWs, createHumanSession, reconnectDelay } from "./human-session.ts";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -319,9 +319,43 @@ test("failed refresh and failed socket construction each recover through the rec
   await failed[0].promise;
   t.mock.timers.tick(1500);
   await failed[1].promise;
-  t.mock.timers.tick(1500);
+  t.mock.timers.tick(2000); // Second consecutive failure: backoff is 1-2 s.
   await connected.promise;
   assert.equal(refreshes, 3);
   assert.equal(sockets, 2);
   assert.equal(failures, 2);
+});
+
+test("reconnect delay backs off exponentially to 30 s with jitter over the upper half", () => {
+  assert.deepEqual([0, 1, 2, 3, 4, 5, 6, 50].map(attempt => reconnectDelay(attempt, () => 1)),
+    [1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000]);
+  assert.deepEqual([0, 1, 5].map(attempt => reconnectDelay(attempt, () => 0)), [500, 1000, 15000]);
+});
+
+test("consecutive failed connections back off and an opened socket resets the backoff", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const attempts: number[] = [];
+  const sockets: FakeSocket[] = [];
+  let created = deferred<FakeSocket>();
+  const stop = connectHumanWs({ refresh: async () => 1 }, () => {}, undefined, () => {
+    const socket = new FakeSocket();
+    sockets.push(socket);
+    created.resolve(socket);
+    return socket.browserSocket();
+  }, (attempt) => { attempts.push(attempt); return 100 * (attempt + 1); });
+  t.after(stop);
+  const next = async (fail: (socket: FakeSocket) => void, wait: number) => {
+    const socket = await created.promise;
+    created = deferred<FakeSocket>();
+    fail(socket);
+    t.mock.timers.tick(wait - 1);
+    assert.equal(sockets.length, attempts.length, "no reconnect before the backoff elapses");
+    t.mock.timers.tick(1);
+  };
+  await next(socket => socket.onclose?.(), 100);
+  await next(socket => socket.onclose?.(), 200);
+  await next(socket => { socket.onopen?.(); socket.onclose?.(); }, 100);
+  await created.promise;
+  assert.deepEqual(attempts, [0, 1, 0]);
+  assert.equal(sockets.length, 4);
 });
