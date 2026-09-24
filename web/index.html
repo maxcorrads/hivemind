@@ -7,7 +7,10 @@
     <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="apple-touch-icon" href="/icon.png" />
     <script>
-      if (localStorage.getItem("hivemind-theme") === "dark") document.documentElement.classList.add("dark");
+      // A saved choice wins; otherwise follow the OS (kept in sync by use-theme.ts).
+      var theme = localStorage.getItem("hivemind-theme");
+      if (theme === "dark" || (theme !== "light" && matchMedia("(prefers-color-scheme: dark)").matches))
+        document.documentElement.classList.add("dark");
     </script>
   </head>
   <body>
