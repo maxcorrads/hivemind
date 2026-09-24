@@ -50,7 +50,7 @@ test("outside a transaction, a throwing listener is logged and every later liste
   hive.bus.on("room", () => { throw new Error("first fails"); });
   hive.bus.once("room", () => { ran.push("once"); });
   hive.bus.on("room", ({ channelId }) => { ran.push(channelId); });
-  assert.equal(hive.bus.emit("room", { channelId: "c1" }), true);
-  hive.bus.emit("room", { channelId: "c2" });
+  assert.equal(hive.bus.emit("room", { channelId: "c1", archived: false }), true);
+  hive.bus.emit("room", { channelId: "c2", archived: false });
   assert.deepEqual(ran, ["once", "c1", "c2"]);
 });
