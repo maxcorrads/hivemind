@@ -10,7 +10,7 @@ import { now } from "./rows.ts";
 
 export type BotServiceDeps = Core & {
   readonly projects: Pick<ProjectDirectory, "requireActorProject">;
-  readonly identity: AgentDirectory;
+  readonly identity: AgentDirectory & { findAgentByName(name: string): Agent | null };
   readonly channels: ChannelAccess;
   readonly messageQueries: Pick<MessageReader, "getMessageById">;
   readonly files: Pick<FileService, "validateAttachments" | "bindAttachments">;
@@ -32,7 +32,7 @@ export class BotService {
     const parsed = createBotSchema.safeParse(raw);
     if (!parsed.success) throw new HiveError(400, "Bot name must be 1–40 letters, digits, underscores or dashes, starting with a letter");
     const { name } = parsed.data;
-    if (this.deps.identity.getAgentByName(name)) throw new HiveError(409, "This identity name is already in use");
+    if (this.deps.identity.findAgentByName(name)) throw new HiveError(409, "This identity name is already in use");
     const id = crypto.randomUUID();
     const token = newToken();
     const t = now();
@@ -47,7 +47,7 @@ export class BotService {
   botCredential(actor: Agent, projectRef: string, botId: string): BotCredentialView {
     if (actor.role !== 'human') throw new HiveError(403, 'Only Human can manage bot credentials');
     const project = this.deps.projects.requireActorProject(actor, projectRef), bot = this.deps.identity.getAgent(botId);
-    if (bot.role !== 'bot' || bot.projectId !== project.id) throw new HiveError(404, 'Bot not found in this project');
+    if (bot.role !== 'bot' || bot.projectId !== project.id || bot.removedAt !== undefined) throw new HiveError(404, 'Bot not found in this project');
     const row = this.db.prepare('SELECT revision, revoked FROM bot_credentials WHERE bot_id=?').get(bot.id);
     return { bot, credential: { revision: row ? Number(row.revision) : 1, revoked: Boolean(row?.revoked) } };
   }

@@ -154,7 +154,7 @@ test('the strip above the composer shows usable Jev advice only and opens the pa
   await f.render(strip({ state: null, executions: [], events: [] }));
   assert.equal(f.host.querySelector('.routing-strip'), null);
 
-  await f.render(<Composer agents={[]} value="" onChange={() => {}} onSend={() => {}} placeholder="Message" />);
+  await f.render(<Composer agents={[]} onSend={async () => true} placeholder="Message" />);
   assert.equal(f.host.querySelector('select, .composer-routing, .routing-mode, .routing-lock-mode'), null);
   assert.doesNotMatch(f.host.textContent!, /Auto · Jev|Brain \+ 1|Multi-DM|Orchestrated|Lock/);
 });

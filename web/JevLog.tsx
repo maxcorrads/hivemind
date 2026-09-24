@@ -3,14 +3,19 @@ import type { JevCall, JevCallLogView, JevCallSummary, JevRequestGroup } from '.
 import { api } from './api.ts';
 import { CollectorHealthNotice } from './EvidenceHealth.tsx';
 import type { EvidenceCollectorHealth } from '../src/shared/evidence-health.ts';
-import { adviceLabel, answerLabel, answerRejected, appendOlderPage, errorLabel, contextRows, mergeRefreshedPage, modelLabel, outcomeLabel, percent, questionRows, reasonLabel, requestedModel, triggerLabel, uncertaintyLabel, workersLabel } from './jev-log-view.ts';
+import { adviceLabel, answerLabel, answerRejected, appendOlderPage, errorLabel, contextRows, mergeLiveCall, mergeRefreshedPage, modelLabel, outcomeLabel, percent, questionRows, reasonLabel, requestedModel, triggerLabel, uncertaintyLabel, workersLabel } from './jev-log-view.ts';
 import { MIN_TOPOLOGY_CONFIDENCE } from '../src/shared/adaptive-topology-policy.ts';
 import { incoherenceLabel, topologyName as topologyLabel } from '../src/shared/jev-outcome.ts';
+import type { JevLiveSubscribe } from './use-realtime.ts';
 
 type Props = {
   project: string;
-  /** Incremented on every realtime Jev call so the history refreshes. */
+  /** The project's id, as carried by realtime calls (`project` may be a slug). */
+  projectId?: string;
+  /** Incremented when the history must be reloaded (reconnect). */
   tick: number;
+  /** Realtime calls and collector health, merged in place instead of refetching the log. */
+  subscribe?: JevLiveSubscribe;
   channelLabel: (channelId: string) => string;
   agentName: (agentId: string) => string;
   onOpenChannel: (channelId: string) => void;
@@ -19,22 +24,35 @@ type Props = {
 const time = (at: number) => new Date(at).toLocaleString([], { dateStyle: 'short', timeStyle: 'medium' });
 
 /** Routing log: Human-only history of every exchange with Jev, grouped by the request that caused it. */
-export function JevLog({ project, tick, channelLabel, agentName, onOpenChannel }: Props) {
+export function JevLog({ project, projectId, tick, subscribe, channelLabel, agentName, onOpenChannel }: Props) {
   const [view, setView] = useState<JevCallLogView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [collector, setCollector] = useState<EvidenceCollectorHealth | null>(null);
   const detail = useRef<HTMLDivElement>(null);
+  /** Calls received since the current page request started, replayed onto its (possibly older) result. */
+  const liveCalls = useRef<JevCallSummary[]>([]);
   // On narrow screens the detail sits below the list: bring it into view when a call is chosen.
   useEffect(() => {
     if (selected && window.matchMedia?.('(max-width: 900px)').matches) detail.current?.scrollIntoView({ block: 'start' });
   }, [selected]);
   useEffect(() => { setView(null); setSelected(null); }, [project]);
   useEffect(() => {
+    if (!subscribe) return;
+    return subscribe(event => {
+      if (event.type === 'health') { setCollector(event.health); return; }
+      const { call } = event;
+      if (call.projectId !== projectId && call.projectId !== project) return;
+      liveCalls.current = [...liveCalls.current.slice(-99), call];
+      setView(current => current ? mergeLiveCall(current, call) : current);
+    });
+  }, [subscribe, project, projectId]);
+  useEffect(() => {
     const controller = new AbortController();
+    liveCalls.current = [];
     api.jevCalls(project, undefined, controller.signal).then(next => {
-      setView(current => mergeRefreshedPage(current, next));
+      setView(current => liveCalls.current.reduce(mergeLiveCall, mergeRefreshedPage(current, next)));
       setError(null);
     }).catch(reason => { if ((reason as Error)?.name !== 'AbortError') setError(String((reason as Error)?.message ?? reason)); });
     // Collector health is diagnostic only; failing to read it never hides the history.

@@ -71,10 +71,10 @@ export function useChangeSelection(
     setThreadId(nextThread);
   }, []);
 
-  const go = (next: Sel) => {
+  const go = useCallback((next: Sel) => {
     changeSelection(next);
     setHash(next);
-  };
+  }, [changeSelection]);
 
   return { changeSelection, go };
 }

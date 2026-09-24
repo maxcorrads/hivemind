@@ -3,7 +3,7 @@ import type { EvidenceCollectorHealth } from '../src/shared/evidence-health.ts';
 import type { RoutingRequest, RoutingSuggestions } from '../src/shared/routing.ts';
 import type { TelegramHealth } from "./telegram-health.ts";
 import type { Agent, BotCredentialView, AttachmentMeta, Channel, Message, Project, SearchHit, Thread, ThreadStatus, InboxStatus } from "../src/shared/types.ts";
-import type { MentionPage, ReadSnapshot } from "../src/shared/read-state.ts";
+import type { ActivityPage, ActivityReason, MentionPage, ReadSnapshot } from "../src/shared/read-state.ts";
 import { resolveUploadMime } from "../src/shared/mime.ts";
 import type { LaunchContext } from "../src/shared/launch-prompt.ts";
 import type { ProjectPluginView, SettingsValues } from "../src/shared/plugin-settings.ts";
@@ -138,12 +138,12 @@ export const api = {
     req<ReadSnapshot>("/api/ui/read", {
       method: "POST", body: JSON.stringify({ channelId, threadId, messageSeqs }), signal,
     }),
-  mentions: (beforeSeq?: number, project?: string, signal?: AbortSignal) => {
-    const q = new URLSearchParams();
-    if (beforeSeq) q.set("beforeSeq", String(beforeSeq));
-    if (project) q.set("project", project);
-    const suffix = q.toString() ? `?${q}` : "";
-    return req<MentionPage>(`/api/ui/mentions${suffix}`, { signal });
+  activity: (view: { project: string; unreadOnly: boolean; reasons: readonly ActivityReason[]; beforeSeq?: number },
+    signal?: AbortSignal) => {
+    const q = new URLSearchParams({ project: view.project, unread: view.unreadOnly ? "1" : "0" });
+    if (view.reasons.length) q.set("reason", view.reasons.join(","));
+    if (view.beforeSeq) q.set("beforeSeq", String(view.beforeSeq));
+    return req<ActivityPage>(`/api/ui/activity?${q}`, { signal });
   },
   markMentionsSeen: (project?: string) =>
     req<MentionPage & { unread: Record<string, number>; readState: ReadSnapshot }>("/api/ui/mentions/seen", {

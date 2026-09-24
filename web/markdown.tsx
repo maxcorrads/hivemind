@@ -1,6 +1,23 @@
 import type { ReactNode } from "react";
 
+/** Parsed bodies by text, newest last: a re-rendered row reuses its parse instead of rescanning up to 20k chars. */
+const parsed = new Map<string, ReactNode[]>();
+const PARSED_BODIES = 1000;
+
 export function renderBody(body: string): ReactNode[] {
+  const cached = parsed.get(body);
+  if (cached) {
+    parsed.delete(body);
+    parsed.set(body, cached);
+    return cached;
+  }
+  const parts = parseBody(body);
+  parsed.set(body, parts);
+  if (parsed.size > PARSED_BODIES) parsed.delete(parsed.keys().next().value!);
+  return parts;
+}
+
+function parseBody(body: string): ReactNode[] {
   const parts: ReactNode[] = [];
   const re = /```(\w+)?\n([\s\S]*?)```|`([^`]+)`|\*\*([^*]+)\*\*|@([A-Za-z][A-Za-z0-9_-]*)/g;
   let last = 0;

@@ -141,9 +141,9 @@ async function installSnapshot(page: Page, current: () => Snapshot) {
     harness.revision++;
     await fulfillJson(route, reads());
   });
-  await page.route("**/api/ui/mentions?*", async route => fulfillJson(route, {
+  await page.route("**/api/ui/activity?*", async route => fulfillJson(route, {
     readInstance: "browser-fixture", readRevision: harness.revision, readSeq: harness.seq,
-    messages: [], hasMore: false,
+    items: [], hasMore: false,
   }));
   const room: RoomView = { room: null, tasks: [], activeTaskCount: 0, tasksHasMore: false,
     nextTaskCursor: null, links: [], unmanagedBots: [] };
@@ -840,12 +840,18 @@ test("direct conversations, inbox receipts and the Jev advice strip remain indep
   const mentioned = message("mention", 2, peers.id, "An update mentioning @Human.", null, { authorId: "brain", authorName: "Beacon", authorRole: "brain", mentions: ["human"] });
   snap.mentions = [mentioned, direct]; snap.mentionCounts = { alpha: 2 }; snap.unread = { dm: 1, peers: 1 };
   await installSnapshot(page, () => snap);
-  await installSocketHarness(page);
+  const sockets = await installSocketHarness(page);
   await installMessages(page, async (route, id) => fulfillJson(route, payload(id === "dm" ? dm : peers, [id === "dm" ? direct : mentioned])));
-  await page.route("**/api/ui/mentions?*", route => fulfillJson(route, {
-    readInstance: "browser-fixture", readRevision: harnesses.get(page)!.revision, readSeq: 2,
-    messages: [mentioned, direct].filter(m => !harnesses.get(page)!.receipts.flat().includes(m.seq)), hasMore: false,
-  }));
+  const activityRequests: string[] = [];
+  await page.route("**/api/ui/activity?*", route => {
+    const query = new URL(route.request().url()).searchParams, reasons = query.get("reason")?.split(",") ?? [];
+    activityRequests.push(query.toString());
+    const read = harnesses.get(page)!.receipts.flat();
+    const items = ([[mentioned, "mention"], [direct, "direct"]] as const)
+      .map(([m, reason]) => ({ message: m, reason, project: alpha.slug, read: read.includes(m.seq) }))
+      .filter(item => (!reasons.length || reasons.includes(item.reason)) && (query.get("unread") !== "1" || !item.read));
+    return fulfillJson(route, { readInstance: "browser-fixture", readRevision: harnesses.get(page)!.revision, readSeq: 2, items, hasMore: false });
+  });
   const advised = { executionId: "run", channelId: dm.id, projectId: alpha.id, brainId: "brain", rootMessageId: "direct", updatedAt: 1,
     revision: 1, completedAt: null, monitoring: "active", recommendation: { routeId: "r", contractVersion: "adaptive-routing-v3",
       targetTopology: "brain_multi_dm", targetWorkers: 2, confidence: 0.72, reason: "parallel_workstreams", providerStatus: "ok",
@@ -867,7 +873,7 @@ test("direct conversations, inbox receipts and the Jev advice strip remain indep
   await expect(page.locator(".inbox-card")).toHaveCount(1);
   await page.getByRole("button", { name: "Direct messages", exact: true }).click();
   await expect(page.locator(".inbox-card")).toHaveCount(0);
-  await page.getByRole("button", { name: "Mentions elsewhere", exact: true }).click();
+  await page.getByRole("button", { name: "Mentions", exact: true }).click();
   await expect(page.locator(".inbox-card")).toHaveCount(1);
   await page.getByRole("button", { name: "Expand", exact: true }).click();
   await expect(page.locator(".inbox-card")).toHaveClass(/expanded/);
@@ -875,6 +881,20 @@ test("direct conversations, inbox receipts and the Jev advice strip remain indep
   await page.getByRole("button", { name: "Mark read", exact: true }).click();
   await expect(page.locator(".inbox-card")).toHaveCount(0);
   expect(harnesses.get(page)!.receipts.some(receipt => receipt.length === 1 && receipt[0] === 2)).toBe(true);
+  // #225: Activity is served by the server with read state, and new entries arrive in realtime.
+  await page.getByRole("button", { name: "Everything", exact: true }).click();
+  await page.getByRole("button", { name: "Activity", exact: true }).click();
+  await expect(page).toHaveURL(/#\/inbox\/alpha\/all$/);
+  await expect(page.locator(".inbox-card")).toHaveCount(2);
+  await expect(page.locator(".inbox-card.unread")).toHaveCount(0);
+  expect(activityRequests.at(-1)).toBe("project=alpha&unread=0");
+  const requests = activityRequests.length;
+  const fresh = message("fresh", 3, dm.id, "A fresh direct update.", null, { authorId: "brain", authorName: "Beacon", authorRole: "brain", mentions: [] });
+  sockets[0]!.send(JSON.stringify({ type: "activity", payload: { message: fresh, reason: "direct", project: alpha.slug, read: false } }));
+  await expect(page.locator(".inbox-card")).toHaveCount(3);
+  await expect(page.locator(".inbox-card").first()).toContainText("A fresh direct update.");
+  await expect(page.locator(".inbox-card.unread")).toHaveCount(1);
+  expect(activityRequests.length).toBe(requests);
 });
 
 for (const inThread of [false, true]) {

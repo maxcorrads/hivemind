@@ -6,6 +6,7 @@ import {
 } from "../shared/types.ts";
 import { InboxDeliveryStore, INBOX_BATCH_MAX } from "./inbox-delivery.ts";
 import { packWait, waitWireBytes } from "./wait-format.ts";
+import { agentLabelSql } from "./services/rows.ts";
 import type { NotificationStore } from './notifications.ts';
 import { fairOrder, type NotificationHeader } from '../shared/notifications.ts';
 
@@ -73,7 +74,7 @@ export class InboxReader {
   private hydrate(seq: number): Message {
     const row = this.db.prepare(`SELECT m.id, m.seq, m.channel_id, m.thread_id, m.author_id,
       substr(CAST(m.body AS BLOB), 1, ?) AS body, length(CAST(m.body AS BLOB)) AS body_bytes, m.kind, m.control,
-      m.mentions, m.recipients, m.created_at, m.event_type, a.name AS author_name, a.role AS author_role
+      m.mentions, m.recipients, m.created_at, m.event_type, ${agentLabelSql("a")} AS author_name, a.role AS author_role
       FROM messages m LEFT JOIN agents a ON a.id = m.author_id WHERE m.seq = ?`).get(BODY_MAX * 3, seq)!;
     // SQLite's TEXT substr/length stop at NUL. Bound the byte read instead: UTF-8
     // needs at most three bytes per UTF-16 unit (our BODY_MAX convention). A
