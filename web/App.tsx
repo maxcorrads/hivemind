@@ -283,7 +283,8 @@ export function App() {
         ) : sel.kind === "home" ? null : (
           <ChannelDesk channelId={sel.id} activeChannel={activeChannel} agents={snap.agents} roomAgents={roomAgents}
             channel={channelPane} threadPaneId={threadPane?.threadId} stickBottom={stickBottom}
-            threadOpenAnchor={threadOpenAnchor} go={go} roomTick={roomTick} routingView={routingView}
+            threadOpenAnchor={threadOpenAnchor} go={go} roomTick={roomTick} decisionTick={decisionTick}
+            onDecisionAnswered={() => setDecisionTick(t => t + 1)} routingView={routingView}
             activeBrainChannel={activeBrainChannel} brainNames={brainNames}
             onOpenRouting={() => setRoutingPanelOpen(true)} onInvite={() => channelSheets.setInviteOpen(true)}
             compose={compose} setErr={setErr} onMarkUnread={async (channelId, seq) => {

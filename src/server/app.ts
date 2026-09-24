@@ -46,6 +46,15 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     return c.json({ error: "Internal server error" }, 500);
   });
   app.get("/api/health", c => c.json({ ok: true, name: "hivemind" }));
+  /** The channel and root of a thread id (a message, task or decision id); null when the id is unknown. */
+  const threadOwner = (id: string): { channelId: string; threadId: string } | null => {
+    const ref = hive.messageQueries.messageRef(id);
+    if (ref) return { channelId: ref.channelId, threadId: ref.threadId ?? ref.id };
+    const human = hive.identity.getAgent('human');
+    if (hive.tasks.has(id)) return { channelId: hive.tasks.get(human, id).channelId, threadId: id };
+    if (hive.decisions.has(id)) return { channelId: hive.decisions.get(human, id).channelId, threadId: id };
+    return null;
+  };
   const ui = new Hono();
   ui.use("*", async (c, next) => {
     c.header("Cache-Control", "no-store");
@@ -221,9 +230,18 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   ui.get("/channels/:id/messages", c => {
     const human = hive.identity.getAgent('human'), id = c.req.param('id'), threadId = c.req.query('threadId') || null;
     const after = c.req.query('afterSeq'), before = c.req.query('beforeSeq');
+    const ch = hive.channels.getChannel(id);
+    // A thread opened under the wrong channel (a stale or hand-edited link) must not show another channel's task
+    // or decision: name the owning channel so the UI can redirect there.
+    const owner = threadId ? threadOwner(threadId) : null;
+    if (owner && owner.channelId !== ch.id) {
+      return hive.channels.canSeeChannel(human, hive.channels.getChannel(owner.channelId))
+        ? c.json({ error: 'This thread belongs to another channel', channelId: owner.channelId, threadId: owner.threadId }, 409)
+        : c.json({ error: 'Thread not found in this channel' }, 404);
+    }
     const listed = hive.messageQueries.listMessages(human, id, { threadId, afterSeq: after !== undefined ? Number(after) : undefined,
       beforeSeq: before !== undefined ? Number(before) : undefined, limit: Number(c.req.query('limit') ?? 80) });
-    const ch = hive.channels.getChannel(id), roots = windowRoots(listed.messages, threadId);
+    const roots = windowRoots(listed.messages, threadId);
     return c.json({ channel: ch, threadId, messages: listed.messages, hasOlder: listed.hasOlder, hasNewer: listed.hasNewer,
       cursors: listed.cursors, threads: hive.messageQueries.threadsInChannel(ch.id, roots).map(thread => threadResponseSchema.parse(thread)),
       replyCounts: hive.messageQueries.replyCounts(ch.id, roots), snapshotSeq: hive.messageQueries.latestSeq(ch.id),
@@ -232,6 +250,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       decision: threadId && hive.decisions.has(threadId) ? hive.decisions.get(human, threadId) : undefined,
       decisions: threadId && hive.tasks.has(threadId) ? hive.decisions.forTask(human, threadId) : undefined });
   });
+  ui.get('/channels/:id/tasks', c => c.json(hive.tasks.listForChannel(hive.identity.getAgent('human'), c.req.param('id'))));
   ui.post("/channels", async c => {
     const body = await requestJson(c.req.raw);
     return c.json({ channel: hive.channels.createChannel(hive.identity.getAgent('human'), { name: String(body.name ?? ''), type: body.type ?? 'public',

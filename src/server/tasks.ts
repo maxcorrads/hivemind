@@ -6,7 +6,7 @@ import { checkpointFreshness, type HandoffSummary } from '../shared/handoffs.ts'
 import { createHash, randomUUID } from 'node:crypto';
 import type { TaskStoreDeps } from './services/ports.ts';
 import { agentLabel, BODY_MAX, HiveError, HUMAN_ID, type Agent, type Channel } from '../shared/types.ts';
-import { assignTaskSchema, taskEventSchema, taskBody, type AgentWork, type TaskContract, type TaskEnvelope, type TaskSnapshot, type TaskState } from '../shared/tasks.ts';
+import { assignTaskSchema, taskEventSchema, taskBody, type AgentWork, type ChannelTaskPage, type TaskContract, type TaskEnvelope, type TaskSnapshot, type TaskState } from '../shared/tasks.ts';
 
 type Row = { id: string; channel_id: string; worker_id: string; dispatch_seq: number; received_at: number | null; snapshot: string };
 type StoredEvent = { message_id: string; task_id: string; request_hash: string };
@@ -34,11 +34,25 @@ export class TaskStore {
   /** The task as read by clients: removed participants are labelled "Name (removed)" (never stored). */
   view(actor: Agent, id: string): TaskSnapshot {
     const task = this.get(actor, id);
-    const label = (agentId: string, name: string) => {
-      const agent = this.deps.identity.findAgent(agentId);
-      return agent ? agentLabel({ name, removedAt: agent.removedAt }) : name;
-    };
-    return { ...task, assignerName: label(task.assignerId, task.assignerName), workerName: label(task.workerId, task.workerName) };
+    return { ...task, assignerName: this.label(task.assignerId, task.assignerName), workerName: this.label(task.workerId, task.workerName) };
+  }
+  private label(agentId: string, name: string) {
+    const agent = this.deps.identity.findAgent(agentId);
+    return agent ? agentLabel({ name, removedAt: agent.removedAt }) : name;
+  }
+  /** The newest 100 tasks of one channel, most recently updated first (Human UI Tasks tab). */
+  listForChannel(actor: Agent, channelRef: string): ChannelTaskPage {
+    const channel = this.deps.channels.getChannel(channelRef);
+    if (actor.role === 'bot' || !this.deps.channels.canSeeChannel(actor, channel)) throw new HiveError(403, 'Cannot read this channel');
+    const rows = this.db.prepare(`SELECT received_at, snapshot FROM task_records WHERE channel_id = ?
+      ORDER BY CAST(json_extract(snapshot, '$.updatedAt') AS INTEGER) DESC, rowid DESC LIMIT 101`).all(channel.id) as Pick<Row, 'received_at' | 'snapshot'>[];
+    const items = rows.slice(0, 100).map(row => {
+      const task = JSON.parse(row.snapshot) as TaskSnapshot;
+      return { id: task.id, channelId: task.channelId, workerName: this.label(task.workerId, task.workerName), assignerName: this.label(task.assignerId, task.assignerName),
+        revision: task.revision, updatedAt: task.updatedAt, objective: task.contract.objective,
+        state: task.state === 'sent' && row.received_at !== null ? 'delivered' as const : task.state };
+    });
+    return { items, hasMore: rows.length > 100 };
   }
   previewClaim(actor: Agent, id: string, raw: unknown) {
     validated(z.string().uuid(), id);

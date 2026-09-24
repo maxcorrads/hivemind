@@ -62,6 +62,7 @@ async function installHive(page: Page) {
   await page.route("**/api/ui/nav-status", route => json(route, { awaitingDecisions: {}, agentWork: {} }));
   await page.route("**/api/ui/channels/*/room", route => json(route, { room: null, tasks: [], activeTaskCount: 0,
     tasksHasMore: false, nextTaskCursor: null, links: [], unmanagedBots: [] }));
+  await page.route("**/api/ui/channels/*/tasks", route => json(route, { items: [], hasMore: false }));
   await page.route("**/api/ui/channels/*/messages*", route => {
     const url = new URL(route.request().url());
     const id = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
@@ -130,7 +131,7 @@ test("the Decisions tab answers a decision and its thread returns through the ba
   await expect(tabs(page).getByRole("button", { name: "Decisions" })).toHaveAttribute("aria-current", "page");
   const card = page.getByRole("region", { name: "Human decision request" });
   await card.getByRole("button", { name: /Friday/ }).click();
-  await card.getByRole("button", { name: "Answer", exact: true }).click();
+  await card.getByRole("button", { name: "Confirm", exact: true }).click();
   await expect(card.getByText("answered", { exact: true })).toBeVisible();
   expect(hive.answers).toEqual([expect.objectContaining({ expectedRevision: 1, body: "a: Friday" })]);
 

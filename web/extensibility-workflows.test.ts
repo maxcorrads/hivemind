@@ -286,8 +286,9 @@ test("observation threads support Human replies and reactions without granting b
   await f.change(thread.querySelector("textarea")!, "Human follow-up");
   await f.click(f.button("Send", thread));
   assert.match(thread.textContent!, /Human follow-up/);
-  await f.change(thread.querySelector("select")!, "in_progress");
-  assert.equal(thread.querySelector("select")!.value, "in_progress");
+  await f.click([...thread.querySelectorAll<HTMLButtonElement>(".status-menu [role=menuitemradio]")]
+    .find(item => item.textContent === "in progress")!);
+  assert.equal(thread.querySelector("[data-thread-status]")!.getAttribute("data-thread-status"), "in_progress");
   await f.click(thread.querySelector<HTMLButtonElement>(".react-pick button")!);
   assert.ok(f.requests.includes(`/api/ui/threads/${message.id}/status`));
   await f.click(f.button("×", thread));

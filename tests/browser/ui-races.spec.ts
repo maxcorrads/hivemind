@@ -149,6 +149,9 @@ async function installSnapshot(page: Page, current: () => Snapshot) {
   const room: RoomView = { room: null, tasks: [], activeTaskCount: 0, tasksHasMore: false,
     nextTaskCursor: null, links: [], unmanagedBots: [] };
   await page.route("**/api/ui/channels/*/room", async route => fulfillJson(route, room));
+  // The channel tabs count the channel's tasks and decisions.
+  await page.route("**/api/ui/channels/*/tasks", async route => fulfillJson(route, { items: [], hasMore: false }));
+  await page.route("**/api/ui/decisions?*", async route => fulfillJson(route, { items: [], awaiting: 0, warning: "" }));
 }
 
 async function installMessages(
@@ -445,7 +448,7 @@ test("slow thread response cannot overwrite a newer thread selection", async ({ 
   releaseFirstThread.resolve();
   await expect(page.getByText("current thread two reply", { exact: true })).toBeVisible();
   await expect(page.getByText("stale thread one reply", { exact: true })).toHaveCount(0);
-  await expect(page.locator("aside.thread select")).toHaveValue("in_progress");
+  await expect(page.locator("aside.thread [data-thread-status]")).toHaveAttribute("data-thread-status", "in_progress");
 });
 
 test("reconnect converges open channel and thread after missed message reaction and status events", async ({ page }) => {
@@ -485,7 +488,7 @@ test("reconnect converges open channel and thread after missed message reaction 
       payload: { id: root.id, channelId: "a", status: "blocked" },
     }),
   );
-  await expect(page.locator("aside.thread select")).toHaveValue("blocked");
+  await expect(page.locator("aside.thread [data-thread-status]")).toHaveAttribute("data-thread-status", "blocked");
 
   const updatedRoot = { ...root, reactions: [{ emoji: "✅", count: 1 }] };
   const missed = message("missed", 3, "a", "missed while websocket was down");
@@ -525,7 +528,7 @@ test("reconnect converges open channel and thread after missed message reaction 
   await expect(page.getByText("missed while websocket was down", { exact: true })).toBeVisible();
   await expect(page.getByText("live during reconnect refresh", { exact: true })).toBeVisible();
   await expect(page.getByText("thread reply missed while disconnected", { exact: true })).toBeVisible();
-  await expect(page.locator("aside.thread select")).toHaveValue("done");
+  await expect(page.locator("aside.thread [data-thread-status]")).toHaveAttribute("data-thread-status", "done");
   await expect(page.locator("aside.thread .react").filter({ hasText: "✅" })).toHaveCount(1);
 });
 
@@ -672,7 +675,7 @@ test("live status survives a delayed first thread snapshot and ignores another t
   await expect(page.locator("main .st")).toHaveText("blocked");
   release.resolve();
   await expect(page.getByText("loaded thread reply", { exact: true })).toBeVisible();
-  await expect(page.locator("aside.thread select")).toHaveValue("blocked");
+  await expect(page.locator("aside.thread [data-thread-status]")).toHaveAttribute("data-thread-status", "blocked");
 });
 
 for (const inThread of [false, true]) {
