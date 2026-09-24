@@ -1,15 +1,11 @@
 import { Modal } from "./Modal.tsx";
-import { useState } from "react";
+import { useId, useState, type KeyboardEvent } from "react";
 import { primaryExecution } from "./adaptive-routing-view.ts";
 import { captureLabel, CollectorHealthNotice } from "./EvidenceHealth.tsx";
-import type { AdaptiveExecutionState, AdaptiveRoutingEvent, AdaptiveRoutingView, AdaptiveTopology,
+import type { AdaptiveExecutionState, AdaptiveRoutingEvent, AdaptiveRoutingView,
   AdaptiveTopologyDecision } from "../src/shared/adaptive-topology.ts";
-import { jevAdviceLabel, jevAnswerState, planLabel, topologyName } from "../src/shared/jev-outcome.ts";
+import { jevAdviceLabel, jevAnswerState, planLabel } from "../src/shared/jev-outcome.ts";
 import { triggerLabel } from "./jev-log-view.ts";
-
-export function topologyLabel(topology: AdaptiveTopology): string {
-  return topologyName(topology);
-}
 
 type DecisionLike = Pick<AdaptiveTopologyDecision, "providerStatus" | "confidence" | "reason" | "targetTopology" | "targetWorkers"
   | "incoherent" | "error"> & Partial<Pick<AdaptiveTopologyDecision, "model" | "inputTokens">>;
@@ -51,16 +47,32 @@ export function AdaptiveRoutingPanel({ channelId, view, brainNames, onClose }: P
   const events = view.events.filter(event => event.channelId === channelId &&
     (executions.length < 2 || !state || event.executionId === state.executionId || event.kind === "observation"));
   const name = (id: string) => brainNames?.[id] ?? "Brain";
+  const panelId = useId();
+  const tabbed = executions.length > 1;
+  // Roving tabs: only the selected brain is in the tab order; arrows/Home/End move and select.
+  const onTabKey = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!["ArrowRight", "ArrowLeft", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const index = executions.findIndex(item => item.executionId === state?.executionId);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? executions.length - 1
+      : (index + (event.key === "ArrowRight" ? 1 : -1) + executions.length) % executions.length;
+    setBrainId(executions[next]!.brainId);
+    event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
+  };
   return (
     <Modal onClose={onClose}>
       <div className="sheet routing-sheet" role="dialog" aria-modal="true" aria-label="Jev advice"
         onClick={event => event.stopPropagation()}>
         <h2>Routing · Jev</h2>
-        {executions.length > 1 && <div className="routing-executions" role="tablist" aria-label="Brains">
-          {executions.map(item => <button key={item.executionId} type="button" role="tab" aria-selected={item.executionId === state?.executionId}
-            onClick={() => setBrainId(item.brainId)}>{name(item.brainId)}</button>)}
+        {tabbed && <div className="routing-executions" role="tablist" aria-label="Brains" onKeyDown={onTabKey}>
+          {executions.map(item => {
+            const selected = item.executionId === state?.executionId;
+            return <button key={item.executionId} type="button" role="tab" aria-selected={selected} aria-controls={panelId}
+              tabIndex={selected ? 0 : -1} onClick={() => setBrainId(item.brainId)}>{name(item.brainId)}</button>;
+          })}
         </div>}
-        <div className="sheet-body">
+        <div className="sheet-body" id={panelId} role={tabbed ? "tabpanel" : undefined}
+          aria-label={tabbed && state ? name(state.brainId) : undefined}>
         <CollectorHealthNotice health={view.collector} />
         <p className="help-p">Jev only advises the brain. Its suggestion is returned with each brain action and never enforced: the brain decides, and your instructions always take precedence.</p>
         {!state ? <p className="help-p">No request to a brain has been sent to Jev in this channel yet.</p> : <AdviceSummary state={state} />}
