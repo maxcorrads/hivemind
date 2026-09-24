@@ -108,6 +108,8 @@ export class BotService {
       this.deps.files.bindAttachments(messageId, input.attachmentIds);
       if (input.threadId) this.db.prepare("INSERT OR IGNORE INTO threads (id, channel_id, status) VALUES (?, ?, 'open')")
         .run(input.threadId, ch.id);
+      const { seq } = this.db.prepare("SELECT seq FROM messages WHERE id = ?").get(messageId) as { seq: number };
+      this.deps.bus.outbox("message", { seq, id: messageId, kind: "chat" });
       return { messageId, duplicate: false };
     });
     const message = this.deps.messageQueries.getMessageById(messageId);

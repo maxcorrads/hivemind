@@ -143,6 +143,7 @@ export class MessageService implements MessagePoster {
       this.deps.identity.touch(actor.id, true);
       const msg = this.deps.messageQueries.getMessageById(id);
       const decision = actor.role === 'human' ? this.deps.decisions?.captureHumanReply(actor, msg, input.source ?? 'hive') ?? null : null;
+      this.deps.bus.outbox("message", { seq: msg.seq, id: msg.id, kind: msg.kind });
       this.deps.storage.afterCommit(() => {
         if (input.source === "telegram") this.telegramOrigin.add(msg.id);
         this.deps.bus.emit("message", msg);
@@ -177,7 +178,9 @@ export class MessageService implements MessagePoster {
     this.db.prepare(`INSERT INTO messages(id, channel_id, thread_id, author_id, body, kind, event_type, mentions, created_at, recipients)
       VALUES (?, ?, ?, ?, ?, 'chat', ?, ?, ?, ?)`)
       .run(input.id, input.channelId, input.threadId, input.authorId, input.body, input.eventType, input.mentions, input.createdAt, input.recipients);
-    return Number((this.db.prepare("SELECT seq FROM messages WHERE id = ?").get(input.id) as { seq: number }).seq);
+    const seq = Number((this.db.prepare("SELECT seq FROM messages WHERE id = ?").get(input.id) as { seq: number }).seq);
+    this.deps.bus.outbox("message", { seq, id: input.id, kind: "chat" });
+    return seq;
   }
 
   /** Registers a thread root (without a status) if it has none yet. */
@@ -252,6 +255,7 @@ export class MessageService implements MessagePoster {
       if (had !== wanted) {
         if (wanted) this.db.prepare('INSERT INTO reactions(message_id,agent_id,emoji,created_at) VALUES(?,?,?,?)').run(msg.id, actor.id, emoji, now());
         else this.db.prepare('DELETE FROM reactions WHERE message_id=? AND agent_id=? AND emoji=?').run(msg.id, actor.id, emoji);
+        this.deps.bus.outbox("reaction", { seq: msg.seq });
         const forUi = this.deps.messageQueries.decorate([msg], HUMAN_ID)[0]!;
         this.deps.storage.afterCommit(() => this.deps.bus.emit("reaction", { seq: msg.seq, message: forUi }));
       }

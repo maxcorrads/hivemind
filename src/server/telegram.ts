@@ -18,6 +18,7 @@ import { Hive, channelLabel } from "./hive.ts";
 import { hiveHome } from "./paths.ts";
 import { filePathForHash, safeFileName } from "./files.ts";
 import { TelegramStore } from "./telegram-store.ts";
+import type { HiveOutboxEvents } from "./hive-events.ts";
 
 export type TelegramConfig = {
   botToken: string;
@@ -516,20 +517,11 @@ export class TelegramBridge {
   }
 
   captureDuringDrain(): () => void {
-    const capture = (seq: number, kind: "message" | "reaction") => {
-      const destination = telegramDestinationForSeq(this.hive, seq, this.cfg);
-      if (destination) this.store.enqueuePending(seq, kind, destination);
-    };
-    const message = (msg: Message) => {
-      if (msg.kind === "chat" && !this.hive.messages.fromTelegram(msg.id)) capture(msg.seq, "message");
-    };
-    const reaction = (body: { seq?: number; message?: Message }) => {
-      const seq = body.message?.seq ?? body.seq;
-      if (seq !== undefined) capture(seq, "reaction");
-    };
-    this.hive.bus.on("message", message);
-    this.hive.bus.on("reaction", reaction);
-    return () => { this.hive.bus.off("message", message); this.hive.bus.off("reaction", reaction); };
+    const message = (msg: HiveOutboxEvents["message"]) => { if (this.forwards(msg)) this.enqueue(msg.seq, "message"); };
+    const reaction = ({ seq }: HiveOutboxEvents["reaction"]) => { this.enqueue(seq, "reaction"); };
+    this.hive.bus.onOutbox("message", message);
+    this.hive.bus.onOutbox("reaction", reaction);
+    return () => { this.hive.bus.offOutbox("message", message); this.hive.bus.offOutbox("reaction", reaction); };
   }
 
   private chatForChannel(ch: Channel): number | undefined {
@@ -542,10 +534,10 @@ export class TelegramBridge {
     this.store.setActiveBot(telegramConfigKey(this.cfg));
     this.hive.bus.on("telegram-inbox-wake", this.onInboxWake);
     this.inboundRetries.wake();
-    this.hive.bus.on("message", this.onHiveMessage);
-    this.hive.bus.on("reaction", this.onHiveReaction);
+    this.hive.bus.onOutbox("message", this.onHiveMessage);
+    this.hive.bus.onOutbox("reaction", this.onHiveReaction);
     this.hive.bus.on("telegram-outbox-wake", this.onOutboxWake);
-    this.poll = this.pollLoop().catch(error => {
+    this.poll =this.pollLoop().catch(error => {
       if (!this.stopped) console.error("telegram poll stopped", error instanceof Error ? error.message : error);
     });
     this.kickPump();
@@ -562,8 +554,8 @@ export class TelegramBridge {
     this.cooldownTimer = undefined;
     this.cooldownWakeAt = undefined;
     this.abort.abort(new DOMException("Telegram bridge stopped", "AbortError"));
-    this.hive.bus.off("message", this.onHiveMessage);
-    this.hive.bus.off("reaction", this.onHiveReaction);
+    this.hive.bus.offOutbox("message", this.onHiveMessage);
+    this.hive.bus.offOutbox("reaction", this.onHiveReaction);
     this.hive.bus.off("telegram-outbox-wake", this.onOutboxWake);
     await Promise.allSettled([this.poll, this.outbound.stop(), this.inboundRetries.stop(), this.incoming, ...this.topicLocks.values()]);
     if (this.handoffError) throw this.handoffError;
@@ -581,19 +573,19 @@ export class TelegramBridge {
 
   private onOutboxWake = () => this.kickPump();
 
-  private onHiveMessage = (payload: unknown) => {
-    const msg = payload as Message;
-    if (!msg?.id || this.hive.messages.fromTelegram(msg.id)) return;
-    if (msg.kind !== "chat") return;
-    this.queuePending(msg.seq, "message");
+  // Outbox hooks: they run inside the transaction that commits the message or reaction,
+  // so its telegram_pending row can never be lost between commit and enqueue.
+  private onHiveMessage = (msg: HiveOutboxEvents["message"]) => {
+    if (this.forwards(msg)) this.queuePending(msg.seq, "message");
   };
 
-  private onHiveReaction = (payload: unknown) => {
-    const body = payload as { message?: Message; seq?: number };
-    const seq = body.message?.seq ?? body.seq;
-    if (seq == null) return;
+  private onHiveReaction = ({ seq }: HiveOutboxEvents["reaction"]) => {
     this.queuePending(seq, "reaction");
   };
+
+  private forwards(msg: HiveOutboxEvents["message"]): boolean {
+    return msg.kind === "chat" && !this.hive.messages.fromTelegram(msg.id);
+  }
 
   private async ensureTopic(ch: Channel): Promise<number | null> {
     const chatId = this.chatForChannel(ch);
@@ -1045,12 +1037,18 @@ export class TelegramBridge {
   }
 
   private queuePending(seq: number, kind: "message" | "reaction") {
-    if (this.stopped) return;
+    if (this.stopped || !this.enqueue(seq, kind)) return;
+    this.store.afterCommit(() => {
+      this.hive.telegramAdmin.publishHealth();
+      this.kickPump();
+    });
+  }
+
+  private enqueue(seq: number, kind: "message" | "reaction"): boolean {
     const destination = telegramDestinationForSeq(this.hive, seq, this.cfg);
-    if (!destination) return;
+    if (!destination) return false;
     this.store.enqueuePending(seq, kind, destination);
-    this.hive.telegramAdmin.publishHealth();
-    this.kickPump();
+    return true;
   }
 
   private chatForSeq(seq: number): number | undefined {

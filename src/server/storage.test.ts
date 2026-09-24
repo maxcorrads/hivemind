@@ -114,18 +114,24 @@ test('after-commit effects run once, in scheduling order, after the data is dura
   assert.equal(immediate, true, 'outside a transaction an effect runs at once');
 });
 
-test('an effect may open a new transaction; a failing effect does not stop the rest', t => {
+test('an effect may open a new transaction; a failing effect is logged and does not stop the rest', t => {
   const { storage, insert, values } = fixture(t), ran: string[] = [], failure = new Error('effect failed');
-  assert.throws(() => storage.transaction(() => {
+  const logged = t.mock.method(console, 'error', () => undefined);
+  const result = storage.transaction(() => {
     insert('first');
     storage.afterCommit(() => { throw failure; });
     storage.afterCommit(() => storage.transaction(() => {
       insert('from-effect');
       storage.afterCommit(() => ran.push('effect of effect'));
     }));
-  }), error => error === failure);
+    return 'committed';
+  });
+  assert.equal(result, 'committed', 'a committed transaction never reports a post-commit failure to its caller');
   assert.deepEqual(values(), ['first', 'from-effect']);
   assert.deepEqual(ran, ['effect of effect']);
+  assert.equal(logged.mock.callCount(), 1);
+  assert.match(String(logged.mock.calls[0]!.arguments.join(' ')), /effect failed/);
+  assert.doesNotThrow(() => storage.afterCommit(() => { throw failure; }), 'outside a transaction too');
 });
 
 test('HiveBus bound to a Storage emits after commit and drops events of rolled-back work', t => {
