@@ -5,7 +5,7 @@ import { now, type ProjectRow } from "./rows.ts";
 
 export type ProjectServiceDeps = Core & {
   readonly telegramAdmin: { purgeProject(projectId: string, channelIds: string[], extraChatId?: number | null): void };
-  readonly files: { deleteUnsentBy(agentId: string): void; collectUnusedBlobs(): number };
+  readonly lifecycle: { purgeProjectAgents(agentIds: string[]): void; sweepBlobs(): void };
   readonly channels: { ensureBuiltinChannels(project: Project): void; addHumanToAllChannels(): void };
   /** Brains/workers of the project that are online or blocked in a wait. */
   readonly identity: { busyAgents(projectId: string): Agent[] };
@@ -140,7 +140,7 @@ export class ProjectService {
   deleteProject(actor: Agent, slug: string, opts: { telegramChatId?: number | null } = {}): void {
     if (actor.role !== "human") throw new HiveError(403, "Only Human can delete projects");
     const project = this.getProjectBySlug(slug);
-    const { storage, telegramAdmin: telegram, files, identity: agents } = this.deps;
+    const { storage, telegramAdmin: telegram, lifecycle, identity: agents } = this.deps;
 
     storage.transaction(() => {
       const busy = agents.busyAgents(project.id);
@@ -172,22 +172,10 @@ export class ProjectService {
         this.db.prepare(`DELETE FROM channels WHERE id IN (${ph})`).run(...channelIds);
       }
 
-      for (const agent of goneAgents) {
-        this.db.prepare("DELETE FROM channel_members WHERE agent_id = ?").run(agent.id);
-        this.db.prepare("DELETE FROM reads WHERE agent_id = ?").run(agent.id);
-        this.db.prepare("DELETE FROM reactions WHERE agent_id = ?").run(agent.id);
-        files.deleteUnsentBy(agent.id);
-        this.db.prepare("DELETE FROM agents WHERE id = ?").run(agent.id);
-      }
-
+      lifecycle.purgeProjectAgents(goneAgents.map((agent) => agent.id));
       this.db.prepare("DELETE FROM projects WHERE id = ?").run(project.id);
+      storage.afterCommit(() => this.deps.bus.emit("project", { deleted: project.slug }));
     });
-
-    try {
-      files.collectUnusedBlobs();
-    } catch {
-      /* sweep can drop leftover blobs later */
-    }
-    this.deps.bus.emit("project", { deleted: project.slug });
+    lifecycle.sweepBlobs();
   }
 }

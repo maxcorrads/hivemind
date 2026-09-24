@@ -86,7 +86,9 @@ export const taskEventSchema = z.object({
 export type TaskContract = z.infer<typeof taskContractSchema>;
 export type TaskResult = z.infer<typeof taskResultSchema>;
 export type TaskAction = z.infer<typeof taskActionSchema>;
-export type TaskState = 'sent' | 'delivered' | 'accepted' | 'rejected' | 'blocked' | 'result_submitted' | 'changes_requested' | 'accepted_complete';
+export type TaskState = 'sent' | 'delivered' | 'accepted' | 'rejected' | 'blocked' | 'result_submitted' | 'changes_requested' | 'accepted_complete'
+  /** Closed by Hivemind because the assigned worker was removed (#215); a revise reassigns it. */
+  | 'cancelled';
 export type TaskEnvelope = {
   taskId: string; channelId: string; revision: number; contractVersion: number;
   actorId: string; actorRole: 'brain' | 'worker'; assignerId: string; workerId: string;
@@ -100,6 +102,8 @@ export type TaskSnapshot = {
   checkpoint?: TaskCheckpoint;
   claim?: TaskClaim;
   coordination?: TaskCoordinationView;
+  /** Why the task was cancelled; cleared when it is revised. */
+  cancellation?: { reason: string; at: number };
   id: string; channelId: string; assignerId: string; assignerName: string; workerId: string; workerName: string;
   revision: number; contractVersion: number; state: TaskState; contract: TaskContract;
   dispatchSeq: number; receivedAt: number | null; lastEventSeq: number; updatedAt: number;

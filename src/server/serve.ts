@@ -5,7 +5,7 @@ import type { Socket } from "node:net";
 import path from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { getRequestListener } from "@hono/node-server";
-import { DEFAULT_PORT } from "../shared/types.ts";
+import { DEFAULT_PORT, type Message } from "../shared/types.ts";
 import { createRealtimeStream } from "../shared/realtime-client.ts";
 import { Hive } from "./hive.ts";
 import type { HiveEvents } from "./hive-events.ts";
@@ -22,7 +22,7 @@ import { retentionDays, startMaintenance } from "./maintenance.ts";
 
 /** Hive events forwarded verbatim to every web UI socket; Telegram wake signals stay server-side. */
 const FORWARDED_EVENTS = [
-  "message", "agent", "channel", "thread", "reaction", "queued", "project", "telegram-health",
+  "message", "activity", "agent", "channel", "thread", "reaction", "queued", "project", "telegram-health",
   "task", "room", "decision", "adaptive-routing", "jev-call", "evidence-health",
 ] as const satisfies ReadonlyArray<keyof HiveEvents>;
 type ForwardedEvent = (typeof FORWARDED_EVENTS)[number];
@@ -95,7 +95,11 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
     const bytes = Buffer.byteLength(data);
     for (const ws of clients) sendRealtime(ws, data, bytes);
   };
-  const forwarders = FORWARDED_EVENTS.map(type => [type, (payload: unknown) => emit(type, payload)] as const);
+  const forwarders = FORWARDED_EVENTS.map(type => [type, (payload: unknown) => {
+    emit(type, payload);
+    // The Human's For you feed follows each committed message: `activity` goes out on the bus.
+    if (type === "message") hive.reads.publishActivity(payload as Message);
+  }] as const);
   for (const [type, forward] of forwarders) hive.bus.on(type, forward);
 
   server.requestTimeout = REQUEST_BODY_MS;

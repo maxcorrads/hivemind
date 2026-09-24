@@ -73,6 +73,9 @@ const OWNERSHIP: Record<string, { modules: string[]; tables: string[] }> = {
 const CROSS_DOMAIN_EXCEPTIONS: Record<string, string> = {
   // The latency-sensitive inbox scan flags structured-task mail in the same statement it pages with.
   "inbox-reader.ts task_events": "task flag and bounded envelope of delivered task messages",
+  // The For you predicate classifies decision threads and addressed task events in the statement it pages and counts with.
+  "read-state.ts decision_requests": "For you: messages in a Human decision request's thread",
+  "read-state.ts task_events": "For you: structured task events addressed to the reader",
   // The evidence store also runs standalone (evidence export); it guards the channel foreign key itself.
   "adaptive-evidence.ts channels": "existence guard before recording gap evidence for a deleted channel",
 };

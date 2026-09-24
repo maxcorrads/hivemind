@@ -5,6 +5,7 @@ import type { DecisionView } from "../shared/decisions.ts";
 import type { AdaptiveExecutionState, AdaptiveRoutingEvent } from "../shared/adaptive-topology.ts";
 import type { JevCallSummary } from "../shared/jev-calls.ts";
 import type { EvidenceCollectorHealth } from "../shared/evidence-health.ts";
+import type { ActivityItem } from "../shared/read-state.ts";
 import type { TelegramAdminService } from "./services/telegram-admin.ts";
 import { runEffect, type Storage } from "./storage.ts";
 
@@ -21,6 +22,8 @@ export type TelegramHealthEvent = ReturnType<TelegramAdminService["health"]>;
 export type HiveEvents = {
   /** A message (chat, system, control or structured task/room/decision event) was committed. */
   message: Message;
+  /** A committed message is in the Human's For you feed (the running server publishes it right after its `message`). */
+  activity: ActivityItem;
   /** An agent joined, changed presence, or a bot was created: the current Agent row. */
   agent: Agent;
   /** A channel was created or its membership/metadata changed (including task-driven changes). */
@@ -41,8 +44,11 @@ export type HiveEvents = {
   "telegram-outbox-wake": void;
   /** A task was assigned, changed state, or recorded a delivery receipt: its Human view. */
   task: TaskSnapshot;
-  /** A room's link or state changed; clients refetch the room for `channelId`. */
-  room: { channelId: string };
+  /**
+   * A room's link or state changed; clients refetch the room for `channelId`.
+   * `archived` is the room's archive state after the change (sidebar projection).
+   */
+  room: { channelId: string; archived: boolean };
   /** A Human decision request was created, answered, withdrawn or superseded: its view. */
   decision: DecisionView;
   /** Adaptive routing recorded an event for a channel; `state` is null when no execution is displayed. */

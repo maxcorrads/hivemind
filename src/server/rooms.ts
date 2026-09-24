@@ -5,7 +5,7 @@ import { roomEventSchema, sourceLinkSchema, sourceReportSchema, type Room, type 
 import type { TaskSnapshot } from '../shared/tasks.ts';
 
 type TaskLink = { task_id: string; channel_id: string; version: number; action_key: string; payload_hash: string; status: 'active' | 'stop_requested' | 'stopped' };
-const finished = (t: TaskSnapshot) => ['accepted_complete', 'rejected'].includes(t.state);
+const finished = (t: TaskSnapshot) => ['accepted_complete', 'rejected', 'cancelled'].includes(t.state);
 export class RoomStore {
   constructor(private readonly deps: RoomStoreDeps) {}
   private get db() { return this.deps.storage.db; }
@@ -20,6 +20,10 @@ export class RoomStore {
     return this.db.prepare("SELECT channel_id FROM rooms WHERE json_extract(snapshot,'$.state')='archived' ORDER BY channel_id")
       .all().map(row => String(row.channel_id)).filter(id => visible.has(id));
   }
+  /** Carries the archive state so clients update navigation without refetching the snapshot. */
+  private roomChanged(channelId: string) {
+    this.deps.bus.emit('room', { channelId, archived: this.peek(channelId)?.state === 'archived' });
+  }
   private channel(actor: Agent, channel: string) {
     const ch = this.deps.channels.getChannel(channel, actor.projectId);
     if (!this.deps.channels.canSeeChannel(actor, ch)) throw new HiveError(403, 'Cannot access this room');
@@ -33,7 +37,7 @@ export class RoomStore {
   }
   private running(channel: string): TaskSnapshot[] {
     return this.db.prepare(`SELECT t.snapshot FROM task_records t LEFT JOIN room_tasks r ON r.task_id=t.id
-      WHERE t.channel_id=? AND json_extract(t.snapshot,'$.state') NOT IN ('accepted_complete','rejected')
+      WHERE t.channel_id=? AND json_extract(t.snapshot,'$.state') NOT IN ('accepted_complete','rejected','cancelled')
       AND COALESCE(r.status,'active')!='stopped'`).all(channel).map(r => JSON.parse(String(r.snapshot)));
   }
   private links(channel: string): SourceLink[] {
@@ -211,7 +215,7 @@ export class RoomStore {
     });
     if (!duplicate) {
       for (const message of messages) this.deps.messages.publishTaskMessage(message);
-      this.deps.bus.emit('room', { channelId: ch.id });
+      this.roomChanged(ch.id);
     }
     return { ...this.view(actor, ch.id), duplicate };
   }
@@ -289,7 +293,7 @@ export class RoomStore {
     if (this.links(ch.id).length >= 64) throw new HiveError(400, 'Source link limit reached');
     const link: SourceLink = { ...p.data, botId: bot.id, desired: this.peek(ch.id)?.state === 'archived' ? 'paused' : 'running',
       generation: 1, observed: this.peek(ch.id)?.state === 'archived' && !p.data.suspendSupported ? 'unsupported' : 'pending', detail: '', updatedAt: Date.now() };
-    this.saveLink(ch.id, link); this.deps.bus.emit('room', { channelId: ch.id }); return link;
+    this.saveLink(ch.id, link); this.roomChanged(ch.id); return link;
   }
   reportLink(bot: Agent, channel: string, id: string, raw: unknown) {
     const ch = this.botChannel(bot, channel), p = sourceReportSchema.safeParse(raw);
@@ -308,6 +312,6 @@ export class RoomStore {
       }
     });
     if (message) this.deps.messages.publishTaskMessage(message);
-    this.deps.bus.emit('room', { channelId: ch.id }); return next;
+    this.roomChanged(ch.id); return next;
   }
 }

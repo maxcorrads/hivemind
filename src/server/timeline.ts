@@ -5,7 +5,7 @@ import {
   traceMetadataSchema, type RedactedTimelineEvent, type TimelineDeliveryEvent, type TimelineExport,
   type TimelineMessageEvent, type TimelineView,
 } from '../shared/timeline.ts';
-import { HiveError } from '../shared/types.ts';
+import { agentLabel, HiveError } from '../shared/types.ts';
 import type { TimelineDeps } from './services/ports.ts';
 
 type ProvenanceRow = {
@@ -133,7 +133,7 @@ export class TimelineStore {
       // Deliveries to agents removed since are dropped, as before.
       const deliveries = (this.deps.storage.db.prepare(`SELECT d.* FROM timeline_deliveries d
         WHERE d.message_seq=? ORDER BY d.offered_at,d.agent_id`).all(row.seq) as DeliveryRow[])
-        .flatMap(d => { const a = agent(d.agent_id); return a ? [{ ...d, name: a.name, role: a.role }] : []; });
+        .flatMap(d => { const a = agent(d.agent_id); return a ? [{ ...d, name: agentLabel(a), role: a.role }] : []; });
       for (const d of deliveries) {
         events.push({ kind:'delivery', id:`delivery:${d.delivery_id}:${row.seq}:${d.agent_id}:offered`,
           at:d.offered_at, traceId, messageId:String(row.id), seq:Number(row.seq), agentId:d.agent_id, agentName:d.name,

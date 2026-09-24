@@ -49,6 +49,10 @@ this feature does not execute or automatically unblock dependencies.
   means none reported, not a passing build. These remain claims, not verification.
 - `changes_requested` / `accepted_complete`: an explicit assigning-brain review of
   a submitted result. A worker cannot accept its own result as complete.
+- `cancelled`: Human removed the assigned worker from the hive; `cancellation` holds the
+  reason. The assigning brain can `revise` it to another worker. When the assigning brain
+  is removed instead, its tasks stay open: the worker can still checkpoint and submit, but
+  no brain reviews the result.
 
 Transport receipt is also retained separately: a worker may explicitly accept a
 contract read from history without an inbox ACK, in which case `receivedAt` remains

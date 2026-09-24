@@ -10,6 +10,7 @@ export function TaskCard({ task, decisions = [] }: { task: TaskSnapshot; decisio
     <header><strong>{task.state.replaceAll('_', ' ')}</strong><small>Revision {task.revision} · contract {task.contractVersion}</small></header>
     <p>{task.contract.objective}</p>
     <p>{task.assignerName} → {task.workerName}</p>
+    {task.cancellation && <p role="status">Cancelled: {task.cancellation.reason}. The assigning brain can reassign it with a revise.</p>}
     {task.room && <p role="status">Room contract {task.room.contractVersion} / current {task.room.currentVersion} · {task.room.status.replaceAll('_', ' ')} · {task.room.acknowledged ? 'Rules acknowledged' : 'Rules not yet acknowledged'}. A stop request is not task completion.</p>}
     <p>{task.receivedAt !== null ? 'Worker confirmed receipt' : 'Worker receipt not confirmed'} · receipt is not acceptance</p>
     <details><summary>Contract and evidence</summary>
