@@ -6,6 +6,8 @@ import { test, type TestContext } from "node:test";
 import type { SQLInputValue } from "node:sqlite";
 import type { Message, WaitMailItem } from "../shared/types.ts";
 import { Hive } from "./hive.ts";
+import { createApp } from "./app.ts";
+import { InboxReader } from "./inbox-reader.ts";
 import { addChannelMember, insertRows, markInboxRead, seedMessages } from "./test-fixtures.ts";
 
 function setup(t: TestContext) {
@@ -220,3 +222,84 @@ for (const compact of [false, true]) {
     assert.ok(hive.identity.listAgents(human).some((a) => a.projectId === other.id));
   });
 }
+
+function decisionFixture(t: TestContext) {
+  const { hive, human, project } = setup(t);
+  const brain = hive.identity.join({ role: "brain", project: project.slug }).agent;
+  const workers = [0, 1].map(() => hive.identity.join({ role: "worker", seniority: "mid", project: project.slug }).agent);
+  const room = hive.channels.createChannel(brain, { name: "decision-budget", type: "private", memberNames: workers.map(w => w.name) });
+  const task = hive.tasks.assign(brain, { requestId: "budget-task", worker: workers[0]!.name, channel: room.id,
+    contract: { objective: "Budget", scope: ["src"], nonGoals: [], acceptanceCriteria: ["Done"], dependencies: [], evidenceSeqs: [] } }).task;
+  let serial = 0;
+  const add = (count: number) => {
+    for (let i = 0; i < count; i++) {
+      const made = hive.decisions.create(brain, { requestId: `budget-${++serial}`, taskId: task.id,
+        expectedTaskRevision: hive.tasks.get(brain, task.id).revision, question: `Question ${serial}?`,
+        options: [{ id: "a", label: "A", impact: "a" }, { id: "b", label: "B", impact: "b" }],
+        recommendation: { optionId: "a", rationale: "Simple", uncertainty: "Low" }, evidenceSeqs: [], artifacts: [],
+        affectedWorkers: workers.map(w => w.name), relatedDecisionIds: [] }).decision;
+      // Every other decision is answered, so its view carries per-recipient receipts.
+      if (serial % 2 === 0) hive.decisions.answer(human, made.id, { requestId: `answer-${serial}`, expectedRevision: made.revision, body: "Take A." });
+    }
+  };
+  return { hive, human, project: room.projectId, add };
+}
+
+test("the Human decision queue reads a constant number of statements however many decisions it shows", (t) => {
+  const f = decisionFixture(t);
+  f.add(4);
+  const small = record(t, f.hive);
+  assert.equal(f.hive.decisions.listHuman(f.human, f.project).items.length, 4);
+  const smallCalls = [...small.calls]; small.restore();
+  f.add(36);
+  const large = record(t, f.hive);
+  const page = f.hive.decisions.listHuman(f.human, f.project);
+  const largeCalls = [...large.calls]; large.restore();
+  assert.equal(page.items.length, 40);
+  assert.ok(page.items.some(item => item.delivery.length === 3), "answered decisions list their recipients' receipts");
+  assert.equal(largeCalls.length, smallCalls.length, "no per-decision task, channel or receipt query");
+  assert.ok(largeCalls.length <= 12, `decision queue statement budget exceeded: ${largeCalls.length}`);
+  const receipts = largeCalls.find(call => /FROM json_each\(\?\) p\s+JOIN inbox_receipts/.test(call.sql));
+  assert.ok(receipts);
+  assert.match(plan(f.hive, receipts), /SEARCH r USING INDEX sqlite_autoindex_inbox_receipts_1 \(agent_id=\? AND seq=\?\)/);
+});
+
+test("channel pages scope thread aggregates to their window and read them through indexes", async (t) => {
+  const { hive, project } = setup(t);
+  const channel = hive.channels.getChannel("general", project.id);
+  // 2,000 threads with a reply each; the page shows the newest 20 messages.
+  seedMessages(hive, Array.from({ length: 2_000 }, (_, i) => ({ id: `root-${i}`, channelId: channel.id, authorId: "human", body: `root ${i}`, createdAt: 1 })));
+  seedMessages(hive, Array.from({ length: 2_000 }, (_, i) => ({ id: `reply-${i}`, channelId: channel.id, authorId: "human", body: "reply",
+    threadId: `root-${i}`, createdAt: 1 })));
+  insertRows(hive, "threads", Array.from({ length: 2_000 }, (_, i) => ({ id: `root-${i}`, channel_id: channel.id, status: "open" })));
+  const observed = record(t, hive);
+  const response = await createApp(hive).request(`/api/ui/channels/${channel.id}/messages?limit=20`);
+  const calls = [...observed.calls]; observed.restore();
+  const body = await response.json() as { messages: Message[]; threads: { id: string }[]; replyCounts: Record<string, number> };
+  assert.equal(body.messages.length, 20);
+  const roots = body.messages.map(message => message.id).filter(id => id.startsWith("root-")).sort();
+  assert.ok(roots.length > 0);
+  assert.deepEqual(Object.keys(body.replyCounts).sort(), roots);
+  assert.ok(Object.values(body.replyCounts).every(n => n === 1));
+  assert.deepEqual(body.threads.map(thread => thread.id).sort(), roots);
+  const threads = calls.find(call => /FROM threads\s+WHERE id IN/.test(call.sql))!;
+  const counts = calls.find(call => /COUNT\(\*\) AS n FROM messages/.test(call.sql))!;
+  assert.ok(threads.count <= 20 && counts.count <= 20, "aggregates never return rows outside the page");
+  assert.doesNotMatch(plan(hive, threads), /SCAN threads/);
+  assert.match(plan(hive, counts), /SEARCH messages USING (?:COVERING )?INDEX idx_messages_channel_thread_seq \(channel_id=\? AND thread_id=\?\)/);
+  assert.doesNotMatch(plan(hive, counts), /SCAN messages/);
+});
+
+test("the UI snapshot estimates each agent's inbox once, and room history uses its index", async (t) => {
+  const { hive, human, project } = setup(t);
+  hive.identity.join({ role: "brain", project: project.slug });
+  const agents = hive.identity.listAgents().filter(agent => agent.role === "brain" || agent.role === "worker").length;
+  const estimate = t.mock.method(InboxReader.prototype, "estimate");
+  const snapshot = await (await createApp(hive).request("/api/ui/snapshot")).json() as { queued: Record<string, number>; inbox: Record<string, unknown> };
+  assert.equal(estimate.mock.callCount(), agents);
+  assert.deepEqual(Object.keys(snapshot.queued).sort(), Object.keys(snapshot.inbox).sort());
+  const observed = record(t, hive);
+  hive.rooms.history(human, "general");
+  const history = observed.calls.find(call => /FROM room_events/.test(call.sql))!; observed.restore();
+  assert.match(plan(hive, history), /SEARCH room_events USING INDEX idx_room_events_channel_revision \(channel_id=\? AND revision<\?\)/);
+});

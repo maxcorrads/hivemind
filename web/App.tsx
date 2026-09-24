@@ -137,11 +137,24 @@ export function App() {
 
   const onAgent = async (agent: Agent) => {
     if (agent.id === "human") return;
-    const { channel } = await api.openDm(agent.name);
-    dms.reopenDm(channel.id);
-    await refreshSnap();
-    go({ kind: "channel", id: channel.id });
+    try {
+      const { channel } = await api.openDm(agent.name);
+      dms.reopenDm(channel.id);
+      await refreshSnap();
+      go({ kind: "channel", id: channel.id });
+    } catch (error) {
+      setErr(String((error as Error)?.message || error));
+    }
   };
+  /** Error banner retry: reload the snapshot and whatever conversation or inbox is on screen. */
+  const retry = () => {
+    setErr(null);
+    hive.setReconnectTick((value) => value + 1);
+    refreshSnap().catch((error) => { if (error?.name !== "AbortError") setErr(String(error.message || error)); });
+  };
+  // "Reconnecting" only after the socket was live once, so the first connect does not flash a banner.
+  const [wasLive, setWasLive] = useState(false);
+  useEffect(() => { if (live) setWasLive(true); }, [live]);
 
   if (!snap && err) {
     return (
@@ -156,7 +169,7 @@ export function App() {
   if (!snap) {
     return (
       <div className="boot-fail">
-        <p>Opening the hive…</p>
+        <p role="status">Opening the hive…</p>
       </div>
     );
   }
@@ -180,6 +193,7 @@ export function App() {
         }} />
 
       <main className="desk">
+        {wasLive && !live && <div className="conn-banner" role="status">Reconnecting… Live updates are paused.</div>}
         {projects.length === 0 ? (
           <header className="desk-h">
             <div>
@@ -216,6 +230,8 @@ export function App() {
             onMarkMessage={(message) => inbox.markMessage(sel.project, message)}
             box={inboxBox}
             mentions={inboxBox === "all" ? allForYou : inboxMentions}
+            loading={inboxBox === "unread" && inbox.inboxLoading}
+            failed={inboxBox === "unread" && inbox.inboxFailed === sel.project}
             hasMore={inboxBox === "unread" && !inboxBusy && inboxPage?.project === sel.project && Boolean(inboxPage.hasMore)}
             channels={channels}
             agents={snap.agents.filter((a) => a.role === "human" || a.project === sel.project)}
@@ -238,8 +254,10 @@ export function App() {
             onBack={() => go(channelBack(activeChannel, lastList.current, selectedProject))} />
         )}
         {err && (
-          <div className="err" onClick={() => setErr(null)}>
-            {err}
+          <div className="err with-actions" role="alert">
+            <span>{err}</span>
+            <button type="button" onClick={retry}>Retry</button>
+            <button type="button" aria-label="Dismiss error" onClick={() => setErr(null)}>Dismiss</button>
           </div>
         )}
       </main>

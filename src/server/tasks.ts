@@ -282,6 +282,12 @@ export class TaskStore {
       WHERE id IN (SELECT value FROM json_each(?)) AND json_extract(snapshot,'$.state')='accepted_complete'`)
       .all(JSON.stringify(ids)) as { id: string }[]).map(row => String(row.id));
   }
+  /** Current revisions of the given tasks in one statement; a missing task is absent from the map. */
+  revisions(ids: readonly string[]): Map<string, number> {
+    return new Map((this.db.prepare(`SELECT id, CAST(json_extract(snapshot,'$.revision') AS INTEGER) AS revision
+      FROM task_records WHERE id IN (SELECT value FROM json_each(?))`).all(JSON.stringify(ids)) as { id: string; revision: number }[])
+      .map(row => [row.id, Number(row.revision)]));
+  }
   /** The subset of `ids` that are tasks not yet accepted-complete. */
   unfinished(ids: string[]): string[] {
     return (this.db.prepare(`SELECT id FROM task_records WHERE id IN (SELECT value FROM json_each(?))

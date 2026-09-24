@@ -84,8 +84,14 @@ export function reconcileChannelSnapshot(
   for (const { message, inserted } of journal.messages.values()) {
     if (!message.threadId && (inserted || byId.has(message.id))) byId.set(message.id, message);
   }
-  const counts = { ...data.replyCounts };
-  const replySeqs: Record<string, number> = {};
+  // The server scopes thread aggregates to the page it returns. Roots kept from the previous window
+  // (older pages, held history) keep their counts and statuses, which live events already updated.
+  const dataRoots = new Set(data.messages.map(message => message.id));
+  const carry = <T,>(values: Record<string, T> | undefined) => held || older
+    ? Object.fromEntries(Object.entries(values ?? {}).filter(([id]) => byId.has(id) && !dataRoots.has(id))) : {};
+  const carried = carry(previous?.replyCounts);
+  const counts = { ...carried, ...data.replyCounts };
+  const replySeqs: Record<string, number> = carry(previous?.replySeqs);
   // Count each insertion once across ACK + WS, including a reply missing from
   // the snapshot. A reaction-only entry must not erase proof of insertion.
   const insertions = new Map(journal.confirmations);
@@ -93,7 +99,7 @@ export function reconcileChannelSnapshot(
     if (inserted) insertions.set(message.id, message);
   }
   for (const message of insertions.values()) {
-    if (!message.threadId) continue;
+    if (!message.threadId || message.threadId in carried) continue;
     if (data.snapshotSeq === undefined) {
       // Older/mock payloads lack a sequence fence; avoid duplicate counts.
       counts[message.threadId] = Math.max(counts[message.threadId] ?? 0, previous?.replyCounts[message.threadId] ?? 0);
@@ -102,7 +108,8 @@ export function reconcileChannelSnapshot(
       replySeqs[message.threadId] = Math.max(replySeqs[message.threadId] ?? 0, message.seq);
     }
   }
-  const threads = new Map(data.threads.map(thread => [thread.id, thread]));
+  const threads = new Map([...(held || older ? previous?.threads ?? [] : []).filter(thread => !dataRoots.has(thread.id)), ...data.threads]
+    .map(thread => [thread.id, thread]));
   for (const thread of journal.threads.values()) threads.set(thread.id, thread);
   const pane = boundLivePane({ ...data,
     messages: [...byId.values()].sort((a, b) => a.seq - b.seq),

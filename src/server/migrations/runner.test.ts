@@ -117,16 +117,29 @@ test("a populated current-main (user_version 2) hive upgrades with every row and
   // #211 (jev_advisory) drops what only served enforced topologies; every other row and object is untouched.
   const dropped = ["adaptive_topology_locks", "adaptive_topology_tasks", "adaptive_topology_evaluated", "adaptive_topology_messages"];
   const rewritten = ["adaptive_topology_executions", "adaptive_topology_events"];
+  // #217 (performance_retention) adds the per-message receipt index, backfilled from the delivery ledger.
+  const added = ["inbox_receipts"];
   const kept = (rows: Record<string, unknown[]>) => Object.fromEntries(Object.entries(rows)
-    .filter(([table]) => !dropped.includes(table) && !rewritten.includes(table)));
+    .filter(([table]) => !dropped.includes(table) && !rewritten.includes(table) && !added.includes(table)));
   assert.deepEqual(kept(after.rows), kept(before.rows), "the advisory migration keeps every other row, including jev_calls and evidence");
   for (const table of dropped) assert.equal(after.rows[table], undefined, `${table} is dropped`);
   assert.deepEqual(after.rows.adaptive_topology_events, [], "enforced routing events are cleared");
   assert.deepEqual(after.rows.adaptive_topology_executions!.map(row => (row as { execution_id: string }).execution_id), ["ex1"],
     "only the current execution survives; a draining one is dropped");
   assert.ok(after.rows.jev_calls!.length > 0 && after.rows.adaptive_evidence_runs!.length > 0);
+  type Delivery = { agent_id: string; seqs: string; acknowledged_at: number | null };
+  const receipts = new Map<string, number | null>();
+  for (const row of before.rows.inbox_deliveries as Delivery[]) for (const seq of JSON.parse(row.seqs) as number[]) {
+    const key = `${row.agent_id}:${seq}`, previous = receipts.get(key);
+    receipts.set(key, previous ?? row.acknowledged_at);
+  }
+  assert.ok(receipts.size > 0);
+  assert.deepEqual(new Map((after.rows.inbox_receipts as Array<{ agent_id: string; seq: number; acknowledged_at: number | null }>)
+    .map(row => [`${row.agent_id}:${row.seq}`, row.acknowledged_at])), receipts, "receipts are backfilled from the delivery ledger");
+  const performance = ["idx_threads_channel", "idx_room_events_channel_revision", "idx_attachments_sha256",
+    "upload_usage_insert", "upload_usage_delete", "upload_usage_change"];
   const objects = (schema: SchemaRow[]) => schema.filter(row => !dropped.includes(row.tbl) && !rewritten.includes(row.tbl)
-    && row.name !== "adaptive_channel_deleted");
+    && !added.includes(row.tbl) && row.name !== "adaptive_channel_deleted" && !performance.includes(row.name) && !row.name.startsWith("inbox_receipts_"));
   assert.deepEqual(objects(after.schema), objects(before.schema));
   assert.deepEqual(after.schema, JSON.parse(fixture("main-schema-telegram-routed.json")));
   open(t, file).db.close();

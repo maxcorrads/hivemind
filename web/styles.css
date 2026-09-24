@@ -58,6 +58,8 @@
   --mute: #5c6556;
   --line: rgba(27, 32, 23, 0.1);
   --wax: #b8922a;
+  /* --wax is decorative (3:1 at best): text and focus rings use --wax-ink (>= 4.5:1 on desk and paper). */
+  --wax-ink: #7d5f12;
   --moss: #2f7a4a;
   --ember: #c24b38;
   --pill: rgba(255, 255, 255, 0.82);
@@ -101,6 +103,7 @@ html.dark {
   --mute: #9aa394;
   --line: rgba(236, 238, 230, 0.08);
   --wax: #e0c36a;
+  --wax-ink: #e0c36a;
   --moss: #5dba7a;
   --ember: #e07a68;
   --pill: rgba(255, 255, 255, 0.12);
@@ -135,6 +138,8 @@ button, input, textarea, select {
   border: 0;
 }
 button { cursor: pointer; }
+/* One keyboard focus ring for every control; zero specificity so a component can still restyle it. */
+:where(button, a, input, textarea, select, summary, [tabindex]):focus-visible { outline: 2px solid var(--wax-ink); outline-offset: 2px; }
 code, pre { font-family: var(--mono); font-size: 0.86em; }
 pre {
   background: rgba(27, 32, 23, 0.05);
@@ -159,14 +164,11 @@ html.dark pre { background: rgba(255, 255, 255, 0.05); }
   grid-template-columns: 300px minmax(0, 1fr) minmax(300px, 36vw);
 }
 
-.rail, .hive {
+.rail {
   color: var(--rail-ink);
   min-height: 0;
   overflow: auto;
   padding: 0.85rem 0.7rem 1.1rem;
-}
-.hive {
-  border-left: 1px solid transparent;
 }
 
 .brand {
@@ -223,7 +225,6 @@ html.dark pre { background: rgba(255, 255, 255, 0.05); }
   background: var(--pill);
   padding: 0.48rem 0.7rem;
   margin: 0 0 0.55rem;
-  outline: none;
   color: var(--rail-ink);
 }
 .search::placeholder { color: var(--rail-mute); }
@@ -279,12 +280,11 @@ html.dark pre { background: rgba(255, 255, 255, 0.05); }
   color: var(--ink);
   padding: 0.35rem 0.5rem;
   margin-bottom: 0.2rem;
-  outline: none;
 }
 .text-btn {
   font-size: 0.82rem;
   font-weight: 600;
-  color: var(--wax);
+  color: var(--wax-ink);
   padding: 0.25rem 0.45rem;
   border-radius: 8px;
 }
@@ -293,7 +293,7 @@ html.dark pre { background: rgba(255, 255, 255, 0.05); }
 .older {
   display: block;
   margin: 0.5rem auto 0.8rem;
-  color: var(--wax);
+  color: var(--wax-ink);
   font-weight: 600;
   font-size: 0.85rem;
 }
@@ -432,7 +432,7 @@ html.dark .hit { background: rgba(224, 195, 106, 0.28); }
 html.dark .mention { color: var(--wax); }
 .replies {
   margin-top: 0.28rem;
-  color: var(--wax);
+  color: var(--wax-ink);
   font-size: 0.8rem;
   font-weight: 600;
 }
@@ -465,7 +465,6 @@ html.dark .avatar.role-bot { color: var(--ink); }
   background: var(--moss);
   box-shadow: 0 0 0 2px var(--desk);
 }
-.hive .avatar[data-on="1"]::after { box-shadow: 0 0 0 2px transparent; }
 
 .composer {
   padding: 0.55rem 1rem 1rem;
@@ -488,6 +487,8 @@ html.dark .avatar.role-bot { color: var(--ink); }
   line-height: 1.4;
   outline: none;
 }
+/* The textarea sits borderless inside the box, so the box carries the focus ring. */
+.composer-box:has(textarea:focus-visible) { outline: 2px solid var(--wax-ink); outline-offset: 2px; }
 
 .routing-strip {
   margin: 0.4rem 1rem 0;
@@ -522,12 +523,6 @@ html.dark .avatar.role-bot { color: var(--ink); }
   gap: 0.45rem;
   align-items: center;
   padding: 0.55rem 0;
-}
-.routing-summary span {
-  padding: 0.15rem 0.4rem;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  font-size: 0.75rem;
 }
 .routing-warning {
   padding: 0.5rem 0.65rem;
@@ -568,7 +563,6 @@ html.dark .avatar.role-bot { color: var(--ink); }
   font-weight: 700;
 }
 
-.routing-event.warning { background: color-mix(in srgb, var(--wax) 10%, transparent); }
 .routing-event time { flex: none; opacity: 0.6; }
 .send {
   flex: none;
@@ -672,7 +666,6 @@ html.dark .send { background: var(--wax); color: #1b2017; }
 .hints button:hover { background: rgba(27, 32, 23, 0.04); }
 .hints small { color: var(--mute); }
 
-.hive .group-h { padding-top: 0.15rem; }
 .subh {
   color: var(--rail-mute);
   font-size: 0.7rem;
@@ -837,7 +830,7 @@ html.dark .inbox-item:hover { background: rgba(255, 255, 255, 0.03); }
 .open-link {
   display: block;
   padding: 0 1.2rem 0.7rem 3.7rem;
-  color: var(--wax);
+  color: var(--wax-ink);
   font-size: 0.8rem;
   font-weight: 600;
 }
@@ -855,6 +848,23 @@ html.dark .inbox-item:hover { background: rgba(255, 255, 255, 0.03); }
   border-radius: 10px;
 }
 html.dark .err { background: #3a221c; color: #f3d2cb; }
+.err.with-actions { display: flex; align-items: center; gap: 0.5rem; }
+.err.with-actions > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.err.with-actions button { flex: none; font-weight: 600; padding: 0.15rem 0.45rem; border-radius: 8px; }
+.err.with-actions button:hover { background: color-mix(in srgb, var(--ember) 12%, transparent); }
+.conn-banner {
+  flex: none;
+  padding: 0.4rem 1rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--wax) 18%, var(--desk));
+  border-bottom: 1px solid var(--line);
+}
+.loading { color: var(--mute); padding: 1.2rem; }
+.loading::after { content: ""; display: inline-block; width: 0.7em; height: 0.7em; margin-left: 0.5em; border: 2px solid currentColor;
+  border-right-color: transparent; border-radius: 50%; vertical-align: -0.1em; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .loading::after { animation: none; } }
 
 .modal {
   position: fixed;
@@ -1089,7 +1099,7 @@ html.dark .primary { background: var(--wax); color: #1b2017; }
 .inbox-card.collapsed .msg-b { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 .inbox-actions { display: flex; flex-wrap: wrap; gap: 0.8rem; padding: 0.6rem 1.15rem 0.25rem 4rem; }
 .inbox-actions .text-btn { font-size: 0.78rem; }
-.inbox-actions .text-btn:first-child { color: var(--wax); }
+.inbox-actions .text-btn:first-child { color: var(--wax-ink); }
 .inbox-error { color: var(--ember); }
 .settings-disclosure { border-top: 1px solid var(--line); padding: 0.7rem 0; }
 .settings-disclosure > summary { cursor: pointer; font-weight: 600; font-size: 0.85rem; }
@@ -1260,7 +1270,7 @@ summary:focus-visible, .tool-action:focus-visible { outline: 2px solid var(--wax
 .jev-call-answer { color: var(--mute); }
 .jev-call-answer.unavailable { color: var(--ember); }
 .jev-call-outcome.applied, .jev-badge.applied, .jev-outcome.applied { color: var(--moss); }
-.jev-call-outcome.warning, .jev-badge.warning, .jev-outcome.warning { color: var(--wax); }
+.jev-call-outcome.warning, .jev-badge.warning, .jev-outcome.warning { color: var(--wax-ink); }
 .jev-call-outcome.idle, .jev-badge.idle, .jev-outcome.idle { color: var(--mute); }
 .jev-outcome { font-weight: 600; }
 

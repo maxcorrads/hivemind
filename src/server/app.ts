@@ -30,6 +30,11 @@ function fileDownload(hive: Hive, actor: Agent, id: string) {
       "content-disposition": `inline; filename="${safeFileName(opened.meta.name)}"` },
   });
 }
+/** Thread roots a message page shows: its messages and the open thread; aggregates are scoped to them. */
+function windowRoots(messages: readonly { id: string }[], threadId: string | null): string[] {
+  return threadId ? [threadId, ...messages.map(message => message.id)] : messages.map(message => message.id);
+}
+
 export function createApp(hive: Hive, hooks: AppHooks = {}) {
   const app = new Hono();
   app.use("*", cors({ origin: ["http://127.0.0.1:7421", "http://localhost:7421", "http://127.0.0.1:7420"] }));
@@ -100,7 +105,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const channels = hive.channels.listChannels(human);
     return c.json({ you: human, projects: hive.projects.listProjects(), agents: hive.identity.listAgents(), channels,
       archivedChannelIds: hive.rooms.archivedChannelIds(channels),
-      ...hive.reads.readSnapshot(human), queued: hive.delivery.queuedCounts(), inbox: hive.delivery.inboxStatuses(),
+      ...hive.reads.readSnapshot(human), ...hive.delivery.queueSnapshot(),
       telegram: { running: Boolean(hooks.telegramRunning?.()), configured: publicTelegramView(hive.home).configured, ...hive.telegramAdmin.health() } });
   });
   ui.get("/read-state", c => c.json(hive.reads.readSnapshot(hive.identity.getAgent("human"))));
@@ -199,10 +204,10 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const after = c.req.query('afterSeq'), before = c.req.query('beforeSeq');
     const listed = hive.messageQueries.listMessages(human, id, { threadId, afterSeq: after !== undefined ? Number(after) : undefined,
       beforeSeq: before !== undefined ? Number(before) : undefined, limit: Number(c.req.query('limit') ?? 80) });
-    const ch = hive.channels.getChannel(id);
+    const ch = hive.channels.getChannel(id), roots = windowRoots(listed.messages, threadId);
     return c.json({ channel: ch, threadId, messages: listed.messages, hasOlder: listed.hasOlder, hasNewer: listed.hasNewer,
-      cursors: listed.cursors, threads: hive.messageQueries.threadsInChannel(ch.id).map(thread => threadResponseSchema.parse(thread)),
-      replyCounts: hive.messageQueries.replyCounts(ch.id), snapshotSeq: hive.messageQueries.latestSeq(ch.id),
+      cursors: listed.cursors, threads: hive.messageQueries.threadsInChannel(ch.id, roots).map(thread => threadResponseSchema.parse(thread)),
+      replyCounts: hive.messageQueries.replyCounts(ch.id, roots), snapshotSeq: hive.messageQueries.latestSeq(ch.id),
       task: threadId && hive.tasks.has(threadId) ? hive.tasks.get(human, threadId) : undefined,
       decision: threadId && hive.decisions.has(threadId) ? hive.decisions.get(human, threadId) : undefined,
       decisions: threadId && hive.tasks.has(threadId) ? hive.decisions.forTask(human, threadId) : undefined });
@@ -336,14 +341,15 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   });
   agent.get('/channels/:id/messages', c => {
     const me = c.get('me'), after = c.req.query('afterSeq'), before = c.req.query('beforeSeq');
-    const listed = hive.messageQueries.listMessages(me, c.req.param('id'), { threadId: c.req.query('threadId') || null,
+    const threadId = c.req.query('threadId') || null;
+    const listed = hive.messageQueries.listMessages(me, c.req.param('id'), { threadId,
       afterSeq: after !== undefined ? Number(after) : undefined, beforeSeq: before !== undefined ? Number(before) : undefined,
       limit: Number(c.req.query('limit') ?? 20) });
     const ch = hive.channels.getChannel(c.req.param('id'), me.projectId), meta = c.req.query('meta') === '1';
     return c.json({ channel: { id: ch.id, name: ch.name, type: ch.type }, messages: listed.messages,
       hasOlder: listed.hasOlder, hasNewer: listed.hasNewer, cursors: listed.cursors,
-      threads: meta ? hive.messageQueries.threadsInChannel(ch.id).map(thread => threadResponseSchema.parse(thread)) : undefined,
-      replyCounts: meta ? hive.messageQueries.replyCounts(ch.id) : undefined });
+      threads: meta ? hive.messageQueries.threadsInChannel(ch.id, windowRoots(listed.messages, threadId)).map(thread => threadResponseSchema.parse(thread)) : undefined,
+      replyCounts: meta ? hive.messageQueries.replyCounts(ch.id, windowRoots(listed.messages, threadId)) : undefined });
   });
   agent.post('/channels', async c => {
     const body = await requestJson(c.req.raw);

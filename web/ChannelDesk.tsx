@@ -40,6 +40,7 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
   onBack: () => void;
 }) {
   const { pane, setPane, channelStream, channelJournal, loadChannel } = channel;
+  const loaded = pane?.channel.id === channelId;
   return (
     <>
       <header className="desk-h">
@@ -67,7 +68,7 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
           {pane.deferredLive ? "New messages — return to live" : "Return to live"}
         </button>
       )}
-      <div className="stream" ref={channelStream} onScroll={() => {
+      <div className="stream" role="log" aria-label="Messages" ref={channelStream} onScroll={() => {
         if (isReadingHistory(channelStream.current)) setPane((current) => current ? holdLivePane(current) : current);
       }}>
         {activeChannel && ['private', 'public'].includes(activeChannel.type) && <RoomPanel key={activeChannel.id} channel={activeChannel} agents={agents} tick={roomTick} />}
@@ -88,7 +89,9 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
             Load older
           </button>
         )}
-        {(pane?.channel.id === channelId ? pane.messages : []).map((m) => (
+        {!loaded && <div className="loading" role="status">Loading messages…</div>}
+        {loaded && pane.messages.length === 0 && !pane.hasOlder && <div className="empty">No messages yet.</div>}
+        {(loaded ? pane.messages : []).map((m) => (
           <Msg
             key={m.id}
             m={m}
