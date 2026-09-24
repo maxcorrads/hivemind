@@ -34,7 +34,7 @@ Timeline entries are observability facts only. They do not grant authority, chan
 
 ## Redacted export and replay
 
-`export_task_timeline` and the TaskCard export button produce schema v1 fixtures with `mode: "fake-only"`.
+`get_task_timeline` with `export=true` and the TaskCard export button produce schema v1 fixtures with `mode: "fake-only"`.
 
 Redaction is structural:
 

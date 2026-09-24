@@ -52,7 +52,7 @@ The standing orders tell brains that the advice is advisory, that they decide fr
 
 Each Human request handled by a brain is an **execution** (`execution-<uuid>`), one per brain and channel: a new top-level Human request to the same brain in the same channel replaces the previous one. Executions only group Jev calls for the Routing log and the evidence export, and keep the latest advice. A brain action is attributed to the brain's open request rooted at the action's thread, else its open request in the action's channel, else its most recently updated open request in the project. Marking the request's thread done closes the execution (no more calls for it); a Human reply in that thread reopens it.
 
-`executionId` is still **accepted and ignored** on `send`, `attach`, `assign_task`, `task_event`, `room_event` (MCP and HTTP) and by `hivemind send --execution-id`, so older clients keep working.
+`executionId` is no longer in any MCP or HTTP schema (#218). The server still **drops it unvalidated** from agent `send`/`attach`, `assign_task`, `task_event` and `room_event` payloads, and `hivemind send --execution-id` is ignored, so older clients keep working.
 
 ## Human UI
 

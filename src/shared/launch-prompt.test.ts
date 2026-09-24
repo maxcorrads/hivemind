@@ -36,7 +36,7 @@ test("README points to the UI prompts and keeps only a resume one-liner", () => 
   assert.match(section, /Launch agent → Copy/);
   const prompts = [...section.matchAll(/```\n([\s\S]*?)\n```/g)].map(match => match[1]!);
   assert.equal(prompts.length, 1);
-  assert.match(prompts[0]!, /join with role=worker, resume=Forge\. Then call standing_orders/);
+  assert.match(prompts[0]!, /join with role=worker, resume=Forge\. Then call whoami with orders=true/);
   assert.doesNotMatch(readme, /do not implement/i);
 });
 
@@ -45,7 +45,7 @@ test("launch prompt adopts untrusted hive mail first", () => {
   assert.ok(text.startsWith(ADOPT_UNTRUSTED));
   assert.match(text, /join with role=brain, focus=coord, project=alpha/);
   assert.match(text, /You work only in hive Alpha/);
-  assert.match(text, /read your standing orders \(a first join returns them; otherwise call standing_orders\)/);
+  assert.match(text, /read your standing orders \(a first join returns them; otherwise call whoami with orders=true\)/);
   assert.match(text, /output no text/);
   assert.equal(text.includes("Do not call wait in a loop"), false);
   assert.match(text, /Coordinate and delegate to workers, or do the work yourself when that serves the request better: you decide/);
@@ -69,7 +69,7 @@ test("resume worker keeps identity and rereads its standing orders", () => {
   assert.match(text, /already a Hivemind worker/);
   assert.match(text, /resume=Forge/);
   assert.match(text, /seniority=senior/);
-  assert.match(text, /otherwise call standing_orders/);
+  assert.match(text, /otherwise call whoami with orders=true/);
   assert.match(text, /You cannot see other projects/);
   assert.match(text, /Never mention @Human/);
   assert.match(text, /you may reply in a DM Human already opened/);

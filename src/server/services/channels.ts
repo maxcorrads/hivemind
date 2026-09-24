@@ -1,6 +1,6 @@
 import type { SQLInputValue } from "node:sqlite";
 import { DEFAULT_PROJECT_SLUG, HiveError, HUMAN_ID, type Agent, type Channel, type ChannelType, type Project } from "../../shared/types.ts";
-import { channelInputSchema, validated } from "../../shared/api-contract.ts";
+import { channelInputSchema, normalizeChannelReference, validated } from "../../shared/api-contract.ts";
 import type { AgentDirectory, ChannelAccess, Core, MessagePoster, ProjectDirectory } from "./ports.ts";
 import { now, type ChannelRow } from "./rows.ts";
 
@@ -143,7 +143,9 @@ export class ChannelService implements ChannelAccess {
       .map((row) => row.channel_id);
   }
 
-  getChannel(idOrName: string, projectId?: string | null): Channel {
+  /** Resolves a UUID, name or display `#name`. */
+  getChannel(reference: string, projectId?: string | null): Channel {
+    const idOrName = normalizeChannelReference(reference);
     if (projectId) {
       const scoped = this.db.prepare(
         `SELECT * FROM channels WHERE project_id = ? AND (id = ? OR lower(name) = lower(?))`,

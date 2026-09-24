@@ -3,6 +3,7 @@ import { api, type ChannelPayload } from "./api.ts";
 import { Composer } from "./Composer.tsx";
 import { DecisionCard } from './DecisionQueue.tsx';
 import { STATUSES } from "./labels.ts";
+import { BackButton } from "./MobileNav.tsx";
 import { Msg } from "./Msg.tsx";
 import { holdLivePane, isReadingHistory } from "./pane-window.ts";
 import { TaskCard } from './TaskCard.tsx';
@@ -24,6 +25,7 @@ export function ThreadAside({ channelId, threadId, threadPane, thread, onClose, 
   return (
     <aside className="thread">
       <header className="desk-h">
+        <BackButton label="Back to channel" onBack={onClose} />
         <div>
           <h1>Thread</h1>
           <p>replies on this message</p>

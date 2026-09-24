@@ -72,7 +72,7 @@ export class TaskStore {
         ...checkpointFreshness(task) };
     });
     return { items, hasMore: rows.length > 5, nextCursor: rows.length > 5 ? page.at(-1)!.id : null,
-      next: 'Read get_handoff for the current task before acting. An identity resume does not restore model memory or verify saved work.' };
+      next: 'Read get_handoffs with taskId for the current task before acting. An identity resume does not restore model memory or verify saved work.' };
   }
   private worker(actor: Agent, name: string) {
     const worker = this.deps.identity.getAgentByName(name);

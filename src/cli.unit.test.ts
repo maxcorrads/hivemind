@@ -336,7 +336,6 @@ test("send validates its flags before contacting the hive", async (t) => {
   await assert.rejects(runCli(["send", "--channel", "general", "--body", "x", "--event-type", "gossip"]), /Unknown --event-type/);
   await assert.rejects(runCli(["send", "--channel", "general"]), /send --body TEXT {2}and\/or {2}--file PATH/);
   await assert.rejects(runCli(["send", "--body", "x"]), /send --channel NAME {2}or {2}--to NAME/);
-  await assert.rejects(runCli(["send", "--channel", "general", "--body", "x", "--execution-id", "bad id"]));
   await assert.rejects(runCli(["send", "--channel", "general", "--body", "x", "--thread", "not-a-uuid"]));
   await assert.rejects(runCli(["send", "--channel", "general", "--file", path.join(home, "blob.bin")]), /unsupported file type/);
   assert.equal(calls.length, 0);

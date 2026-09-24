@@ -21,7 +21,8 @@ export function Msg({
   const time = new Date(m.createdAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
   const placed = (m.reactions ?? []).filter((r) => r.count > 0);
   return (
-    <article className={`msg role-${m.authorRole} kind-${m.kind}`}>
+    // Focusable so a tap on touch screens reveals the reaction picker (:focus-within), as hover does with a mouse.
+    <article className={`msg role-${m.authorRole} kind-${m.kind}`} tabIndex={-1}>
       <Avatar name={m.authorName} role={m.authorRole} />
       <div>
         <div className="msg-h">

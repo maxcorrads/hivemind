@@ -13,7 +13,7 @@ import type { BrainAction } from './adaptive-topology.ts';
  * For a brain, Hivemind then asks Jev synchronously and returns its non-binding advice as `jevAdvice` (null when Jev is
  * off or the brain serves no open Human request). Workers never trigger Jev and receive no advice.
  *
- * `executionId` is still accepted in every payload for backward compatibility and ignored.
+ * A legacy `executionId` from older clients is dropped at ingress (api-input.ts) and never reaches these actions.
  */
 type Advised = { jevAdvice?: JevAdvice | null };
 
@@ -26,7 +26,7 @@ function retried(deps: AdaptiveActionDeps, actor: Agent, hint: Pick<BrainAction,
 }
 
 export async function sendAdaptiveAgentMessage(deps: AdaptiveActionDeps, actor: Agent, channelRef: string, raw: unknown) {
-  const { executionId: _ignored, ...input } = validated(sendInputSchema, raw);
+  const input = validated(sendInputSchema, raw);
   const channel = deps.channels.getChannel(channelRef, actor.projectId);
   if (!deps.channels.canSeeChannel(actor, channel) || !deps.channels.canPost(actor, channel)) throw new HiveError(403, 'Cannot send to this channel');
   const body = input.body ?? '', requestId = input.requestId ?? randomUUID();
@@ -52,7 +52,7 @@ export async function sendAdaptiveAgentMessage(deps: AdaptiveActionDeps, actor: 
 
 export async function assignAdaptiveTask(deps: AdaptiveActionDeps, actor: Agent, raw: unknown) {
   if (actor.role !== 'brain') throw new HiveError(403, 'Only a brain assigns work');
-  const { executionId: _ignored, ...input } = validated(assignTaskSchema, raw);
+  const input = validated(assignTaskSchema, raw);
   const hint = { channelId: input.channel };
   if (deps.tasks.hasRequest(actor.id, input.requestId)) return { ...deps.tasks.assign(actor, input), ...retried(deps, actor, hint) };
   const result = deps.tasks.assign(actor, input);
@@ -61,7 +61,7 @@ export async function assignAdaptiveTask(deps: AdaptiveActionDeps, actor: Agent,
 }
 
 export async function mutateAdaptiveTask(deps: AdaptiveActionDeps, actor: Agent, taskId: string, raw: unknown) {
-  const { executionId: _ignored, ...input } = validated(taskEventSchema, raw), action = input.action;
+  const input = validated(taskEventSchema, raw), action = input.action;
   const task = deps.tasks.get(actor, taskId);
   const hint = { channelId: task.channelId, threadId: taskId };
   if (deps.tasks.hasRequest(actor.id, input.requestId)) return { ...deps.tasks.event(actor, taskId, input), ...retried(deps, actor, hint) };
@@ -71,7 +71,7 @@ export async function mutateAdaptiveTask(deps: AdaptiveActionDeps, actor: Agent,
 }
 
 export async function mutateAdaptiveRoom(deps: AdaptiveActionDeps, actor: Agent, channelId: string, raw: unknown) {
-  const { executionId: _ignored, ...input } = validated(roomEventSchema, raw), action = input.action;
+  const input = validated(roomEventSchema, raw), action = input.action;
   const hint = { channelId };
   if (deps.rooms.hasRequest(actor.id, input.requestId)) return { ...deps.rooms.event(actor, channelId, input), ...retried(deps, actor, hint) };
   const result = deps.rooms.event(actor, channelId, input);

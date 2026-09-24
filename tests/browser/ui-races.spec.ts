@@ -255,6 +255,9 @@ test("archived channels are consultable, searchable and project-scoped without m
     await section.screenshot({ path: testInfo.outputPath(`archived-${dark ? "dark" : "light"}.png`) });
   }
   await page.setViewportSize({ width: 390, height: 700 });
+  // Phones show the channel full screen; its back arrow leads to Home, where the navigation lives.
+  await page.getByRole("button", { name: "Back", exact: true }).click();
+  await expect(page).toHaveURL(/#\/home\/alpha$/);
   await summary.scrollIntoViewIfNeeded();
   const bounds = await summary.boundingBox();
   expect(bounds!.x).toBeGreaterThanOrEqual(0);

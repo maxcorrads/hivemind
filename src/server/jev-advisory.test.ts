@@ -194,6 +194,10 @@ test('a legacy executionId is accepted and ignored everywhere', async t => {
   const worker = await f.agent(f.workers[0]!.token, 'POST', `/channels/${assigned.task.channelId}/messages`,
     { body: 'ok', requestId: 'w', executionId: 'execution-unknown' });
   assert.equal('jevAdvice' in worker, false);
+  // Dropped before validation (#218): even a malformed legacy value cannot fail an event.
+  const accepted = await f.agent<{ task: TaskSnapshot }>(f.workers[0]!.token, 'POST', `/tasks/${assigned.task.id}/events`,
+    { requestId: 'acc', expectedRevision: assigned.task.revision, action: { type: 'accept' }, executionId: 'bad id' });
+  assert.equal(accepted.task.state, 'accepted');
 });
 
 test('without Jev, or without a Human request, brains get null advice and no call is made', async t => {

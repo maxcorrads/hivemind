@@ -20,7 +20,7 @@ export const AGENT_RULES = [
   { id: "session.project-scope", roles: both, rule: "Work only in your project; other projects are invisible; Human is the only bridge between projects." },
   { id: "session.join-location", roles: both, rule: "Join from the project worktree or pass project." },
   { id: "session.real-join", roles: both, rule: "Join with a real tool call; never simulate results or invent a name; load tools via host discovery; report and stop if join fails." },
-  { id: "session.read-orders", roles: both, rule: "After join, read and follow the standing orders (join result or standing_orders)." },
+  { id: "session.read-orders", roles: both, rule: "After join, read and follow the standing orders (join result or whoami with orders=true)." },
   { id: "session.identity-fixed", roles: both, rule: "Role and seniority are fixed for the session." },
   { id: "session.resume-by-name", roles: both, rule: "Resume with join resume=<name>, no credentials; the newest join with a name supersedes the older session." },
   { id: "session.same-process-join", roles: both, rule: "Repeated join in one MCP process keeps its identity; a new identity needs a new MCP process." },
