@@ -54,12 +54,15 @@ test('fresh real stdio and CLI sessions recover bounded handoffs without token d
   const joined = await call<{ handoffs: HandoffList; next: string }>(resumed, 'join', { role: 'worker', project: 'chapter' });
   assert.equal(joined.handoffs.items[0]?.taskId, task.id);
   assert.equal(joined.handoffs.items[0]?.nextAction, 'Add the empty input guard');
-  assert.match(joined.next, /get_handoff/);
-  const recovered = await call<ReturnType<Hive['tasks']['handoff']>>(resumed, 'get_handoff', { taskId: task.id });
+  assert.match(joined.next, /get_handoffs with taskId/);
+  const recovered = await call<ReturnType<Hive['tasks']['handoff']>>(resumed, 'get_handoffs', { taskId: task.id });
   assert.equal(recovered.freshness, 'current');
   assert.equal(recovered.checkpoint?.version, 1);
   assert.equal(recovered.state, 'accepted');
   assert.equal((await call<HandoffList>(resumed, 'get_handoffs')).items[0]?.taskId, task.id);
+  const both = await resumed.callTool({ name: 'get_handoffs', arguments: { taskId: task.id, beforeTask: task.id } });
+  assert.equal(both.isError, true);
+  assert.match(JSON.stringify(both.content), /not both/);
   assert.equal((await call<{ duplicate: boolean }>(resumed, 'task_event', checkpoint)).duplicate, true);
   const cli = await promisify(execFile)(process.execPath, [...args, 'task', 'handoff', '--id', task.id], { cwd: dir, env, timeout: 8000 });
   assert.equal(JSON.parse(cli.stdout).checkpoint.messageId, recovered.checkpoint?.messageId);
