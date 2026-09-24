@@ -77,6 +77,8 @@ export type ChannelPayload = {
   /** Client-only reading window. Live arrivals must not evict selected/older text. */
   historyThrough?: number;
   deferredLive?: boolean;
+  /** Oldest unread root when the channel was opened (or marked unread): where "New messages" starts. */
+  firstUnreadSeq?: number | null;
   task?: TaskSnapshot;
   decision?: DecisionView;
   decisions?: DecisionView[];
@@ -147,6 +149,8 @@ export const api = {
     req<ReadSnapshot>("/api/ui/read", {
       method: "POST", body: JSON.stringify({ channelId, threadId, messageSeqs }), signal,
     }),
+  markUnread: (channelId: string, fromSeq: number) =>
+    req<ReadSnapshot>("/api/ui/unread", { method: "POST", body: JSON.stringify({ channelId, fromSeq }) }),
   activity: (view: { project: string; unreadOnly: boolean; reasons: readonly ActivityReason[]; beforeSeq?: number },
     signal?: AbortSignal) => {
     const q = new URLSearchParams({ project: view.project, unread: view.unreadOnly ? "1" : "0" });

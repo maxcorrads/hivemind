@@ -61,7 +61,7 @@ export function useSend(deps: SendDeps) {
         if (root) await loadThread(channelId, root, result.message);
         else await loadChannel(channelId, undefined, [result.message]);
       } catch (error) {
-        setErr(`Message sent, but the conversation could not refresh. Return to live to retry. ${String(error)}`);
+        setErr(`Message sent, but the conversation could not refresh. Jump to recent to retry. ${String(error)}`);
       }
     }
     return true;

@@ -227,6 +227,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     return c.json({ channel: ch, threadId, messages: listed.messages, hasOlder: listed.hasOlder, hasNewer: listed.hasNewer,
       cursors: listed.cursors, threads: hive.messageQueries.threadsInChannel(ch.id, roots).map(thread => threadResponseSchema.parse(thread)),
       replyCounts: hive.messageQueries.replyCounts(ch.id, roots), snapshotSeq: hive.messageQueries.latestSeq(ch.id),
+      firstUnreadSeq: threadId ? undefined : hive.reads.firstUnreadSeq(human, ch.id),
       task: threadId && hive.tasks.has(threadId) ? hive.tasks.view(human, threadId) : undefined,
       decision: threadId && hive.decisions.has(threadId) ? hive.decisions.get(human, threadId) : undefined,
       decisions: threadId && hive.tasks.has(threadId) ? hive.decisions.forTask(human, threadId) : undefined });
@@ -303,6 +304,11 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       if (seq > hive.messageQueries.latestSeq(channel.id)) throw new HiveError(400, 'Read-through sequence is beyond the channel history');
       hive.reads.markRead(human, channel.id, seq);
     }
+    return c.json({ ok: true, ...hive.reads.readSnapshot(human) });
+  });
+  ui.post('/unread', async c => {
+    const human = hive.identity.getAgent('human'), body = await requestJson(c.req.raw);
+    hive.reads.markUnreadFrom(human, String(body.channelId), body.fromSeq);
     return c.json({ ok: true, ...hive.reads.readSnapshot(human) });
   });
   ui.post('/tasks/:id/routing', async c => c.json(hive.routing.suggest(hive.identity.getAgent('human'), c.req.param('id'), await requestJson(c.req.raw))));

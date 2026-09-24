@@ -3,7 +3,7 @@ import type { ChannelPayload } from "./api.ts";
 
 /** Where the clicked reply link sat when the Human opened a thread (see `useThreadScrollAnchor`). */
 export type ThreadOpenAnchor = {
-  channelId: string; threadId: string; button: HTMLButtonElement; bottom: number; atBottom: boolean;
+  channelId: string; threadId: string; button: HTMLElement; bottom: number; atBottom: boolean;
 };
 
 /**

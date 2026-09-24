@@ -16,6 +16,16 @@ const pane = (messages = [message(1)], snapshotSeq = 1): ChannelPayload => ({
 });
 const thread = (id: string, status: Thread["status"] = "blocked"): Thread => ({ id, channelId: "c", status });
 
+test("the New messages divider stays where it was when the channel opened, across refreshes of that channel", () => {
+  const opened = reconcileChannelSnapshot(null, { ...pane([message(1), message(2)], 2), firstUnreadSeq: 2 }, beginChannelJournal("c"))!;
+  assert.equal(opened.firstUnreadSeq, 2);
+  // Receipts made the refreshed page read; the divider must not vanish under the Human's eyes.
+  const refreshed = reconcileChannelSnapshot(opened, { ...pane([message(1), message(2)], 2), firstUnreadSeq: null }, beginChannelJournal("c"))!;
+  assert.equal(refreshed.firstUnreadSeq, 2);
+  const other = { ...pane([message(1)], 1), channel: { id: "d" } as ChannelPayload["channel"], firstUnreadSeq: 1 };
+  assert.equal(reconcileChannelSnapshot(opened, other, beginChannelJournal("d"))!.firstUnreadSeq, 1);
+});
+
 test("late channel snapshots preserve pending roots, reactions, status and exactly counted replies", () => {
   const snapshot = { ...pane([message(1)], 2), replyCounts: { m1: 1 }, threads: [thread("m1", "open")] };
   const journal = beginChannelJournal("c");

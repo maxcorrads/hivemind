@@ -625,3 +625,13 @@ test("Human can delete an idle project but not one with online or waiting agents
   assert.equal(again.slug, "nuovo");
   rmSync(dir, { recursive: true, force: true });
 });
+
+test("the picker's extra reactions are accepted; anything else is still rejected (#221)", () => {
+  const { hive, dir } = tempHive();
+  const human = hive.identity.getAgent("human");
+  const msg = hive.messages.postMessage(human, { channel: "general", body: "ship it" });
+  assert.equal(hive.messages.setReaction(human, msg.seq, "🎉", true).added, true);
+  assert.equal(hive.messages.setReaction(human, msg.seq, "❤️", true).message.reactions?.some((r) => r.emoji === "❤️"), true);
+  assert.throws(() => hive.messages.setReaction(human, msg.seq, "🦄", true), /Invalid reaction/);
+  rmSync(dir, { recursive: true, force: true });
+});

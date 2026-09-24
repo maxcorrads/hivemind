@@ -409,3 +409,43 @@ test("GET /api/ui/activity serves Unread and Activity and rejects unknown types"
   assert.equal((await get("&reason=gossip")).status, 400);
   assert.equal((await get("&beforeSeq=0")).status, 400);
 });
+
+test("the channel page reports its first unread root, and mark-unread reopens roots from a message on (#221)", async (t) => {
+  const f = fixture(t);
+  const app = createApp(f.hive);
+  const page = async () => (await app.request(`/api/ui/channels/${f.room.id}/messages`)).json() as
+    Promise<{ firstUnreadSeq: number | null; messages: Message[] }>;
+  const unread = (body: unknown) => app.request("/api/ui/unread", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+  });
+  f.hive.messages.postMessage(f.human, { channel: f.room.id, body: "Human's own message is never unread" });
+  const first = f.post("first");
+  const reply = f.post("a reply", first.id);
+  const second = f.post("second");
+  const third = f.post("third");
+  assert.equal((await page()).firstUnreadSeq, first.seq);
+  f.hive.reads.markMessagesRead(f.human, f.room.id, [first.seq, second.seq, third.seq]);
+  f.hive.reads.markMessagesRead(f.human, f.room.id, [reply.seq], first.id);
+  assert.equal((await page()).firstUnreadSeq, null);
+  assert.equal(f.hive.reads.unreadCounts(f.human)[f.room.id], 0);
+
+  const response = await unread({ channelId: f.room.id, fromSeq: second.seq });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json() as ReadSnapshot).unread[f.room.id], 2);
+  assert.equal((await page()).firstUnreadSeq, second.seq);
+
+  // A lowered legacy cursor keeps the replies it covered read: only roots from the message on reopen.
+  f.hive.reads.markMessagesRead(f.human, f.room.id, [second.seq, third.seq]);
+  f.hive.reads.markRead(f.human, f.room.id, third.seq);
+  const lateReply = f.post("late reply", first.id);
+  f.hive.reads.markMessagesRead(f.human, f.room.id, [lateReply.seq], first.id);
+  f.hive.reads.markUnreadFrom(f.human, f.room.id, first.seq);
+  assert.equal(f.hive.reads.unreadCounts(f.human)[f.room.id], 3);
+  assert.equal(f.hive.reads.readsFor(f.human)[f.room.id], first.seq - 1);
+
+  assert.equal((await unread({ channelId: f.room.id, fromSeq: reply.seq })).status, 400, "replies are not roots");
+  assert.equal((await unread({ channelId: f.room.id, fromSeq: 0 })).status, 400);
+  assert.equal((await unread({ channelId: f.room.id })).status, 400);
+  const thread = await (await app.request(`/api/ui/channels/${f.room.id}/messages?threadId=${first.id}`)).json() as Record<string, unknown>;
+  assert.equal("firstUnreadSeq" in thread, false, "a thread page has no channel divider");
+});
