@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -69,48 +69,43 @@ test("production MCP schemas and calls retain their observable contracts", { tim
       join: [["role"], { role: "string", seniority: "string", focus: "string", resume: "string", project: "string" }],
       get_worker_capabilities: [["workerId"], { workerId: "string" }],
       set_capabilities: [["expectedRevision", "card"], { expectedRevision: "integer", card: "object" }],
-      suggest_workers: [["taskId", "mode", "category"], { taskId: "string", requiredCapabilities: "array", mode: "string", category: "string", minContext: "integer", minReviewedResults: "integer", minimumAcceptedRate: "number", offset: "integer" }],
-      record_routing_outcome: [["taskId", "expectedRevision", "category", "capabilityRevision"], { taskId: "string", expectedRevision: "integer", category: "string", capabilityRevision: "integer" }],
-      record_routing_override: [["taskId", "expectedRevision", "workerId", "reason", "requestId"], { taskId: "string", expectedRevision: "integer", workerId: "string", reason: "string", requestId: "string" }],
-      whoami: [[], {}], standing_orders: [[], {}], agents: [[], {}], wait: [[], {}],
+      worker_match_suggest: [["taskId", "mode", "category"], { taskId: "string", requiredCapabilities: "array", mode: "string", category: "string", minContext: "integer", minReviewedResults: "integer", minimumAcceptedRate: "number", offset: "integer" }],
+      worker_match_outcome: [["taskId", "expectedRevision", "category", "capabilityRevision"], { taskId: "string", expectedRevision: "integer", category: "string", capabilityRevision: "integer" }],
+      worker_match_override: [["taskId", "expectedRevision", "workerId", "reason", "requestId"], { taskId: "string", expectedRevision: "integer", workerId: "string", reason: "string", requestId: "string" }],
+      whoami: [[], { orders: "boolean" }], agents: [[], {}], wait: [[], {}],
       channels: [[], { unread: "boolean" }],
       search: [["q"], { q: "string", channel: "string", limit: "integer", before: "integer" }],
       history: [["channel"], { channel: "string", threadId: "string", limit: "integer", since: "integer", before: "integer", meta: "boolean" }],
-      send: [["body"], { requestId: "string", body: "string", channel: "string", to: "string", threadId: "string", attachmentIds: "array", recipients: "array", eventType: "string", traceId: "string", causeMessageId: "string", executionId: "string" }],
+      send: [["body"], { requestId: "string", body: "string", channel: "string", to: "string", threadId: "string", attachmentIds: "array", recipients: "array", eventType: "string", traceId: "string", causeMessageId: "string" }],
       create_channel: [["name"], { name: "string", type: "string", topic: "string", members: "array" }],
       set_thread_status: [["threadId", "status"], { threadId: "string", status: "string" }],
       invite: [["channel", "members"], { channel: "string", members: "array" }],
       clear_context: [["agent"], { agent: "string" }],
-      attach: [["path"], { requestId: "string", path: "string", body: "string", channel: "string", to: "string", threadId: "string", mime: "string", recipients: "array", eventType: "string", traceId: "string", causeMessageId: "string", executionId: "string" }],
+      attach: [["path"], { requestId: "string", path: "string", body: "string", channel: "string", to: "string", threadId: "string", mime: "string", recipients: "array", eventType: "string", traceId: "string", causeMessageId: "string" }],
       fetch_file: [[], { id: "string", seq: "integer", index: "integer" }],
       react: [["seq", "emoji"], { seq: "integer", emoji: "string", present: "boolean" }],
       ack_delivery: [["deliveryId"], { deliveryId: "string" }],
       expand_digest: [["channel", "messageIds"], { channel: "string", messageIds: "array", afterSeq: "integer" }],
-      subscriptions: [[], {}],
-      set_subscription: [["channel", "eventTypes"], { channel: "string", threadId: "string", eventTypes: "array" }],
-      reset_subscription: [["channel"], { channel: "string", threadId: "string" }],
+      subscriptions: [["mode"], { mode: "string", channel: "string", threadId: "string", eventTypes: "array" }],
       get_room: [["channel"], { channel: "string", history: "boolean", beforeRevision: "integer", beforeTask: "string" }],
       room_event: [["channel", "requestId", "expectedRevision", "action"], {
-        channel: "string", requestId: "string", expectedRevision: "integer", humanInstructionSeq: "integer", action: "union", executionId: "string",
+        channel: "string", requestId: "string", expectedRevision: "integer", humanInstructionSeq: "integer", action: "union",
       }],
-      assign_task: [["requestId", "worker", "contract"], { requestId: "string", worker: "string", channel: "string", contract: "object", room: "object", executionId: "string" }],
+      assign_task: [["requestId", "worker", "contract"], { requestId: "string", worker: "string", channel: "string", contract: "object", room: "object" }],
       request_human_decision: [["requestId", "taskId", "expectedTaskRevision", "question", "options", "recommendation", "evidenceSeqs", "artifacts", "affectedWorkers", "relatedDecisionIds"], {
         requestId: "string", taskId: "string", expectedTaskRevision: "integer", question: "string",
         options: "array-object", recommendation: "union", evidenceSeqs: "array-integer", artifacts: "array",
         affectedWorkers: "array", requestedByAt: "integer", relatedDecisionIds: "array", supersedesDecisionId: "string",
       }],
-      get_decision: [["decisionId"], { decisionId: "string" }],
-      get_task_decisions: [["taskId"], { taskId: "string" }],
+      get_decisions: [[], { decisionId: "string", taskId: "string" }],
       decision_event: [["decisionId", "requestId", "expectedRevision", "action"], {
         decisionId: "string", requestId: "string", expectedRevision: "integer", action: "object",
       }],
       get_task: [["taskId"], { taskId: "string" }],
-      get_task_timeline: [["taskId"], { taskId: "string" }],
-      export_task_timeline: [["taskId"], { taskId: "string" }],
-      get_handoff: [["taskId"], { taskId: "string" }],
-      get_handoffs: [[], { beforeTask: "string" }],
+      get_task_timeline: [["taskId"], { taskId: "string", export: "boolean" }],
+      get_handoffs: [[], { taskId: "string", beforeTask: "string" }],
       preview_task_claim: [["taskId", "paths"], { taskId: "string", paths: "array" }],
-      task_event: [["taskId", "requestId", "expectedRevision", "action"], { taskId: "string", requestId: "string", expectedRevision: "integer", action: "union", executionId: "string" }],
+      task_event: [["taskId", "requestId", "expectedRevision", "action"], { taskId: "string", requestId: "string", expectedRevision: "integer", action: "union" }],
     };
     assert.deepEqual(tools.map((tool) => tool.name).sort(), Object.keys(expected).sort());
     for (const tool of tools) {
@@ -138,6 +133,7 @@ test("production MCP schemas and calls retain their observable contracts", { tim
       ["join", "seniority", ["junior", "mid", "senior"]],
       ["create_channel", "type", ["public", "private"]],
       ["set_thread_status", "status", ["open", "in_progress", "blocked", "done"]],
+      ["subscriptions", "mode", ["list", "set", "reset"]],
       ["send", "eventType", ["progress", "blocker", "question", "action_required", "assignment", "decision", "acknowledgement"]],
       ["attach", "eventType", ["progress", "blocker", "question", "action_required", "assignment", "decision", "acknowledgement"]],
     ];
@@ -154,6 +150,14 @@ test("production MCP schemas and calls retain their observable contracts", { tim
     assert.equal(actor.role, "brain");
     assert.equal(actor.seniority, null);
     assert.equal(actor.focus, null);
+    // whoami absorbed standing_orders (#218): orders=true adds the full orders, otherwise only a reference.
+    const me = textResult(await call("whoami", {}));
+    assert.equal((me.you as { name: string }).name, joined.name);
+    assert.ok(!Object.hasOwn(me, "standingOrders"));
+    const withOrders = textResult(await call("whoami", { orders: true }));
+    assert.equal((withOrders.you as { name: string }).name, joined.name);
+    assert.match(String(withOrders.standingOrders), /wait/);
+    assert.equal(connected.getServerVersion()?.version, JSON.parse(readFileSync(path.join(root, "package.json"), "utf8")).version);
     const withoutUnread = textResult(await call("channels", { unread: false }));
     assert.ok(!Object.hasOwn(withoutUnread, "unread"));
     const withUnread = textResult(await call("channels", { unread: true }));
@@ -198,18 +202,21 @@ test("production MCP schemas and calls retain their observable contracts", { tim
     ["ack_delivery", {}], ["ack_delivery", { deliveryId: "not-a-delivery-uuid" }],
     ["expand_digest", { channel: "general", messageIds: [] }],
     ["expand_digest", { channel: "general", messageIds: ["invalid"] }],
-    ["set_subscription", { channel: "general", eventTypes: ["administrator"] }],
-    ["reset_subscription", { channel: "general", threadId: "invalid" }],
+    ["subscriptions", {}], ["subscriptions", { mode: "mute", channel: "general" }],
+    ["subscriptions", { mode: "set", channel: "general", eventTypes: ["administrator"] }],
+    ["subscriptions", { mode: "reset", channel: "general", threadId: "invalid" }],
+    ["whoami", { orders: "yes" }],
     ["get_room", { channel: "general", beforeRevision: 0 }],
     ["room_event", { channel: "general", requestId: "r", expectedRevision: 0, action: { type: "configure" } }],
     ["assign_task", { requestId: "r", worker: "Nobody", contract: {} }],
     ["request_human_decision", {}],
-    ["get_decision", { decisionId: "invalid" }],
-    ["get_task_decisions", { taskId: "invalid" }],
+    ["get_decisions", { decisionId: "invalid" }],
+    ["get_decisions", { taskId: "invalid" }],
     ["decision_event", { decisionId: "invalid", requestId: "r", expectedRevision: 0, action: { type: "withdraw", reason: "x" } }],
     ["get_task", { taskId: "invalid" }],
     ["get_task_timeline", { taskId: "invalid" }],
-    ["export_task_timeline", { taskId: "invalid" }],
+    ["get_task_timeline", { taskId: "00000000-0000-4000-8000-000000000001", export: "1" }],
+    ["get_handoffs", { taskId: "invalid" }],
     ["task_event", { taskId: "00000000-0000-4000-8000-000000000001", requestId: "r", expectedRevision: 0, action: { type: "accept" } }],
     ["send", { channel: "general", body: "x", recipients: [] }],
     ["send", { channel: "general", body: "x", eventType: "admin" }],

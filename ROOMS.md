@@ -53,8 +53,8 @@ including the actor, reason and referenced Human instruction. `contractVersion`
 changes only on configuration/reopen; `revision` changes on every room event.
 
 `room_event` takes `channel`, stable `requestId`, `expectedRevision` and an `action`
-(an `executionId` from older clients is accepted and ignored; see
-[Jev advice](#jev-advice)).
+(`executionId` is no longer part of the schema; the server drops one sent by an older
+client, see [Jev advice](#jev-advice)).
 Retries with the same ID and payload do not repeat effects. A changed payload or stale
 revision conflicts; reread before deciding what to retry.
 
@@ -202,7 +202,7 @@ advisory only: nothing about room staffing or room work is checked against it, t
 brain decides, and Human instructions always take precedence. Room rules, the
 coordinator, Human instructions for `configure`/`reopen` and worker boundaries are
 enforced exactly as described above. Workers never trigger Jev. Since #211 no
-`executionId` is needed; one sent by an older client is ignored. See
+`executionId` is needed and since #218 no schema lists it; one sent by an older client is ignored. See
 [Jev advice](docs/adaptive-routing.md).
 
 ## Bounds and persistence

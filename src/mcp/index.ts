@@ -1,12 +1,12 @@
 import { setCapabilitiesSchema, suggestWorkersSchema, routingOutcomeSchema, routingOverrideSchema } from '../shared/routing.ts';
-import { attachmentIdsSchema, cursorSchema, limitSchema, memberNamesSchema, messageBodySchema, nameSchema, referenceSchema, senioritySchema, sequenceSchema } from "../shared/api-contract.ts";
+import { attachmentIdsSchema, cursorSchema, limitSchema, memberNamesSchema, messageBodySchema, nameSchema, normalizeChannelReference, referenceSchema, senioritySchema, sequenceSchema } from "../shared/api-contract.ts";
 import type { HandoffList } from '../shared/handoffs.ts';
 import { sendOperation } from "../client/send-operation.ts";
-import { executionIdSchema, requestIdSchema } from "../shared/mutation.ts";
+import { requestIdSchema } from "../shared/mutation.ts";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { mkdirSync, existsSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { agentDownloadToFile, agentRequest } from "../client/http.ts";
@@ -18,7 +18,9 @@ import { claimPreviewSchema } from '../shared/task-claims.ts';
 import { assignTaskSchema, taskEventSchema } from '../shared/tasks.ts';
 import { decisionEventSchema, requestDecisionSchema } from '../shared/decisions.ts';
 import { roomEventSchema } from '../shared/rooms.ts';
-import { subscriptionSchema, subscriptionScopeSchema } from '../shared/notifications.ts';
+import { subscriptionSchema } from '../shared/notifications.ts';
+import { packageVersion } from "../shared/package-root.ts";
+import { attachablePath } from "./attach-guard.ts";
 import { MESSAGE_EVENT_TYPES } from "../shared/types.ts";
 import { JOIN_SESSION, PARAM_DESCRIPTIONS, SEARCH_NEXT, TOOL_DESCRIPTIONS, joinNext } from "./tool-text.ts";
 import { MCP_HEARTBEAT_MS, MCP_WAIT_POLL_MS, WAIT_NEXT, type Agent, type Channel, type WaitResult } from "../shared/types.ts";
@@ -27,18 +29,19 @@ function text(data: unknown) {
   return { content: [{ type: "text" as const, text: typeof data === "string" ? data : JSON.stringify(data, null, 2) }] };
 }
 
-export function normalizeChannelReference(reference: string): string {
-  const value = reference.trim();
-  return value.startsWith('#') ? value.slice(1) : value;
-}
+export { normalizeChannelReference };
+/** URL path segment for a channel reference (UUID, name or #name). */
+const channelPath = (reference: string) => encodeURIComponent(normalizeChannelReference(reference));
+/** Explicit shapes of the subscriptions tool, listed in its description. */
+export const SUBSCRIPTION_MODES = ["list", "set", "reset"] as const;
 
 export function resolveVisibleWorkerReference(reference: string, roster: Agent[]): string {
   const value = reference.trim();
   if (z.string().uuid().safeParse(value).success) return value;
   const matches = roster.filter(agent => agent.role === 'worker' && agent.name.toLowerCase() === value.toLowerCase());
   if (matches.length === 1) return matches[0]!.id;
-  if (!matches.length) throw new Error(`No visible worker named ${value}; pass a worker UUID or exact name from agents/suggest_workers`);
-  throw new Error(`Worker name ${value} is ambiguous; pass the worker UUID from agents/suggest_workers`);
+  if (!matches.length) throw new Error(`No visible worker named ${value}; pass a worker UUID or exact name from agents/worker_match_suggest`);
+  throw new Error(`Worker name ${value} is ambiguous; pass the worker UUID from agents/worker_match_suggest`);
 }
 
 export async function startMcp() {
@@ -58,7 +61,7 @@ export async function startMcp() {
     }, MCP_HEARTBEAT_MS);
     heartbeat.unref();
   }
-  const server = new McpServer({ name: "hivemind", version: "0.1.0" });
+  const server = new McpServer({ name: "hivemind", version: packageVersion() });
   // Serialize joins to prevent two concurrent first calls creating two identities.
   let joins: Promise<unknown> = Promise.resolve();
   const joinSerial = <T>(work: () => Promise<T>): Promise<T> => {
@@ -131,12 +134,8 @@ export async function startMcp() {
     }),
   );
 
-  server.tool("whoami", TOOL_DESCRIPTIONS.whoami, async () => {
-    return text(await agentRequest("GET", "/api/agent/me", undefined, token()));
-  });
-
-  server.tool("standing_orders", TOOL_DESCRIPTIONS.standing_orders, async () => {
-    return text(await agentRequest("GET", "/api/agent/me?orders=1", undefined, token()));
+  server.tool("whoami", TOOL_DESCRIPTIONS.whoami, { orders: z.boolean().optional() }, async ({ orders }) => {
+    return text(await agentRequest("GET", `/api/agent/me${orders ? "?orders=1" : ""}`, undefined, token()));
   });
 
   server.tool("agents", TOOL_DESCRIPTIONS.agents, async () => {
@@ -202,7 +201,7 @@ export async function startMcp() {
       return text(
         await agentRequest(
           "GET",
-          `/api/agent/channels/${encodeURIComponent(normalizeChannelReference(channel))}/messages${suffix}`,
+          `/api/agent/channels/${channelPath(channel)}/messages${suffix}`,
           undefined,
           token(),
         ),
@@ -214,7 +213,8 @@ export async function startMcp() {
     "expand_digest",
     TOOL_DESCRIPTIONS.expand_digest,
     digestExpansionSchema.shape,
-    async (args) => text(await agentRequest("POST", "/api/agent/messages/expand", args, token())),
+    async (args) => text(await agentRequest("POST", "/api/agent/messages/expand",
+      { ...args, channel: normalizeChannelReference(args.channel) }, token())),
   );
 
   server.tool(
@@ -231,9 +231,7 @@ export async function startMcp() {
       eventType: z.enum(MESSAGE_EVENT_TYPES).optional().describe(PARAM_DESCRIPTIONS.eventType),
       traceId: z.string().uuid().optional().describe(PARAM_DESCRIPTIONS.traceId),
       causeMessageId: z.string().uuid().optional().describe(PARAM_DESCRIPTIONS.causeMessageId),
-      executionId: executionIdSchema.optional(),
     },
-    // executionId is accepted from older clients and ignored (#211).
     async ({ body, channel, to, threadId, attachmentIds, eventType, recipients, traceId, causeMessageId, requestId }) => {
       let channelId = channel ? normalizeChannelReference(channel) : channel;
       if (to) {
@@ -245,26 +243,35 @@ export async function startMcp() {
     },
   );
 
-  server.tool("subscriptions", TOOL_DESCRIPTIONS.subscriptions, {},
-    async () => text(await agentRequest('GET', '/api/agent/subscriptions', undefined, token())));
-  server.tool("set_subscription",
-    TOOL_DESCRIPTIONS.set_subscription,
-    subscriptionSchema.shape,
-    async args => text(await agentRequest('POST', '/api/agent/subscriptions', args, token())));
-  server.tool("reset_subscription",
-    TOOL_DESCRIPTIONS.reset_subscription,
-    subscriptionScopeSchema.shape,
-    async args => text(await agentRequest('POST', '/api/agent/subscriptions/reset', args, token())));
+  server.tool("subscriptions",
+    TOOL_DESCRIPTIONS.subscriptions,
+    { mode: z.enum(SUBSCRIPTION_MODES), channel: subscriptionSchema.shape.channel.optional(),
+      threadId: subscriptionSchema.shape.threadId, eventTypes: subscriptionSchema.shape.eventTypes.optional() },
+    async ({ mode, channel, threadId, eventTypes }) => {
+      if (mode === 'list') {
+        if (channel !== undefined || threadId !== undefined || eventTypes !== undefined)
+          throw new Error('mode=list takes no other fields: {mode:"list"}');
+        return text(await agentRequest('GET', '/api/agent/subscriptions', undefined, token()));
+      }
+      if (channel === undefined) throw new Error(`mode=${mode} needs channel`);
+      const scope = { channel: normalizeChannelReference(channel), ...(threadId ? { threadId } : {}) };
+      if (mode === 'set') {
+        if (eventTypes === undefined) throw new Error('mode=set needs eventTypes (use [] to mute)');
+        return text(await agentRequest('POST', '/api/agent/subscriptions', { ...scope, eventTypes }, token()));
+      }
+      if (eventTypes !== undefined) throw new Error('mode=reset takes no eventTypes: {mode:"reset",channel,threadId?}');
+      return text(await agentRequest('POST', '/api/agent/subscriptions/reset', scope, token()));
+    });
 
   server.tool("get_room",
     TOOL_DESCRIPTIONS.get_room,
     { channel: referenceSchema, history: z.boolean().optional(), beforeRevision: z.number().int().positive().optional(), beforeTask: z.string().uuid().optional() },
     async ({ channel, history, beforeRevision, beforeTask }) => text(await agentRequest('GET',
-      `/api/agent/channels/${encodeURIComponent(normalizeChannelReference(channel))}/room${history ? `/history?before=${beforeRevision ?? Number.MAX_SAFE_INTEGER}` : beforeTask ? `?beforeTask=${beforeTask}` : ''}`, undefined, token())));
+      `/api/agent/channels/${channelPath(channel)}/room${history ? `/history?before=${beforeRevision ?? Number.MAX_SAFE_INTEGER}` : beforeTask ? `?beforeTask=${beforeTask}` : ''}`, undefined, token())));
   server.tool("room_event",
     TOOL_DESCRIPTIONS.room_event,
     { channel: referenceSchema, ...roomEventSchema.shape },
-    async ({ channel, ...args }) => text(await agentRequest('POST', `/api/agent/channels/${encodeURIComponent(normalizeChannelReference(channel))}/room`, args, token())));
+    async ({ channel, ...args }) => text(await agentRequest('POST', `/api/agent/channels/${channelPath(channel)}/room`, args, token())));
   server.tool("assign_task",
     TOOL_DESCRIPTIONS.assign_task,
     assignTaskSchema.shape,
@@ -274,14 +281,13 @@ export async function startMcp() {
     TOOL_DESCRIPTIONS.request_human_decision,
     requestDecisionSchema.shape,
     async args => text(await agentRequest('POST', '/api/agent/decisions', args, token())));
-  server.tool("get_decision",
-    TOOL_DESCRIPTIONS.get_decision,
-    { decisionId: z.string().uuid() },
-    async ({ decisionId }) => text(await agentRequest('GET', `/api/agent/decisions/${decisionId}`, undefined, token())));
-  server.tool("get_task_decisions",
-    TOOL_DESCRIPTIONS.get_task_decisions,
-    { taskId: z.string().uuid() },
-    async ({ taskId }) => text(await agentRequest('GET', `/api/agent/tasks/${taskId}/decisions`, undefined, token())));
+  server.tool("get_decisions",
+    TOOL_DESCRIPTIONS.get_decisions,
+    { decisionId: z.string().uuid().optional(), taskId: z.string().uuid().optional() },
+    async ({ decisionId, taskId }) => {
+      if ((decisionId === undefined) === (taskId === undefined)) throw new Error("Pass exactly one of decisionId (one request) or taskId (a task's requests)");
+      return text(await agentRequest('GET', decisionId ? `/api/agent/decisions/${decisionId}` : `/api/agent/tasks/${taskId}/decisions`, undefined, token()));
+    });
   server.tool("decision_event",
     TOOL_DESCRIPTIONS.decision_event,
     { decisionId: z.string().uuid(), ...decisionEventSchema.shape },
@@ -298,32 +304,29 @@ export async function startMcp() {
     });
   server.tool("set_capabilities", TOOL_DESCRIPTIONS.set_capabilities,
     setCapabilitiesSchema.shape, async args => text(await agentRequest('POST', '/api/agent/capabilities', args, token())));
-  server.tool("suggest_workers", TOOL_DESCRIPTIONS.suggest_workers,
+  server.tool("worker_match_suggest", TOOL_DESCRIPTIONS.worker_match_suggest,
     { taskId: z.string().uuid(), ...suggestWorkersSchema.shape }, async ({ taskId, ...args }) => text(await agentRequest('POST', `/api/agent/tasks/${taskId}/routing`, args, token())));
-  server.tool("record_routing_outcome", TOOL_DESCRIPTIONS.record_routing_outcome,
+  server.tool("worker_match_outcome", TOOL_DESCRIPTIONS.worker_match_outcome,
     { taskId: z.string().uuid(), ...routingOutcomeSchema.shape }, async ({ taskId, ...args }) => text(await agentRequest('POST', `/api/agent/tasks/${taskId}/routing-outcome`, args, token())));
-  server.tool("record_routing_override", TOOL_DESCRIPTIONS.record_routing_override,
+  server.tool("worker_match_override", TOOL_DESCRIPTIONS.worker_match_override,
     { taskId: z.string().uuid(), ...routingOverrideSchema.shape }, async ({ taskId, ...args }) => text(await agentRequest('POST', `/api/agent/tasks/${taskId}/routing-override`, args, token())));
   server.tool("get_handoffs",
     TOOL_DESCRIPTIONS.get_handoffs,
-    { beforeTask: z.string().uuid().optional() },
-    async ({ beforeTask }) => text(await agentRequest('GET', `/api/agent/handoffs${beforeTask ? `?beforeTask=${beforeTask}` : ''}`, undefined, token())));
-  server.tool("get_handoff",
-    TOOL_DESCRIPTIONS.get_handoff,
-    { taskId: z.string().uuid() },
-    async ({ taskId }) => text(await agentRequest('GET', `/api/agent/tasks/${taskId}/handoff`, undefined, token())));
+    { taskId: z.string().uuid().optional(), beforeTask: z.string().uuid().optional() },
+    async ({ taskId, beforeTask }) => {
+      if (taskId && beforeTask) throw new Error('Pass taskId (one checkpoint) or beforeTask (next page), not both');
+      return text(await agentRequest('GET', taskId ? `/api/agent/tasks/${taskId}/handoff`
+        : `/api/agent/handoffs${beforeTask ? `?beforeTask=${beforeTask}` : ''}`, undefined, token()));
+    });
   server.tool("get_task",
     TOOL_DESCRIPTIONS.get_task,
     { taskId: z.string().uuid() },
     async ({ taskId }) => text(await agentRequest('GET', `/api/agent/tasks/${taskId}`, undefined, token())));
   server.tool("get_task_timeline",
     TOOL_DESCRIPTIONS.get_task_timeline,
-    { taskId: z.string().uuid() },
-    async ({ taskId }) => text(await agentRequest('GET', `/api/agent/tasks/${taskId}/timeline`, undefined, token())));
-  server.tool("export_task_timeline",
-    TOOL_DESCRIPTIONS.export_task_timeline,
-    { taskId: z.string().uuid() },
-    async ({ taskId }) => text(await agentRequest('GET', `/api/agent/tasks/${taskId}/timeline/export`, undefined, token())));
+    { taskId: z.string().uuid(), export: z.boolean().optional() },
+    async ({ taskId, export: fixture }) => text(await agentRequest('GET',
+      `/api/agent/tasks/${taskId}/timeline${fixture ? '/export' : ''}`, undefined, token())));
   server.tool("preview_task_claim",
     TOOL_DESCRIPTIONS.preview_task_claim,
     { taskId: z.string().uuid(), ...claimPreviewSchema.shape },
@@ -414,7 +417,7 @@ export async function startMcp() {
       return text(
         await agentRequest(
           "POST",
-          `/api/agent/channels/${encodeURIComponent(channel)}/invite`,
+          `/api/agent/channels/${channelPath(channel)}/invite`,
           { names: members },
           token(),
         ),
@@ -446,14 +449,13 @@ export async function startMcp() {
       recipients: memberNamesSchema.min(1).optional(),
       traceId: z.string().uuid().optional(),
       causeMessageId: z.string().uuid().optional(),
-      executionId: executionIdSchema.optional(),
     },
     async ({ path: filePath, body, channel, to, threadId, mime, eventType, recipients, traceId, causeMessageId, requestId }) => {
-      const resolved = path.resolve(filePath);
-      if (!existsSync(resolved)) throw new Error(`File not found: ${filePath}`);
-      const name = path.basename(resolved);
+      // Refuses credential stores, dotenv files and private keys, following symlinks (#218).
+      const resolved = attachablePath(filePath);
+      const name = path.basename(path.resolve(filePath));
       const guessed = mime ?? guessMime(name);
-      let channelId = channel;
+      let channelId = channel ? normalizeChannelReference(channel) : channel;
       if (to) {
         const dm = await agentRequest<{ channel: Channel }>("POST", "/api/agent/dms", { name: to }, token());
         channelId = dm.channel.id;
