@@ -7,7 +7,7 @@ export function QueueBadge({ count = 0, estimate }: { count?: number; estimate?:
   const title = partial
     ? (n ? `At least ${n} waiting; more history remains to scan` : "Queue size unknown; more history remains to scan")
     : `${n} waiting`;
-  return <em className="queue-badge" title={title}>{n > 99 ? "99+" : partial ? (n ? `${n}+` : "…") : n}</em>;
+  return <em className="queue-badge" title={title}>{`${n > 99 ? "99+" : partial ? (n ? `${n}+` : "…") : n} queued`}</em>;
 }
 
 export function InboxReceipt({ status }: { status?: InboxStatus }) {

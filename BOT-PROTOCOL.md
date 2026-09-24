@@ -7,7 +7,7 @@ There are no provider-specific SDKs or commands in this protocol.
 
 ## Create and invite
 
-Human selects **+** in the project's **bot · context only** sidebar section, chooses
+Human selects **+** in the project's **Bots · post updates, no tasks** sidebar section, chooses
 a unique name and saves the returned token privately. New bots have no channel memberships.
 The token is returned only on creation or rotation; the database stores its hash, not the token.
 Closing the creation panel clears its displayed credential. It is not saved in browser storage.

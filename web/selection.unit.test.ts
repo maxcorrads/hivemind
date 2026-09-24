@@ -55,6 +55,14 @@ test("repairSel keeps valid selections and falls back to the first project", () 
   assert.deepEqual(repairSel({ kind: "channel", id: "gone" }, snap), { kind: "inbox", project: "alpha" });
 });
 
+test("repairSel prefers the project last shown in this browser while it exists", () => {
+  const snap = { projects: [project("alpha"), project("beta")], channels: [channel("general")] };
+  assert.deepEqual(repairSel({ kind: "channel", id: "gone" }, snap, "beta"), { kind: "inbox", project: "beta" });
+  assert.deepEqual(repairSel({ kind: "decisions", project: "" }, snap, "beta"), { kind: "decisions", project: "beta" });
+  assert.deepEqual(repairSel({ kind: "channel", id: "gone" }, snap, "deleted"), { kind: "inbox", project: "alpha" });
+  assert.equal(repairSel({ kind: "inbox", project: "alpha" }, snap, "beta"), null, "a valid selection is never moved");
+});
+
 test("repairSel without projects", () => {
   const empty = { projects: [], channels: [] };
   assert.equal(repairSel({ kind: "inbox", project: "" }, empty), null);

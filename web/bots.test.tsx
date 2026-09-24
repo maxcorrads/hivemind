@@ -11,7 +11,7 @@ import { createBotSchema } from "../src/shared/bot-message.ts";
 test("the create action lives in the bot section even with no bots", () => {
   const html = renderToStaticMarkup(<AgentList agents={[]} projectName="Example"
     onCreateBot={() => {}} queued={{}} onOpen={() => {}} onAskClear={() => {}} onAskRemove={() => {}} />);
-  assert.match(html, /class="subh bot-h"><span>bot · context only<\/span><button/);
+  assert.match(html, /class="subh bot-h" title="Integrations that post updates into channels. Bots never take tasks."><span>Bots · post updates, no tasks<\/span><button/);
   assert.match(html, /aria-label="Create bot in Example"/);
 });
 

@@ -109,13 +109,15 @@ export function ProjectSettingsSheet({ form, project, agents, onPlugins, refresh
   );
 }
 
-export function CreateProjectSheet({ form, refreshSnap, setErr }: {
+export function CreateProjectSheet({ form, refreshSnap, onCreated, setErr }: {
   form: ProjectSheets;
   refreshSnap: () => Promise<unknown>;
+  /** Opens the new project, once the refreshed snapshot has it. */
+  onCreated: (slug: string) => void;
   setErr: (error: string) => void;
 }) {
   const { setCreatingProject, newProjectName, setNewProjectName, newProjectSlug, setNewProjectSlug,
-    newProjectTree, setNewProjectTree, setOpenProjects } = form;
+    newProjectTree, setNewProjectTree } = form;
   return (
     <Modal onClose={() => setCreatingProject(false)}>
       <form
@@ -131,7 +133,7 @@ export function CreateProjectSheet({ form, refreshSnap, setErr }: {
               setNewProjectSlug("");
               setNewProjectTree("");
               await refreshSnap();
-              setOpenProjects((g) => ({ ...g, [project.slug]: true }));
+              onCreated(project.slug);
             })
             .catch((ex) => setErr(String(ex.message || ex)));
         }}

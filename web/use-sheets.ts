@@ -24,12 +24,11 @@ export function useChannelSheets() {
 export type ChannelSheets = ReturnType<typeof useChannelSheets>;
 
 /**
- * Sidebar project sections plus the new-project and project-settings sheets
+ * The new-project and project-settings sheets
  * (which share the name and worktree fields). Sheets aimed at a project that
  * disappeared from the snapshot close.
  */
 export function useProjectSheets(snap: Snapshot | null, { createIn, setCreateIn }: Pick<ChannelSheets, "createIn" | "setCreateIn">) {
-  const [openProjects, setOpenProjects] = useState<Record<string, boolean>>({});
   const [creatingProject, setCreatingProject] = useState(false);
   const [editingProject, setEditingProject] = useState<string | null>(null);
   const [newProjectName, setNewProjectName] = useState("");
@@ -56,7 +55,7 @@ export function useProjectSheets(snap: Snapshot | null, { createIn, setCreateIn 
   };
 
   return {
-    openProjects, setOpenProjects, creatingProject, setCreatingProject, editingProject, setEditingProject,
+    creatingProject, setCreatingProject, editingProject, setEditingProject,
     newProjectName, setNewProjectName, newProjectSlug, setNewProjectSlug, newProjectTree, setNewProjectTree,
     projectDeleteConfirm, setProjectDeleteConfirm, deletingProject, setDeletingProject, editProject,
   };
