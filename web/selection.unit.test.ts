@@ -20,6 +20,8 @@ test("parseHash defaults to #general and reads every route", () => {
   assert.deepEqual(parseHash("#/decisions"), { kind: "decisions", project: "" });
   assert.deepEqual(parseHash("#/routing-log/alpha"), { kind: "jev", project: "alpha" });
   assert.deepEqual(parseHash("#/jev/alpha"), { kind: "jev", project: "alpha" });
+  assert.deepEqual(parseHash("#/home/alpha"), { kind: "home", project: "alpha" });
+  assert.deepEqual(parseHash("#/dms"), { kind: "dms", project: "" });
 });
 
 test("hashFor round-trips through parseHash", () => {
@@ -29,6 +31,8 @@ test("hashFor round-trips through parseHash", () => {
     { kind: "inbox", project: "", box: "unread" },
     { kind: "decisions", project: "a b" },
     { kind: "jev", project: "alpha" },
+    { kind: "home", project: "a b" },
+    { kind: "dms", project: "alpha" },
     { kind: "channel", id: "ch/1", thread: undefined },
     { kind: "channel", id: "ch", thread: "root 1" },
   ];
@@ -45,6 +49,9 @@ test("repairSel keeps valid selections and falls back to the first project", () 
   assert.deepEqual(repairSel({ kind: "inbox", project: "", box: "all" }, snap), { kind: "inbox", project: "alpha", box: "all" });
   assert.deepEqual(repairSel({ kind: "decisions", project: "gone" }, snap), { kind: "decisions", project: "alpha" });
   assert.deepEqual(repairSel({ kind: "jev", project: "gone" }, snap), { kind: "jev", project: "alpha" });
+  assert.deepEqual(repairSel({ kind: "home", project: "" }, snap), { kind: "home", project: "alpha" });
+  assert.deepEqual(repairSel({ kind: "dms", project: "gone" }, snap), { kind: "dms", project: "alpha" });
+  assert.equal(repairSel({ kind: "dms", project: "beta" }, snap), null);
   assert.deepEqual(repairSel({ kind: "channel", id: "gone" }, snap), { kind: "inbox", project: "alpha" });
 });
 
