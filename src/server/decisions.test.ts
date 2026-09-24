@@ -133,3 +133,19 @@ test('old awaiting decisions stay visible ahead of more than 100 newer closed re
   const openOnly = f.hive.decisions.listHuman(f.human, f.room.projectId, false);
   assert.deepEqual(openOnly.items.map(item => item.id), [oldest.id]);
 });
+
+test('decision requests and their answers are For you: Unread until read, Activity for good', t => {
+  const f = fixture(t), made = f.hive.decisions.create(f.brain.agent, f.input());
+  const feed = (unreadOnly: boolean) => f.hive.reads.activity(f.human, { projectId: f.room.projectId, unreadOnly, reasons: ['decision'] })
+    .items.map(item => [item.message.id, item.read]);
+  assert.deepEqual(feed(true), [[made.message.id, false]]);
+  const answer = f.hive.decisions.answer(f.human, made.decision.id,
+    { requestId: 'answer-for-you', expectedRevision: made.decision.revision, body: 'Keep the compatible boundary.' });
+  const followUp = f.hive.messages.postMessage(f.brain.agent, { channel: f.room.id, threadId: made.decision.id, body: 'Applying it now.' });
+  assert.deepEqual(feed(true), [[followUp.id, false], [made.message.id, false]], 'the Human’s own answer is never unread');
+  assert.deepEqual(feed(false), [[followUp.id, false], [answer.message!.id, true], [made.message.id, false]]);
+  assert.equal(f.hive.reads.readSnapshot(f.human).mentionCounts[f.room.project], 2);
+  // A structured task event is For you when it is addressed to you (here: the assigned worker).
+  assert.deepEqual(f.hive.reads.activity(f.a.agent, { reasons: ['task'] }).items.map(item => item.message.id), [f.task.id]);
+  assert.deepEqual(f.hive.reads.activity(f.b.agent, { reasons: ['task'] }).items, []);
+});

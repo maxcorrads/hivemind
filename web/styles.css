@@ -1101,6 +1101,9 @@ html.dark .primary { background: var(--wax); color: #1b2017; }
 .inbox-actions .text-btn { font-size: 0.78rem; }
 .inbox-actions .text-btn:first-child { color: var(--wax-ink); }
 .inbox-error { color: var(--ember); }
+.inbox-count { margin-left: 0.4rem; font-style: normal; font-weight: 600; }
+.inbox-unread { font-style: normal; font-weight: 600; color: var(--wax); }
+.inbox-card.read .inbox-context > span:first-child { opacity: 0.75; }
 .settings-disclosure { border-top: 1px solid var(--line); padding: 0.7rem 0; }
 .settings-disclosure > summary { cursor: pointer; font-weight: 600; font-size: 0.85rem; }
 .settings-disclosure > :not(summary) { margin-top: 0.8rem; }
