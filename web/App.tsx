@@ -286,7 +286,11 @@ export function App() {
             threadOpenAnchor={threadOpenAnchor} go={go} roomTick={roomTick} routingView={routingView}
             activeBrainChannel={activeBrainChannel} brainNames={brainNames}
             onOpenRouting={() => setRoutingPanelOpen(true)} onInvite={() => channelSheets.setInviteOpen(true)}
-            compose={compose} setErr={setErr}
+            compose={compose} setErr={setErr} onMarkUnread={async (channelId, seq) => {
+              const ticket = hive.readFence.current.ticket();
+              const next = await api.markUnread(channelId, seq);
+              if (!hive.acceptRead(next, ticket)) hive.readRefresh.current?.request();
+            }}
             onBack={() => go(channelBack(activeChannel, lastList.current, selectedProject))} />
         )}
         {err && (

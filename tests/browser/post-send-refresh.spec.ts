@@ -72,7 +72,7 @@ async function fixture(page: Page, inThread: boolean) {
     },
     async sendFromHistory() {
       await scope.locator('.stream').evaluate(el => { el.scrollTop = 0; });
-      await expect(scope.getByRole('button', { name: inThread ? 'Refresh thread' : 'Return to live', exact: true })).toBeVisible();
+      await expect(scope.getByRole('button', { name: inThread ? 'Refresh thread' : 'Jump to recent', exact: true })).toBeVisible();
       await scope.locator('.composer textarea').fill('My confirmed message');
       await scope.locator('.composer textarea').press('Enter');
     },
@@ -81,7 +81,7 @@ async function fixture(page: Page, inThread: boolean) {
       await expect(scope.getByText('My confirmed message', { exact: true })).toBeInViewport();
       await expect(scope.getByText('Previously unseen message', { exact: true })).toHaveCount(1);
       await expect(scope.locator('.composer textarea')).toHaveValue('');
-      await expect(scope.getByRole('button', { name: /return to live|refresh thread/i })).toHaveCount(0);
+      await expect(scope.getByRole('button', { name: /jump to recent|refresh thread/i })).toHaveCount(0);
       await expect.poll(() => scope.locator('.stream').evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(3);
       expect(posts).toBe(1);
     },
@@ -195,7 +195,7 @@ for (const inThread of [false, true]) {
       h.trigger(inThread ? 'room' : 'project');
       await expect(page.locator('main .err')).toContainText(inThread ? 'could not refresh' : 'Fixture refresh failure');
       await expect(h.scope.locator('.msg')).toHaveCount(40);
-      await h.scope.getByRole('button', { name: /return to live|refresh thread/i }).click();
+      await h.scope.getByRole('button', { name: /jump to recent|refresh thread/i }).click();
       await h.expectConfirmed();
     } finally { release.resolve(); }
   });

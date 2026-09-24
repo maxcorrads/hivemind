@@ -33,6 +33,11 @@ export const WAIT_NEXT = "Call ack_delivery with delivery.id before acting. A di
 
 export const REACTION_EMOJIS = ["👍", "👎", "👀", "🚩", "✅", "❓"] as const;
 export type ReactionEmoji = (typeof REACTION_EMOJIS)[number];
+/** Picker-only extras: accepted like the core set, but not mirrored to Telegram and carrying no protocol meaning. */
+export const EXTRA_REACTION_EMOJIS = ["🎉", "❤️", "😂", "🙏", "🔥", "🚀", "👏", "🙌", "💡", "🐛", "⏳", "😅"] as const;
+export function isReactionEmoji(emoji: string): boolean {
+  return (REACTION_EMOJIS as readonly string[]).includes(emoji) || (EXTRA_REACTION_EMOJIS as readonly string[]).includes(emoji);
+}
 
 export const ALLOWED_MIMES = [
   "image/png",

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, type MutableRefObject } from "react";
+import { useCallback, useMemo, useRef, type MutableRefObject } from "react";
 import type { AdaptiveRoutingView } from "../src/shared/adaptive-topology.ts";
 import type { Agent, Channel, Message, ThreadStatus } from "../src/shared/types.ts";
 import { adviceSummary } from "./AdaptiveRoutingPanel.tsx";
@@ -9,6 +9,8 @@ import { Composer } from "./Composer.tsx";
 import { channelTitle, memberNames } from "./labels.ts";
 import { BackButton } from "./MobileNav.tsx";
 import { MessageRow } from "./MessageRow.tsx";
+import { streamRows } from "./message-stream.ts";
+import { StreamDivider } from "./StreamCards.tsx";
 import { holdLivePane, isReadingHistory } from "./pane-window.ts";
 import { RoomPanel } from './RoomPanel.tsx';
 import type { Sel } from "./selection.ts";
@@ -16,9 +18,11 @@ import type { ChannelPane } from "./use-channel-pane.ts";
 import type { useSend } from "./use-send.ts";
 import type { ThreadOpenAnchor } from "./use-thread-scroll-anchor.ts";
 
+const NO_MESSAGES: Message[] = [];
+
 /** The selected channel: header, room panel, message stream, Jev advice strip and composer. */
 export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, channel, threadPaneId, stickBottom, threadOpenAnchor,
-  go, roomTick, routingView, activeBrainChannel, brainNames, onOpenRouting, onInvite, compose, setErr, onBack }: {
+  go, roomTick, routingView, activeBrainChannel, brainNames, onOpenRouting, onInvite, compose, onMarkUnread, setErr, onBack }: {
   channelId: string;
   activeChannel: Channel | undefined;
   agents: Agent[];
@@ -35,6 +39,8 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
   onOpenRouting: () => void;
   onInvite: () => void;
   compose: ReturnType<typeof useSend>;
+  /** Marks root messages from `seq` on unread for the Human and refreshes the read state. */
+  onMarkUnread: (channelId: string, seq: number) => Promise<void>;
   setErr: (error: string) => void;
   /** Phones only: leaves the full-screen channel for the list it was opened from. */
   onBack: () => void;
@@ -42,7 +48,18 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
   const { pane, setPane, channelStream, channelJournal, loadChannel } = channel;
   const loaded = pane?.channel.id === channelId;
   const statuses = useMemo(() => new Map<string, ThreadStatus | null>((pane?.threads ?? []).map((t) => [t.id, t.status])), [pane?.threads]);
-  const onThread = useCallback((m: Message, button: HTMLButtonElement) => {
+  const firstUnreadSeq = loaded ? pane.firstUnreadSeq ?? null : null;
+  const messages = loaded ? pane.messages : NO_MESSAGES;
+  const rows = useMemo(() => streamRows(messages, { firstUnreadSeq }), [messages, firstUnreadSeq]);
+  const agentNames = useMemo(() => Object.fromEntries(agents.map((agent) => [agent.id, agent.name])), [agents]);
+  const markUnreadRef = useRef(onMarkUnread);
+  markUnreadRef.current = onMarkUnread;
+  // Stable across renders so memoized rows keep their props: the divider moves here at once, the server follows.
+  const markUnread = useCallback((m: Message) => {
+    setPane((current) => current?.channel.id === m.channelId ? { ...current, firstUnreadSeq: m.seq } : current);
+    markUnreadRef.current(m.channelId, m.seq).catch((error) => setErr(String(error)));
+  }, [setPane, setErr]);
+  const onThread = useCallback((m: Message, button: HTMLElement) => {
     const stream = channelStream.current;
     if (stream && threadPaneId !== m.id) {
       threadOpenAnchor.current = {
@@ -78,14 +95,6 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
           </button>
         )}
       </header>
-      {pane?.historyThrough !== undefined && (
-        <button type="button" className="older" onClick={() => {
-          const id = channelId;
-          loadChannel(id, undefined, []).catch((error) => { if (error?.name !== "AbortError") setErr(String(error)); });
-        }}>
-          {pane.deferredLive ? "New messages — return to live" : "Return to live"}
-        </button>
-      )}
       <div className="stream" role="log" aria-label="Messages" ref={channelStream} onScroll={() => {
         if (isReadingHistory(channelStream.current)) setPane((current) => current ? holdLivePane(current) : current);
       }}>
@@ -109,18 +118,32 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
         )}
         {!loaded && <div className="loading" role="status">Loading messages…</div>}
         {loaded && pane.messages.length === 0 && !pane.hasOlder && <div className="empty">No messages yet.</div>}
-        {(loaded ? pane.messages : []).map((m) => (
+        {rows.map((row) => row.type === "date" ? <StreamDivider key={row.key} label={row.label} />
+          : row.type === "new" ? <StreamDivider key={row.key} label="New messages" unread /> : (
           <MessageRow
-            key={m.id}
-            m={m}
-            replies={pane?.replyCounts[m.id] ?? 0}
-            status={statuses.get(m.id) ?? null}
+            key={row.key}
+            m={row.message}
+            grouped={row.grouped}
+            replies={pane?.replyCounts[row.message.id] ?? 0}
+            status={statuses.get(row.message.id) ?? null}
+            taskRoute={row.message.taskEvent &&
+              `${agentNames[row.message.taskEvent.assignerId] ?? "Brain"} → ${agentNames[row.message.taskEvent.workerId] ?? "worker"}`}
             onThread={onThread}
             onReact={onReact}
+            onMarkUnread={markUnread}
           />
         ))}
         <div />
       </div>
+      {pane?.channel.id === channelId && pane.historyThrough !== undefined && (
+        <div className="jump-dock">
+          <button type="button" className="jump-pill" onClick={() => {
+            loadChannel(channelId, undefined, []).catch((error) => { if (error?.name !== "AbortError") setErr(String(error)); });
+          }}>
+            {pane.deferredLive ? "New messages — jump to recent" : "Jump to recent"}
+          </button>
+        </div>
+      )}
       {activeBrainChannel && routingView && (
         <RoutingStrip view={routingView} channelId={activeChannel?.id} brainNames={brainNames} onOpen={onOpenRouting} />
       )}

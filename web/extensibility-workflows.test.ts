@@ -281,7 +281,7 @@ test("observation threads support Human replies and reactions without granting b
   assert.deepEqual(f.copies, ["https://example.com/review"]);
   await f.click(f.host.querySelector<HTMLButtonElement>(".react-pick button")!);
   assert.match(f.host.querySelector(".reacts")!.textContent!, /1/);
-  await f.click(f.button("Thread"));
+  await f.click(f.host.querySelector<HTMLButtonElement>('button[aria-label="Reply in thread"]')!);
   const thread = f.host.querySelector<HTMLElement>("aside.thread")!;
   await f.change(thread.querySelector("textarea")!, "Human follow-up");
   await f.click(f.button("Send", thread));
@@ -445,7 +445,7 @@ for (const threaded of [false, true]) {
     assert.ok(anchor.isConnected);
     assert.equal(selection.toString(), selected);
     selection.removeAllRanges();
-    await f.click(f.button(threaded ? "New replies — refresh thread" : "New messages — return to live", scope));
+    await f.click(f.button(threaded ? "New replies — refresh thread" : "New messages — jump to recent", scope));
     const refreshed = threaded ? f.host.querySelector("aside.thread")! : f.host.querySelector("main.desk")!;
     assert.ok(refreshed.querySelectorAll(".msg-b").length <= 500);
     if (!threaded) assert.ok(refreshed.textContent!.includes(incoming.body));

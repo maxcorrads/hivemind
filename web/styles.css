@@ -382,23 +382,47 @@ html.dark .nav:hover { background: rgba(255, 255, 255, 0.08); }
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  padding: 0.55rem 0.25rem 1rem;
+  padding: 0.75rem 0.25rem 1rem;
 }
 
 .msg {
   display: grid;
   grid-template-columns: 36px minmax(0, 1fr);
   gap: 0.65rem;
-  padding: 0.55rem 1.15rem 0.6rem;
-  border-left: 2px solid transparent;
+  padding: 0.45rem 1.15rem 0.35rem;
   position: relative;
 }
-.msg:hover { background: rgba(27, 32, 23, 0.03); }
-html.dark .msg:hover { background: rgba(255, 255, 255, 0.03); }
-.msg.role-human { border-left-color: var(--ember); }
-.msg.role-brain { border-left-color: var(--wax); }
-.msg.role-worker { border-left-color: var(--moss); }
-.msg.kind-system, .msg.kind-control { opacity: 0.78; }
+.msg:hover, .msg.tools-open { background: rgba(27, 32, 23, 0.03); }
+html.dark .msg:hover, html.dark .msg.tools-open { background: rgba(255, 255, 255, 0.03); }
+.msg.kind-control { opacity: 0.78; }
+/* A follow-up from the same author: no avatar or name, its time appears in the gutter on hover. */
+.msg.grouped { padding-top: 0.08rem; padding-bottom: 0.12rem; }
+.gutter-time { visibility: hidden; font-size: 0.66rem; line-height: 1.5rem; text-align: right; white-space: nowrap; }
+.msg.grouped:hover .gutter-time, .msg.grouped.tools-open .gutter-time { visibility: visible; }
+.msg.sys { display: block; padding: 0.3rem 1.15rem; text-align: center; }
+.msg.sys p { margin: 0; color: var(--mute); font-size: 0.8rem; }
+.msg.sys time { margin-left: 0.45rem; font-size: 0.72rem; }
+.stream-divider { display: flex; align-items: center; gap: 0.6rem; margin: 0.7rem 1.15rem 0.3rem; color: var(--mute); font-size: 0.74rem; font-weight: 700; }
+.stream-divider::before, .stream-divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.stream-divider span { padding: 0.1rem 0.6rem; border: 1px solid var(--line); border-radius: 999px; background: var(--desk); }
+.stream-divider.unread { color: var(--ember); }
+.stream-divider.unread::before, .stream-divider.unread::after { background: color-mix(in srgb, var(--ember) 55%, transparent); }
+.stream-divider.unread span { border-color: color-mix(in srgb, var(--ember) 55%, transparent); }
+.jump-dock { position: relative; height: 0; z-index: 4; }
+.jump-pill {
+  position: absolute;
+  bottom: 0.7rem;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0.35rem 0.9rem;
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--desk);
+  font-size: 0.8rem;
+  font-weight: 700;
+  white-space: nowrap;
+  box-shadow: var(--shadow);
+}
 .msg-h {
   display: flex;
   gap: 0.4rem;
@@ -422,6 +446,32 @@ html.dark .hit { background: rgba(224, 195, 106, 0.28); }
   overflow-wrap: anywhere;
 }
 .msg-b.muted { color: var(--mute); }
+.msg-b.md { white-space: normal; }
+.msg-b.md > :first-child { margin-top: 0; }
+.msg-b.md > :last-child { margin-bottom: 0; }
+.msg-b.md p, .msg-b.md ul, .msg-b.md ol, .msg-b.md pre, .msg-b.md blockquote, .msg-b.md table { margin: 0.3rem 0; }
+.msg-b.md ul, .msg-b.md ol { padding-left: 1.4rem; }
+.msg-b.md blockquote { padding-left: 0.7rem; border-left: 3px solid var(--line); color: var(--mute); }
+.msg-b.md h1, .msg-b.md h2, .msg-b.md h3, .msg-b.md h4, .msg-b.md h5, .msg-b.md h6 { margin: 0.45rem 0 0.2rem; font-size: 1rem; }
+.msg-b.md a { color: var(--moss); text-decoration: underline; }
+.msg-b.md pre { white-space: pre-wrap; }
+.msg-b.md table { border-collapse: collapse; font-size: 0.88rem; }
+.msg-b.md th, .msg-b.md td { padding: 0.2rem 0.5rem; border: 1px solid var(--line); }
+.stream-card { max-width: 60ch; margin: 0.2rem 0; padding: 0.55rem 0.75rem; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); font-size: 0.88rem; }
+.stream-card .card-top { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.stream-card .card-top small, .stream-card .card-meta { color: var(--mute); font-size: 0.78rem; }
+.stream-card .card-title { margin: 0.35rem 0 0.1rem; font-weight: 600; overflow-wrap: anywhere; }
+.stream-card .card-meta { margin: 0; }
+.stream-card .card-actions { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.3rem 0.8rem; margin-top: 0.4rem; }
+.stream-card details { flex-basis: 100%; }
+.stream-card details:not([open]) { flex-basis: auto; }
+.stream-card summary { cursor: pointer; color: var(--mute); font-size: 0.8rem; }
+.card-raw { margin-top: 0.35rem; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.8rem; color: var(--mute); }
+.card-btn { padding: 0.2rem 0.7rem; border: 1px solid var(--line); border-radius: 8px; font-size: 0.8rem; font-weight: 600; }
+.card-btn.primary { border-color: var(--wax); color: var(--wax); }
+.chip { padding: 0.05rem 0.5rem; border-radius: 999px; font-size: 0.72rem; font-weight: 700; background: color-mix(in srgb, var(--dusk) 60%, transparent); }
+.chip-ok { color: var(--moss); background: color-mix(in srgb, var(--moss) 16%, transparent); }
+.chip-warn { color: var(--ember); background: color-mix(in srgb, var(--ember) 14%, transparent); }
 .mention {
   color: #6b4f10;
   background: rgba(184, 146, 42, 0.16);
@@ -620,21 +670,39 @@ html.dark .send { background: var(--wax); color: #1b2017; }
 }
 .react.mine { border-color: var(--moss); background: color-mix(in srgb, var(--moss) 16%, transparent); }
 .react em { font-style: normal; margin-left: 0.2rem; font-size: 0.7rem; }
-.react-pick {
+.msg-tools {
   display: none;
   position: absolute;
-  top: 0.2rem;
+  top: -0.35rem;
   right: 0.7rem;
   z-index: 3;
+  align-items: center;
   gap: 0.05rem;
   padding: 0.12rem 0.2rem;
   background: var(--desk);
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: 10px;
   box-shadow: var(--shadow);
 }
-.msg:hover .react-pick,
-.msg:focus-within .react-pick { display: flex; }
+.msg:hover .msg-tools,
+.msg:focus-within .msg-tools,
+.msg.tools-open .msg-tools { display: flex; }
+.react-pick { display: flex; gap: 0.05rem; padding-right: 0.15rem; margin-right: 0.1rem; border-right: 1px solid var(--line); }
+.tool-btn { width: 1.7rem; height: 1.7rem; padding: 0; border-radius: 7px; font-size: 0.9rem; line-height: 1; color: var(--mute); }
+.tool-btn:hover { background: color-mix(in srgb, var(--ink) 8%, transparent); }
+.emoji-picker {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  right: 0;
+  display: grid;
+  grid-template-columns: repeat(6, 1.9rem);
+  gap: 0.1rem;
+  padding: 0.3rem;
+  background: var(--desk);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+}
 .react-pick-btn {
   width: 1.7rem;
   height: 1.7rem;
