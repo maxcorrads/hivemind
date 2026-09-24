@@ -42,6 +42,7 @@ async function install(page: Page, fixture: Partial<Fixture> = {}): Promise<Fixt
   await page.route("**/api/ui/session", route => json(route, { ok: true }));
   await page.route("**/api/ui/snapshot", route => json(route, snapshot()));
   await page.route("**/api/ui/read-state", route => json(route, snapshot()));
+  await page.route("**/api/ui/nav-status", route => json(route, { awaitingDecisions: {}, agentWork: {} }));
   await page.route("**/api/ui/read", route => json(route, snapshot()));
   await page.route("**/api/ui/activity?*", async route => {
     if (state.holdMentions) await state.holdMentions;
@@ -97,7 +98,7 @@ test("keyboard only: visible focus, sidebar menu with arrows and Escape, current
   await install(page);
   await page.goto("/#/c/general");
   await expect(page.getByText("Starting the worker")).toBeVisible();
-  const search = page.getByRole("textbox", { name: "Search projects and messages" });
+  const search = page.getByRole("textbox", { name: "Search messages" });
   await search.focus();
   await page.keyboard.press("Tab");
   await page.keyboard.press("Shift+Tab");
