@@ -5,9 +5,10 @@ import path from "node:path";
 import { test, type TestContext } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import type { Agent, Message } from "../shared/types.ts";
-import type { ReadSnapshot } from "../shared/read-state.ts";
+import type { ActivityItem, ActivityPage, ReadSnapshot } from "../shared/read-state.ts";
 import { Hive } from "./hive.ts";
 import { createApp } from "./app.ts";
+import { startServer } from "./serve.ts";
 import { countRows, deleteRows, failWrites, markLegacyStorage, updateRows } from "./test-fixtures.ts";
 
 function fixture(t: TestContext) {
@@ -293,4 +294,118 @@ test("forward thread pages keep unrequested replies unread and expose a usable c
   assert.equal(rest.hasNewer, false);
   f.hive.reads.markMessagesRead(f.human, f.room.id, rest.messages.map((m) => m.seq), root.id);
   assert.equal(f.hive.reads.unreadCounts(f.human)[f.room.id], 0);
+});
+
+const entries = (items: ActivityItem[]) => items.map((item) => [item.message.id, item.reason, item.read]);
+
+test("the Unread tab lists exactly what the sidebar counts: DM badges and the For you badge", (t) => {
+  const f = fixture(t);
+  const dm = f.hive.channels.openDm(f.human, f.brain.name);
+  const direct = [f.post("plain DM", null, f.brain, dm.id), f.post("another plain DM", null, f.brain, dm.id)];
+  f.post("my own DM", null, f.human, dm.id);
+  const mention = f.post();
+  f.post("ordinary chatter");
+  const unread = () => f.hive.reads.activity(f.human, { projectId: f.first.id, unreadOnly: true });
+  const directOnly = () => f.hive.reads.activity(f.human, { projectId: f.first.id, unreadOnly: true, reasons: ["direct"] });
+  assert.deepEqual(entries(unread().items), [[mention.id, "mention", false], [direct[1]!.id, "direct", false], [direct[0]!.id, "direct", false]]);
+  let snapshot = f.hive.reads.readSnapshot(f.human);
+  assert.equal(snapshot.mentionCounts[f.first.slug], unread().items.length);
+  assert.equal(snapshot.unread[dm.id], directOnly().items.length);
+  assertIds(snapshot.mentions, [mention, direct[1]!, direct[0]!]);
+
+  f.hive.reads.markMessagesRead(f.human, dm.id, [direct[0]!.seq]);
+  snapshot = f.hive.reads.readSnapshot(f.human);
+  assert.equal(snapshot.unread[dm.id], 1);
+  assert.equal(directOnly().items.length, 1);
+  assert.equal(snapshot.mentionCounts[f.first.slug], 2);
+
+  // Activity keeps read entries, with their read state from the server.
+  assert.deepEqual(entries(f.hive.reads.activity(f.human, { projectId: f.first.id, unreadOnly: false }).items),
+    [[mention.id, "mention", false], [direct[1]!.id, "direct", false], [direct[0]!.id, "direct", true]]);
+  f.hive.reads.markMentionsSeen(f.human, f.first.id);
+  snapshot = f.hive.reads.readSnapshot(f.human);
+  assert.equal(snapshot.mentionCounts[f.first.slug], 0);
+  assert.equal(snapshot.unread[dm.id], 0);
+  assert.deepEqual(unread().items, []);
+  assert.ok(f.hive.reads.activity(f.human, { projectId: f.first.id, unreadOnly: false }).items.every((item) => item.read));
+});
+
+test("thread replies are For you once the reader took part; DMs between agents are not", (t) => {
+  const f = fixture(t);
+  const worker = f.hive.identity.join({ role: "worker", seniority: "mid", project: f.first.slug }).agent;
+  const between = f.hive.channels.openDm(f.brain, worker.name);
+  f.post("agents talking", null, f.brain, between.id);
+  const root = f.post("ordinary root");
+  f.post("before the Human replied", root.id);
+  f.post("the Human replies", root.id, f.human);
+  const after = f.post("after the Human replied", root.id);
+  const humanRoot = f.post("the Human starts a thread", null, f.human);
+  const reply = f.post("reply to the Human", humanRoot.id);
+  const all = f.hive.reads.activity(f.human, { projectId: f.first.id, unreadOnly: false });
+  assert.deepEqual(entries(all.items), [[reply.id, "thread", false], [after.id, "thread", false]]);
+  assert.equal(f.hive.reads.readSnapshot(f.human).mentionCounts[f.first.slug], 2);
+});
+
+test("Activity pages newest first through read and unread entries, per project and type", (t) => {
+  const f = fixture(t);
+  const other = f.hive.projects.createProject(f.human, { name: "Other", slug: "other" });
+  const otherBrain = f.hive.identity.join({ role: "brain", project: other.slug }).agent;
+  const otherRoom = f.hive.channels.getChannel("general", other.id);
+  const dm = f.hive.channels.openDm(f.human, f.brain.name);
+  const wanted: Message[] = [];
+  for (let n = 0; n < 45; n++) {
+    wanted.push(f.post(`@Human ${n}`));
+    wanted.push(f.post(`direct ${n}`, null, f.brain, dm.id));
+    f.post("noise");
+    f.post(`@Human elsewhere ${n}`, null, otherBrain, otherRoom.id);
+  }
+  f.hive.reads.markMessagesRead(f.human, dm.id, wanted.filter((m) => m.channelId === dm.id).slice(0, 30).map((m) => m.seq));
+  const found: ActivityItem[] = [];
+  let before: number | undefined;
+  for (let i = 0; i < 10; i++) {
+    const page = f.hive.reads.activity(f.human, { projectId: f.first.id, unreadOnly: false, beforeSeq: before, limit: 25 });
+    found.push(...page.items);
+    if (!page.hasMore) break;
+    before = page.items.at(-1)!.message.seq;
+  }
+  assertIds(found.map((item) => item.message), [...wanted].reverse());
+  assert.ok(found.every((item) => item.project === f.first.slug));
+  assert.equal(found.filter((item) => item.read).length, 30);
+  const directs = f.hive.reads.activity(f.human, { projectId: f.first.id, unreadOnly: false, reasons: ["direct"], limit: 200 });
+  assert.equal(directs.items.length, 45);
+  assert.ok(directs.items.every((item) => item.reason === "direct"));
+  assert.throws(() => f.hive.reads.activity(f.human, { beforeSeq: 0 }), /beforeSeq/);
+});
+
+test("the running server publishes every committed For you message on the bus as activity", async (t) => {
+  const f = fixture(t);
+  const server = startServer({ hive: f.hive, port: 0, telegram: false });
+  t.after(() => server.shutdown());
+  await server.ready;
+  const published: ActivityItem[] = [];
+  f.hive.bus.on("activity", (item) => published.push(item));
+  const dm = f.hive.channels.openDm(f.human, f.brain.name);
+  f.post("ordinary chatter");
+  const mention = f.post();
+  f.post("my own words", null, f.human);
+  const direct = f.post("plain DM", null, f.brain, dm.id);
+  assert.deepEqual(entries(published), [[mention.id, "mention", false], [direct.id, "direct", false]]);
+  assert.deepEqual(published.map((item) => item.project), [f.first.slug, f.first.slug]);
+});
+
+test("GET /api/ui/activity serves Unread and Activity and rejects unknown types", async (t) => {
+  const f = fixture(t);
+  const app = createApp(f.hive);
+  const mention = f.post();
+  f.hive.reads.markMessagesRead(f.human, f.room.id, [mention.seq]);
+  const later = f.post("@Human later");
+  const get = async (query: string) => {
+    const response = await app.request(`/api/ui/activity?project=${f.first.slug}${query}`);
+    return { status: response.status, body: await response.json() as ActivityPage };
+  };
+  assert.deepEqual(entries((await get("&unread=1")).body.items), [[later.id, "mention", false]]);
+  assert.deepEqual(entries((await get("")).body.items), [[later.id, "mention", false], [mention.id, "mention", true]]);
+  assert.deepEqual((await get("&reason=direct,thread")).body.items, []);
+  assert.equal((await get("&reason=gossip")).status, 400);
+  assert.equal((await get("&beforeSeq=0")).status, 400);
 });
