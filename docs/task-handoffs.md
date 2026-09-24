@@ -51,7 +51,7 @@ available through explicit `get_task`/history, but are omitted from resume disco
 The join response includes the same bounded summary page and pagination instruction.
 There is no global last-join task fallback or automatic task execution.
 
-Read MCP `get_handoff` / `hivemind task handoff --id TASK_UUID` for one full handoff.
+Read MCP `get_handoffs` with `taskId` / `hivemind task handoff --id TASK_UUID` for one full handoff.
 HTTP equivalents are `GET /api/agent/handoffs?beforeTask=TASK_UUID` and
 `GET /api/agent/tasks/TASK_UUID/handoff`. Output includes current task state,
 checkpoint age, contract/task freshness, whether later persisted thread messages
