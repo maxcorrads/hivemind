@@ -871,18 +871,14 @@ export class TelegramBridge {
     const persistReceipt = (posted: Message) => {
       this.store.saveInboundMapping(chatId, message.message_id, posted.seq, posted.channelId, posted.threadId, telegramConfigKey(this.cfg));
     };
+    let posted: Message;
     try {
-      // Same as the Human UI: every message addressed to a brain is sent to Jev first, for advice only.
-      const routed = await this.hive.adaptiveTopology.routeHumanRequest(
-        human,
-        { channel: channelId, body, threadId, source: "telegram", attachmentIds },
-        persistReceipt,
-        routingText,
-      );
-      if (!routed) this.hive.messages.postMessage(human, {
+      posted = this.hive.messages.postMessage(human, {
         channel: channelId, body, threadId, source: "telegram", attachmentIds,
       }, persistReceipt);
     } catch (error) { this.discardUnboundAttachments(attachmentIds); throw error; }
+    // Same as the Human UI: posted first, then Jev advises the owning brain in the background (#214).
+    this.hive.adaptiveTopology.humanMessagePosted(human, posted, routingText);
   }
 
   private async onTelegramReaction(update: TelegramReaction) {

@@ -12,7 +12,7 @@ import type { TaskSnapshot } from '../src/shared/tasks.ts';
 import type { RoomView, Room } from '../src/shared/rooms.ts';
 import type { DecisionPage, DecisionView } from '../src/shared/decisions.ts';
 import type { TimelineExport, TimelineView } from '../src/shared/timeline.ts';
-import type { AdaptiveExecutionState, AdaptiveRoutingView } from '../src/shared/adaptive-topology.ts';
+import type { AdaptiveRoutingView } from '../src/shared/adaptive-topology.ts';
 
 export class ApiError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
@@ -188,9 +188,9 @@ export const api = {
     const suffix = q.toString() ? `?${q}` : "";
     return req<ChannelPayload>(`/api/ui/channels/${encodeURIComponent(id)}/messages${suffix}`, { signal });
   },
-  /** Jev's advice for the owning brain(s) comes back in adaptiveStates; it never changes the message (#211). */
+  /** Returns once the message is committed; Jev never delays a send, its advice arrives over realtime (#214). */
   send: (id: string, body: string, threadId?: string | null, attachmentIds?: string[], requestId?: string) =>
-    req<{ message: Message; adaptiveStates?: AdaptiveExecutionState[] }>(`/api/ui/channels/${encodeURIComponent(id)}/messages`, {
+    req<{ message: Message }>(`/api/ui/channels/${encodeURIComponent(id)}/messages`, {
       method: "POST",
       body: JSON.stringify({ body, threadId: threadId ?? null, attachmentIds, requestId }),
     }),

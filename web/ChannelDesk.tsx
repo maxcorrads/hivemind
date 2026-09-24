@@ -135,7 +135,8 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
 
 /**
  * Informational strip above the composer (#211): Jev's latest advice for the primary request in this channel, e.g.
- * "Jev suggests: Multi-DM · 2 workers (72%)", or its state. Nothing is applied; it opens the Routing panel.
+ * "Jev suggests: Multi-DM · 2 workers (72%)". Nothing is applied; it opens the Routing panel. Jev is optional (#214):
+ * the strip is absent while Jev is disabled, before it has advised, and when its call failed (the Routing log has it).
  */
 export function RoutingStrip({ view, channelId, brainNames, onOpen }: {
   view: AdaptiveRoutingView;
@@ -144,18 +145,17 @@ export function RoutingStrip({ view, channelId, brainNames, onOpen }: {
   onOpen: () => void;
 }) {
   const { state, brains } = adviceStrip(view, channelId);
-  if (!state) return null;
+  const failed = state?.advice?.state === "unavailable" || state?.advice?.state === "rejected";
+  if (!state?.recommendation || state.monitoring === "disabled" || failed) return null;
   const unsure = state.advice && state.advice.state !== "ok";
   return (
     <div className={`routing-strip ${unsure ? "warning" : ""}`}>
       <button type="button" onClick={onOpen}>
-        <strong>{state.recommendation ? adviceSummary(state.recommendation) : "Jev has not advised yet"}</strong>
+        <strong>{adviceSummary(state.recommendation)}</strong>
         {brains > 1 ? ` · ${brainNames[state.brainId] ?? "brain"} · ${brains} brains` : ""}
       </button>
       <span>
-        {state.monitoring === "completed" ? "Request closed · no further advice"
-          : state.monitoring === "disabled" ? "Jev disabled · brains get no advice"
-          : "Advisory only · the brain decides"}
+        {state.monitoring === "completed" ? "Request closed · no further advice" : "Advisory only · the brain decides"}
       </span>
     </div>
   );

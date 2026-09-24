@@ -24,7 +24,8 @@ export function adviceSummary(decision: DecisionLike): string {
 /** One line of the Human-only advice audit. Nothing in it was enforced. */
 export function routingEventLabel(event: AdaptiveRoutingEvent): string {
   if (event.kind === "status") return `Hivemind · ${event.reason === "execution_completed" ? "request closed · no more advice"
-    : event.reason === "execution_reopened" ? "request reopened" : event.reason.replaceAll("_", " ")}`;
+    : event.reason === "execution_reopened" ? "request reopened"
+    : event.reason === "execution_expired" ? "request closed after inactivity" : event.reason.replaceAll("_", " ")}`;
   const advice = jevAdviceLabel(decisionOf(event));
   if (event.kind === "observation") return `No single owning brain · ${advice} · recorded only`;
   const trigger = event.trigger ? triggerLabel({ kind: event.trigger as never, eventType: null }, "continuous") : "Jev";
@@ -74,7 +75,7 @@ export function AdaptiveRoutingPanel({ channelId, view, brainNames, onClose }: P
         <div className="sheet-body" id={panelId} role={tabbed ? "tabpanel" : undefined}
           aria-label={tabbed && state ? name(state.brainId) : undefined}>
         <CollectorHealthNotice health={view.collector} />
-        <p className="help-p">Jev only advises the brain. Its suggestion is returned with each brain action and never enforced: the brain decides, and your instructions always take precedence.</p>
+        <p className="help-p">Jev only advises the brain. Its suggestion reaches the brain with its next action and is never enforced: the brain decides, and your instructions always take precedence.</p>
         {!state ? <p className="help-p">No request to a brain has been sent to Jev in this channel yet.</p> : <AdviceSummary state={state} />}
         <h3>Jev advice</h3>
         <p className="help-p">Human-only audit: these entries are not messages delivered to agents.</p>

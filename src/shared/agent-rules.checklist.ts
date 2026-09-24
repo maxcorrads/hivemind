@@ -102,7 +102,7 @@ export const AGENT_RULES = [
   { id: "brain.human-admin", roles: brain, rule: "Human sees every conversation; treat DMs as private from workers' view." },
 
   // Jev advice (brain), advisory-only since #211
-  { id: "jev.advice", roles: brain, rule: "Brains receive Jev advice (jevAdvice) with the response to each action and wait; workers never trigger Jev." },
+  { id: "jev.advice", roles: brain, rule: "When Jev is enabled, brains receive its advice (jevAdvice) with their next action on a request, or a wait delivering its mail; workers never trigger Jev." },
   { id: "jev.advisory", roles: brain, rule: "Jev advice is advisory: the brain decides from the task; Human instructions always override it; nothing is blocked because of it." },
   { id: "jev.not-enforced", roles: brain, rule: "SINGLE/BRAIN+1/MULTI-DM/ROOM are suggestions, not enforced: no worker budget, lock or executionId; non-ok advice counts as no advice." },
 

@@ -16,11 +16,14 @@ test('each Jev outcome has one state and one precise advisory label; an answer t
     [{ ...base, confidence: 0.17 }, 'uncertain', 'Jev uncertain (17%) · Multi-DM · 2 workers'],
     [{ ...base, confidence: null }, 'uncertain', 'Jev uncertain (no confidence) · Multi-DM · 2 workers'],
     [{ ...base, incoherent: 'plan_vs_sufficiency' }, 'incoherent', 'Jev uncertain (incoherent: plan contradicts sufficiency)'],
-    [{ ...failed, reason: 'provider_timeout_preserve_current', error: 'timeout' }, 'unavailable', 'Jev unavailable (timeout)'],
-    [{ ...failed, reason: 'provider_unavailable_preserve_current', error: 'http_503' }, 'unavailable', 'Jev unavailable (http_503)'],
-    [{ ...failed, reason: 'provider_unavailable_preserve_current' }, 'unavailable', 'Jev unavailable'],
-    [{ ...failed, reason: 'response_rejected_preserve_current', model: 'jev-1.13.0', inputTokens: 5, error: 'plan_not_offered' },
+    [{ ...failed, reason: 'provider_timeout', error: 'timeout' }, 'unavailable', 'Jev unavailable (timeout)'],
+    [{ ...failed, reason: 'provider_unavailable', error: 'http_503' }, 'unavailable', 'Jev unavailable (http_503)'],
+    [{ ...failed, reason: 'provider_unavailable' }, 'unavailable', 'Jev unavailable'],
+    [{ ...failed, reason: 'response_rejected', model: 'jev-1.13.0', inputTokens: 5, error: 'plan_not_offered' },
       'rejected', 'Jev answer rejected (plan_not_offered)'],
+    // Rows recorded before #214 keep their old reason names.
+    [{ ...failed, reason: 'provider_timeout_preserve_current', error: 'timeout' }, 'unavailable', 'Jev unavailable (timeout)'],
+    [{ ...failed, reason: 'response_rejected_preserve_current', error: 'plan_not_offered' }, 'rejected', 'Jev answer rejected (plan_not_offered)'],
     [{ ...failed, reason: 'capacity_changed_during_initial_routing', model: 'jev-1.13.0', inputTokens: 5 }, 'stale', 'Capacity changed during the Jev call'],
     [{ ...failed, providerStatus: 'bypassed', reason: 'jev_disabled_manual_override' }, 'bypassed', 'Jev not called'],
     [{ ...base, targetTopology: 'single', targetWorkers: 0, reason: 'orchestration_needed_no_capacity' }, 'answered',
@@ -39,9 +42,9 @@ test('the advice a brain receives names the plan, its state and the advisory not
   assert.equal(jevAdvice({ ...base, confidence: 0.3 }, 1)!.state, 'uncertain');
   assert.equal(jevAdvice({ ...base, incoherent: 'plan_vs_sufficiency' }, 1)!.state, 'incoherent');
   assert.equal(jevAdvice({ ...base, targetTopology: 'single', targetWorkers: 0, reason: 'orchestration_needed_no_capacity' }, 1)!.plan, 'capacity_blocked');
-  assert.deepEqual(jevAdvice({ ...failed, reason: 'provider_timeout_preserve_current', error: 'timeout' }, 7),
+  assert.deepEqual(jevAdvice({ ...failed, reason: 'provider_timeout', error: 'timeout' }, 7),
     { plan: null, topology: null, workers: null, confidence: null, state: 'unavailable', reason: 'timeout', at: 7, note: JEV_ADVICE_NOTE });
-  assert.equal(jevAdvice({ ...failed, reason: 'response_rejected_preserve_current', model: 'm', error: 'plan_not_offered' }, 1)!.state, 'rejected');
+  assert.equal(jevAdvice({ ...failed, reason: 'response_rejected', model: 'm', error: 'plan_not_offered' }, 1)!.state, 'rejected');
   assert.equal(jevAdvice({ ...failed, reason: 'capacity_changed_during_initial_routing' }, 1)!.state, 'unavailable');
   assert.equal(jevAdvice({ ...failed, providerStatus: 'bypassed' }, 1), null);
 });

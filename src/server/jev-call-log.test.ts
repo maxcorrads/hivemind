@@ -10,6 +10,7 @@ import { saveAdaptiveRouting } from './adaptive-config.ts';
 import { jevTopologyResponse } from './fixtures/jev-topology.ts';
 import { GROUPS_PER_PAGE, JEV_CALLS_PER_PROJECT } from './jev-call-log.ts';
 import type { JevCall, JevCallLogView } from '../shared/jev-calls.ts';
+import { sendHumanRequest } from './fixtures/jev-human.ts';
 
 function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-jev-calls-'));
@@ -41,7 +42,7 @@ function fixture(t: TestContext) {
 
 test('every Jev exchange is logged with the exact payloads and its trigger; advice is never applied', async t => {
   const f = fixture(t);
-  const routed = await f.hive.adaptiveTopology.routeHumanRequest(f.human,
+  const routed = await sendHumanRequest(f.hive, f.human,
     { channel: f.dm.id, body: 'Draft the migration plan.', requestId: 'plan' });
   assert.ok(routed);
   await f.hive.adaptiveTopology.adviseBrainAction(f.brains[0]!.agent, { kind: 'brain_message', channelId: f.dm.id, eventType: 'progress' });
@@ -82,7 +83,7 @@ test('every Jev exchange is logged with the exact payloads and its trigger; advi
 
 test('a rejected answer is logged with its specific reason, resolved model and tokens', async t => {
   const f = fixture(t);
-  const routed = await f.hive.adaptiveTopology.routeHumanRequest(f.human,
+  const routed = await sendHumanRequest(f.hive, f.human,
     { channel: f.dm.id, body: 'Draft the migration plan.', requestId: 'plan' });
   assert.ok(routed);
   f.fail('reject');
@@ -91,7 +92,7 @@ test('a rejected answer is logged with its specific reason, resolved model and t
   const call = list.body.requests[0]!.calls.at(-1)!;
   assert.equal(call.status, 'unavailable');
   assert.equal(call.error, 'plan_not_offered');
-  assert.equal(call.reason, 'response_rejected_preserve_current');
+  assert.equal(call.reason, 'response_rejected');
   assert.equal(call.model, 'jev-1.13.0');
   assert.equal(call.inputTokens, 2851); assert.equal(call.outputTokens, 248);
   assert.equal(call.outcome, null);
@@ -103,7 +104,7 @@ test('observations are logged without a brain and the history is bounded per pro
   const f = fixture(t);
   const group = f.hive.channels.createChannel(f.human, { name: 'council', type: 'private', project: 'chapter',
     memberNames: f.brains.map(brain => brain.agent.name) });
-  await f.hive.adaptiveTopology.routeHumanRequest(f.human, { channel: group.id, body: 'Who takes this?', requestId: 'who' });
+  await sendHumanRequest(f.hive, f.human, { channel: group.id, body: 'Who takes this?', requestId: 'who' });
   const view = f.hive.adaptiveTopology.observations.jevCalls.view(group.projectId);
   const call = view.requests[0]!.calls[0]!;
   assert.equal(call.phase, 'observation');

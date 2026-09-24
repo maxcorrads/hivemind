@@ -1,14 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { createApp } from "./app.ts";
 import { Hive } from "./hive.ts";
 import { jevTopologyResponse } from "./fixtures/jev-topology.ts";
-import { adaptiveRoutingPublic, loadAdaptiveRouting, saveAdaptiveRouting } from "./adaptive-config.ts";
+import { adaptiveRoutingPublic, cachedAdaptiveRouting, loadAdaptiveRouting, saveAdaptiveRouting } from "./adaptive-config.ts";
 import type { Message } from "../shared/types.ts";
-import type { AdaptiveExecutionState } from "../shared/adaptive-topology.ts";
 
 test("adaptive routing settings keep the TypeSafe key private and support enable/disable", () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-active-routing-"));
@@ -29,9 +28,9 @@ test("adaptive routing settings keep the TypeSafe key private and support enable
     const disabled = saveAdaptiveRouting(dir, { enabled: false });
     assert.equal(disabled.enabled, false);
     assert.equal(loadAdaptiveRouting(dir)?.apiKey, "ts_fixture_secret_1234");
-    // The enforced-mode fallbacks were removed (#211): older pages may still send them; they are ignored, not stored.
-    const ignored = saveAdaptiveRouting(dir, { fallback: "single", topologyFallback: "brain_multi_room" });
-    assert.equal("fallback" in ignored || "topologyFallback" in ignored, false);
+    // The enforced-mode fallbacks were removed (#211) and are no longer accepted (#214).
+    assert.throws(() => saveAdaptiveRouting(dir, { fallback: "single" }), /Unknown adaptive routing setting/);
+    assert.throws(() => saveAdaptiveRouting(dir, { topologyFallback: "brain_multi_room" }), /Unknown adaptive routing setting/);
     assert.deepEqual(Object.keys(JSON.parse(readFileSync(path.join(dir, "adaptive-routing.json"), "utf8"))).sort(), ["apiKey", "enabled", "version"]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -75,9 +74,11 @@ test("enabling Jev adds advice to Human delivery without changing it; disabled J
 
   const active = await send({ body: "Small direct request", requestId: "active-request" });
   assert.equal(active.status, 200);
-  const activeJson = await active.json() as { message: Message; adaptiveStates: AdaptiveExecutionState[] };
+  const activeJson = await active.json() as { message: Message; adaptiveStates?: unknown };
+  assert.equal(activeJson.adaptiveStates, undefined, "the send response never waits for advice (#214)");
+  await hive.adaptiveTopology.settled();
   assert.equal(calls, 1);
-  const [state] = activeJson.adaptiveStates;
+  const state = hive.adaptiveTopology.view(human, dm.id).state;
   assert.equal(state!.recommendation?.targetTopology, "single");
   assert.equal(state!.recommendation?.providerStatus, "ok", "A malformed mock must not look like a successful answer");
   assert.equal(state!.recommendation?.contractVersion, "adaptive-routing-v3");
@@ -89,16 +90,18 @@ test("enabling Jev adds advice to Human delivery without changing it; disabled J
 
   const retry = await send({ body: "Small direct request", requestId: "active-request" });
   assert.equal(retry.status, 200);
+  await hive.adaptiveTopology.settled();
   const retried = await retry.json() as { message: Message; adaptiveStates?: unknown };
   assert.equal(retried.message.id, activeJson.message.id);
   assert.equal(retried.adaptiveStates, undefined);
   assert.equal(calls, 1, "A committed send retry must not reclassify");
   const reply = await send({ body: "Thread clarification", threadId: activeJson.message.id, requestId: "reply-request" });
   assert.equal(reply.status, 200);
-  const replied = await reply.json() as { adaptiveStates?: AdaptiveExecutionState[]; message: Message };
-  assert.equal(replied.adaptiveStates?.[0]?.executionId, state!.executionId, "A Human reply continues its request");
+  const replied = await reply.json() as { message: Message };
+  await hive.adaptiveTopology.settled();
+  assert.equal(hive.adaptiveTopology.view(human, dm.id).state?.executionId, state!.executionId, "A Human reply continues its request");
   assert.equal(replied.message.threadId, activeJson.message.id);
-  assert.equal(calls, 2, "A Human reply is sent to Jev before delivery");
+  assert.equal(calls, 2, "A Human reply is sent to Jev after delivery");
   const view = hive.adaptiveTopology.view(human, dm.id);
   assert.equal(view.executions?.length, 1);
   assert.equal(view.state?.executionId, state!.executionId);
@@ -106,7 +109,23 @@ test("enabling Jev adds advice to Human delivery without changing it; disabled J
   assert.equal(view.events.at(-1)?.trigger, "human_message");
   const replayed = await send({ body: "Thread clarification", threadId: activeJson.message.id, requestId: "reply-request" });
   assert.equal(replayed.status, 200);
+  await hive.adaptiveTopology.settled();
   assert.equal(calls, 2, "A committed reply retry must not reclassify");
+});
+
+test("the runtime reads the settings file once and again only after a save (#214)", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "hive-routing-cache-"));
+  try {
+    assert.equal(cachedAdaptiveRouting(dir), null);
+    saveAdaptiveRouting(dir, { enabled: true, apiKey: "ts_fixture_cache_1234" });
+    assert.equal(cachedAdaptiveRouting(dir)?.enabled, true, "a save invalidates the cache");
+    // A hand edit is not read on the hot path; the next save or a restart picks the file up.
+    writeFileSync(path.join(dir, "adaptive-routing.json"), JSON.stringify({ version: 1, enabled: false, apiKey: "x" }));
+    assert.equal(cachedAdaptiveRouting(dir)?.enabled, true);
+    assert.equal(loadAdaptiveRouting(dir)?.enabled, false);
+    saveAdaptiveRouting(dir, { enabled: false });
+    assert.equal(cachedAdaptiveRouting(dir)?.enabled, false);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("public settings never expose the saved key", () => {

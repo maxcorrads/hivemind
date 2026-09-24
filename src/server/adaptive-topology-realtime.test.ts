@@ -11,6 +11,7 @@ import { saveAdaptiveRouting } from './adaptive-config.ts';
 import { jevTopologyResponse } from './fixtures/jev-topology.ts';
 import type { AdaptiveExecutionState, AdaptiveRoutingEvent, AdaptiveTopology } from '../shared/adaptive-topology.ts';
 import { countRows } from './test-fixtures.ts';
+import { sendHumanRequest } from './fixtures/jev-human.ts';
 
 test('the Human websocket receives every piece of advice; agents only get it in their own responses', { timeout: 15000 }, async t => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-routing-realtime-'));
@@ -50,14 +51,14 @@ test('the Human websocket receives every piece of advice; agents only get it in 
     socket!.on('message', listener);
   });
   let pending = nextRouting();
-  const started = await hive.adaptiveTopology.routeHumanRequest(human, { channel: dm.id, body: 'Perform the bounded request.', requestId: 'start' });
+  const started = await sendHumanRequest(hive, human, { channel: dm.id, body: 'Perform the bounded request.', requestId: 'start' });
   assert.ok(started); const initial = await pending;
   assert.equal(initial.payload.state.monitoring, 'active');
   assert.equal(initial.payload.state.advice?.plan, 'single');
   const messagesBefore = countRows(hive, 'messages');
   const act = () => hive.adaptiveTopology.adviseBrainAction(brain.agent, { kind: 'brain_message', channelId: dm.id, summary: 'progress' });
   pending = nextRouting(); unavailable = true;
-  assert.equal((await act())?.state, 'unavailable');
+  assert.equal(await act(), null, 'a failed call reaches the brain as no advice (#214)');
   const failed = await pending; assert.equal(failed.payload.event.kind, 'advice');
   assert.equal(failed.payload.state.advice?.state, 'unavailable');
   pending = nextRouting(); unavailable = false; target = 'brain_multi_room';
