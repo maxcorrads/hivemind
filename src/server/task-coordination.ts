@@ -101,7 +101,7 @@ export class TaskCoordination {
       task.claim = { ...old, state: 'released', version: old.version + 1, updatedAt: now };
       return;
     }
-    if (task.state === 'accepted_complete' || task.state === 'rejected') throw new HiveError(409, 'Finished or rejected tasks cannot acquire work claims');
+    if (task.state === 'accepted_complete' || task.state === 'rejected' || task.state === 'cancelled') throw new HiveError(409, 'Finished, rejected or cancelled tasks cannot acquire work claims');
     if (action.type === 'claim' && old?.state === 'held') throw new HiveError(409, 'Task already claimed; expiry never automatically grants another owner');
     if (action.type === 'renew_claim' && claimState(task, now) !== 'held') throw new HiveError(409, 'Only a current unexpired claim can be renewed');
     if (action.type === 'reconcile_claim' && old?.state !== 'held') throw new HiveError(409, 'Reconciliation requires an existing held or uncertain claim');

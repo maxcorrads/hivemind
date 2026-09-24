@@ -23,9 +23,9 @@ export class AdaptiveTopologyStore {
   execution(executionId: string): Row | undefined {
     return this.db.prepare('SELECT snapshot FROM adaptive_topology_executions WHERE execution_id=?').get(executionId);
   }
-  /** A brain's executions in a project, most recently updated first. */
+  /** A brain's executions in a project (whole rows), most recently updated first. */
   brainExecutions(brainId: string, projectId: string): Row[] {
-    return this.db.prepare(`SELECT snapshot FROM adaptive_topology_executions WHERE brain_id=? AND project_id=?
+    return this.db.prepare(`SELECT * FROM adaptive_topology_executions WHERE brain_id=? AND project_id=?
       ORDER BY json_extract(snapshot,'$.updatedAt') DESC, rowid DESC`).all(brainId, projectId);
   }
   /** Executions whose request is the given thread root. */

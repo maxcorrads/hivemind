@@ -173,7 +173,9 @@ export class AdaptiveTopologyRuntime {
       const request = routingRequest ?? requestText(posted);
       const requestedAt = this.requestedAt();
       // A reply in a request's thread continues that request; any other message starts a new one per owning brain.
-      const rooted = posted.threadId ? this.store.rootedExecutions(posted.threadId).map(parse).filter(state => state.channelId === channel.id) : [];
+      // A removed brain's request is closed: the reply goes to the current owners instead.
+      const rooted = posted.threadId ? this.store.rootedExecutions(posted.threadId).map(parse)
+        .filter(state => state.channelId === channel.id && this.deps.identity.findActiveAgent(state.brainId)) : [];
       if (!rooted.length && !owners.length) { this.background(this.observe(config, channel, request)); return; }
       const states: StoredExecution[] = rooted.length ? rooted : owners.map(brain => ({ executionId: `execution-${randomUUID()}`,
         channelId: channel.id, projectId: channel.projectId, brainId: brain.id, rootMessageId: posted.threadId ?? posted.id,
@@ -312,6 +314,27 @@ export class AdaptiveTopologyRuntime {
       published.push([state, event]);
     }
     return published.length ? () => { for (const [state, event] of published) this.publish(state, event); } : null;
+  }
+
+  /**
+   * #215, inside the removal transaction: completes every open execution of a removed brain (no more Jev calls for
+   * it); the executions and their audit stay in the Routing log. Publishes after the commit.
+   */
+  closeBrainExecutions(brain: Agent): void {
+    const published: Array<[StoredExecution, AdaptiveRoutingEvent]> = [];
+    for (const row of brain.projectId ? this.store.brainExecutions(brain.id, brain.projectId) : []) {
+      // The row's key columns are authoritative: snapshots of older hives may lack them (and the timestamps).
+      const stored = parse(row);
+      const state: StoredExecution = { ...stored, executionId: String(row.execution_id), channelId: String(row.channel_id),
+        brainId: String(row.brain_id), projectId: String(row.project_id), rootMessageId: String(row.root_message_id),
+        updatedAt: stored.updatedAt ?? 0, recentEvents: stored.recentEvents ?? [] };
+      if (state.completedAt) continue;
+      this.touch(state); state.completedAt = state.updatedAt;
+      const event = this.statusEvent(state, 'brain_removed');
+      this.store.saveExecution(state); this.store.saveEvent(event);
+      published.push([state, event]);
+    }
+    if (published.length) this.deps.storage.afterCommit(() => { for (const [state, event] of published) this.publish(state, event); });
   }
 
   view(actor: Agent, channelId: string): AdaptiveRoutingView {

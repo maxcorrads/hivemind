@@ -22,10 +22,19 @@ import type { MessageService } from "./messages.ts";
 /** The shared unit of work and the post-commit event bus. */
 export type Core = { readonly storage: Storage; readonly bus: HiveBus };
 
+/**
+ * Agent lookups. Removed agents (#215) stay readable by id, for history, but are left out of name lookups and the
+ * roster, so they can no longer be addressed, mentioned or assigned.
+ */
 export interface AgentDirectory {
   getAgent(id: string): Agent;
+  findAgent(id: string): Agent | null;
+  /** The agent when it exists and was not removed. */
+  findActiveAgent(id: string): Agent | null;
   getAgentByName(name: string): Agent | null;
   listAgents(viewer?: Agent): Agent[];
+  /** The ids among `ids` of removed agents, read with one statement. */
+  removedAmong(ids: string[]): Set<string>;
 }
 
 export interface ProjectDirectory {

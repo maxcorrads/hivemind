@@ -114,11 +114,21 @@ test("a populated current-main (user_version 2) hive upgrades with every row and
   hive.db.close();
 
   const after = inspect(file, db => ({ schema: schemaOf(db), rows: rowsOf(db) }));
-  // #211 (jev_advisory) drops what only served enforced topologies; every other row and object is untouched.
+  // #211 (jev_advisory) drops what only served enforced topologies and #215 (agent_tombstones) adds agents.removed_at
+  // and replaces the constant Human token hash; every other row and object is untouched.
   const dropped = ["adaptive_topology_locks", "adaptive_topology_tasks", "adaptive_topology_evaluated", "adaptive_topology_messages"];
-  const rewritten = ["adaptive_topology_executions", "adaptive_topology_events"];
+  const rewritten = ["adaptive_topology_executions", "adaptive_topology_events", "agents"];
   // #217 (performance_retention) adds the per-message receipt index, backfilled from the delivery ledger.
   const added = ["inbox_receipts"];
+  type AgentRow = { id: string; token_hash: string; removed_at?: number | null };
+  const beforeAgents = before.rows.agents as AgentRow[], afterAgents = after.rows.agents as AgentRow[];
+  assert.deepEqual(afterAgents.map(({ token_hash: _t, removed_at, ...row }) => ({ ...row, removed_at })),
+    beforeAgents.map(({ token_hash: _t, ...row }) => ({ ...row, removed_at: null })), "every agent is kept, none removed");
+  for (const [i, row] of afterAgents.entries()) {
+    if (row.id === "human") assert.match(row.token_hash, /^[0-9a-f]{64}$/);
+    if (row.id === "human") assert.notEqual(row.token_hash, beforeAgents[i]!.token_hash, "the constant Human hash is replaced");
+    else assert.equal(row.token_hash, beforeAgents[i]!.token_hash);
+  }
   const kept = (rows: Record<string, unknown[]>) => Object.fromEntries(Object.entries(rows)
     .filter(([table]) => !dropped.includes(table) && !rewritten.includes(table) && !added.includes(table)));
   assert.deepEqual(kept(after.rows), kept(before.rows), "the advisory migration keeps every other row, including jev_calls and evidence");

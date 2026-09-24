@@ -17,7 +17,7 @@ export function readAdaptiveCapacity(deps: CapacityDeps, scope: { projectId: str
   const isLive = (worker: typeof workers[number]) => worker.online && now - worker.lastSeenAt < PRESENCE_IDLE_MS;
   const free = workers.filter(worker => isLive(worker) && !ownWorkers.has(worker.id) && !otherWorkers.has(worker.id));
   const committed = workers.filter(worker => isLive(worker) && ownWorkers.has(worker.id) && !otherWorkers.has(worker.id));
-  const active = own.filter(task => !['accepted_complete', 'rejected'].includes(task.state));
+  const active = own.filter(task => !['accepted_complete', 'rejected', 'cancelled'].includes(task.state));
   const dependencyIds = [...new Set(active.flatMap(task => task.dependencies))];
   const completed = new Set(deps.tasks.completedAmong(dependencyIds));
   const available = [...committed.map(worker => ({ ...worker, committed: true })), ...free.map(worker => ({ ...worker, committed: false }))]

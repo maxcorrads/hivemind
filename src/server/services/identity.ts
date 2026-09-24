@@ -44,8 +44,8 @@ export type IdentityServiceDeps = Core & {
     generalChannelId(projectId: string): string | null;
   };
   readonly messages: Pick<MessagePoster, "postMessage" | "postSystem">;
-  readonly files: { deleteUnsentBy(agentId: string): void };
-  readonly waiters: WaiterRegistry & { evict(agentId: string): void };
+  readonly waiters: WaiterRegistry;
+  readonly lifecycle: { removeAgent(actor: Agent, name: string): Agent };
 };
 
 /**
@@ -66,9 +66,10 @@ export class IdentityService implements AgentDirectory {
     this.db.prepare(
       `INSERT INTO agents (id, name, role, seniority, focus, token_hash, online, last_seen_at, created_at, inbox_cursor)
        VALUES (?, ?, 'human', NULL, NULL, ?, 1, ?, ?, 0)`,
-    ).run(HUMAN_ID, HUMAN_NAME, hashToken("human-local"), t, t);
+    ).run(HUMAN_ID, HUMAN_NAME, hashToken(newToken()), t, t);
   }
 
+  /** The agent, including a removed one (a tombstone keeps its history readable). */
   getAgent(id: string): Agent {
     const row = this.db.prepare("SELECT * FROM agents WHERE id = ?").get(id) as AgentRow | undefined;
     if (!row) throw new HiveError(404, "Agent not found");
@@ -81,13 +82,31 @@ export class IdentityService implements AgentDirectory {
     return row ? this.mapAgent(row) : null;
   }
 
-  /** Ids of a project's workers. */
+  /** The agent when it exists and was not removed. */
+  findActiveAgent(id: string): Agent | null {
+    const agent = this.findAgent(id);
+    return agent && agent.removedAt === undefined ? agent : null;
+  }
+
+  removedAmong(ids: string[]): Set<string> {
+    return new Set((this.db.prepare(`SELECT id FROM agents WHERE removed_at IS NOT NULL
+      AND id IN (SELECT value FROM json_each(?))`).all(JSON.stringify([...new Set(ids)])) as { id: string }[]).map(row => row.id));
+  }
+
+  /** Ids of a project's workers (removed ones excluded). */
   projectWorkerIds(projectId: string): string[] {
-    return (this.db.prepare("SELECT id FROM agents WHERE project_id = ? AND role = 'worker'").all(projectId) as { id: string }[])
+    return (this.db.prepare("SELECT id FROM agents WHERE project_id = ? AND role = 'worker' AND removed_at IS NULL").all(projectId) as { id: string }[])
       .map((row) => row.id);
   }
 
+  /** An agent that can still be addressed by name; removed agents are not found. */
   getAgentByName(name: string): Agent | null {
+    const agent = this.findAgentByName(name);
+    return agent && agent.removedAt === undefined ? agent : null;
+  }
+
+  /** Any agent holding the name, including a removed one: removed names stay reserved. */
+  findAgentByName(name: string): Agent | null {
     const row = this.db.prepare("SELECT * FROM agents WHERE lower(name) = lower(?)").get(name) as
       | AgentRow
       | undefined;
@@ -100,7 +119,7 @@ export class IdentityService implements AgentDirectory {
   }
 
   agentByToken(token: string): Agent {
-    const row = this.db.prepare("SELECT * FROM agents WHERE token_hash = ?").get(hashToken(token)) as
+    const row = this.db.prepare("SELECT * FROM agents WHERE token_hash = ? AND removed_at IS NULL").get(hashToken(token)) as
       | AgentRow
       | undefined;
     if (!row) throw new HiveError(401, "Invalid token");
@@ -119,6 +138,7 @@ export class IdentityService implements AgentDirectory {
       createdAt: row.created_at,
       projectId: row.project_id,
       project: projectSlug,
+      ...(row.removed_at != null ? { removedAt: row.removed_at } : {}),
     };
   }
 
@@ -126,6 +146,7 @@ export class IdentityService implements AgentDirectory {
     return this.agentFromRow(row, row.project_id ? this.deps.projects.slugOf(row.project_id) : null);
   }
 
+  /** The roster: agents that were not removed. */
   listAgents(viewer?: Agent): Agent[] {
     type Joined = AgentRow & { project_slug: string | null };
     const scoped = viewer && viewer.role !== "human";
@@ -133,7 +154,7 @@ export class IdentityService implements AgentDirectory {
     const rows = this.db.prepare(`
       SELECT a.*, p.slug AS project_slug FROM agents a
       LEFT JOIN projects p ON p.id = a.project_id
-      ${scoped ? "WHERE a.role = 'human' OR a.project_id = ?" : ""}
+      WHERE a.removed_at IS NULL ${scoped ? "AND (a.role = 'human' OR a.project_id = ?)" : ""}
       ORDER BY a.role, a.seniority, a.name
     `).all(...(scoped ? [viewer.projectId] : [])) as Joined[];
     return rows.map((row) => this.agentFromRow(row, row.project_slug));
@@ -142,7 +163,7 @@ export class IdentityService implements AgentDirectory {
   /** Brains/workers of a project that are online or blocked in a wait. */
   busyAgents(projectId: string): Agent[] {
     const rows = this.db.prepare(
-      "SELECT * FROM agents WHERE project_id = ? AND id != ? AND role != 'human'",
+      "SELECT * FROM agents WHERE project_id = ? AND id != ? AND role != 'human' AND removed_at IS NULL",
     ).all(projectId, HUMAN_ID) as AgentRow[];
     return rows.map((row) => this.mapAgent(row)).filter((agent) => agent.online || this.deps.waiters.has(agent.id));
   }
@@ -176,7 +197,7 @@ export class IdentityService implements AgentDirectory {
     };
     // The session key of a running process: a repeated join keeps its session.
     const current = input.token
-      ? this.db.prepare("SELECT * FROM agents WHERE token_hash = ?").get(hashToken(input.token)) as AgentRow | undefined
+      ? this.db.prepare("SELECT * FROM agents WHERE token_hash = ? AND removed_at IS NULL").get(hashToken(input.token)) as AgentRow | undefined
       : undefined;
     if (current) {
       const agent = this.mapAgent(current);
@@ -193,6 +214,9 @@ export class IdentityService implements AgentDirectory {
       const row = this.db.prepare("SELECT * FROM agents WHERE lower(name) = lower(?) AND role IN ('brain','worker')")
         .get(input.resumeName) as AgentRow | undefined;
       if (!row) throw new HiveError(404, `No brain or worker named ${input.resumeName}; join without resume to get a new name`);
+      if (row.removed_at != null) {
+        throw new HiveError(410, `${row.name} was removed from the hive and cannot resume; join without resume to get a new name`);
+      }
       const agent = this.mapAgent(row);
       assertResumable(agent);
       return storage.transaction(() => {
@@ -265,7 +289,7 @@ export class IdentityService implements AgentDirectory {
 
   touch(agentId: string, online = true) {
     const current = this.db.prepare(
-      "SELECT online, last_seen_at AS lastSeenAt FROM agents WHERE id = ?",
+      "SELECT online, last_seen_at AS lastSeenAt FROM agents WHERE id = ? AND removed_at IS NULL",
     ).get(agentId) as { online: number; lastSeenAt: number } | undefined;
     if (!current) return;
     const wanted = online ? 1 : 0;
@@ -289,7 +313,7 @@ export class IdentityService implements AgentDirectory {
   sweepPresence(maxIdleMs = PRESENCE_IDLE_MS) {
     const cutoff = now() - maxIdleMs;
     const rows = this.db.prepare(
-      `SELECT id FROM agents WHERE role != 'human' AND online = 1 AND last_seen_at < ?`,
+      `SELECT id FROM agents WHERE role != 'human' AND online = 1 AND last_seen_at < ? AND removed_at IS NULL`,
     ).all(cutoff) as { id: string }[];
     for (const r of rows) {
       if (this.deps.waiters.has(r.id)) {
@@ -300,25 +324,17 @@ export class IdentityService implements AgentDirectory {
     }
   }
 
+  /** Human removes an agent; see AgentLifecycle.removeAgent. */
   removeAgent(actor: Agent, name: string): Agent {
-    if (actor.role !== "human") throw new HiveError(403, "Only Human can remove agents");
-    const target = this.getAgentByName(name);
-    if (!target) throw new HiveError(404, `No agent named ${name}`);
-    if (target.id === HUMAN_ID || target.role === "human") {
-      throw new HiveError(403, "Cannot remove Human");
-    }
-    const { waiters, files, channels, messages, bus } = this.deps;
-    waiters.evict(target.id);
-    this.db.prepare("DELETE FROM channel_members WHERE agent_id = ?").run(target.id);
-    this.db.prepare("DELETE FROM reads WHERE agent_id = ?").run(target.id);
-    this.db.prepare("DELETE FROM reactions WHERE agent_id = ?").run(target.id);
-    files.deleteUnsentBy(target.id);
-    this.db.prepare("DELETE FROM agents WHERE id = ?").run(target.id);
-    if (target.projectId) {
-      const general = channels.generalChannelId(target.projectId);
-      if (general) messages.postSystem(general, `${actor.name} removed ${target.name} from the hive.`);
-    }
-    bus.emit("project", { removed: target.name });
-    return target;
+    return this.deps.lifecycle.removeAgent(actor, name);
+  }
+
+  /**
+   * Inside the lifecycle transaction: turns the agent into a tombstone. It keeps its row and name (history stays
+   * attributed), goes offline and gets an unguessable session key, so no earlier key authenticates it again.
+   */
+  markRemoved(agentId: string, at: number): void {
+    this.db.prepare("UPDATE agents SET removed_at = ?, online = 0, token_hash = ? WHERE id = ? AND removed_at IS NULL")
+      .run(at, hashToken(newToken()), agentId);
   }
 }
