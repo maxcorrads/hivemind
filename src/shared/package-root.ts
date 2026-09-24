@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -26,6 +26,13 @@ export function packageRoot(from = here): string {
     }
     if (path.dirname(dir) === dir) throw new Error(`Hivemind package root not found above ${from}`);
   }
+}
+
+/** Hivemind's version from its package.json (the MCP server reports it to clients). */
+export function packageVersion(root = packageRoot()): string {
+  const { version } = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8")) as { version?: unknown };
+  if (typeof version !== "string" || !version) throw new Error(`No version in ${path.join(root, "package.json")}`);
+  return version;
 }
 
 /** Node argv that re-launches this CLI the same way it is running now: compiled JS, or source through tsx. */

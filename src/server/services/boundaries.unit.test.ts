@@ -46,7 +46,7 @@ const OWNERSHIP: Record<string, { modules: string[]; tables: string[] }> = {
     modules: ["inbox-delivery.ts", "inbox-reader.ts", "read-state.ts", "send-requests.ts", "upload-budget.ts"],
     tables: ["projects", "agents", "channels", "channel_members", "messages", "threads", "reactions", "reads",
       "message_reads", "ui_read_revision", "attachments", "bot_credentials", "bot_events", "inbox_sessions",
-      "inbox_deliveries", "inbox_early_receipts", "inbox_receipt_totals", "send_requests", "upload_reservations", "upload_usage"],
+      "inbox_deliveries", "inbox_receipts", "inbox_early_receipts", "inbox_receipt_totals", "send_requests", "upload_reservations", "upload_usage"],
   },
   // Structured tasks, advisory claims, rooms, Human decisions and routing evidence.
   coordination: {

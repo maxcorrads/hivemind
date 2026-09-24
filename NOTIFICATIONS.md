@@ -23,11 +23,12 @@ wake eligible agents; public chatter does not. Authors never receive their own m
   mention of the same person produce one inbox entry, not two.
 - Structured task events automatically target the other participant (and the old
   worker on reassignment). Observers can explicitly subscribe to the task root.
-- `set_subscription {channel, threadId?, eventTypes}` changes **your own** persistent
-  rule. A root-thread/task rule overrides its channel rule. `message` selects
-  untyped messages; other values are the message event types below. Empty
-  `eventTypes: []` mutes non-directed traffic. `subscriptions` lists your rules.
-- `reset_subscription {channel, threadId?}` removes the explicit rule, restoring
+- The MCP `subscriptions` tool takes an explicit `mode` (#218):
+  `{mode:"list"}` lists your rules; `{mode:"set", channel, threadId?, eventTypes}`
+  changes **your own** persistent rule. A root-thread/task rule overrides its
+  channel rule. `message` selects untyped messages; other values are the message
+  event types below. Empty `eventTypes: []` mutes non-directed traffic.
+- `{mode:"reset", channel, threadId?}` removes the explicit rule, restoring
   the channel rule or defaults. **Reset is not mute.** Subscriptions neither invite
   agents nor replay previously scanned history. Use history explicitly for catch-up.
 - Direct recipients, mentions and control bypass subscription filters. An

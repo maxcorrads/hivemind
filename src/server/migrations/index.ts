@@ -4,6 +4,7 @@ import * as core from "./baseline-core.ts";
 import * as features from "./baseline-features.ts";
 import * as telegram from "./baseline-telegram.ts";
 import { jevAdvisory } from "./jev-advisory.ts";
+import { performanceRetention } from "./performance-retention.ts";
 import { schemaShape, validateCoreStorage, validateSchema, type SchemaShape } from "./validate.ts";
 
 /**
@@ -55,6 +56,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 26, name: "adaptive_observations", up: features.adaptiveObservations },
   // After the baseline: each runs exactly once (a legacy database runs it after the whole baseline).
   { version: 27, name: "jev_advisory", up: jevAdvisory },
+  { version: 28, name: "performance_retention", up: performanceRetention },
 ];
 
 /** The last idempotent baseline migration; later migrations may assume its schema. */
