@@ -6,6 +6,10 @@ import { HiveError, type InboxDelivery, type InboxStatus } from "../shared/types
 // One bounded batch per identity; scan and byte limits are enforced by InboxReader.
 export const INBOX_BATCH_MAX = 100;
 export const INBOX_LEASE_MS = 5 * 60_000;
+const PRUNE_BATCH = 1000;
+
+export type ReceiptState = "pending" | "offered" | "acknowledged";
+export const receiptKey = (agentId: string, seq: number) => `${agentId}:${seq}`;
 
 type DeliveryRow = {
   id: string; agent_id: string; session_id: string; through_seq: number;
@@ -46,12 +50,35 @@ export class InboxDeliveryStore {
   }
 
   /** Whether the agent was offered the message, and acknowledged it (an acknowledged delivery wins). */
-  receiptState(agentId: string, seq: number): "pending" | "offered" | "acknowledged" {
-    const rows = this.db.prepare(`SELECT acknowledged_at FROM inbox_deliveries d
-      WHERE d.agent_id = ? AND EXISTS (SELECT 1 FROM json_each(d.seqs) WHERE CAST(value AS INTEGER) = ?)
-      ORDER BY acknowledged_at IS NOT NULL DESC LIMIT 1`).all(agentId, seq) as Array<{ acknowledged_at: number | null }>;
-    if (!rows.length) return "pending";
-    return rows[0]!.acknowledged_at === null ? "offered" : "acknowledged";
+  receiptState(agentId: string, seq: number): ReceiptState {
+    return this.receiptStates([{ agentId, seq }]).get(receiptKey(agentId, seq))!;
+  }
+
+  /** Receipt states of many (agent, message) pairs in one statement, keyed by `receiptKey`. */
+  receiptStates(pairs: ReadonlyArray<{ agentId: string; seq: number }>): Map<string, ReceiptState> {
+    const states = new Map(pairs.map(pair => [receiptKey(pair.agentId, pair.seq), "pending" as ReceiptState]));
+    if (!pairs.length) return states;
+    const rows = this.db.prepare(`SELECT r.agent_id, r.seq, r.acknowledged_at FROM json_each(?) p
+      JOIN inbox_receipts r ON r.agent_id = json_extract(p.value, '$[0]') AND r.seq = json_extract(p.value, '$[1]')`)
+      .all(JSON.stringify(pairs.map(pair => [pair.agentId, pair.seq]))) as Array<{ agent_id: string; seq: number; acknowledged_at: number | null }>;
+    for (const row of rows) states.set(receiptKey(row.agent_id, row.seq), row.acknowledged_at === null ? "offered" : "acknowledged");
+    return states;
+  }
+
+  /**
+   * Retention: drops acknowledged or superseded deliveries finished before `cutoff`, in bounded batches.
+   * The live (pending) delivery of each agent is never touched, and per-message receipts and totals are kept.
+   */
+  prune(cutoff: number, batch = PRUNE_BATCH): number {
+    let removed = 0;
+    for (;;) {
+      const changes = Number(this.transaction(() => this.db.prepare(`DELETE FROM inbox_deliveries WHERE rowid IN (
+        SELECT rowid FROM inbox_deliveries WHERE (acknowledged_at IS NOT NULL AND acknowledged_at < ?)
+          OR (acknowledged_at IS NULL AND superseded_by IS NOT NULL AND offered_at < ?) LIMIT ?)`)
+        .run(cutoff, cutoff, batch).changes));
+      removed += changes;
+      if (changes < batch) return removed;
+    }
   }
 
   pending(agentId: string): DeliveryRow | undefined {
