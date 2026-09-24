@@ -43,9 +43,9 @@ async function install(page: Page, fixture: Partial<Fixture> = {}): Promise<Fixt
   await page.route("**/api/ui/snapshot", route => json(route, snapshot()));
   await page.route("**/api/ui/read-state", route => json(route, snapshot()));
   await page.route("**/api/ui/read", route => json(route, snapshot()));
-  await page.route("**/api/ui/mentions?*", async route => {
+  await page.route("**/api/ui/activity?*", async route => {
     if (state.holdMentions) await state.holdMentions;
-    await json(route, { readInstance: "a11y-fixture", readRevision: 0, readSeq: 3, messages: [], hasMore: false })
+    await json(route, { readInstance: "a11y-fixture", readRevision: 0, readSeq: 3, items: [], hasMore: false })
       .catch(() => undefined);
   });
   const room: RoomView = { room: null, tasks: [], activeTaskCount: 0, tasksHasMore: false, nextTaskCursor: null, links: [],

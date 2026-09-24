@@ -27,7 +27,6 @@ import { useConversationLoads } from "./use-conversation-loads.ts";
 import { useDmNav } from "./use-dm-nav.ts";
 import { useHiveSnapshot } from "./use-hive-snapshot.ts";
 import { useInbox } from "./use-inbox.ts";
-import { useMailLog } from "./use-mail-log.ts";
 import { useRealtime } from "./use-realtime.ts";
 import { useSearch } from "./use-search.ts";
 import { useChangeSelection, useSelection, useSelectionRepair } from "./use-selection.ts";
@@ -70,7 +69,6 @@ export function App() {
 
   const search = useSearch({ selectedProject, projects, setErr });
   const inbox = useInbox({ sel, selRef, projects, hive, setErr });
-  const { mailLog, mergeMail } = useMailLog({ snap, channels, pane, threadPane, inboxPage: inbox.inboxPage });
   const { changeSelection, go } = useChangeSelection(selection, {
     channelLoad: channelPane.channelLoad, channelJournal: channelPane.channelJournal,
     channelRefreshIntent: channelPane.channelRefreshIntent, channelReads: hive.channelReads,
@@ -79,7 +77,7 @@ export function App() {
   });
   const { live, roomTick, decisionTick, setDecisionTick, jevTick } = useRealtime({
     selection, hive, channel: channelPane, thread: threadState, inboxLoad: inbox.inboxLoad, changeSelection,
-    reopenDm: dms.reopenDm, mergeMail, refreshRoutingView, onRoutingEvent, setErr,
+    reopenDm: dms.reopenDm, onActivity: inbox.receive, refreshRoutingView, onRoutingEvent, setErr,
   });
   useSelectionRepair(snap, sel, changeSelection);
   // Phones show one screen at a time with bottom tabs (#223); the hash stays the single source of navigation.
@@ -131,9 +129,7 @@ export function App() {
     if (!q) return true;
     return match(a.name) || match(a.focus ?? "") || match(a.role);
   });
-  const inboxProject = sel.kind === "inbox" ? sel.project : selectedProject;
-  const allForYou = mailLog.filter((m) => channels.find((c) => c.id === m.channelId)?.project === inboxProject);
-  const { inboxBox, inboxMentions, inboxPage, inboxBusy } = inbox;
+  const { inboxBox, inboxItems, inboxPage, inboxBusy } = inbox;
 
   const onAgent = async (agent: Agent) => {
     if (agent.id === "human") return;
@@ -227,20 +223,23 @@ export function App() {
           <Inbox
             key={`${sel.project}:${inboxBox}`}
             onDecisions={() => go({ kind: "decisions", project: sel.project })}
-            onMarkMessage={(message) => inbox.markMessage(sel.project, message)}
+            onMarkMessage={inbox.markMessage}
             box={inboxBox}
-            mentions={inboxBox === "all" ? allForYou : inboxMentions}
-            loading={inboxBox === "unread" && inbox.inboxLoading}
-            failed={inboxBox === "unread" && inbox.inboxFailed === sel.project}
-            hasMore={inboxBox === "unread" && !inboxBusy && inboxPage?.project === sel.project && Boolean(inboxPage.hasMore)}
+            items={inboxItems}
+            unread={snap.mentionCounts[sel.project] ?? 0}
+            filter={inbox.filter}
+            onFilter={inbox.setFilter}
+            loading={inbox.inboxLoading}
+            failed={inbox.inboxFailed}
+            hasMore={!inboxBusy && inboxPage?.project === sel.project && inboxItems.length > 0 && Boolean(inboxPage.hasMore)}
             channels={channels}
             agents={snap.agents.filter((a) => a.role === "human" || a.project === sel.project)}
             onBox={(box) => go({ kind: "inbox", project: sel.project, box })}
-            onOpen={(m) =>
+            onOpen={({ message: m }) =>
               go({ kind: "channel", id: m.channelId, thread: m.threadId ?? undefined })
             }
-            onOlder={() => inbox.loadOlder(sel.project)}
-            onMarkSeen={() => inbox.markAllSeen(sel.project)}
+            onOlder={inbox.loadOlder}
+            onMarkSeen={inbox.markAllSeen}
           />
         ) : sel.kind === "dms" ? (
           <MobileDms snap={snap} project={sel.project} onOpen={id => go({ kind: "channel", id })} />
