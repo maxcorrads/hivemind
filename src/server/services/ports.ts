@@ -138,7 +138,6 @@ export type AdaptiveRuntimeDeps = Core & CapacityDeps & {
   readonly projects: Pick<ProjectDirectory, "getProject">;
   readonly channels: ChannelAccess;
   readonly messageQueries: Pick<MessageReader, "getMessageById">;
-  readonly messages: Pick<MessageService, "hasActiveSendRequest" | "postMessage">;
   readonly rooms: Pick<RoomStore, "peek">;
   readonly tasks: Pick<TaskStore, "get" | "has">;
 };

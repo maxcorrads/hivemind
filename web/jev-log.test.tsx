@@ -4,7 +4,7 @@ import { Window } from 'happy-dom';
 import { act } from 'react';
 import { JevLog } from './JevLog.tsx';
 import { api } from './api.ts';
-import { answerLabel, appendOlderPage, errorLabel, mergeRefreshedPage, modelLabel, outcomeLabel, questionRows, requestedModel, triggerLabel } from './jev-log-view.ts';
+import { answerLabel, appendOlderPage, errorLabel, mergeRefreshedPage, modelLabel, outcomeLabel, questionRows, reasonLabel, requestedModel, triggerLabel } from './jev-log-view.ts';
 import { routingEventLabel } from './AdaptiveRoutingPanel.tsx';
 import type { JevCall, JevCallSummary, JevRequestGroup } from '../src/shared/jev-calls.ts';
 import type { AdaptiveRoutingEvent } from '../src/shared/adaptive-topology.ts';
@@ -39,14 +39,22 @@ test('labels explain triggers, answers and outcomes in plain words', () => {
   const noAnswer = { status: 'unavailable' as const, model: null, inputTokens: null, outputTokens: null, reason: 'provider_timeout_preserve_current' };
   assert.equal(answerLabel(summary('b', { ...noAnswer, error: 'timeout' })), 'No answer · Jev did not answer in time');
   assert.equal(answerLabel(summary('b', { ...noAnswer, error: 'Invalid Jev response' })), 'No answer · Invalid Jev response', 'Calls logged before #207 keep their text');
-  assert.equal(answerLabel(summary('b', { status: 'unavailable', error: 'plan_not_offered', reason: 'response_rejected_preserve_current' })),
+  assert.equal(answerLabel(summary('b', { status: 'unavailable', error: 'plan_not_offered', reason: 'response_rejected' })),
     'Answer rejected · Jev chose a plan that was not offered');
+  assert.equal(answerLabel(summary('b', { status: 'unavailable', error: 'plan_not_offered', reason: 'response_rejected_preserve_current' })),
+    'Answer rejected · Jev chose a plan that was not offered', 'Calls logged before #214 keep their old reason name');
+  // #214 renamed the failure reasons; rows recorded earlier read the same.
+  for (const [current, legacy, label] of [['provider_timeout', 'provider_timeout_preserve_current', 'Jev timed out'],
+    ['provider_unavailable', 'provider_unavailable_preserve_current', 'Jev unavailable'],
+    ['response_rejected', 'response_rejected_preserve_current', 'Jev answer rejected']]) {
+    assert.equal(reasonLabel(current!), label); assert.equal(reasonLabel(legacy!), label);
+  }
   assert.equal(triggerLabel({ kind: 'wait', eventType: null }, 'continuous'), 'Brain received mail');
   assert.equal(triggerLabel({ kind: 'thread_status', eventType: 'done' }, 'continuous'), 'Brain set a thread status · done');
   assert.deepEqual(outcomeLabel(summary('a')), { text: 'Advice returned to the brain · not enforced', tone: 'applied' });
   assert.equal(outcomeLabel(summary('low', { confidence: 0.2 })).text, 'Uncertain advice returned to the brain');
   assert.equal(outcomeLabel(summary('b', { status: 'unavailable', confidence: null, model: null, inputTokens: null, error: 'timeout',
-    reason: 'provider_timeout_preserve_current' })).text, 'Brain told Jev had no advice');
+    reason: 'provider_timeout_preserve_current' })).text, 'No advice delivered to the brain');
   assert.match(outcomeLabel(summary('o', { phase: 'observation' })).text, /Recorded only · no single owning brain/);
   // Calls recorded before #211 keep what was enforced then.
   assert.equal(outcomeLabel(summary('c', { outcome: { kind: 'transition', applied: true, appliedTopology: 'brain_one_worker', appliedWorkers: 1, warning: null } })).text,

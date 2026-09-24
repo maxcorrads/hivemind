@@ -1,28 +1,30 @@
 import { randomUUID } from 'node:crypto';
 import type { AdaptiveActionDeps } from "./services/ports.ts";
 import { parseMentions } from '../shared/mentions.ts';
-import { HiveError, type Agent, type ThreadStatus } from '../shared/types.ts';
+import { HiveError, type Agent, type ThreadStatus, type WaitResult } from '../shared/types.ts';
 import { validated, sendInputSchema } from '../shared/api-contract.ts';
 import { assignTaskSchema, taskEventSchema } from '../shared/tasks.ts';
 import { roomEventSchema } from '../shared/rooms.ts';
 import type { JevAdvice } from '../shared/adaptive-topology.ts';
-import type { BrainAction } from './adaptive-topology.ts';
+import type { ActionHint, BrainAction } from './adaptive-topology.ts';
 
 /**
  * Agent coordination actions (#211). The action always runs first and is never blocked, checked or reshaped by Jev.
- * For a brain, Hivemind then asks Jev synchronously and returns its non-binding advice as `jevAdvice` (null when Jev is
- * off or the brain serves no open Human request). Workers never trigger Jev and receive no advice.
+ * For a brain acting on an open Human request (same thread or channel), Hivemind then asks Jev and returns its
+ * non-binding advice as `jevAdvice`. The field is absent when Jev is off, the brain serves no open request there, or
+ * Jev gave no usable answer (#214). Workers never trigger Jev and receive no advice.
  *
  * A legacy `executionId` from older clients is dropped at ingress (api-input.ts) and never reaches these actions.
  */
-type Advised = { jevAdvice?: JevAdvice | null };
+type Advised = { jevAdvice?: JevAdvice };
+const advised = (advice: JevAdvice | null): Advised => advice ? { jevAdvice: advice } : {};
 
 async function advise(deps: AdaptiveActionDeps, actor: Agent, action: BrainAction): Promise<Advised> {
-  return actor.role === 'brain' ? { jevAdvice: await deps.adaptiveTopology.adviseBrainAction(actor, action) } : {};
+  return actor.role === 'brain' ? advised(await deps.adaptiveTopology.adviseBrainAction(actor, action)) : {};
 }
 /** A retried request (same requestId) returns the latest advice without asking Jev again. */
-function retried(deps: AdaptiveActionDeps, actor: Agent, hint: Pick<BrainAction, 'channelId' | 'threadId'>): Advised {
-  return actor.role === 'brain' ? { jevAdvice: deps.adaptiveTopology.latestAdvice(actor, hint) } : {};
+function retried(deps: AdaptiveActionDeps, actor: Agent, hint: ActionHint): Advised {
+  return actor.role === 'brain' ? advised(deps.adaptiveTopology.latestAdvice(actor, hint)) : {};
 }
 
 export async function sendAdaptiveAgentMessage(deps: AdaptiveActionDeps, actor: Agent, channelRef: string, raw: unknown) {
@@ -85,8 +87,15 @@ export async function setAdaptiveThreadStatus(deps: AdaptiveActionDeps, actor: A
     eventType: status ?? 'none', summary: `thread status ${status}` }) };
 }
 
-/** A wait that delivered mail asks Jev once; an idle wait returns the latest advice without a call. */
-export async function adviseAfterWait(deps: AdaptiveActionDeps, actor: Agent, delivered: boolean): Promise<Advised> {
-  if (actor.role !== 'brain') return {};
-  return delivered ? advise(deps, actor, { kind: 'wait', summary: 'wait delivered mail' }) : retried(deps, actor, {});
+/**
+ * A wait never calls Jev (#214). When it delivered mail from a thread or channel with an open request, it carries that
+ * request's latest advice, e.g. the advice Jev gave in the background for the Human message just delivered.
+ */
+export function adviseAfterWait(deps: AdaptiveActionDeps, actor: Agent, result: WaitResult): Advised {
+  if (actor.role !== 'brain' || result.idle) return {};
+  const hints: ActionHint[] = [
+    ...(result.mail ?? []).map(item => ({ channelId: item.channelId, threadId: item.rootId })),
+    ...[...result.messages, ...result.mentions].map(item => ({ channelId: item.channelId, threadId: item.threadId ?? item.id })),
+  ].reverse();
+  return hints.length ? advised(deps.adaptiveTopology.latestAdvice(actor, ...hints)) : {};
 }

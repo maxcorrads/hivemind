@@ -84,7 +84,7 @@ For `noisy-room`, the 12 unrelated observations apply only to `brain_multi_room`
 
 ### Optional Codex / OpenCode cohort executor
 
-The core benchmark remains provider-neutral. The local executor supports both Codex and OpenCode cohorts. It runs the fixed-workflow `pilot-v1` / `clarification-v1` cohorts only. The Phase 2 Auto-vs-fixed controller comparison has its own [paired-study runner](topology-study-runner.md); do not relabel these results as controller evidence.
+The core benchmark remains provider-neutral. The local executor supports both Codex and OpenCode cohorts. It runs the fixed-workflow `pilot-v1` / `clarification-v1` cohorts only. The Phase 2 Auto-vs-fixed controller comparison had its own paired-study runner (#136, removed in #214; it needs a release before #211); do not relabel these results as controller evidence.
 
 ```sh
 npm run benchmark:coordination:run -- \

@@ -40,7 +40,6 @@
     "benchmark:coordination:pilot:run": "node scripts/run-coordination-pilot-codex.mjs",
     "benchmark:coordination:run": "node scripts/run-coordination-pilot-codex.mjs",
     "benchmark:coordination:mcp-errors": "node scripts/analyze-coordination-mcp-errors.mjs",
-    "benchmark:topology:study": "node --import tsx scripts/topology-study-runner.mjs",
     "benchmark:human-decisions": "node scripts/benchmark-human-decisions.mjs"
   },
   "engines": {

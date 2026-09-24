@@ -49,7 +49,7 @@ export function App() {
   // Jev advises on every Human message addressed to a brain, so any channel with a brain has advice state.
   const routingChannelId = sel.kind === "channel" && snap?.channels.some(channel => channel.id === sel.id &&
     channel.memberIds.some(id => snap.agents.some(agent => agent.id === id && agent.role === "brain"))) ? sel.id : null;
-  const { view: routingView, error: routingError, refresh: refreshRoutingView,
+  const { view: routingView, refresh: refreshRoutingView,
     onEvent: onRoutingEvent } = useAdaptiveRouting(routingChannelId);
   const [routingPanelOpen, setRoutingPanelOpen] = useState(false);
   const channelPane = useChannelPane(selRef);
@@ -237,7 +237,6 @@ export function App() {
             compose={compose} setErr={setErr}
             onBack={() => go(channelBack(activeChannel, lastList.current, selectedProject))} />
         )}
-        {routingError && activeBrainChannel && <div className="err" role="alert">Routing status unavailable: {routingError}</div>}
         {err && (
           <div className="err" onClick={() => setErr(null)}>
             {err}

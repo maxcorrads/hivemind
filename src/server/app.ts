@@ -235,10 +235,10 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       attachmentIds: Array.isArray(body.attachmentIds) ? body.attachmentIds.map(String) : undefined };
     if (hive.messages.hasActiveSendRequest(human, channel.id, body.requestId))
       return c.json({ message: hive.messages.postMessage(human, messageInput) });
-    // Every Human message addressed to a brain is sent to Jev first; the advice is kept for that brain, never applied.
-    const routed = await hive.adaptiveTopology.routeHumanRequest(human, messageInput);
-    if (!routed) return c.json({ message: hive.messages.postMessage(human, messageInput) });
-    return c.json({ message: routed.message, adaptiveStates: routed.states });
+    const message = hive.messages.postMessage(human, messageInput);
+    // Committed and broadcast first; Jev advises the owning brain in the background and never delays the send (#214).
+    hive.adaptiveTopology.humanMessagePosted(human, message);
+    return c.json({ message });
   });
   ui.post('/files', async c => {
     const human = hive.identity.getAgent('human'), name = c.req.header('x-file-name') || 'paste.png';
@@ -409,8 +409,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     if (body?.sessionId == null) throw new HiveError(409, 'HTTP 409: Inbox delivery protocol changed. Restart the Hivemind MCP client and rejoin. HTTP/CLI clients must open an inbox session and include sessionId in wait. Do not retry this wait unchanged.');
     if (typeof body.sessionId !== 'string') throw new HiveError(400, 'Expected sessionId');
     const result = await hive.delivery.wait(me, Number(body.timeoutMs ?? DEFAULT_WAIT_MS), c.req.raw.signal, { compact: Boolean(body.compact), sessionId: body.sessionId });
-    const delivered = result.idle !== true && Boolean(result.mail?.length || result.messages?.length || result.mentions?.length || result.control?.length);
-    return c.json({ ...result, ...await adviseAfterWait(hive, me, delivered) });
+    return c.json({ ...result, ...adviseAfterWait(hive, me, result) });
   });
   agent.post('/inbox/session', async c => {
     const body = await requestJson(c.req.raw);

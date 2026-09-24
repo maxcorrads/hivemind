@@ -22,7 +22,8 @@ export { validJevModel };
 
 /**
  * Jev settings. Since #211 Jev only advises brains, so the former `fallback` and `topologyFallback` (the mode applied
- * when Jev was uncertain) have no meaning: they are ignored when read and dropped on the next save.
+ * when Jev was uncertain) have no meaning: they are ignored when read from an old file and dropped on the next save,
+ * and rejected as unknown settings when sent (#214).
  */
 export type AdaptiveRoutingFile = {
   version: 1;
@@ -118,9 +119,7 @@ export function saveAdaptiveRouting(home: string, raw: unknown): AdaptiveRouting
   if (!raw || typeof raw !== "object" || Array.isArray(raw))
     throw new HiveError(400, "Adaptive routing settings must be an object");
   const input = raw as AdaptiveRoutingInput & Record<string, unknown>;
-  // `fallback` and `topologyFallback` are still accepted from pages loaded before #211, and ignored.
-  const unknown = Object.keys(input).filter(key =>
-    key !== "enabled" && key !== "apiKey" && key !== "fallback" && key !== "topologyFallback" && key !== "model");
+  const unknown = Object.keys(input).filter(key => key !== "enabled" && key !== "apiKey" && key !== "model");
   if (unknown.length) throw new HiveError(400, "Unknown adaptive routing setting");
   const previous = readRawConfig(home);
   if (input.enabled !== undefined && typeof input.enabled !== "boolean")
@@ -137,10 +136,26 @@ export function saveAdaptiveRouting(home: string, raw: unknown): AdaptiveRouting
   const model = requestedModel === undefined ? previous?.model ?? TYPESAFE_MODEL : requestedModel || TYPESAFE_MODEL;
   if (apiKey.length > 512) throw new HiveError(400, "TypeSafe API key is too long");
   if (enabled && !apiKey) throw new HiveError(400, "TypeSafe API key is required when Jev adaptive routing is enabled");
-  persistConfig(home, { version: 1, enabled, apiKey, model });
+  try {
+    persistConfig(home, { version: 1, enabled, apiKey, model });
+  } finally {
+    cached.delete(home);
+  }
   return adaptiveRoutingPublic(home);
 }
 
+/** Reads the settings file (settings page, diagnostics). The runtime uses {@link cachedAdaptiveRouting}. */
 export function loadAdaptiveRouting(home: string): AdaptiveRoutingFile | null {
   return readRawConfig(home);
+}
+
+const cached = new Map<string, AdaptiveRoutingFile | null>();
+/**
+ * The settings as the runtime sees them, read once per hive home and re-read after every save through
+ * {@link saveAdaptiveRouting} (#214): brain actions and Human sends never read the file. A hand edit of the file takes
+ * effect after a restart or the next save.
+ */
+export function cachedAdaptiveRouting(home: string): AdaptiveRoutingFile | null {
+  if (!cached.has(home)) cached.set(home, readRawConfig(home));
+  return cached.get(home) ?? null;
 }

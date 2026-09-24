@@ -8,6 +8,7 @@ import { saveAdaptiveRouting } from './adaptive-config.ts';
 import { exportAdaptiveEvidence, EVIDENCE_RUN_LIMIT } from './adaptive-evidence.ts';
 import { jevTopologyResponse } from './fixtures/jev-topology.ts';
 import { countRows, failWrites } from './test-fixtures.ts';
+import { sendHumanRequest } from './fixtures/jev-human.ts';
 
 function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-evidence-runtime-'));
@@ -26,7 +27,7 @@ function fixture(t: TestContext) {
     return Response.json(response);
   });
   t.after(async () => { await hive.adaptiveTopology.stop(); hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
-  const start = () => hive.adaptiveTopology.routeHumanRequest(human,
+  const start = () => sendHumanRequest(hive, human,
     { channel: dm.id, body: 'Private original Human request', requestId: 'root-request' });
   const check = (summary: string) => hive.adaptiveTopology.adviseBrainAction(brain, { kind: 'brain_message', channelId: dm.id, summary });
   return { get hive() { return hive; }, dir, human, brain, workers, dm, start, check, calls: () => calls,

@@ -38,9 +38,9 @@ The single baseline receives the complete information set. This tests room-vs-DM
 
 ### Integration smoke before economic claims
 
-Human configures the TypeSafe key in **Adaptive routing** on their own instance. Never paste it into an issue, command transcript, fixture or commit. Keep the optional toggle and manual locks under Human control.
+Human configures the TypeSafe key in **Adaptive routing** on their own instance. Never paste it into an issue, command transcript, fixture or commit. Jev stays optional: the toggle is under Human control, and with it off nothing calls TypeSafe.
 
-Use disposable local workspaces and synthetic non-sensitive requests first. Check a simple request, a parallel request, a request needing shared decisions, and a provider-unavailable case. Confirm that UI shows monitoring state and warnings, while agents receive only compact applied policy. Record the exact Hivemind revision, resolved provider/model, policy/contract version, worker capacity and whether the result is a fake fixture or live observation.
+Use disposable local workspaces and synthetic non-sensitive requests first. Check a simple request, a parallel request, a request needing shared decisions, and a provider-unavailable case. Confirm that the Human send is posted at once, the advice appears in the Routing log, and the owning brain receives `jevAdvice` with its next action on the request; nothing is applied (#211, #214). Record the exact Hivemind revision, resolved provider/model, policy/contract version, worker capacity and whether the result is a fake fixture or live observation.
 
 A failed smoke is a test result, not a reason to silently rewrite or drop the trial. Do not turn on broad live experiments until the simple contract works with the actual configured provider.
 
@@ -67,9 +67,9 @@ Check the selected installed host/provider configuration before running. No prov
 
 ### Matched Phase 2 comparison
 
-Run the same reviewed workload set with `auto`, `single`, `brain_one_worker`, `brain_multi_dm`, and `brain_multi_room` in randomized repeated order, with fixed versions and equivalent initial capacity. Fixed-mode conditions must disable external Jev monitoring for a clean no-router overhead baseline; selecting a manual lock while Jev stays enabled is a different experimental condition, because monitoring continues.
+> **Not runnable on this build.** The comparison needs server-enforced fixed topologies, which were removed when Jev became advisory-only (#211); the paired-study runner (#136) was removed in #214. Use a Hivemind release before #211 to execute the #132 manifest.
 
-Use the [paired-study runner](topology-study-runner.md) (#136) to execute the #132 manifest: `prepare`, `validate` and `dry-run` are credential-free, and only an explicitly authorized `run` can spend. Do not use the fixed-workflow executor above for this comparison.
+The design: run the same reviewed workload set with `auto`, `single`, `brain_one_worker`, `brain_multi_dm`, and `brain_multi_room` in randomized repeated order, with fixed versions and equivalent initial capacity. Fixed-mode conditions disable Jev for a clean no-router overhead baseline. Do not use the fixed-workflow executor above for this comparison.
 
 Compare acceptance and independent defects first, then net provider tokens and elapsed wall time. Do not add summed Jev call latency to wall time already measured end-to-end. Keep workload-model tokens and Jev tokens separate; add them only where both are complete and the comparison is meaningful. Unknown monetary cost remains null; no current vendor price is hard-coded.
 
@@ -79,7 +79,7 @@ Preserve workload failures, transport/harness failures, missing measurements, in
 
 #34's 16-trial Human comparison remains optional and deferred. It measures actual Human response time and context errors; an agent replay is not a substitute participant. This does not block use of the delivered queue.
 
-The TypeSafe key is not yet configured in Human's instance. Engineering work and fake-provider CI proceed without it. Credential setup/live evidence and release approval are the only external boundaries in this plan; the topology, escalation, de-escalation, capacity and lock decisions are already agreed.
+The TypeSafe key is not yet configured in Human's instance. Engineering work and fake-provider CI proceed without it. Credential setup/live evidence and release approval are the only external boundaries in this plan; Jev is advisory-only and optional (#211, #214): there are no topology, de-escalation or lock decisions left to agree.
 
 ## Release readiness is separate from measurement readiness
 

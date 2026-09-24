@@ -44,6 +44,10 @@ const REASONS: Record<string, string> = {
   shared_coordination_pressure: 'Workers need shared coordination',
   orchestration_needed_no_capacity: 'Needs workers, but none are available',
   incoherent_plan_vs_sufficiency: 'Jev chose Single while saying delegation helps (incoherent)',
+  provider_timeout: 'Jev timed out',
+  provider_unavailable: 'Jev unavailable',
+  response_rejected: 'Jev answer rejected',
+  // The same failures as recorded before #214.
   provider_timeout_preserve_current: 'Jev timed out',
   provider_unavailable_preserve_current: 'Jev unavailable',
   response_rejected_preserve_current: 'Jev answer rejected',
@@ -120,7 +124,7 @@ export function outcomeLabel(call: OutcomeCall): { text: string; tone: 'applied'
   const state = jevAnswerState({ ...call, providerStatus: call.status });
   if (state === 'answered') return { text: 'Advice returned to the brain · not enforced', tone: 'applied' };
   if (state === 'uncertain' || state === 'incoherent') return { text: 'Uncertain advice returned to the brain', tone: 'kept' };
-  return { text: 'Brain told Jev had no advice', tone: 'warning' };
+  return { text: 'No advice delivered to the brain', tone: 'warning' };
 }
 
 /** A call's advice in the #211 wording: `Jev suggested Multi-DM · 2 workers (72%)`, `Jev uncertain`, `Jev unavailable (timeout)`. */
