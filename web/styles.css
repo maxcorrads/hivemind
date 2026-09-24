@@ -1002,33 +1002,6 @@ html.dark .err { background: #3a221c; color: #f3d2cb; }
 html.dark .primary { background: var(--wax); color: #1b2017; }
 .thread-tools { display: flex; gap: 0.4rem; align-items: center; }
 
-@media (max-width: 960px) {
-  .shell, .shell:has(.thread) {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto minmax(0, 1fr);
-    background: var(--paper);
-    padding: 0;
-  }
-  .hive, .thread { display: none; }
-  .desk { margin: 0; border-radius: 0; box-shadow: none; }
-  .rail {
-    display: flex;
-    gap: 0.4rem;
-    overflow-x: auto;
-    border-bottom: 1px solid var(--line);
-    background: linear-gradient(90deg, var(--pollen), var(--dusk));
-  }
-  .group { display: flex; gap: 0.2rem; margin: 0; }
-  .brand-tools { display: none; }
-  .search {
-    display: block;
-    flex: 0 0 11rem;
-    width: 11rem;
-    margin: 0.35rem 0.25rem;
-    padding: 0.35rem 0.55rem;
-  }
-}
-
 ::view-transition-old(root),
 ::view-transition-new(root) {
   animation-duration: 0.42s;
@@ -1128,11 +1101,80 @@ html.dark .primary { background: var(--wax); color: #1b2017; }
 .composer textarea { min-width: 0; flex: 1; }
 
 summary:focus-visible, .tool-action:focus-visible { outline: 2px solid var(--wax); outline-offset: 2px; }
+/* Phones and narrow windows (#223): one full-screen view at a time, chosen by the
+   shell's data-m (see web/mobile-nav.ts), with bottom tabs on the list screens. */
+.m-back, .m-tabs { display: none; }
 @media (max-width: 960px) {
-  .rail { display: block; max-height: 30dvh; overflow-x: hidden; overflow-y: auto; }
-  .rail .group { display: block; }
-  .brand-tools { display: flex; }
-  .rail .search { width: 100%; min-width: 0; max-width: 100%; }
+  .shell, .shell:has(.thread) {
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    background: var(--paper);
+  }
+  .shell > .rail, .shell > .desk, .shell > .thread { flex: 1 1 auto; min-height: 0; }
+  .desk, .thread, .shell:has(.thread) .desk { margin: 0; border: 0; border-radius: 0; box-shadow: none; }
+  .shell:not([data-m="home"]):not([data-m="search"]) > .rail { display: none; }
+  .shell[data-m="home"] > .desk, .shell:has(> .thread) > .desk { display: none; }
+  .rail {
+    overflow-x: hidden;
+    overflow-y: auto;
+    background: linear-gradient(180deg, var(--pollen), var(--dusk));
+  }
+  .rail > .launch-cta { display: none; }
+  /* Search keeps its box on top and shows hits below it. */
+  .shell[data-m="search"] > .rail { flex: none; padding-bottom: 0.2rem; }
+  .shell[data-m="search"] > .rail > :not(.brand):not(.search) { display: none; }
+
+  .desk-h { align-items: center; justify-content: flex-start; gap: 0.5rem; padding: 0.7rem 0.75rem 0.6rem; }
+  .desk-h > div:not(.thread-tools) { flex: 1; min-width: 0; }
+  .desk-h h1 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .m-back {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 2.5rem;
+    height: 2.5rem;
+    margin-left: -0.35rem;
+    border-radius: 999px;
+    font-size: 1.3rem;
+  }
+  .m-back:active { background: var(--pill); }
+  .thread-tools > .plus { display: none; }
+  .m-list { padding: 0.5rem 0.75rem 1rem; }
+  .m-list .nav { padding: 0.7rem 0.6rem; color: var(--ink); }
+  .m-list .empty { color: var(--mute); padding: 0 0.6rem; }
+
+  .m-tabs {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    flex: none;
+    border-top: 1px solid var(--line);
+    background: var(--desk);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .m-tabs button {
+    position: relative;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 0.3rem;
+    min-height: 3.2rem;
+    color: var(--mute);
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+  .m-tabs button.on { color: var(--ink); box-shadow: inset 0 2px 0 var(--wax); }
+  .m-tabs em {
+    font-style: normal;
+    font-size: 0.66rem;
+    font-weight: 700;
+    background: var(--ember);
+    color: #fff;
+    min-width: 1.1rem;
+    padding: 0.05rem 0.3rem;
+    border-radius: 999px;
+  }
+
   .inbox-stream { padding: 0.4rem; }
   .inbox-context { padding-inline: 0.6rem; }
 }
