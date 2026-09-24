@@ -233,3 +233,26 @@ export function appendOlderPage(current: JevCallLogView | null, older: JevCallLo
   return { requests: [...current.requests, ...older.requests.filter(group => !seen.has(group.executionId))],
     hasMore: older.hasMore, nextCursor: older.nextCursor };
 }
+
+/**
+ * Merges one realtime call (new or settled) into the loaded log without refetching it: the call joins or replaces its
+ * entry in its request group, and the group moves to its page-order position.
+ */
+export function mergeLiveCall(view: JevCallLogView, call: JevCallSummary): JevCallLogView {
+  const group = view.requests.find(item => item.executionId === call.executionId);
+  let merged: JevRequestGroup;
+  if (!group) {
+    merged = { executionId: call.executionId, channelId: call.channelId, brainId: call.brainId, request: call.request,
+      firstAt: call.createdAt, lastAt: call.createdAt, callCount: 1, calls: [call] };
+  } else {
+    const known = group.calls.some(item => item.id === call.id);
+    const calls = known ? group.calls.map(item => item.id === call.id ? call : item)
+      : [...group.calls, call].sort((a, b) => a.createdAt - b.createdAt);
+    merged = { ...group, request: group.request || call.request, firstAt: Math.min(group.firstAt, call.createdAt),
+      lastAt: Math.max(group.lastAt, call.createdAt), callCount: group.callCount + (known ? 0 : 1), calls };
+  }
+  const rest = view.requests.filter(item => item !== group);
+  const at = rest.findIndex(item => isOlderGroup(item, merged));
+  const requests = at === -1 ? [...rest, merged] : [...rest.slice(0, at), merged, ...rest.slice(at)];
+  return { ...view, requests };
+}
