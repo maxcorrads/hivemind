@@ -12,6 +12,8 @@ import type { HiveEvents } from "./hive-events.ts";
 import { createApp } from "./app.ts";
 import { startTelegram } from "./telegram.ts";
 import { LocalHumanAuth } from "./local-auth.ts";
+import { acquireInstanceLock } from "./instance-lock.ts";
+import { hiveHome } from "./paths.ts";
 import { createStaticWeb } from "./static-web.ts";
 import { WS_HEARTBEAT_MS } from "../shared/realtime.ts";
 import { heartbeatClients, sendRealtime } from "./websocket-policy.ts";
@@ -28,7 +30,15 @@ type ForwardedEvent = (typeof FORWARDED_EVENTS)[number];
 export function startServer(opts: { port?: number; hive?: Hive; telegram?: boolean; shutdownGraceMs?: number; retentionDays?: number } = {}) {
   const port = integerArgument(String(opts.port ?? process.env.HIVEMIND_PORT ?? DEFAULT_PORT), 0, 65535);
   const retention = opts.retentionDays ?? retentionDays();
-  const hive = opts.hive ?? new Hive();
+  // Fail fast, before migrating the database or polling Telegram, if this home is already served.
+  const lock = acquireInstanceLock(opts.hive?.home ?? hiveHome());
+  let hive: Hive;
+  try {
+    hive = opts.hive ?? new Hive();
+  } catch (error) {
+    lock.release();
+    throw error;
+  }
   const telegram = startTelegram(hive, opts.telegram !== false);
   const app = createApp(hive, {
     telegramRunning: () => telegram.running(),
@@ -144,7 +154,7 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
       const failed = results.find(result => result.status === "rejected");
       if (failed?.status === "rejected") throw failed.reason;
     });
-    shutdownTask = Promise.race([drained, deadline]).finally(() => clearTimeout(timer));
+    shutdownTask = Promise.race([drained, deadline]).finally(() => { clearTimeout(timer); lock.release(); });
     return shutdownTask;
   };
   return { server, hive, port, shutdown, ready };
