@@ -6,7 +6,7 @@ import type { AdaptiveExecutionState, AdaptiveRoutingEvent } from "../shared/ada
 import type { JevCallSummary } from "../shared/jev-calls.ts";
 import type { EvidenceCollectorHealth } from "../shared/evidence-health.ts";
 import type { TelegramAdminService } from "./services/telegram-admin.ts";
-import type { Storage } from "./storage.ts";
+import { runEffect, type Storage } from "./storage.ts";
 
 /** Telegram delivery and polling health as published to the UI. */
 export type TelegramHealthEvent = ReturnType<TelegramAdminService["health"]>;
@@ -53,6 +53,18 @@ export type HiveEvents = {
   "evidence-health": EvidenceCollectorHealth;
 };
 
+/**
+ * Durable-outbox hooks (see `HiveBus.outbox`): published inside the transaction that
+ * inserts a message or changes a reaction, so a consumer's outbox row commits, or rolls
+ * back, together with the change itself.
+ */
+export type HiveOutboxEvents = {
+  /** A message row was inserted (chat, system, control or coordination). */
+  message: { seq: number; id: string; kind: Message["kind"] };
+  /** A reaction was added to or removed from the message with this seq. */
+  reaction: { seq: number };
+};
+
 type EventMap = { [event: string]: unknown };
 export type EventListener<P> = (payload: P) => void;
 type EventArgs<P> = [P] extends [void] ? [] : [payload: P];
@@ -84,6 +96,11 @@ export class TypedEmitter<Events extends EventMap> {
     return this.#emitter.emit(event, ...args);
   }
 
+  /** A snapshot of the listeners (once-wrappers included) in registration order. */
+  listeners<K extends keyof Events & string>(event: K): Array<EventListener<Events[K]>> {
+    return this.#emitter.rawListeners(event) as Array<EventListener<Events[K]>>;
+  }
+
   listenerCount(event: keyof Events & string): number {
     return this.#emitter.listenerCount(event);
   }
@@ -104,9 +121,9 @@ export class TypedEmitter<Events extends EventMap> {
 }
 
 /**
- * Per-event listener budget for `Hive.bus`. Production peaks at three listeners per
- * event (the web socket fan-out in serve.ts, the running Telegram bridge, and a
- * draining bridge's capture during reload); the rest is headroom for tests that
+ * Per-event listener budget for `Hive.bus`, applied to events and outbox hooks alike.
+ * Production peaks at two per event (an outbox hook of the running Telegram bridge plus
+ * a draining bridge's capture during reload); the rest is headroom for tests that
  * observe events. Node warns (MaxListenersExceededWarning) past this, which is how
  * a subscriber that is never removed on stop/reconnect shows up.
  */
@@ -114,6 +131,7 @@ export const HIVE_BUS_MAX_LISTENERS = 10;
 
 export class HiveBus extends TypedEmitter<HiveEvents> {
   #storage: Storage | undefined;
+  readonly #outbox = new TypedEmitter<HiveOutboxEvents>(HIVE_BUS_MAX_LISTENERS);
   constructor() { super(HIVE_BUS_MAX_LISTENERS); }
 
   /**
@@ -125,10 +143,59 @@ export class HiveBus extends TypedEmitter<HiveEvents> {
     this.#storage = storage;
   }
 
+  /**
+   * Listeners are infallible: the change they observe is already committed, so a
+   * throwing listener is logged and every later listener still runs; the failure
+   * never reaches the code (often a request handler) that published the event.
+   */
   override emit<K extends keyof HiveEvents & string>(event: K, ...args: EventArgs<HiveEvents[K]>): boolean {
+    const deliver = () => {
+      for (const listener of this.listeners(event)) {
+        runEffect(() => (listener as (...payload: unknown[]) => void)(...args), `${event} listener`);
+      }
+    };
     const storage = this.#storage;
-    if (!storage?.active) return super.emit(event, ...args);
-    storage.afterCommit(() => { super.emit(event, ...args); });
+    if (!storage?.active) {
+      const listened = this.listenerCount(event) > 0;
+      deliver();
+      return listened;
+    }
+    storage.afterCommit(deliver);
     return this.listenerCount(event) > 0;
+  }
+
+  /** Subscribes a durable-outbox hook; it runs inside the publishing transaction. */
+  onOutbox<K extends keyof HiveOutboxEvents & string>(event: K, listener: EventListener<HiveOutboxEvents[K]>): this {
+    this.#outbox.on(event, listener);
+    return this;
+  }
+
+  offOutbox<K extends keyof HiveOutboxEvents & string>(event: K, listener: EventListener<HiveOutboxEvents[K]>): this {
+    this.#outbox.off(event, listener);
+    return this;
+  }
+
+  outboxListenerCount(event: keyof HiveOutboxEvents & string): number {
+    return this.#outbox.listenerCount(event);
+  }
+
+  override totalListenerCount(): number {
+    return super.totalListenerCount() + this.#outbox.totalListenerCount();
+  }
+
+  /**
+   * Runs the durable-outbox hooks for a change. Callers publish from inside the
+   * transaction that writes the change, so the hooks' rows commit atomically with it
+   * (outside a transaction each hook opens its own). Each hook runs in its own
+   * savepoint: a failing hook is logged and rolled back alone, never the change.
+   */
+  outbox<K extends keyof HiveOutboxEvents & string>(event: K, payload: HiveOutboxEvents[K]): void {
+    const storage = this.#storage;
+    for (const listener of this.#outbox.listeners(event)) {
+      runEffect(() => {
+        if (storage) storage.transaction(() => listener(payload));
+        else listener(payload);
+      }, `${event} outbox hook`);
+    }
   }
 }
