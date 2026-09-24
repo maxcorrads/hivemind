@@ -86,7 +86,8 @@ export function Sidebar({ snap, sel, go, live, theme, onToggleTheme, query, setQ
               </button>
             </div>
           </details>
-          <span className={`pulse ${live ? "on" : ""}`} title={live ? "live" : "waiting"} />
+          <span className={`pulse ${live ? "on" : ""}`} title={live ? "live" : "waiting"} role="img"
+            aria-label={live ? "Connected" : "Not connected"} />
         </div>
       </div>
       <input
@@ -110,7 +111,8 @@ export function Sidebar({ snap, sel, go, live, theme, onToggleTheme, query, setQ
 
       <div className="group-h">
         <span>Projects</span>
-        <button type="button" className="plus" onClick={() => projectSheets.setCreatingProject(true)} title="New project">
+        <button type="button" className="plus" onClick={() => projectSheets.setCreatingProject(true)} title="New project"
+          aria-label="New project">
           +
         </button>
       </div>
@@ -227,8 +229,9 @@ function ProjectSection({ project, snap, sel, go, query, open, onToggle, onSetti
           className="twist"
           onClick={() => onToggle(!open)}
           aria-expanded={open}
+          aria-label={`${project.name} navigation`}
         >
-          {open ? "▾" : "▸"}
+          <span aria-hidden="true">{open ? "▾" : "▸"}</span>
         </button>
         <span>{project.name}</span>
         {n > 0 && <em className="sec-badge">{n}</em>}
@@ -236,6 +239,7 @@ function ProjectSection({ project, snap, sel, go, query, open, onToggle, onSetti
           type="button"
           className="plus"
           title="Project settings"
+          aria-label={`Settings for ${project.name}`}
           onClick={onSettings}
         >
           …
@@ -245,6 +249,7 @@ function ProjectSection({ project, snap, sel, go, query, open, onToggle, onSetti
         <>
           <button
             className={`nav ${sel.kind === "inbox" && sel.project === project.slug ? "active" : ""}`}
+            aria-current={sel.kind === "inbox" && sel.project === project.slug ? "page" : undefined}
             onClick={() => go({ kind: "inbox", project: project.slug, box: inboxBox })}
           >
             <span>For you</span>
@@ -252,12 +257,14 @@ function ProjectSection({ project, snap, sel, go, query, open, onToggle, onSetti
           </button>
           <button
             className={`nav ${sel.kind === "decisions" && sel.project === project.slug ? "active" : ""}`}
+            aria-current={sel.kind === "decisions" && sel.project === project.slug ? "page" : undefined}
             onClick={() => go({ kind: "decisions", project: project.slug })}
           >
             <span>Decisions</span>
           </button>
           <button
             className={`nav ${sel.kind === "jev" && sel.project === project.slug ? "active" : ""}`}
+            aria-current={sel.kind === "jev" && sel.project === project.slug ? "page" : undefined}
             onClick={() => go({ kind: "jev", project: project.slug })}
             title="Every request Hivemind sent to Jev (TypeSafe) and its answer"
           >
@@ -271,6 +278,7 @@ function ProjectSection({ project, snap, sel, go, query, open, onToggle, onSetti
                 className="plus"
                 onClick={() => onNewChannel(project.slug)}
                 title="New channel"
+                aria-label={`New channel in ${project.name}`}
               >
                 +
               </button>
@@ -291,6 +299,7 @@ function ProjectSection({ project, snap, sel, go, query, open, onToggle, onSetti
                 className="plus"
                 data-dm-open={project.slug}
                 title="Open a conversation"
+                aria-label={`Open a closed conversation in ${project.name}`}
                 onClick={() => {
                   setDmMenu(null);
                   setDmPickQ("");
@@ -307,6 +316,7 @@ function ProjectSection({ project, snap, sel, go, query, open, onToggle, onSetti
                   value={dmPickQ}
                   onChange={(e) => setDmPickQ(e.target.value)}
                   placeholder="Find a closed conversation"
+                  aria-label="Find a closed conversation"
                 />
                 {hiddenDms.length === 0 && (
                   <div className="empty-mini">

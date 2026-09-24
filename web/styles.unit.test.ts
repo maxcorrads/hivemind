@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-const css = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
+const css = readFileSync(new URL("./styles.css", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 
 function declaration(selector: string, property: string): string {
   const block = css.split(selector + " {")[1]?.split("}")[0];
@@ -45,4 +45,30 @@ test("the UI shell self-hosts its fonts and references no third-party host", () 
   assert.ok(faces.some(face => face.includes('"Figtree"')), "Figtree must be self-hosted");
   assert.ok(faces.some(face => face.includes('"IBM Plex Mono"')), "IBM Plex Mono must be self-hosted");
   for (const face of faces) assert.match(face, /url\("\.\/fonts\/[^"]+\.woff2"\)/);
+});
+
+test("wax text uses the --wax-ink token with readable contrast in both themes", () => {
+  for (const [scope, backgrounds] of [[":root", ["--desk", "--paper"]], ["html.dark", ["--desk", "--paper", "--composer"]]] as const) {
+    const ink = declaration(scope, "--wax-ink");
+    for (const background of backgrounds) {
+      const ratio = contrast(ink, declaration(scope, background));
+      assert.ok(ratio >= 4.5, `${scope} --wax-ink on ${background} is only ${ratio.toFixed(2)}:1`);
+    }
+  }
+  for (const selector of [".text-btn", ".older", ".replies"]) assert.equal(declaration(selector, "color"), "var(--wax-ink)");
+});
+
+test("keyboard focus stays visible on every control and main input", () => {
+  assert.match(css, /:where\(button, a, input, textarea, select, summary, \[tabindex\]\):focus-visible \{ outline: 2px solid var\(--wax-ink\)/);
+  for (const selector of [".search", ".dm-picker input"]) {
+    assert.throws(() => declaration(selector, "outline"), /missing outline/, `${selector} must not suppress the focus ring`);
+  }
+  // The composer textarea is borderless; its box draws the ring instead.
+  assert.match(css, /\.composer-box:has\(textarea:focus-visible\) \{ outline: 2px solid/);
+});
+
+test("no dead rules for the removed hive column or Jev enforcement remain", () => {
+  assert.doesNotMatch(css, /\.hive\b/);
+  assert.doesNotMatch(css, /\.routing-summary span/);
+  assert.doesNotMatch(css, /\.routing-event\.warning/);
 });

@@ -67,6 +67,12 @@
  },
  {
   "type": "index",
+  "name": "idx_attachments_sha256",
+  "tbl": "attachments",
+  "sql": "CREATE INDEX idx_attachments_sha256 ON attachments(sha256)"
+ },
+ {
+  "type": "index",
   "name": "idx_channel_members_agent_channel",
   "tbl": "channel_members",
   "sql": "CREATE INDEX idx_channel_members_agent_channel ON channel_members(agent_id, channel_id)"
@@ -109,6 +115,12 @@
  },
  {
   "type": "index",
+  "name": "idx_room_events_channel_revision",
+  "tbl": "room_events",
+  "sql": "CREATE INDEX idx_room_events_channel_revision ON room_events(channel_id, revision)"
+ },
+ {
+  "type": "index",
   "name": "idx_telegram_failures_open",
   "tbl": "telegram_failures",
   "sql": "CREATE INDEX idx_telegram_failures_open ON telegram_failures(resolved_at, created_at)"
@@ -136,6 +148,12 @@
   "name": "idx_telegram_update_retry",
   "tbl": "telegram_update_failures",
   "sql": "CREATE INDEX idx_telegram_update_retry ON telegram_update_failures(bot_key, state, retry_at)"
+ },
+ {
+  "type": "index",
+  "name": "idx_threads_channel",
+  "tbl": "threads",
+  "sql": "CREATE INDEX idx_threads_channel ON threads(channel_id)"
  },
  {
   "type": "index",
@@ -328,6 +346,12 @@
   "name": "inbox_receipt_totals",
   "tbl": "inbox_receipt_totals",
   "sql": "CREATE TABLE inbox_receipt_totals ( agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE, acknowledged_messages INTEGER NOT NULL, last_acknowledged_at INTEGER NOT NULL )"
+ },
+ {
+  "type": "table",
+  "name": "inbox_receipts",
+  "tbl": "inbox_receipts",
+  "sql": "CREATE TABLE inbox_receipts ( agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, seq INTEGER NOT NULL, acknowledged_at INTEGER, PRIMARY KEY(agent_id, seq) )"
  },
  {
   "type": "table",
@@ -559,6 +583,18 @@
  },
  {
   "type": "trigger",
+  "name": "inbox_receipts_acknowledge",
+  "tbl": "inbox_deliveries",
+  "sql": "CREATE TRIGGER inbox_receipts_acknowledge AFTER UPDATE OF acknowledged_at ON inbox_deliveries WHEN NEW.acknowledged_at IS NOT NULL BEGIN UPDATE inbox_receipts SET acknowledged_at = NEW.acknowledged_at WHERE agent_id = NEW.agent_id AND acknowledged_at IS NULL AND seq IN (SELECT CAST(value AS INTEGER) FROM json_each(NEW.seqs)); END"
+ },
+ {
+  "type": "trigger",
+  "name": "inbox_receipts_offer",
+  "tbl": "inbox_deliveries",
+  "sql": "CREATE TRIGGER inbox_receipts_offer AFTER INSERT ON inbox_deliveries BEGIN INSERT OR IGNORE INTO inbox_receipts(agent_id, seq, acknowledged_at) SELECT NEW.agent_id, CAST(value AS INTEGER), NEW.acknowledged_at FROM json_each(NEW.seqs); UPDATE inbox_receipts SET acknowledged_at = NEW.acknowledged_at WHERE NEW.acknowledged_at IS NOT NULL AND agent_id = NEW.agent_id AND acknowledged_at IS NULL AND seq IN (SELECT CAST(value AS INTEGER) FROM json_each(NEW.seqs)); END"
+ },
+ {
+  "type": "trigger",
   "name": "timeline_message_default",
   "tbl": "messages",
   "sql": "CREATE TRIGGER timeline_message_default AFTER INSERT ON messages BEGIN INSERT OR IGNORE INTO message_provenance(message_id, trace_id, parent_message_id, cause_message_id, source, created_at) VALUES (NEW.id, COALESCE(NEW.thread_id, NEW.id), NEW.thread_id, NULL, 'hive', NEW.created_at); END"
@@ -615,18 +651,18 @@
   "type": "trigger",
   "name": "upload_usage_change",
   "tbl": "attachments",
-  "sql": "CREATE TRIGGER upload_usage_change AFTER UPDATE OF bytes ON attachments BEGIN UPDATE upload_usage SET bytes = bytes + NEW.bytes - OLD.bytes WHERE singleton = 1; END"
+  "sql": "CREATE TRIGGER upload_usage_change AFTER UPDATE OF bytes, sha256 ON attachments BEGIN UPDATE upload_usage SET bytes = (SELECT COALESCE(SUM(b), 0) FROM (SELECT MAX(bytes) AS b FROM attachments GROUP BY sha256)) WHERE singleton = 1; END"
  },
  {
   "type": "trigger",
   "name": "upload_usage_delete",
   "tbl": "attachments",
-  "sql": "CREATE TRIGGER upload_usage_delete AFTER DELETE ON attachments BEGIN UPDATE upload_usage SET bytes = bytes - OLD.bytes WHERE singleton = 1; END"
+  "sql": "CREATE TRIGGER upload_usage_delete AFTER DELETE ON attachments WHEN NOT EXISTS (SELECT 1 FROM attachments WHERE sha256 = OLD.sha256) BEGIN UPDATE upload_usage SET bytes = bytes - OLD.bytes WHERE singleton = 1; END"
  },
  {
   "type": "trigger",
   "name": "upload_usage_insert",
   "tbl": "attachments",
-  "sql": "CREATE TRIGGER upload_usage_insert AFTER INSERT ON attachments BEGIN UPDATE upload_usage SET bytes = bytes + NEW.bytes WHERE singleton = 1; END"
+  "sql": "CREATE TRIGGER upload_usage_insert AFTER INSERT ON attachments WHEN (SELECT COUNT(*) FROM attachments WHERE sha256 = NEW.sha256) = 1 BEGIN UPDATE upload_usage SET bytes = bytes + NEW.bytes WHERE singleton = 1; END"
  }
 ]

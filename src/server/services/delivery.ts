@@ -64,6 +64,12 @@ export class DeliveryService {
     );
   }
 
+  /** Receipt status and queue estimate of every agent, estimating each inbox once (the UI snapshot). */
+  queueSnapshot(): { queued: Record<string, number>; inbox: Record<string, InboxStatus> } {
+    const inbox = this.inboxStatuses();
+    return { inbox, queued: Object.fromEntries(Object.entries(inbox).map(([id, status]) => [id, status.queued?.atLeast ?? 0])) };
+  }
+
   private takeUnseen(actor: Agent, sessionId: string, compact: boolean, scanLimit: number): WaitResult {
     const current = this.deps.identity.getAgent(actor.id);
     const result = this.deps.inboxReader.take(current, sessionId, compact, scanLimit);
