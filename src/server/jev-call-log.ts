@@ -4,6 +4,7 @@ import type { AdaptiveTopologyDecision } from '../shared/adaptive-topology.ts';
 import { encodeJevCallCursor, type JevCallCursor } from '../shared/jev-calls.ts';
 import type { JevCall, JevCallLogView, JevCallOutcome, JevCallSummary, JevCallTrigger, JevRequestGroup } from '../shared/jev-calls.ts';
 import { HiveError } from '../shared/types.ts';
+import { Storage } from './storage.ts';
 
 /** Human-only local history; the oldest calls of a project are pruned beyond this bound. */
 export const JEV_CALLS_PER_PROJECT = 1000;
@@ -44,6 +45,17 @@ export class JevCallLog {
       (SELECT id FROM jev_calls WHERE project_id=? ORDER BY created_at DESC, rowid DESC LIMIT ?)`)
       .run(summary.projectId, summary.projectId, JEV_CALLS_PER_PROJECT);
     return summary;
+  }
+
+  /** Retention: drops calls recorded before `cutoff`, in bounded batches. */
+  prune(cutoff: number, batch = 1000): number {
+    let removed = 0;
+    for (;;) {
+      const changes = Number(Storage.for(this.db).transaction(() => this.db.prepare(`DELETE FROM jev_calls WHERE rowid IN
+        (SELECT rowid FROM jev_calls WHERE created_at < ? LIMIT ?)`).run(cutoff, batch).changes));
+      removed += changes;
+      if (changes < batch) return removed;
+    }
   }
 
   private summaryOf(row: Record<string, unknown>): JevCallSummary {

@@ -72,6 +72,8 @@ In the Human UI, write to the brain, for example `@Atlas next: add a settings pa
 
 All runtime state is under `~/.hivemind/` (or `HIVEMIND_HOME`); none of it belongs in version control. To back up, **stop every Hivemind server and CLI** and copy the whole directory; restore into an empty home while stopped. Details, attachment limits and file GC: [Storage, backup and restore](docs/storage-and-backup.md).
 
+`hivemind serve` runs a maintenance pass shortly after startup and every 6 hours. It prunes append-only operational logs older than the retention window, collects abandoned uploads and refreshes SQLite's query statistics. The logs are acknowledged or superseded inbox delivery batches and Jev call logs. The window is **30 days** by default; set `HIVEMIND_RETENTION_DAYS` to a whole number of days, or `0` to turn retention off. Retention never deletes messages, tasks, decisions or room contracts. See [Retention and maintenance](docs/storage-and-backup.md#retention-and-maintenance).
+
 ## More documentation
 
 - [Identity lifecycle](docs/identity-lifecycle.md): join, resume, superseded sessions

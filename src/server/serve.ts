@@ -16,6 +16,7 @@ import { createStaticWeb } from "./static-web.ts";
 import { WS_HEARTBEAT_MS } from "../shared/realtime.ts";
 import { heartbeatClients, sendRealtime } from "./websocket-policy.ts";
 import { packageRoot } from "../shared/package-root.ts";
+import { retentionDays, startMaintenance } from "./maintenance.ts";
 
 /** Hive events forwarded verbatim to every web UI socket; Telegram wake signals stay server-side. */
 const FORWARDED_EVENTS = [
@@ -24,8 +25,9 @@ const FORWARDED_EVENTS = [
 ] as const satisfies ReadonlyArray<keyof HiveEvents>;
 type ForwardedEvent = (typeof FORWARDED_EVENTS)[number];
 
-export function startServer(opts: { port?: number; hive?: Hive; telegram?: boolean; shutdownGraceMs?: number } = {}) {
+export function startServer(opts: { port?: number; hive?: Hive; telegram?: boolean; shutdownGraceMs?: number; retentionDays?: number } = {}) {
   const port = integerArgument(String(opts.port ?? process.env.HIVEMIND_PORT ?? DEFAULT_PORT), 0, 65535);
+  const retention = opts.retentionDays ?? retentionDays();
   const hive = opts.hive ?? new Hive();
   const telegram = startTelegram(hive, opts.telegram !== false);
   const app = createApp(hive, {
@@ -94,6 +96,7 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
   sweep.unref();
   const heartbeat = setInterval(() => heartbeatClients(clients, responsive), WS_HEARTBEAT_MS);
   heartbeat.unref();
+  const stopMaintenance = startMaintenance(hive, { retentionDays: retention });
   const ready = new Promise<number>((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, "127.0.0.1", () => {
@@ -118,6 +121,7 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
     const httpClosed = server.listening ? closeHttp() : ready.then(closeHttp, () => undefined);
     clearInterval(sweep);
     clearInterval(heartbeat);
+    stopMaintenance();
     for (const [type, forward] of forwarders) hive.bus.off(type, forward);
     hive.delivery.cancelWaits();
     for (const ws of clients) ws.close(1001, "server shutdown");
