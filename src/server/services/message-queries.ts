@@ -385,17 +385,20 @@ export class MessageQueries implements MessageReader {
     };
   }
 
-  threadsInChannel(channelId: string): Thread[] {
-    return this.db
-      .prepare("SELECT id, channel_id AS channelId, status FROM threads WHERE channel_id = ?")
-      .all(channelId) as Thread[];
+  /** Thread records of a channel; with `roots`, only those threads (a page's window). */
+  threadsInChannel(channelId: string, roots?: readonly string[]): Thread[] {
+    if (!roots) return this.db.prepare("SELECT id, channel_id AS channelId, status FROM threads WHERE channel_id = ?").all(channelId) as Thread[];
+    return this.db.prepare(`SELECT id, channel_id AS channelId, status FROM threads
+      WHERE id IN (SELECT value FROM json_each(?)) AND channel_id = ?`).all(JSON.stringify(roots), channelId) as Thread[];
   }
 
-  replyCounts(channelId: string): Record<string, number> {
-    const rows = this.db.prepare(
-      `SELECT thread_id AS id, COUNT(*) AS n FROM messages
-       WHERE channel_id = ? AND thread_id IS NOT NULL GROUP BY thread_id`,
-    ).all(channelId) as { id: string; n: number }[];
+  /** Reply counts per thread root of a channel; with `roots`, only those roots (a page's window). */
+  replyCounts(channelId: string, roots?: readonly string[]): Record<string, number> {
+    const rows = (roots
+      ? this.db.prepare(`SELECT thread_id AS id, COUNT(*) AS n FROM messages
+         WHERE channel_id = ? AND thread_id IN (SELECT value FROM json_each(?)) GROUP BY thread_id`).all(channelId, JSON.stringify(roots))
+      : this.db.prepare(`SELECT thread_id AS id, COUNT(*) AS n FROM messages
+         WHERE channel_id = ? AND thread_id IS NOT NULL GROUP BY thread_id`).all(channelId)) as { id: string; n: number }[];
     return Object.fromEntries(rows.map((r) => [r.id, r.n]));
   }
 
