@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.4.0](https://github.com/maxcorrads/hivemind/compare/v0.3.0...v0.4.0) (2026-09-24)
+
+
+### ⚠ BREAKING CHANGES
+
+* **routing:** the Human send response no longer carries adaptiveStates; jevAdvice is absent instead of null when there is no usable advice; PUT /api/ui/adaptive-routing rejects fallback and topologyFallback; the benchmark:topology:study script is removed.
+* **mcp:** the old MCP tool names are gone; restart agents' MCP clients after upgrading.
+
+### Features
+
+* **agents:** remove agents as transactional tombstones that keep history ([#233](https://github.com/maxcorrads/hivemind/issues/233)) ([b06d041](https://github.com/maxcorrads/hivemind/commit/b06d041e7026f672995e54341fa8f55463df9620)), closes [#215](https://github.com/maxcorrads/hivemind/issues/215)
+* **mcp:** consolidate duplicate tools, drop executionId, fix #name, guard attach ([#229](https://github.com/maxcorrads/hivemind/issues/229)) ([5f7754c](https://github.com/maxcorrads/hivemind/commit/5f7754ca374cdf3d27406ccef08a99583177f244)), closes [#218](https://github.com/maxcorrads/hivemind/issues/218)
+* **routing:** take Jev off the send path and make it fully optional ([#234](https://github.com/maxcorrads/hivemind/issues/234)) ([9de3c7d](https://github.com/maxcorrads/hivemind/commit/9de3c7d05f74472ff53ce6816113392eb9f0d1db)), closes [#214](https://github.com/maxcorrads/hivemind/issues/214)
+* **storage:** add indexes, batch hot queries and a 30-day configurable retention ([#230](https://github.com/maxcorrads/hivemind/issues/230)) ([616178b](https://github.com/maxcorrads/hivemind/commit/616178be83744b7b1ee86f5d54903437e2dbbe28)), closes [#217](https://github.com/maxcorrads/hivemind/issues/217)
+* **ui:** accessibility pass, loading/empty/error states and OS theme ([#228](https://github.com/maxcorrads/hivemind/issues/228)) ([46274f2](https://github.com/maxcorrads/hivemind/commit/46274f2361bf068da4f47dab97d3f918e9724d40)), closes [#220](https://github.com/maxcorrads/hivemind/issues/220)
+* **ui:** channel tabs, task stepper, one-click decisions and thread header ([#232](https://github.com/maxcorrads/hivemind/issues/232)) ([a2cfc34](https://github.com/maxcorrads/hivemind/commit/a2cfc34cf579618bfcdfcf44a0789a48d951b667)), closes [#224](https://github.com/maxcorrads/hivemind/issues/224)
+* **ui:** mobile layout with full-screen screens and bottom tabs ([#226](https://github.com/maxcorrads/hivemind/issues/226)) ([9d5c63e](https://github.com/maxcorrads/hivemind/commit/9d5c63edd84325dafda25b0496a4e4b28f02d7a5)), closes [#223](https://github.com/maxcorrads/hivemind/issues/223)
+* **ui:** server-backed For you Activity feed and Unread that matches the badges ([#235](https://github.com/maxcorrads/hivemind/issues/235)) ([4402663](https://github.com/maxcorrads/hivemind/commit/4402663591daf7629b182c4b5346b41dbc39ca30))
+* **ui:** Slack-style message stream with grouping, markdown, dividers and cards ([#231](https://github.com/maxcorrads/hivemind/issues/231)) ([00bf5a1](https://github.com/maxcorrads/hivemind/commit/00bf5a1f0e84cff10b591f870a935b536d40d7aa)), closes [#221](https://github.com/maxcorrads/hivemind/issues/221)
+* **ui:** Slack-style navigation with project rail, Cmd+K switcher and badges ([#237](https://github.com/maxcorrads/hivemind/issues/237)) ([717c9b5](https://github.com/maxcorrads/hivemind/commit/717c9b5a68bd36d9b8d6c9e628080dde1efc54bd))
+
+
+### Bug Fixes
+
+* **server:** transactional Telegram outbox, infallible post-commit listeners, single-instance lock ([#238](https://github.com/maxcorrads/hivemind/issues/238)) ([fa3a672](https://github.com/maxcorrads/hivemind/commit/fa3a6725814ba307e082b06477a1b50454230bba))
+* **ui:** hide the queue badge when the queued count is unknown ([#239](https://github.com/maxcorrads/hivemind/issues/239)) ([a784768](https://github.com/maxcorrads/hivemind/commit/a784768dab73028e0726700f71f73a000ed041f4))
+* **ui:** reliable sends, render performance, realtime coalescing, keyboard mentions ([#236](https://github.com/maxcorrads/hivemind/issues/236)) ([3b1885d](https://github.com/maxcorrads/hivemind/commit/3b1885d285942115e0ed5ba48858f402f1f1cff1)), closes [#219](https://github.com/maxcorrads/hivemind/issues/219)
+
 ## [0.3.0](https://github.com/maxcorrads/hivemind/compare/v0.2.0...v0.3.0) (2026-09-23)
 
 
