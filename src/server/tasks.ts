@@ -5,7 +5,7 @@ import { validated } from '../shared/api-contract.ts';
 import { checkpointFreshness, type HandoffSummary } from '../shared/handoffs.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import type { TaskStoreDeps } from './services/ports.ts';
-import { BODY_MAX, HiveError, type Agent, type Channel } from '../shared/types.ts';
+import { agentLabel, BODY_MAX, HiveError, HUMAN_ID, type Agent, type Channel } from '../shared/types.ts';
 import { assignTaskSchema, taskEventSchema, taskBody, type TaskContract, type TaskEnvelope, type TaskSnapshot } from '../shared/tasks.ts';
 
 type Row = { id: string; channel_id: string; worker_id: string; dispatch_seq: number; received_at: number | null; snapshot: string };
@@ -30,6 +30,15 @@ export class TaskStore {
     const task = JSON.parse(row.snapshot) as TaskSnapshot;
     return { ...task, room: this.deps.rooms.taskInfo(task), coordination: this.coordination.view(actor, task), receivedAt: row.received_at,
       state: task.state === 'sent' && row.received_at !== null ? 'delivered' : task.state };
+  }
+  /** The task as read by clients: removed participants are labelled "Name (removed)" (never stored). */
+  view(actor: Agent, id: string): TaskSnapshot {
+    const task = this.get(actor, id);
+    const label = (agentId: string, name: string) => {
+      const agent = this.deps.identity.findAgent(agentId);
+      return agent ? agentLabel({ name, removedAt: agent.removedAt }) : name;
+    };
+    return { ...task, assignerName: label(task.assignerId, task.assignerName), workerName: label(task.workerId, task.workerName) };
   }
   previewClaim(actor: Agent, id: string, raw: unknown) {
     validated(z.string().uuid(), id);
@@ -82,6 +91,11 @@ export class TaskStore {
   }
   private evidence(actor: Agent, sequences: number[]) {
     for (const seq of sequences) this.deps.messageQueries.getVisibleMessage(actor, seq);
+  }
+  /** Worker evidence must stay readable by the assigning brain; a removed brain reads nothing, so it is not checked. */
+  private assignerEvidence(task: TaskSnapshot, sequences: number[]) {
+    const assigner = this.deps.identity.findActiveAgent(task.assignerId);
+    if (assigner) this.evidence(assigner, sequences);
   }
   private workerEvidence(worker: Agent, sequences: number[]) {
     try { this.evidence(worker, sequences); }
@@ -147,7 +161,7 @@ export class TaskStore {
     return record;
   }
   private published(actor: Agent, taskId: string, messageId: string) {
-    const task = this.get(actor, taskId), message = this.deps.messageQueries.getMessageById(messageId);
+    const task = this.view(actor, taskId), message = this.deps.messageQueries.getMessageById(messageId);
     this.deps.messages.publishTaskMessage(message); this.deps.bus.emit('task', task);
     return { task, message, duplicate: false };
   }
@@ -207,6 +221,7 @@ export class TaskStore {
         this.contract(actor, action.contract, task.id); this.workerEvidence(worker, action.contract.evidenceSeqs);
         task.workerId = worker.id; task.workerName = worker.name;
         task.contract = action.contract; task.contractVersion++; task.state = 'sent'; task.result = null; task.review = null;
+        delete task.cancellation;
       } else if (action.type === 'review') {
         if (task.state !== 'result_submitted') throw new HiveError(409, 'Review requires a submitted result');
         this.evidence(actor, action.evidenceSeqs);
@@ -228,15 +243,15 @@ export class TaskStore {
         if (action.type === 'block') task.state = 'blocked';
         else if (action.type === 'checkpoint') {
           const references = [...action.checkpoint.evidenceSeqs, ...action.checkpoint.checks.flatMap(check => check.evidenceSeqs)];
-          this.evidence(actor, references); this.evidence(this.deps.identity.getAgent(task.assignerId), references);
+          this.evidence(actor, references); this.assignerEvidence(task, references);
           task.checkpoint = { version: (task.checkpoint?.version ?? 0) + 1,
             taskRevision: task.revision + 1, contractVersion: task.contractVersion, workerId: task.workerId,
             objective: task.contract.objective, worktree: task.contract.worktree, branch: task.contract.branch,
             savedAt: Date.now(), state: task.state, messageId: '', messageSeq: 0, data: action.checkpoint };
         } else {
           if (action.type !== 'result') throw new HiveError(400, 'Unknown task action');
-          this.evidence(actor, [...action.result.evidenceSeqs, ...action.result.checks.flatMap(c => c.evidenceSeqs)]);
-          this.evidence(this.deps.identity.getAgent(task.assignerId), [...action.result.evidenceSeqs, ...action.result.checks.flatMap(c => c.evidenceSeqs)]);
+          const references = [...action.result.evidenceSeqs, ...action.result.checks.flatMap(c => c.evidenceSeqs)];
+          this.evidence(actor, references); this.assignerEvidence(task, references);
           task.result = action.result; task.review = null; task.state = 'result_submitted';
         }
       }
@@ -255,10 +270,10 @@ export class TaskStore {
     return Boolean(this.db.prepare('SELECT 1 FROM task_events WHERE actor_id=? AND request_id=?').get(actorId, requestId) ||
       this.db.prepare('SELECT 1 FROM task_request_aliases WHERE actor_id=? AND request_id=?').get(actorId, requestId));
   }
-  /** True when the task is assigned to the worker and neither accepted-complete nor rejected. */
+  /** True when the task is assigned to the worker and not finished (accepted-complete, rejected or cancelled). */
   isOpenFor(taskId: string, workerId: string): boolean {
     return Boolean(this.db.prepare(`SELECT 1 FROM task_records t WHERE t.id=? AND t.worker_id=?
-      AND json_extract(t.snapshot,'$.state') NOT IN ('accepted_complete','rejected')`).get(taskId, workerId));
+      AND json_extract(t.snapshot,'$.state') NOT IN ('accepted_complete','rejected','cancelled')`).get(taskId, workerId));
   }
   /** Work that occupies a worker in a project: unfinished tasks not stopped by their room, and held claims. */
   capacityWork(projectId: string): Array<{ id: string; workerId: string; assignerId: string; state: string; held: boolean; dependencies: string[] }> {
@@ -269,7 +284,7 @@ export class TaskStore {
         json_extract(t.snapshot,'$.contract.dependencies') AS dependencies
       FROM task_records t
       LEFT JOIN room_tasks room ON room.task_id=t.id
-      WHERE t.channel_id IN (SELECT value FROM json_each(?)) AND ((json_extract(t.snapshot,'$.state') NOT IN ('accepted_complete','rejected')
+      WHERE t.channel_id IN (SELECT value FROM json_each(?)) AND ((json_extract(t.snapshot,'$.state') NOT IN ('accepted_complete','rejected','cancelled')
         AND COALESCE(room.status,'active')!='stopped') OR json_extract(t.snapshot,'$.claim.state')='held')`)
       .all(JSON.stringify(this.deps.channels.channelIdsIn(projectId))).map(row => ({
         id: String(row.id), workerId: String(row.worker_id), assignerId: String(row.assigner_id), state: String(row.state), held: row.claim_state === 'held',
@@ -292,6 +307,28 @@ export class TaskStore {
   unfinished(ids: string[]): string[] {
     return (this.db.prepare(`SELECT id FROM task_records WHERE id IN (SELECT value FROM json_each(?))
       AND json_extract(snapshot,'$.state')!='accepted_complete'`).all(JSON.stringify(ids)) as { id: string }[]).map(row => row.id);
+  }
+  /**
+   * #215, inside the removal transaction. Unfinished tasks assigned to the removed agent are cancelled with the reason
+   * (a held claim is released); their brain can reassign one with a revise. Unfinished tasks the agent assigned stay
+   * open, so their workers can still checkpoint and submit; they are only counted.
+   */
+  closeForRemovedAgent(agent: Agent): { cancelled: number; unreviewed: number } {
+    const open = `json_extract(snapshot,'$.state') NOT IN ('accepted_complete','rejected','cancelled')`;
+    const assigned = this.db.prepare(`SELECT id, snapshot FROM task_records WHERE worker_id=? AND ${open}`).all(agent.id) as Array<Pick<Row, 'id' | 'snapshot'>>;
+    const at = Date.now(), human = this.deps.identity.getAgent(HUMAN_ID);
+    for (const row of assigned) {
+      const task = JSON.parse(row.snapshot) as TaskSnapshot;
+      task.state = 'cancelled'; task.cancellation = { reason: `${agent.name} was removed from the hive`, at };
+      if (task.claim?.state === 'held') task.claim = { ...task.claim, state: 'released', version: task.claim.version + 1, updatedAt: at };
+      task.revision++; task.updatedAt = at;
+      this.db.prepare('UPDATE task_records SET snapshot=? WHERE id=?').run(JSON.stringify(task), row.id);
+    }
+    const unreviewed = Number((this.db.prepare(`SELECT COUNT(*) AS n FROM task_records
+      WHERE json_extract(snapshot,'$.assignerId')=? AND worker_id!=? AND ${open}`).get(agent.id, agent.id) as { n: number }).n);
+    // The bus defers these until the removal commits.
+    for (const row of assigned) this.deps.bus.emit('task', this.view(human, row.id));
+    return { cancelled: assigned.length, unreviewed };
   }
   recordReceipt(workerId: string, seqs: number[], at: number): string[] {
     return (this.db.prepare(`UPDATE task_records SET received_at = ? WHERE worker_id = ? AND received_at IS NULL

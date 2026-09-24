@@ -106,7 +106,7 @@ export class RoutingStore {
       if (evidence.length < (input.minReviewedResults ?? 0) ||
         (input.minimumAcceptedRate !== undefined && (!interval || interval[0] < input.minimumAcceptedRate))) continue;
       const workload = this.db.prepare(`SELECT COUNT(*) AS n FROM task_records r
-        WHERE r.channel_id IN (SELECT value FROM json_each(?)) AND r.worker_id=? AND r.id!=? AND json_extract(r.snapshot,'$.state') NOT IN ('accepted_complete','rejected')`)
+        WHERE r.channel_id IN (SELECT value FROM json_each(?)) AND r.worker_id=? AND r.id!=? AND json_extract(r.snapshot,'$.state') NOT IN ('accepted_complete','rejected','cancelled')`)
         .get(visibleInProject, worker.id, task.id) as { n: number };
       if (workload.n >= card.maxInProgress) continue;
       candidates.push({ workerId: worker.id, name: worker.name, capabilityRevision: row.revision, card,

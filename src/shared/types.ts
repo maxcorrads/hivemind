@@ -82,7 +82,16 @@ export type Agent = {
   createdAt: number;
   projectId: string | null;
   project: string | null;
+  /** Set once Human removed the agent: a tombstone that keeps its history but can no longer act (#215). */
+  removedAt?: number;
 };
+
+/** How history names a removed agent. Removed names stay reserved, so the label is unambiguous. */
+export const REMOVED_SUFFIX = " (removed)";
+
+export function agentLabel(agent: { name: string; removedAt?: number | null }): string {
+  return agent.removedAt != null ? agent.name + REMOVED_SUFFIX : agent.name;
+}
 
 export type BotCredentialView = {
   bot: Agent;

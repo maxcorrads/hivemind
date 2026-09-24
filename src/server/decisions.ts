@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { DecisionDeps } from './services/ports.ts';
-import { HiveError, type Agent, type Channel, type Message } from '../shared/types.ts';
+import { agentLabel, HiveError, type Agent, type Channel, type Message } from '../shared/types.ts';
 import { receiptKey } from './inbox-delivery.ts';
 import {
   decisionAnswerSchema, decisionBody, decisionEventSchema, requestDecisionSchema,
@@ -55,12 +55,18 @@ export class DecisionStore {
     const revisions = this.deps.tasks.revisions([...new Set(snapshots.map(snapshot => snapshot.taskId))]);
     const receipts = this.deps.inbox.receiptStates(snapshots.flatMap(snapshot => snapshot.answer
       ? this.recipients(snapshot).map(person => ({ agentId: person.id, seq: snapshot.answer!.seq })) : []));
+    // Removed agents read "Name (removed)" in views; stored snapshots keep the plain name.
+    const removed = this.deps.identity.removedAmong(snapshots.flatMap(snapshot => this.recipients(snapshot).map(person => person.id)));
+    const label = <T extends { id: string; name: string }>(person: T): T =>
+      ({ ...person, name: agentLabel({ name: person.name, removedAt: removed.has(person.id) ? 0 : null }) });
     return snapshots.map(snapshot => {
       const projection = this.projected(snapshot, revisions.get(snapshot.taskId));
       return {
         ...snapshot,
+        requesterName: label({ id: snapshot.requesterId, name: snapshot.requesterName }).name,
+        affectedWorkers: snapshot.affectedWorkers.map(label),
         ...projection,
-        delivery: snapshot.answer ? this.recipients(snapshot).map(person => ({
+        delivery: snapshot.answer ? this.recipients(snapshot).map(label).map(person => ({
           agentId: person.id, name: person.name,
           state: receipts.get(receiptKey(person.id, snapshot.answer!.seq)) ?? 'pending' as DecisionDeliveryState,
         })) : [],
@@ -180,10 +186,30 @@ export class DecisionStore {
     return { decision, message, duplicate: false };
   }
 
+  /** Who a Human reply in a decision thread is addressed to; removed agents receive nothing. */
   replyRecipientNames(threadId: string | null) {
     if (!threadId || !this.has(threadId)) return [];
     const snapshot = this.snapshot(threadId);
-    return [...new Set([snapshot.requesterName, ...snapshot.affectedWorkers.map(worker => worker.name)])];
+    return [...new Set([{ id: snapshot.requesterId, name: snapshot.requesterName }, ...snapshot.affectedWorkers]
+      .filter(person => this.deps.identity.findActiveAgent(person.id)).map(person => person.name))];
+  }
+
+  /**
+   * #215, inside the removal transaction: the removed brain's awaiting requests are withdrawn with the reason, so the
+   * Human queue no longer offers them; they stay in history. Returns how many were withdrawn.
+   */
+  withdrawForRemovedBrain(brain: Agent): number {
+    const rows = this.deps.storage.db.prepare(`SELECT id, snapshot FROM decision_requests
+      WHERE requester_id = ? AND json_extract(snapshot, '$.storedState') = 'awaiting_input'`).all(brain.id) as DecisionRow[];
+    const now = Date.now(), human = this.deps.identity.getAgent('human');
+    for (const row of rows) {
+      const snapshot = JSON.parse(row.snapshot) as DecisionSnapshot;
+      snapshot.storedState = 'withdrawn'; snapshot.revision += 1; snapshot.updatedAt = now;
+      snapshot.withdrawn = { reason: `${brain.name} was removed from the hive`, at: now }; this.save(snapshot);
+    }
+    // The bus defers these until the removal commits.
+    for (const row of rows) this.deps.bus.emit('decision', this.get(human, row.id));
+    return rows.length;
   }
 
   captureHumanReply(actor: Agent, message: Message, source: 'hive' | 'telegram' = 'hive'): DecisionView | null {

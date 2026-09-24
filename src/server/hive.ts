@@ -22,6 +22,7 @@ import { pruneTelegramUpdates } from "./telegram-inbox.ts";
 import { pruneTelegramFailures } from "./telegram-outbox.ts";
 import { TimelineStore } from "./timeline.ts";
 import { UploadBudget, type UploadLimits } from "./upload-budget.ts";
+import { AgentLifecycle } from "./services/agent-lifecycle.ts";
 import { BotService } from "./services/bots.ts";
 import { ChannelService } from "./services/channels.ts";
 import { DeliveryService } from "./services/delivery.ts";
@@ -54,6 +55,7 @@ type ServiceRegistry = Core & {
   files: FileService;
   projects: ProjectService;
   identity: IdentityService;
+  lifecycle: AgentLifecycle;
   channels: ChannelService;
   messageQueries: MessageQueries;
   delivery: DeliveryService;
@@ -88,6 +90,7 @@ export class Hive {
   readonly files!: FileService;
   readonly projects!: ProjectService;
   readonly identity!: IdentityService;
+  readonly lifecycle!: AgentLifecycle;
   readonly channels!: ChannelService;
   readonly messageQueries!: MessageQueries;
   readonly messages!: MessageService;
@@ -128,6 +131,7 @@ export class Hive {
       this.files = services.files = new FileService(services);
       this.projects = services.projects = new ProjectService(services);
       this.identity = services.identity = new IdentityService(services);
+      this.lifecycle = services.lifecycle = new AgentLifecycle(services);
       this.channels = services.channels = new ChannelService(services);
       this.messageQueries = services.messageQueries = new MessageQueries(services);
       this.delivery = services.delivery = new DeliveryService(services);

@@ -19,7 +19,7 @@ import {
 } from "../../shared/types.ts";
 import type { ChannelService } from "./channels.ts";
 import type { Core, MessageReader, ProjectDirectory } from "./ports.ts";
-import { batches, type MessageRow } from "./rows.ts";
+import { agentLabelSql, batches, type MessageRow } from "./rows.ts";
 
 export type MessageRef = { id: string; channelId: string; threadId: string | null; createdAt: number };
 export type WakeHeader = Record<string, any>;
@@ -72,7 +72,7 @@ export class MessageQueries implements MessageReader {
     }
     for (const ids of batches([...new Set(rows.map((row) => row.author_id))])) {
       const found = this.db.prepare(
-        `SELECT id, name, role FROM agents WHERE id IN (${ids.map(() => "?").join(",")})`,
+        `SELECT id, ${agentLabelSql("agents")} AS name, role FROM agents WHERE id IN (${ids.map(() => "?").join(",")})`,
       ).all(...ids) as Author[];
       for (const author of found) authors.set(author.id, author);
     }
@@ -450,7 +450,7 @@ export class MessageQueries implements MessageReader {
    */
   traceMessages(traceId: string, limit: number): Array<Record<string, any>> {
     return this.db.prepare(`SELECT m.id,m.seq,m.channel_id,m.author_id,m.body,m.event_type,m.created_at,
-      a.name AS author_name,a.role AS author_role,p.trace_id,p.parent_message_id,p.cause_message_id,p.source,
+      ${agentLabelSql("a")} AS author_name,a.role AS author_role,p.trace_id,p.parent_message_id,p.cause_message_id,p.source,
       te.envelope FROM messages m
       LEFT JOIN message_provenance p ON p.message_id=m.id
       LEFT JOIN agents a ON a.id=m.author_id LEFT JOIN task_events te ON te.message_id=m.id
