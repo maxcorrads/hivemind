@@ -43,8 +43,9 @@ test("repeated server start/stop on one Hive leaves no bus listeners behind", as
   for (let cycle = 0; cycle < CYCLES; cycle++) {
     const started = startServer({ port: 0, hive, shutdownGraceMs: 1_000 });
     await started.ready;
-    // Web socket fan-out and the Telegram bridge each subscribe once per event they need.
-    assert.equal(hive.bus.listenerCount("message"), 2);
+    // Web socket fan-out subscribes after commit; the Telegram bridge enqueues through the outbox hook.
+    assert.equal(hive.bus.listenerCount("message"), 1);
+    assert.equal(hive.bus.outboxListenerCount("message"), 1);
     assert.ok(peak() <= 2, `cycle ${cycle}: peak ${peak()}`);
     await started.shutdown();
     assert.equal(hive.bus.totalListenerCount(), baseline, `cycle ${cycle} leaked a listener`);
