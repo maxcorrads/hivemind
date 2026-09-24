@@ -53,6 +53,12 @@ export class Storage {
     return this.depth > 0;
   }
 
+  /** Lets SQLite refresh the planner statistics it considers stale (cheap; run periodically, never inside a transaction). */
+  optimize(): void {
+    if (this.depth > 0) throw new Error("PRAGMA optimize must run outside a transaction");
+    this.db.exec("PRAGMA optimize");
+  }
+
   transaction<T>(work: () => T, options: TransactionOptions = {}): T {
     const depth = this.depth;
     const savepoint = `storage_${depth}`;

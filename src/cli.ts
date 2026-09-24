@@ -278,8 +278,8 @@ export async function runCli(argv: string[]): Promise<void> {
     const thread = arg(argv, "--thread");
     const to = arg(argv, "--to");
     let channel = arg(argv, "--channel");
-    // --execution-id is accepted for older scripts and ignored (#211).
-    validated(sendInputSchema, { body, threadId: thread, eventType, recipients, executionId: arg(argv, "--execution-id"), requestId: arg(argv, "--request-id") });
+    // A legacy --execution-id from older scripts is ignored unread (#211, #218).
+    validated(sendInputSchema, { body, threadId: thread, eventType, recipients, requestId: arg(argv, "--request-id") });
     if (to) {
       const dm = await agentRequest<{ channel: Channel }>("POST", "/api/agent/dms", { name: to }, token);
       channel = dm.channel.id;

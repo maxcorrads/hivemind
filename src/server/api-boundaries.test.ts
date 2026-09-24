@@ -102,7 +102,8 @@ test('upload limits are shared by database instances, permit another actor, and 
   const b = other.files.createFile(f.human, { name: 'two', mime: 'text/plain', body: two.stream, declaredBytes: 1 });
   await assert.rejects(other.files.createFile(f.human, { name: 'three', mime: 'text/plain', body: body('x'), declaredBytes: 1 }), /concurrency/);
   const c = other.files.createFile(worker, { name: 'three', mime: 'text/plain', body: three.stream, declaredBytes: 1 });
-  one.finish(); two.finish(); three.finish();
+  // Distinct contents: the quota counts each stored blob once.
+  one.finish('a'); two.finish('b'); three.finish('c');
   assert.equal((await Promise.all([a,b,c])).length, 3);
   assert.equal(countRows(f.hive, 'upload_reservations'), 0);
   assert.equal(readValue(f.hive, 'upload_usage', 'bytes'), 3);
@@ -114,7 +115,7 @@ test('quota accounts for committed metadata and in-flight reservation; lying len
   const hold = paused();
   const uploading = f.hive.files.createFile(f.human, { name: 'held', mime: 'text/plain', body: hold.stream, declaredBytes: 2 });
   await assert.rejects(f.hive.files.createFile(f.human, { name: 'too-much', mime: 'text/plain', body: body('x'), declaredBytes: 1 }), /quota/);
-  hold.finish('xx'); await uploading;
+  hold.finish('yy'); await uploading;
   assert.equal(readValue(f.hive, 'upload_usage', 'bytes'), 4);
   deleteRows(f.hive, 'attachments');
   await assert.rejects(f.hive.files.createFile(f.human, { name: 'lie', mime: 'text/plain', body: body('xxx'), declaredBytes: 2 }), /large|reservation/);

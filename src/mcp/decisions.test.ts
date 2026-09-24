@@ -42,12 +42,16 @@ test('real MCP brain requests a Human decision and Telegram-root reply resolves 
     const made = await call(b, 'request_human_decision', input);
     assert.equal(made.decision.state, 'awaiting_input');
     const denied = await w.callTool({ name: 'request_human_decision', arguments: input }); assert.equal(denied.isError, true);
-    const before = await call(b, 'get_task_decisions', { taskId: task.id }); assert.equal(before.decisions[0].id, made.decision.id);
+    const before = await call(b, 'get_decisions', { taskId: task.id }); assert.equal(before.decisions[0].id, made.decision.id);
     hive.messages.postMessage(hive.identity.getAgent('human'), { channel: channel.id, threadId: made.decision.id,
       body: 'Telegram answer: compatible.', source: 'telegram' });
-    const answered = await call(b, 'get_decision', { decisionId: made.decision.id });
+    const answered = await call(b, 'get_decisions', { decisionId: made.decision.id });
     assert.equal(answered.decision.state, 'answered'); assert.equal(answered.decision.answer.source, 'telegram');
     assert.equal(hive.tasks.get(brain.agent, task.id).revision, 1);
+    for (const ambiguous of [{}, { decisionId: made.decision.id, taskId: task.id }]) {
+      const rejected = await b.callTool({ name: 'get_decisions', arguments: ambiguous });
+      assert.equal(rejected.isError, true); assert.match(JSON.stringify(rejected.content), /exactly one of decisionId/);
+    }
   } finally {
     for (const client of clients) await client.close();
     for (const transport of transports) await transport.close();

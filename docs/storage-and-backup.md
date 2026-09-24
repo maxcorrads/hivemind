@@ -19,15 +19,40 @@ Do **not** copy only a running `hive.db`: committed data can still be in its WAL
 The schema has a single source: the ordered, versioned migrations in `src/server/migrations/`. Stores only prepare statements. `PRAGMA user_version` is the number of the last applied migration. At startup, before any store is constructed, Hivemind applies each pending migration in its own `BEGIN IMMEDIATE` transaction together with its version bump, so a crash or failure rolls back only that step and the next start retries it. Afterwards the schema is checked against what the migrations produce on an empty database (every table, column, index and trigger) plus the core key invariants.
 
 - A database with a `user_version` newer than this build is refused with a clear error before anything writes to it. Upgrade Hivemind rather than lowering `user_version`.
+- Migration 28 (`performance_retention`, #217) adds indexes on `threads(channel_id)`, `room_events(channel_id, revision)` and `attachments(sha256)`. It also adds the per-message `inbox_receipts` table, backfilled from the delivery ledger and kept current by triggers, and recomputes the upload quota over distinct blobs.
 - Versions 0 (unversioned) and 2 (the project-storage marker of earlier releases) are legacy: such a database runs the whole baseline (versions 3–26). Every baseline step is idempotent and detects what already exists, so databases from any earlier release upgrade without data loss; version 2 must first pass the core-table checks.
 - The Telegram routing migration is deferred: it assigns legacy Telegram rows to the bot that is active when the bridge first starts, so the bridge runs it (it is idempotent and keeps its own marker table).
 - To change the schema, append a migration with the next version; never edit or reorder a shipped one. A unit test rejects `CREATE`/`ALTER`/`DROP` statements outside `src/server/migrations/`.
 
 Unknown versions and inconsistent keys/partial schemas are rejected without repair-by-data-loss. Retain the original home and investigate the error rather than deleting tables or lowering `user_version`.
 
+## Retention and maintenance
+
+`hivemind serve` runs a maintenance pass about a minute after startup and then every 6 hours. It never blocks startup. A failed pass (for example, a busy database) is logged and retried on the next interval. Each pass:
+
+1. **Prunes operational logs older than the retention window.** Only append-only logs are pruned:
+   - acknowledged inbox delivery batches, and superseded ones (the pending batch of each agent is never touched);
+   - Jev call logs (the per-project cap of 1,000 calls still applies within the window).
+
+   Per-message delivery receipts (`inbox_receipts`) and the acknowledgement totals are kept, so decision receipt stages ("offered", "acknowledged") and inbox status do not change when a batch is pruned. After pruning, acknowledging a pruned batch id returns 404, like any unknown delivery.
+2. **Collects abandoned uploads**, as `hivemind gc` does. It removes uploads never attached to a message after 24 hours, then blobs no attachment references.
+3. **Runs `PRAGMA optimize`** so SQLite refreshes the planner statistics it considers stale.
+
+**Retention never deletes messages, threads, tasks and their events, decisions, room contracts or their history.** Other logs keep their own bounds: the coordination timeline (30 days, unfinished task traces kept), Telegram diagnostics (30 days), Jev routing audit events (the latest 500 per channel) and routing outcomes (90 days).
+
+The window is **30 days** by default. Configure it with `HIVEMIND_RETENTION_DAYS` in the environment of `hivemind serve`:
+
+| Value | Effect |
+| --- | --- |
+| unset or empty | 30 days |
+| `N` (a whole number, up to 36500) | prune logs older than `N` days |
+| `0` | retention disabled: no log is pruned; upload collection and `PRAGMA optimize` still run |
+
+Any other value (negative, fractional, text) stops `serve` at startup with an error that names the variable.
+
 ## Files and attachments
 
-Messages can have 0–4 attachments (empty body is allowed). Caps: 512 MB per file, 60-second upload deadline, two active uploads per actor/four per hive, an 8 GiB logical attachment-and-reservation quota, allowlisted types, sha256 blob reuse under `~/.hivemind/files`. Orphan uploads expire; `hivemind gc` sweeps them.
+Messages can have 0–4 attachments (empty body is allowed). Caps: 512 MB per file, 60-second upload deadline, two active uploads per actor/four per hive, an 8 GiB attachment-and-reservation quota, allowlisted types, sha256 blob reuse under `~/.hivemind/files`. The quota counts each stored blob once: attachments with identical content share one file and one quota charge. Orphan uploads expire; the `serve` maintenance pass and `hivemind gc` sweep them.
 
 MCP `attach` uploads from a local path. `fetch_file` writes into `<cwd>/.hivemind-inbox/` (gitignored) and, for images, also returns a small preview (not the original).
 

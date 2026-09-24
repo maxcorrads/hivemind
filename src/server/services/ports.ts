@@ -126,8 +126,8 @@ export type TimelineDeps = Core & Channels<"getChannel" | "canSeeChannel"> & Mes
   readonly tasks: Pick<TaskStore, "get" | "unfinished">;
 };
 export type DecisionDeps = Core & Channels & Agents & Messages & Poster<"postMessage"> & {
-  readonly inbox: Pick<InboxDeliveryStore, "receiptState">;
-  readonly tasks: Pick<TaskStore, "get">;
+  readonly inbox: Pick<InboxDeliveryStore, "receiptStates">;
+  readonly tasks: Pick<TaskStore, "get" | "revisions">;
 };
 export type DiagnosticsDeps = { readonly home: string } & Agents<"getAgent">;
 

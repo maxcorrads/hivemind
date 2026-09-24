@@ -8,7 +8,7 @@ import { createApp } from "./app.ts";
 import { BOT_JSON_BYTES } from "./ingress.ts";
 import { waitWireBytes } from "./wait-format.ts";
 import { markInboxRead } from "./test-fixtures.ts";
-import { API_JSON_BYTES, humanSendInputSchema, messageBodySchema, sendInputSchema } from "../shared/api-contract.ts";
+import { API_JSON_BYTES, messageBodySchema, sendInputSchema } from "../shared/api-contract.ts";
 import { botMessageSchema } from "../shared/bot-message.ts";
 import { BODY_MAX, WAIT_MAX_BYTES, type Message, type WaitResult } from "../shared/types.ts";
 import type { TaskAction } from "../shared/tasks.ts";
@@ -34,7 +34,7 @@ function fixture(t: TestContext) {
 
 test("the body limit is 20,000 units for every schema and dependent JSON caps fit its worst case", () => {
   assert.equal(BODY_MAX, 20_000);
-  for (const schema of [messageBodySchema, sendInputSchema.shape.body, humanSendInputSchema.shape.body]) {
+  for (const schema of [messageBodySchema, sendInputSchema.shape.body]) {
     for (const body of [ASCII, CJK, "😀".repeat(BODY_MAX / 2)]) assert.equal(schema.safeParse(body).success, true);
     assert.equal(schema.safeParse(OVER).success, false);
   }
