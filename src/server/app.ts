@@ -14,6 +14,7 @@ import { launchContext, projectPlugins, saveProjectPlugin, setProjectPluginAvail
 import { BotIngressBudget, readLimitedJson, assertLocalHumanRequest, BOT_JSON_BYTES, PLUGIN_REQUEST_BYTES, CREDENTIAL_JSON_BYTES } from "./ingress.ts";
 import { adaptiveRoutingPublic, saveAdaptiveRouting } from "./adaptive-config.ts";
 import { decodeJevCallCursor } from "../shared/jev-calls.ts";
+import { ACTIVITY_REASONS, type ActivityReason } from "../shared/read-state.ts";
 import { installJevDiagnostics } from './adaptive-routing-diagnostics.ts';
 import { adviseAfterWait, assignAdaptiveTask, mutateAdaptiveTask, mutateAdaptiveRoom, sendAdaptiveAgentMessage, setAdaptiveThreadStatus } from './adaptive-topology-actions.ts';
 
@@ -186,6 +187,17 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const beforeSeq = c.req.query('beforeSeq') ? Number(c.req.query('beforeSeq')) : undefined;
     const project = c.req.query('project') ? hive.projects.getProjectBySlug(String(c.req.query('project'))).id : undefined;
     return c.json(hive.reads.mentionInbox(hive.identity.getAgent('human'), 30, beforeSeq, project));
+  });
+  ui.get("/activity", c => {
+    const project = c.req.query('project') ? hive.projects.getProjectBySlug(String(c.req.query('project'))).id : undefined;
+    const reasons = (c.req.query('reason') ?? '').split(',').filter(Boolean);
+    if (reasons.length > ACTIVITY_REASONS.length || reasons.some(reason => !(ACTIVITY_REASONS as readonly string[]).includes(reason)))
+      throw new HiveError(400, 'Unknown activity reason');
+    return c.json(hive.reads.activity(hive.identity.getAgent('human'), {
+      projectId: project, unreadOnly: c.req.query('unread') === '1', reasons: reasons as ActivityReason[],
+      beforeSeq: c.req.query('beforeSeq') ? Number(c.req.query('beforeSeq')) : undefined,
+      limit: c.req.query('limit') ? Number(c.req.query('limit')) : undefined,
+    }));
   });
   ui.post("/mentions/seen", async c => {
     const human = hive.identity.getAgent('human'), body = await requestJson(c.req.raw);

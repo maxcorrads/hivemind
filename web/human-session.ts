@@ -67,6 +67,15 @@ export const humanSession = createHumanSession();
 
 type HumanEvent = { type: string; payload: unknown };
 
+/**
+ * Delay before reconnect attempt `attempt` (0-based): exponential from 1s up to 30s,
+ * with jitter over the upper half so many tabs do not reconnect in lockstep.
+ */
+export function reconnectDelay(attempt: number, random: () => number = Math.random): number {
+  const ceiling = Math.min(30_000, 1_000 * 2 ** Math.min(Math.max(attempt, 0), 5));
+  return Math.round(ceiling / 2 + random() * ceiling / 2);
+}
+
 /** Refresh before every handshake: WebSocket does not expose a failed HTTP status. */
 export function connectHumanWs(
   session: Pick<ReturnType<typeof createHumanSession>, "refresh">,
@@ -76,11 +85,14 @@ export function connectHumanWs(
     const protocol = location.protocol === "https:" ? "wss" : "ws";
     return new WebSocket(`${protocol}://${location.host}/ws`);
   },
+  delay: (attempt: number) => number = reconnectDelay,
 ): () => void {
-  const later = (delay: number) => (run: () => void) => {
-    const timer = setTimeout(run, delay);
+  const later = (ms: number) => (run: () => void) => {
+    const timer = setTimeout(run, ms);
     return () => clearTimeout(timer);
   };
+  // Consecutive failed connections; an opened socket resets the backoff.
+  let failures = 0;
   return connectRealtime(onEvent, onLive, {
     open: (callbacks) => {
       let stopped = false;
@@ -89,7 +101,11 @@ export function connectHumanWs(
         if (stopped) return;
         const current = makeSocket();
         socket = current;
-        current.onopen = () => { if (!stopped && socket === current) callbacks.opened(); };
+        current.onopen = () => {
+          if (stopped || socket !== current) return;
+          failures = 0;
+          callbacks.opened();
+        };
         current.onmessage = (event) => { if (!stopped && socket === current) callbacks.message(event.data); };
         current.onerror = () => { /* Failed browser handshakes also emit close. */ };
         current.onclose = () => {
@@ -108,6 +124,6 @@ export function connectHumanWs(
       };
     },
     deferPresence: later(16),
-    retry: later(1500),
+    retry: (run) => later(delay(failures++))(run),
   });
 }

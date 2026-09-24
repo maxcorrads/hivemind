@@ -57,8 +57,8 @@ async function installHive(page: Page) {
   });
   await page.route("**/api/ui/session", route => json(route, { ok: true }));
   await page.route(/\/api\/ui\/(snapshot|read-state|read)(\?|$)/, route => json(route, snap));
-  await page.route("**/api/ui/mentions?*", route => json(route, {
-    readInstance: "mobile-fixture", readRevision: 0, readSeq: 3, messages: [], hasMore: false }));
+  await page.route("**/api/ui/activity?*", route => json(route, {
+    readInstance: "mobile-fixture", readRevision: 0, readSeq: 3, items: [], hasMore: false }));
   await page.route("**/api/ui/channels/*/room", route => json(route, { room: null, tasks: [], activeTaskCount: 0,
     tasksHasMore: false, nextTaskCursor: null, links: [], unmanagedBots: [] }));
   await page.route("**/api/ui/channels/*/messages*", route => {

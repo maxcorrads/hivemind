@@ -65,7 +65,8 @@ test('HTTP and Human WebSocket expose the same typed task/room contract through 
   const configured = await f.request(roomUrl, undefined, { requestId: 'wire-config', expectedRevision: 0,
     action: { type: 'configure', reason: 'Human fixture', contract: f.contract } });
   assert.equal(configured.status, 200);
-  assert.deepEqual(await f.frame<{ channelId: string }>('room', room => room.channelId === f.channel.id), { channelId: f.channel.id });
+  assert.deepEqual(await f.frame<{ channelId: string; archived: boolean }>('room', room => room.channelId === f.channel.id),
+    { channelId: f.channel.id, archived: false });
   const input = { requestId: 'wire-assign', channel: f.channel.id, worker: f.worker.agent.name,
     room: { contractVersion: 1, actionKey: 'wire-work' }, contract: f.taskContract };
   const assigned = await f.request<TaskReply>('/api/agent/tasks', f.brain.token, input);
