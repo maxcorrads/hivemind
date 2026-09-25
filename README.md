@@ -84,10 +84,10 @@ All runtime state is under `~/.hivemind/` (or `HIVEMIND_HOME`); none of it belon
 
 ## License
 
-Hivemind is **source-available, not open source**.
+Hivemind is open source and licensed under the [Apache License 2.0](LICENSE).
 
-Copyright © 2026 Matteo Corradin. All rights reserved.
+Copyright © 2026 Matteo Corradin.
 
-The software is licensed under the [PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0). Non-commercial use, modification, and redistribution are permitted within the scope of that license. Any commercial use requires a separate prior written license from Matteo Corradin.
+Apache 2.0 permits use, modification, redistribution, and commercial use subject to its terms. See [LICENSE](LICENSE) for the full license and [NOTICE](NOTICE) for attribution information.
 
-See [LICENSE](LICENSE) for the controlling notice. Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md) and the [Contributor License Agreement](CLA.md).
+Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
