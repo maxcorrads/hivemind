@@ -142,6 +142,8 @@ test('mention autocomplete: arrows move, Enter/Tab insert, Escape closes, Enter 
   const f = mount(t);
   const agents = [agent('Ada'), agent('Adrian', 'brain'), agent('Adfeed', 'bot'), agent('Bob')];
   await f.render(<Composer agents={agents} placeholder="Message" onSend={async body => { sent.push(body); return true; }} />);
+  await f.type('Hi @');
+  assert.deepEqual(f.hints().map(h => h.text), ['@Adaworker', '@Adrianbrain', '@Bobworker'], 'a bare @ offers every non-bot');
   await f.type('Hi @Ad');
   assert.deepEqual(f.hints(), [{ text: '@Adaworker', active: true }, { text: '@Adrianbrain', active: false }], 'bots are never offered');
   assert.equal(f.textarea().getAttribute('aria-activedescendant'), f.host.querySelector('[role="option"][aria-selected="true"]')!.id);
