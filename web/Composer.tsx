@@ -84,7 +84,8 @@ export function Composer({
   const onInput = (v: string) => {
     setValue(v);
     const at = v.split(/\s/).pop() ?? "";
-    if (at.startsWith("@") && at.length > 1) {
+    // A bare "@" already offers everyone; each typed letter narrows the list.
+    if (at.startsWith("@")) {
       const q = at.slice(1).toLowerCase();
       setHint(names.filter((a) => a.name.toLowerCase().startsWith(q)).slice(0, 6));
     } else setHint([]);
