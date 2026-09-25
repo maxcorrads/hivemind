@@ -31,7 +31,7 @@ export type MaintenanceResult = {
 /**
  * One maintenance pass. Retention prunes only append-only operational logs older than the window:
  * acknowledged or superseded inbox deliveries (per-message receipts and totals are kept) and Jev call logs.
- * Messages, tasks, decisions and room contracts are never deleted. Unsent uploads older than a day and
+ * Messages, tasks and room contracts are never deleted. Unsent uploads older than a day and
  * unreferenced blobs are collected (as `hivemind gc` does), then SQLite refreshes its planner statistics.
  */
 export function runMaintenance(hive: Hive, options: { retentionDays: number; now?: number }): MaintenanceResult {

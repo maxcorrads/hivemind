@@ -21,7 +21,7 @@ function fixture(t: TestContext) {
   const event = (id: string, actor: Agent, action: TaskAction) => hive.tasks.event(actor, id,
     { requestId: `e-${++n}`, expectedRevision: hive.tasks.get(actor, id).revision, action });
   const status = async () => await (await createApp(hive).request('/api/ui/nav-status')).json() as {
-    awaitingDecisions: Record<string, number>; agentWork: Record<string, AgentWork> };
+    agentWork: Record<string, AgentWork> };
   return { hive, brain, worker, assign, event, status };
 }
 
@@ -32,6 +32,7 @@ test('nav status reports a worker\'s newest open task with its latest blocker an
   f.event(older.id, f.worker, { type: 'block', needed: 'Old blocker' });
   f.event(older.id, f.worker, { type: 'accept' });
   f.event(older.id, f.worker, { type: 'block', needed: 'API contract' });
+  assert.deepEqual(Object.keys(await f.status()), ['agentWork']);
   let work = (await f.status()).agentWork;
   assert.deepEqual(work[f.worker.id]?.task, { id: older.id, channelId: older.channelId, state: 'blocked',
     objective: 'Draft the API contract', needed: 'API contract' });
@@ -52,20 +53,4 @@ test('nav status reports a worker\'s newest open task with its latest blocker an
   work = (await f.status()).agentWork;
   assert.equal(work[f.worker.id]?.task?.id, older.id, 'accepted-complete work drops out');
   assert.equal(work[f.brain.id]?.toReview, 0);
-});
-
-test('nav status counts only currently applicable awaiting decisions, per project slug', async t => {
-  const f = fixture(t);
-  const slug = f.hive.projects.listProjects()[0]!.slug;
-  assert.deepEqual((await f.status()).awaitingDecisions, { [slug]: 0 });
-  const task = f.assign('Choose a parser boundary');
-  const request = (requestId: string, extra = {}) => f.hive.decisions.create(f.brain, { requestId, taskId: task.id,
-    expectedTaskRevision: f.hive.tasks.get(f.brain, task.id).revision, question: 'Which boundary?',
-    options: [{ id: 'a', label: 'A', impact: 'x' }, { id: 'b', label: 'B', impact: 'y' }],
-    recommendation: { optionId: 'a', rationale: 'Simpler', uncertainty: 'Low' },
-    evidenceSeqs: [], artifacts: [], affectedWorkers: [f.worker.name], relatedDecisionIds: [], ...extra });
-  request('open');
-  request('expired', { requestedByAt: Date.now() - 1 });
-  assert.deepEqual((await f.status()).awaitingDecisions, { [slug]: 1 });
-  assert.throws(() => f.hive.decisions.awaitingCounts(f.brain), /Only Human/);
 });

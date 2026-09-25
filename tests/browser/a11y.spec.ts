@@ -42,7 +42,7 @@ async function install(page: Page, fixture: Partial<Fixture> = {}): Promise<Fixt
   await page.route("**/api/ui/session", route => json(route, { ok: true }));
   await page.route("**/api/ui/snapshot", route => json(route, snapshot()));
   await page.route("**/api/ui/read-state", route => json(route, snapshot()));
-  await page.route("**/api/ui/nav-status", route => json(route, { awaitingDecisions: {}, agentWork: {} }));
+  await page.route("**/api/ui/nav-status", route => json(route, { agentWork: {} }));
   await page.route("**/api/ui/read", route => json(route, snapshot()));
   await page.route("**/api/ui/activity?*", async route => {
     if (state.holdMentions) await state.holdMentions;
@@ -53,7 +53,6 @@ async function install(page: Page, fixture: Partial<Fixture> = {}): Promise<Fixt
     unmanagedBots: [] };
   await page.route("**/api/ui/channels/*/room", route => json(route, room));
   await page.route("**/api/ui/channels/*/tasks", route => json(route, { items: [], hasMore: false }));
-  await page.route("**/api/ui/decisions?*", route => json(route, { items: [], awaiting: 0, warning: "" }));
   await page.route("**/api/ui/adaptive-routing*", route => json(route, { executions: [], events: [], state: null }));
   await page.route("**/api/ui/channels/*/messages*", async route => {
     const id = decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-2) ?? "");

@@ -39,7 +39,7 @@ function fixture(t: TestContext, options: { jev?: boolean } = {}) {
   return { hive, app, human, brain, other, worker, room, ui, remove };
 }
 
-test('removing a brain keeps its history, closes its decision and Jev request, and its worker can still submit', async t => {
+test('removing a brain keeps its history, closes its Jev request, and its worker can still submit', async t => {
   const f = fixture(t, { jev: true });
   const { hive, brain, other, worker, room } = f;
   // A Jev request owned by the brain: Human mentions it in a room both brains share.
@@ -48,14 +48,9 @@ test('removing a brain keeps its history, closes its decision and Jev request, a
   const root = request.json.message as Message;
   const executions = () => hive.adaptiveTopology.store.rootedExecutions(root.id).map(row => JSON.parse(String(row.snapshot)) as AdaptiveExecutionState);
   assert.deepEqual(executions().map(state => state.brainId), [brain.agent.id], 'the request is recorded for its brain at once');
-  // An open task and a pending decision request, and chat history.
+  // An open task and chat history.
   const task = hive.tasks.assign(brain.agent, { requestId: 'task', worker: worker.agent.name, channel: room.id, contract }).task;
   hive.tasks.event(worker.agent, task.id, { requestId: 'accept', expectedRevision: task.revision, action: { type: 'accept' } });
-  const decision = hive.decisions.create(brain.agent, { requestId: 'decision', taskId: task.id,
-    expectedTaskRevision: hive.tasks.get(brain.agent, task.id).revision, question: 'Which grammar?',
-    options: [{ id: 'peg', label: 'PEG', impact: 'Rewrite' }, { id: 'lr', label: 'LR', impact: 'Keep' }],
-    recommendation: { optionId: 'lr', rationale: 'Smaller change', uncertainty: 'Low' },
-    evidenceSeqs: [], artifacts: [], affectedWorkers: [worker.agent.name], relatedDecisionIds: [] }).decision;
   const said = hive.messages.postMessage(brain.agent, { channel: room.id, body: 'Remember the edge cases.' });
   const waiting = hive.delivery.wait(brain.agent, 4_000).then(() => 'ended', () => 'ended');
 
@@ -82,17 +77,7 @@ test('removing a brain keeps its history, closes its decision and Jev request, a
   const history = hive.messageQueries.listMessages(f.human, room.id).messages;
   assert.equal(history.find(message => message.id === said.id)?.authorName, `${brain.agent.name} (removed)`);
   const general = hive.messageQueries.listMessages(f.human, 'general').messages.at(-1)!;
-  assert.match(general.body, new RegExp(`Human removed ${brain.agent.name} from the hive\\. 1 pending decision request withdrawn; 1 task ${brain.agent.name} assigned stay open`));
-
-  // The decision is withdrawn with the reason and stays in history; Human can no longer answer it.
-  const closed = hive.decisions.get(f.human, decision.id);
-  assert.equal(closed.state, 'withdrawn');
-  assert.equal(closed.withdrawn?.reason, `${brain.agent.name} was removed from the hive`);
-  assert.equal(closed.requesterName, `${brain.agent.name} (removed)`);
-  assert.throws(() => hive.decisions.answer(f.human, decision.id, { requestId: 'late', expectedRevision: closed.revision, body: 'LR' }), status(409));
-  // A Human reply in the decision thread is plain chat addressed to the remaining (live) recipients.
-  const reply = hive.messages.postMessage(f.human, { channel: room.id, threadId: decision.id, body: 'Noted.' });
-  assert.deepEqual(reply.recipientIds, [worker.agent.id]);
+  assert.match(general.body, new RegExp(`Human removed ${brain.agent.name} from the hive\\. 1 task ${brain.agent.name} assigned stay open`));
 
   // The Jev request is completed and audited; a reply in its thread goes to the remaining brain.
   const execution = executions();
@@ -116,7 +101,6 @@ test('removing a brain keeps its history, closes its decision and Jev request, a
   const submitted = hive.tasks.event(worker.agent, task.id, { requestId: 'result', expectedRevision: current.revision, action: { type: 'result', result } });
   assert.equal(submitted.task.state, 'result_submitted');
   assert.equal(submitted.task.assignerName, `${brain.agent.name} (removed)`);
-  assert.equal(countRows(hive, 'decision_requests', { requester_id: brain.agent.id }), 1, 'decision history is kept');
 });
 
 test('removing a worker cancels its unfinished tasks, keeps routing evidence and lets the brain reassign', async t => {

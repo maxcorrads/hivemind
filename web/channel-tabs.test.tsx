@@ -35,7 +35,7 @@ async function until(check: () => boolean, message: string) {
   assert.ok(check(), message);
 }
 
-test('channel tabs, member stack, one-click decisions and a mismatched thread link redirecting to its channel', async t => {
+test('channel tabs, member stack and a mismatched thread link redirecting to its channel', async t => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'channel-tabs-'));
   const hive = new Hive(path.join(dir, 'hive.db'));
   const human = hive.identity.getAgent('human'), brain = hive.identity.join({ role: 'brain' }).agent;
@@ -44,11 +44,6 @@ test('channel tabs, member stack, one-click decisions and a mismatched thread li
   const task = hive.tasks.assign(brain, { requestId: 'tab-task', worker: worker.name, channel: room.id,
     contract: { objective: 'Pick the parser boundary', scope: ['src/parser'], nonGoals: [], acceptanceCriteria: ['Decision recorded'],
       dependencies: [], evidenceSeqs: [] } }).task;
-  const decision = hive.decisions.create(brain, { requestId: 'tab-decision', taskId: task.id, expectedTaskRevision: task.revision,
-    question: 'Which compatibility boundary?', options: [{ id: 'strict', label: 'Strict', impact: 'Reject old payloads' },
-      { id: 'compat', label: 'Compatible', impact: 'Keep old payloads' }],
-    recommendation: { optionId: 'compat', rationale: 'Lower migration risk', uncertainty: 'Medium' },
-    evidenceSeqs: [], artifacts: [], affectedWorkers: [worker.name], relatedDecisionIds: [] }).decision;
   const dm = hive.channels.openDm(human, brain.name);
   // #224: a task thread of #engineering opened next to an unrelated DM.
   window.happyDOM.setURL(`http://localhost/#/c/${dm.id}/t/${task.id}`);
@@ -59,7 +54,7 @@ test('channel tabs, member stack, one-click decisions and a mismatched thread li
   globalThis.WebSocket = BrowserSocket as unknown as typeof WebSocket;
   const host = document.createElement('div'); document.body.append(host);
   const root = createRoot(host);
-  const events = ['message', 'task', 'decision', 'room', 'thread', 'channel'] as const;
+  const events = ['message', 'task', 'room', 'thread', 'channel'] as const;
   const listeners = events.map(type => {
     const listener = (payload: unknown) => BrowserSocket.current?.event(type, payload);
     hive.bus.on(type, listener); return listener;
@@ -82,8 +77,8 @@ test('channel tabs, member stack, one-click decisions and a mismatched thread li
   assert.equal(summary.querySelectorAll('.avatar').length, 3);
   const tabs = () => [...host.querySelectorAll<HTMLButtonElement>('[role=tab]')];
   const tab = (name: string) => tabs().find(item => item.textContent?.startsWith(name))!;
-  await until(() => tab('Tasks').textContent === 'Tasks1' && tab('Decisions').textContent === 'Decisions1', 'tabs count open work');
-  assert.deepEqual(tabs().map(item => item.textContent?.replace(/\d+$/, '')), ['Messages', 'Tasks', 'Contract', 'Decisions']);
+  await until(() => tab('Tasks').textContent === 'Tasks1', 'tabs count open work');
+  assert.deepEqual(tabs().map(item => item.textContent?.replace(/\d+$/, '')), ['Messages', 'Tasks', 'Contract']);
   assert.equal(tab('Messages').getAttribute('aria-selected'), 'true');
   assert.ok(host.querySelector('main .composer'), 'Messages shows the stream and composer');
   assert.equal(host.querySelector<HTMLElement>('main .channel-messages')!.hidden, false);
@@ -93,17 +88,6 @@ test('channel tabs, member stack, one-click decisions and a mismatched thread li
   const row = host.querySelector<HTMLButtonElement>('.task-list button')!;
   assert.match(row.textContent!, /sent/); assert.match(row.textContent!, /Pick the parser boundary/);
   assert.equal(host.querySelector<HTMLElement>('main .channel-messages')!.hidden, true, 'Messages hides but keeps the composer draft');
-
-  await act(async () => tab('Decisions').click());
-  const option = (label: string) => [...host.querySelectorAll<HTMLButtonElement>('main .decision-options button')]
-    .find(button => button.textContent?.includes(label))!;
-  assert.match(option('Compatible').textContent!, /Recommended/);
-  await act(async () => option('Compatible').click());
-  const confirm = [...host.querySelectorAll<HTMLButtonElement>('main button')].find(button => button.textContent === 'Confirm')!;
-  await act(async () => confirm.click());
-  await until(() => hive.decisions.get(human, decision.id).state === 'answered', 'confirm answers the decision');
-  assert.equal(hive.decisions.get(human, decision.id).answer!.body, 'compat: Compatible');
-  await until(() => tab('Decisions').textContent === 'Decisions', 'the answered decision leaves the awaiting count');
 
   await act(async () => tab('Contract').click());
   assert.ok(host.querySelector('main .room-panel'), 'the room contract lives in its own tab');

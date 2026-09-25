@@ -2,16 +2,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createRequestGate } from "../src/shared/read-client.ts";
 import { api, type NavStatus } from "./api.ts";
 
-/** Live events that can change a Decisions badge or a roster status line. */
-const REFRESH_ON = new Set(["hello", "task", "decision", "room", "project"]);
+/** Live events that can change a roster status line. */
+const REFRESH_ON = new Set(["hello", "task", "room", "project"]);
 
 /**
- * Decisions badges and agent status lines. Loaded once, then refreshed
+ * Agent status lines. Loaded once, then refreshed
  * (coalesced) after the live events that can change them. A failed refresh
  * keeps the last known values: they are hints, never authority.
  */
 export function useNavStatus(delay = 150) {
-  const [status, setStatus] = useState<NavStatus>({ awaitingDecisions: {}, agentWork: {} });
+  const [status, setStatus] = useState<NavStatus>({ agentWork: {} });
   const gate = useRef(createRequestGate());
   const timer = useRef<number | null>(null);
 

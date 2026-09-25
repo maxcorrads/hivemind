@@ -10,7 +10,7 @@ import { backdate, countRows, countTables, insertRows, readValue } from './test-
 
 const DAY = 86_400_000;
 /** What retention must never delete (#217). */
-const DURABLE = ['messages', 'threads', 'task_records', 'task_events', 'decision_requests', 'decision_mutations', 'rooms', 'room_events',
+const DURABLE = ['messages', 'threads', 'task_records', 'task_events', 'rooms', 'room_events',
   'inbox_receipts', 'inbox_receipt_totals'] as const;
 
 async function fixture(t: TestContext) {
@@ -28,12 +28,7 @@ async function fixture(t: TestContext) {
       coordinator: brain.name, participants: [{ name: a.name, boundary: 'A' }, { name: b.name, boundary: 'B' }], completion: ['Done'], originTaskId: null } } });
   const task = hive.tasks.assign(brain, { requestId: 'task', worker: a.name, channel: room.id,
     contract: { objective: 'Pick a boundary', scope: ['src'], nonGoals: [], acceptanceCriteria: ['Decided'], dependencies: [], evidenceSeqs: [] } }).task;
-  const decision = hive.decisions.create(brain, { requestId: 'decision', taskId: task.id,
-    expectedTaskRevision: hive.tasks.get(brain, task.id).revision, question: 'Which boundary?',
-    options: [{ id: 'x', label: 'X', impact: 'x' }, { id: 'y', label: 'Y', impact: 'y' }],
-    recommendation: { optionId: 'x', rationale: 'Simple', uncertainty: 'Low' }, evidenceSeqs: [], artifacts: [],
-    affectedWorkers: [a.name, b.name], relatedDecisionIds: [] }).decision;
-  const answered = hive.decisions.answer(human, decision.id, { requestId: 'answer', expectedRevision: decision.revision, body: 'Take X.' });
+  const answered = hive.messages.postMessage(human, { channel: room.id, body: 'Take X.', recipients: [a.name, b.name] });
   // Worker A receives and acknowledges its mail; worker B is offered its mail and leaves it pending.
   const sessionA = hive.delivery.openInboxSession(a, crypto.randomUUID());
   for (;;) {
@@ -47,17 +42,17 @@ async function fixture(t: TestContext) {
     offered_at: 1, lease_until: 2, acknowledged_at: null, superseded_by: pending.id }]);
   insertRows(hive, 'jev_calls', [{ id: 'jev-old', route_id: 'route-old', project_id: room.projectId, channel_id: room.id,
     execution_id: 'execution', created_at: 1, summary: '{}' }]);
-  const receipts = () => hive.decisions.get(human, decision.id).delivery.map(item => [item.name, item.state] as const);
+  const receipts = () => [a, b].map(worker => [worker.name, hive.inbox.receiptState(worker.id, answered.seq)] as const);
   assert.deepEqual(new Map(receipts()).get(a.name), 'acknowledged');
   // Everything is older than the window.
-  for (const [table, column] of [['messages', 'created_at'], ['inbox_deliveries', 'offered_at'], ['decision_requests', 'created_at']] as const)
+  for (const [table, column] of [['messages', 'created_at'], ['inbox_deliveries', 'offered_at']] as const)
     backdate(hive, table, column);
   backdate(hive, 'inbox_deliveries', 'acknowledged_at', { agent_id: a.id }, 1);
   assert.equal(new Map(receipts()).get(b.name), 'offered');
-  return { hive, human, a, b, room, contracted, task, decision, answered, pending, receipts, dir };
+  return { hive, human, a, b, room, contracted, task, answered, pending, receipts, dir };
 }
 
-test('retention prunes only finished inbox deliveries and Jev calls; messages, tasks, decisions and contracts stay', async t => {
+test('retention prunes only finished inbox deliveries and Jev calls; messages, tasks and contracts stay', async t => {
   const f = await fixture(t);
   const durable = countTables(f.hive, DURABLE), receipts = f.receipts(), room = f.hive.rooms.view(f.human, f.contracted.id);
   const history = f.hive.rooms.history(f.human, f.contracted.id), task = f.hive.tasks.get(f.human, f.task.id);
@@ -70,12 +65,12 @@ test('retention prunes only finished inbox deliveries and Jev calls; messages, t
   assert.equal(countRows(f.hive, 'inbox_deliveries'), 1);
   assert.equal(readValue(f.hive, 'inbox_deliveries', 'id'), f.pending.id, 'the live delivery is never pruned');
   assert.equal(countRows(f.hive, 'jev_calls'), 0);
-  // Receipts survive the ledger: decision delivery stages and the Human views are unchanged.
+  // Receipts survive the ledger: per-recipient delivery stages and the Human views are unchanged.
   assert.deepEqual(f.receipts(), receipts);
   assert.deepEqual(f.hive.rooms.view(f.human, f.contracted.id), room);
   assert.deepEqual(f.hive.rooms.history(f.human, f.contracted.id), history);
   assert.deepEqual(f.hive.tasks.get(f.human, f.task.id), task);
-  assert.equal(f.hive.messageQueries.getMessageById(f.answered.message!.id).body, 'Take X.');
+  assert.equal(f.hive.messageQueries.getMessageById(f.answered.id).body, 'Take X.');
   // The pending delivery can still be acknowledged.
   f.hive.delivery.acknowledgeInbox(f.b, f.pending.sessionId, f.pending.id);
   assert.equal(new Map(f.receipts()).get(f.b.name), 'acknowledged');

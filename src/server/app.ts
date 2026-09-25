@@ -46,13 +46,12 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     return c.json({ error: "Internal server error" }, 500);
   });
   app.get("/api/health", c => c.json({ ok: true, name: "hivemind" }));
-  /** The channel and root of a thread id (a message, task or decision id); null when the id is unknown. */
+  /** The channel and root of a thread id (a message or task id); null when the id is unknown. */
   const threadOwner = (id: string): { channelId: string; threadId: string } | null => {
     const ref = hive.messageQueries.messageRef(id);
     if (ref) return { channelId: ref.channelId, threadId: ref.threadId ?? ref.id };
     const human = hive.identity.getAgent('human');
     if (hive.tasks.has(id)) return { channelId: hive.tasks.get(human, id).channelId, threadId: id };
-    if (hive.decisions.has(id)) return { channelId: hive.decisions.get(human, id).channelId, threadId: id };
     return null;
   };
   const ui = new Hono();
@@ -117,15 +116,8 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       telegram: { running: Boolean(hooks.telegramRunning?.()), configured: publicTelegramView(hive.home).configured, ...hive.telegramAdmin.health() },
       jev: { enabled: adaptiveRoutingPublic(hive.home).enabled } });
   });
-  // Sidebar badges and roster status lines, refreshed on task and decision events.
-  ui.get("/nav-status", c => {
-    const human = hive.identity.getAgent("human");
-    const awaiting = hive.decisions.awaitingCounts(human);
-    return c.json({
-      awaitingDecisions: Object.fromEntries(hive.projects.listProjects().map(project => [project.slug, awaiting[project.id] ?? 0])),
-      agentWork: hive.tasks.workStatus(),
-    });
-  });
+  // Roster status lines, refreshed on task events.
+  ui.get("/nav-status", c => c.json({ agentWork: hive.tasks.workStatus() }));
   ui.get("/read-state", c => c.json(hive.reads.readSnapshot(hive.identity.getAgent("human"))));
   ui.get("/telegram", c => {
     hive.identity.getAgent("human");
@@ -235,8 +227,8 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const human = hive.identity.getAgent('human'), id = c.req.param('id'), threadId = c.req.query('threadId') || null;
     const after = c.req.query('afterSeq'), before = c.req.query('beforeSeq');
     const ch = hive.channels.getChannel(id);
-    // A thread opened under the wrong channel (a stale or hand-edited link) must not show another channel's task
-    // or decision: name the owning channel so the UI can redirect there.
+    // A thread opened under the wrong channel (a stale or hand-edited link) must not show another channel's task:
+    // name the owning channel so the UI can redirect there.
     const owner = threadId ? threadOwner(threadId) : null;
     if (owner && owner.channelId !== ch.id) {
       return hive.channels.canSeeChannel(human, hive.channels.getChannel(owner.channelId))
@@ -250,9 +242,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       cursors: listed.cursors, threads: hive.messageQueries.threadsInChannel(ch.id, roots).map(thread => threadResponseSchema.parse(thread)),
       replyCounts: hive.messageQueries.replyCounts(ch.id, roots), snapshotSeq: hive.messageQueries.latestSeq(ch.id),
       firstUnreadSeq: threadId ? undefined : hive.reads.firstUnreadSeq(human, ch.id),
-      task: threadId && hive.tasks.has(threadId) ? hive.tasks.view(human, threadId) : undefined,
-      decision: threadId && hive.decisions.has(threadId) ? hive.decisions.get(human, threadId) : undefined,
-      decisions: threadId && hive.tasks.has(threadId) ? hive.decisions.forTask(human, threadId) : undefined });
+      task: threadId && hive.tasks.has(threadId) ? hive.tasks.view(human, threadId) : undefined });
   });
   ui.get('/channels/:id/tasks', c => c.json(hive.tasks.listForChannel(hive.identity.getAgent('human'), c.req.param('id'))));
   ui.post("/channels", async c => {
@@ -338,12 +328,6 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   ui.post('/tasks/:id/routing-override', async c => c.json(hive.routing.override(hive.identity.getAgent('human'), c.req.param('id'), await requestJson(c.req.raw))));
   ui.get('/tasks/:id/timeline', c => c.json({ timeline: hive.timeline.traceForTask(hive.identity.getAgent('human'), c.req.param('id')) }));
   ui.get('/tasks/:id/timeline/export', c => c.json({ fixture: hive.timeline.exportTask(hive.identity.getAgent('human'), c.req.param('id')) }));
-  ui.get('/decisions', c => {
-    const project = hive.projects.getProjectBySlug(String(c.req.query('project') ?? ''));
-    return c.json(hive.decisions.listHuman(hive.identity.getAgent('human'), project.id, c.req.query('includeClosed') !== '0'));
-  });
-  ui.get('/decisions/:id', c => c.json({ decision: hive.decisions.get(hive.identity.getAgent('human'), c.req.param('id')) }));
-  ui.post('/decisions/:id/answer', async c => c.json(hive.decisions.answer(hive.identity.getAgent('human'), c.req.param('id'), await requestJson(c.req.raw))));
 
   const agent = new Hono();
   agent.use('*', async (c, next) => {
@@ -408,10 +392,6 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   agent.get('/messages/:seq', c => c.json({ message: hive.messageQueries.getVisibleMessage(c.get('me'), Number(c.req.param('seq'))) }));
   agent.post('/messages/expand', async c => c.json(hive.messageQueries.expandDigest(c.get('me'), await requestJson(c.req.raw))));
   agent.post('/tasks', async c => c.json(await assignAdaptiveTask(hive, c.get('me'), await requestJson(c.req.raw))));
-  agent.post('/decisions', async c => c.json(hive.decisions.create(c.get('me'), await requestJson(c.req.raw))));
-  agent.get('/decisions/:id', c => c.json({ decision: hive.decisions.get(c.get('me'), c.req.param('id')) }));
-  agent.get('/tasks/:id/decisions', c => c.json({ decisions: hive.decisions.forTask(c.get('me'), c.req.param('id')) }));
-  agent.post('/decisions/:id/events', async c => c.json(hive.decisions.event(c.get('me'), c.req.param('id'), await requestJson(c.req.raw))));
   agent.get('/channels/:id/room', c => c.json(hive.rooms.view(c.get('me'), c.req.param('id'), c.req.query('beforeTask'))));
   agent.get('/channels/:id/room/history', c => c.json({ history: hive.rooms.history(c.get('me'), c.req.param('id'), Number(c.req.query('before') ?? Number.MAX_SAFE_INTEGER)) }));
   agent.post('/channels/:id/room', async c => c.json(await mutateAdaptiveRoom(hive, c.get('me'), c.req.param('id'), await requestJson(c.req.raw))));

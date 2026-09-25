@@ -88,11 +88,6 @@ export class IdentityService implements AgentDirectory {
     return agent && agent.removedAt === undefined ? agent : null;
   }
 
-  removedAmong(ids: string[]): Set<string> {
-    return new Set((this.db.prepare(`SELECT id FROM agents WHERE removed_at IS NOT NULL
-      AND id IN (SELECT value FROM json_each(?))`).all(JSON.stringify([...new Set(ids)])) as { id: string }[]).map(row => row.id));
-  }
-
   /** Ids of a project's workers (removed ones excluded). */
   projectWorkerIds(projectId: string): string[] {
     return (this.db.prepare("SELECT id FROM agents WHERE project_id = ? AND role = 'worker' AND removed_at IS NULL").all(projectId) as { id: string }[])

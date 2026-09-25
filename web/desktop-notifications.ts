@@ -1,5 +1,4 @@
 import { useCallback, useRef, useState } from "react";
-import type { DecisionView } from "../src/shared/decisions.ts";
 import type { Channel, Message } from "../src/shared/types.ts";
 import { isHumanDm } from "./nav-model.ts";
 import type { Sel } from "./selection.ts";
@@ -10,10 +9,10 @@ export type DesktopNotice = { title: string; body: string; tag: string; target: 
 
 /**
  * What a live event should tell the Human while the tab is in the background:
- * a message that mentions or is addressed to the Human, a message in one of
- * the Human's DMs, or a newly requested decision. Null for everything else.
+ * a message that mentions or is addressed to the Human, or a message in one of
+ * the Human's DMs. Null for everything else.
  */
-export function noticeFor(event: { type: string; payload: unknown }, channels: Channel[], seenDecisions: Set<string>): DesktopNotice | null {
+export function noticeFor(event: { type: string; payload: unknown }, channels: Channel[]): DesktopNotice | null {
   if (event.type === "message") {
     const message = event.payload as Message;
     if (message.authorId === "human" || message.kind !== "chat") return null;
@@ -24,13 +23,6 @@ export function noticeFor(event: { type: string; payload: unknown }, channels: C
     return { title: dm || !channel ? message.authorName : `${message.authorName} in #${channel.name}`,
       body: body || "(attachment)", tag: message.id,
       target: { kind: "channel", id: message.channelId, thread: message.threadId ?? undefined } };
-  }
-  if (event.type === "decision") {
-    const decision = event.payload as DecisionView;
-    if (decision.state !== "awaiting_input" || decision.revision !== 1 || seenDecisions.has(decision.id)) return null;
-    seenDecisions.add(decision.id);
-    return { title: `Decision needed · ${decision.requesterName}`, body: decision.question, tag: `decision:${decision.id}`,
-      target: { kind: "channel", id: decision.channelId, thread: decision.id } };
   }
   return null;
 }
@@ -54,7 +46,6 @@ export function useDesktopNotifications(channels: Channel[], go: (next: Sel) => 
   channelsRef.current = channels;
   const goRef = useRef(go);
   goRef.current = go;
-  const seen = useRef(new Set<string>());
   const enabled = optIn && permission === "granted";
 
   const toggle = useCallback(async () => {
@@ -71,7 +62,7 @@ export function useDesktopNotifications(channels: Channel[], go: (next: Sel) => 
 
   const onLiveEvent = useCallback((event: { type: string; payload: unknown }) => {
     if (!enabled) return;
-    const notice = noticeFor(event, channelsRef.current, seen.current);
+    const notice = noticeFor(event, channelsRef.current);
     if (!notice || (document.visibilityState === "visible" && document.hasFocus())) return;
     const shown = new Notification(notice.title, { body: notice.body, tag: notice.tag, icon: "/icon.png" });
     shown.onclick = () => { window.focus(); goRef.current(notice.target); shown.close(); };

@@ -46,7 +46,6 @@ The checked-in weights come from five recent Node 24 logs and retain the determi
 | `src/server/inbox-bounds.test.ts` | 3.75 s |
 | `src/server/dependency-concurrently.test.ts` | 2.74 s |
 | `src/server/query-contracts.test.ts` | 2.49 s |
-| `src/server/decisions.test.ts` | 2.39 s |
 | `src/server/history-contracts.test.ts` | 2.00 s |
 
 These are scheduling weights, not claims that they capture every millisecond in a file. Unmapped/new integration files receive a deterministic fallback weight and are still assigned to exactly one shard.

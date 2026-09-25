@@ -13,7 +13,6 @@ export type AgentLifecycleDeps = Core & {
   readonly files: { deleteUnsentBy(agentId: string): void; collectUnusedBlobs(): number };
   readonly waiters: { evict(agentId: string): void };
   readonly tasks: { closeForRemovedAgent(agent: Agent): { cancelled: number; unreviewed: number } };
-  readonly decisions: { withdrawForRemovedBrain(brain: Agent): number };
   readonly adaptiveTopology: { closeBrainExecutions(brain: Agent): void };
 };
 
@@ -23,10 +22,10 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
  * How an agent leaves the hive (#215). Both operations run inside one transaction: the caller's (project deletion) or
  * their own (removal). Events and waiter evictions happen only after the commit.
  *
- * - Removal keeps a tombstone: the agent row stays (marked `removed_at`) so its messages, tasks, decisions and routing
- *   outcomes keep their author. The agent can no longer authenticate, join, resume, receive mail or be assigned; its
- *   open work is closed: tasks assigned to it are cancelled, its pending decision requests withdrawn and its Jev
- *   executions completed. Tasks it assigned stay open so their workers can still report and submit.
+ * - Removal keeps a tombstone: the agent row stays (marked `removed_at`) so its messages, tasks and routing outcomes
+ *   keep their author. The agent can no longer authenticate, join, resume, receive mail or be assigned; its open work
+ *   is closed: tasks assigned to it are cancelled and its Jev executions completed. Tasks it assigned stay open so
+ *   their workers can still report and submit.
  * - Project deletion purges: the project's agents are deleted along with everything else the project scoped.
  */
 export class AgentLifecycle {
@@ -36,22 +35,20 @@ export class AgentLifecycle {
 
   removeAgent(actor: Agent, name: string): Agent {
     if (actor.role !== "human") throw new HiveError(403, "Only Human can remove agents");
-    const { storage, identity, tasks, decisions, adaptiveTopology, channels, messages, bus } = this.deps;
+    const { storage, identity, tasks, adaptiveTopology, channels, messages, bus } = this.deps;
     const removed = storage.transaction(() => {
       const target = identity.getAgentByName(name);
       if (!target) throw new HiveError(404, `No agent named ${name}`);
       if (target.id === HUMAN_ID || target.role === "human") throw new HiveError(403, "Cannot remove Human");
       this.detach(target.id);
-      // Tombstone first, so the task and decision views published below already label the agent as removed.
+      // Tombstone first, so the task views published below already label the agent as removed.
       identity.markRemoved(target.id, now());
       const work = tasks.closeForRemovedAgent(target);
-      const withdrawn = target.role === "brain" ? decisions.withdrawForRemovedBrain(target) : 0;
       if (target.role === "brain") adaptiveTopology.closeBrainExecutions(target);
       const general = target.projectId ? channels.generalChannelId(target.projectId) : null;
       if (general) {
         const notes = [
           work.cancelled ? `${plural(work.cancelled, "unfinished task", "unfinished tasks")} assigned to ${target.name} cancelled` : "",
-          withdrawn ? `${plural(withdrawn, "pending decision request", "pending decision requests")} withdrawn` : "",
           work.unreviewed ? `${plural(work.unreviewed, "task", "tasks")} ${target.name} assigned stay open: their workers can still report and submit, but ${target.name} will not review` : "",
         ].filter(Boolean);
         messages.postSystem(general, `${actor.name} removed ${target.name} from the hive.${notes.length ? ` ${notes.join("; ")}.` : ""}`);

@@ -10,7 +10,6 @@ Status reconciled on 2026-09-22 against `dc9323c650530e4d58be6dc15f2fbf7816c3aca
 | Task/claim/worker coordination | #26/#85, #28/#92, #30/#94, #31/#95 | Workload-specific benefit belongs in #29. |
 | Causal timeline/replay | #32/#101 and follow-ups; #32 closed | Do not describe it as an unimplemented feature. |
 | Collaboration rooms | #33/#85; selected as a Phase 2 option | Compare room versus DM where direct peer clarification is genuinely necessary. Human already chose to retain rooms as an optional mode. |
-| Human decision queue | #34/#100 and paired protocol #124 | Real Human evaluation explicitly deferred by Human; no synthetic Human results. |
 | Jev Phase 1/2 | #120/#126 and #128/#129 | Live provider integration smoke, per-attempt overhead, matched quality/cost/latency and confidence calibration. |
 | Stable release | #73 (0.2.0), draft | Publication requires a separate explicit Human decision. |
 

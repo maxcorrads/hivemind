@@ -23,10 +23,9 @@ export type MentionPage = ReadStamp & {
 /**
  * Why a message is For you. `direct`: in a DM with the reader; `mention`: names or
  * addresses the reader; `thread`: a reply after the reader took part in the thread;
- * `decision`: in the thread of a Human decision request (Human only); `task`: a task
- * event addressed to the reader.
+ * `task`: a task event addressed to the reader.
  */
-export const ACTIVITY_REASONS = ["direct", "mention", "thread", "decision", "task"] as const;
+export const ACTIVITY_REASONS = ["direct", "mention", "thread", "task"] as const;
 export type ActivityReason = typeof ACTIVITY_REASONS[number];
 
 /** One For you entry with its read state from the server. */

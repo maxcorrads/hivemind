@@ -2,7 +2,6 @@ import { useCallback, useMemo } from "react";
 import type { Agent, Message, ThreadStatus } from "../src/shared/types.ts";
 import { api, type ChannelPayload } from "./api.ts";
 import { Composer } from "./Composer.tsx";
-import { DecisionCard } from './DecisionQueue.tsx';
 import { channelTitle, STATUSES } from "./labels.ts";
 import { BackButton } from "./MobileNav.tsx";
 import { MessageRow } from "./MessageRow.tsx";
@@ -14,18 +13,17 @@ import { TaskCard, TaskChip } from './TaskCard.tsx';
 import type { useSend } from "./use-send.ts";
 import type { ThreadPane } from "./use-thread-pane.ts";
 
-/** The open side thread: status or task state, decision card, paged replies and the reply composer. */
-export function ThreadAside({ channelId, threadId, threadPane, thread, onClose, onDecisionAnswered, roomAgents, compose }: {
+/** The open side thread: status or task state, paged replies and the reply composer. */
+export function ThreadAside({ channelId, threadId, threadPane, thread, onClose, roomAgents, compose }: {
   channelId: string;
   threadId: string;
   threadPane: ChannelPayload;
   thread: ThreadPane;
   onClose: () => void;
-  onDecisionAnswered: () => void;
   roomAgents: Agent[];
   compose: ReturnType<typeof useSend>;
 }) {
-  const { threadStream, setThreadPane, loadThread, onThreadMessage } = thread;
+  const { threadStream, setThreadPane, onThreadMessage } = thread;
   const onReact = useCallback((m: Message, emoji: string) => {
     void api.react(m.seq, emoji, !m.reactions?.some(reaction => reaction.emoji === emoji && reaction.mine))
       .then((r) => onThreadMessage(r.message));
@@ -63,12 +61,7 @@ export function ThreadAside({ channelId, threadId, threadPane, thread, onClose, 
       <div className="stream" role="log" aria-label="Thread replies" ref={threadStream} onScroll={() => {
         if (isReadingHistory(threadStream.current)) setThreadPane((current) => current ? holdLivePane(current) : current);
       }}>
-        {threadPane.task && <TaskCard task={threadPane.task} decisions={threadPane.decisions} />}
-        {threadPane.decision && <DecisionCard decision={threadPane.decision}
-          onAnswered={() => {
-            onDecisionAnswered();
-            loadThread(threadPane.decision!.channelId, threadPane.decision!.id).catch(() => undefined);
-          }} />}
+        {threadPane.task && <TaskCard task={threadPane.task} />}
         {threadPane.hasOlder && (
           <button type="button" className="older" onClick={() => thread.loadEarlier(threadPane, channelId, threadId)}>
             Load earlier replies

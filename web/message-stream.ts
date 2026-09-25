@@ -33,7 +33,7 @@ export function dayLabel(at: number, now = Date.now(), locale?: string): string 
 
 /** Only plain chat can join a group: cards, system rows and control messages always stand alone. */
 function groupable(message: Message): boolean {
-  return message.kind === "chat" && !message.taskEvent && !isDecisionRequest(message);
+  return message.kind === "chat" && !message.taskEvent;
 }
 
 /**
@@ -62,25 +62,4 @@ export function streamRows(messages: Message[], { firstUnreadSeq = null, now = D
     previous = message;
   }
   return rows;
-}
-
-export type DecisionSummary = { question: string; from: string | null; deadline: string | null };
-
-/**
- * A Human decision request posted by the server (see `decisionBody`). The thread's DecisionCard is the
- * authority; this only chooses the compact rendering, so a look-alike chat message gains nothing.
- */
-export function isDecisionRequest(message: Message): boolean {
-  return message.kind === "chat" && message.eventType === "question" && message.threadId === null &&
-    message.body.startsWith("Decision needed · task ");
-}
-
-export function decisionSummary(body: string): DecisionSummary {
-  const field = (name: string) => body.split("\n").find((line) => line.startsWith(`${name}: `))?.slice(name.length + 2).trim() || null;
-  const deadline = field("Requested by");
-  return {
-    question: field("Question") ?? body.split("\n")[0]!,
-    from: field("From"),
-    deadline: deadline && deadline !== "no deadline" ? deadline : null,
-  };
 }

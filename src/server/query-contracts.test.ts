@@ -223,47 +223,6 @@ for (const compact of [false, true]) {
   });
 }
 
-function decisionFixture(t: TestContext) {
-  const { hive, human, project } = setup(t);
-  const brain = hive.identity.join({ role: "brain", project: project.slug }).agent;
-  const workers = [0, 1].map(() => hive.identity.join({ role: "worker", seniority: "mid", project: project.slug }).agent);
-  const room = hive.channels.createChannel(brain, { name: "decision-budget", type: "private", memberNames: workers.map(w => w.name) });
-  const task = hive.tasks.assign(brain, { requestId: "budget-task", worker: workers[0]!.name, channel: room.id,
-    contract: { objective: "Budget", scope: ["src"], nonGoals: [], acceptanceCriteria: ["Done"], dependencies: [], evidenceSeqs: [] } }).task;
-  let serial = 0;
-  const add = (count: number) => {
-    for (let i = 0; i < count; i++) {
-      const made = hive.decisions.create(brain, { requestId: `budget-${++serial}`, taskId: task.id,
-        expectedTaskRevision: hive.tasks.get(brain, task.id).revision, question: `Question ${serial}?`,
-        options: [{ id: "a", label: "A", impact: "a" }, { id: "b", label: "B", impact: "b" }],
-        recommendation: { optionId: "a", rationale: "Simple", uncertainty: "Low" }, evidenceSeqs: [], artifacts: [],
-        affectedWorkers: workers.map(w => w.name), relatedDecisionIds: [] }).decision;
-      // Every other decision is answered, so its view carries per-recipient receipts.
-      if (serial % 2 === 0) hive.decisions.answer(human, made.id, { requestId: `answer-${serial}`, expectedRevision: made.revision, body: "Take A." });
-    }
-  };
-  return { hive, human, project: room.projectId, add };
-}
-
-test("the Human decision queue reads a constant number of statements however many decisions it shows", (t) => {
-  const f = decisionFixture(t);
-  f.add(4);
-  const small = record(t, f.hive);
-  assert.equal(f.hive.decisions.listHuman(f.human, f.project).items.length, 4);
-  const smallCalls = [...small.calls]; small.restore();
-  f.add(36);
-  const large = record(t, f.hive);
-  const page = f.hive.decisions.listHuman(f.human, f.project);
-  const largeCalls = [...large.calls]; large.restore();
-  assert.equal(page.items.length, 40);
-  assert.ok(page.items.some(item => item.delivery.length === 3), "answered decisions list their recipients' receipts");
-  assert.equal(largeCalls.length, smallCalls.length, "no per-decision task, channel or receipt query");
-  assert.ok(largeCalls.length <= 12, `decision queue statement budget exceeded: ${largeCalls.length}`);
-  const receipts = largeCalls.find(call => /FROM json_each\(\?\) p\s+JOIN inbox_receipts/.test(call.sql));
-  assert.ok(receipts);
-  assert.match(plan(f.hive, receipts), /SEARCH r USING INDEX sqlite_autoindex_inbox_receipts_1 \(agent_id=\? AND seq=\?\)/);
-});
-
 test("channel pages scope thread aggregates to their window and read them through indexes", async (t) => {
   const { hive, project } = setup(t);
   const channel = hive.channels.getChannel("general", project.id);

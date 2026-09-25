@@ -13,7 +13,6 @@ import {
   type ThreadStatus,
 } from "../../shared/types.ts";
 import type { AdaptiveTopologyRuntime } from "../adaptive-topology.ts";
-import type { DecisionStore } from "../decisions.ts";
 import type { RoomStore } from "../rooms.ts";
 import type { SendRequests } from "../send-requests.ts";
 import type { TaskStore } from "../tasks.ts";
@@ -36,7 +35,6 @@ export type MessageServiceDeps = Core & {
   readonly rooms: Pick<RoomStore, "peek">;
   readonly tasks: Pick<TaskStore, "has">;
   readonly timeline: Pick<TimelineStore, "prepare" | "recordMessage" | "source">;
-  readonly decisions: Pick<DecisionStore, "replyRecipientNames" | "captureHumanReply">;
   readonly adaptiveTopology: Pick<AdaptiveTopologyRuntime, "threadStatusChange">;
 };
 
@@ -59,8 +57,7 @@ export class MessageService implements MessagePoster {
     persistReceipt?: (message: Message) => void,
   ): Message {
     if (input.attachmentIds !== undefined) validated(attachmentIdsSchema, input.attachmentIds);
-    const decisionRecipients = actor.role === 'human' ? this.deps.decisions?.replyRecipientNames(input.threadId ?? null) ?? [] : [];
-    const recipientNames = [...new Set([...(input.recipients ?? []), ...decisionRecipients])];
+    const recipientNames = [...new Set(input.recipients ?? [])];
     if (recipientNames.length) validated(memberNamesSchema.min(1), recipientNames);
     if (input.eventType !== undefined && !MESSAGE_EVENT_TYPES.includes(input.eventType))
       throw new HiveError(400, "Unknown message eventType");
@@ -142,13 +139,11 @@ export class MessageService implements MessagePoster {
       persistReceipt?.(this.deps.messageQueries.getMessageById(id));
       this.deps.identity.touch(actor.id, true);
       const msg = this.deps.messageQueries.getMessageById(id);
-      const decision = actor.role === 'human' ? this.deps.decisions?.captureHumanReply(actor, msg, input.source ?? 'hive') ?? null : null;
       this.deps.bus.outbox("message", { seq: msg.seq, id: msg.id, kind: msg.kind });
       this.deps.storage.afterCommit(() => {
         if (input.source === "telegram") this.telegramOrigin.add(msg.id);
         this.deps.bus.emit("message", msg);
         this.deps.delivery.wakeMembers(ch, msg);
-        if (decision) this.deps.bus.emit('decision', decision);
       });
       return msg;
     });

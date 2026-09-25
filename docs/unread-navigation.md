@@ -26,7 +26,7 @@ unopened threads and later live arrivals remain unread. Requests are cancelled
 or ignored after navigation, including a second badge action or a delayed page.
 
 A pending jump belongs to the navigation intent, not to one HTTP request.
-Reconnect and automatic room/task/decision refreshes inherit its destination;
+Reconnect and automatic room/task refreshes inherit its destination;
 only the committed target page triggers focus and highlighting. A second jump,
 explicit paging, return-to-live, or a selection change supersedes that intent.
 This also cancels the initial `last-unread` lookup, before a destination has
@@ -48,7 +48,7 @@ The split navigation/badge buttons retain the active page's accessibility marker
 and work in both the project sidebar and the mobile DM list. The existing
 "New messages" divider, message grouping, long-press toolbar, system rows and
 archived-channel disclosure remain intact.
-A jump also reveals Messages when Tasks, Contract or Decisions was selected,
+A jump also reveals Messages when Tasks or Contract was selected,
 without discarding the composer's draft. Those tabs remain selectable afterwards.
 
 ## Verification
@@ -65,4 +65,4 @@ anchors through automatic refresh and late reflow, paging during lookup, and
 empty/failed replacement lookups after pending/failed target loads. Tests use
 isolated fixtures, not real Human receipts. Mobile DM tests cover roots, replies
 and system messages; tab-switch tests cover repeated root and reply jumps from
-Tasks, Contract and Decisions while preserving drafts.
+Tasks and Contract while preserving drafts.

@@ -23,7 +23,7 @@ import { retentionDays, startMaintenance } from "./maintenance.ts";
 /** Hive events forwarded verbatim to every web UI socket; Telegram wake signals stay server-side. */
 const FORWARDED_EVENTS = [
   "message", "activity", "agent", "channel", "thread", "reaction", "queued", "project", "telegram-health",
-  "task", "room", "decision", "adaptive-routing", "jev-call", "evidence-health",
+  "task", "room", "adaptive-routing", "jev-call", "evidence-health",
 ] as const satisfies ReadonlyArray<keyof HiveEvents>;
 type ForwardedEvent = (typeof FORWARDED_EVENTS)[number];
 

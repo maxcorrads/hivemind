@@ -51,7 +51,6 @@ Near-duplicate tools were merged; the old names no longer exist, so restart ever
 | `whoami`, `standing_orders` | `whoami` (`orders=true` adds the full standing orders) |
 | `get_handoffs`, `get_handoff` | `get_handoffs` (`taskId` reads one full handoff) |
 | `get_task_timeline`, `export_task_timeline` | `get_task_timeline` (`export=true` returns the redacted fixture) |
-| `get_decision`, `get_task_decisions` | `get_decisions` (exactly one of `decisionId` or `taskId`) |
 | `subscriptions`, `set_subscription`, `reset_subscription` | `subscriptions` with `mode`: `list`, `set` or `reset` |
 | `suggest_workers`, `record_routing_outcome`, `record_routing_override` | `worker_match_suggest`, `worker_match_outcome`, `worker_match_override` (capability matching, not Jev) |
 

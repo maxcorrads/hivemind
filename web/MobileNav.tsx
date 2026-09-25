@@ -3,7 +3,7 @@ import type { Snapshot } from "./api.ts";
 import { ChannelItem } from "./ChannelNav.tsx";
 import type { MobileTab } from "./mobile-nav.ts";
 
-const TABS: [MobileTab, string][] = [["home", "Home"], ["dms", "DMs"], ["activity", "Activity"], ["decisions", "Decisions"]];
+const TABS: [MobileTab, string][] = [["home", "Home"], ["dms", "DMs"], ["activity", "Activity"]];
 
 /** The phone's bottom tab bar (#223). Hidden on wide screens and while a channel or thread is open. */
 export function MobileTabs({ active, badges, onTab }: {

@@ -28,7 +28,7 @@ const shortcut = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navi
  */
 export function Sidebar({ snap, sel, go, live, theme, onToggleTheme, query, setQuery, onSearchNow, onTelegram,
   onAdaptiveRouting, onLaunch, onHelp, selectedProject, onSelectProject, onSwitcher, inboxBox, projectSheets, onNewChannel,
-  dms, agentActions, awaitingDecisions, agentWork, notifications, onUnread }: {
+  dms, agentActions, agentWork, notifications, onUnread }: {
   snap: Snapshot;
   sel: Sel;
   go: (next: Sel) => void;
@@ -50,7 +50,6 @@ export function Sidebar({ snap, sel, go, live, theme, onToggleTheme, query, setQ
   onNewChannel: (project: string) => void;
   dms: DmNav;
   agentActions: AgentActions;
-  awaitingDecisions: Record<string, number>;
   agentWork: Record<string, AgentWork>;
   notifications: DesktopNotifications;
   onUnread: (channelId: string) => void;
@@ -59,7 +58,7 @@ export function Sidebar({ snap, sel, go, live, theme, onToggleTheme, query, setQ
   const project = projects.find(item => item.slug === selectedProject) ?? projects[0];
   return (
     <>
-      <ProjectRail snap={snap} selectedProject={project?.slug ?? ""} awaitingDecisions={awaitingDecisions}
+      <ProjectRail snap={snap} selectedProject={project?.slug ?? ""}
         onSelect={onSelectProject} onNewProject={() => projectSheets.setCreatingProject(true)} />
       <aside className="rail">
         <div className="brand">
@@ -84,7 +83,7 @@ export function Sidebar({ snap, sel, go, live, theme, onToggleTheme, query, setQ
                 </button>
                 {notifications.supported && (
                   <button type="button" className="tool-action" aria-pressed={notifications.enabled}
-                    title="Notify mentions, direct messages and decisions while Hivemind is in the background"
+                    title="Notify mentions and direct messages while Hivemind is in the background"
                     onClick={() => void notifications.toggle()}>
                     {notifications.blocked ? "Notifications blocked by the browser"
                       : `Desktop notifications: ${notifications.enabled ? "on" : "off"}`}
@@ -153,7 +152,7 @@ export function Sidebar({ snap, sel, go, live, theme, onToggleTheme, query, setQ
           <ProjectSection key={project.id} project={project} snap={snap} sel={sel} go={go}
             onSettings={() => projectSheets.editProject(project)} inboxBox={inboxBox} onNewChannel={onNewChannel}
             dms={dms} agentActions={agentActions} onLaunch={onLaunch} onUnread={onUnread}
-            decisions={awaitingDecisions[project.slug] ?? 0} agentWork={agentWork} />
+            agentWork={agentWork} />
         )}
       </aside>
     </>
@@ -161,7 +160,7 @@ export function Sidebar({ snap, sel, go, live, theme, onToggleTheme, query, setQ
 }
 
 function ProjectSection({ project, snap, sel, go, onSettings, inboxBox, onNewChannel, dms, agentActions, onLaunch,
-  decisions, agentWork, onUnread }: {
+  agentWork, onUnread }: {
   project: Project;
   snap: Snapshot;
   sel: Sel;
@@ -172,7 +171,6 @@ function ProjectSection({ project, snap, sel, go, onSettings, inboxBox, onNewCha
   dms: DmNav;
   agentActions: AgentActions;
   onLaunch: (project: string) => void;
-  decisions: number;
   agentWork: Record<string, AgentWork>;
   onUnread: (channelId: string) => void;
 }) {
@@ -263,15 +261,6 @@ function ProjectSection({ project, snap, sel, go, onSettings, inboxBox, onNewCha
       >
         <span>For you</span>
         {n > 0 && <em>{n}</em>}
-      </button>
-      <button
-        className={`nav ${sel.kind === "decisions" && sel.project === project.slug ? "active" : ""}`}
-        aria-current={sel.kind === "decisions" && sel.project === project.slug ? "page" : undefined}
-        onClick={() => go({ kind: "decisions", project: project.slug })}
-        title={decisions ? `${decisions} ${decisions === 1 ? "decision" : "decisions"} awaiting your answer` : undefined}
-      >
-        <span>Decisions</span>
-        {decisions > 0 && <em className="nav-alert">{decisions}</em>}
       </button>
       {snap.jev?.enabled && (
         <button

@@ -5,7 +5,7 @@ import type { InboxBox, Sel } from "./selection.ts";
 /** Keep in sync with the `@media (max-width: 960px)` block in styles.css. */
 export const MOBILE_QUERY = "(max-width: 960px)";
 
-export type MobileTab = "home" | "dms" | "activity" | "decisions";
+export type MobileTab = "home" | "dms" | "activity";
 
 /**
  * What a phone shows for a selection (#223): one screen at a time. `channel`

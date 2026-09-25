@@ -3,7 +3,6 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { ROUTINE_BATCH_MS } from "../shared/notifications.ts";
 import { AdaptiveTopologyRuntime } from "./adaptive-topology.ts";
-import { DecisionStore } from "./decisions.ts";
 import { HiveBus } from "./hive-events.ts";
 import { InboxDeliveryStore } from "./inbox-delivery.ts";
 import { InboxReader } from "./inbox-reader.ts";
@@ -68,7 +67,6 @@ type ServiceRegistry = Core & {
   rooms: RoomStore;
   notifications: NotificationStore;
   timeline: TimelineStore;
-  decisions: DecisionStore;
   adaptiveTopology: AdaptiveTopologyRuntime;
 };
 
@@ -104,7 +102,6 @@ export class Hive {
   readonly routing!: RoutingStore;
   readonly rooms!: RoomStore;
   readonly notifications!: NotificationStore;
-  readonly decisions!: DecisionStore;
   readonly timeline!: TimelineStore;
   readonly adaptiveTopology!: AdaptiveTopologyRuntime;
 
@@ -148,7 +145,6 @@ export class Hive {
       this.notifications = services.notifications = new NotificationStore(services);
       this.routing = new RoutingStore(services);
       this.timeline = services.timeline = new TimelineStore(services);
-      this.decisions = services.decisions = new DecisionStore(services, work => this.storage.transaction(work));
       this.adaptiveTopology = services.adaptiveTopology = new AdaptiveTopologyRuntime(services);
       this.inbox = services.inbox = new InboxDeliveryStore(this.db);
       services.inboxReader = new InboxReader(this.db, this.inbox, this.notifications, options.routineBatchMs ?? ROUTINE_BATCH_MS);

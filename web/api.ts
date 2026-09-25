@@ -10,7 +10,6 @@ import type { ProjectPluginView, SettingsValues } from "../src/shared/plugin-set
 import { humanSession, connectHumanWs } from "./human-session.ts";
 import type { AgentWork, ChannelTaskPage, TaskSnapshot } from '../src/shared/tasks.ts';
 import type { RoomView, Room } from '../src/shared/rooms.ts';
-import type { DecisionPage, DecisionView } from '../src/shared/decisions.ts';
 import type { TimelineExport, TimelineView } from '../src/shared/timeline.ts';
 import type { AdaptiveRoutingView } from '../src/shared/adaptive-topology.ts';
 
@@ -43,10 +42,8 @@ export type Snapshot = ReadSnapshot & {
   jev?: { enabled: boolean };
 };
 
-/** Sidebar badges and roster status lines. */
+/** Roster status lines. */
 export type NavStatus = {
-  /** Awaiting decisions per project slug. */
-  awaitingDecisions: Record<string, number>;
   /** Open work per agent id; agents without any are omitted. */
   agentWork: Record<string, AgentWork>;
 };
@@ -87,8 +84,6 @@ export type ChannelPayload = {
   /** Oldest unread root when the channel was opened (or marked unread): where "New messages" starts. */
   firstUnreadSeq?: number | null;
   task?: TaskSnapshot;
-  decision?: DecisionView;
-  decisions?: DecisionView[];
   channel: Channel;
   threadId: string | null;
   messages: Message[];
@@ -117,17 +112,12 @@ export const api = {
     req<{ timeline: TimelineView }>(`/api/ui/tasks/${encodeURIComponent(id)}/timeline`, { signal }),
   exportTaskTimeline: (id: string, signal?: AbortSignal) =>
     req<{ fixture: TimelineExport }>(`/api/ui/tasks/${encodeURIComponent(id)}/timeline/export`, { signal }),
-  decisions: (project: string, includeClosed = true, signal?: AbortSignal) =>
-    req<DecisionPage>('/api/ui/decisions?project=' + encodeURIComponent(project) + '&includeClosed=' + (includeClosed ? '1' : '0'), { signal }),
   /** `cursor` is the previous page's opaque `nextCursor`; omit it for the newest page. */
   jevCalls: (project: string, cursor?: string | null, signal?: AbortSignal) =>
     req<JevCallLogView>(`/api/ui/projects/${encodeURIComponent(project)}/jev-calls${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`, { signal }),
   evidenceHealth: (signal?: AbortSignal) => req<EvidenceCollectorHealth>('/api/ui/adaptive-routing/evidence-health', { signal }),
   jevCall: (project: string, id: string, signal?: AbortSignal) =>
     req<{ call: JevCall }>(`/api/ui/projects/${encodeURIComponent(project)}/jev-calls/${encodeURIComponent(id)}`, { signal }),
-  answerDecision: (id: string, body: { requestId: string; expectedRevision: number; body: string }, signal?: AbortSignal) =>
-    req<{ decision: DecisionView; message: Message; duplicate: boolean }>('/api/ui/decisions/' + encodeURIComponent(id) + '/answer',
-      { method: 'POST', body: JSON.stringify(body), signal }),
   suggestWorkers: (id: string, body: RoutingRequest, signal?: AbortSignal) => req<RoutingSuggestions>(`/api/ui/tasks/${encodeURIComponent(id)}/routing`, { method: 'POST', body: JSON.stringify(body), signal }),
   recordRoutingChoice: (id: string, body: { expectedRevision: number; workerId: string; reason: string; requestId: string }, signal?: AbortSignal) => req<{ assigned: false }>(`/api/ui/tasks/${encodeURIComponent(id)}/routing-override`, { method: 'POST', body: JSON.stringify(body), signal }),
   botCredential: (project: string, bot: string) => req<BotCredentialView>(

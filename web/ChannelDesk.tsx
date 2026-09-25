@@ -1,6 +1,5 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import type { AdaptiveRoutingView } from "../src/shared/adaptive-topology.ts";
-import type { DecisionView } from "../src/shared/decisions.ts";
 import type { ChannelTaskPage } from "../src/shared/tasks.ts";
 import type { Agent, Channel, Message, ThreadStatus } from "../src/shared/types.ts";
 import { adviceSummary } from "./AdaptiveRoutingPanel.tsx";
@@ -9,7 +8,6 @@ import { api, type UnreadTarget } from "./api.ts";
 import { Avatar } from "./Avatar.tsx";
 import { applyChannelMessage, recordChannelMessage } from "./channel-state.ts";
 import { Composer } from "./Composer.tsx";
-import { DecisionCard } from "./DecisionQueue.tsx";
 import { channelTitle, memberNames } from "./labels.ts";
 import { BackButton } from "./MobileNav.tsx";
 import { MessageRow } from "./MessageRow.tsx";
@@ -29,14 +27,14 @@ import type { ThreadOpenAnchor } from "./use-thread-scroll-anchor.ts";
 
 const NO_MESSAGES: Message[] = [];
 
-export type ChannelTab = "messages" | "tasks" | "contract" | "decisions";
+export type ChannelTab = "messages" | "tasks" | "contract";
 
 /**
- * The selected channel: header with its members, tabs (Messages · Tasks · Contract for rooms · Decisions) and, on
+ * The selected channel: header with its members, tabs (Messages · Tasks · Contract for rooms) and, on
  * Messages, the message stream, Jev advice strip and composer.
  */
 export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, channel, threadPaneId, stickBottom, threadOpenAnchor, unreadTarget,
-  go, roomTick, decisionTick, onDecisionAnswered, routingView, activeBrainChannel, brainNames, onOpenRouting, onInvite, compose, onMarkUnread, setErr, onBack }: {
+  go, roomTick, routingView, activeBrainChannel, brainNames, onOpenRouting, onInvite, compose, onMarkUnread, setErr, onBack }: {
   channelId: string;
   /** A new explicit badge navigation reveals Messages without remounting its draft. */
   unreadTarget?: UnreadTarget | null;
@@ -49,8 +47,6 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
   threadOpenAnchor: MutableRefObject<ThreadOpenAnchor | null>;
   go: (next: Sel) => void;
   roomTick: number;
-  decisionTick: number;
-  onDecisionAnswered: () => void;
   routingView: AdaptiveRoutingView | null;
   activeBrainChannel: boolean;
   brainNames: Record<string, string>;
@@ -100,19 +96,17 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
   const newUnreadJump = unreadTarget?.channelId === channelId && unreadTarget !== picked.unreadTarget;
   const requested = picked.channelId === channelId && !newUnreadJump ? picked.tab : "messages";
   const tab = requested === "contract" && !room ? "messages" : requested;
-  const work = useChannelWork(activeChannel, roomTick, decisionTick);
+  const work = useChannelWork(activeChannel, roomTick);
   // The hidden stream loses its scroll position; coming back to a live pane lands on its newest message.
   useLayoutEffect(() => {
     const stream = channelStream.current;
     if (tab === "messages" && stream && pane?.historyThrough === undefined) stream.scrollTop = stream.scrollHeight;
   }, [tab]);
   const openTasks = work.tasks?.items.filter((task) => isOpenTask(task.state)).length ?? 0;
-  const awaiting = work.decisions?.filter((decision) => decision.state === "awaiting_input").length ?? 0;
   const tabs: Array<{ id: ChannelTab; label: string; count?: number }> = [
     { id: "messages", label: "Messages" },
     { id: "tasks", label: "Tasks", count: openTasks },
     ...(room ? [{ id: "contract" as const, label: "Contract" }] : []),
-    ...(activeChannel?.project ? [{ id: "decisions" as const, label: "Decisions", count: awaiting }] : []),
   ];
   return (
     <>
@@ -148,12 +142,6 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
       ) : tab === "contract" && activeChannel ? (
         <div className="stream channel-panel" role="tabpanel" id="channel-panel-contract" aria-labelledby="channel-tab-contract">
           <RoomPanel key={activeChannel.id} channel={activeChannel} agents={agents} tick={roomTick} />
-        </div>
-      ) : tab === "decisions" ? (
-        <div className="stream channel-panel decision-queue" role="tabpanel" id="channel-panel-decisions" aria-labelledby="channel-tab-decisions">
-          <ChannelDecisions decisions={work.decisions} error={work.error}
-            onOpen={(decision) => go({ kind: "channel", id: channelId, thread: decision.id })}
-            onAnswered={(decision) => { work.answered(decision); onDecisionAnswered(); }} />
         </div>
       ) : null}
       {/* Messages stays mounted while another tab shows, so the composer keeps its draft and the stream its place. */}
@@ -275,20 +263,6 @@ export function TaskList({ page, error, activeId, onOpen, now }: {
       {page.hasMore && <p className="empty">Showing the 100 most recently updated tasks.</p>}
     </>
   );
-}
-
-/** The Decisions tab: this channel's Human decision requests, answerable in place. */
-function ChannelDecisions({ decisions, error, onOpen, onAnswered }: {
-  decisions: DecisionView[] | null;
-  error: string | null;
-  onOpen: (decision: DecisionView) => void;
-  onAnswered: (decision: DecisionView) => void;
-}) {
-  if (!decisions) return error ? <p role="alert">{error}</p> : <p className="empty">Loading decisions…</p>;
-  if (decisions.length === 0) return <p className="empty">No decision requests in this channel.</p>;
-  return <>{decisions.map((decision) => (
-    <DecisionCard key={decision.id} decision={decision} onOpen={() => onOpen(decision)} onAnswered={onAnswered} />
-  ))}</>;
 }
 
 

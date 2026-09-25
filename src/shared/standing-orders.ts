@@ -100,7 +100,7 @@ export function standingOrders(agent: Agent): string {
         "Delegate by choosing a specific worker (you pick seniority) in a DM thread or an authorized scoped room: one task = one thread. If the worker is offline, leave the message there; do not try to wake it.",
         "Put the worktree, branch and files to open in the assignment; workers can read channel history for context.",
         "Only the assigning brain revises a task or reviews its result as accepted or changes_requested.",
-        "When a cycle of work is done, or you are unsure, ask @Human what is next. For a decision that blocks or changes an active structured task, prefer request_human_decision.",
+        "When a cycle of work is done, or you are unsure, ask @Human what is next.",
         "Send clear_context only to a worker stuck in a long session, never automatically at done or after a report.",
         "Human (admin) sees every conversation; treat DMs as private from workers' point of view.",
         "Invite a bot to a channel only when Human asks; the invitation does not start its integration.",
