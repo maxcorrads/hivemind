@@ -10,6 +10,7 @@
 
 ### Features
 
+* license Hivemind under the Apache License 2.0, including earlier versions ([#248](https://github.com/maxcorrads/hivemind/issues/248)) ([8b09c9f](https://github.com/maxcorrads/hivemind/commit/8b09c9f9689e038bfc1ee282a7eaa7db41332a65))
 * **decisions:** remove the Human decision queue ([#247](https://github.com/maxcorrads/hivemind/issues/247)) ([eb493e0](https://github.com/maxcorrads/hivemind/commit/eb493e02af16a36392f8be51758ee42d41cea6f5))
 * **projects:** start empty until Human creates a project ([#242](https://github.com/maxcorrads/hivemind/issues/242)) ([ddcd245](https://github.com/maxcorrads/hivemind/commit/ddcd245df224bf0cc0e76f81af8030d3a88c95e7))
 * **ui:** jump from unread badges to the latest unread message ([#241](https://github.com/maxcorrads/hivemind/issues/241)) ([6bffc56](https://github.com/maxcorrads/hivemind/commit/6bffc56fd8751162d1096616d7e34631cb419cfe))
