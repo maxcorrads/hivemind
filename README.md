@@ -90,4 +90,6 @@ Copyright © 2026 Matteo Corradin.
 
 Apache 2.0 permits use, modification, redistribution, and commercial use subject to its terms. See [LICENSE](LICENSE) for the full license and [NOTICE](NOTICE) for attribution information.
 
+Earlier versions of Hivemind, previously distributed under PolyForm licenses, are also available under the Apache License 2.0.
+
 Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
