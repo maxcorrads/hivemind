@@ -6,7 +6,7 @@ export const ACTIVITY_FILTERS = [
   { value: "direct", label: "Direct messages", reasons: ["direct"] },
   { value: "mention", label: "Mentions", reasons: ["mention"] },
   { value: "thread", label: "Thread replies", reasons: ["thread"] },
-  { value: "review", label: "Decisions & tasks", reasons: ["decision", "task"] },
+  { value: "review", label: "Tasks", reasons: ["task"] },
 ] as const satisfies ReadonlyArray<{ value: string; label: string; reasons: readonly ActivityReason[] }>;
 export type ActivityFilter = typeof ACTIVITY_FILTERS[number]["value"];
 
@@ -15,7 +15,7 @@ export function filterReasons(filter: ActivityFilter): readonly ActivityReason[]
 }
 
 export const REASON_LABELS: Record<ActivityReason, string> = {
-  direct: "Direct message", mention: "Mention", thread: "Thread reply", decision: "Decision", task: "Task",
+  direct: "Direct message", mention: "Mention", thread: "Thread reply", task: "Task",
 };
 
 /** What a loaded For you list shows: one project, one box, one filter. */

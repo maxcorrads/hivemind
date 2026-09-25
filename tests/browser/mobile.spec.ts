@@ -1,7 +1,6 @@
 import { expect, test, type Page, type Route } from "./fixtures.ts";
 
 import type { Agent, Channel, Message, Project } from "../../src/shared/types.ts";
-import type { DecisionView } from "../../src/shared/decisions.ts";
 import type { ChannelPayload, Snapshot } from "../../web/api.ts";
 
 // Runs in the "mobile" Playwright project (a phone viewport with touch): the
@@ -23,16 +22,6 @@ function message(id: string, seq: number, channelId: string, body: string, threa
 
 const root = message("root", 1, "build", "Ship the release?");
 const reply = message("reply", 2, "build", "Checking the changelog", "root");
-const decisionRoot = message("decision", 3, "build", "Decision needed");
-
-function decision(patch: Partial<DecisionView> = {}): DecisionView {
-  return { id: "decision", projectId: alpha.id, channelId: "build", taskId: "task", taskRevision: 1, requesterId: "brain",
-    requesterName: "Beacon", revision: 1, storedState: "awaiting_input", state: "awaiting_input",
-    question: "Which release train?", options: [{ id: "a", label: "Friday", impact: "Short QA window" }],
-    recommendation: null, evidenceSeqs: [], artifacts: [], affectedWorkers: [], requestedByAt: null,
-    relatedDecisionIds: [], supersedesDecisionId: null, supersededByDecisionId: null, rootSeq: 3, createdAt: 1, updatedAt: 1,
-    answer: null, withdrawn: null, currentTaskRevision: 1, staleReason: null, delivery: [], warning: "", ...patch };
-}
 
 function payload(ch: Channel, messages: Message[], extra: Partial<ChannelPayload> = {}): ChannelPayload {
   return { channel: ch, threadId: null, messages, hasOlder: false, hasNewer: false, threads: [], replyCounts: {},
@@ -44,9 +33,7 @@ const json = (route: Route, body: unknown) => route.fulfill({ contentType: "appl
 
 async function installHive(page: Page) {
   const unexpected: string[] = [];
-  const answers: unknown[] = [];
   page.on("pageerror", error => unexpected.push(error.message));
-  let current = decision();
   const snap: Snapshot = { readInstance: "mobile-fixture", readRevision: 0, readSeq: 3, mentionCounts: { alpha: 2 },
     you: human, projects: [alpha], agents: [human, { ...human, id: "brain", name: "Beacon", role: "worker", projectId: alpha.id,
       project: alpha.slug }], channels: [general, build, dm], unread: { "dm-beacon": 1 }, mentions: [],
@@ -59,7 +46,7 @@ async function installHive(page: Page) {
   await page.route(/\/api\/ui\/(snapshot|read-state|read)(\?|$)/, route => json(route, snap));
   await page.route("**/api/ui/activity?*", route => json(route, {
     readInstance: "mobile-fixture", readRevision: 0, readSeq: 3, items: [], hasMore: false }));
-  await page.route("**/api/ui/nav-status", route => json(route, { awaitingDecisions: {}, agentWork: {} }));
+  await page.route("**/api/ui/nav-status", route => json(route, { agentWork: {} }));
   await page.route("**/api/ui/channels/*/room", route => json(route, { room: null, tasks: [], activeTaskCount: 0,
     tasksHasMore: false, nextTaskCursor: null, links: [], unmanagedBots: [] }));
   await page.route("**/api/ui/channels/*/tasks", route => json(route, { items: [], hasMore: false }));
@@ -69,20 +56,12 @@ async function installHive(page: Page) {
     const threadId = url.searchParams.get("threadId");
     const ch = [general, build, dm].find(c => c.id === id)!;
     if (threadId === "root") return json(route, payload(ch, [root, reply], { threadId }));
-    if (threadId === "decision") return json(route, payload(ch, [decisionRoot], { threadId, decision: current }));
-    return json(route, payload(ch, id === "build" ? [root, decisionRoot] : [], { replyCounts: { root: 1 } }));
-  });
-  await page.route("**/api/ui/decisions?*", route => json(route, { items: [current], awaiting: 1, warning: "" }));
-  await page.route("**/api/ui/decisions/*/answer", route => {
-    answers.push(route.request().postDataJSON());
-    current = decision({ state: "answered", storedState: "answered", revision: 2,
-      answer: { messageId: "answer", seq: 4, body: "a: Friday", at: 2, source: "hive" } });
-    return json(route, { decision: current, message: message("answer", 4, "build", "a: Friday", "decision"), duplicate: false });
+    return json(route, payload(ch, id === "build" ? [root] : [], { replyCounts: { root: 1 } }));
   });
   await page.routeWebSocket("**/ws", socket => {
     socket.send(JSON.stringify({ type: "hello", payload: null, streamId: "mobile", sequence: 1 }));
   });
-  return { unexpected, answers };
+  return { unexpected };
 }
 
 const tabs = (page: Page) => page.getByRole("navigation", { name: "Sections" });
@@ -156,25 +135,11 @@ test("a phone starts on Home and opens a channel and a thread full screen, with 
   expect(hive.unexpected).toEqual([]);
 });
 
-test("the Decisions tab answers a decision and its thread returns through the back arrows", async ({ page }) => {
+test("the bottom bar has no Decisions tab, and an old Decisions link opens Activity", async ({ page }) => {
   const hive = await installHive(page);
-  await page.goto("/#/home/alpha");
-  await tabs(page).getByRole("button", { name: "Decisions" }).click();
-  await expect(page).toHaveURL(/#\/decisions\/alpha$/);
-  await expect(tabs(page).getByRole("button", { name: "Decisions" })).toHaveAttribute("aria-current", "page");
-  const card = page.getByRole("region", { name: "Human decision request" });
-  await card.getByRole("button", { name: /Friday/ }).click();
-  await card.getByRole("button", { name: "Confirm", exact: true }).click();
-  await expect(card.getByText("answered", { exact: true })).toBeVisible();
-  expect(hive.answers).toEqual([expect.objectContaining({ expectedRevision: 1, body: "a: Friday" })]);
-
-  await card.getByRole("button", { name: "Open decision thread" }).click();
-  await expect(page).toHaveURL(/#\/c\/build\/t\/decision$/);
-  await expect(page.locator(".thread").getByText("Which release train?")).toBeVisible();
-  await expect(tabs(page)).toHaveCount(0);
-  await page.getByRole("button", { name: "Back to channel" }).click();
-  await page.getByRole("button", { name: "Back", exact: true }).click();
-  await expect(page).toHaveURL(/#\/decisions\/alpha$/);
+  await page.goto("/#/decisions/alpha");
+  await expect(tabs(page).getByRole("button")).toHaveText([/^Home/, /^DMs/, /^Activity/]);
+  await expect(tabs(page).getByRole("button", { name: "Activity" })).toHaveAttribute("aria-current", "page");
   expect(hive.unexpected).toEqual([]);
 });
 

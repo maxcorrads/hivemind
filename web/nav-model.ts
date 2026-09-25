@@ -47,12 +47,10 @@ export type ProjectAttention = {
   alerts: number;
   /** Any unread message in an active channel or a Human DM. */
   unread: boolean;
-  /** Decisions awaiting the Human. */
-  decisions: number;
 };
 
 export function projectAttention(snap: Pick<Snapshot, "channels" | "unread" | "mentionCounts" | "archivedChannelIds">,
-  slug: string, awaitingDecisions: Record<string, number> = {}): ProjectAttention {
+  slug: string): ProjectAttention {
   const archived = new Set(snap.archivedChannelIds ?? []);
   let dmUnread = 0, unread = false;
   for (const channel of snap.channels) {
@@ -62,7 +60,7 @@ export function projectAttention(snap: Pick<Snapshot, "channels" | "unread" | "m
     if (isHumanDm(channel)) { dmUnread += n; unread = true; }
     else if (channel.type !== "dm" && !archived.has(channel.id)) unread = true;
   }
-  return { alerts: (snap.mentionCounts[slug] ?? 0) + dmUnread, unread, decisions: awaitingDecisions[slug] ?? 0 };
+  return { alerts: (snap.mentionCounts[slug] ?? 0) + dmUnread, unread };
 }
 
 /** The count shown in the browser tab: every project's alerts. */

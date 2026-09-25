@@ -5,7 +5,6 @@ import { AdaptiveRoutingSettings } from "./AdaptiveRoutingSettings.tsx";
 import { api } from "./api.ts";
 import { ChannelDesk } from "./ChannelDesk.tsx";
 import { CreateChannelSheet, InviteSheet } from "./ChannelSheets.tsx";
-import { DecisionQueue } from './DecisionQueue.tsx';
 import { useDesktopNotifications } from "./desktop-notifications.ts";
 import { AgentConfirmSheet, BotSheet, CredentialSheet, HelpSheet } from "./HiveSheets.tsx";
 import { Inbox } from "./Inbox.tsx";
@@ -89,7 +88,7 @@ export function App() {
   };
   const navStatus = useNavStatus();
   const notifications = useDesktopNotifications(channels, navigate);
-  const { live, roomTick, decisionTick, setDecisionTick, jevTick, subscribeJev } = useRealtime({
+  const { live, roomTick, jevTick, subscribeJev } = useRealtime({
     selection, hive, channel: channelPane, thread: threadState, inboxLoad: inbox.inboxLoad, changeSelection,
     reopenDm: dms.reopenDm, onActivity: inbox.receive, refreshRoutingView, onRoutingEvent, setErr,
     onLiveEvent: event => { navStatus.onLiveEvent(event); notifications.onLiveEvent(event); },
@@ -216,7 +215,7 @@ export function App() {
         onTelegram={() => telegramSheet.openTelegram(snap?.projects ?? [])}
         onAdaptiveRouting={() => setAdaptiveRoutingOpen(true)} onLaunch={openLaunch} onHelp={() => setHelpOpen(true)}
         selectedProject={selectedProject} onSelectProject={selectProject} onSwitcher={() => setSwitcherOpen(true)}
-        awaitingDecisions={navStatus.awaitingDecisions} agentWork={navStatus.agentWork} notifications={notifications}
+        agentWork={navStatus.agentWork} notifications={notifications}
         inboxBox={inboxBox} projectSheets={projectSheets}
         onNewChannel={(project) => {
           channelSheets.setCreateIn(project);
@@ -257,13 +256,9 @@ export function App() {
             channelLabel={id => { const channel = channels.find(item => item.id === id); return channel ? channelTitle(channel) : "Deleted channel"; }}
             agentName={id => snap.agents.find(agent => agent.id === id)?.name ?? "Removed brain"}
             onOpenChannel={id => go({ kind: "channel", id })} />
-        ) : sel.kind === "decisions" ? (
-          <DecisionQueue project={sel.project} tick={decisionTick}
-            onOpen={decision => go({ kind: "channel", id: decision.channelId, thread: decision.id })} />
         ) : sel.kind === "inbox" ? (
           <Inbox
             key={`${sel.project}:${inboxBox}`}
-            onDecisions={() => go({ kind: "decisions", project: sel.project })}
             onMarkMessage={inbox.markMessage}
             box={inboxBox}
             items={inboxItems}
@@ -288,8 +283,7 @@ export function App() {
           <ChannelDesk channelId={sel.id} activeChannel={activeChannel} agents={snap.agents} roomAgents={roomAgents}
             unreadTarget={unreadTarget}
             channel={channelPane} threadPaneId={threadPane?.threadId} stickBottom={stickBottom}
-            threadOpenAnchor={threadOpenAnchor} go={go} roomTick={roomTick} decisionTick={decisionTick}
-            onDecisionAnswered={() => setDecisionTick(t => t + 1)} routingView={routingView}
+            threadOpenAnchor={threadOpenAnchor} go={go} roomTick={roomTick} routingView={routingView}
             activeBrainChannel={activeBrainChannel} brainNames={brainNames}
             onOpenRouting={() => setRoutingPanelOpen(true)} onInvite={() => channelSheets.setInviteOpen(true)}
             compose={compose} setErr={setErr} onMarkUnread={async (channelId, seq) => {
@@ -314,7 +308,7 @@ export function App() {
             if (sel.kind === "channel") go({ kind: "channel", id: sel.id });
             else setThreadId(null);
           }}
-          onDecisionAnswered={() => setDecisionTick(t => t + 1)} roomAgents={roomAgents} compose={compose} />
+          roomAgents={roomAgents} compose={compose} />
       )}
 
       {mobileTab(screen) && (

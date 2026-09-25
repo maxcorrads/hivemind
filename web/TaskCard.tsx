@@ -2,7 +2,6 @@ import { WorkerRouting } from './WorkerRouting.tsx';
 import type { TaskSnapshot, TaskState } from '../src/shared/tasks.ts';
 import { checkpointFreshness } from '../src/shared/handoffs.ts';
 import { claimState } from '../src/shared/task-claims.ts';
-import type { DecisionView } from '../src/shared/decisions.ts';
 import { InfoTip } from './Popover.tsx';
 import { RelativeTime } from './RelativeTime.tsx';
 import { taskSteps, taskTone } from './task-progress.ts';
@@ -24,7 +23,7 @@ export function TaskStepper({ state }: { state: TaskState }) {
 }
 
 /** The fine print of a task card, gathered into one info tooltip instead of repeating under every section. */
-function taskNotes(task: TaskSnapshot, decisions: DecisionView[]): string[] {
+function taskNotes(task: TaskSnapshot): string[] {
   return [
     'Receipt is not acceptance: a worker confirming it received the task has not agreed to do it.',
     'Only the assigning brain\'s review completes a task; a submitted result is not accepted-complete.',
@@ -33,18 +32,17 @@ function taskNotes(task: TaskSnapshot, decisions: DecisionView[]): string[] {
     task.coordination?.dependencies.length ? 'Only assigning-brain accepted completion satisfies a prerequisite. Unavailable references do not grant access. Re-read before acting.' : null,
     task.claim ? 'Claims are advisory only, not a filesystem lock. Uncertain ownership needs explicit assigning-brain reconciliation. No execution or reassignment happens at expiry. Private intentions are not disclosed; absence of a warning is not exclusivity.' : null,
     task.checkpoint ? 'Checkpoints are the worker\'s own report. Older checkpoints remain in thread history and are superseded. Later unsaved work may exist. This is not independently verified state, completion, or a host context reset.' : null,
-    decisions.length ? 'Decision requests are revision-fenced. Expired or superseded recommendations never auto-apply.' : null,
     task.result ? 'Checks are claims by the worker, not independently verified by Hivemind.' : null,
   ].filter((note): note is string => note !== null);
 }
 
-export function TaskCard({ task, decisions = [], now }: { task: TaskSnapshot; decisions?: DecisionView[]; now?: number }) {
+export function TaskCard({ task, now }: { task: TaskSnapshot; now?: number }) {
   const freshness = task.checkpoint ? checkpointFreshness(task).freshness : null;
   return <section className="task-card" aria-label="Structured task">
     <header>
       <TaskChip state={task.state} />
       <small>Revision {task.revision} · contract {task.contractVersion}</small>
-      <InfoTip label="About these task facts" notes={taskNotes(task, decisions)} />
+      <InfoTip label="About these task facts" notes={taskNotes(task)} />
     </header>
     <p className="task-objective">{task.contract.objective}</p>
     <p className="task-meta">{task.assignerName} → {task.workerName} · updated <RelativeTime at={task.updatedAt} now={now} /></p>
@@ -82,12 +80,6 @@ export function TaskCard({ task, decisions = [], now }: { task: TaskSnapshot; de
       <p>Reported checks: {task.checkpoint.data.checks.map(check => `${check.name}: ${check.outcome}`).join('; ') || 'none run/reported'}</p>
       <p>Evidence sequences: {task.checkpoint.data.evidenceSeqs.join(', ') || 'none'}</p>
       <small>Checkpoint message #{task.checkpoint.messageSeq}</small>
-    </details>}
-    {decisions.length > 0 && <details open className="task-decisions"><summary>Human decisions · {decisions.length}</summary>
-      {decisions.map(decision => <p key={decision.id}>
-        <strong>{decision.state.replaceAll('_', ' ')}</strong> · {decision.question}
-        {decision.answer ? ' — Human: ' + decision.answer.body : ''}
-      </p>)}
     </details>}
     <WorkerRouting task={task} />
     {task.result && <details open><summary>Reported result</summary>

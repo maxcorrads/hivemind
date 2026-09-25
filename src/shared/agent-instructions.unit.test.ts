@@ -166,7 +166,7 @@ const COVERAGE: Record<AgentRuleId, readonly Evidence[]> = {
   "brain.prepare": [{ where: "orders", phrase: "Put the worktree, branch and files to open in the assignment; workers can read channel history for context." }],
   "brain.task-owner": [{ where: "orders", phrase: "Only the assigning brain revises a task or reviews its result as accepted or changes_requested." },
     { where: "task_event", phrase: "Assigning brain: revise, review." }],
-  "brain.ask-human": [{ where: "orders", phrase: "When a cycle of work is done, or you are unsure, ask @Human what is next. For a decision that blocks or changes an active structured task, prefer request_human_decision." }],
+  "brain.ask-human": [{ where: "orders", phrase: "When a cycle of work is done, or you are unsure, ask @Human what is next." }],
   "brain.housekeeping": [{ where: "search", phrase: "Find messages in this project" },
     { where: "create_channel", phrase: "Brain only: create a public (default) or private channel" },
     { where: "set_thread_status", phrase: "Set an optional status on a free-form thread" }],
@@ -203,8 +203,6 @@ const COVERAGE: Record<AgentRuleId, readonly Evidence[]> = {
   "room.staff": [{ where: "orders", phrase: "room_event staff picks already-invited workers and boundaries within the unchanged Human mandate (no new Human instruction needed); it cannot change purpose, rules, limits or coordinator, override limits via boundary text, or remove a worker with running work." }],
   "room.reconcile": [{ where: "orders", phrase: "After rules or staffing change, reconcile each affected task as continue or stop, and require current rule acknowledgements." }],
   "room.summarize": [{ where: "orders", phrase: "In a finite room, only the coordinating brain summarizes decisions and artifacts back to the originating task, then archives under the agreed completion policy." }],
-  "advisory.decision": [{ where: "request_human_decision", phrase: "the recommendation is advisory and never applies on expiry" },
-    { where: "get_decisions", phrase: "Stale or expired recommendations never auto-apply." }],
   "advisory.capabilities": [{ where: "set_capabilities", phrase: "Declarations never permit launching or changing a runtime." },
     { where: "get_worker_capabilities", phrase: "Declarations are not verified." }],
   "advisory.routing": [{ where: "worker_match_suggest", phrase: "Never assigns or changes a model" },
@@ -315,7 +313,6 @@ test("action tool descriptions list every action type of their schema", async ()
     schema.options.map(option => option.shape.type.value);
   for (const type of types(taskActionSchema as never)) assert.ok(TOOL_DESCRIPTIONS.task_event.includes(`{type:"${type}"`), `task_event lacks ${type}`);
   for (const type of types(roomActionSchema as never)) assert.ok(TOOL_DESCRIPTIONS.room_event.includes(`{type:"${type}"`), `room_event lacks ${type}`);
-  assert.ok(TOOL_DESCRIPTIONS.decision_event.includes('{type:"withdraw"'));
   const { SUBSCRIPTION_MODES } = await import("../mcp/index.ts");
   for (const mode of SUBSCRIPTION_MODES) assert.ok(TOOL_DESCRIPTIONS.subscriptions.includes(`{mode:"${mode}"`), `subscriptions lacks ${mode}`);
 });
@@ -329,4 +326,7 @@ test("merged tools keep one name per concept and capability matching never reads
     assert.match(TOOL_DESCRIPTIONS[name as ToolName], /^Capability matching \((?:unrelated to|not) Jev/);
   const texts = [...launch.brain, ...launch.worker, orders.brain, orders.worker, ...Object.values(TOOL_DESCRIPTIONS), ...joinTexts, WAIT_NEXT];
   for (const text of texts) assert.doesNotMatch(text, /\b(?:standing_orders|get_handoff|export_task_timeline|get_task_decisions|set_subscription|reset_subscription|suggest_workers|record_routing_\w+)\b/);
+  // The Human decision queue was removed: brains ask Human in chat.
+  for (const gone of ["request_human_decision", "get_decisions", "decision_event"]) assert.ok(!names.includes(gone), `${gone} was removed`);
+  for (const text of texts) assert.doesNotMatch(text, /\b(?:request_human_decision|get_decisions|decision_event)\b/);
 });

@@ -5,9 +5,9 @@ import { api } from "./api.ts";
 import { Avatar } from "./Avatar.tsx";
 import { BotOrigin } from "./Bots.tsx";
 import { Markdown } from "./markdown.tsx";
-import { formatTime, isDecisionRequest } from "./message-stream.ts";
+import { formatTime } from "./message-stream.ts";
 import { hashFor } from "./selection.ts";
-import { DecisionRequestCard, TaskEventCard } from "./StreamCards.tsx";
+import { TaskEventCard } from "./StreamCards.tsx";
 
 const LONG_PRESS_MS = 450;
 
@@ -18,7 +18,7 @@ export function messageLink(m: Pick<Message, "id" | "channelId" | "threadId">): 
 
 /**
  * One message row. `grouped` hides the header of a follow-up from the same author (time on hover);
- * system messages render as a centered line, task events and decision requests as compact cards.
+ * system messages render as a centered line, task events as compact cards.
  * Memoized: a row re-renders only when its message, counts or (stable) handlers change, so keep props
  * primitive or stable (see MessageRow).
  */
@@ -122,7 +122,6 @@ export const Msg = memo(function Msg({
           </div>
         )}
         {m.taskEvent ? <TaskEventCard envelope={m.taskEvent} route={taskRoute} body={m.body} onOpen={open} />
-          : isDecisionRequest(m) ? <DecisionRequestCard body={m.body} onOpen={open} />
           : m.body && <Markdown body={m.body} />}
         <BotOrigin event={m.botEvent} />
         {(m.attachments?.length ?? 0) > 0 && (

@@ -4,7 +4,6 @@ import type { Storage } from "../storage.ts";
 import type { AdaptiveTopologyRuntime } from "../adaptive-topology.ts";
 import type { RoomStore } from "../rooms.ts";
 import type { TaskStore } from "../tasks.ts";
-import type { InboxDeliveryStore } from "../inbox-delivery.ts";
 import type { NotificationStore } from "../notifications.ts";
 import type { ChannelService } from "./channels.ts";
 import type { IdentityService } from "./identity.ts";
@@ -33,8 +32,6 @@ export interface AgentDirectory {
   findActiveAgent(id: string): Agent | null;
   getAgentByName(name: string): Agent | null;
   listAgents(viewer?: Agent): Agent[];
-  /** The ids among `ids` of removed agents, read with one statement. */
-  removedAmong(ids: string[]): Set<string>;
 }
 
 export interface ProjectDirectory {
@@ -87,7 +84,7 @@ export interface WaiterRegistry {
 }
 
 /*
- * Dependencies of the coordination sub-stores (tasks, rooms, decisions, timeline, …).
+ * Dependencies of the coordination sub-stores (tasks, rooms, timeline, …).
  * Hive hands each store the same service registry it gives the services; each store
  * sees only the slice it declares here, so it cannot grow a dependency on the rest.
  */
@@ -133,10 +130,6 @@ export type TimelineDeps = Core & Channels<"getChannel" | "canSeeChannel"> & Mes
   readonly notifications: Pick<NotificationStore, "subscribedEventTypes">;
   readonly rooms: Pick<RoomStore, "peek">;
   readonly tasks: Pick<TaskStore, "get" | "unfinished">;
-};
-export type DecisionDeps = Core & Channels & Agents & Messages & Poster<"postMessage"> & {
-  readonly inbox: Pick<InboxDeliveryStore, "receiptStates">;
-  readonly tasks: Pick<TaskStore, "get" | "revisions">;
 };
 export type DiagnosticsDeps = { readonly home: string } & Agents<"getAgent">;
 

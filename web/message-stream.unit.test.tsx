@@ -5,10 +5,9 @@ import { act } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { TaskEnvelope } from "../src/shared/tasks.ts";
 import type { Message } from "../src/shared/types.ts";
-import { decisionBody } from "../src/shared/decisions.ts";
 import { taskBody } from "../src/shared/tasks.ts";
 import { renderMarkdown } from "./markdown.tsx";
-import { dayLabel, decisionSummary, formatTime, GROUP_WINDOW_MS, isDecisionRequest, streamRows } from "./message-stream.ts";
+import { dayLabel, formatTime, GROUP_WINDOW_MS, streamRows } from "./message-stream.ts";
 import { Msg } from "./Msg.tsx";
 
 const window = new Window({ url: "http://localhost/" });
@@ -49,7 +48,7 @@ test("consecutive messages of one author within five minutes are grouped; anythi
   assert.deepEqual(kinds(streamRows([a, b, c, d, e, f], { now: NOON })), ["date:Today", "msg", "grouped", "msg", "msg", "msg", "msg"]);
 });
 
-test("task events and decision requests stand alone as cards", () => {
+test("task events stand alone as cards", () => {
   const envelope = { taskId: "t1", channelId: "c1", revision: 1, contractVersion: 1, actorId: "forge", actorRole: "brain",
     assignerId: "forge", workerId: "w", action: { type: "accept" } } as TaskEnvelope;
   const rows = streamRows([message(), message({ taskEvent: envelope }), message()], { now: NOON });
@@ -109,7 +108,7 @@ test("a grouped follow-up has no header; the Thread line appears only when there
   assert.match(renderToStaticMarkup(<Msg m={m} grouped replies={0} status="blocked" />), /msg-h/, "a thread status keeps its header");
 });
 
-test("task and decision messages render as compact cards with the raw text behind Details", () => {
+test("task messages render as compact cards with the raw text behind Details", () => {
   const envelope: TaskEnvelope = { taskId: "3f2a9c1e-0000-4000-8000-000000000000", channelId: "c1", revision: 1, contractVersion: 1,
     actorId: "b", actorRole: "brain", assignerId: "b", workerId: "w", action: { type: "assign", contract: {
       objective: "Ship the <b>stream</b>", scope: ["web"], nonGoals: [], acceptanceCriteria: ["Tests pass"], dependencies: [], evidenceSeqs: [],
@@ -123,19 +122,13 @@ test("task and decision messages render as compact cards with the raw text behin
   assert.match(task, /<details><summary>Details<\/summary><div class="card-raw">Task assign · 3f2a9c1e/);
   assert.doesNotMatch(task, /class="msg-b/);
 
-  const body = decisionBody({ requestId: "r", taskId: "t1", expectedTaskRevision: 2, question: "Keep the legacy API?",
-    options: [{ id: "a", label: "Keep", impact: "none" }], affectedWorkers: ["Forge"], evidenceSeqs: [], artifacts: [],
-    recommendation: null, relatedDecisionIds: [], requestedByAt: NOON } as Parameters<typeof decisionBody>[0], "Atlas");
-  const request = message({ eventType: "question", body });
-  assert.ok(isDecisionRequest(request));
-  assert.equal(isDecisionRequest({ ...request, threadId: "root" }), false);
-  assert.equal(isDecisionRequest({ ...request, eventType: undefined }), false);
-  assert.deepEqual(decisionSummary(body), { question: "Keep the legacy API?", from: "Atlas", deadline: new Date(NOON).toISOString() });
-  const card = renderToStaticMarkup(<Msg m={request} replies={0} status={null} onThread={() => undefined} />);
-  assert.match(card, /chip-warn">Decision needed</);
-  assert.match(card, /class="card-title">Keep the legacy API\?</);
-  assert.match(card, />Answer</);
-  assert.match(card, /from Atlas/);
+  // A request from the removed Human decision queue is plain history now: its text, not a card.
+  const legacy = message({ eventType: "question", body: "Decision needed · task t1 · task revision 2\nQuestion: Keep the legacy API?" });
+  const plain = renderToStaticMarkup(<Msg m={legacy} replies={0} status={null} onThread={() => undefined} />);
+  assert.match(plain, /class="msg-b/);
+  assert.match(plain, /Keep the legacy API\?/);
+  assert.doesNotMatch(plain, /stream-card/);
+  assert.equal(kinds(streamRows([message(), legacy], { now: NOON })).at(-1), "grouped", "it groups like any chat message");
 });
 
 test("the hover toolbar replies in thread, copies a thread link, marks unread and reacts from the bigger picker", async () => {

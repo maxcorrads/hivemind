@@ -22,7 +22,7 @@ wake eligible agents; public chatter does not. Authors never receive their own m
   Telegram mute and non-chat exclusions still apply; a recipient and a textual
   mention of the same person produce one inbox entry, not two.
   For you holds DMs with Human, messages mentioning or targeting Human, replies in
-  threads Human took part in, and Human decision threads. Its **Unread** tab is
+  threads Human took part in, and task events addressed to Human. Its **Unread** tab is
   exactly what the sidebar badge counts; **Activity** keeps every entry with its
   server read state, on every device.
 - Structured task events automatically target the other participant (and the old

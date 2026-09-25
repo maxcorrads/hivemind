@@ -6,7 +6,7 @@ import { Msg } from "./Msg.tsx";
 import type { InboxBox } from "./selection.ts";
 
 export function Inbox({ box, items, unread, filter, loading = false, failed = false, hasMore, channels, agents, onBox, onFilter, onOpen,
-  onOlder, onMarkSeen, onMarkMessage, onDecisions }: {
+  onOlder, onMarkSeen, onMarkMessage }: {
   box: InboxBox;
   /** The first page of this view has not arrived yet. */
   loading?: boolean;
@@ -25,7 +25,6 @@ export function Inbox({ box, items, unread, filter, loading = false, failed = fa
   onOlder: () => void;
   onMarkSeen: () => void;
   onMarkMessage: (item: ActivityItem) => Promise<void>;
-  onDecisions: () => void;
 }) {
   const [expanded, setExpanded] = useState<string[]>([]);
   const [marking, setMarking] = useState<string[]>([]);
@@ -35,14 +34,13 @@ export function Inbox({ box, items, unread, filter, loading = false, failed = fa
       <div>
         <h1>For you</h1>
         <p>{box === "all"
-          ? "Direct messages, mentions, replies in your threads, decisions and tasks for you — read and unread, on every device."
-          : "Unread direct messages, mentions, replies in your threads, decisions and tasks for you."}</p>
+          ? "Direct messages, mentions, replies in your threads and tasks for you — read and unread, on every device."
+          : "Unread direct messages, mentions, replies in your threads and tasks for you."}</p>
         <div className="inbox-tabs" aria-label="Read status">
           <button type="button" className={box === "unread" ? "on" : ""} aria-pressed={box === "unread"} onClick={() => onBox("unread")}>
             Unread{unread > 0 && <em className="inbox-count">{unread}</em>}
           </button>
           <button type="button" className={box === "all" ? "on" : ""} aria-pressed={box === "all"} onClick={() => onBox("all")}>Activity</button>
-          <button type="button" onClick={onDecisions}>Decisions →</button>
         </div>
         <div className="inbox-tabs inbox-filters" aria-label="Activity type">
           {ACTIVITY_FILTERS.map(({ value, label }) =>

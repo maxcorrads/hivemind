@@ -16,7 +16,6 @@ import { waitUntilMail } from "./wait-loop.ts";
 import { digestExpansionSchema } from "../shared/digest.ts";
 import { claimPreviewSchema } from '../shared/task-claims.ts';
 import { assignTaskSchema, taskEventSchema } from '../shared/tasks.ts';
-import { decisionEventSchema, requestDecisionSchema } from '../shared/decisions.ts';
 import { roomEventSchema } from '../shared/rooms.ts';
 import { subscriptionSchema } from '../shared/notifications.ts';
 import { packageVersion } from "../shared/package-root.ts";
@@ -277,21 +276,6 @@ export async function startMcp() {
     assignTaskSchema.shape,
     async args => text(await agentRequest('POST', '/api/agent/tasks',
       { ...args, channel: args.channel ? normalizeChannelReference(args.channel) : undefined }, token())));
-  server.tool("request_human_decision",
-    TOOL_DESCRIPTIONS.request_human_decision,
-    requestDecisionSchema.shape,
-    async args => text(await agentRequest('POST', '/api/agent/decisions', args, token())));
-  server.tool("get_decisions",
-    TOOL_DESCRIPTIONS.get_decisions,
-    { decisionId: z.string().uuid().optional(), taskId: z.string().uuid().optional() },
-    async ({ decisionId, taskId }) => {
-      if ((decisionId === undefined) === (taskId === undefined)) throw new Error("Pass exactly one of decisionId (one request) or taskId (a task's requests)");
-      return text(await agentRequest('GET', decisionId ? `/api/agent/decisions/${decisionId}` : `/api/agent/tasks/${taskId}/decisions`, undefined, token()));
-    });
-  server.tool("decision_event",
-    TOOL_DESCRIPTIONS.decision_event,
-    { decisionId: z.string().uuid(), ...decisionEventSchema.shape },
-    async ({ decisionId, ...args }) => text(await agentRequest('POST', `/api/agent/decisions/${decisionId}/events`, args, token())));
   server.tool("get_worker_capabilities", TOOL_DESCRIPTIONS.get_worker_capabilities,
     { workerId: z.string().trim().min(1).max(100).describe(PARAM_DESCRIPTIONS.workerId) },
     async ({ workerId }) => {

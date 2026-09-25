@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AgentWork } from "../src/shared/tasks.ts";
 import type { Agent, Channel, Message, Project } from "../src/shared/types.ts";
-import type { DecisionView } from "../src/shared/decisions.ts";
 import { noticeFor } from "./desktop-notifications.ts";
 import { agentStatusLine, attentionTotal, documentTitle, projectAttention, projectInitials, switcherItems } from "./nav-model.ts";
 
@@ -23,10 +22,10 @@ const snap = { projects, channels, archivedChannelIds: ["old"], agents: [agent("
   unread: { gen: 2, old: 9, "dm-ada": 3, "dm-agents": 5, release: 1 }, mentionCounts: { alpha: 1, beta: 0 } };
 
 test("project attention counts mentions and Human DMs, ignores archived rooms and agent-only DMs", () => {
-  assert.deepEqual(projectAttention(snap, "alpha", { alpha: 2 }), { alerts: 4, unread: true, decisions: 2 });
-  assert.deepEqual(projectAttention(snap, "beta"), { alerts: 0, unread: true, decisions: 0 });
+  assert.deepEqual(projectAttention(snap, "alpha"), { alerts: 4, unread: true });
+  assert.deepEqual(projectAttention(snap, "beta"), { alerts: 0, unread: true });
   const quiet = { ...snap, unread: { old: 9, "dm-agents": 5 }, mentionCounts: {} };
-  assert.deepEqual(projectAttention(quiet, "alpha"), { alerts: 0, unread: false, decisions: 0 });
+  assert.deepEqual(projectAttention(quiet, "alpha"), { alerts: 0, unread: false });
   assert.equal(attentionTotal(snap), 4);
   assert.equal(documentTitle(0), "hivemind");
   assert.equal(documentTitle(4), "(4) hivemind");
@@ -67,11 +66,10 @@ test("switcher lists the current project's live conversations when empty and ran
   assert.deepEqual(switcherItems(snap, "(", "alpha"), [], "regex characters are literal");
 });
 
-test("desktop notices cover mentions, Human DMs and new decisions only", () => {
+test("desktop notices cover mentions and Human DMs only", () => {
   const message = (extra: Partial<Message>): Message => ({ id: "m", seq: 1, channelId: "gen", threadId: null, authorId: "ada",
     authorName: "Ada", authorRole: "brain", body: "hello", kind: "chat", control: null, mentions: [], createdAt: 0, ...extra });
-  const seen = new Set<string>();
-  const notice = (type: string, payload: unknown) => noticeFor({ type, payload }, channels, seen);
+  const notice = (type: string, payload: unknown) => noticeFor({ type, payload }, channels);
   assert.equal(notice("message", message({})), null, "plain channel chatter is not notified");
   assert.deepEqual(notice("message", message({ mentions: ["human"], threadId: "root" })),
     { title: "Ada in #general", body: "hello", tag: "m", target: { kind: "channel", id: "gen", thread: "root" } });
@@ -79,9 +77,5 @@ test("desktop notices cover mentions, Human DMs and new decisions only", () => {
   assert.equal(notice("message", message({ channelId: "dm-agents" })), null);
   assert.equal(notice("message", message({ authorId: "human", mentions: ["human"] })), null);
   assert.equal(notice("message", message({ kind: "system", mentions: ["human"] })), null);
-  const decision = { id: "d", channelId: "gen", state: "awaiting_input", revision: 1, requesterName: "Ada", question: "Which?" } as DecisionView;
-  assert.deepEqual(notice("decision", decision)?.target, { kind: "channel", id: "gen", thread: "d" });
-  assert.equal(notice("decision", decision), null, "each decision is announced once");
-  assert.equal(notice("decision", { ...decision, id: "e", state: "answered" }), null);
   assert.equal(notice("agent", {}), null);
 });

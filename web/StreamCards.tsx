@@ -1,5 +1,4 @@
 import type { TaskEnvelope } from "../src/shared/tasks.ts";
-import { decisionSummary } from "./message-stream.ts";
 
 const TASK_LABELS: Record<string, string> = {
   assign: "Assigned", revise: "Revised", accept: "Accepted", reject: "Rejected", block: "Blocked",
@@ -52,29 +51,6 @@ export function TaskEventCard({ envelope, route, body, onOpen }: {
       {route && <p className="card-meta">{route}</p>}
       <div className="card-actions">
         {onOpen && <button type="button" className="card-btn" onClick={onOpen}>Open</button>}
-        <details>
-          <summary>Details</summary>
-          <div className="card-raw">{body}</div>
-        </details>
-      </div>
-    </section>
-  );
-}
-
-/** Compact Human decision request; answering happens in the thread's DecisionCard, which holds the authority. */
-export function DecisionRequestCard({ body, onOpen }: { body: string; onOpen?: () => void }) {
-  const { question, from, deadline } = decisionSummary(body);
-  const due = deadline ? new Date(deadline) : null;
-  return (
-    <section className="stream-card decision-request" aria-label="Decision request">
-      <div className="card-top">
-        <span className="chip chip-warn">Decision needed</span>
-        {from && <small>from {from}</small>}
-      </div>
-      <p className="card-title">{question}</p>
-      {due && !Number.isNaN(due.getTime()) && <p className="card-meta">Needed by {due.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</p>}
-      <div className="card-actions">
-        {onOpen && <button type="button" className="card-btn primary" onClick={onOpen}>Answer</button>}
         <details>
           <summary>Details</summary>
           <div className="card-raw">{body}</div>

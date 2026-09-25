@@ -114,9 +114,11 @@ test("a populated current-main (user_version 2) hive upgrades with every row and
   hive.db.close();
 
   const after = inspect(file, db => ({ schema: schemaOf(db), rows: rowsOf(db) }));
-  // #211 (jev_advisory) drops what only served enforced topologies and #215 (agent_tombstones) adds agents.removed_at
-  // and replaces the constant Human token hash; every other row and object is untouched.
-  const dropped = ["adaptive_topology_locks", "adaptive_topology_tasks", "adaptive_topology_evaluated", "adaptive_topology_messages"];
+  // #211 (jev_advisory) drops what only served enforced topologies, #215 (agent_tombstones) adds agents.removed_at
+  // and replaces the constant Human token hash, and drop_decision_requests removes the Human decision queue (its
+  // messages stay); every other row and object is untouched.
+  const dropped = ["adaptive_topology_locks", "adaptive_topology_tasks", "adaptive_topology_evaluated", "adaptive_topology_messages",
+    "decision_requests", "decision_mutations"];
   const rewritten = ["adaptive_topology_executions", "adaptive_topology_events", "agents"];
   // #217 (performance_retention) adds the per-message receipt index, backfilled from the delivery ledger.
   const added = ["inbox_receipts"];

@@ -36,7 +36,7 @@ test("agent_tombstones migrates an online backup of a populated previous-release
   live.exec(`VACUUM INTO '${backup.replaceAll("'", "''")}'`);
   const copy = new DatabaseSync(backup);
   try {
-    assert.deepEqual(applyMigrations(copy).map(m => m.name), ["agent_tombstones"]);
+    assert.deepEqual(applyMigrations(copy, { target: 29 }).map(m => m.name), ["agent_tombstones"]);
     const after = rowsOf(copy);
     const { agents: agentsAfter, ...restAfter } = after, { agents: agentsBefore, ...restBefore } = before;
     assert.deepEqual(restAfter, restBefore, "every other row is kept");
@@ -58,7 +58,7 @@ test("agent_tombstones migrates an online backup of a populated previous-release
   assert.equal(schemaVersion(hive.db), LATEST_VERSION);
   const human = hive.identity.getAgent("human");
   const brain = hive.identity.listAgents().find(agent => agent.role === "brain")!;
-  const history = ["messages", "task_records", "decision_requests", "routing_outcomes", "reactions", "adaptive_topology_events", "jev_calls"];
+  const history = ["messages", "task_records", "routing_outcomes", "reactions", "adaptive_topology_events", "jev_calls"];
   const count = () => Object.fromEntries(history.map(table => [table, countRows(hive, table)]));
   const kept = count();
   assert.ok(countRows(hive, "messages", { author_id: brain.id }) > 0);

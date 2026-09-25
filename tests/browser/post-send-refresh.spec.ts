@@ -61,14 +61,14 @@ async function fixture(page: Page, inThread: boolean) {
       if (!socket) throw new Error('Fixture WebSocket not ready');
       socket.send(JSON.stringify({ type, payload, streamId: 'post-send-stream', sequence: ++eventSequence }));
     },
-    trigger(kind: 'task' | 'decision' | 'room' | 'project') {
+    trigger(kind: 'task' | 'room' | 'project') {
       if (kind === 'task') {
         task = { id: root.id, channelId: a.id, assignerId: 'brain', assignerName: 'Brain', workerId: 'worker', workerName: 'Worker',
           revision: 2, contractVersion: 1, state: 'accepted', dispatchSeq: 1, receivedAt: 1, lastEventSeq: 90, updatedAt: 90,
           result: null, review: null, contract: { objective: 'Keep the confirmed reply visible', scope: [], nonGoals: [],
             acceptanceCriteria: ['Confirmed reply visible'], dependencies: [], evidenceSeqs: [] } };
         h.emit(kind, task);
-      } else h.emit(kind, kind === 'decision' ? { id: 'decision', taskId: root.id, channelId: a.id } : { channelId: a.id });
+      } else h.emit(kind, { channelId: a.id });
     },
     async sendFromHistory() {
       await scope.locator('.stream').evaluate(el => { el.scrollTop = 0; });
@@ -93,13 +93,12 @@ async function fixture(page: Page, inThread: boolean) {
   await page.route('**/api/ui/session', route => json(route, { ok: true }));
   await page.route('**/api/ui/snapshot', route => json(route, snap()));
   await page.route('**/api/ui/read-state', route => json(route, snap()));
-  await page.route('**/api/ui/nav-status', route => json(route, { awaitingDecisions: {}, agentWork: {} }));
+  await page.route('**/api/ui/nav-status', route => json(route, { agentWork: {} }));
   await page.route('**/api/ui/read', route => { revision++; return json(route, snap()); });
   await page.route('**/api/ui/activity?*', route => json(route, { ...snap(), items: [], hasMore: false }));
   await page.route('**/api/ui/channels/*/room', route => json(route, { room: null, tasks: [], activeTaskCount: 0,
     tasksHasMore: false, nextTaskCursor: null, links: [], unmanagedBots: [] }));
   await page.route('**/api/ui/channels/*/tasks', route => json(route, { items: [], hasMore: false }));
-  await page.route('**/api/ui/decisions?*', route => json(route, { items: [], awaiting: 0, warning: '' }));
   // Mounting TaskCard also mounts its timeline. Keep this expected read local;
   // the catch-all above must still fail any genuinely unexpected API request.
   const timeline: TimelineView = { traceId: root.id, taskId: root.id,
@@ -133,7 +132,7 @@ async function fixture(page: Page, inThread: boolean) {
   return h;
 }
 
-for (const trigger of ['task', 'decision', 'room'] as const) {
+for (const trigger of ['task', 'room'] as const) {
   test(`post-send thread refresh survives a competing ${trigger} read`, async ({ page }) => {
     const h = await fixture(page, true), requested = deferred(), release = deferred(), settled = deferred();
     h.onRead = async (route, index) => {

@@ -18,8 +18,8 @@ test("a realtime entry is added newest first only where the view shows it", () =
   assert.equal(receiveActivity(loaded, activity, item("b", 5)), loaded, "a duplicate is ignored");
   assert.equal(receiveActivity(loaded, activity, item("x", 9, { project: "other" })), loaded);
   assert.equal(receiveActivity(loaded, { ...activity, unreadOnly: true }, item("x", 9, { read: true })), loaded,
-    "Unread never shows a read entry (the Human's own decision answer)");
-  assert.deepEqual(ids(receiveActivity(loaded, activity, item("own", 9, { read: true, reason: "decision" }))), ["own", "b", "a"]);
+    "Unread never shows a read entry");
+  assert.deepEqual(ids(receiveActivity(loaded, activity, item("own", 9, { read: true, reason: "thread" }))), ["own", "b", "a"]);
   const review = { ...activity, reasons: filterReasons("review") };
   assert.equal(receiveActivity(loaded, review, item("x", 9, { reason: "direct" })), loaded);
   assert.deepEqual(ids(receiveActivity(loaded, review, item("t", 9, { reason: "task" }))), ["t", "b", "a"]);

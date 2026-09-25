@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
 import type { AdaptiveExecutionState, AdaptiveRoutingEvent } from "../src/shared/adaptive-topology.ts";
-import type { DecisionView } from '../src/shared/decisions.ts';
 import type { EvidenceCollectorHealth } from "../src/shared/evidence-health.ts";
 import type { JevCallSummary } from "../src/shared/jev-calls.ts";
 import type { createRequestGate } from "../src/shared/read-client.ts";
@@ -26,7 +25,7 @@ export type JevLiveSubscribe = (listener: (event: JevLiveEvent) => void) => () =
 
 /** Roster/queue/health updates are applied at most once per this window. */
 const SNAP_BATCH_MS = 50;
-/** Refetch ticks (room panel, decision queue) run at most once per this window. */
+/** Refetch ticks (room panel, channel tasks) run at most once per this window. */
 const TICK_MS = 250;
 
 /**
@@ -58,7 +57,6 @@ export function useRealtime({ selection, hive, channel, thread, inboxLoad, chang
   const { setThreadView, setThreadPane, threadLoad, loadThread, onThreadMessage } = thread;
   const [live, setLive] = useState(false);
   const [roomTick, setRoomTick] = useState(0);
-  const [decisionTick, setDecisionTick] = useState(0);
   const [jevTick, setJevTick] = useState(0);
   const jevListeners = useRef(new Set<(event: JevLiveEvent) => void>());
   const subscribeJev = useCallback<JevLiveSubscribe>((listener) => {
@@ -85,7 +83,6 @@ export function useRealtime({ selection, hive, channel, thread, inboxLoad, chang
     refreshSnap().catch((e) => { if (e?.name !== "AbortError") setErr(String(e.message || e)); });
     const snapUpdates = createUpdateBatch<Snapshot | null>(setSnap, SNAP_BATCH_MS);
     const roomTicks = createThrottle(() => setRoomTick(t => t + 1), TICK_MS);
-    const decisionTicks = createThrottle(() => setDecisionTick(t => t + 1), TICK_MS);
     const jev = (event: JevLiveEvent) => { for (const listener of jevListeners.current) listener(event); };
     const off = connectWs((ev) => {
       tap.current?.(ev);
@@ -163,7 +160,6 @@ export function useRealtime({ selection, hive, channel, thread, inboxLoad, chang
       }
       if (ev.type === "queued") {
         const q = ev.payload as { agentId: string; n: number; inbox?: InboxStatus };
-        if (selRef.current.kind === 'decisions') decisionTicks.request();
         snapUpdates.push((current) => {
           if (!current) return current;
           const previous = current.inbox?.[q.agentId];
@@ -183,21 +179,10 @@ export function useRealtime({ selection, hive, channel, thread, inboxLoad, chang
       }
       if (ev.type === 'task') {
         const task = ev.payload as TaskSnapshot;
-        decisionTicks.request();
         if (selRef.current.kind === 'channel' && selRef.current.id === task.channelId) roomTicks.request();
         if (viewingThread(task.channelId, task.id)) {
           setThreadView(view => receiveThreadTask(selectThread(view, task.channelId, task.id), task));
           loadThread(task.channelId, task.id).catch(() => undefined);
-        }
-        return;
-      }
-      if (ev.type === 'decision') {
-        const decision = ev.payload as DecisionView;
-        decisionTicks.request();
-        if (selRef.current.kind === 'channel' && selRef.current.id === decision.channelId) {
-          const root = threadIdRef.current;
-          if (root === decision.id || root === decision.taskId)
-            loadThread(decision.channelId, root).catch(() => undefined);
         }
         return;
       }
@@ -225,7 +210,6 @@ export function useRealtime({ selection, hive, channel, thread, inboxLoad, chang
       off();
       snapUpdates.cancel();
       roomTicks.cancel();
-      decisionTicks.cancel();
       channelLoad.current.cancel();
       channelJournal.current = null;
       threadLoad.current.cancel();
@@ -236,5 +220,5 @@ export function useRealtime({ selection, hive, channel, thread, inboxLoad, chang
     };
   }, [loadChannel, refreshSnap, refreshArchivedChannels, setArchivedChannel, resetReadConnection, changeSelection, onThreadMessage, viewingThread, loadThread, setThreadPane]);
 
-  return { live, roomTick, setRoomTick, decisionTick, setDecisionTick, jevTick, subscribeJev };
+  return { live, roomTick, setRoomTick, jevTick, subscribeJev };
 }

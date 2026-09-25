@@ -53,7 +53,7 @@ async function mount(t: TestContext, hive: Hive, hash: string) {
   });
   const originalSocket = globalThis.WebSocket;
   globalThis.WebSocket = BrowserSocket as unknown as typeof WebSocket;
-  const events = ['message', 'agent', 'channel', 'task', 'decision', 'queued', 'room'] as const;
+  const events = ['message', 'agent', 'channel', 'task', 'queued', 'room'] as const;
   const listeners = events.map(type => {
     const listener = (payload: unknown) => BrowserSocket.current?.event(type, payload);
     hive.bus.on(type, listener); return listener;
@@ -175,14 +175,13 @@ test('Cmd/Ctrl+K opens a keyboard-driven switcher over channels, DMs, agents and
   assert.ok(!dialog(), 'Escape closes it');
 });
 
-test('Decisions carries an awaiting count and the roster says what each agent is doing', async t => {
+test('the roster says what each agent is doing, and the sidebar has no Decisions entry', async t => {
   const { hive, home } = fixture(t);
   const brain = hive.identity.join({ role: 'brain', project: home.slug }).agent;
   const worker = hive.identity.join({ role: 'worker', project: home.slug, seniority: 'mid' }).agent;
   localStorage.clear();
   const view = await mount(t, hive, `#/inbox/${home.slug}`);
-  const decisions = () => view.navButton(/^Decisions/)!;
-  assert.equal(decisions().querySelector('em'), null, 'no badge while nothing awaits');
+  assert.equal(view.navButton(/^Decisions/), undefined, 'the Human decision queue was removed');
   const status = (agent: Agent) => [...view.sidebar().querySelectorAll('.person')]
     .find(row => row.querySelector('.pn')?.textContent === agent.name)?.querySelector('.person-status')?.textContent;
   assert.equal(status(worker), 'idle');
@@ -196,17 +195,6 @@ test('Decisions carries an awaiting count and the roster says what each agent is
   await settle();
   assert.equal(status(worker), 'blocked: API contract');
   assert.equal(status(brain), 'coordinating 1 task');
-
-  await act(async () => {
-    hive.decisions.create(brain, { requestId: 'd', taskId: task.id, expectedTaskRevision: hive.tasks.get(brain, task.id).revision,
-      question: 'Which contract?', options: [{ id: 'a', label: 'A', impact: 'x' }, { id: 'b', label: 'B', impact: 'y' }],
-      recommendation: { optionId: 'a', rationale: 'Simple', uncertainty: 'Low' },
-      evidenceSeqs: [], artifacts: [], affectedWorkers: [worker.name], relatedDecisionIds: [] });
-  });
-  await settle();
-  assert.equal(decisions().querySelector('em.nav-alert')?.textContent, '1');
-  assert.match(view.railButton(new RegExp(home.name))!.getAttribute('aria-label')!, /1 decision awaiting/);
-  assert.ok(view.host.querySelector('.rail-project .rail-decision'));
 });
 
 test('the page title counts what is waiting for the Human', async t => {

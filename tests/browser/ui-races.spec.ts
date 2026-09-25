@@ -135,7 +135,7 @@ async function installSnapshot(page: Page, current: () => Snapshot) {
   });
   await page.route("**/api/ui/snapshot", async route => fulfillJson(route, reads()));
   await page.route("**/api/ui/read-state", async route => fulfillJson(route, reads()));
-  await page.route("**/api/ui/nav-status", async route => fulfillJson(route, { awaitingDecisions: {}, agentWork: {} }));
+  await page.route("**/api/ui/nav-status", async route => fulfillJson(route, { agentWork: {} }));
   await page.route("**/api/ui/read", async route => {
     const receipt = route.request().postDataJSON() as { messageSeqs: number[] };
     harness.receipts.push(receipt.messageSeqs);
@@ -149,9 +149,8 @@ async function installSnapshot(page: Page, current: () => Snapshot) {
   const room: RoomView = { room: null, tasks: [], activeTaskCount: 0, tasksHasMore: false,
     nextTaskCursor: null, links: [], unmanagedBots: [] };
   await page.route("**/api/ui/channels/*/room", async route => fulfillJson(route, room));
-  // The channel tabs count the channel's tasks and decisions.
+  // The Tasks tab counts the channel's tasks.
   await page.route("**/api/ui/channels/*/tasks", async route => fulfillJson(route, { items: [], hasMore: false }));
-  await page.route("**/api/ui/decisions?*", async route => fulfillJson(route, { items: [], awaiting: 0, warning: "" }));
 }
 
 async function installMessages(
@@ -231,7 +230,7 @@ for (const inThread of [false, true]) for (const alreadyOpen of [false, true]) {
   });
 }
 
-for (const tab of ['Tasks', 'Contract', 'Decisions']) for (const inThread of [false, true]) {
+for (const tab of ['Tasks', 'Contract']) for (const inThread of [false, true]) {
   test(`unread badge reveals Messages from ${tab} (thread=${inThread})`, async ({ page }) => {
     const p = project('alpha', 'Alpha Hive'), a = channel('a', 'Alpha', p);
     const snap = { ...snapshot([p], [a]), unread: { a: 1 } };

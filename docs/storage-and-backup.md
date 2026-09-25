@@ -22,6 +22,7 @@ The schema has a single source: the ordered, versioned migrations in `src/server
 
 - A database with a `user_version` newer than this build is refused with a clear error before anything writes to it. Upgrade Hivemind rather than lowering `user_version`.
 - Migration 28 (`performance_retention`, #217) adds indexes on `threads(channel_id)`, `room_events(channel_id, revision)` and `attachments(sha256)`. It also adds the per-message `inbox_receipts` table, backfilled from the delivery ledger and kept current by triggers, and recomputes the upload quota over distinct blobs.
+- Migration 30 (`drop_decision_requests`) drops `decision_requests` and `decision_mutations`: the Human decision queue was removed. Messages posted by decision requests, and replies in their threads, stay as ordinary history. The migration deletes the request records (options, recommendation, state), so back up first if you need them.
 - Versions 0 (unversioned) and 2 (the project-storage marker of earlier releases) are legacy: such a database runs the whole baseline (versions 3–26). Every baseline step is idempotent and detects what already exists, so databases from any earlier release upgrade without data loss; version 2 must first pass the core-table checks.
 - The Telegram routing migration is deferred: it assigns legacy Telegram rows to the bot that is active when the bridge first starts, so the bridge runs it (it is idempotent and keeps its own marker table).
 - To change the schema, append a migration with the next version; never edit or reorder a shipped one. A unit test rejects `CREATE`/`ALTER`/`DROP` statements outside `src/server/migrations/`.
@@ -36,11 +37,11 @@ Unknown versions and inconsistent keys/partial schemas are rejected without repa
    - acknowledged inbox delivery batches, and superseded ones (the pending batch of each agent is never touched);
    - Jev call logs (the per-project cap of 1,000 calls still applies within the window).
 
-   Per-message delivery receipts (`inbox_receipts`) and the acknowledgement totals are kept, so decision receipt stages ("offered", "acknowledged") and inbox status do not change when a batch is pruned. After pruning, acknowledging a pruned batch id returns 404, like any unknown delivery.
+   Per-message delivery receipts (`inbox_receipts`) and the acknowledgement totals are kept, so per-message receipt stages ("offered", "acknowledged") and inbox status do not change when a batch is pruned. After pruning, acknowledging a pruned batch id returns 404, like any unknown delivery.
 2. **Collects abandoned uploads**, as `hivemind gc` does. It removes uploads never attached to a message after 24 hours, then blobs no attachment references.
 3. **Runs `PRAGMA optimize`** so SQLite refreshes the planner statistics it considers stale.
 
-**Retention never deletes messages, threads, tasks and their events, decisions, room contracts or their history.** Other logs keep their own bounds: the coordination timeline (30 days, unfinished task traces kept), Telegram diagnostics (30 days), Jev routing audit events (the latest 500 per channel) and routing outcomes (90 days).
+**Retention never deletes messages, threads, tasks and their events, room contracts or their history.** Other logs keep their own bounds: the coordination timeline (30 days, unfinished task traces kept), Telegram diagnostics (30 days), Jev routing audit events (the latest 500 per channel) and routing outcomes (90 days).
 
 The window is **30 days** by default. Configure it with `HIVEMIND_RETENTION_DAYS` in the environment of `hivemind serve`:
 

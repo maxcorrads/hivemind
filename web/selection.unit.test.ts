@@ -16,8 +16,9 @@ test("parseHash defaults to #general and reads every route", () => {
   assert.deepEqual(parseHash("#/inbox"), { kind: "inbox", project: "", box: "unread" });
   assert.deepEqual(parseHash("#/inbox/alpha/all"), { kind: "inbox", project: "alpha", box: "all" });
   assert.deepEqual(parseHash("#/inbox/alpha/other"), { kind: "inbox", project: "alpha", box: "unread" });
-  assert.deepEqual(parseHash("#/decisions/alpha"), { kind: "decisions", project: "alpha" });
-  assert.deepEqual(parseHash("#/decisions"), { kind: "decisions", project: "" });
+  // The removed Decisions view: old links land on the project's For you.
+  assert.deepEqual(parseHash("#/decisions/alpha"), { kind: "inbox", project: "alpha", box: "unread" });
+  assert.deepEqual(parseHash("#/decisions"), { kind: "inbox", project: "", box: "unread" });
   assert.deepEqual(parseHash("#/routing-log/alpha"), { kind: "jev", project: "alpha" });
   assert.deepEqual(parseHash("#/jev/alpha"), { kind: "jev", project: "alpha" });
   assert.deepEqual(parseHash("#/home/alpha"), { kind: "home", project: "alpha" });
@@ -29,7 +30,6 @@ test("hashFor round-trips through parseHash", () => {
     { kind: "inbox", project: "alpha", box: "unread" },
     { kind: "inbox", project: "alpha", box: "all" },
     { kind: "inbox", project: "", box: "unread" },
-    { kind: "decisions", project: "a b" },
     { kind: "jev", project: "alpha" },
     { kind: "home", project: "a b" },
     { kind: "dms", project: "alpha" },
@@ -47,7 +47,6 @@ test("repairSel keeps valid selections and falls back to the first project", () 
   assert.equal(repairSel({ kind: "channel", id: "general" }, snap), null);
   assert.equal(repairSel({ kind: "inbox", project: "beta" }, snap), null);
   assert.deepEqual(repairSel({ kind: "inbox", project: "", box: "all" }, snap), { kind: "inbox", project: "alpha", box: "all" });
-  assert.deepEqual(repairSel({ kind: "decisions", project: "gone" }, snap), { kind: "decisions", project: "alpha" });
   assert.deepEqual(repairSel({ kind: "jev", project: "gone" }, snap), { kind: "jev", project: "alpha" });
   assert.deepEqual(repairSel({ kind: "home", project: "" }, snap), { kind: "home", project: "alpha" });
   assert.deepEqual(repairSel({ kind: "dms", project: "gone" }, snap), { kind: "dms", project: "alpha" });
@@ -58,7 +57,7 @@ test("repairSel keeps valid selections and falls back to the first project", () 
 test("repairSel prefers the project last shown in this browser while it exists", () => {
   const snap = { projects: [project("alpha"), project("beta")], channels: [channel("general")] };
   assert.deepEqual(repairSel({ kind: "channel", id: "gone" }, snap, "beta"), { kind: "inbox", project: "beta" });
-  assert.deepEqual(repairSel({ kind: "decisions", project: "" }, snap, "beta"), { kind: "decisions", project: "beta" });
+  assert.deepEqual(repairSel({ kind: "home", project: "" }, snap, "beta"), { kind: "home", project: "beta" });
   assert.deepEqual(repairSel({ kind: "channel", id: "gone" }, snap, "deleted"), { kind: "inbox", project: "alpha" });
   assert.equal(repairSel({ kind: "inbox", project: "alpha" }, snap, "beta"), null, "a valid selection is never moved");
 });

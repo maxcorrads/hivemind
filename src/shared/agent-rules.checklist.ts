@@ -96,7 +96,7 @@ export const AGENT_RULES = [
   { id: "brain.offline-worker", roles: brain, rule: "Leave work for an offline worker; do not try to wake it." },
   { id: "brain.prepare", roles: brain, rule: "Put worktree, branch and files to open in the assignment; workers can read history." },
   { id: "brain.task-owner", roles: brain, rule: "Only the assigning brain revises a task or reviews its result (accepted/changes_requested)." },
-  { id: "brain.ask-human", roles: brain, rule: "Ask @Human what is next when a cycle is done or when unsure; prefer request_human_decision for decisions blocking an active structured task." },
+  { id: "brain.ask-human", roles: brain, rule: "Ask @Human what is next when a cycle is done or when unsure." },
   { id: "brain.housekeeping", roles: brain, rule: "May search the project, create channels and set optional thread status." },
   { id: "brain.clear-context", roles: brain, rule: "clear_context only for a worker stuck in a long session; never automatically at done or after a report." },
   { id: "brain.human-admin", roles: brain, rule: "Human sees every conversation; treat DMs as private from workers' view." },
@@ -132,7 +132,6 @@ export const AGENT_RULES = [
   { id: "room.summarize", roles: brain, rule: "Only the coordinating brain summarizes a finite room back to its originating task, then archives under the agreed policy." },
 
   // Advisory data (tool-level safety facts)
-  { id: "advisory.decision", roles: brain, rule: "A Human decision recommendation is advisory; expiry or staleness never applies it." },
   { id: "advisory.capabilities", roles: both, rule: "Capability declarations are unverified and never permit launching or changing a runtime." },
   { id: "advisory.routing", roles: brain, rule: "Routing suggestions and overrides never assign work or change ownership." },
 ] as const satisfies readonly AgentRule[];

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
-import { HiveError, HUMAN_ID } from "../shared/types.ts";
+import { HiveError } from "../shared/types.ts";
 import { Storage } from "./storage.ts";
 import type { ActivityReason, ReadStamp } from "../shared/read-state.ts";
 
@@ -63,13 +63,11 @@ export class ReadState {
    * Why `m` (in channel `c`) is For you, as a SQL expression that is NULL when it is
    * not. The unread badge, the Unread tab, "mark all read" and the Activity feed all
    * use this one definition, so they cannot disagree. The reader's own messages are
-   * never For you, except the Human's replies in a decision thread (their answers).
+   * never For you.
    */
   private reason(actorId: string) {
-    const decision = actorId === HUMAN_ID
-      ? "WHEN EXISTS (SELECT 1 FROM decision_requests d WHERE d.id = COALESCE(m.thread_id, m.id)) THEN 'decision'" : "";
     return {
-      sql: `CASE ${decision}
+      sql: `CASE
         WHEN m.author_id = ? THEN NULL
         WHEN EXISTS (SELECT 1 FROM json_each(m.recipients) WHERE value = ?)
           AND EXISTS (SELECT 1 FROM task_events te WHERE te.message_id = m.id) THEN 'task'

@@ -7,7 +7,6 @@ import { API_JSON_BYTES, channelInputSchema, cursorSchema, integerArgument,
 import { subscriptionSchema, subscriptionScopeSchema } from "../shared/notifications.ts";
 import { claimPreviewSchema } from '../shared/task-claims.ts';
 import { assignTaskSchema, taskEventSchema } from "../shared/tasks.ts";
-import { decisionAnswerSchema, decisionEventSchema, requestDecisionSchema } from "../shared/decisions.ts";
 import { roomEventSchema, sourceLinkSchema, sourceReportSchema } from "../shared/rooms.ts";
 import { HiveError } from "../shared/types.ts";
 
@@ -62,9 +61,6 @@ function schemaFor(path: string, method: string): z.ZodType | undefined {
   if (/\/tasks\/[^/]+\/routing-override$/.test(path)) return routingOverrideSchema;
   if (path.endsWith('/tasks')) return assignTaskSchema;
   if (/\/tasks\/[^/]+\/events$/.test(path)) return taskEventSchema;
-  if (path.endsWith('/api/agent/decisions')) return requestDecisionSchema;
-  if (/\/api\/agent\/decisions\/[^/]+\/events$/.test(path)) return decisionEventSchema;
-  if (/\/api\/ui\/decisions\/[^/]+\/answer$/.test(path)) return decisionAnswerSchema;
   if (/\/channels\/[^/]+\/room$/.test(path)) return roomEventSchema;
   if (/\/channels\/[^/]+\/links$/.test(path)) return sourceLinkSchema;
   if (/\/channels\/[^/]+\/links\/[^/]+\/status$/.test(path)) return sourceReportSchema;

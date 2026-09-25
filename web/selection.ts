@@ -4,7 +4,6 @@ export type InboxBox = "unread" | "all";
 
 export type Sel =
   | { kind: "inbox"; project: string; box?: InboxBox }
-  | { kind: "decisions"; project: string }
   /** Routing log: every Jev exchange of a project. Hash `#/routing-log/<project>`; `#/jev/<project>` is an alias. */
   | { kind: "jev"; project: string }
   /** Mobile list screens (#223): a project's channels (`#/home/<project>`) and its direct messages (`#/dms/<project>`). */
@@ -22,7 +21,8 @@ export function parseHash(hash: string = location.hash): Sel {
       box: parts[2] === "all" ? "all" : "unread",
     };
   }
-  if (parts[0] === "decisions") return { kind: "decisions", project: parts[1] ? decodeURIComponent(parts[1]) : "" };
+  // The Decisions view was removed: its old links open the project's For you.
+  if (parts[0] === "decisions") return { kind: "inbox", project: parts[1] ? decodeURIComponent(parts[1]) : "", box: "unread" };
   if (parts[0] === "home" || parts[0] === "dms") return { kind: parts[0], project: parts[1] ? decodeURIComponent(parts[1]) : "" };
   if (parts[0] === "routing-log" || parts[0] === "jev") return { kind: "jev", project: parts[1] ? decodeURIComponent(parts[1]) : "" };
   if (parts[1]) {
