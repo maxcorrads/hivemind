@@ -34,7 +34,7 @@ async function fixture(t: TestContext) {
     const result = await raw(name, args); assert.notEqual(result.isError, true, JSON.stringify(result));
     const block = result.content.find(item => item.type === "text"); assert(block?.type === "text"); return JSON.parse(block.text) as T;
   };
-  const joined = await call<{ name: string }>("join", { role: "worker", seniority: "mid", project: "chapter" });
+  const joined = await call<{ name: string }>("join", { role: "worker", seniority: "mid", project: "acme" });
   const worker = hive.identity.getAgentByName(joined.name)!;
   const human = hive.identity.getAgent("human"), brain = hive.identity.join({ role: "brain" });
   const channel = hive.channels.openDm(human, worker.name);
