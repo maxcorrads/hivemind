@@ -13,6 +13,20 @@ function tempHive() {
   return { hive, dir };
 }
 
+test("a new hive has no project until Human creates one", () => {
+  const previous = process.env.HIVEMIND_FIXTURE_PROJECT;
+  delete process.env.HIVEMIND_FIXTURE_PROJECT;
+  try {
+    const { hive, dir } = tempHive();
+    assert.deepEqual(hive.projects.listProjects(), []);
+    hive.close();
+    rmSync(dir, { recursive: true, force: true });
+  } finally {
+    if (previous === undefined) delete process.env.HIVEMIND_FIXTURE_PROJECT;
+    else process.env.HIVEMIND_FIXTURE_PROJECT = previous;
+  }
+});
+
 test("workers cannot forge control messages", () => {
   const { hive, dir } = tempHive();
   const worker = hive.identity.join({ role: "worker", seniority: "senior" });

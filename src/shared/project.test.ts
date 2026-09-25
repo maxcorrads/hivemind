@@ -15,5 +15,5 @@ test("join project: flag wins, then worktree, then the only project", () => {
   assert.equal(resolveJoinProject([chapter], { cwd: "/tmp" }).slug, "chapter");
   assert.throws(() => resolveJoinProject([chapter, altro], { cwd: "/tmp" }), /Pass project=slug/);
   assert.throws(() => resolveJoinProject([chapter], { project: "missing" }), /No project/);
-  assert.equal(parseProjectSlug("Chapter"), "chapter");
+  assert.equal(parseProjectSlug("Alpha"), "alpha");
 });

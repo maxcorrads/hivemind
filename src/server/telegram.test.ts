@@ -210,7 +210,7 @@ test("telegram config maps each group chat to a project and ignores unknown chat
   );
   const cfg = loadTelegramConfig(dir);
   assert.ok(cfg);
-  assert.equal(chatIdForProject(cfg!, "chapter"), -1001);
+  assert.equal(chatIdForProject(cfg!, "chapter"), undefined);
   assert.equal(chatIdForProject(cfg!, "altro"), -1002);
   assert.equal(projectSlugForChat(cfg!, -1002), "altro");
   assert.equal(projectSlugForChat(cfg!, -1999), undefined);

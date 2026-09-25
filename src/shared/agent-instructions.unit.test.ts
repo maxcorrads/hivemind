@@ -16,7 +16,7 @@ const agent = (role: AgentRole): Agent => ({
 });
 const orders = { brain: standingOrders(agent("brain")), worker: standingOrders(agent("worker")) };
 
-const launchBase = { software: "codex", workspacePath: null, cdWorktree: false, projectSlug: "chapter", hiveName: "Chapter",
+const launchBase = { software: "codex", workspacePath: null, cdWorktree: false, projectSlug: "chapter", hiveName: "Acme",
   passProject: true, adoptUntrusted: true, seniority: "senior", resumeName: "Forge" } as const;
 function launchPrompts(role: AgentRole): string[] {
   return [false, true].flatMap(resume => {
