@@ -1,13 +1,36 @@
 # Contributing
 
-Hivemind is currently source-available, but it is not an open-source project and is not currently accepting unsolicited code, documentation, design, or asset contributions.
+Contributions to Hivemind are welcome.
 
-Bug reports, feature requests, and technical discussion are welcome through GitHub Issues.
+Hivemind is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE). You may use, fork, modify, and redistribute the project for non-commercial purposes within the terms of that license.
+
+Bug reports, feature requests, technical discussion, documentation improvements, and pull requests are welcome.
 
 ## Pull requests
 
-Please do not submit a pull request containing copyrightable changes unless Matteo Corradin has explicitly invited the contribution and the applicable ownership and licensing terms have been agreed in writing beforehand.
+Before opening a pull request:
 
-Submitting a pull request does not transfer copyright or other ownership rights. A contribution will not be merged unless the necessary rights have been granted or assigned under a separate written agreement.
+1. Keep the change focused and explain the problem it solves.
+2. Run `npm run check` when the change affects code.
+3. Include relevant tests or documentation updates when appropriate.
+4. Read and agree to the [Contributor License Agreement](CLA.md).
 
-This policy is intended to keep the project's copyright ownership and future relicensing options clear while Hivemind remains under its current restrictive license.
+By submitting a pull request or other copyrightable contribution to this repository, you agree to the terms in [CLA.md].
+
+If you are contributing on behalf of an employer or another organization, you are responsible for confirming that you have authority to submit the contribution and grant the rights described in the CLA.
+
+## Ownership and licensing of contributions
+
+You retain copyright ownership of your contribution.
+
+The CLA grants Matteo Corradin the rights needed to incorporate, distribute, sublicense, and relicense accepted contributions, including as part of a separately licensed commercial version of Hivemind.
+
+Accepted contributions also remain available as part of Hivemind under the public license applicable to the project when the contribution is submitted.
+
+This arrangement keeps community contributions possible while preserving Hivemind's non-commercial public licensing model and the ability to offer separate commercial licenses.
+
+## Review
+
+Submitting a contribution does not guarantee that it will be accepted. Contributions may be declined, revised, or requested to be split into smaller changes.
+
+Thank you for helping improve Hivemind.
