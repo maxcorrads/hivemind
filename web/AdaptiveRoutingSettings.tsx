@@ -4,7 +4,7 @@ import { api, type AdaptiveRoutingSettings } from "./api.ts";
 import { JevConnectionTest } from "./JevConnectionTest.tsx";
 import { JEV_MODEL_ALIAS, validJevModel } from "../src/shared/jev-model.ts";
 
-export function AdaptiveRoutingSettings({ onClose, onSaved }: { onClose: () => void; onSaved?: () => void }) {
+export function AdaptiveRoutingSettings({ onClose, onSaved }: { onClose: () => void; onSaved?: (settings: AdaptiveRoutingSettings) => void }) {
   const [settings, setSettings] = useState<AdaptiveRoutingSettings | null>(null);
   const [enabled, setEnabled] = useState(false);
   const [apiKey, setApiKey] = useState("");
@@ -51,7 +51,7 @@ export function AdaptiveRoutingSettings({ onClose, onSaved }: { onClose: () => v
             setEnabled(value.enabled);
             setModel(value.modelPinned ? value.model : "");
             setApiKey("");
-            onSaved?.();
+            onSaved?.(value);
           }).catch(err => setError(String(err.message || err)))
             .finally(() => setBusy(false));
         }}

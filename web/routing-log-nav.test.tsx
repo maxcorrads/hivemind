@@ -7,6 +7,7 @@ import { Window } from 'happy-dom';
 import { act } from 'react';
 import { Hive } from '../src/server/hive.ts';
 import { createApp } from '../src/server/app.ts';
+import { saveAdaptiveRouting } from '../src/server/adaptive-config.ts';
 import { App } from './App.tsx';
 
 const window = new Window({ url: 'http://localhost/' });
@@ -22,9 +23,10 @@ class IdleSocket {
   close() { this.onclose?.(); }
 }
 
-async function mount(t: import('node:test').TestContext, hash: string) {
+async function mount(t: import('node:test').TestContext, hash: string, { jev = false } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'routing-log-nav-'));
   const hive = new Hive(path.join(dir, 'hive.db'));
+  if (jev) saveAdaptiveRouting(dir, { enabled: true, apiKey: 'fixture-key' });
   const app = createApp(hive);
   window.happyDOM.setURL(`http://localhost/${hash}`);
   t.mock.method(globalThis, 'fetch', async (url: string, init?: RequestInit) => {
@@ -64,7 +66,7 @@ test('a project without agents offers Launch agent in the sidebar and in the ros
 });
 
 test('the Routing log replaces the Jev nav label and #/jev stays an alias', async t => {
-  const { host, slug, button } = await mount(t, '#/jev/placeholder');
+  const { host, slug, button } = await mount(t, '#/jev/placeholder', { jev: true });
   // Alias: the legacy hash opens the Routing log (repaired to an existing project).
   assert.equal(host.querySelector('main.desk h1')?.textContent, 'Routing log');
   assert.match(host.querySelector('main.desk')!.textContent!, /Every request Hivemind sent to Jev \(TypeSafe\) and its answer/);
@@ -75,6 +77,13 @@ test('the Routing log replaces the Jev nav label and #/jev stays an alias', asyn
   await act(async () => nav.click());
   assert.equal(window.location.hash, `#/routing-log/${slug}`);
   assert.equal(host.querySelector('main.desk h1')?.textContent, 'Routing log');
+});
+
+test('without Jev the sidebar has no Routing log and its link opens For you', async t => {
+  const { host, slug, button } = await mount(t, '#/routing-log/placeholder');
+  assert.equal(window.location.hash, `#/inbox/${slug}`);
+  assert.equal(host.querySelector('main.desk h1')?.textContent, 'For you');
+  assert.equal(button('Routing log'), undefined);
 });
 
 test('Help leads with Launch agent and resume by name, and states who can start conversations', async t => {

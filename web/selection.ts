@@ -49,8 +49,13 @@ export function setHash(sel: Sel) {
  * A valid replacement when `sel` points at a project or channel the snapshot no longer has; null when it is fine.
  * Replacements land in `preferred` (the project last shown in this browser) while it exists, else the first project.
  */
-export function repairSel(sel: Sel, snap: Pick<Snapshot, "projects" | "channels">, preferred?: string | null): Sel | null {
+export function repairSel(sel: Sel, snap: Pick<Snapshot, "projects" | "channels" | "jev">, preferred?: string | null): Sel | null {
   const fallback = snap.projects.find((p) => p.slug === preferred) ?? snap.projects[0];
+  // The Routing log exists only while Jev is on: its link then opens the project's For you.
+  if (sel.kind === "jev" && !snap.jev?.enabled) {
+    const project = snap.projects.find((p) => p.slug === sel.project) ?? fallback;
+    return { kind: "inbox", project: project?.slug ?? "" };
+  }
   if (sel.kind !== "channel") {
     if (!sel.project) return fallback ? { ...sel, project: fallback.slug } : null;
     if (snap.projects.some((p) => p.slug === sel.project)) return null;

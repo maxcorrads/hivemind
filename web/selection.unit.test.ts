@@ -43,7 +43,7 @@ test("hashFor round-trips through parseHash", () => {
 });
 
 test("repairSel keeps valid selections and falls back to the first project", () => {
-  const snap = { projects: [project("alpha"), project("beta")], channels: [channel("general")] };
+  const snap = { projects: [project("alpha"), project("beta")], channels: [channel("general")], jev: { enabled: true } };
   assert.equal(repairSel({ kind: "channel", id: "general" }, snap), null);
   assert.equal(repairSel({ kind: "inbox", project: "beta" }, snap), null);
   assert.deepEqual(repairSel({ kind: "inbox", project: "", box: "all" }, snap), { kind: "inbox", project: "alpha", box: "all" });
@@ -63,8 +63,15 @@ test("repairSel prefers the project last shown in this browser while it exists",
   assert.equal(repairSel({ kind: "inbox", project: "alpha" }, snap, "beta"), null, "a valid selection is never moved");
 });
 
+test("repairSel sends the Routing log to For you while Jev is off", () => {
+  const snap = { projects: [project("alpha"), project("beta")], channels: [channel("general")] };
+  assert.deepEqual(repairSel({ kind: "jev", project: "beta" }, snap), { kind: "inbox", project: "beta" });
+  assert.deepEqual(repairSel({ kind: "jev", project: "gone" }, { ...snap, jev: { enabled: false } }), { kind: "inbox", project: "alpha" });
+  assert.equal(repairSel({ kind: "jev", project: "beta" }, { ...snap, jev: { enabled: true } }), null);
+});
+
 test("repairSel without projects", () => {
-  const empty = { projects: [], channels: [] };
+  const empty = { projects: [], channels: [], jev: { enabled: true } };
   assert.equal(repairSel({ kind: "inbox", project: "" }, empty), null);
   assert.deepEqual(repairSel({ kind: "jev", project: "gone" }, empty), { kind: "jev", project: "" });
   assert.deepEqual(repairSel({ kind: "channel", id: "gone" }, empty), { kind: "inbox", project: "" });
