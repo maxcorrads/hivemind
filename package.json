@@ -86,9 +86,10 @@
     "TASK-PROTOCOL.md",
     "DELIVERY-PROTOCOL.md",
     "CONTRIBUTING.md",
-    "CLA.md",
     "TESTING.md",
-    "docs"
+    "docs",
+    "LICENSE",
+    "NOTICE"
   ],
-  "license": "SEE LICENSE IN LICENSE"
+  "license": "Apache-2.0"
 }
