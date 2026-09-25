@@ -127,7 +127,7 @@ test("real WebSocket handshakes reject unauthorized combinations before any subs
   assert.deepEqual((await event).payload, { deleted: "security-test" });
   assert.equal(f.hive.projects.listProjects().some((p) => p.slug === "security-test"), false);
 
-  const brain = f.hive.identity.join({ role: "brain", project: "chapter" }).agent;
+  const brain = f.hive.identity.join({ role: "brain", project: "acme" }).agent;
   const dm = f.hive.channels.openDm(f.hive.identity.getAgent("human"), brain.name);
   const dmEvent = nextEvent(live.ws, "message", (event) => (event.payload as { channelId: string }).channelId === dm.id);
   f.hive.messages.postMessage(f.hive.identity.getAgent("human"), { channel: dm.id, body: "private Human message" });
@@ -138,13 +138,13 @@ test("browser join/resume cannot create identities or rotate tokens; native flow
   const f = await fixture(t);
   const native = await json(f.base, "/api/agent/join", {
     method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ role: "worker", seniority: "mid", project: "chapter" }),
+    body: JSON.stringify({ role: "worker", seniority: "mid", project: "acme" }),
   });
   assert.equal(native.status, 200);
   const credentials = () => listRows(f.hive, "agents", { columns: ["id", "token_hash"], orderBy: "id" });
   const before = credentials();
   for (const origin of ["http://evil.example", "null", `${f.base}/invalid`]) {
-    for (const body of [{ role: "brain" }, { resume: native.data.agent.name, project: "chapter" }]) {
+    for (const body of [{ role: "brain" }, { resume: native.data.agent.name, project: "acme" }]) {
       for (const contentType of ["text/plain", "application/json"]) {
         const result = await json(f.base, "/api/agent/join", {
           method: "POST", headers: { origin, "content-type": contentType }, body: JSON.stringify(body),

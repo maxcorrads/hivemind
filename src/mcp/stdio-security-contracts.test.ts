@@ -68,7 +68,7 @@ test("real stdio wait fails invalid authentication once instead of entering a re
 test("real stdio tools cannot read, search, DM or mutate another project's messages", { timeout: 20_000 }, async t => {
   const f = await fixture(t), human = f.hive.identity.getAgent("human");
   f.hive.projects.createProject(human, { name: "Beta", slug: "beta" });
-  const alpha = f.hive.identity.join({ role: "brain", project: "chapter" });
+  const alpha = f.hive.identity.join({ role: "brain", project: "acme" });
   const beta = f.hive.identity.join({ role: "brain", project: "beta" });
   // Ordinary UUID channel avoids confusing project-local legacy 'general' aliases.
   const channel = f.hive.channels.createChannel(beta.agent, { name: "beta-private", type: "private" });

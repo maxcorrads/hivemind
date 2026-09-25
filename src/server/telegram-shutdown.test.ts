@@ -10,7 +10,7 @@ test("a completed drain error remains visible but does not leak the server-owned
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-tg-owned-shutdown-"));
   const previousHome = process.env.HIVEMIND_HOME;
   process.env.HIVEMIND_HOME = dir;
-  writeTelegramFile({ botToken: "shutdown-fixture", allowUserIds: [1], projects: { chapter: -1001 } }, dir);
+  writeTelegramFile({ botToken: "shutdown-fixture", allowUserIds: [1], projects: { acme: -1001 } }, dir);
   t.mock.method(globalThis, "fetch", async (_url: unknown, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
     if (init?.signal?.aborted) reject(init.signal.reason);
     else init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });

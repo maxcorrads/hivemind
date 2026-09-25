@@ -13,6 +13,20 @@ function tempHive() {
   return { hive, dir };
 }
 
+test("a new hive has no project until Human creates one", () => {
+  const previous = process.env.HIVEMIND_FIXTURE_PROJECT;
+  delete process.env.HIVEMIND_FIXTURE_PROJECT;
+  try {
+    const { hive, dir } = tempHive();
+    assert.deepEqual(hive.projects.listProjects(), []);
+    hive.close();
+    rmSync(dir, { recursive: true, force: true });
+  } finally {
+    if (previous === undefined) delete process.env.HIVEMIND_FIXTURE_PROJECT;
+    else process.env.HIVEMIND_FIXTURE_PROJECT = previous;
+  }
+});
+
 test("workers cannot forge control messages", () => {
   const { hive, dir } = tempHive();
   const worker = hive.identity.join({ role: "worker", seniority: "senior" });
@@ -490,7 +504,7 @@ test("search stays in one project and only rooms the actor can see", async () =>
   hive.messages.toggleReaction(solace.agent, attached.seq, "✅");
   hive.messages.postMessage(atlas.agent, { channel: "general", body: "altro oauth must not leak" });
 
-  const humanHits = hive.messageQueries.searchMessages(human, { q: "oauth", project: "chapter" });
+  const humanHits = hive.messageQueries.searchMessages(human, { q: "oauth", project: "acme" });
   assert.ok(humanHits.hits.some((h) => /feat\/login/.test(h.body)));
   assert.ok(humanHits.hits.some((h) => h.channelName === "brains"));
   assert.ok(humanHits.hits.some((h) => h.channelName === "secret"));
@@ -510,11 +524,11 @@ test("search stays in one project and only rooms the actor can see", async () =>
 
   const fileHits = hive.messageQueries.searchMessages(dowel.agent, { q: "oauth-plan.txt" });
   assert.ok(fileHits.hits.some((h) => h.seq === attached.seq));
-  const reactHits = hive.messageQueries.searchMessages(human, { q: "✅", project: "chapter" });
+  const reactHits = hive.messageQueries.searchMessages(human, { q: "✅", project: "acme" });
   assert.ok(reactHits.hits.some((h) => h.seq === attached.seq));
   const mentionHits = hive.messageQueries.searchMessages(solace.agent, { q: "Human" });
   assert.ok(mentionHits.hits.some((h) => h.channelName === "brains"));
-  const seqHits = hive.messageQueries.searchMessages(human, { q: String(attached.seq), project: "chapter" });
+  const seqHits = hive.messageQueries.searchMessages(human, { q: String(attached.seq), project: "acme" });
   assert.ok(seqHits.hits.some((h) => h.seq === attached.seq));
   let lonely = hive.messages.postMessage(human, { channel: "general", body: "no digits in this line" });
   while (lonely.seq < 10) {
@@ -522,23 +536,23 @@ test("search stays in one project and only rooms the actor can see", async () =>
   }
   const digit = String(lonely.seq)[0]!;
   assert.equal(
-    hive.messageQueries.searchMessages(human, { q: digit, project: "chapter" }).hits.some((h) => h.seq === lonely.seq),
+    hive.messageQueries.searchMessages(human, { q: digit, project: "acme" }).hits.some((h) => h.seq === lonely.seq),
     false,
   );
-  const quoted = hive.messageQueries.searchMessages(human, { q: `"feat/login`, project: "chapter" });
+  const quoted = hive.messageQueries.searchMessages(human, { q: `"feat/login`, project: "acme" });
   assert.ok(quoted.hits.some((h) => /feat\/login/.test(h.body)));
-  const paged = hive.messageQueries.searchMessages(human, { q: "oauth", project: "chapter", limit: 1 });
+  const paged = hive.messageQueries.searchMessages(human, { q: "oauth", project: "acme", limit: 1 });
   assert.equal(paged.hits.length, 1);
   assert.equal(paged.hasMore, true);
   const next = hive.messageQueries.searchMessages(human, {
     q: "oauth",
-    project: "chapter",
+    project: "acme",
     limit: 20,
     beforeSeq: paged.hits[0]!.seq,
   });
   assert.ok(next.hits.every((h) => h.seq < paged.hits[0]!.seq));
-  const fromStart = hive.messageQueries.searchMessages(human, { q: "oauth", project: "chapter", beforeSeq: 0 });
-  assert.equal(fromStart.hits.length, hive.messageQueries.searchMessages(human, { q: "oauth", project: "chapter" }).hits.length);
+  const fromStart = hive.messageQueries.searchMessages(human, { q: "oauth", project: "acme", beforeSeq: 0 });
+  assert.equal(fromStart.hits.length, hive.messageQueries.searchMessages(human, { q: "oauth", project: "acme" }).hits.length);
   assert.throws(() => hive.messageQueries.searchMessages(human, { q: "oauth" }), /Project required/);
   assert.equal(hive.messageQueries.searchMessages(rivet.agent, { q: "oauth" }).hits.some((h) => /feat\/login/.test(h.body)), false);
   rmSync(dir, { recursive: true, force: true });
@@ -547,9 +561,9 @@ test("search stays in one project and only rooms the actor can see", async () =>
 test("projects are isolated: roster, DM, mentions, wait, join cwd", async () => {
   const { hive, dir } = tempHive();
   const human = hive.identity.getAgent("human");
-  const chapter = hive.projects.listProjects()[0]!;
-  assert.equal(chapter.slug, "chapter");
-  hive.projects.updateProject(human, "chapter", { worktree: dir });
+  const acme = hive.projects.listProjects()[0]!;
+  assert.equal(acme.slug, "acme");
+  hive.projects.updateProject(human, "acme", { worktree: dir });
   const solace = hive.identity.join({ role: "brain" });
   const dowel = hive.identity.join({ role: "worker", seniority: "senior" });
   const other = hive.projects.createProject(human, { name: "Altro", slug: "altro", worktree: path.join(dir, "altro") });
@@ -562,7 +576,7 @@ test("projects are isolated: roster, DM, mentions, wait, join cwd", async () => 
     hive.identity.listAgents(atlas.agent).filter((a) => a.role !== "human").map((a) => a.name).sort(),
     [atlas.agent.name, rivet.agent.name].sort(),
   );
-  assert.ok(!hive.channels.listChannels(atlas.agent).some((c) => c.id === "general" || c.project === "chapter"));
+  assert.ok(!hive.channels.listChannels(atlas.agent).some((c) => c.id === "general" || c.project === "acme"));
   assert.notEqual(hive.channels.getChannel("general", atlas.agent.projectId).id, "general");
   assert.throws(() => hive.channels.openDm(atlas.agent, dowel.agent.name), /not in your project/);
   assert.throws(() => hive.identity.join({ role: "worker", seniority: "junior", cwd: path.join(dir, "unknown") }), /Pass project=slug/);
@@ -571,7 +585,7 @@ test("projects are isolated: roster, DM, mentions, wait, join cwd", async () => 
     /project cannot change/,
   );
   const back = hive.identity.join({ role: "brain", token: solace.token, resumeName: solace.agent.name });
-  assert.equal(back.agent.project, "chapter");
+  assert.equal(back.agent.project, "acme");
   hive.messages.postMessage(atlas.agent, { channel: "general", body: `take this @${rivet.agent.name}` });
   const idle = await hive.delivery.wait(dowel.agent, 200);
   assert.equal(idle.idle, true);
@@ -580,7 +594,7 @@ test("projects are isolated: roster, DM, mentions, wait, join cwd", async () => 
   const mention = hive.messages.postMessage(atlas.agent, { channel: "general", body: "need a goal @Human" });
   const inbox = hive.reads.mentionInbox(human, 30, undefined, other.id);
   assert.ok(inbox.messages.some((m) => m.id === mention.id));
-  const chapterInbox = hive.reads.mentionInbox(human, 30, undefined, chapter.id);
+  const chapterInbox = hive.reads.mentionInbox(human, 30, undefined, acme.id);
   assert.ok(!chapterInbox.messages.some((m) => m.id === mention.id));
   rmSync(dir, { recursive: true, force: true });
 });
@@ -602,12 +616,12 @@ test("Human can delete an idle project but not one with online or waiting agents
   insertRow(hive, "telegram_hold", { telegram_chat_id: -1003, telegram_message_id: 7, telegram_thread_id: 2, payload: "{}" });
   insertRow(hive, "telegram_state", { key: "mute:-1003", value: "1" });
   insertRow(hive, "telegram_state", { key: "offset", value: "9" });
-  const chapterGeneral = hive.channels.getChannel("general", hive.projects.getProjectBySlug("chapter").id);
-  hive.messages.postMessage(human, { channel: chapterGeneral.id, body: "chapter stays" });
+  const chapterGeneral = hive.channels.getChannel("general", hive.projects.getProjectBySlug("acme").id);
+  hive.messages.postMessage(human, { channel: chapterGeneral.id, body: "acme stays" });
   hive.projects.deleteProject(human, "altro", { telegramChatId: -1003 });
   assert.equal(hive.projects.listProjects().some((p) => p.slug === "altro"), false);
   assert.equal(hive.identity.getAgentByName(brain.agent.name), null);
-  assert.equal(hive.projects.listProjects()[0]?.slug, "chapter");
+  assert.equal(hive.projects.listProjects()[0]?.slug, "acme");
   assert.ok(hive.channels.getChannel("general", hive.projects.listProjects()[0]!.id));
   assert.equal(
     countRows(hive, "telegram_hold", { telegram_chat_id: -1003 }),
@@ -615,11 +629,11 @@ test("Human can delete an idle project but not one with online or waiting agents
   );
   assert.equal(findRow(hive, "telegram_state", { key: "mute:-1003" }), undefined);
   assert.equal(readValue(hive, "telegram_state", "value", { key: "offset" }), "9");
-  assert.ok(hive.messageQueries.listMessages(human, chapterGeneral.id).messages.some((m) => /chapter stays/.test(m.body)));
+  assert.ok(hive.messageQueries.listMessages(human, chapterGeneral.id).messages.some((m) => /acme stays/.test(m.body)));
   assert.equal(hive.projects.findProjectBySlug("altro"), null);
   assert.equal(hive.projects.findProjectBySlug("!!!"), null);
-  assert.equal(hive.projects.findProjectBySlug("chapter")?.slug, "chapter");
-  hive.projects.deleteProject(human, "chapter");
+  assert.equal(hive.projects.findProjectBySlug("acme")?.slug, "acme");
+  hive.projects.deleteProject(human, "acme");
   assert.equal(hive.projects.listProjects().length, 0);
   const again = hive.projects.createProject(human, { name: "Nuovo", slug: "nuovo" });
   assert.equal(again.slug, "nuovo");

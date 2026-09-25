@@ -348,6 +348,9 @@ jobs:
         run: zsh --version
 
       - name: Run macOS-specific launch and shell contracts
+        env:
+          # This job does not go through scripts/run-tests.mjs, which sets the same fixture.
+          HIVEMIND_FIXTURE_PROJECT: acme
         run: node scripts/run-logged.mjs artifacts/macos-compat.log node --import tsx --test src/shared/launch-prompt.test.ts src/server/plugins.test.ts
 
       - name: Retain redacted failing macOS compatibility log

@@ -16,8 +16,8 @@ function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-jev-calls-'));
   const hive = new Hive(path.join(dir, 'hive.db'));
   const human = hive.identity.getAgent('human');
-  const brains = [0, 1].map(() => hive.identity.join({ role: 'brain', project: 'chapter' }));
-  hive.identity.join({ role: 'worker', seniority: 'senior', project: 'chapter' });
+  const brains = [0, 1].map(() => hive.identity.join({ role: 'brain', project: 'acme' }));
+  hive.identity.join({ role: 'worker', seniority: 'senior', project: 'acme' });
   const dm = hive.channels.openDm(human, brains[0]!.agent.name);
   const app = createApp(hive);
   let offline: boolean | 'reject' = false;
@@ -49,7 +49,7 @@ test('every Jev exchange is logged with the exact payloads and its trigger; advi
   f.fail(true);
   await f.hive.adaptiveTopology.adviseBrainAction(f.brains[0]!.agent, { kind: 'brain_message', channelId: f.dm.id });
 
-  const list = await f.get<JevCallLogView>('/projects/chapter/jev-calls');
+  const list = await f.get<JevCallLogView>('/projects/acme/jev-calls');
   assert.equal(list.status, 200);
   assert.equal(list.body.requests.length, 1, 'All calls of one request are grouped');
   const group = list.body.requests[0]!;
@@ -63,14 +63,14 @@ test('every Jev exchange is logged with the exact payloads and its trigger; advi
   assert.equal(group.calls[2]!.error, 'network', 'Only the failure class is kept, never the transport message');
   assert.equal(f.published.length >= 3, true, 'Calls are published to the Human realtime stream');
 
-  const detail = await f.get<{ call: JevCall }>(`/projects/chapter/jev-calls/${group.calls[0]!.id}`);
+  const detail = await f.get<{ call: JevCall }>(`/projects/acme/jev-calls/${group.calls[0]!.id}`);
   assert.equal(detail.status, 200);
   const sent = detail.body.call.sent as { model: string; state: { request: string }; questions: Record<string, unknown> };
   assert.equal(sent.state.request, 'Draft the migration plan.');
   assert.equal(sent.model, 'jev-latest');
   assert.ok(sent.questions.plan && !sent.questions.target_topology && !sent.questions.worker_budget);
   assert.ok((detail.body.call.received as { answers: Record<string, unknown> }).answers.plan);
-  const failed = await f.get<{ call: JevCall }>(`/projects/chapter/jev-calls/${group.calls[2]!.id}`);
+  const failed = await f.get<{ call: JevCall }>(`/projects/acme/jev-calls/${group.calls[2]!.id}`);
   assert.equal(failed.body.call.received, null);
   assert.ok(failed.body.call.sent, 'A failed call still shows what was sent');
 
@@ -88,7 +88,7 @@ test('a rejected answer is logged with its specific reason, resolved model and t
   assert.ok(routed);
   f.fail('reject');
   await f.hive.adaptiveTopology.adviseBrainAction(f.brains[0]!.agent, { kind: 'brain_message', channelId: f.dm.id, eventType: 'progress' });
-  const list = await f.get<JevCallLogView>('/projects/chapter/jev-calls');
+  const list = await f.get<JevCallLogView>('/projects/acme/jev-calls');
   const call = list.body.requests[0]!.calls.at(-1)!;
   assert.equal(call.status, 'unavailable');
   assert.equal(call.error, 'plan_not_offered');
@@ -96,13 +96,13 @@ test('a rejected answer is logged with its specific reason, resolved model and t
   assert.equal(call.model, 'jev-1.13.0');
   assert.equal(call.inputTokens, 2851); assert.equal(call.outputTokens, 248);
   assert.equal(call.outcome, null);
-  const detail = await f.get<{ call: JevCall }>(`/projects/chapter/jev-calls/${call.id}`);
+  const detail = await f.get<{ call: JevCall }>(`/projects/acme/jev-calls/${call.id}`);
   assert.equal((detail.body.call.received as { answers: { plan: { choice: string } } }).answers.plan.choice, 'brain_one_worker_2');
 });
 
 test('observations are logged without a brain and the history is bounded per project', async t => {
   const f = fixture(t);
-  const group = f.hive.channels.createChannel(f.human, { name: 'council', type: 'private', project: 'chapter',
+  const group = f.hive.channels.createChannel(f.human, { name: 'council', type: 'private', project: 'acme',
     memberNames: f.brains.map(brain => brain.agent.name) });
   await sendHumanRequest(f.hive, f.human, { channel: group.id, body: 'Who takes this?', requestId: 'who' });
   const view = f.hive.adaptiveTopology.observations.jevCalls.view(group.projectId);
@@ -120,7 +120,7 @@ test('observations are logged without a brain and the history is bounded per pro
   await f.hive.adaptiveTopology.stop();
   for (const agent of f.hive.identity.listAgents(f.human).filter(agent => agent.role !== 'human')) f.hive.identity.setOffline(agent.id);
   f.hive.projects.createProject(f.human, { slug: 'other', name: 'Other' });
-  f.hive.projects.deleteProject(f.human, 'chapter');
+  f.hive.projects.deleteProject(f.human, 'acme');
   assert.equal(countRows(f.hive, 'jev_calls'), 0, 'Project deletion removes its Jev history');
 });
 
@@ -149,7 +149,7 @@ test('pagination returns every request exactly once when groups share the page-b
   let cursor: string | null = null;
   for (let page = 0; page < 10; page++) {
     const query: string = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
-    const { status, body } = await f.get<JevCallLogView>(`/projects/chapter/jev-calls${query}`);
+    const { status, body } = await f.get<JevCallLogView>(`/projects/acme/jev-calls${query}`);
     assert.equal(status, 200);
     seen.push(...body.requests.map(group => group.executionId));
     assert.equal(body.hasMore, body.nextCursor !== null, 'nextCursor is present exactly when more pages exist');
@@ -162,6 +162,6 @@ test('pagination returns every request exactly once when groups share the page-b
   assert.deepEqual(seen.slice(-5), ['older-4', 'older-3', 'older-2', 'older-1', 'older-0'], 'Newest activity first');
 
   // Legacy `before=<ms>` keeps working and excludes the boundary millisecond.
-  const legacy = await f.get<JevCallLogView>('/projects/chapter/jev-calls?before=7000');
+  const legacy = await f.get<JevCallLogView>('/projects/acme/jev-calls?before=7000');
   assert.deepEqual(legacy.body.requests.map(group => group.executionId), ['older-4', 'older-3', 'older-2', 'older-1', 'older-0']);
 });

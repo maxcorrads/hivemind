@@ -13,7 +13,7 @@
       },
       "mentionView": {
         "mode": "mentions",
-        "project": "chapter",
+        "project": "acme",
         "entries": [
           {
             "seq": 101,
@@ -37,7 +37,7 @@
       },
       "decisionView": {
         "mode": "decision_queue",
-        "project": "chapter",
+        "project": "acme",
         "decision": {
           "question": "Which compatibility boundary should task-api-contract revision 3 use?",
           "state": "awaiting_input",
@@ -80,7 +80,7 @@
       },
       "mentionView": {
         "mode": "mentions",
-        "project": "chapter",
+        "project": "acme",
         "entries": [
           {
             "seq": 210,
@@ -104,7 +104,7 @@
       },
       "decisionView": {
         "mode": "decision_queue",
-        "project": "chapter",
+        "project": "acme",
         "decision": {
           "question": "Should task-schema-rollout use old-schema-only or dual-read?",
           "state": "superseded",
@@ -147,7 +147,7 @@
       },
       "mentionView": {
         "mode": "mentions",
-        "project": "chapter",
+        "project": "acme",
         "entries": [
           {
             "seq": 330,
@@ -177,7 +177,7 @@
       },
       "decisionView": {
         "mode": "decision_queue",
-        "project": "chapter",
+        "project": "acme",
         "decision": {
           "question": "How long should task-audit-storage revision 5 retain audit records?",
           "state": "awaiting_input",
@@ -221,7 +221,7 @@
       },
       "mentionView": {
         "mode": "mentions",
-        "project": "chapter",
+        "project": "acme",
         "entries": [
           {
             "seq": 450,
@@ -245,7 +245,7 @@
       },
       "decisionView": {
         "mode": "decision_queue",
-        "project": "chapter",
+        "project": "acme",
         "decision": {
           "question": "Should task-search-index revision 7 rebuild the index now or defer?",
           "state": "expired",

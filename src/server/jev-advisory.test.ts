@@ -25,8 +25,8 @@ function fixture(t: TestContext, options: { enabled?: boolean } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-jev-advisory-'));
   const hive = new Hive(path.join(dir, 'hive.db'));
   const human = hive.identity.getAgent('human');
-  const brain = hive.identity.join({ role: 'brain', project: 'chapter' });
-  const workers = [0, 1].map(() => hive.identity.join({ role: 'worker', seniority: 'senior', project: 'chapter' }));
+  const brain = hive.identity.join({ role: 'brain', project: 'acme' });
+  const workers = [0, 1].map(() => hive.identity.join({ role: 'worker', seniority: 'senior', project: 'acme' }));
   const app = createApp(hive);
   let target: AdaptiveTopology = 'single', workersAdvised = 0, calls = 0;
   let failure: 'none' | 'http' | 'network' = 'none';
@@ -58,7 +58,7 @@ function fixture(t: TestContext, options: { enabled?: boolean } = {}) {
   };
   const view = (channelId: string) => hive.adaptiveTopology.view(human, channelId);
   /** A channel where the brain can assign work to the first worker. */
-  const team = () => hive.channels.createChannel(human, { name: `team-${randomUUID().slice(0, 8)}`, type: 'private', project: 'chapter',
+  const team = () => hive.channels.createChannel(human, { name: `team-${randomUUID().slice(0, 8)}`, type: 'private', project: 'acme',
     memberNames: [brain.agent.name, workers[0]!.agent.name] });
   return { dir, hive, human, brain, workers, app, humanSend, humanRequest, agent, view, team, calls: () => calls,
     advise: (topology: AdaptiveTopology, n = 0) => { target = topology; workersAdvised = n; },
@@ -359,7 +359,7 @@ test('a request idle for longer than the TTL is closed and no longer advised, un
 test('advice follows the channel an action happens in when a brain serves several requests', async t => {
   const f = fixture(t);
   const dm = f.hive.channels.openDm(f.human, f.brain.agent.name);
-  const group = f.hive.channels.createChannel(f.human, { name: 'release', type: 'private', project: 'chapter', memberNames: [f.brain.agent.name] });
+  const group = f.hive.channels.createChannel(f.human, { name: 'release', type: 'private', project: 'acme', memberNames: [f.brain.agent.name] });
   const first = await f.humanRequest(dm.id, { body: 'Write the report.', requestId: 'report' });
   f.advise('brain_one_worker', 1);
   await f.humanRequest(group.id, { body: 'Plan the release.', requestId: 'release' });
@@ -420,7 +420,7 @@ test('deleting a project prunes its advice state and audit; the call log follows
   for (const a of [f.brain, ...f.workers]) f.hive.identity.setOffline(a.agent.id);
   await f.hive.adaptiveTopology.stop();
   f.hive.projects.createProject(f.human, { slug: 'other', name: 'Other' });
-  f.hive.projects.deleteProject(f.human, 'chapter');
+  f.hive.projects.deleteProject(f.human, 'acme');
   for (const table of ['adaptive_topology_executions', 'adaptive_topology_events', 'jev_calls'])
     assert.equal(countRows(f.hive, table), 0, table);
 });

@@ -12,14 +12,13 @@ Telegram is an optional second Human client. One forum topic per hive channel. L
 {
   "botToken": "PUT_BOT_TOKEN_HERE",
   "allowUserIds": [123456789],
-  "groupChatId": -1000000000000,
   "projects": {
-    "chapter": { "groupChatId": -1000000000000 }
+    "your-project": { "groupChatId": -1000000000000 }
   }
 }
 ```
 
-One forum group per project. Same bot, one long poll. `chat.id` selects the project. A legacy top-level `groupChatId` is the first project (`chapter`). An unmapped chat is ignored. `allowUserIds` is write access only. Anyone in a group can read every topic in that group (including DMs). The UI reloads the bridge on save; a hand edit of the file still needs a serve restart.
+One forum group per project. Same bot, one long poll. `chat.id` selects the project. Map each group under `projects`; a file that only has a top-level `groupChatId` is ignored. An unmapped chat is ignored. `allowUserIds` is write access only. Anyone in a group can read every topic in that group (including DMs). The UI reloads the bridge on save; a hand edit of the file still needs a serve restart.
 
 `#general` of a project uses that group's General topic (thread 1). Other channels and DMs create topics in that same group. Hive `system` / `control` messages are not mirrored. Inbound posts are Human, with a `[Firstname]` prefix. Files and the six reactions sync both ways. Outbound is paced (~1 msg/s), bounded, and retries `429` per group so one chat does not stall the others.
 
