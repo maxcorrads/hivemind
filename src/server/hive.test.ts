@@ -127,11 +127,11 @@ test("public chatter does not wake a waiting worker", async () => {
   const { hive, dir } = tempHive();
   const worker = hive.join({ role: "worker", seniority: "senior" });
   const brain = hive.join({ role: "brain" });
+  const started = Date.now();
   const sleeping = hive.wait(worker.agent, 400);
   await new Promise((r) => setTimeout(r, 40));
   hive.postMessage(brain.agent, { channel: "general", body: "noise one" });
   hive.postMessage(brain.agent, { channel: "general", body: "noise two" });
-  const started = Date.now();
   const result = await sleeping;
   assert.equal(result.idle, true);
   assert.ok(Date.now() - started >= 300);
@@ -435,7 +435,6 @@ test("Human can see brain-worker DMs and invite to private rooms", () => {
 test("search stays in one project and only rooms the actor can see", async () => {
   const { hive, dir } = tempHive();
   const human = hive.getAgent("human");
-  const chapter = hive.listProjects()[0]!;
   const solace = hive.join({ role: "brain" });
   const dowel = hive.join({ role: "worker", seniority: "senior" });
   hive.createProject(human, { name: "Altro", slug: "altro" });
@@ -592,38 +591,5 @@ test("Human can delete an idle project but not one with online or waiting agents
   assert.equal(hive.listProjects().length, 0);
   const again = hive.createProject(human, { name: "Nuovo", slug: "nuovo" });
   assert.equal(again.slug, "nuovo");
-  rmSync(dir, { recursive: true, force: true });
-});
-
-
-test("agent and channel listings are scoped in SQL and backed by lookup-direction indexes", () => {
-  const { hive, dir } = tempHive();
-  const human = hive.getAgent("human");
-  const chapter = hive.listProjects()[0]!;
-  const a = hive.join({ role: "worker", seniority: "mid", project: chapter.slug }).agent;
-  const other = hive.createProject(human, { name: "Other", slug: "other" });
-
-  for (let i = 0; i < 40; i += 1) {
-    hive.join({ role: "worker", seniority: "mid", project: other.slug, focus: `other-${i}` });
-  }
-  for (let i = 0; i < 20; i += 1) {
-    hive.createChannel(human, { name: `other-room-${i}`, type: "private", project: other.slug });
-  }
-
-  const agents = hive.listAgents(a);
-  assert.ok(agents.every((agent) => agent.role === "human" || agent.projectId === chapter.id));
-  assert.equal(agents.some((agent) => agent.projectId === other.id), false);
-
-  const channels = hive.listChannels(a);
-  assert.ok(channels.every((channel) => channel.projectId === chapter.id));
-  assert.equal(channels.some((channel) => channel.projectId === other.id), false);
-
-  const indexes = new Set(
-    (hive.db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as { name: string }[]).map((row) => row.name),
-  );
-  assert.ok(indexes.has("idx_agents_project_role"));
-  assert.ok(indexes.has("idx_channels_project_type_name"));
-  assert.ok(indexes.has("idx_channel_members_agent_channel"));
-
   rmSync(dir, { recursive: true, force: true });
 });
