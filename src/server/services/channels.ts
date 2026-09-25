@@ -1,5 +1,5 @@
 import type { SQLInputValue } from "node:sqlite";
-import { DEFAULT_PROJECT_SLUG, HiveError, HUMAN_ID, type Agent, type Channel, type ChannelType, type Project } from "../../shared/types.ts";
+import { HiveError, HUMAN_ID, type Agent, type Channel, type ChannelType, type Project } from "../../shared/types.ts";
 import { channelInputSchema, normalizeChannelReference, validated } from "../../shared/api-contract.ts";
 import type { AgentDirectory, ChannelAccess, Core, MessagePoster, ProjectDirectory } from "./ports.ts";
 import { now, type ChannelRow } from "./rows.ts";
@@ -119,7 +119,7 @@ export class ChannelService implements ChannelAccess {
       id: row.id, name: row.name, type: row.type, topic: row.topic,
       createdBy: row.created_by, createdAt: row.created_at,
       memberIds: members.get(row.id) ?? [], projectId: row.project_id,
-      project: row.project_slug ?? DEFAULT_PROJECT_SLUG,
+      project: row.project_slug ?? "",
     }));
   }
 
@@ -173,7 +173,7 @@ export class ChannelService implements ChannelAccess {
       createdAt: row.created_at,
       memberIds: members.map((m) => m.agent_id),
       projectId: row.project_id,
-      project: this.deps.projects.slugOf(row.project_id) ?? DEFAULT_PROJECT_SLUG,
+      project: this.deps.projects.slugOf(row.project_id) ?? "",
     };
   }
 

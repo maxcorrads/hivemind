@@ -4,9 +4,6 @@ export const PROTOCOL_VERSION = 3;
 export const DEFAULT_PORT = 7420;
 export const HUMAN_ID = "human";
 export const HUMAN_NAME = "Human";
-/** Seed slug for the first project when an existing hive is migrated. Not a special runtime mode. */
-export const DEFAULT_PROJECT_SLUG = "chapter";
-export const DEFAULT_PROJECT_NAME = "Chapter";
 /** Server-side wait sleep. Long so agents do not burn a model turn every minute. */
 export const DEFAULT_WAIT_MS = 1_500_000;
 /** MCP wait HTTP poll. Short so localhost fetch does not die mid-sleep. */

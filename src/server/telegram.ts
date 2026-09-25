@@ -10,7 +10,7 @@ export { telegramPollBackoffMs, isTelegramTerminalPollError } from "./telegram-i
 import { CoalescingPump } from "./coalescing-pump.ts";
 import { existsSync, mkdirSync, openAsBlob, readFileSync, writeFileSync, renameSync, unlinkSync, openSync, closeSync, fsyncSync } from "node:fs";
 import path from "node:path";
-import { BODY_MAX, DEFAULT_PROJECT_SLUG, FILE_MAX_BYTES, HiveError, HUMAN_ID, REACTION_EMOJIS, type Channel, type Message } from "../shared/types.ts";
+import { BODY_MAX, FILE_MAX_BYTES, HiveError, HUMAN_ID, REACTION_EMOJIS, type Channel, type Message } from "../shared/types.ts";
 import { parseProjectSlug } from "../shared/project.ts";
 import { isDirectRecipient } from '../shared/message-target.ts';
 import { resolveUploadMime } from "../shared/mime.ts";
@@ -72,10 +72,9 @@ export function readTelegramFile(home = hiveHome()): TelegramFile | null {
         projects[slug] = id;
       }
     }
-    const legacy = Number(raw.groupChatId);
-    if (raw.groupChatId !== undefined && projects[DEFAULT_PROJECT_SLUG] === undefined) {
-      if (!Number.isSafeInteger(legacy) || legacy === 0 || Object.values(projects).includes(legacy)) return null;
-      projects[DEFAULT_PROJECT_SLUG] = legacy;
+    if (raw.groupChatId !== undefined) {
+      const legacy = Number(raw.groupChatId);
+      if (!Number.isSafeInteger(legacy) || legacy === 0 || Object.keys(projects).length === 0 || Object.values(projects).includes(legacy)) return null;
     }
     if (!botToken && allowUserIds.length === 0 && Object.keys(projects).length === 0) return null;
     const verified = raw.verifiedTokenHash === tokenFingerprint(botToken) && Number.isSafeInteger(raw.botId) && Number(raw.botId) > 0 &&

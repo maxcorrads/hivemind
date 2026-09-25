@@ -70,7 +70,7 @@ export function App() {
   const brainNames = Object.fromEntries((snap?.agents ?? []).filter(agent => agent.role === "brain").map(agent => [agent.id, agent.name]));
   const storedProject = loadSelectedProject();
   const selectedProject = sel.kind !== "channel" ? sel.project
-    : (activeChannel?.project ?? projects.find(p => p.slug === storedProject)?.slug ?? projects[0]?.slug ?? "chapter");
+    : (activeChannel?.project ?? projects.find(p => p.slug === storedProject)?.slug ?? projects[0]?.slug ?? "");
 
   const search = useSearch({ selectedProject, projects, setErr });
   const inbox = useInbox({ sel, selRef, projects, hive, setErr });

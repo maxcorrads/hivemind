@@ -45,7 +45,7 @@ export type LaunchInput = {
   cdWorktree: boolean;
   /** Hivemind project slug, passed to join when `passProject` is on. */
   projectSlug: string;
-  /** Human hive name (Chapter, …). Named in the prompt when set. */
+  /** Human hive name. Named in the prompt when set. */
   hiveName?: string | null;
   passProject: boolean;
   role: LaunchRole;

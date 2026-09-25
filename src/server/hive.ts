@@ -161,6 +161,12 @@ export class Hive {
 
   private bootstrap() {
     this.identity.ensureHuman();
+    // The test runner sets this so fixtures that join "chapter" keep a project.
+    // A normal hive starts empty; Human creates the first project.
+    const fixture = process.env.HIVEMIND_FIXTURE_PROJECT;
+    if (fixture && this.projects.listProjects().length === 0) {
+      this.projects.createProject(this.identity.getAgent("human"), { name: fixture, slug: fixture });
+    }
     const home = this.projects.listProjects()[0];
     if (home) this.channels.ensureBuiltinChannels(home);
     this.channels.addHumanToAllChannels();

@@ -1,5 +1,5 @@
 import { realpathSync } from "node:fs";
-import { DEFAULT_PROJECT_SLUG, HiveError, type Project } from "./types.ts";
+import { HiveError, type Project } from "./types.ts";
 
 export function parseProjectSlug(raw: string): string {
   const slug = raw.trim().toLowerCase();
@@ -38,6 +38,6 @@ export function resolveJoinProject(
   const slugs = projects.map((p) => p.slug).join(", ");
   throw new HiveError(
     400,
-    `Pass project=slug. cwd is not a registered worktree. Projects: ${slugs || DEFAULT_PROJECT_SLUG}`,
+    `Pass project=slug. cwd is not a registered worktree. Projects: ${slugs || "none"}`,
   );
 }
