@@ -50,6 +50,7 @@ test("HTTP protocol: join, isolate, wait, Human admin", async () => {
     assert.equal(snap.data.you.name, "Human");
     assert.ok(snap.data.projects.some((p: { slug: string }) => p.slug === "acme"));
     assert.ok(snap.data.channels.some((c: { name: string }) => c.name === "brains"));
+    assert.deepEqual(snap.data.jev, { enabled: false }, "the Routing log is offered only while Jev is on");
 
     const brain = await json(base, "POST", "/api/agent/join", { role: "brain", focus: "coord" });
     const worker = await json(base, "POST", "/api/agent/join", {

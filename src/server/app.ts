@@ -114,7 +114,8 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     return c.json({ you: human, projects: hive.projects.listProjects(), agents: hive.identity.listAgents(), channels,
       archivedChannelIds: hive.rooms.archivedChannelIds(channels),
       ...hive.reads.readSnapshot(human), ...hive.delivery.queueSnapshot(),
-      telegram: { running: Boolean(hooks.telegramRunning?.()), configured: publicTelegramView(hive.home).configured, ...hive.telegramAdmin.health() } });
+      telegram: { running: Boolean(hooks.telegramRunning?.()), configured: publicTelegramView(hive.home).configured, ...hive.telegramAdmin.health() },
+      jev: { enabled: adaptiveRoutingPublic(hive.home).enabled } });
   });
   // Sidebar badges and roster status lines, refreshed on task and decision events.
   ui.get("/nav-status", c => {

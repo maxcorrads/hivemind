@@ -370,7 +370,10 @@ export function App() {
       )}
 
       {adaptiveRoutingOpen && (
-        <AdaptiveRoutingSettings onClose={() => setAdaptiveRoutingOpen(false)} onSaved={() => refreshRoutingView()} />
+        <AdaptiveRoutingSettings onClose={() => setAdaptiveRoutingOpen(false)} onSaved={(settings) => {
+          setSnap((s) => (s ? { ...s, jev: { enabled: settings.enabled } } : s));
+          refreshRoutingView();
+        }} />
       )}
 
       {routingPanelOpen && activeChannel && routingView && (

@@ -273,14 +273,16 @@ function ProjectSection({ project, snap, sel, go, onSettings, inboxBox, onNewCha
         <span>Decisions</span>
         {decisions > 0 && <em className="nav-alert">{decisions}</em>}
       </button>
-      <button
-        className={`nav ${sel.kind === "jev" && sel.project === project.slug ? "active" : ""}`}
-        aria-current={sel.kind === "jev" && sel.project === project.slug ? "page" : undefined}
-        onClick={() => go({ kind: "jev", project: project.slug })}
-        title="Every request Hivemind sent to Jev (TypeSafe) and its answer"
-      >
-        <span>Routing log</span>
-      </button>
+      {snap.jev?.enabled && (
+        <button
+          className={`nav ${sel.kind === "jev" && sel.project === project.slug ? "active" : ""}`}
+          aria-current={sel.kind === "jev" && sel.project === project.slug ? "page" : undefined}
+          onClick={() => go({ kind: "jev", project: project.slug })}
+          title="Every request Hivemind sent to Jev (TypeSafe) and its answer"
+        >
+          <span>Routing log</span>
+        </button>
+      )}
       <div className="group">
         <div className="group-h">
           <span>Channels</span>

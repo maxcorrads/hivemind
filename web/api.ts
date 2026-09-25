@@ -39,6 +39,8 @@ export type Snapshot = ReadSnapshot & {
   queued: Record<string, number>;
   inbox?: Record<string, InboxStatus>;
   telegram?: { running: boolean; configured: boolean } & TelegramHealth;
+  /** Whether Jev adaptive routing is on; the Routing log is offered only then. */
+  jev?: { enabled: boolean };
 };
 
 /** Sidebar badges and roster status lines. */
