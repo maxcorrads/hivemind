@@ -227,6 +227,9 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     beforeSeq: c.req.query('beforeSeq') ? Number(c.req.query('beforeSeq')) : undefined,
     limit: c.req.query('limit') ? Number(c.req.query('limit')) : undefined,
   })));
+  ui.get("/channels/:id/last-unread", c => c.json({
+    target: hive.reads.latestUnread(hive.identity.getAgent('human'), c.req.param('id')),
+  }));
   ui.get("/channels/:id/messages", c => {
     const human = hive.identity.getAgent('human'), id = c.req.param('id'), threadId = c.req.query('threadId') || null;
     const after = c.req.query('afterSeq'), before = c.req.query('beforeSeq');

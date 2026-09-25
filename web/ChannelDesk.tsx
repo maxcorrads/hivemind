@@ -5,7 +5,7 @@ import type { ChannelTaskPage } from "../src/shared/tasks.ts";
 import type { Agent, Channel, Message, ThreadStatus } from "../src/shared/types.ts";
 import { adviceSummary } from "./AdaptiveRoutingPanel.tsx";
 import { adviceStrip } from "./adaptive-routing-view.ts";
-import { api } from "./api.ts";
+import { api, type UnreadTarget } from "./api.ts";
 import { Avatar } from "./Avatar.tsx";
 import { applyChannelMessage, recordChannelMessage } from "./channel-state.ts";
 import { Composer } from "./Composer.tsx";
@@ -35,9 +35,11 @@ export type ChannelTab = "messages" | "tasks" | "contract" | "decisions";
  * The selected channel: header with its members, tabs (Messages · Tasks · Contract for rooms · Decisions) and, on
  * Messages, the message stream, Jev advice strip and composer.
  */
-export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, channel, threadPaneId, stickBottom, threadOpenAnchor,
+export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, channel, threadPaneId, stickBottom, threadOpenAnchor, unreadTarget,
   go, roomTick, decisionTick, onDecisionAnswered, routingView, activeBrainChannel, brainNames, onOpenRouting, onInvite, compose, onMarkUnread, setErr, onBack }: {
   channelId: string;
+  /** A new explicit badge navigation reveals Messages without remounting its draft. */
+  unreadTarget?: UnreadTarget | null;
   activeChannel: Channel | undefined;
   agents: Agent[];
   roomAgents: Agent[];
@@ -93,9 +95,10 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
   }, [channelJournal, setPane, setErr]);
   const sendChannel = compose.sendChannel;
   // A tab belongs to the channel it was picked in: another channel opens on Messages.
-  const [picked, setPicked] = useState<{ channelId: string; tab: ChannelTab }>({ channelId, tab: "messages" });
+  const [picked, setPicked] = useState<{ channelId: string; tab: ChannelTab; unreadTarget?: UnreadTarget | null }>({ channelId, tab: "messages" });
   const room = Boolean(activeChannel && ["private", "public"].includes(activeChannel.type));
-  const requested = picked.channelId === channelId ? picked.tab : "messages";
+  const newUnreadJump = unreadTarget?.channelId === channelId && unreadTarget !== picked.unreadTarget;
+  const requested = picked.channelId === channelId && !newUnreadJump ? picked.tab : "messages";
   const tab = requested === "contract" && !room ? "messages" : requested;
   const work = useChannelWork(activeChannel, roomTick, decisionTick);
   // The hidden stream loses its scroll position; coming back to a live pane lands on its newest message.
@@ -131,7 +134,7 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
       <div className="channel-tabs" role="tablist" aria-label="Channel views">
         {tabs.map((item) => (
           <button key={item.id} type="button" role="tab" id={`channel-tab-${item.id}`} aria-selected={tab === item.id}
-            aria-controls={tab === item.id ? `channel-panel-${item.id}` : undefined} onClick={() => setPicked({ channelId, tab: item.id })}>
+            aria-controls={tab === item.id ? `channel-panel-${item.id}` : undefined} onClick={() => setPicked({ channelId, tab: item.id, unreadTarget })}>
             {item.label}
             {item.count ? <span className="tab-count">{item.count}</span> : null}
           </button>

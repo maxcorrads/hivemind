@@ -68,7 +68,7 @@ export const Msg = memo(function Msg({
 
   if (m.kind === "system") {
     return (
-      <article className="msg sys kind-system" tabIndex={-1}>
+      <article className="msg sys kind-system" tabIndex={-1} data-message-seq={m.seq}>
         <p>
           <span>{m.body}</span>
           <time dateTime={stamp.toISOString()} title={stamp.toLocaleString()}>{time}</time>
@@ -96,6 +96,7 @@ export const Msg = memo(function Msg({
   return (
     <article
       ref={row}
+      data-message-seq={m.seq}
       className={`msg role-${m.authorRole} kind-${m.kind} ${grouped ? "grouped" : ""} ${toolsOpen ? "tools-open" : ""}`}
       // Focusable so a tap on touch screens reveals the toolbar (:focus-within), as hover does with a mouse.
       tabIndex={-1}

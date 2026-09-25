@@ -26,6 +26,28 @@ test("the New messages divider stays where it was when the channel opened, acros
   assert.equal(reconcileChannelSnapshot(opened, other, beginChannelJournal("d"))!.firstUnreadSeq, 1);
 });
 
+test('an unread jump retains its target before trimming a full live arrival window', () => {
+  const journal = beginChannelJournal('c');
+  for (let seq = 2; seq <= LIVE_MESSAGE_WINDOW + 1; seq++) recordChannelMessage(journal, message(seq));
+  const next = reconcileChannelSnapshot(null, pane([message(1)]), journal, false, true, 1)!;
+  assert.deepEqual(next.messages.map(m => m.seq), [1]);
+  assert.equal(next.historyThrough, 1); assert.equal(next.deferredLive, true);
+});
+
+test('only automatic held-page refreshes preserve the committed unread target identity', () => {
+  const target = { channelId: 'c', threadId: null, seq: 2 };
+  const current = { ...holdLivePane(pane([message(1), message(2)], 2)), unreadTarget: target };
+  const refreshed = reconcileChannelSnapshot(current, pane([message(3)], 3), beginChannelJournal('c'))!;
+  assert.equal(refreshed.unreadTarget, target);
+  assert.deepEqual(refreshed.messages.map(m => m.seq), [1, 2]);
+  assert.equal(reconcileChannelSnapshot(refreshed, pane([message(4)], 4), beginChannelJournal('c'))!.unreadTarget, target);
+  assert.equal(reconcileChannelSnapshot(refreshed, pane([message(0)]), beginChannelJournal('c'), true)!.unreadTarget, undefined);
+  const live = reconcileChannelSnapshot(refreshed, pane([message(3)], 3), beginChannelJournal('c'), false, true)!;
+  assert.equal(live.unreadTarget, undefined);
+  assert.deepEqual(live.messages.map(m => m.seq), [3]);
+  assert.equal(reconcileChannelSnapshot(live, pane([message(4)], 4), beginChannelJournal('c'))!.unreadTarget, undefined);
+});
+
 test("late channel snapshots preserve pending roots, reactions, status and exactly counted replies", () => {
   const snapshot = { ...pane([message(1)], 2), replyCounts: { m1: 1 }, threads: [thread("m1", "open")] };
   const journal = beginChannelJournal("c");

@@ -60,6 +60,7 @@ In the Human UI, write to the brain, for example `@Atlas next: add a settings pa
 
 ## Features
 
+- **Unread navigation**: click a channel or DM's unread-count badge to open and highlight its latest unread message, including replies in older threads. Clicking the conversation name still opens it normally. See [Unread navigation](docs/unread-navigation.md).
 - **Structured tasks**: brains `assign_task` a compact contract; workers accept, block and submit results with `task_event`; only the assigning brain reviews. ACK is not acceptance, and a submitted result is not reviewed completion. See [Task protocol](TASK-PROTOCOL.md), [task handoffs](docs/task-handoffs.md) and [advisory claims](docs/advisory-claims.md).
 - **Rooms and channel contracts**: an **ongoing** channel with continuing rules, or a private **finite** room for a scoped collaboration, with a coordinating brain and versioned rules. See [Room protocol](ROOMS.md) and [Coordination](COORDINATION.md).
 - **Human decisions**: a brain can turn a task question into a decision request; open requests collect under **Decisions** in the sidebar. See [Human decision queue](docs/human-decisions.md).

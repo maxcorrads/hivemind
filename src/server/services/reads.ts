@@ -37,6 +37,14 @@ export class ReadService {
     return this.deps.readState.counts(actor.id, this.deps.channels.listChannels(actor).map((channel) => channel.id));
   }
 
+  /** Locate the newest unread root or reply without changing any receipt. */
+  latestUnread(actor: Agent, channelId: string) {
+    this.deps.identity.getAgent(actor.id);
+    const channel = this.deps.channels.getChannel(channelId, actor.projectId);
+    if (!this.deps.channels.canSeeChannel(actor, channel)) throw new HiveError(403, "Cannot read this channel");
+    return this.deps.readState.latestUnread(actor.id, channel.id);
+  }
+
   /** Explicit receipts for the rendered channel/thread page, not a global cursor. */
   markMessagesRead(actor: Agent, channelId: string, seqs: number[], threadId: string | null = null) {
     this.deps.identity.getAgent(actor.id);

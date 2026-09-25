@@ -68,7 +68,7 @@ export function applyChannelMessage(pane: ChannelPayload | null, message: Messag
 
 /** Snapshot refreshes pre-request data; only this request's live updates win. */
 export function reconcileChannelSnapshot(
-  current: ChannelPayload | null, data: ChannelPayload, journal: ChannelJournal, older = false, returnToLive = false,
+  current: ChannelPayload | null, data: ChannelPayload, journal: ChannelJournal, older = false, returnToLive = false, holdThrough?: number,
 ): ChannelPayload | null {
   if (data.channel.id !== journal.channelId || data.threadId !== null) return current;
   // Never install a partially replayed snapshot and silently erase live state.
@@ -112,11 +112,16 @@ export function reconcileChannelSnapshot(
     .map(thread => [thread.id, thread]));
   for (const thread of journal.threads.values()) threads.set(thread.id, thread);
   const pane = boundLivePane({ ...data,
+    // Background refreshes keep the committed jump's short-lived anchor.
+    // Explicit history/live navigation must not resurrect it.
+    unreadTarget: held && !older ? previous!.unreadTarget : undefined,
     messages: [...byId.values()].sort((a, b) => a.seq - b.seq),
     // The divider marks what was unread when the channel was opened; refreshes see it already read.
     firstUnreadSeq: previous ? previous.firstUnreadSeq : data.firstUnreadSeq,
-    historyThrough: held ? previous!.historyThrough : undefined,
-    deferredLive: held ? previous!.deferredLive : undefined,
+    // Apply explicit jump bounds BEFORE live-window trimming; a burst of new
+    // messages must not evict the historical destination from the page.
+    historyThrough: holdThrough ?? (held ? previous!.historyThrough : undefined),
+    deferredLive: holdThrough !== undefined ? Boolean(data.hasNewer) : held ? previous!.deferredLive : undefined,
     hasOlder: older ? data.hasOlder : held ? previous!.hasOlder : data.hasOlder,
     hasNewer: held ? previous!.hasNewer : data.hasNewer,
     cursors: held ? { ...previous!.cursors, ...(older ? { before: data.cursors?.before } : {}) } : data.cursors,
