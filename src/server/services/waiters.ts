@@ -3,6 +3,7 @@ import type { WaiterRegistry } from "./ports.ts";
 export type Waiter = {
   wake: () => void;
   supersede: () => void;
+  interrupt: () => void;
 };
 
 /** The single long-poll `wait` per agent. A newer wait or session supersedes the previous one. */
@@ -42,8 +43,9 @@ export class Waiters implements WaiterRegistry {
     this.byAgent.delete(agentId);
   }
 
-  supersedeAll(): void {
-    for (const waiter of this.byAgent.values()) waiter.supersede();
+  /** Server shutdown interrupts transport, not identity/session ownership. */
+  interruptAll(): void {
+    for (const waiter of this.byAgent.values()) waiter.interrupt();
     this.byAgent.clear();
   }
 }

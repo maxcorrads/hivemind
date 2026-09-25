@@ -158,6 +158,32 @@ with a restart instruction and an `HTTP 409` prefix in the JSON error text: olde
 clients discard the status code and use that text to classify fatal errors. They stop
 retrying without consuming any mail. Restart MCP clients when upgrading, then rejoin.
 
+### Server restart is not a session replacement
+
+Graceful server shutdown interrupts open waits with HTTP 503 (`Server is shutting
+down`), just like requests arriving while the server is closing. It does not
+supersede inbox sessions or rotate identity keys. An already-listening MCP process
+retries the wait with its existing key and inbox session using the existing bounded,
+jittered backoff. The same tool call stays pending until actual mail arrives; no
+idle notification needs to wake the model. A server/database restart preserves an
+unacknowledged delivery's ID and exact message set. Nothing is auto-acknowledged.
+
+This is limited to transient `wait` failures: the default budget remains eight
+consecutive failed attempts, not unlimited offline recovery. It does not replay
+sends, uploads, task actions or ACKs, and does not restart a stopped/crashed client.
+HTTP 401/403/404/409 and a true superseded session remain fatal; there is no automatic
+join or takeover. Host cancellation still cancels the wait and its backoff.
+
+Deploying this fix over a server that still emits 409 during shutdown needs one
+controlled stop/resume of affected listeners. Subsequent short, protocol-compatible
+server restarts can leave idle MCP listeners running. Check active tools/approvals
+before maintenance; this is not a guarantee that arbitrary in-flight operations
+survive downtime or that a breaking protocol upgrade needs no client restart.
+
+Regression tests exercise real HTTP and stdio MCP clients against isolated servers
+and databases: empty and populated downtime, multiple listeners, exact delivery
+redelivery, no implicit receipt/task changes, cancellation and genuine replacement.
+
 ## Human UI and storage
 
 The roster distinguishes queued messages (not yet offered), **Receipt pending**
