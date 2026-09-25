@@ -40,8 +40,8 @@ test("project isolation covers channels, history, search, DMs, waits, mentions, 
   const human = hive.identity.getAgent("human");
   hive.projects.createProject(human, { name: "Beta", slug: "beta" });
 
-  const alphaBrain = hive.identity.join({ role: "brain", project: "chapter", focus: "alpha" });
-  const alphaWorker = hive.identity.join({ role: "worker", seniority: "mid", project: "chapter", focus: "alpha-worker" });
+  const alphaBrain = hive.identity.join({ role: "brain", project: "acme", focus: "alpha" });
+  const alphaWorker = hive.identity.join({ role: "worker", seniority: "mid", project: "acme", focus: "alpha-worker" });
   const betaBrain = hive.identity.join({ role: "brain", project: "beta", focus: "beta" });
   const betaWorker = hive.identity.join({ role: "worker", seniority: "mid", project: "beta", focus: "beta-worker" });
 
@@ -84,7 +84,7 @@ test("project isolation covers channels, history, search, DMs, waits, mentions, 
 
   const alphaSearch = hive.messageQueries.searchMessages(alphaBrain.agent, {
     q: "search-fixture",
-    project: "chapter",
+    project: "acme",
   });
   assert.ok(alphaSearch.hits.some((hit) => hit.seq === alphaMessage.seq));
   assert.equal(alphaSearch.hits.some((hit) => /beta-only/.test(hit.body)), false);

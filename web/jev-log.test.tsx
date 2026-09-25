@@ -108,7 +108,7 @@ test('a rejected call shows its specific reason with the resolved model and toke
   const plan = { type: 'choice', choice: 'brain_one_worker_2', confidence: 0.9, probabilities: { single: 0.05, brain_one_worker: 0.95 } };
   t.mock.method(api, 'jevCall', async () => ({ call: { ...rejected, sent: { ...sent, questions: { plan: { type: 'choice' } } },
     received: { model: 'jev-1.13.0', answers: { plan }, usage: { input_tokens: 2851, output_tokens: 248 } } } }));
-  await act(async () => root.render(<JevLog project="chapter" tick={0} channelLabel={() => 'dm'} agentName={() => 'Atlas'} onOpenChannel={() => {}} />));
+  await act(async () => root.render(<JevLog project="acme" tick={0} channelLabel={() => 'dm'} agentName={() => 'Atlas'} onOpenChannel={() => {}} />));
   const text = () => host.textContent ?? '';
   assert.match(text(), /Answer rejected · Jev chose a plan that was not offered/);
   assert.doesNotMatch(text(), /Invalid Jev response/);
@@ -138,7 +138,7 @@ test('uncertain and incoherent answers are labelled as such, and the default ali
     request: 'Una volta terminati questi passaggi quale è il piano?', firstAt: 1_000, lastAt: 1_000, callCount: 1, calls: [incoherent] }] }));
   t.mock.method(api, 'jevCall', async () => ({ call: detail }));
   const render = async () => {
-    await act(async () => root.render(<JevLog project="chapter" tick={0} channelLabel={() => 'dm'} agentName={() => 'Atlas'} onOpenChannel={() => {}} />));
+    await act(async () => root.render(<JevLog project="acme" tick={0} channelLabel={() => 'dm'} agentName={() => 'Atlas'} onOpenChannel={() => {}} />));
     await act(async () => (host.querySelector('button.jev-call') as HTMLElement).click());
   };
   await render();
@@ -155,7 +155,7 @@ test('uncertain and incoherent answers are labelled as such, and the default ali
   const pinnedRoot = createRoot(host);
   t.after(async () => { await act(async () => pinnedRoot.unmount()); });
   detail = { ...detail, requestedModel: 'jev-2026-09-01' };
-  await act(async () => pinnedRoot.render(<JevLog project="chapter" tick={1} channelLabel={() => 'dm'} agentName={() => 'Atlas'} onOpenChannel={() => {}} />));
+  await act(async () => pinnedRoot.render(<JevLog project="acme" tick={1} channelLabel={() => 'dm'} agentName={() => 'Atlas'} onOpenChannel={() => {}} />));
   await act(async () => (host.querySelector('button.jev-call') as HTMLElement).click());
   assert.match(text(), /jev-2026-09-01 → jev-1\.13\.0 \(differs from the pinned model\)/);
 });
@@ -191,7 +191,7 @@ test('the Routing log groups calls by request and shows the exact exchange of th
   const detail: JevCall = { ...calls[0]!, sent, received };
   t.mock.method(api, 'jevCall', async () => ({ call: detail }));
   let opened: string | null = null;
-  await act(async () => root.render(<JevLog project="chapter" tick={0} channelLabel={() => 'Human, Atlas'}
+  await act(async () => root.render(<JevLog project="acme" tick={0} channelLabel={() => 'Human, Atlas'}
     agentName={() => 'Atlas'} onOpenChannel={id => { opened = id; }} />));
   const text = () => host.textContent ?? '';
   assert.equal(host.querySelector('h1')?.textContent, 'Routing log');
@@ -228,7 +228,7 @@ test('Older requests pages with the server cursor and keeps requests that share 
     ? { requests: [group('tie-b', 5_000), group('old', 1_000)], hasMore: false, nextCursor: null }
     : { requests: [group('new', 9_000), group('tie-a', 5_000)], hasMore: true, nextCursor: '5000:tie-a' });
   t.after(async () => { await act(async () => root.unmount()); host.remove(); });
-  await act(async () => root.render(<JevLog project="chapter" tick={0} channelLabel={() => 'dm'} agentName={() => 'Atlas'} onOpenChannel={() => {}} />));
+  await act(async () => root.render(<JevLog project="acme" tick={0} channelLabel={() => 'dm'} agentName={() => 'Atlas'} onOpenChannel={() => {}} />));
   const more = [...host.querySelectorAll('button')].find(button => button.textContent === 'Older requests') as HTMLElement;
   assert.ok(more);
   await act(async () => more.click());

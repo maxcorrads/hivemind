@@ -9,7 +9,7 @@ import { Hive } from "./hive.ts";
 import { hasRow, insertRow } from "./test-fixtures.ts";
 import { TelegramBridge } from "./telegram.ts";
 
-const CONFIG = { botToken: "fixture", allowUserIds: [1], groups: { chapter: -1001 } };
+const CONFIG = { botToken: "fixture", allowUserIds: [1], groups: { acme: -1001 } };
 
 function blocked(signal?: AbortSignal | null): Promise<Response> {
   return new Promise((_resolve, reject) => {

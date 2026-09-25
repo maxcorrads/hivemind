@@ -6,7 +6,7 @@ import type { Agent } from "./types.ts";
 const brain: Agent = {
   id: "brain-id", name: "Brain", role: "brain", seniority: null,
   focus: "coord", online: true, lastSeenAt: 1, createdAt: 1,
-  projectId: "project-id", project: "chapter",
+  projectId: "project-id", project: "acme",
 };
 const worker: Agent = { ...brain, id: "worker-id", name: "Forge", role: "worker", seniority: "senior" };
 

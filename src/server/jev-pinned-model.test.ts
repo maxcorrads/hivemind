@@ -93,8 +93,8 @@ function runtime(t: TestContext) {
   const dir = tempHome(t);
   const hive = new Hive(path.join(dir, 'hive.db'));
   const human = hive.identity.getAgent('human');
-  const brain = hive.identity.join({ role: 'brain', project: 'chapter' }).agent;
-  for (let index = 0; index < 2; index++) hive.identity.join({ role: 'worker', seniority: 'senior', project: 'chapter' });
+  const brain = hive.identity.join({ role: 'brain', project: 'acme' }).agent;
+  for (let index = 0; index < 2; index++) hive.identity.join({ role: 'worker', seniority: 'senior', project: 'acme' });
   const dm = hive.channels.openDm(human, brain.name);
   let target: AdaptiveTopology = 'single', resolved: ((requested: string) => string) = requested => requested;
   let unavailable: string | null = null, hook: (() => void) | undefined, serial = 0;

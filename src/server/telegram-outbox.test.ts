@@ -33,7 +33,7 @@ function fixture(t: { after: (fn: () => void) => void }) {
 test("real bridge resumes only the failed part after restart and Human retry wakes the idle dispatcher", async t => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-multipart-"));
   let hive = new Hive(path.join(dir, "hive.db"));
-  const cfg = { botToken: "fixture", allowUserIds: [1], groups: { chapter: -1001 } };
+  const cfg = { botToken: "fixture", allowUserIds: [1], groups: { acme: -1001 } };
   writeTelegramFile({ botToken: cfg.botToken, allowUserIds: [1], projects: cfg.groups }, dir);
   let bridge: TelegramBridge | undefined;
   const sent: string[] = [];
@@ -117,7 +117,7 @@ test("old destination jobs are quarantined rather than sent under a new bridge",
     sends++;
     return Response.json({ ok: true, result: { message_id: 10 } });
   });
-  const bridge = new TelegramBridge(hive, { botToken: "b", allowUserIds: [1], groups: { chapter: -1002 } });
+  const bridge = new TelegramBridge(hive, { botToken: "b", allowUserIds: [1], groups: { acme: -1002 } });
   bridge.start();
   try {
     await until(() => hive.telegramAdmin.failureCount() === 1);

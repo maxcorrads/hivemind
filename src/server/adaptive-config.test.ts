@@ -43,7 +43,7 @@ test("enabling Jev adds advice to Human delivery without changing it; disabled J
     hive.db.close(); rmSync(dir, { recursive: true, force: true });
   });
   const human = hive.identity.getAgent("human");
-  const brain = hive.identity.join({ role: "brain", project: "chapter" });
+  const brain = hive.identity.join({ role: "brain", project: "acme" });
   const dm = hive.channels.openDm(human, brain.agent.name);
   const app = createApp(hive);
   let calls = 0;

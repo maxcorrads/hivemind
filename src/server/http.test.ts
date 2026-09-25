@@ -48,7 +48,7 @@ test("HTTP protocol: join, isolate, wait, Human admin", async () => {
 
     const snap = await json(base, "GET", "/api/ui/snapshot");
     assert.equal(snap.data.you.name, "Human");
-    assert.ok(snap.data.projects.some((p: { slug: string }) => p.slug === "chapter"));
+    assert.ok(snap.data.projects.some((p: { slug: string }) => p.slug === "acme"));
     assert.ok(snap.data.channels.some((c: { name: string }) => c.name === "brains"));
 
     const brain = await json(base, "POST", "/api/agent/join", { role: "brain", focus: "coord" });
@@ -148,7 +148,7 @@ test("HTTP protocol: join, isolate, wait, Human admin", async () => {
     assert.ok(withMeta.data.threads);
 
     await json(base, "POST", "/api/agent/channels/brains/messages", { body: "oauth secret for brains" }, brainTok);
-    const uiSearch = await json(base, "GET", "/api/ui/search?q=oauth&project=chapter");
+    const uiSearch = await json(base, "GET", "/api/ui/search?q=oauth&project=acme");
     assert.equal(uiSearch.status, 200);
     assert.ok(uiSearch.data.hits.some((h: { body: string }) => /oauth secret/.test(h.body)));
     const workerSearch = await json(base, "GET", "/api/agent/search?q=oauth", undefined, workerTok);
@@ -225,21 +225,21 @@ test("Human Telegram UI saves settings and never returns the bot token", async t
     const put = await json(base, "PUT", "/api/ui/telegram", {
       botToken: token,
       allowUserIds: [42],
-      projects: { chapter: { groupChatId: -1001 } },
+      projects: { acme: { groupChatId: -1001 } },
     });
     assert.equal(put.status, 200);
     assert.equal(put.data.tokenSet, true);
     assert.equal(put.data.configured, true);
-    assert.equal(put.data.projects.chapter, -1001);
+    assert.equal(put.data.projects.acme, -1001);
     assert.ok(!JSON.stringify(put.data).includes(token));
     const got = await json(base, "GET", "/api/ui/telegram");
     assert.equal(got.data.tokenHint, "…n-ui");
     assert.ok(!JSON.stringify(got.data).includes(token));
     const keep = await json(base, "PUT", "/api/ui/telegram", {
       allowUserIds: [42],
-      projects: { chapter: { groupChatId: -1002 } },
+      projects: { acme: { groupChatId: -1002 } },
     });
-    assert.equal(keep.data.projects.chapter, -1002);
+    assert.equal(keep.data.projects.acme, -1002);
     assert.ok(!JSON.stringify(keep.data).includes(token));
     const bad = await json(base, "PUT", "/api/ui/telegram", {
       allowUserIds: [42],
@@ -250,7 +250,7 @@ test("Human Telegram UI saves settings and never returns the bot token", async t
     assert.equal(other.status, 200);
     const mapped = await json(base, "PUT", "/api/ui/telegram", {
       allowUserIds: [42],
-      projects: { chapter: { groupChatId: -1002 }, altro: { groupChatId: -1003 } },
+      projects: { acme: { groupChatId: -1002 }, altro: { groupChatId: -1003 } },
     });
     assert.equal(mapped.data.projects.altro, -1003);
     const live = await json(base, "POST", "/api/agent/join", { role: "brain", project: "altro" });
@@ -267,7 +267,7 @@ test("Human Telegram UI saves settings and never returns the bot token", async t
     assert.equal(snap.data.projects.some((p: { slug: string }) => p.slug === "altro"), false);
     const tg = await json(base, "GET", "/api/ui/telegram");
     assert.equal(tg.data.projects.altro, undefined);
-    assert.equal(tg.data.projects.chapter, -1002);
+    assert.equal(tg.data.projects.acme, -1002);
   } finally {
     await started.shutdown();
     hive.db.close();

@@ -67,7 +67,7 @@ test("real bridge sends a job queued in the same turn as empty startup", async t
     calls++;
     return Response.json({ ok: true, result: { message_id: 42 } });
   });
-  const bridge = new TelegramBridge(hive, { botToken: "fixture", allowUserIds: [1], groups: { chapter: -1001 } });
+  const bridge = new TelegramBridge(hive, { botToken: "fixture", allowUserIds: [1], groups: { acme: -1001 } });
   bridge.start();
   const message = hive.messages.postMessage(hive.identity.getAgent("human"), { channel: "general", body: "startup work" });
   try {
@@ -80,7 +80,7 @@ test("real bridge sends a job queued in the same turn as empty startup", async t
 test("stop drains a delayed old topic response without restoring a mapping or consuming its job", async t => {
   const { hive } = fixture(t);
   const human = hive.identity.getAgent("human");
-  const channel = hive.channels.createChannel(human, { name: "delayed", type: "private", project: "chapter" });
+  const channel = hive.channels.createChannel(human, { name: "delayed", type: "private", project: "acme" });
   let release!: (response: Response) => void;
   let topicStarted = false;
   t.mock.method(globalThis, "fetch", async (url: unknown, init?: RequestInit) => {
@@ -89,7 +89,7 @@ test("stop drains a delayed old topic response without restoring a mapping or co
     topicStarted = true;
     return new Promise<Response>(resolve => { release = resolve; });
   });
-  const bridge = new TelegramBridge(hive, { botToken: "fixture", allowUserIds: [1], groups: { chapter: -1001 } });
+  const bridge = new TelegramBridge(hive, { botToken: "fixture", allowUserIds: [1], groups: { acme: -1001 } });
   bridge.start();
   const message = hive.messages.postMessage(human, { channel: channel.id, body: "pending" });
   await until(() => topicStarted);
@@ -102,7 +102,7 @@ test("stop drains a delayed old topic response without restoring a mapping or co
 
 test("serialized reload never overlaps polling generations", async t => {
   const { hive, dir } = fixture(t);
-  writeTelegramFile({ botToken: "fixture", allowUserIds: [1], projects: { chapter: -1001 } }, dir);
+  writeTelegramFile({ botToken: "fixture", allowUserIds: [1], projects: { acme: -1001 } }, dir);
   let active = 0;
   let maxActive = 0;
   t.mock.method(globalThis, "fetch", async (_url: unknown, init?: RequestInit) => {
@@ -131,7 +131,7 @@ test("shutdown fences new admission and keeps a caller-owned Hive usable", async
 
 test("shutdown deadline bounds an abort-ignoring bridge and closes remaining sockets", async t => {
   const { hive, dir } = fixture(t);
-  writeTelegramFile({ botToken: "fixture", allowUserIds: [1], projects: { chapter: -1001 } }, dir);
+  writeTelegramFile({ botToken: "fixture", allowUserIds: [1], projects: { acme: -1001 } }, dir);
   let release!: (response: Response) => void;
   t.mock.method(globalThis, "fetch", async () => new Promise<Response>(resolve => { release = resolve; }));
   const started = startServer({ port: 0, hive, shutdownGraceMs: 50 });

@@ -268,7 +268,7 @@ test('room authority seeding bootstraps Human auth, writes a local Human message
     }
     if (String(url).endsWith('/api/ui/snapshot')) {
       return new Response(JSON.stringify({
-        projects: [{ id: 'project-1', slug: 'chapter' }],
+        projects: [{ id: 'project-1', slug: 'acme' }],
         channels: [{ id: 'general-1', name: 'general', projectId: 'project-1' }],
       }), { status: 200, headers: { 'content-type': 'application/json' } });
     }

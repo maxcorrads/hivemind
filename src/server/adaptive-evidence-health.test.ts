@@ -123,8 +123,8 @@ function runtime(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-evidence-health-'));
   let hive = new Hive(path.join(dir, 'hive.db'));
   const human = hive.identity.getAgent('human');
-  const brain = hive.identity.join({ role: 'brain', project: 'chapter' }).agent;
-  const worker = hive.identity.join({ role: 'worker', seniority: 'senior', project: 'chapter' }).agent;
+  const brain = hive.identity.join({ role: 'brain', project: 'acme' }).agent;
+  const worker = hive.identity.join({ role: 'worker', seniority: 'senior', project: 'acme' }).agent;
   const dm = hive.channels.openDm(human, brain.name);
   saveAdaptiveRouting(dir, { enabled: true, apiKey: 'never-export-this-key' });
   let calls = 0;
@@ -202,7 +202,7 @@ test('a gap marker for a deleted channel is discarded without recreating evidenc
   await f.check('lost-before-delete');
   assert.equal(f.hive.adaptiveTopology.observations.collectorHealth().status, 'degraded');
   for (const agent of [f.brain, f.worker]) f.hive.identity.setOffline(agent.id);
-  f.hive.projects.deleteProject(f.human, 'chapter');
+  f.hive.projects.deleteProject(f.human, 'acme');
   heal();
   const health = f.hive.adaptiveTopology.observations.collectorHealth();
   assert.equal(health.status, 'recovered'); assert.equal(health.discardedGaps, 1); assert.equal(health.persistedGaps, 0);

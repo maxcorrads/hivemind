@@ -18,8 +18,8 @@ function fixture(t: TestContext, enabled = true) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-topology-channels-'));
   const hive = new Hive(path.join(dir, 'hive.db'));
   const human = hive.identity.getAgent('human');
-  const brains = [0, 1].map(() => hive.identity.join({ role: 'brain', project: 'chapter' }));
-  const workers = [0, 1].map(() => hive.identity.join({ role: 'worker', seniority: 'senior', project: 'chapter' }));
+  const brains = [0, 1].map(() => hive.identity.join({ role: 'brain', project: 'acme' }));
+  const workers = [0, 1].map(() => hive.identity.join({ role: 'worker', seniority: 'senior', project: 'acme' }));
   const app = createApp(hive);
   let target: AdaptiveTopology = 'single', calls = 0;
   t.mock.method(globalThis, 'fetch', async (_url: unknown, init?: RequestInit) => {
@@ -28,7 +28,7 @@ function fixture(t: TestContext, enabled = true) {
   });
   saveAdaptiveRouting(dir, { enabled, apiKey: 'fixture-key' });
   t.after(async () => { await hive.adaptiveTopology.stop(); hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
-  const channel = (name: string, members: string[]) => hive.channels.createChannel(human, { name, type: 'private', project: 'chapter', memberNames: members });
+  const channel = (name: string, members: string[]) => hive.channels.createChannel(human, { name, type: 'private', project: 'acme', memberNames: members });
   const send = async (channelId: string, body: Record<string, unknown>) => {
     const response = await app.request(`/api/ui/channels/${channelId}/messages`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
@@ -147,7 +147,7 @@ test('legacy channel-keyed executions migrate through to the advisory schema; th
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const file = path.join(dir, 'hive.db');
   let hive = new Hive(file);
-  const human = hive.identity.getAgent('human'), brain = hive.identity.join({ role: 'brain', project: 'chapter' });
+  const human = hive.identity.getAgent('human'), brain = hive.identity.join({ role: 'brain', project: 'acme' });
   const dm = hive.channels.openDm(human, brain.agent.name);
   const root = hive.messages.postMessage(human, { channel: dm.id, body: 'Legacy request.' });
   const snapshot = JSON.stringify({ executionId: 'execution-legacy', channelId: dm.id, projectId: dm.projectId, brainId: brain.agent.id,
@@ -182,7 +182,7 @@ test('per-brain executions migrate to execution keys and keep their request', as
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const file = path.join(dir, 'hive.db');
   let hive = new Hive(file);
-  const human = hive.identity.getAgent('human'), brain = hive.identity.join({ role: 'brain', project: 'chapter' });
+  const human = hive.identity.getAgent('human'), brain = hive.identity.join({ role: 'brain', project: 'acme' });
   const dm = hive.channels.openDm(human, brain.agent.name);
   const root = hive.messages.postMessage(human, { channel: dm.id, body: 'Per-brain request.' });
   const snapshot = JSON.stringify({ executionId: 'execution-v2', channelId: dm.id, projectId: dm.projectId, brainId: brain.agent.id,

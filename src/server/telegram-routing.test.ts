@@ -31,9 +31,9 @@ function fixture() {
 test("invalid or duplicate routes cannot replace the previous config", () => {
   const { dir, close } = fixture();
   try {
-    writeTelegramFile({ botToken: "original", allowUserIds: [1], projects: { chapter: -1001 } }, dir);
+    writeTelegramFile({ botToken: "original", allowUserIds: [1], projects: { acme: -1001 } }, dir);
     const before = readFileSync(path.join(dir, "telegram.json"), "utf8");
-    for (const projects of ([{ chapter: -1002, other: -1002 }, { chapter: 0 }, { chapter: 1.2 }, { chapter: "" }] as Array<Record<string, string | number>>)) {
+    for (const projects of ([{ acme: -1002, other: -1002 }, { acme: 0 }, { acme: 1.2 }, { acme: "" }] as Array<Record<string, string | number>>)) {
       assert.throws(() => writeTelegramFile({ botToken: "replacement", allowUserIds: [1], projects }, dir));
       assert.equal(readFileSync(path.join(dir, "telegram.json"), "utf8"), before);
     }
@@ -42,9 +42,9 @@ test("invalid or duplicate routes cannot replace the previous config", () => {
 
 test("configuration drains late old topic work before publishing, and never retargets queued old messages", async t => {
   const { hive, dir, close } = fixture();
-  writeTelegramFile({ botToken: "fixture", allowUserIds: [1], projects: { chapter: -1001 } }, dir);
+  writeTelegramFile({ botToken: "fixture", allowUserIds: [1], projects: { acme: -1001 } }, dir);
   const human = hive.identity.getAgent("human");
-  const channel = hive.channels.createChannel(human, { name: "room", type: "private", project: "chapter" });
+  const channel = hive.channels.createChannel(human, { name: "room", type: "private", project: "acme" });
   let release!: (response: Response) => void;
   let oldSignal: AbortSignal | null | undefined;
   const sentChats: number[] = [];
@@ -65,14 +65,14 @@ test("configuration drains late old topic work before publishing, and never reta
   try {
     hive.messages.postMessage(human, { channel: channel.id, body: "old audience" });
     await until(() => Boolean(release));
-    const change = handle.configure({ botToken: "fixture", allowUserIds: [1], projects: { chapter: -1002 } });
+    const change = handle.configure({ botToken: "fixture", allowUserIds: [1], projects: { acme: -1002 } });
     await until(() => Boolean(oldSignal?.aborted));
-    assert.equal(readTelegramFile(dir)?.projects.chapter, -1001);
+    assert.equal(readTelegramFile(dir)?.projects.acme, -1001);
     hive.messages.postMessage(human, { channel: channel.id, body: "arrived while draining" });
     release(Response.json({ ok: true, result: { message_thread_id: 11 } }));
     await change;
     await until(() => hive.telegramAdmin.failureCount() === 2);
-    assert.equal(readTelegramFile(dir)?.projects.chapter, -1002);
+    assert.equal(readTelegramFile(dir)?.projects.acme, -1002);
     assert.equal(hasRow(hive, "telegram_topics", { telegram_thread_id: 11 }), false);
     assert.equal(sentChats.length, 0);
     hive.messages.postMessage(human, { channel: channel.id, body: "new audience" });
@@ -93,12 +93,12 @@ test("different bots process colliding update and message IDs without inheriting
     if (offsets.length === 1) return Response.json({ ok: true, result: [{ update_id: 900, message: { message_id: 7, chat: { id: -1001 }, from: { id: 1 }, text: token } }] });
     return blocked(init?.signal);
   });
-  let bridge = new TelegramBridge(hive, { botToken: "first", botId: 1, allowUserIds: [1], groups: { chapter: -1001 } });
+  let bridge = new TelegramBridge(hive, { botToken: "first", botId: 1, allowUserIds: [1], groups: { acme: -1001 } });
   try {
     bridge.start();
     await until(() => (pollOffsets.get("first")?.length ?? 0) >= 2);
     await bridge.stop();
-    bridge = new TelegramBridge(hive, { botToken: "second", botId: 2, allowUserIds: [1], groups: { chapter: -1001 } });
+    bridge = new TelegramBridge(hive, { botToken: "second", botId: 2, allowUserIds: [1], groups: { acme: -1001 } });
     bridge.start();
     await until(() => (pollOffsets.get("second")?.length ?? 0) >= 2);
     assert.equal(pollOffsets.get("first")![0], 777);
@@ -113,9 +113,9 @@ test("different bots process colliding update and message IDs without inheriting
 test("Telegram Human replies in a brain DM are posted without waiting for Jev, which advises afterwards (#214)", async t => {
   const { hive, dir, close } = fixture();
   const human = hive.identity.getAgent("human");
-  const brain = hive.identity.join({ role: "brain", project: "chapter" }).agent;
+  const brain = hive.identity.join({ role: "brain", project: "acme" }).agent;
   const dm = hive.channels.openDm(human, brain.name);
-  const cfg = { botToken: "fixture", botId: 77, allowUserIds: [1], groups: { chapter: -1001 } };
+  const cfg = { botToken: "fixture", botId: 77, allowUserIds: [1], groups: { acme: -1001 } };
   const botKey = telegramConfigKey(cfg);
   const bridge = new TelegramBridge(hive, cfg);
   insertRow(hive, "telegram_topics", { channel_id: dm.id, telegram_thread_id: 22, telegram_chat_id: -1001, bot_key: botKey });
@@ -171,20 +171,20 @@ test("Telegram Human replies in a brain DM are posted without waiting for Jev, w
 
 test("verified same-bot rotation preserves its namespace and publication failure preserves the prior file", async t => {
   const { hive, dir, close } = fixture();
-  writeTelegramFile({ botToken: "original", allowUserIds: [1], projects: { chapter: -1001 } }, dir);
+  writeTelegramFile({ botToken: "original", allowUserIds: [1], projects: { acme: -1001 } }, dir);
   t.mock.method(globalThis, "fetch", async (url: unknown) => Response.json({ ok: true, result: { id: String(url).includes("different") ? 43 : 42, is_bot: true } }));
   const handle = startTelegram(hive, false);
   try {
-    await handle.configure({ botToken: "original", allowUserIds: [1], projects: { chapter: -1001 } });
+    await handle.configure({ botToken: "original", allowUserIds: [1], projects: { acme: -1001 } });
     const first = telegramConfigKey(loadTelegramConfig(dir)!);
     const message = hive.messages.postMessage(hive.identity.getAgent("human"), { channel: "general", body: "same bot" });
     enqueueTelegramPending(hive.db, message.seq, "message", undefined, { botKey: first, chatId: -1001 });
-    await handle.configure({ botToken: "rotated", allowUserIds: [1], projects: { chapter: -1001 } });
+    await handle.configure({ botToken: "rotated", allowUserIds: [1], projects: { acme: -1001 } });
     assert.equal(telegramConfigKey(loadTelegramConfig(dir)!), first);
     assert.equal(readValue(hive, "telegram_pending", "bot_key", { seq: message.seq }), first);
     const before = readFileSync(path.join(dir, "telegram.json"), "utf8");
     t.mock.method(fs, "renameSync", () => { throw new Error("fixture publication failure"); }); syncBuiltinESMExports();
-    await assert.rejects(handle.configure({ botToken: "different", allowUserIds: [1], projects: { chapter: -1002 } }), /publication failure/);
+    await assert.rejects(handle.configure({ botToken: "different", allowUserIds: [1], projects: { acme: -1002 } }), /publication failure/);
     assert.equal(readFileSync(path.join(dir, "telegram.json"), "utf8"), before);
     assert.equal(readdirSync(dir).some(file => file.startsWith(".telegram-")), false);
     t.mock.restoreAll(); syncBuiltinESMExports();
