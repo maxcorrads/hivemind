@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.5.0](https://github.com/maxcorrads/hivemind/compare/v0.4.0...v0.5.0) (2026-09-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* **decisions:** the MCP tools request_human_decision, get_decisions and decision_event and the /api/agent/decisions and /api/ui/decisions routes are gone; migration 30 deletes stored decision requests.
+* **projects:** start empty until Human creates a project ([#242](https://github.com/maxcorrads/hivemind/issues/242))
+
+### Features
+
+* **decisions:** remove the Human decision queue ([#247](https://github.com/maxcorrads/hivemind/issues/247)) ([eb493e0](https://github.com/maxcorrads/hivemind/commit/eb493e02af16a36392f8be51758ee42d41cea6f5))
+* **projects:** start empty until Human creates a project ([#242](https://github.com/maxcorrads/hivemind/issues/242)) ([ddcd245](https://github.com/maxcorrads/hivemind/commit/ddcd245df224bf0cc0e76f81af8030d3a88c95e7))
+* **ui:** jump from unread badges to the latest unread message ([#241](https://github.com/maxcorrads/hivemind/issues/241)) ([6bffc56](https://github.com/maxcorrads/hivemind/commit/6bffc56fd8751162d1096616d7e34631cb419cfe))
+* **ui:** open the mention list on a bare @ ([#246](https://github.com/maxcorrads/hivemind/issues/246)) ([8ed7823](https://github.com/maxcorrads/hivemind/commit/8ed7823240375065812d786236c41da4e2a81bdb))
+* **ui:** show the Routing log only while Jev is enabled ([#249](https://github.com/maxcorrads/hivemind/issues/249)) ([5c643a6](https://github.com/maxcorrads/hivemind/commit/5c643a6590a948b8ee38a3021e38566a62522b0b))
+
+
+### Bug Fixes
+
+* **ci:** restore main after projects, restart and license changes ([#245](https://github.com/maxcorrads/hivemind/issues/245)) ([5444751](https://github.com/maxcorrads/hivemind/commit/5444751ef26a45a692483955363b72efaf93bb26))
+* **delivery:** keep pending waits recoverable across server restart ([#240](https://github.com/maxcorrads/hivemind/issues/240)) ([480fe13](https://github.com/maxcorrads/hivemind/commit/480fe1375cc4fc1ba0deb57041e9320129cb9a54))
+
 ## [0.4.0](https://github.com/maxcorrads/hivemind/compare/v0.3.0...v0.4.0) (2026-09-24)
 
 
