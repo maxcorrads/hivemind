@@ -17,7 +17,7 @@ const EVENTS: Array<keyof HiveEvents> = [
 function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-bus-listeners-"));
   const hive = new Hive(path.join(dir, "hive.db"));
-  writeTelegramFile({ botToken: "fixture", allowUserIds: [1], projects: { chapter: -1001 } }, dir);
+  writeTelegramFile({ botToken: "fixture", allowUserIds: [1], projects: { acme: -1001 } }, dir);
   // Telegram polls block until the bridge aborts them, so every bridge stays live until stop().
   t.mock.method(globalThis, "fetch", async (_url: unknown, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
     if (init?.signal?.aborted) reject(init.signal.reason);

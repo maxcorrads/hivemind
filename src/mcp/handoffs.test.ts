@@ -51,7 +51,7 @@ test('fresh real stdio and CLI sessions recover bounded handoffs without token d
   await call(client, 'task_event', checkpoint);
   await client.close();
   const resumed = await connect();
-  const joined = await call<{ handoffs: HandoffList; next: string }>(resumed, 'join', { role: 'worker', project: 'chapter' });
+  const joined = await call<{ handoffs: HandoffList; next: string }>(resumed, 'join', { role: 'worker', project: 'acme' });
   assert.equal(joined.handoffs.items[0]?.taskId, task.id);
   assert.equal(joined.handoffs.items[0]?.nextAction, 'Add the empty input guard');
   assert.match(joined.next, /get_handoffs with taskId/);

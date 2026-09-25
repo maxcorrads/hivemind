@@ -66,7 +66,7 @@ function ch(over: Partial<Channel> = {}): Channel {
     createdAt: 0,
     memberIds: ["human", "b"],
     projectId: "p1",
-    project: "chapter",
+    project: "acme",
     ...over,
   };
 }
@@ -176,22 +176,22 @@ test("telegram file save keeps a prior token and never returns it in the public 
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-tg-ui-"));
   const token = "123456:SECRET-telegram-token-ui";
   writeTelegramFile(
-    { botToken: token, allowUserIds: [9], projects: { chapter: { groupChatId: -1001 } } },
+    { botToken: token, allowUserIds: [9], projects: { acme: { groupChatId: -1001 } } },
     dir,
   );
-  writeTelegramFile({ allowUserIds: [9, 8], projects: { chapter: { groupChatId: -1002 } } }, dir);
+  writeTelegramFile({ allowUserIds: [9, 8], projects: { acme: { groupChatId: -1002 } } }, dir);
   const cfg = loadTelegramConfig(dir);
   assert.equal(cfg?.botToken, token);
-  assert.equal(cfg?.groups.chapter, -1002);
+  assert.equal(cfg?.groups.acme, -1002);
   const view = publicTelegramView(dir, true);
   assert.equal(view.tokenHint, maskTelegramToken(token));
   assert.equal(view.running, true);
   assert.ok(!JSON.stringify(view).includes(token));
-  const after = removeTelegramProjectSlug("chapter", dir);
-  assert.equal(after?.projects.chapter, undefined);
+  const after = removeTelegramProjectSlug("acme", dir);
+  assert.equal(after?.projects.acme, undefined);
   assert.equal(after?.botToken, token);
   const gone = publicTelegramView(dir, false);
-  assert.equal(gone.projects.chapter, undefined);
+  assert.equal(gone.projects.acme, undefined);
   assert.ok(!JSON.stringify(gone).includes(token));
   assert.equal(removeTelegramProjectSlug("missing", dir)?.botToken, token);
   rmSync(dir, { recursive: true, force: true });
@@ -210,7 +210,7 @@ test("telegram config maps each group chat to a project and ignores unknown chat
   );
   const cfg = loadTelegramConfig(dir);
   assert.ok(cfg);
-  assert.equal(chatIdForProject(cfg!, "chapter"), -1001);
+  assert.equal(chatIdForProject(cfg!, "acme"), undefined);
   assert.equal(chatIdForProject(cfg!, "altro"), -1002);
   assert.equal(projectSlugForChat(cfg!, -1002), "altro");
   assert.equal(projectSlugForChat(cfg!, -1999), undefined);

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { DEFAULT_PROJECT_NAME, DEFAULT_PROJECT_SLUG, HUMAN_ID } from "../../shared/types.ts";
+import { HUMAN_ID } from "../../shared/types.ts";
 import { hasColumn, hasUniqueKey, primaryKey, rebuild, requireKey, requireShape } from "./schema.ts";
 import { validateCoreStorage } from "./validate.ts";
 
@@ -163,7 +163,9 @@ export function messageRecipients(db: DatabaseSync): void {
 
 /**
  * The atomic-project schema of #56 (formerly `STORAGE_VERSION = 2`): project
- * columns, the projects table, chat-scoped Telegram keys and the seed project.
+ * columns, the projects table and chat-scoped Telegram keys.
+ * A database with no rows is left without a project; Human creates the first one.
+ * Rows that predate projects are attached to one project so they keep a home.
  */
 export function projectStorage(db: DatabaseSync): void {
   for (const table of ["agents", "channels"]) {
@@ -213,13 +215,18 @@ export function projectStorage(db: DatabaseSync): void {
   db.exec("CREATE INDEX IF NOT EXISTS idx_telegram_out_seq ON telegram_out(seq)");
 
   const seed = db.prepare("SELECT id FROM projects ORDER BY created_at, id LIMIT 1").get() as { id: string } | undefined;
-  const id = seed?.id ?? randomUUID();
-  if (!seed) {
+  const orphans = (db.prepare(
+    "SELECT (SELECT COUNT(*) FROM agents WHERE project_id IS NULL AND id != ?) + (SELECT COUNT(*) FROM channels WHERE project_id IS NULL) AS n",
+  ).get(HUMAN_ID) as { n: number }).n;
+  const id = seed?.id ?? (orphans > 0 ? randomUUID() : null);
+  if (!seed && id) {
     db.prepare("INSERT INTO projects (id, slug, name, worktree, created_at) VALUES (?, ?, ?, NULL, ?)")
-      .run(id, DEFAULT_PROJECT_SLUG, DEFAULT_PROJECT_NAME, Date.now());
+      .run(id, "imported", "Imported", Date.now());
   }
-  db.prepare("UPDATE agents SET project_id = ? WHERE project_id IS NULL AND id != ?").run(id, HUMAN_ID);
-  db.prepare("UPDATE channels SET project_id = ? WHERE project_id IS NULL").run(id);
+  if (id) {
+    db.prepare("UPDATE agents SET project_id = ? WHERE project_id IS NULL AND id != ?").run(id, HUMAN_ID);
+    db.prepare("UPDATE channels SET project_id = ? WHERE project_id IS NULL").run(id);
+  }
   validateCoreStorage(db);
 }
 

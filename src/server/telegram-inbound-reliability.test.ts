@@ -18,7 +18,7 @@ function fixture(t: TestContext) {
   t.after(async () => { await state.bridge?.stop(); state.hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
   return state;
 }
-const config: TelegramConfig = { botToken: "fixture-secret", allowUserIds: [1], groups: { chapter: -1001 } };
+const config: TelegramConfig = { botToken: "fixture-secret", allowUserIds: [1], groups: { acme: -1001 } };
 function blocked(signal?: AbortSignal | null): Promise<Response> {
   return new Promise((_resolve, reject) => {
     if (signal?.aborted) reject(signal.reason);
@@ -38,7 +38,7 @@ function message(updateId: number, text: string, chatId = -1001) {
   return { update_id: updateId, message: { message_id: updateId + 100, chat: { id: chatId }, from: { id: 1, first_name: "Human" }, text } };
 }
 function scope(hive: Hive) {
-  return { botKey: telegramConfigKey(config), chatId: -1001, projectId: hive.projects.findProjectBySlug("chapter")!.id };
+  return { botKey: telegramConfigKey(config), chatId: -1001, projectId: hive.projects.findProjectBySlug("acme")!.id };
 }
 
 test("failure record, seen marker and cursor roll back at each SQLite statement and survive reopen", async t => {
@@ -64,7 +64,7 @@ test("failure record, seen marker and cursor roll back at each SQLite statement 
 test("a failed attachment cannot starve another project; retries have deadlines and explicit replay wakes an idle bridge", async t => {
   const f = fixture(t); freeze(t);
   const other = f.hive.projects.createProject(f.hive.identity.getAgent("human"), { name: "Other", slug: "other" });
-  writeTelegramFile({ botToken: config.botToken, allowUserIds: [1], projects: { chapter: -1001, other: -1002 } }, f.dir);
+  writeTelegramFile({ botToken: config.botToken, allowUserIds: [1], projects: { acme: -1001, other: -1002 } }, f.dir);
   const cfg = loadTelegramConfig(f.dir)!;
   let polls = 0, downloads = 0, broken = true;
   const poison = { update_id: 1, message: { message_id: 101, chat: { id: -1001 }, from: { id: 1 }, document: { file_id: "document", file_name: "a.txt", mime_type: "text/plain" } } };
@@ -204,7 +204,7 @@ test("quarantine API rejects a different bot/project/chat, rolls back a failed r
   const id = f.hive.telegramAdmin.quarantine()[0]!.id;
   const app = createApp(f.hive);
   for (const [token, chat] of [["other-bot", -1001], [config.botToken, -1002]] as const) {
-    writeTelegramFile({ botToken: token, allowUserIds: [1], projects: { chapter: chat } }, f.dir);
+    writeTelegramFile({ botToken: token, allowUserIds: [1], projects: { acme: chat } }, f.dir);
     assert.equal((await app.request(`/api/ui/telegram/quarantine/${id}/retry`, { method: "POST" })).status, 409);
   }
   writeTelegramFile({ botToken: config.botToken, allowUserIds: [1], projects: config.groups }, f.dir);

@@ -13,7 +13,7 @@ The process binds `127.0.0.1` only. There is no account auth on the HTTP API. Se
 
 Optional `--focus frontend` (or review, mobile, …) is a label, not a rank for brains and workers.
 
-One process can host several isolated **projects** (the first migrate is `chapter`). Each has its own `#general`, `#brains`, DMs, and For you. Brain and worker of A cannot see B. Human is the only bridge. Join from that project's worktree, or pass `project=slug`. A tab in an unknown directory with two projects does not fall through to Chapter.
+One process can host several isolated **projects**. A new hive has none until Human creates one. Each has its own `#general`, `#brains`, DMs, and For you. Brain and worker of A cannot see B. Human is the only bridge. Join from that project's worktree, or pass `project=slug`. A tab in an unknown directory with two projects does not pick one on its own.
 
 An agent that closes its terminal has left the office. Work stays in queue. When they `join` again with `resume=Name` they pick it up. Brains and workers have no credentials to keep or recover: resuming by name opens a new session and supersedes the previous one, so its waits end and unacknowledged mail is redelivered. Role, seniority and project cannot change on resume. See [Identity lifecycle](docs/identity-lifecycle.md).
 

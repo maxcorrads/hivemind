@@ -6,13 +6,13 @@ import { filterReasons, mergeActivity, receiveActivity } from "./activity.ts";
 
 const item = (id: string, seq: number, fields: { reason?: ActivityReason; read?: boolean; project?: string } = {}): ActivityItem => ({
   message: { id, seq, channelId: "general", threadId: null } as Message,
-  project: fields.project ?? "chapter", reason: fields.reason ?? "mention", read: fields.read ?? false,
+  project: fields.project ?? "acme", reason: fields.reason ?? "mention", read: fields.read ?? false,
 });
 const ids = (items: ActivityItem[]) => items.map(entry => entry.message.id);
 
 test("a realtime entry is added newest first only where the view shows it", () => {
   const loaded = [item("b", 5), item("a", 2)];
-  const activity = { project: "chapter", unreadOnly: false, reasons: [] };
+  const activity = { project: "acme", unreadOnly: false, reasons: [] };
   assert.deepEqual(ids(receiveActivity(loaded, activity, item("c", 9))), ["c", "b", "a"]);
   assert.deepEqual(ids(receiveActivity(loaded, activity, item("mid", 3))), ["b", "mid", "a"]);
   assert.equal(receiveActivity(loaded, activity, item("b", 5)), loaded, "a duplicate is ignored");

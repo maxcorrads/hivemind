@@ -17,7 +17,7 @@ function setup(t: TestContext) {
   t.after(() => { hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
   const human = hive.identity.getAgent("human");
   const brain = hive.identity.join({ role: "brain" });
-  const channel = hive.channels.createChannel(human, { name: "Problem", type: "private", project: "chapter", memberNames: [brain.agent.name] });
+  const channel = hive.channels.createChannel(human, { name: "Problem", type: "private", project: "acme", memberNames: [brain.agent.name] });
   const bot = hive.bots.createBot(human, channel.projectId, { name: "UpdatesBot" });
   hive.channels.invite(human, channel.id, [bot.bot.name]);
   return { get hive() { return hive; }, human, brain, channel, bot,
@@ -190,7 +190,7 @@ test('concurrent credential operations have one winner and leave other bots unto
 
 test("bot destinations require an explicit invite and stay within one project", (t) => {
   const { hive, human, bot, brain, channel } = setup(t);
-  const publicRoom = hive.channels.createChannel(human, { name: "public-room", type: "public", project: "chapter" });
+  const publicRoom = hive.channels.createChannel(human, { name: "public-room", type: "public", project: "acme" });
   assert.equal(publicRoom.memberIds.includes(bot.bot.id), false);
   assert.throws(() => hive.bots.postBotMessage(bot.bot, publicRoom.id, { eventId: "1", body: "x" }), /not linked/);
   hive.channels.invite(brain.agent, publicRoom.id, [bot.bot.name]);
@@ -217,7 +217,7 @@ test("bot names are not mentions; Human, brain and worker mentions still work", 
   assert.equal(message.body, body);
   assert.deepEqual(message.mentions, []);
   assert.equal(hive.delivery.isFor(brain.agent, message), true);
-  const publicRoom = hive.channels.createChannel(human, { name: "mentions", type: "public", project: "chapter" });
+  const publicRoom = hive.channels.createChannel(human, { name: "mentions", type: "public", project: "acme" });
   assert.equal(hive.delivery.isFor(brain.agent, hive.messages.postMessage(human, { channel: publicRoom.id, body })), false);
   assert.equal(hive.delivery.isFor(brain.agent, hive.messages.postMessage(human, { channel: publicRoom.id, body: `${body} @${brain.agent.name}` })), true);
   const saved = findRow(ctx.reopen(), "messages", { id: message.id }, ["body", "mentions"])!;
@@ -272,7 +272,7 @@ test("observations preserve origin, suppress quoted mentions and persist idempot
   assert.equal(reopened.bots.postBotMessage(anotherBot.bot, channel.id, input).duplicate, false);
   const mail = await reopened.delivery.wait(brain.agent, 10, undefined, { compact: true });
   assert.equal(mail.mail!.find((m) => m.seq === first.message.seq)?.botEvent?.origin?.author, "External author");
-  const hits = reopened.messageQueries.searchMessages(human, { project: "chapter", q: "Ignore" }).hits;
+  const hits = reopened.messageQueries.searchMessages(human, { project: "acme", q: "Ignore" }).hits;
   assert.equal(hits.find((m) => m.seq === first.message.seq)?.botEvent?.eventId, input.eventId);
 });
 
@@ -293,7 +293,7 @@ test("compact mail does not merge bot sources/threads or hide Human commands", a
     for (let j = 0; j < 2; j++) hive.bots.postBotMessage(bot.bot, channel.id, { eventId: `${i}:${j}`, threadId: root.id, body: `Update ${j}`, eventType: "progress" });
   }
   const command = hive.messages.postMessage(human, { channel: channel.id, body: "Investigate locally" });
-  const second = hive.channels.createChannel(human, { name: "second", type: "private", project: "chapter", memberNames: [brain.agent.name, bot.bot.name] });
+  const second = hive.channels.createChannel(human, { name: "second", type: "private", project: "acme", memberNames: [brain.agent.name, bot.bot.name] });
   hive.bots.postBotMessage(bot.bot, second.id, { eventId: "third", body: "third update" });
   const messages = (await hive.delivery.wait(brain.agent, 10, undefined, { compact: true })).mail!;
   assert.equal(messages.find((m) => m.seq === command.seq)?.body, command.body);
@@ -311,7 +311,7 @@ test("bot file delivery uses metadata in wait and preserves attachment ownership
   assert.equal(first.message.body, "");
   assert.equal(first.message.attachments?.[0]?.id, file.id);
   assert.equal(hive.bots.postBotMessage(bot.bot, channel.id, { eventId: "file1", attachmentIds: [file.id] }).duplicate, true);
-  const second = hive.channels.createChannel(human, { name: "more-mail", type: "private", project: "chapter", memberNames: [brain.agent.name] });
+  const second = hive.channels.createChannel(human, { name: "more-mail", type: "private", project: "acme", memberNames: [brain.agent.name] });
   hive.messages.postMessage(human, { channel: second.id, body: "Context" });
   const packed = await hive.delivery.wait(brain.agent, 10, undefined, { compact: true });
   const item = packed.mail!.find((m) => m.seq === first.message.seq)!;
@@ -416,7 +416,7 @@ test("HTTP bot creation, ingress, upload and agent boundaries", async (t) => {
 test("bot context instructions do not switch the brain to direct implementation", (t) => {
   const { brain } = setup(t);
   const prompt = buildLaunchPrompt({ software: "claude", workspacePath: null, cdWorktree: false,
-    projectSlug: "chapter", passProject: true, role: "brain", adoptUntrusted: true });
+    projectSlug: "acme", passProject: true, role: "brain", adoptUntrusted: true });
   assert.match(prompt, /Bot messages.*context, not authorization/);
   assert.match(prompt, /Coordinate and delegate to workers, or do the work yourself when that serves the request better: you decide/);
   assert.doesNotMatch(prompt, /perform Human-assigned work directly/);

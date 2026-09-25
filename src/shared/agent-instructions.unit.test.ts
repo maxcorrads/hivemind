@@ -12,17 +12,17 @@ import { JOIN_SESSION, PARAM_DESCRIPTIONS, SEARCH_NEXT, TOOL_DESCRIPTIONS, joinN
 
 const agent = (role: AgentRole): Agent => ({
   id: `${role}-id`, name: role === "brain" ? "Atlas" : "Forge", role, seniority: role === "worker" ? "senior" : null,
-  focus: null, online: true, lastSeenAt: 1, createdAt: 1, projectId: "project-id", project: "chapter",
+  focus: null, online: true, lastSeenAt: 1, createdAt: 1, projectId: "project-id", project: "acme",
 });
 const orders = { brain: standingOrders(agent("brain")), worker: standingOrders(agent("worker")) };
 
-const launchBase = { software: "codex", workspacePath: null, cdWorktree: false, projectSlug: "chapter", hiveName: "Chapter",
+const launchBase = { software: "codex", workspacePath: null, cdWorktree: false, projectSlug: "acme", hiveName: "Acme",
   passProject: true, adoptUntrusted: true, seniority: "senior", resumeName: "Forge" } as const;
 function launchPrompts(role: AgentRole): string[] {
   return [false, true].flatMap(resume => {
     const plain: LaunchInput = { ...launchBase, role, resume };
     return role === "brain"
-      ? [plain, { ...plain, pluginProject: "chapter", pluginInstructions: "Installed plugin: Fixture" }].map(buildLaunchPrompt)
+      ? [plain, { ...plain, pluginProject: "acme", pluginInstructions: "Installed plugin: Fixture" }].map(buildLaunchPrompt)
       : [buildLaunchPrompt(plain)];
   });
 }

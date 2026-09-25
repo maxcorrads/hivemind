@@ -35,7 +35,7 @@ test("project attention counts mentions and Human DMs, ignores archived rooms an
 
 test("project initials", () => {
   assert.equal(projectInitials("Alpha Hive"), "AH");
-  assert.equal(projectInitials("chapter"), "CH");
+  assert.equal(projectInitials("acme"), "AC");
   assert.equal(projectInitials("my-app"), "MA");
 });
 

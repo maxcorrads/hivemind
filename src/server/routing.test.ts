@@ -72,7 +72,7 @@ test('cold starts stay eligible, independent review and explicit context/quality
 test('routing never crosses project or private task boundaries', t => {
   const f = fixture(t), task = f.assign(); f.set(0); f.set(1);
   const human = f.hive.identity.getAgent('human'); f.hive.projects.createProject(human, { name: 'Other', slug: 'other' });
-  const stranger = f.hive.identity.join({ role: 'brain', project: 'other' }), outsider = f.hive.identity.join({ role: 'worker', seniority: 'mid', project: 'chapter' });
+  const stranger = f.hive.identity.join({ role: 'brain', project: 'other' }), outsider = f.hive.identity.join({ role: 'worker', seniority: 'mid', project: 'acme' });
   f.hive.routing.set(outsider.agent, { expectedRevision: 0, card });
   assert.throws(() => f.hive.routing.get(stranger.agent, f.workers[0]!.agent.id), status(403));
   assert.throws(() => f.hive.routing.suggest(stranger.agent, task.id, query), status(403));

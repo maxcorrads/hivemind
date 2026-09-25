@@ -206,7 +206,7 @@ export function buildWorkerPrompt(trial, fixture, worker, seatIndex) {
   return [
     'You are a finite-lifecycle worker in a controlled Hivemind coordination benchmark.',
     'Use the real Hivemind MCP tools. Do not simulate tool results.',
-    `Join with role=worker, seniority=mid, focus=${worker.id}, project=chapter.`,
+    `Join with role=worker, seniority=mid, focus=${worker.id}, project=acme.`,
     `After joining, call set_capabilities with expectedRevision=0 and this exact card: ${JSON.stringify(workerCapabilityCard(trial, worker))}.`,
     'Then call wait and take work only from the benchmark brain.',
     ...partitionInstructions,
@@ -254,8 +254,8 @@ export function buildBrainPrompt(trial, fixture, workerCount, humanInstructionSe
   return [
     'You are the finite-lifecycle coordinating brain in a controlled Hivemind benchmark.',
     'Use the real Hivemind MCP tools. Do not simulate tool results.',
-    'Join with role=brain, focus=benchmark, project=chapter.',
-    `Exactly ${workerCount} benchmark worker seat(s) have already been started. Call agents once and use only workers in project chapter whose focus starts with worker-.`,
+    'Join with role=brain, focus=benchmark, project=acme.',
+    `Exactly ${workerCount} benchmark worker seat(s) have already been started. Call agents once and use only workers in project acme whose focus starts with worker-.`,
     'The benchmark runbook in this initial host prompt is already the Human task for this finite trial.',
     'After join, do not call wait before processing this initial Human task; the normal first-wait standing-order behavior resumes only when you actually need mail from workers.',
     'Do not perform worker task outputs yourself: coordinate workers, assign structured tasks, collect their results, verify submitted hashes when reviewing them, and request changes when evidence is wrong.',
@@ -297,7 +297,7 @@ export function humanRoomInstructionBody(trial) {
   return [
     `Benchmark authorization for ${trial.blindId}.`,
     'Human authorizes the coordinating brain to create and configure one finite task-scoped collaboration room for this trial only.',
-    'Use only the benchmark workers in project chapter, preserve the generated runbook scope and dependencies, and do not grant broader authority.',
+    'Use only the benchmark workers in project acme, preserve the generated runbook scope and dependencies, and do not grant broader authority.',
     'The room may be archived after the benchmark tasks are reviewed and the final result artifact is produced.',
   ].join(' ');
 }
@@ -325,8 +325,8 @@ export async function seedHumanRoomInstruction(trial) {
   });
   if (!snapshotResponse.ok) throw new Error(`Cannot read benchmark Human snapshot: HTTP ${snapshotResponse.status}`);
   const snapshot = await snapshotResponse.json();
-  const project = snapshot.projects?.find(value => value.slug === 'chapter');
-  assert.ok(project, 'benchmark project chapter is missing');
+  const project = snapshot.projects?.find(value => value.slug === 'acme');
+  assert.ok(project, 'benchmark project acme is missing');
   const channel = snapshot.channels?.find(value => value.projectId === project.id && String(value.name).toLowerCase() === 'general');
   assert.ok(channel, 'benchmark project #general channel is missing');
   const body = humanRoomInstructionBody(trial);

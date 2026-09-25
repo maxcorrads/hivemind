@@ -12,7 +12,7 @@ import { TelegramBridge, startTelegram, telegramConfigKey, telegramRetryAfterMs,
 import { enqueueTelegramPending } from "./telegram-outbox.ts";
 import { recordTelegramUpdateFailure } from "./telegram-inbox.ts";
 
-const cfg: TelegramConfig = { botToken: "test-bot", allowUserIds: [1], groups: { chapter: -1001 } };
+const cfg: TelegramConfig = { botToken: "test-bot", allowUserIds: [1], groups: { acme: -1001 } };
 function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-tg-transport-"));
   const f = { dir, hive: new Hive(path.join(dir, "hive.db")), bridge: undefined as TelegramBridge | undefined };
@@ -36,7 +36,7 @@ test("per-chat HTTP Retry-After survives restart while another chat progresses",
   const f = fixture(t); const human = f.hive.identity.getAgent("human");
   const project = f.hive.projects.createProject(human, { name: "Other", slug: "other" });
   const other = f.hive.channels.getChannel("general", project.id);
-  const config = { ...cfg, groups: { chapter: -1001, other: -1002 } };
+  const config = { ...cfg, groups: { acme: -1001, other: -1002 } };
   const calls: number[] = [];
   t.mock.method(globalThis, "fetch", async (url: unknown, init?: RequestInit) => {
     if (String(url).endsWith("getUpdates")) return blocked(init?.signal);
@@ -61,7 +61,7 @@ test("per-chat HTTP Retry-After survives restart while another chat progresses",
 test("transient failure backoff is per chat and retry attempts cannot reset across restarts", async t => {
   const f = fixture(t); const human = f.hive.identity.getAgent("human");
   const project = f.hive.projects.createProject(human, { name: "Other", slug: "other" });
-  const config = { ...cfg, groups: { chapter: -1001, other: -1002 } };
+  const config = { ...cfg, groups: { acme: -1001, other: -1002 } };
   const calls: number[] = [];
   t.mock.method(globalThis, "fetch", async (url: unknown, init?: RequestInit) => {
     if (String(url).endsWith("getUpdates")) return blocked(init?.signal);
@@ -91,7 +91,7 @@ test("eligible chats get round-robin turns without reordering a chat", async t =
     const body = JSON.parse(String(init?.body)); sent.push(String(body.text).split("\n").at(-1)!);
     return Response.json({ ok: true, result: { message_id: sent.length } });
   });
-  f.bridge = new TelegramBridge(f.hive, { ...cfg, groups: { chapter: -1001, other: -1002 } }); f.bridge.start();
+  f.bridge = new TelegramBridge(f.hive, { ...cfg, groups: { acme: -1001, other: -1002 } }); f.bridge.start();
   for (const body of ["A1", "A2", "A3"]) f.hive.messages.postMessage(human, { channel: "general", body });
   f.hive.messages.postMessage(human, { channel: f.hive.channels.getChannel("general", project.id).id, body: "B1" });
   await until(() => sent.length === 1); await flush();
@@ -130,9 +130,9 @@ test("route removal and restoration cannot revive cancelled outbound or inbound 
   f.bridge = new TelegramBridge(f.hive, cfg);
   const destination = { botKey: telegramConfigKey(cfg), chatId: -1001 };
   enqueueTelegramPending(f.hive.db, m.seq, "message", undefined, destination);
-  recordTelegramUpdateFailure(f.hive.db, { ...destination, projectId: f.hive.projects.findProjectBySlug("chapter")!.id },
+  recordTelegramUpdateFailure(f.hive.db, { ...destination, projectId: f.hive.projects.findProjectBySlug("acme")!.id },
     { update_id: 4, message: { message_id: 40, chat: { id: -1001 }, from: { id: 1 }, text: "old input" } }, "temporary");
-  f.bridge = new TelegramBridge(f.hive, { ...cfg, groups: { chapter: -1002 } });
+  f.bridge = new TelegramBridge(f.hive, { ...cfg, groups: { acme: -1002 } });
   assert.equal(f.hive.telegramAdmin.failureCount(), 1);
   f.bridge = new TelegramBridge(f.hive, cfg);
   assert.throws(() => f.hive.telegramAdmin.retryFailure(f.hive.telegramAdmin.failures()[0]!.id, () => destination), /invalidated/);
@@ -143,11 +143,11 @@ test("route removal and restoration cannot revive cancelled outbound or inbound 
 
 test("legacy configuration validation rejects duplicate ownership and non-integer users", t => {
   const f = fixture(t);
-  for (const extra of [{ groupChatId: -1001, projects: { other: -1001 } }, { allowUserIds: [1.5] }, { projects: { chapter: 0 } }, { projects: [] }]) {
+  for (const extra of [{ groupChatId: -1001, projects: { other: -1001 } }, { allowUserIds: [1.5] }, { projects: { acme: 0 } }, { projects: [] }]) {
     writeFileSync(path.join(f.dir, "telegram.json"), JSON.stringify({ botToken: "x", allowUserIds: [1], ...extra }));
     assert.equal(readTelegramFile(f.dir), null);
   }
-  assert.equal(projectSlugForChat({ ...cfg, groups: { chapter: -1001, other: -1001 } }, -1001), undefined);
+  assert.equal(projectSlugForChat({ ...cfg, groups: { acme: -1001, other: -1001 } }, -1001), undefined);
 });
 
 test("raw reload captures both messages and reactions while the old poller drains", async t => {
