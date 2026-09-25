@@ -89,4 +89,4 @@ Copyright © 2026 Matteo Corradin. All rights reserved.
 
 The software is licensed under the [PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0). Non-commercial use, modification, and redistribution are permitted within the scope of that license. Any commercial use requires a separate prior written license from Matteo Corradin.
 
-See [LICENSE](LICENSE) for the controlling notice and [CONTRIBUTING.md](CONTRIBUTING.md) before submitting copyrightable contributions.
+See [LICENSE](LICENSE) for the controlling notice. Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md) and the [Contributor License Agreement](CLA.md).
