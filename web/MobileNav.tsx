@@ -41,14 +41,16 @@ export function projectDms(snap: Snapshot, project: string): { withYou: Channel[
 }
 
 /** The DMs tab: every direct conversation of the project, full screen. */
-export function MobileDms({ snap, project, onOpen }: {
+export function MobileDms({ snap, project, onOpen, onUnread }: {
   snap: Snapshot;
   project: string;
   onOpen: (channelId: string) => void;
+  onUnread: (channelId: string) => void;
 }) {
   const { withYou, between } = projectDms(snap, project);
   const row = (ch: Channel) => (
-    <ChannelItem key={ch.id} ch={ch} unread={snap.unread[ch.id] ?? 0} active={false} onClick={() => onOpen(ch.id)} />
+    <ChannelItem key={ch.id} ch={ch} unread={snap.unread[ch.id] ?? 0} active={false}
+      onClick={() => onOpen(ch.id)} onUnread={() => onUnread(ch.id)} />
   );
   return (
     <>

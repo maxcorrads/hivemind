@@ -87,6 +87,39 @@ async function installHive(page: Page) {
 
 const tabs = (page: Page) => page.getByRole("navigation", { name: "Sections" });
 
+for (const kind of ['root', 'reply', 'system'] as const) {
+  test(`the mobile DM unread badge opens and highlights its latest unread ${kind}`, async ({ page }) => {
+    const hive = await installHive(page), receipts: number[] = [];
+    const threadId = kind === 'reply' ? 'root' : null;
+    await page.route('**/api/ui/channels/dm-beacon/last-unread', route =>
+      json(route, { target: { channelId: dm.id, threadId, seq: 240 } }));
+    await page.route('**/api/ui/channels/dm-beacon/messages*', route => {
+      const url = new URL(route.request().url()), before = url.searchParams.get('beforeSeq');
+      const requestedThread = url.searchParams.get('threadId');
+      const target = { ...message('target', 240, dm.id, 'Mobile unread destination', requestedThread),
+        authorId: 'brain', authorName: 'Beacon', authorRole: 'worker' as const,
+        kind: kind === 'system' ? 'system' as const : 'chat' as const };
+      return json(route, payload(dm, before ? [target] : [], { threadId: requestedThread, hasNewer: Boolean(before) }));
+    });
+    await page.route('**/api/ui/read', route => {
+      receipts.push(...route.request().postDataJSON().messageSeqs);
+      return json(route, { readInstance: 'mobile-fixture', readRevision: 1, readSeq: 240,
+        unread: { [dm.id]: 0 }, mentionCounts: {} });
+    });
+    await page.goto('/#/dms/alpha');
+    await page.getByRole('button', { name: 'Jump to last unread message in Beacon (1 unread)' }).tap();
+    await expect(page).toHaveURL(new RegExp('#/c/dm-beacon' + (threadId ? '/t/root' : '') + '$'));
+    const scope = page.locator(threadId ? 'aside.thread' : 'main.desk');
+    const target = scope.locator('[data-message-seq="240"]');
+    await expect(target).toBeVisible();
+    await expect(target).toHaveClass(/unread-target/);
+    await expect(target).toBeFocused();
+    await expect.poll(() => receipts.includes(240)).toBe(true);
+    expect(receipts.every(seq => seq === 240)).toBe(true);
+    expect(hive.unexpected).toEqual([]);
+  });
+}
+
 test("a phone starts on Home and opens a channel and a thread full screen, with back arrows", async ({ page }, testInfo) => {
   const hive = await installHive(page);
   await page.goto("/");
@@ -154,7 +187,7 @@ test("DMs and Activity tabs list the project's conversations and its For you vie
   await tabs(page).getByRole("button", { name: /DMs/ }).click();
   await expect(page).toHaveURL(/#\/dms\/alpha$/);
   await expect(page.locator(".rail")).toBeHidden();
-  await page.locator(".desk").getByRole("button", { name: "Beacon 1" }).click();
+  await page.locator(".desk").getByRole("button", { name: "Beacon", exact: true }).click();
   await expect(page).toHaveURL(/#\/c\/dm-beacon$/);
   await page.getByRole("button", { name: "Back", exact: true }).click();
   await expect(page).toHaveURL(/#\/dms\/alpha$/);

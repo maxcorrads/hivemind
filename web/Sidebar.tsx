@@ -28,7 +28,7 @@ const shortcut = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navi
  */
 export function Sidebar({ snap, sel, go, live, theme, onToggleTheme, query, setQuery, onSearchNow, onTelegram,
   onAdaptiveRouting, onLaunch, onHelp, selectedProject, onSelectProject, onSwitcher, inboxBox, projectSheets, onNewChannel,
-  dms, agentActions, awaitingDecisions, agentWork, notifications }: {
+  dms, agentActions, awaitingDecisions, agentWork, notifications, onUnread }: {
   snap: Snapshot;
   sel: Sel;
   go: (next: Sel) => void;
@@ -53,6 +53,7 @@ export function Sidebar({ snap, sel, go, live, theme, onToggleTheme, query, setQ
   awaitingDecisions: Record<string, number>;
   agentWork: Record<string, AgentWork>;
   notifications: DesktopNotifications;
+  onUnread: (channelId: string) => void;
 }) {
   const projects = snap.projects ?? [];
   const project = projects.find(item => item.slug === selectedProject) ?? projects[0];
@@ -151,7 +152,7 @@ export function Sidebar({ snap, sel, go, live, theme, onToggleTheme, query, setQ
         {project && (
           <ProjectSection key={project.id} project={project} snap={snap} sel={sel} go={go}
             onSettings={() => projectSheets.editProject(project)} inboxBox={inboxBox} onNewChannel={onNewChannel}
-            dms={dms} agentActions={agentActions} onLaunch={onLaunch}
+            dms={dms} agentActions={agentActions} onLaunch={onLaunch} onUnread={onUnread}
             decisions={awaitingDecisions[project.slug] ?? 0} agentWork={agentWork} />
         )}
       </aside>
@@ -160,7 +161,7 @@ export function Sidebar({ snap, sel, go, live, theme, onToggleTheme, query, setQ
 }
 
 function ProjectSection({ project, snap, sel, go, onSettings, inboxBox, onNewChannel, dms, agentActions, onLaunch,
-  decisions, agentWork }: {
+  decisions, agentWork, onUnread }: {
   project: Project;
   snap: Snapshot;
   sel: Sel;
@@ -173,6 +174,7 @@ function ProjectSection({ project, snap, sel, go, onSettings, inboxBox, onNewCha
   onLaunch: (project: string) => void;
   decisions: number;
   agentWork: Record<string, AgentWork>;
+  onUnread: (channelId: string) => void;
 }) {
   const { closedDms, closeDm, reopenDm, dmPicker, setDmPicker, dmPickQ, setDmPickQ, dmMenu, setDmMenu } = dms;
   const channels = snap.channels ?? [];
@@ -229,6 +231,7 @@ function ProjectSection({ project, snap, sel, go, onSettings, inboxBox, onNewCha
       unread={snap.unread[ch.id] ?? 0}
       active={sel.kind === "channel" && sel.id === ch.id}
       onClick={() => go({ kind: "channel", id: ch.id })}
+      onUnread={() => onUnread(ch.id)}
     />
   );
   const dmRow = (ch: Channel) => (
@@ -239,6 +242,7 @@ function ProjectSection({ project, snap, sel, go, onSettings, inboxBox, onNewCha
       active={sel.kind === "channel" && sel.id === ch.id}
       menuOpen={dmMenu === ch.id}
       onClick={() => go({ kind: "channel", id: ch.id })}
+      onUnread={() => { setDmMenu(null); onUnread(ch.id); }}
       onMenu={() => setDmMenu((cur) => (cur === ch.id ? null : ch.id))}
       onClose={() => hideDm(ch)}
     />

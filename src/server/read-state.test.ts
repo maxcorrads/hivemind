@@ -45,6 +45,43 @@ function assertIds(actual: Message[], expected: Message[]) {
   assert.deepEqual(actual.map((m) => m.id), expected.map((m) => m.id));
 }
 
+test('last unread finds ordinary roots and old-thread replies, excluding self and sparse receipts', t => {
+  const f = fixture(t), root = f.post('ordinary root'), reply = f.post('ordinary reply', root.id);
+  const seen = f.post('already seen'), self = f.post('own latest message', null, f.human);
+  f.hive.reads.markMessagesRead(f.human, f.room.id, [seen.seq]);
+  const before = f.hive.reads.readSnapshot(f.human), receipts = f.receipts();
+  assert.deepEqual(f.hive.reads.latestUnread(f.human, f.room.id), { channelId: f.room.id, seq: reply.seq, threadId: root.id });
+  assert.deepEqual(f.hive.reads.readSnapshot(f.human), before); assert.equal(f.receipts(), receipts);
+  f.hive.reads.markMessagesRead(f.human, f.room.id, [reply.seq], root.id);
+  assert.deepEqual(f.hive.reads.latestUnread(f.human, f.room.id), { channelId: f.room.id, seq: root.seq, threadId: null });
+  f.hive.reads.markRead(f.human, f.room.id, root.seq);
+  assert.equal(f.hive.reads.latestUnread(f.human, f.room.id), null);
+  assert.ok(self.seq > seen.seq);
+});
+
+test('last unread does not miss older unread messages behind many already-seen rows', t => {
+  const f = fixture(t), target = f.post('target');
+  const seen = Array.from({ length: 240 }, () => f.post('seen later'));
+  for (let i = 0; i < seen.length; i += 200) f.hive.reads.markMessagesRead(f.human, f.room.id, seen.slice(i, i + 200).map(m => m.seq));
+  assert.equal(f.hive.reads.latestUnread(f.human, f.room.id)?.seq, target.seq);
+  const deleted = f.post('removed'); deleteRows(f.hive, 'messages', { id: deleted.id });
+  assert.equal(f.hive.reads.latestUnread(f.human, f.room.id)?.seq, target.seq);
+});
+
+test('last unread HTTP lookup is read-only and channel/actor scoped', async t => {
+  const f = fixture(t), app = createApp(f.hive);
+  const dm = f.hive.channels.openDm(f.human, f.brain.name), target = f.post('DM target', null, f.brain, dm.id);
+  const before = f.hive.reads.readSnapshot(f.human);
+  const response = await app.request(`/api/ui/channels/${encodeURIComponent(dm.id)}/last-unread`);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { target: { channelId: dm.id, threadId: null, seq: target.seq } });
+  assert.deepEqual(f.hive.reads.readSnapshot(f.human), before);
+  assert.equal((await app.request('/api/ui/channels/no-such-channel/last-unread')).status, 404);
+  const worker = f.hive.identity.join({ role: 'worker', seniority: 'mid', project: f.first.slug }).agent;
+  const hidden = f.hive.channels.getChannel('brains', f.first.id);
+  assert.throws(() => f.hive.reads.latestUnread(worker, hidden.id), /Cannot read this channel/);
+});
+
 test("project/unread filtering precedes LIMIT even behind 1,100 ineligible recent rows", (t) => {
   const f = fixture(t);
   const other = f.hive.projects.createProject(f.human, { name: "Other", slug: "other" });

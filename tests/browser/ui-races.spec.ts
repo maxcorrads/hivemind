@@ -189,6 +189,517 @@ async function installSocketHarness(page: Page) {
   return sockets;
 }
 
+for (const inThread of [false, true]) for (const alreadyOpen of [false, true]) {
+  test(`unread badge jumps to the exact latest unread page (thread=${inThread}, open=${alreadyOpen})`, async ({ page }, testInfo) => {
+    const p = project('alpha', 'Alpha Hive');
+    const a = { ...channel('a', 'Anvil · Human', p), type: 'dm' as const }, b = channel('b', 'Beta', p);
+    const snap = { ...snapshot([p], [a, b]), unread: { a: 3 } };
+    const root = message('root', 1, a.id, 'An old thread root');
+    const thread = inThread ? root.id : null;
+    const target = message('target', 240, a.id, 'The latest unread message', thread,
+      { authorId: 'anvil', authorName: 'Anvil', authorRole: 'worker' });
+    const context = Array.from({ length: 20 }, (_, i) => message(`context-${i}`, 220 + i, a.id, `Context ${i}. ${'Older content. '.repeat(80)}`, thread));
+    const requests: string[] = [];
+    await installSnapshot(page, () => snap); await installSocketHarness(page);
+    await page.route('**/api/ui/channels/a/last-unread', route => fulfillJson(route, { target: { channelId: a.id, threadId: thread, seq: target.seq } }));
+    await installMessages(page, async (route, id, threadId) => {
+      const url = new URL(route.request().url()); requests.push(url.search);
+      if (id === b.id) return fulfillJson(route, payload(b, []));
+      if (url.searchParams.get('beforeSeq') === '241') {
+        expect(threadId).toBe(thread);
+        return fulfillJson(route, { ...payload(a, [...context, target]), threadId: thread, hasOlder: true, hasNewer: true });
+      }
+      return fulfillJson(route, { ...payload(a, [message('latest', 1000, a.id, 'Ordinary channel view', threadId)]), threadId });
+    });
+    await page.goto(`/#/c/${alreadyOpen ? a.id : b.id}`);
+    if (alreadyOpen) await expect(page.getByText('Ordinary channel view', { exact: true })).toBeVisible();
+    const badge = page.getByRole('button', { name: 'Jump to last unread message in Anvil · Human (3 unread)', exact: true });
+    await expect(badge).toBeVisible();
+    expect(await page.locator('button button').count()).toBe(0);
+    if (inThread) { await badge.focus(); await page.keyboard.press(alreadyOpen ? 'Space' : 'Enter'); } else await badge.click();
+    const scope = page.locator(inThread ? 'aside.thread' : 'main.desk');
+    const row = scope.locator('[data-message-seq="240"]');
+    await expect(row).toHaveClass(/unread-target/); await expect(row).toBeInViewport(); await expect(row).toBeFocused();
+    expect(requests.some(q => q.includes('beforeSeq=241'))).toBe(true);
+    await expect.poll(() => harnesses.get(page)!.receipts.flat().includes(240)).toBe(true);
+    expect(harnesses.get(page)!.receipts.flat().includes(219)).toBe(false);
+    if (inThread) await expect(page).toHaveURL(/\/t\/root$/);
+    await page.screenshot({ path: testInfo.outputPath('unread-target.png') });
+    // Repeated activation works even when the channel/thread selection is identical.
+    await scope.locator('.stream').evaluate(el => { el.scrollTop = 0; });
+    await badge.click(); await expect(row).toBeInViewport();
+  });
+}
+
+for (const tab of ['Tasks', 'Contract', 'Decisions']) for (const inThread of [false, true]) {
+  test(`unread badge reveals Messages from ${tab} (thread=${inThread})`, async ({ page }) => {
+    const p = project('alpha', 'Alpha Hive'), a = channel('a', 'Alpha', p);
+    const snap = { ...snapshot([p], [a]), unread: { a: 1 } };
+    const threadId = inThread ? 'root' : null;
+    await installSnapshot(page, () => snap); await installSocketHarness(page);
+    await page.route('**/api/ui/channels/a/last-unread', route =>
+      fulfillJson(route, { target: { channelId: a.id, threadId, seq: 240 } }));
+    await installMessages(page, async (route, _, requestedThread) => {
+      const targeted = new URL(route.request().url()).searchParams.get('beforeSeq') === '241';
+      const messages = targeted ? [message('target', 240, a.id, 'Unread destination', requestedThread,
+        { authorId: 'worker', authorName: 'Worker', authorRole: 'worker' })] : [];
+      await fulfillJson(route, { ...payload(a, messages), threadId: requestedThread, hasNewer: targeted });
+    });
+    await page.goto('/#/c/a');
+    await page.getByRole('textbox', { name: 'Message #Alpha', exact: true }).fill('Keep my draft');
+    const view = page.getByRole('tab', { name: tab, exact: true });
+    const badge = page.getByRole('button', { name: 'Jump to last unread message in Alpha (1 unread)' });
+    for (let repeat = 0; repeat < 2; repeat++) {
+      await view.click();
+      await expect(page.locator('#channel-panel-messages')).toBeHidden();
+      await badge.click();
+      await expect(page.getByRole('tab', { name: 'Messages', exact: true })).toHaveAttribute('aria-selected', 'true');
+      const row = page.locator(inThread ? 'aside.thread' : 'main.desk').locator('[data-message-seq="240"]');
+      await expect(row).toBeVisible(); await expect(row).toBeFocused();
+      await expect(row).toHaveClass(/unread-target/);
+      await expect(page.locator('main.desk').getByRole('textbox', { name: 'Message #Alpha', exact: true })).toHaveValue('Keep my draft');
+    }
+    await view.click();
+    await expect(view).toHaveAttribute('aria-selected', 'true');
+  });
+}
+
+for (const delayed of ['lookup', 'page'] as const) {
+  test(`unread badge discards delayed ${delayed} after navigation, including a later return`, async ({ page }) => {
+    const p = project('alpha', 'Alpha Hive'), a = channel('a', 'Alpha', p), b = channel('b', 'Beta', p);
+    const snap = { ...snapshot([p], [a, b]), unread: { a: 1 } }, started = deferred(), release = deferred();
+    let targeted = 0;
+    await installSnapshot(page, () => snap); await installSocketHarness(page);
+    await page.route('**/api/ui/channels/a/last-unread', async route => {
+      if (delayed === 'lookup') { started.resolve(); await release.promise; }
+      try { await fulfillJson(route, { target: { channelId: a.id, threadId: null, seq: 5 } }); } catch { /* request aborted */ }
+    });
+    await installMessages(page, async (route, id) => {
+      if (new URL(route.request().url()).searchParams.has('beforeSeq')) {
+        targeted++; started.resolve(); await release.promise;
+        try { await fulfillJson(route, payload(a, [message('target', 5, a.id, 'stale unread target')])); } catch { /* request aborted */ }
+      } else await fulfillJson(route, payload(id === a.id ? a : b, [message('current-' + id, 50, id, 'current ' + id)]));
+    });
+    await page.goto('/#/c/b');
+    await page.getByRole('button', { name: 'Jump to last unread message in Alpha (1 unread)', exact: true }).click();
+    await started.promise; await page.getByRole('button', { name: '# Beta', exact: true }).click();
+    release.resolve(); await expect(page.getByText('current b', { exact: true })).toBeVisible();
+    await expect(page.getByText('stale unread target', { exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: '# Alpha', exact: true }).click();
+    await expect(page.getByText('current a', { exact: true })).toBeVisible();
+    expect(targeted).toBe(delayed === 'page' ? 1 : 0);
+    expect(harnesses.get(page)!.receipts.flat()).not.toContain(5);
+  });
+}
+
+for (const [interruption, inThread] of [['hello', false], ['hello', true], ['room', true]] as const) {
+  test(`unread jump survives an automatic ${interruption} refresh (thread=${inThread})`, async ({ page }) => {
+    const p = project('alpha', 'Alpha Hive'), a = channel('a', 'Alpha', p), b = channel('b', 'Beta', p);
+    const root = message('root', 1, a.id, 'Thread root');
+    const threadId = inThread ? root.id : null;
+    const target = message('target', 240, a.id, 'Review unread destination', threadId, { authorId: 'worker' });
+    const started = deferred(), release = deferred(), refreshed = deferred();
+    let interrupted = false;
+    await installSnapshot(page, () => ({ ...snapshot([p], [a, b]), unread: { a: 1 } }));
+    const sockets = await installSocketHarness(page);
+    await page.route('**/api/ui/channels/a/last-unread', route => fulfillJson(route, { target: { channelId: a.id, threadId, seq: 240 } }));
+    await installMessages(page, async (route, id, requestedThread) => {
+      if (interrupted && id === a.id && requestedThread === threadId) refreshed.resolve();
+      if (new URL(route.request().url()).searchParams.has('beforeSeq')) {
+        started.resolve(); await release.promise;
+        try { await fulfillJson(route, { ...payload(a, [target]), threadId, hasOlder: true }); } catch { /* aborted */ }
+        return;
+      }
+      await fulfillJson(route, { ...payload(id === a.id ? a : b,
+        [message('ordinary-' + id, 1000, id, 'Default page ' + id, requestedThread)]), threadId: requestedThread });
+    });
+    await page.goto('/#/c/b');
+    await expect(page.getByText('Default page b', { exact: true })).toBeVisible();
+    await expect.poll(() => sockets.length).toBe(1);
+    await page.getByRole('button', { name: 'Jump to last unread message in Alpha (1 unread)' }).click();
+    await started.promise;
+    interrupted = true;
+    if (interruption === 'hello') await sockets[0]!.close({ code: 1013, reason: 'review reconnect' });
+    else sockets[0]!.send(JSON.stringify({ type: 'room', payload: { channelId: a.id } }));
+    await refreshed.promise;
+    release.resolve();
+    const scope = page.locator(threadId ? 'aside.thread' : 'main.desk');
+    await expect(scope.locator('[data-message-seq="240"]')).toBeVisible();
+    await expect(scope.locator('[data-message-seq="240"]')).toHaveClass(/unread-target/);
+    await expect.poll(() => harnesses.get(page)!.receipts.flat().includes(240)).toBe(true);
+    expect(harnesses.get(page)!.receipts.flat()).not.toContain(1000);
+  });
+}
+
+for (const inThread of [false, true]) for (const keyboard of [false, true]) {
+test(`unread anchor releases on explicit live navigation (thread=${inThread}, keyboard=${keyboard})`, async ({ page }) => {
+  const p = project('alpha', 'Alpha Hive');
+  const a = { ...channel('a', 'Alpha', p), type: 'dm' as const }, b = channel('b', 'Beta', p);
+  const threadId = inThread ? 'root' : null;
+  const target = message('target', 240, a.id, 'Unread target', threadId, { authorId: 'worker' });
+  const context = Array.from({ length: 20 }, (_, i) => message(`before-${i}`, 220 + i, a.id, `Before ${i}. ${'Long content. '.repeat(80)}`, threadId));
+  const after = Array.from({ length: 20 }, (_, i) => message(`after-${i}`, 241 + i, a.id, `After ${i}. ${'Long content. '.repeat(80)}`, threadId));
+  await installSnapshot(page, () => ({ ...snapshot([p], [a, b]), unread: { a: 1 } }));
+  await installSocketHarness(page);
+  await page.route('**/api/ui/channels/a/last-unread', route => fulfillJson(route, { target: { channelId: a.id, threadId, seq: 240 } }));
+  await installMessages(page, async (route, id, requestedThread) => {
+    if (id === b.id) return fulfillJson(route, payload(b, []));
+    if (inThread && !requestedThread) return fulfillJson(route, payload(a, []));
+    const historical = new URL(route.request().url()).searchParams.has('beforeSeq');
+    await fulfillJson(route, { ...payload(a, [...context, target, ...(historical ? [] : after)]), hasOlder: historical, hasNewer: historical });
+  });
+  await page.goto('/#/c/b');
+  await page.getByRole('button', { name: 'Jump to last unread message in Alpha (1 unread)' }).click();
+  const scope = page.locator(inThread ? 'aside.thread' : 'main.desk');
+  await expect(scope.locator('[data-message-seq="240"]')).toHaveClass(/unread-target/);
+  const live = scope.getByRole('button', { name: inThread ? 'New replies — refresh thread' : 'New messages — jump to recent', exact: true });
+  if (keyboard) { await live.focus(); await page.keyboard.press('Enter'); } else await live.click();
+  await expect(scope.locator('[data-message-seq="260"]')).toBeInViewport();
+});
+}
+
+test('a second unread jump replaces the first and survives a room refresh', async ({ page }) => {
+  const p = project('alpha', 'Alpha Hive'), a = channel('a', 'Alpha', p), b = channel('b', 'Beta', p);
+  const blocked = deferred(), release = deferred(), second = deferred(), refreshed = deferred();
+  let lookups = 0, secondLoads = 0;
+  await installSnapshot(page, () => ({ ...snapshot([p], [a, b]), unread: { a: 2 } }));
+  const sockets = await installSocketHarness(page);
+  await page.route('**/api/ui/channels/a/last-unread', route => fulfillJson(route,
+    { target: { channelId: a.id, threadId: 'root', seq: ++lookups === 1 ? 240 : 120 } }));
+  await installMessages(page, async (route, id, threadId) => {
+    const before = new URL(route.request().url()).searchParams.get('beforeSeq');
+    if (before) {
+      if (before === '241') { blocked.resolve(); await release.promise; }
+      else { if (++secondLoads === 1) { second.resolve(); await refreshed.promise; } }
+      const seq = Number(before) - 1;
+      try { await fulfillJson(route, payload(a, [message(`target-${seq}`, seq, a.id, `Target ${seq}`, 'root', { authorId: 'worker' })])); }
+      catch { /* Superseded requests are expected to be aborted. */ }
+      return;
+    }
+    await fulfillJson(route, { ...payload(id === a.id ? a : b, []), threadId });
+  });
+  await page.goto('/#/c/b');
+  const badge = page.getByRole('button', { name: 'Jump to last unread message in Alpha (2 unread)' });
+  await badge.click(); await blocked.promise;
+  await badge.click(); await second.promise;
+  sockets[0]!.send(JSON.stringify({ type: 'room', payload: { channelId: a.id } }));
+  await expect.poll(() => secondLoads).toBe(2);
+  refreshed.resolve(); release.resolve();
+  await expect(page.locator('aside.thread [data-message-seq="120"]')).toHaveClass(/unread-target/);
+  await expect(page.locator('[data-message-seq="240"]')).toHaveCount(0);
+  expect(harnesses.get(page)!.receipts.flat()).not.toContain(240);
+});
+
+test('explicit thread refresh cancels a pending unread destination permanently', async ({ page }) => {
+  const p = project('alpha', 'Alpha Hive'), a = channel('a', 'Alpha', p), b = channel('b', 'Beta', p);
+  const blocked = deferred(), release = deferred();
+  let lookups = 0, targetLoads = 0, normalLoads = 0;
+  await installSnapshot(page, () => ({ ...snapshot([p], [a, b]), unread: { a: 2 } }));
+  const sockets = await installSocketHarness(page);
+  await page.route('**/api/ui/channels/a/last-unread', route => fulfillJson(route,
+    { target: { channelId: a.id, threadId: 'root', seq: ++lookups === 1 ? 240 : 120 } }));
+  await installMessages(page, async (route, id, threadId) => {
+    const before = new URL(route.request().url()).searchParams.get('beforeSeq');
+    if (before) {
+      targetLoads++;
+      if (before === '121') { blocked.resolve(); await release.promise; }
+      const seq = Number(before) - 1;
+      try { await fulfillJson(route, { ...payload(a, [message(`target-${seq}`, seq, a.id, `Target ${seq}`, 'root')]), hasNewer: true }); }
+      catch { /* Explicit live navigation cancels the old target request. */ }
+      return;
+    }
+    normalLoads++;
+    await fulfillJson(route, { ...payload(id === a.id ? a : b,
+      threadId ? [message('live', 1000, a.id, 'Live thread page', threadId)] : []), threadId });
+  });
+  await page.goto('/#/c/b');
+  const badge = page.getByRole('button', { name: 'Jump to last unread message in Alpha (2 unread)' });
+  await badge.click();
+  await expect(page.locator('aside.thread [data-message-seq="240"]')).toHaveClass(/unread-target/);
+  await badge.click(); await blocked.promise;
+  await page.getByRole('button', { name: 'New replies — refresh thread', exact: true }).click();
+  await expect(page.getByText('Live thread page', { exact: true })).toBeVisible();
+  release.resolve();
+  const beforeRefresh = normalLoads;
+  sockets[0]!.send(JSON.stringify({ type: 'room', payload: { channelId: a.id } }));
+  await expect.poll(() => normalLoads).toBeGreaterThan(beforeRefresh);
+  await expect(page.locator('[data-message-seq="120"]')).toHaveCount(0);
+  expect(targetLoads).toBe(2);
+});
+
+for (const inThread of [false, true]) {
+  for (const outcome of ['target', 'empty', 'failure'] as const) {
+  test(`explicit live navigation cancels a delayed unread lookup (thread=${inThread}, outcome=${outcome})`, async ({ page }) => {
+    const p = project('alpha', 'Alpha Hive'), a = channel('a', 'Alpha', p), b = channel('b', 'Beta', p);
+    const threadId = inThread ? 'root' : null;
+    const blocked = deferred(), release = deferred(), lookupDone = deferred();
+    let lookups = 0, targetLoads = 0;
+    await installSnapshot(page, () => ({ ...snapshot([p], [a, b]), unread: { a: 2 } }));
+    await installSocketHarness(page);
+    await page.route('**/api/ui/channels/a/last-unread', async route => {
+      const request = ++lookups;
+      if (request === 2) { blocked.resolve(); await release.promise; }
+      try {
+        if (request === 2 && outcome !== 'target') {
+          await fulfillJson(route, outcome === 'empty' ? { target: null } : { error: 'Obsolete lookup failure' }, outcome === 'empty' ? 200 : 503);
+        } else await fulfillJson(route, { target: { channelId: a.id, threadId, seq: request === 1 ? 240 : 120 } });
+      }
+      catch { /* Explicit navigation may already have aborted the lookup. */ }
+      finally { if (request === 2) lookupDone.resolve(); }
+    });
+    await installMessages(page, async (route, id, requestedThread) => {
+      const before = new URL(route.request().url()).searchParams.get('beforeSeq');
+      if (before) targetLoads++;
+      const seq = before ? Number(before) - 1 : 1000;
+      await fulfillJson(route, { ...payload(id === a.id ? a : b,
+        [message(`m-${id}-${requestedThread}-${seq}`, seq, id, before ? `Target ${seq}` : 'Live page ' + id, requestedThread)]),
+        threadId: requestedThread, hasNewer: Boolean(before) });
+    });
+    await page.goto('/#/c/b');
+    const badge = page.getByRole('button', { name: 'Jump to last unread message in Alpha (2 unread)' });
+    const scope = page.locator(inThread ? 'aside.thread' : 'main.desk');
+    await badge.click(); await expect(scope.locator('[data-message-seq="240"]')).toHaveClass(/unread-target/);
+    await badge.click(); await blocked.promise;
+    await scope.getByRole('button', { name: inThread ? 'New replies — refresh thread' : 'New messages — jump to recent', exact: true }).click();
+    await expect(scope.locator('[data-message-seq="1000"]')).toBeVisible();
+    release.resolve(); await lookupDone.promise;
+    // Wait for any lookup callback's React/paint work without arbitrary wall time.
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await expect(scope.locator('[data-message-seq="120"]')).toHaveCount(0);
+    expect(targetLoads).toBe(1);
+    await expect(scope.locator('[data-message-seq="1000"]')).toBeVisible();
+    await expect(page.locator('.err')).toHaveCount(0);
+    // Cancellation is scoped to the old request; the next badge click still works.
+    await badge.click();
+    await expect(scope.locator('[data-message-seq="120"]')).toHaveClass(/unread-target/);
+    expect(targetLoads).toBe(2);
+  });
+  }
+
+  test(`failed unread target page recovers on an automatic refresh (thread=${inThread})`, async ({ page }) => {
+    const p = project('alpha', 'Alpha Hive'), a = channel('a', 'Alpha', p), b = channel('b', 'Beta', p);
+    const threadId = inThread ? 'root' : null;
+    let targetLoads = 0;
+    await installSnapshot(page, () => ({ ...snapshot([p], [a, b]), unread: { a: 1 } }));
+    const sockets = await installSocketHarness(page);
+    await page.route('**/api/ui/channels/a/last-unread', route => fulfillJson(route, { target: { channelId: a.id, threadId, seq: 240 } }));
+    await installMessages(page, async (route, id, requestedThread) => {
+      const before = new URL(route.request().url()).searchParams.get('beforeSeq');
+      if (before && ++targetLoads === 1) return fulfillJson(route, { error: 'Transient target page failure' }, 503);
+      const seq = before ? 240 : 1000;
+      await fulfillJson(route, { ...payload(id === a.id ? a : b, [message('m-' + seq, seq, id, 'Page ' + seq, requestedThread, { authorId: 'worker' })]), threadId: requestedThread });
+    });
+    await page.goto('/#/c/b');
+    await page.getByRole('button', { name: 'Jump to last unread message in Alpha (1 unread)' }).click();
+    await expect(page.locator('.err')).toContainText('Transient target page failure');
+    if (inThread) sockets[0]!.send(JSON.stringify({ type: 'room', payload: { channelId: a.id } }));
+    else await sockets[0]!.close({ code: 1013, reason: 'Review recovery' });
+    const scope = page.locator(inThread ? 'aside.thread' : 'main.desk');
+    await expect(scope.locator('[data-message-seq="240"]')).toHaveClass(/unread-target/);
+    expect(targetLoads).toBe(2);
+  });
+
+  test(`cancelled unread jump stays cancelled after navigation and reconnect (thread=${inThread})`, async ({ page }) => {
+    const p = project('alpha', 'Alpha Hive'), a = channel('a', 'Alpha', p), b = channel('b', 'Beta', p);
+    const threadId = inThread ? 'root' : null;
+    const blocked = deferred(), release = deferred();
+    let targetLoads = 0;
+    await installSnapshot(page, () => ({ ...snapshot([p], [a, b]), unread: { a: 1 } }));
+    const sockets = await installSocketHarness(page);
+    await page.route('**/api/ui/channels/a/last-unread', route => fulfillJson(route, { target: { channelId: a.id, threadId, seq: 240 } }));
+    await installMessages(page, async (route, id, requestedThread) => {
+      const before = new URL(route.request().url()).searchParams.get('beforeSeq');
+      if (before) { targetLoads++; blocked.resolve(); await release.promise; }
+      const seq = before ? 240 : 1000;
+      try { await fulfillJson(route, { ...payload(id === a.id ? a : b, [message('m-' + seq, seq, id, 'Page ' + id, requestedThread)]), threadId: requestedThread }); }
+      catch { /* Navigation aborts the pending page. */ }
+    });
+    await page.goto('/#/c/b');
+    await page.getByRole('button', { name: 'Jump to last unread message in Alpha (1 unread)' }).click();
+    await blocked.promise;
+    await page.getByRole('button', { name: '# Beta', exact: true }).click();
+    release.resolve();
+    await page.goto('/#/c/a' + (inThread ? '/t/root' : ''));
+    await expect(page.locator(inThread ? 'aside.thread' : 'main.desk').getByText('Page a', { exact: true })).toBeVisible();
+    const connected = sockets.length;
+    await sockets.at(-1)!.close({ code: 1013, reason: 'Review reconnect after cancelled jump' });
+    await expect.poll(() => sockets.length).toBeGreaterThan(connected);
+    expect(targetLoads).toBe(1);
+    await expect(page.locator('[data-message-seq="240"]')).toHaveCount(0);
+  });
+}
+
+for (const [interruption, inThread] of [['hello', false], ['hello', true], ['room', true]] as const) {
+  test('delayed lookup survives automatic ' + interruption + ' thread=' + inThread, async ({ page }) => {
+    const p = project('alpha', 'Alpha Hive'), a = channel('a', 'Alpha', p);
+    const threadId = inThread ? 'root' : null;
+    const blocked = deferred(), release = deferred();
+    let normalLoads = 0;
+    await installSnapshot(page, () => ({ ...snapshot([p], [a]), unread: { a: 1 } }));
+    const sockets = await installSocketHarness(page);
+    await page.route('**/api/ui/channels/a/last-unread', async route => {
+      blocked.resolve(); await release.promise;
+      await fulfillJson(route, { target: { channelId: a.id, threadId, seq: 240 } });
+    });
+    await installMessages(page, async (route, id, requestedThread) => {
+      const before = new URL(route.request().url()).searchParams.get('beforeSeq');
+      if (!before) normalLoads++;
+      const seq = before ? 240 : 1000;
+      await fulfillJson(route, { ...payload(a, [message('row-' + seq, seq, id, 'Row ' + seq, requestedThread,
+        before ? { authorId: 'worker' } : {})]), threadId: requestedThread, hasNewer: Boolean(before) });
+    });
+    await page.goto('/#/c/a' + (inThread ? '/t/root' : ''));
+    const scope = page.locator(inThread ? 'aside.thread' : 'main.desk');
+    await expect(scope.locator('[data-message-seq="1000"]')).toBeVisible();
+    await page.getByRole('button', { name: 'Jump to last unread message in Alpha (1 unread)' }).click();
+    await blocked.promise;
+    const before = normalLoads;
+    if (interruption === 'hello') await sockets[0]!.close({ code: 1013, reason: 'Review initial lookup' });
+    else sockets[0]!.send(JSON.stringify({ type: 'room', payload: { channelId: a.id } }));
+    await expect.poll(() => normalLoads).toBeGreaterThan(before);
+    release.resolve();
+    await expect(scope.locator('[data-message-seq="240"]')).toHaveClass(/unread-target/);
+    await expect.poll(() => harnesses.get(page)!.receipts.flat().includes(240)).toBe(true);
+  });
+}
+
+for (const paging of ['channel-older', 'thread-earlier', 'thread-newer'] as const) {
+  test('explicit ' + paging + ' cancels delayed lookup without a receipt', async ({ page }) => {
+    const p = project('alpha', 'Alpha Hive'), a = channel('a', 'Alpha', p);
+    const inThread = paging !== 'channel-older', threadId = inThread ? 'root' : null;
+    const blocked = deferred(), release = deferred(), done = deferred();
+    let lookups = 0, staleLoads = 0;
+    await installSnapshot(page, () => ({ ...snapshot([p], [a]), unread: { a: 2 } }));
+    await installSocketHarness(page);
+    await page.route('**/api/ui/channels/a/last-unread', async route => {
+      const call = ++lookups;
+      if (call === 2) { blocked.resolve(); await release.promise; }
+      try { await fulfillJson(route, { target: { channelId: a.id, threadId, seq: call === 1 ? 240 : 120 } }); }
+      catch { /* Explicit paging aborts the old lookup. */ }
+      finally { if (call === 2) done.resolve(); }
+    });
+    await installMessages(page, async (route, id, requestedThread) => {
+      const q = new URL(route.request().url()).searchParams, before = q.get('beforeSeq'), after = q.get('afterSeq');
+      if (before === '121') staleLoads++;
+      const seq = before === '241' ? 240 : before === '121' ? 120 : before ? 200 : after ? 260 : 1000;
+      await fulfillJson(route, { ...payload(a, [message('row-' + seq, seq, id, 'Row ' + seq, requestedThread,
+        seq === 120 ? { authorId: 'worker' } : {})]), threadId: requestedThread, hasOlder: true, hasNewer: seq === 240 });
+    });
+    await page.goto('/#/c/a');
+    const badge = page.getByRole('button', { name: 'Jump to last unread message in Alpha (2 unread)' });
+    const scope = page.locator(inThread ? 'aside.thread' : 'main.desk');
+    await badge.click();
+    await expect(scope.locator('[data-message-seq="240"]')).toHaveClass(/unread-target/);
+    await badge.click(); await blocked.promise;
+    await scope.getByRole('button', { name: paging === 'channel-older' ? 'Load older' : paging === 'thread-earlier' ? 'Load earlier replies' : 'Load more replies', exact: true }).click();
+    const newSeq = paging === 'thread-newer' ? 260 : 200;
+    await expect(scope.locator('[data-message-seq="' + newSeq + '"]')).toBeVisible();
+    release.resolve(); await done.promise;
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    expect(staleLoads).toBe(0);
+    expect(harnesses.get(page)!.receipts.flat()).not.toContain(120);
+    await expect(page.locator('.err')).toHaveCount(0);
+  });
+}
+
+for (const inThread of [false, true]) for (const outcome of ['empty', 'failure'] as const) for (const pageFailed of [false, true]) {
+  test('replacement lookup preserves history: thread=' + inThread + ', outcome=' + outcome + ', pageFailed=' + pageFailed, async ({ page }) => {
+    const p = project('alpha', 'Alpha Hive'), a = channel('a', 'Alpha', p);
+    const threadId = inThread ? 'root' : null;
+    const blocked = deferred(), release = deferred(), done = deferred();
+    let lookups = 0, normalLoads = 0, targetLoads = 0;
+    await installSnapshot(page, () => ({ ...snapshot([p], [a]), unread: { a: 2 } }));
+    const sockets = await installSocketHarness(page);
+    await page.route('**/api/ui/channels/a/last-unread', route => {
+      const call = ++lookups;
+      if (call > 2 && outcome === 'failure') return fulfillJson(route, { error: 'Replacement lookup failed' }, 503);
+      return fulfillJson(route, { target: call > 2 ? null : { channelId: a.id, threadId, seq: call === 1 ? 240 : 120 } });
+    });
+    await installMessages(page, async (route, id, requestedThread) => {
+      const before = new URL(route.request().url()).searchParams.get('beforeSeq');
+      if (before) targetLoads++; else normalLoads++;
+      if (before === '121') {
+        blocked.resolve();
+        if (pageFailed) {
+          await fulfillJson(route, { error: 'Target page failed' }, 503);
+          done.resolve(); return;
+        }
+        await release.promise;
+      }
+      const seq = before ? Number(before) - 1 : 1000;
+      try { await fulfillJson(route, { ...payload(a, [message('row-' + seq, seq, id, 'Row ' + seq, requestedThread,
+        seq === 120 || (seq === 1000 && lookups >= 3 && requestedThread === threadId) ? { authorId: 'worker' } : {})]), threadId: requestedThread, hasNewer: Boolean(before) }); }
+      catch { /* The replacement lookup cancelled this page. */ }
+      finally { if (before === '121') done.resolve(); }
+    });
+    await page.goto('/#/c/a');
+    const badge = page.getByRole('button', { name: 'Jump to last unread message in Alpha (2 unread)' });
+    const scope = page.locator(inThread ? 'aside.thread' : 'main.desk');
+    await badge.click(); await expect(scope.locator('[data-message-seq="240"]')).toHaveClass(/unread-target/);
+    await badge.click(); await blocked.promise;
+    if (pageFailed) await expect(page.locator('.err')).toContainText('Target page failed');
+    await badge.click(); await expect(page.locator('.err')).toContainText(outcome === 'empty' ? 'No unread messages remain' : 'Replacement lookup failed');
+    release.resolve(); await done.promise;
+    await expect(scope.locator('[data-message-seq="240"]')).toBeVisible();
+    const before = normalLoads;
+    if (inThread) sockets[0]!.send(JSON.stringify({ type: 'room', payload: { channelId: a.id } }));
+    else await sockets[0]!.close({ code: 1013, reason: 'Review cancelled replacement' });
+    await expect.poll(() => normalLoads).toBeGreaterThan(before);
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await expect(scope.locator('[data-message-seq="240"]')).toBeVisible();
+    await expect(scope.locator('[data-message-seq="1000"]')).toHaveCount(0);
+    expect(targetLoads).toBe(2);
+    expect(harnesses.get(page)!.receipts.flat()).not.toContain(120);
+    expect(harnesses.get(page)!.receipts.flat()).not.toContain(1000);
+  });
+}
+
+for (const inThread of [false, true]) {
+test('automatic refresh retains target highlight and late-reflow anchor: thread=' + inThread, async ({ page }) => {
+  const p = project('alpha', 'Alpha Hive'), a = channel('a', 'Alpha', p);
+  const threadId = inThread ? 'root' : null;
+  const target = message('target', 240, a.id, 'Target unread', threadId);
+  const context = Array.from({ length: 10 }, (_, i) => message('before-' + i, 220 + i, a.id, 'Context ' + i + '. ' + 'Long row. '.repeat(40), threadId));
+  await installSnapshot(page, () => ({ ...snapshot([p], [a]), unread: { a: 1 } }));
+  const sockets = await installSocketHarness(page);
+  await page.route('**/api/ui/channels/a/last-unread', route => fulfillJson(route, { target: { channelId: a.id, threadId, seq: 240 } }));
+  await installMessages(page, async (route, id, requestedThread) => {
+    await fulfillJson(route, { ...payload(a, requestedThread === threadId ? [...context, target] : []), threadId: requestedThread, hasOlder: true, hasNewer: true });
+  });
+  await page.goto('/#/c/a');
+  await page.getByRole('button', { name: 'Jump to last unread message in Alpha (1 unread)' }).click();
+  const scope = page.locator(inThread ? 'aside.thread' : 'main.desk');
+  const row = scope.locator('[data-message-seq="240"]');
+  await expect(row).toHaveClass(/unread-target/);
+  const start = Date.now();
+  const refreshed = page.waitForResponse(response => {
+    const url = new URL(response.url());
+    return url.pathname.endsWith('/messages') && url.searchParams.get('threadId') === threadId && !url.searchParams.has('beforeSeq');
+  });
+  sockets[0]!.send(JSON.stringify({ type: inThread ? 'room' : 'project', payload: { channelId: a.id } }));
+  await refreshed;
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  expect(Date.now() - start).toBeLessThan(2000);
+  expect(await row.getAttribute('class')).toMatch(/unread-target/);
+  await scope.locator('[data-message-seq="229"]').evaluate(el => { (el as HTMLElement).style.minHeight = '1600px'; });
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await expect(row).toBeInViewport();
+});
+}
+
+for (const outcome of ['empty', 'failure'] as const) {
+  test(`unread badge ${outcome} leaves the current conversation intact`, async ({ page }) => {
+    const p = project('alpha', 'Alpha Hive'), a = channel('a', 'Alpha', p), b = channel('b', 'Beta', p);
+    await installSnapshot(page, () => ({ ...snapshot([p], [a, b]), unread: { a: 1 } })); await installSocketHarness(page);
+    await installMessages(page, (route, id) => fulfillJson(route, payload(b, [message('b', 3, id, 'Keep my place')])));
+    await page.route('**/api/ui/channels/a/last-unread', route => fulfillJson(route,
+      outcome === 'empty' ? { target: null } : { error: 'fixture unavailable' }, outcome === 'empty' ? 200 : 503));
+    await page.goto('/#/c/b'); await page.getByRole('button', { name: 'Jump to last unread message in Alpha (1 unread)', exact: true }).click();
+    await expect(page.locator('.err')).toContainText(outcome === 'empty' ? 'No unread messages remain' : 'fixture unavailable');
+    await expect(page).toHaveURL(/\/c\/b$/); await expect(page.getByText('Keep my place', { exact: true })).toBeVisible();
+  });
+}
+
 test("slow channel A cannot overwrite channel B after navigation", async ({ page }) => {
   const alpha = project("alpha", "Alpha Hive");
   const a = channel("a", "Alpha", alpha);
@@ -227,7 +738,7 @@ test("slow channel A cannot overwrite channel B after navigation", async ({ page
   releaseA.resolve();
   await expect(page.getByRole("heading", { name: "#Beta" })).toBeVisible();
   await expect(page.getByText("stale alpha body", { exact: true })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "# Beta" })).toHaveClass(/active/);
+  await expect(page.getByRole("button", { name: "# Beta" }).locator('..')).toHaveClass(/active/);
 });
 
 test("archived channels are consultable, reachable from the switcher and project-scoped without marking them read on expansion", async ({ page }, testInfo) => {
@@ -242,10 +753,10 @@ test("archived channels are consultable, reachable from the switcher and project
   await page.goto("/#/c/a");
   const section = page.locator(".project-sec").filter({ hasText: "Alpha Hive" });
   const archived = section.locator(".archived-channels");
-  const oldRow = archived.getByRole("button", { name: "# review-closed 7", exact: true });
+  const oldRow = archived.getByRole("button", { name: "# review-closed", exact: true });
   await expect(archived).not.toHaveAttribute("open", "");
   await expect(oldRow).toBeHidden();
-  await expect(section.locator(".group > button.nav")).toHaveText(["# General"]);
+  await expect(section.locator(".group > .nav .nav-open")).toHaveText(["# General"]);
   const summary = archived.locator("summary");
   await expect(summary).toHaveText("Archived 1");
   await summary.focus();
@@ -284,7 +795,7 @@ test("archived channels are consultable, reachable from the switcher and project
   await expect(oldRow).toBeVisible();
   await page.reload();
   await expect(oldRow).toBeVisible();
-  await expect(oldRow).toHaveClass(/active/);
+  await expect(oldRow.locator('..')).toHaveClass(/active/);
   expect(harnesses.get(page)!.receipts).toEqual([]);
 });
 
@@ -320,9 +831,9 @@ for (const scenario of ["switcher", "direct-link", "remount"] as const) {
       await page.getByRole("combobox", { name: "Jump to a channel, conversation, agent or project" }).fill("review-two");
       await page.keyboard.press("Enter");
     }
-    const target = scenario === "remount" ? "# review-one 7" : "# review-two 9";
+    const target = scenario === "remount" ? "# review-one" : "# review-two";
     await expect(archived.getByRole("button", { name: target, exact: true })).toBeVisible();
-    if (scenario === "direct-link") await expect(archived.getByRole("button", { name: target, exact: true })).toHaveClass(/active/);
+    if (scenario === "direct-link") await expect(archived.getByRole("button", { name: target, exact: true }).locator('..')).toHaveClass(/active/);
     expect(harnesses.get(page)!.receipts).toEqual([]);
   });
 }

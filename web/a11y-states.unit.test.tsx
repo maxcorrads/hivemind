@@ -78,6 +78,6 @@ test("For you never claims the Human is caught up before the unread page arrived
 test("the active sidebar entry is announced as the current page", () => {
   const ch: Channel = { id: "c", name: "general", type: "public", topic: null, createdBy: "human", createdAt: 0, memberIds: [],
     projectId: "p", project: "alpha" };
-  assert.match(renderToStaticMarkup(createElement(ChannelItem, { ch, unread: 0, active: true, onClick: () => undefined })), /aria-current="page"/);
-  assert.doesNotMatch(renderToStaticMarkup(createElement(ChannelItem, { ch, unread: 0, active: false, onClick: () => undefined })), /aria-current/);
+  assert.match(renderToStaticMarkup(createElement(ChannelItem, { ch, unread: 0, active: true, onClick: () => undefined, onUnread: () => undefined })), /aria-current="page"/);
+  assert.doesNotMatch(renderToStaticMarkup(createElement(ChannelItem, { ch, unread: 0, active: false, onClick: () => undefined, onUnread: () => undefined })), /aria-current/);
 });

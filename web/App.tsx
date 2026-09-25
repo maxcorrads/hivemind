@@ -39,6 +39,7 @@ import { useAgentConfirm, useChannelSheets, useProjectSheets, useTelegramSheet }
 import { useTheme } from "./use-theme.ts";
 import { useThreadPane } from "./use-thread-pane.ts";
 import { useThreadScrollAnchor } from "./use-thread-scroll-anchor.ts";
+import { useUnreadJump } from "./use-unread-jump.ts";
 
 export function App() {
   // Hook order is effect order: the read queues (useHiveSnapshot) exist before
@@ -55,7 +56,7 @@ export function App() {
   const { view: routingView, refresh: refreshRoutingView,
     onEvent: onRoutingEvent } = useAdaptiveRouting(routingChannelId);
   const [routingPanelOpen, setRoutingPanelOpen] = useState(false);
-  const channelPane = useChannelPane(selRef);
+  const channelPane = useChannelPane(selRef, selection.unreadLookup);
   const threadState = useThreadPane(selection, setErr);
   const { pane } = channelPane;
   const { threadPane } = threadState;
@@ -76,6 +77,7 @@ export function App() {
   const inbox = useInbox({ sel, selRef, projects, hive, setErr });
   const { changeSelection, go } = useChangeSelection(selection, {
     channelLoad: channelPane.channelLoad, channelJournal: channelPane.channelJournal,
+    channelJumpIntent: channelPane.channelJumpIntent, threadJumpIntent: threadState.threadJumpIntent,
     channelRefreshIntent: channelPane.channelRefreshIntent, channelReads: hive.channelReads,
     threadLoad: threadState.threadLoad, setThreadView: threadState.setThreadView, threadReads: hive.threadReads,
     inboxLoad: inbox.inboxLoad,
@@ -117,6 +119,8 @@ export function App() {
   const [theme, setTheme] = useTheme();
   const { stickBottom, threadOpenAnchor } = useThreadScrollAnchor({ channelStream: channelPane.channelStream,
     threadStream: threadState.threadStream, pane, threadPane, selectedChannelId, threadId });
+  const { openUnread, target: unreadTarget } = useUnreadJump({ selection, channel: channelPane, thread: threadState, go,
+    clearSearch: () => search.setQuery(''), refreshSnap, setErr });
   useEffect(() => { setRoutingPanelOpen(false); }, [activeChannel?.id]);
   const compose = useSend({ sel, selection, channel: channelPane, thread: threadState, activeBrainChannel,
     refreshRoutingView, setErr });
@@ -206,7 +210,7 @@ export function App() {
 
   return (
     <div className="shell" data-m={screen}>
-      <Sidebar snap={snap} sel={sel} go={navigate} live={live} theme={theme}
+      <Sidebar snap={snap} sel={sel} go={navigate} live={live} theme={theme} onUnread={openUnread}
         onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
         query={search.query} setQuery={search.setQuery} onSearchNow={search.searchNow}
         onTelegram={() => telegramSheet.openTelegram(snap?.projects ?? [])}
@@ -279,9 +283,10 @@ export function App() {
             onMarkSeen={inbox.markAllSeen}
           />
         ) : sel.kind === "dms" ? (
-          <MobileDms snap={snap} project={sel.project} onOpen={id => go({ kind: "channel", id })} />
+          <MobileDms snap={snap} project={sel.project} onOpen={id => go({ kind: "channel", id })} onUnread={openUnread} />
         ) : sel.kind === "home" ? null : (
           <ChannelDesk channelId={sel.id} activeChannel={activeChannel} agents={snap.agents} roomAgents={roomAgents}
+            unreadTarget={unreadTarget}
             channel={channelPane} threadPaneId={threadPane?.threadId} stickBottom={stickBottom}
             threadOpenAnchor={threadOpenAnchor} go={go} roomTick={roomTick} decisionTick={decisionTick}
             onDecisionAnswered={() => setDecisionTick(t => t + 1)} routingView={routingView}

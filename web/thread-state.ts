@@ -1,6 +1,6 @@
 import type { Message, Thread } from '../src/shared/types.ts';
 import type { TaskSnapshot } from '../src/shared/tasks.ts';
-import { ApiError, type ChannelPayload } from './api.ts';
+import { ApiError, type ChannelPayload, type UnreadTarget } from './api.ts';
 import type { Sel } from './selection.ts';
 import { retainNewest } from '../src/shared/realtime.ts';
 import { boundLivePane } from './pane-window.ts';
@@ -16,6 +16,8 @@ export type ThreadView = {
   historyTruncated?: boolean;
   // Navigation intent outlives a single GET (replacement, reconnect or failure).
   returnToLive?: boolean;
+  /** Owner of a pending unread jump, retained on failure until superseded. */
+  unreadJump?: UnreadTarget;
   confirmations?: Message[];
   pendingLoad?: { id: number; liveMessages: Message[]; liveThread?: Thread; truncated?: boolean };
 };
@@ -27,17 +29,19 @@ export function selectThread(view: ThreadView | null, channelId: string, threadI
 
 export function beginThreadLoad(
   view: ThreadView | null, channelId: string, threadId: string, requestId: number,
-  returnToLive = false, confirmations: Message[] = [],
+  returnToLive = false, confirmations: Message[] = [], unreadJump?: UnreadTarget,
 ): ThreadView {
   let current = selectThread(view, channelId, threadId);
   for (const message of confirmations) current = receiveThreadConfirmation(current, message);
-  return { ...current, returnToLive: returnToLive || current.returnToLive,
+  return { ...current, unreadJump, returnToLive: returnToLive || current.returnToLive,
     pendingLoad: { id: requestId, liveMessages: [] } };
 }
 
 /** Explicit history navigation cancels automatic return-to-live, not retained ACKs. */
-export function cancelThreadLoad(view: ThreadView | null): ThreadView | null {
-  return view ? { ...view, pendingLoad: undefined, returnToLive: undefined } : view;
+export function cancelThreadLoad(view: ThreadView | null, unreadJump?: UnreadTarget): ThreadView | null {
+  // A queued cleanup may run after a newer jump, send or explicit live load.
+  if (unreadJump && view?.unreadJump !== unreadJump) return view;
+  return view ? { ...view, unreadJump: undefined, pendingLoad: undefined, returnToLive: undefined } : view;
 }
 
 export function failThreadLoad(view: ThreadView | null, requestId: number): ThreadView | null {
@@ -112,7 +116,7 @@ export function receiveThreadTask(view: ThreadView, task: TaskSnapshot): ThreadV
   return { ...view, pane: { ...view.pane, task: reconcileTask(view.pane.task, task) } };
 }
 
-export function receiveThreadSnapshot(view: ThreadView | null, threadId: string, data: ChannelPayload, requestId: number): ThreadView | null {
+export function receiveThreadSnapshot(view: ThreadView | null, threadId: string, data: ChannelPayload, requestId: number, holdThrough?: number): ThreadView | null {
   if (!view || view.channelId !== data.channel.id || view.threadId !== threadId || view.pendingLoad?.id !== requestId) return view;
   const returnToLive = view.returnToLive;
   const currentMessages = returnToLive ? [] : view.pane?.messages ?? view.pendingMessages;
@@ -126,9 +130,11 @@ export function receiveThreadSnapshot(view: ThreadView | null, threadId: string,
   const threads = liveThread ? [...data.threads.filter(thread => thread.id !== liveThread.id), liveThread] : data.threads;
   return {
     ...view, pendingMessages: [], pendingTask: undefined, pendingLoad: undefined,
-    historyTruncated: undefined, returnToLive: undefined, confirmations: undefined,
-    pane: boundLivePane({ ...data, threads, historyThrough: returnToLive ? undefined : view.pane?.historyThrough,
-      deferredLive: returnToLive ? undefined : view.pane?.deferredLive, messages: messages.filter(message => belongs(view, message)),
+    historyTruncated: undefined, returnToLive: undefined, unreadJump: undefined, confirmations: undefined,
+    pane: boundLivePane({ ...data, threads, historyThrough: holdThrough ?? (returnToLive ? undefined : view.pane?.historyThrough),
+      unreadTarget: !returnToLive && view.pane?.historyThrough !== undefined ? view.pane.unreadTarget : undefined,
+      deferredLive: holdThrough !== undefined ? Boolean(data.hasNewer) : returnToLive ? undefined : view.pane?.deferredLive,
+      messages: messages.filter(message => belongs(view, message)),
       hasOlder: data.hasOlder || (!returnToLive && view.historyTruncated) || view.pendingLoad.truncated,
       task: reconcileTask(view.pane?.task ?? view.pendingTask, data.task) }),
   };

@@ -70,7 +70,11 @@ export type TelegramSettings = TelegramHealth & {
   diagnosticsPruned?: number; failures?: number;
 };
 
+export type UnreadTarget = { channelId: string; threadId: string | null; seq: number };
+
 export type ChannelPayload = {
+  /** Client-only identity of the jump that installed this page. Never an HTTP receipt. */
+  unreadTarget?: UnreadTarget;
   /** Server sequence fence, including replies omitted from this page. */
   snapshotSeq?: number;
   /** Client-only per-root live reply deduplication, pruned with visible roots. */
@@ -196,6 +200,9 @@ export const api = {
     if (limit) params.set("limit", String(limit));
     return req<{ hits: SearchHit[]; hasMore: boolean }>(`/api/ui/search?${params}`, { signal });
   },
+  lastUnread: (id: string, signal?: AbortSignal) =>
+    req<{ target: UnreadTarget | null }>(
+      `/api/ui/channels/${encodeURIComponent(id)}/last-unread`, { signal }),
   messages: (id: string, threadId?: string | null, beforeSeq?: number, signal?: AbortSignal, afterSeq?: number) => {
     const q = new URLSearchParams();
     if (threadId) q.set("threadId", threadId);

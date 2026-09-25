@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
-import type { createReceiptQueue, createRequestGate } from "../src/shared/read-client.ts";
-import type { Snapshot } from "./api.ts";
+import { createRequestGate, type createReceiptQueue } from "../src/shared/read-client.ts";
+import type { Snapshot, UnreadTarget } from "./api.ts";
 import type { ChannelJournal } from "./channel-state.ts";
 import type { Message } from "../src/shared/types.ts";
 import type { ThreadView } from "./thread-state.ts";
@@ -21,11 +21,14 @@ export function useSelection() {
   selRef.current = sel;
   const threadIdRef = useRef(threadId);
   threadIdRef.current = threadId;
+  // The lookup precedes the pane load, so explicit navigation must be able to
+  // cancel it even before the unread destination is known.
+  const unreadLookup = useRef(createRequestGate());
 
   const viewingThread = useCallback((channelId: string, root: string) =>
     selRef.current.kind === 'channel' && selRef.current.id === channelId && threadIdRef.current === root, []);
 
-  return { sel, setSel, threadId, setThreadId, selRef, threadIdRef, viewingThread };
+  return { sel, setSel, threadId, setThreadId, selRef, threadIdRef, viewingThread, unreadLookup };
 }
 
 export type Selection = ReturnType<typeof useSelection>;
@@ -35,19 +38,22 @@ export type Selection = ReturnType<typeof useSelection>;
  * receipts that belonged to the previous one before the new selection commits.
  */
 export function useChangeSelection(
-  { selRef, threadIdRef, setSel, setThreadId }: Selection,
-  { channelLoad, channelJournal, channelRefreshIntent, channelReads, threadLoad, setThreadView, threadReads, inboxLoad }: {
+  { selRef, threadIdRef, setSel, setThreadId, unreadLookup }: Selection,
+  { channelLoad, channelJumpIntent, channelJournal, channelRefreshIntent, channelReads, threadLoad, threadJumpIntent, setThreadView, threadReads, inboxLoad }: {
     channelLoad: Gate;
+    channelJumpIntent: MutableRefObject<UnreadTarget | null>;
     channelJournal: MutableRefObject<ChannelJournal | null>;
     channelRefreshIntent: MutableRefObject<{ channelId: string; confirmations: Message[] } | null>;
     channelReads: Receipts;
     threadLoad: Gate;
+    threadJumpIntent: MutableRefObject<UnreadTarget | null>;
     setThreadView: (view: ThreadView | null) => void;
     threadReads: Receipts;
     inboxLoad: Gate;
   },
 ) {
   const changeSelection = useCallback((next: Sel) => {
+    unreadLookup.current.cancel();
     const previous = selRef.current;
     const priorChannel = previous.kind === "channel" ? previous.id : null;
     const nextChannel = next.kind === "channel" ? next.id : null;
@@ -59,6 +65,12 @@ export function useChangeSelection(
       channelReads.current?.reset();
     }
     if (priorChannel !== nextChannel || threadIdRef.current !== nextThread) {
+      if (channelJumpIntent.current) {
+        channelLoad.current.cancel();
+        channelJournal.current = null;
+      }
+      channelJumpIntent.current = null;
+      threadJumpIntent.current = null;
       threadLoad.current.cancel();
       setThreadView(null);
       threadReads.current?.reset();
