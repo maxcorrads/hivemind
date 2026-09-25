@@ -73,7 +73,7 @@ test("UI and agent HTTP accept a 20,000-unit body, even fully \\u-escaped, and r
 
 test("bot HTTP ingress accepts a worst-case escaped 20,000-unit body and rejects 20,001", async t => {
   const f = fixture(t);
-  const channel = f.hive.channels.createChannel(f.human, { name: "observations", type: "private", project: "chapter" });
+  const channel = f.hive.channels.createChannel(f.human, { name: "observations", type: "private", project: "acme" });
   const bot = f.hive.bots.createBot(f.human, channel.projectId, { name: "LongBot" });
   f.hive.channels.invite(f.human, channel.id, [bot.bot.name]);
   const post = (raw: string) => f.app.request(`/api/bot/channels/${channel.id}/messages`, { method: "POST",

@@ -55,11 +55,11 @@ test("resume keeps project and worktree constraints; agent credential recovery i
   assert.throws(() => hive.identity.join({ role: "brain", resumeName: first.agent.name, cwd: path.join(dir, "other") }), /project cannot change/);
   assert.throws(() => hive.identity.join({ role: "brain", resumeName: first.agent.name, project: "other" }), /project cannot change/);
   assert.throws(() => hive.identity.join({ role: "worker", seniority: "mid", token: first.token }), /role cannot change/);
-  assert.equal(hive.identity.join({ role: "brain", token: first.token, project: "chapter" }).created, false);
+  assert.equal(hive.identity.join({ role: "brain", token: first.token, project: "acme" }).created, false);
 
   const base = `http://127.0.0.1:${await service.ready}`;
   const joined = await fetch(`${base}/api/agent/join`, { method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ role: "brain", resume: first.agent.name, project: "chapter" }) });
+    body: JSON.stringify({ role: "brain", resume: first.agent.name, project: "acme" }) });
   assert.equal(joined.status, 200, await joined.clone().text());
   const body = await joined.json() as { agent: { id: string }; token: string; created: boolean };
   assert.equal(body.agent.id, first.agent.id);

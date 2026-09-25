@@ -8,12 +8,12 @@ function p(slug: string, worktree: string | null = null): Project {
 }
 
 test("join project: flag wins, then worktree, then the only project", () => {
-  const chapter = p("chapter", "/repo/chapter");
+  const acme = p("acme", "/repo/acme");
   const altro = p("altro", "/repo/altro");
-  assert.equal(resolveJoinProject([chapter, altro], { project: "altro", cwd: "/repo/chapter" }).slug, "altro");
-  assert.equal(resolveJoinProject([chapter, altro], { cwd: "/repo/altro" }).slug, "altro");
-  assert.equal(resolveJoinProject([chapter], { cwd: "/tmp" }).slug, "chapter");
-  assert.throws(() => resolveJoinProject([chapter, altro], { cwd: "/tmp" }), /Pass project=slug/);
-  assert.throws(() => resolveJoinProject([chapter], { project: "missing" }), /No project/);
+  assert.equal(resolveJoinProject([acme, altro], { project: "altro", cwd: "/repo/acme" }).slug, "altro");
+  assert.equal(resolveJoinProject([acme, altro], { cwd: "/repo/altro" }).slug, "altro");
+  assert.equal(resolveJoinProject([acme], { cwd: "/tmp" }).slug, "acme");
+  assert.throws(() => resolveJoinProject([acme, altro], { cwd: "/tmp" }), /Pass project=slug/);
+  assert.throws(() => resolveJoinProject([acme], { project: "missing" }), /No project/);
   assert.equal(parseProjectSlug("Alpha"), "alpha");
 });

@@ -161,7 +161,7 @@ export class Hive {
 
   private bootstrap() {
     this.identity.ensureHuman();
-    // The test runner sets this so fixtures that join "chapter" keep a project.
+    // The test runner sets this so fixtures that join "acme" keep a project.
     // A normal hive starts empty; Human creates the first project.
     const fixture = process.env.HIVEMIND_FIXTURE_PROJECT;
     if (fixture && this.projects.listProjects().length === 0) {

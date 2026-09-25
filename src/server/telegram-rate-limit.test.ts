@@ -31,7 +31,7 @@ test("actual polling observes the full rate-limit deadline and stop cancels the 
     if (polls <= 2) return Response.json({ ok: false, error_code: 429, parameters: { retry_after: 30 } }, { status: 429 });
     return blocked(init?.signal);
   });
-  const bridge = new TelegramBridge(hive, { botToken: "fixture", allowUserIds: [1], groups: { chapter: -1001 } });
+  const bridge = new TelegramBridge(hive, { botToken: "fixture", allowUserIds: [1], groups: { acme: -1001 } });
   bridge.start();
   try {
     await flush();
@@ -73,7 +73,7 @@ test("multipart 429 preserves confirmed parts, serves another chat and resumes o
     }
     return Response.json({ ok: true, result: { message_id: id++ } });
   });
-  const bridge = new TelegramBridge(hive, { botToken: "fixture", allowUserIds: [1], groups: { chapter: -1001, other: -1002 } });
+  const bridge = new TelegramBridge(hive, { botToken: "fixture", allowUserIds: [1], groups: { acme: -1001, other: -1002 } });
   bridge.start();
   try {
     hive.messages.postMessage(human, { channel: "general", body: "x".repeat(1100), attachmentIds: [a.id, b.id] });

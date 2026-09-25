@@ -19,8 +19,8 @@ test("startup removes legacy identity folders once and keeps other hive state", 
   const home = tempHome(t);
   mkdirSync(path.join(home, "identities"), { recursive: true });
   writeFileSync(path.join(home, "identities", "Ada.json"), "{}");
-  mkdirSync(path.join(home, "identities-v2", "origin", "chapter"), { recursive: true });
-  writeFileSync(path.join(home, "identities-v2", "origin", "chapter", "ada.json"), "{}");
+  mkdirSync(path.join(home, "identities-v2", "origin", "acme"), { recursive: true });
+  writeFileSync(path.join(home, "identities-v2", "origin", "acme", "ada.json"), "{}");
   writeFileSync(path.join(home, "adaptive-routing.json"), "{}");
 
   const hive = new Hive(path.join(home, "hive.db"));

@@ -40,7 +40,7 @@ const child = spawn(process.execPath,
   { cwd: root, stdio: "inherit", env: {
     ...process.env,
     TSX_TSCONFIG_PATH: path.join(root, "tsconfig.web.json"),
-    HIVEMIND_FIXTURE_PROJECT: process.env.HIVEMIND_FIXTURE_PROJECT ?? "chapter",
+    HIVEMIND_FIXTURE_PROJECT: process.env.HIVEMIND_FIXTURE_PROJECT ?? "acme",
   } });
 child.on("error", error => { console.error(error); process.exitCode = 1; });
 child.on("exit", (code, signal) => {

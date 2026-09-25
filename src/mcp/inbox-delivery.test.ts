@@ -31,10 +31,10 @@ test("real stdio MCP never auto-ACKs; replacement sessions replay and reject sta
     return JSON.parse((result.content as Array<{ type: string; text: string }>).find(x => x.type === "text")!.text) as T;
   };
   try {
-    const registered = hive.identity.join({ role: "brain", project: "chapter" });
+    const registered = hive.identity.join({ role: "brain", project: "acme" });
     const first = await connect(registered.token);
     assert.ok((await first.listTools()).tools.some(t => t.name === "ack_delivery"));
-    const joined = await call<{ name: string }>(first, "join", { role: "brain", project: "chapter" });
+    const joined = await call<{ name: string }>(first, "join", { role: "brain", project: "acme" });
     const brain = hive.identity.getAgentByName(joined.name)!;
     const human = hive.identity.getAgent("human"); const dm = hive.channels.openDm(human, brain.name);
     const message = hive.messages.postMessage(human, { channel: dm.id, body: "An invented assignment; no external effects" });

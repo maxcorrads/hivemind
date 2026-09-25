@@ -42,7 +42,7 @@ test('Human connection test is explicit, fixed-endpoint and inert with respect t
     assert.equal(init?.redirect, 'error');
     assert.equal(init?.method, 'POST');
     assert.equal(new Headers(init?.headers).get('authorization'), `Bearer ${key}`);
-    assert.doesNotMatch(String(init?.body), /private-project-request|chapter|synthetic-http-test-key/);
+    assert.doesNotMatch(String(init?.body), /private-project-request|acme|synthetic-http-test-key/);
     return valid();
   });
   const missing = await f.state();
@@ -55,7 +55,7 @@ test('Human connection test is explicit, fixed-endpoint and inert with respect t
   assert.deepEqual(Object.keys(saved).sort(), ['apiKeySet', 'revision']);
 
   const human = f.hive.identity.getAgent('human');
-  const brain = f.hive.identity.join({ role: 'brain', project: 'chapter' });
+  const brain = f.hive.identity.join({ role: 'brain', project: 'acme' });
   const dm = f.hive.channels.openDm(human, brain.agent.name);
   const send = await f.app.request(`/api/ui/channels/${dm.id}/messages`, { method: 'POST',
     headers: { 'content-type': 'application/json' }, body: JSON.stringify({

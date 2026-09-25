@@ -14,8 +14,8 @@ function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-evidence-runtime-'));
   let hive = new Hive(path.join(dir, 'hive.db'));
   const human = hive.identity.getAgent('human');
-  const brain = hive.identity.join({ role: 'brain', project: 'chapter' }).agent;
-  const workers = [0, 1, 2].map(() => hive.identity.join({ role: 'worker', seniority: 'senior', project: 'chapter' }).agent);
+  const brain = hive.identity.join({ role: 'brain', project: 'acme' }).agent;
+  const workers = [0, 1, 2].map(() => hive.identity.join({ role: 'worker', seniority: 'senior', project: 'acme' }).agent);
   const dm = hive.channels.openDm(human, brain.name);
   saveAdaptiveRouting(dir, { enabled: true, apiKey: 'never-export-this-key' });
   let calls = 0, fail = false, hook: (() => void) | null = null;

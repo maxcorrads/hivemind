@@ -19,8 +19,8 @@ test('MCP reference helpers normalize display channels and resolve visible worke
   assert.equal(normalizeChannelReference('#fixture-room'), 'fixture-room');
   assert.equal(normalizeChannelReference('fixture-room'), 'fixture-room');
   const roster = [
-    { id: '11111111-1111-4111-8111-111111111111', name: 'Loom', role: 'worker', seniority: 'mid', focus: null, online: true, lastSeenAt: 0, createdAt: 0, projectId: 'p', project: 'chapter' },
-    { id: '22222222-2222-4222-8222-222222222222', name: 'Brain', role: 'brain', seniority: null, focus: null, online: true, lastSeenAt: 0, createdAt: 0, projectId: 'p', project: 'chapter' },
+    { id: '11111111-1111-4111-8111-111111111111', name: 'Loom', role: 'worker', seniority: 'mid', focus: null, online: true, lastSeenAt: 0, createdAt: 0, projectId: 'p', project: 'acme' },
+    { id: '22222222-2222-4222-8222-222222222222', name: 'Brain', role: 'brain', seniority: null, focus: null, online: true, lastSeenAt: 0, createdAt: 0, projectId: 'p', project: 'acme' },
   ] as const;
   assert.equal(resolveVisibleWorkerReference('Loom', roster as any), roster[0].id);
   assert.equal(resolveVisibleWorkerReference('loom', roster as any), roster[0].id);

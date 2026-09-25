@@ -42,7 +42,7 @@ test('mounted decision queue exposes impact, uncertainty and sends an explicit H
   });
   const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
   try {
-    await act(async () => root.render(<DecisionQueue project="chapter" tick={0} onOpen={() => undefined} />));
+    await act(async () => root.render(<DecisionQueue project="acme" tick={0} onOpen={() => undefined} />));
     assert.match(host.textContent!, /Reject old payloads/); assert.match(host.textContent!, /Lower migration risk/);
     assert.match(host.textContent!, /production distribution is unknown/);
     // The recommended option is tagged on its card and named by label, not id.

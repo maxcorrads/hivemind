@@ -37,11 +37,11 @@ test("direct bot HTTP → real stdio MCP delivers deduplicated context/files, th
     await client.connect(transport);
     const tools = await client.listTools();
     assert.ok(!tools.tools.some(t => /credential|rotate_bot|revoke_bot/.test(t.name)), 'Credential management belongs to the Human UI, not MCP agents');
-    await call("join", { role: "brain", project: "chapter" });
+    await call("join", { role: "brain", project: "acme" });
     const brain = hive.identity.listAgents().find((agent) => agent.role === "brain") as Agent;
     assert.ok(brain);
     const human = hive.identity.getAgent("human");
-    const channel = hive.channels.createChannel(human, { name: "Local MCP test", project: "chapter", type: "private", memberNames: [brain.name] });
+    const channel = hive.channels.createChannel(human, { name: "Local MCP test", project: "acme", type: "private", memberNames: [brain.name] });
     const thread = hive.messages.postMessage(human, { channel: channel.id, body: "Invented problem" });
     const bot = hive.bots.createBot(human, channel.projectId, { name: "FixtureBot" });
     hive.channels.invite(human, channel.id, [bot.bot.name]);
