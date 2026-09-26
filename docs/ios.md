@@ -255,6 +255,38 @@ runtime the selected Xcode supports, and uploads the unsigned `.ipa` and the
 Simulator app as workflow artifacts (`Hivemind-iOS-unsigned`,
 `Hivemind-iOS-Simulator`). Releases do not attach the iOS app yet.
 
+### End-to-end tests
+
+`ios/UITests` holds UI tests that drive the app against a real Mac. They are
+in their own scheme, **HivemindE2E**, not in **Hivemind**, so CI never runs
+them. Each test is skipped unless its environment is set; `xcodebuild` passes
+`TEST_RUNNER_<NAME>` to the tests as `<NAME>`:
+
+| Test | Environment | What it does |
+| --- | --- | --- |
+| `testPairWithLink` | `HIVEMIND_E2E_PAIRING_LINK` | Opens the pairing link as the Camera app would, taps **Pair** and waits for the Mac's page with **Terminal sessions** |
+| `testTerminalAcrossServerRestart` | `HIVEMIND_E2E_SESSION`, `HIVEMIND_E2E_RUN`, `HIVEMIND_E2E_HOLD` | Opens the session's in-app terminal, types `echo before-restart-<run>-$((6*7))`, waits `HOLD` seconds (restart the Node server meanwhile), then types `echo after-restart-<run>-…` |
+| `testTerminalTouchKeys` | `HIVEMIND_E2E_SESSION`, `HIVEMIND_E2E_RUN` | ^C stops a `sleep 100` (`rc-130-<run>`), Up recalls a command, Left moves the cursor (`aZb-<run>`), Esc reaches `cat -v` as `^[`; every key must be above the keyboard |
+
+xterm.js draws on a canvas, so the output is checked on the Mac, in the tmux
+session (`tmux -L hivemind capture-pane -p -t '=<session>:'`). The pairing
+code is shown only on the Mac's screen; a **Debug** build of Hivemind Server
+(`swift build --package-path macos --product HivemindServer`, copied over the
+executable of a bundle from `macos/build.sh` and signed ad hoc) started with
+`HIVEMIND_DEBUG_PAIRING_LINK=<file>` in its environment opens **Pair a
+Device…** on `SIGUSR1` and writes the link to that file, and on `SIGUSR2`
+revokes every device as a confirmed **Revoke…** does. Release builds, which
+`macos/build.sh` makes, have neither.
+
+```bash
+xcodebuild build-for-testing -project ios/Hivemind.xcodeproj -scheme HivemindE2E \
+  -destination 'platform=iOS Simulator,name=iPhone 17'
+TEST_RUNNER_HIVEMIND_E2E_PAIRING_LINK="$(cat pairing-link.txt)" \
+  xcodebuild test-without-building -project ios/Hivemind.xcodeproj -scheme HivemindE2E \
+  -destination 'platform=iOS Simulator,name=iPhone 17' \
+  -only-testing:HivemindUITests/HivemindE2ETests/testPairWithLink
+```
+
 ## Not included yet
 
 - App Store, TestFlight or any signed build.

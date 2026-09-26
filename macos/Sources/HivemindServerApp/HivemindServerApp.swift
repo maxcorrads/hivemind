@@ -36,6 +36,9 @@ final class ServerAppDelegate: NSObject, NSApplicationDelegate {
     model.controller.launch()
     model.terminals.start()
     model.remote.startIfEnabled()
+    #if DEBUG
+    DebugPairingHook.install(model.remote)
+    #endif
   }
 
   /// hivemind-server://start from Hivemind.app's connect screen. Anything

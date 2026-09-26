@@ -117,7 +117,34 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.maxcorrads.hivemind.ios.tests
         GENERATE_INFOPLIST_FILE: YES
 
+  # End-to-end UI tests against a real Mac (docs/ios.md#end-to-end-tests).
+  # Not in the Hivemind scheme: they need a running gateway and a pairing
+  # link, so CI never runs them.
+  HivemindUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: UITests
+    dependencies:
+      - target: Hivemind
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.maxcorrads.hivemind.ios.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Hivemind
+
 schemes:
+  HivemindE2E:
+    build:
+      targets:
+        Hivemind: all
+        HivemindUITests: [test]
+    test:
+      config: Debug
+      targets:
+        - HivemindUITests
+      gatherCoverageData: false
   Hivemind:
     build:
       targets:

@@ -204,6 +204,9 @@ final class RemoteAccessService {
       server.closePairing()
       return Dialogs.error("Cannot pair a device now", "This Mac has no private network address to offer (\(error.localizedDescription)).")
     }
+    #if DEBUG
+    DebugPairingHook.written(payload)
+    #endif
     if let pairingWindow {
       pairingWindow.show(payload: payload)
     } else {
@@ -230,6 +233,11 @@ final class RemoteAccessService {
 
   func revoke(_ device: DeviceRecord) {
     guard Dialogs.confirm("Revoke \(device.name)?", "It can no longer reach this Mac, and its open connections close now. It can pair again with a new code.", action: "Revoke") else { return }
+    revokeConfirmed(device)
+  }
+
+  /// Revoke… once the person confirmed it.
+  func revokeConfirmed(_ device: DeviceRecord) {
     do {
       if let server { try server.revoke(device.id) } else { try devices?.remove(id: device.id) }
       log.append("[gateway] revoked \(device.name)")
@@ -290,3 +298,41 @@ final class RemoteAccessService {
     return ["\(name).local"]
   }
 }
+
+#if DEBUG
+/// End-to-end test hook, compiled into DEBUG builds only (macos/build.sh
+/// builds release, so no shipped app has it). The pairing code is by design
+/// only ever on the Mac's screen; a test that pairs a Simulator or a script
+/// has no menu to click. With `HIVEMIND_DEBUG_PAIRING_LINK=<file>` in the
+/// environment, SIGUSR1 does what **Pair a Device…** does, and every pairing
+/// link the window shows is also written to that file (0600); SIGUSR2 does
+/// what a confirmed **Revoke…** does, for every paired device.
+@MainActor
+enum DebugPairingHook {
+  private static var sources: [DispatchSourceSignal] = []
+
+  static var file: URL? {
+    ProcessInfo.processInfo.environment["HIVEMIND_DEBUG_PAIRING_LINK"].flatMap { $0.hasPrefix("/") ? URL(fileURLWithPath: $0) : nil }
+  }
+
+  static func install(_ service: RemoteAccessService) {
+    guard file != nil, sources.isEmpty else { return }
+    let actions: [(Int32, @MainActor (RemoteAccessService) -> Void)] = [
+      (SIGUSR1, { $0.openPairing() }),
+      (SIGUSR2, { service in service.deviceList.forEach(service.revokeConfirmed) }),
+    ]
+    for (number, action) in actions {
+      signal(number, SIG_IGN)
+      let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
+      source.setEventHandler { [weak service] in MainActor.assumeIsolated { service.map(action) } }
+      source.resume()
+      sources.append(source)
+    }
+  }
+
+  static func written(_ payload: PairingPayload) {
+    guard let file else { return }
+    FileManager.default.createFile(atPath: file.path, contents: Data(payload.url.absoluteString.utf8), attributes: [.posixPermissions: 0o600])
+  }
+}
+#endif
