@@ -164,7 +164,9 @@ are judged by the IPv4 address inside. There is no dependency on Tailscale:
 any VPN that hands out addresses in these ranges works.
 
 - The gateway listens only on the private addresses of the Mac's interfaces
-  (`RemoteAddressPolicy.listenAddresses`). It follows interface changes.
+  (`RemoteAddressPolicy.listenAddresses`), each address once, and not on
+  Apple's peer-to-peer Wi-Fi links (`awdl*`, `llw*`: AirDrop and the like).
+  It follows interface changes.
 - Every accepted connection is checked again with
   `RemoteAddressPolicy.accepts(local:remote:)` and closed at once unless both
   ends are private.

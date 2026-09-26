@@ -236,9 +236,23 @@ public enum RemoteAddressPolicy {
     isPrivate(local) && isPrivate(remote)
   }
 
-  /// The addresses to listen on: every private one, in a stable order.
+  /// The addresses to listen on: every private one, in a stable order,
+  /// each once. Apple's peer-to-peer Wi-Fi links (`awdl*` for AirDrop and
+  /// `llw*`, which share one link-local address) are left out: no paired
+  /// device reaches the Mac there, and the second of two listeners on one
+  /// address only fails with "address in use", again every 30 s. The same
+  /// address on two interfaces is listened on once, for the same reason.
   public static func listenAddresses(_ interfaces: [InterfaceAddress]) -> [InterfaceAddress] {
-    interfaces.filter { isPrivate($0.address) }.sorted(by: order)
+    var seen = Set<IPAddress>()
+    return interfaces
+      .filter { isPrivate($0.address) && !isPeerToPeer($0.interface) }
+      .sorted(by: order)
+      .filter { seen.insert($0.address).inserted }
+  }
+
+  /// AWDL (AirDrop, Sidecar) and low-latency WLAN interfaces.
+  public static func isPeerToPeer(_ interface: String) -> Bool {
+    interface.hasPrefix("awdl") || interface.hasPrefix("llw")
   }
 
   /// The hosts put in a pairing QR code: private addresses another device

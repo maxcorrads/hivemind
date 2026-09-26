@@ -83,7 +83,23 @@ struct RemoteAddressPolicyTests {
 
   @Test func listensOnPrivateAddressesOnly() {
     let listen = RemoteAddressPolicy.listenAddresses(interfaces).map { "\($0.interface) \($0.address)" }
-    #expect(listen == ["en0 192.168.1.20", "en5 192.168.1.20", "utun4 100.101.102.103", "utun4 fd7a:115c:a1e0::5", "en1 169.254.3.4", "en0 fe80::1c%en0"])
+    #expect(listen == ["en0 192.168.1.20", "utun4 100.101.102.103", "utun4 fd7a:115c:a1e0::5", "en1 169.254.3.4", "en0 fe80::1c%en0"],
+            "each address once: a second listener on 192.168.1.20 (en5) could only fail with address in use")
+  }
+
+  @Test func leavesOutApplePeerToPeerLinks() {
+    // What a MacBook reports: awdl0 and llw0 share one MAC and so one
+    // link-local address, and the listener on the second always failed.
+    let mac = [
+      InterfaceAddress(interface: "en0", address: IPAddress("192.168.1.102")!),
+      InterfaceAddress(interface: "awdl0", address: IPAddress("fe80::ccd8:c2ff:fe79:de9b%awdl0")!),
+      InterfaceAddress(interface: "llw0", address: IPAddress("fe80::ccd8:c2ff:fe79:de9b%llw0")!),
+      InterfaceAddress(interface: "en0", address: IPAddress("fe80::18f4:83:5905:a012%en0")!),
+    ]
+    let listen = RemoteAddressPolicy.listenAddresses(mac).map(\.interface)
+    #expect(listen == ["en0", "en0"])
+    #expect(RemoteAddressPolicy.isPeerToPeer("awdl0") && RemoteAddressPolicy.isPeerToPeer("llw0"))
+    #expect(!RemoteAddressPolicy.isPeerToPeer("en0") && !RemoteAddressPolicy.isPeerToPeer("utun4"))
   }
 
   @Test func pairingHostsAreUsableElsewhere() {
