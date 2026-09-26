@@ -126,6 +126,14 @@ nothing on this page changes in any way. When it is on:
   cookie made from it, on private network addresses only. A paired device is
   therefore trusted exactly as the Human at the Mac is, **terminals included**,
   which is remote command execution on the Mac by design.
+- **It forwards only to the server Hivemind Server.app started.** Before its
+  Human bootstrap, whenever the server restarted or a loopback connection to
+  it failed, and on every WebSocket upgrade, the gateway sends the server the
+  instance challenge Hivemind.app uses (`GET /api/health/instance`,
+  [macOS apps](macos.md#verifying-the-server)), with the secret it launched
+  that server with. A process that took the port answers devices nothing but
+  `503 server-unverified`, gets no request and no capability, and no terminal
+  is bridged beside it ([Verified server](remote-access.md#verified-server)).
 - **It adds nothing for local processes.** The gateway refuses loopback
   connections, so a local process gains no path it did not already have.
   Its device records hold only token hashes (`0600`).

@@ -37,6 +37,12 @@ public enum GatewayHeader {
   public static let authorization = "Authorization"
   /// "Bearer " + DeviceToken.value, only on POST /_hivemind/session.
   public static let bearerPrefix = "Bearer "
+  /// On a 401 `unauthorized` for a missing or expired device session:
+  /// `required`. The page cannot renew the session (it never holds the
+  /// device token), so it tells the app (bridge `device-session-expired`),
+  /// which renews it and puts the new cookie in the web view.
+  public static let deviceSession = "X-Hivemind-Device-Session"
+  public static let deviceSessionRequired = "required"
 
   /// Pulls the device token out of an Authorization value; nil unless it
   /// is exactly "Bearer <token>".
@@ -214,17 +220,29 @@ public enum GatewayErrorCode: String, Codable, Sendable, CaseIterable {
   case tooManyDevices = "too-many-devices"
   /// Too many attempts from this address. 429.
   case rateLimited = "rate-limited"
-  /// No, or an unknown or revoked, device token or device session. The app
-  /// asks for a new session once, then offers to pair again. 401.
+  /// No device session, or one that expired or that the gateway forgot (it
+  /// restarted). The app gets a new session with its device token and
+  /// tries again, without asking the person. 401.
   case unauthorized
+  /// POST /_hivemind/session with a device token the Mac does not know: the
+  /// device was revoked, or the Mac's identity was reset. The only answer
+  /// that makes the app close everything and offer to pair again. 401.
+  case deviceRevoked = "device-revoked"
   /// A request whose Origin is not the gateway's origin. 403.
   case forbiddenOrigin = "forbidden-origin"
   /// A request head or body over its limit. 413 / 431.
   case tooLarge = "too-large"
   /// An unknown /_hivemind/ path. 404.
   case notFound = "not-found"
+  /// A /_hivemind/ POST without a Content-Length (chunked, or none at all).
+  /// The connection closes after it. 411.
+  case lengthRequired = "length-required"
   /// The Node server (or the broker) is not running or did not answer. 502.
   case serverUnavailable = "server-unavailable"
+  /// Something answers on the server's port, but it could not prove it is
+  /// the server Hivemind Server.app started (InstanceProof): the gateway
+  /// forwards nothing to it. 503.
+  case serverUnverified = "server-unverified"
   /// Anything else. A client reads an unknown code as this too. 500.
   case `internal`
 
@@ -235,15 +253,17 @@ public enum GatewayErrorCode: String, Codable, Sendable, CaseIterable {
   public var httpStatus: Int {
     switch self {
     case .badRequest: 400
-    case .unauthorized: 401
+    case .unauthorized, .deviceRevoked: 401
     case .invalidCode, .pairingClosed, .forbiddenOrigin: 403
     case .notFound: 404
+    case .lengthRequired: 411
     case .tooManyDevices: 409
     case .tooLarge: 413
     case .pairingLocked: 423
     case .rateLimited: 429
     case .internal: 500
     case .serverUnavailable: 502
+    case .serverUnverified: 503
     }
   }
 }

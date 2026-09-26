@@ -60,6 +60,27 @@ final class FakeUpstream: GatewayUpstreamConnecting {
   }
 }
 
+/// The instance check (InstanceVerifier) as a fake: it answers at once with
+/// `result`, or, while `holding`, keeps the completions for the test.
+@MainActor
+final class FakeServerVerifier: GatewayServerVerifying {
+  var result = InstanceVerification.verified
+  var holding = false
+  var checked: [GatewayUpstreamServer] = []
+  var held: [@MainActor (InstanceVerification) -> Void] = []
+
+  func verify(_ server: GatewayUpstreamServer, completion: @escaping @MainActor (InstanceVerification) -> Void) {
+    checked.append(server)
+    if holding { held.append(completion) } else { completion(result) }
+  }
+
+  func answer(_ result: InstanceVerification) {
+    let held = self.held
+    self.held = []
+    for completion in held { completion(result) }
+  }
+}
+
 struct ParsedResponse {
   let head: HTTPResponseHead
   let body: Data
@@ -104,6 +125,8 @@ final class GatewayHarness {
   let storage = GatewayDeviceStoreTests.Memory()
   var brokerToken: BrokerToken? = BrokerToken(String(repeating: "ab", count: 32))
   var serverPort: Int? = 7420
+  var secret: InstanceSecret? = InstanceSecret(hex: String(repeating: "5a", count: 32))
+  let verifier = FakeServerVerifier()
   var logs: [String] = []
   let devices: GatewayDeviceStore
   var server: GatewayServer!
@@ -116,7 +139,8 @@ final class GatewayHarness {
       dependencies: .init(
         scheduler: scheduler, upstream: upstream, broker: broker,
         brokerToken: { [unowned self] in self.brokerToken },
-        serverPort: { [unowned self] in self.serverPort },
+        server: { [unowned self] in self.serverPort.map { GatewayUpstreamServer(port: $0, secret: self.secret) } },
+        verifier: verifier,
         log: { [unowned self] in self.logs.append($0) }))
   }
 
@@ -150,7 +174,7 @@ final class GatewayHarness {
   }
 
   func postSession(_ stream: FakeGatewayStream, _ authorization: String) -> ParsedResponse {
-    stream.receive(request("POST", GatewayPath.session, [("Authorization", authorization)]))
+    stream.receive(request("POST", GatewayPath.session, [("Authorization", authorization), ("Content-Length", "0")]))
     return parseResponses(stream.take()).last!
   }
 
@@ -368,11 +392,14 @@ struct GatewaySessionEndpointTests {
 
   @Test func refusesUnknownTokens() {
     let stream = h.connect()
-    #expect(h.postSession(stream, "Bearer \(DeviceToken.generate().value)").error == .unauthorized)
-    #expect(h.postSession(stream, "Basic abc").error == .unauthorized)
+    // device-revoked, not unauthorized: the one answer that makes the app give up and offer to pair again.
+    #expect(h.postSession(stream, "Bearer \(DeviceToken.generate().value)").error == .deviceRevoked)
+    #expect(h.postSession(stream, "Basic abc").error == .deviceRevoked)
     let (token, id) = h.pair()
     try! h.server.revoke(id)
-    #expect(h.postSession(stream, "Bearer \(token.value)").error == .unauthorized)
+    let revoked = h.postSession(stream, "Bearer \(token.value)")
+    #expect(revoked.error == .deviceRevoked)
+    #expect(revoked.status == 401)
   }
 
   @Test func rateLimited() {
@@ -430,7 +457,10 @@ struct GatewayProxyTests {
   @Test func needsALiveSession() {
     let stream = h.connect()
     stream.receive(h.request("GET", "/"))
-    #expect(parseResponses(stream.take()).first?.error == .unauthorized)
+    let first = parseResponses(stream.take()).first
+    #expect(first?.error == .unauthorized)
+    // The page reads this and asks the app for a new device session.
+    #expect(first?.head.headers["X-Hivemind-Device-Session"] == "required")
     stream.receive(h.request("GET", "/", [h.cookie(.generate())]))
     #expect(parseResponses(stream.take()).first?.error == .unauthorized)
     let session = h.signedIn().session
@@ -669,7 +699,12 @@ struct GatewayBrokerEndpointTests {
     broker.push(.welcome(version: 1, tmuxPath: "/opt/homebrew/bin/tmux"))
     var reader = ServerFrameReader()
     let events = reader.read(stream.take())
-    #expect(events == [.text(try BrokerEventFrame(id: nil, .welcome(version: 1, tmuxPath: "/opt/homebrew/bin/tmux")).lineWithoutNewline())])
+    // Compared decoded: JSONEncoder does not keep key order from one encode to the next.
+    guard events.count == 1, case .text(let welcome) = events[0] else {
+      Issue.record("not one text frame: \(events)")
+      return
+    }
+    #expect(try BrokerEventFrame.decode(welcome).event == .welcome(version: 1, tmuxPath: "/opt/homebrew/bin/tmux"))
 
     stream.receive(clientFrame(.ping, Data("p".utf8)))
     #expect(reader.read(stream.take()) == [.pong(Data("p".utf8))])

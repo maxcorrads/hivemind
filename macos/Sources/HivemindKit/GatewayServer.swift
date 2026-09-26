@@ -36,20 +36,24 @@ public final class GatewayServer {
     /// broker.token, read before every broker connection; nil when no
     /// broker runs.
     public var brokerToken: @MainActor () -> BrokerToken?
-    /// The port of the Node server Hivemind Server.app runs, while it runs.
-    public var serverPort: @MainActor () -> Int?
+    /// The Node server Hivemind Server.app runs, while it runs: its port and
+    /// the secret it was started with (docs/remote-access.md#verified-server).
+    public var server: @MainActor () -> GatewayUpstreamServer?
+    /// Proves that server is the one Hivemind Server.app started.
+    public var verifier: any GatewayServerVerifying
     public var log: @MainActor (String) -> Void
 
     public init(
       scheduler: any Scheduling, upstream: any GatewayUpstreamConnecting, broker: any BrokerConnecting,
-      brokerToken: @escaping @MainActor () -> BrokerToken?, serverPort: @escaping @MainActor () -> Int?,
-      log: @escaping @MainActor (String) -> Void
+      brokerToken: @escaping @MainActor () -> BrokerToken?, server: @escaping @MainActor () -> GatewayUpstreamServer?,
+      verifier: any GatewayServerVerifying, log: @escaping @MainActor (String) -> Void
     ) {
       self.scheduler = scheduler
       self.upstream = upstream
       self.broker = broker
       self.brokerToken = brokerToken
-      self.serverPort = serverPort
+      self.server = server
+      self.verifier = verifier
       self.log = log
     }
   }
@@ -67,12 +71,19 @@ public final class GatewayServer {
   private var connections: [ObjectIdentifier: GatewayConnection] = [:]
   private var stopped = false
 
-  private var capability: (port: Int, value: HumanCapability)?
+  private var capability: (server: GatewayUpstreamServer, value: HumanCapability)?
   private var bootstrap: CapabilityBootstrap?
+  private(set) var trust = GatewayServerTrust.unchecked
+  private var check: GatewayServerCheck?
 
   /// How long the Human bootstrap may take before the waiting requests get
   /// server-unavailable.
   static let bootstrapTimeout: TimeInterval = 10
+  /// How long the instance check may take (InstanceVerifier gives up sooner).
+  static let verificationTimeout: TimeInterval = 10
+  /// A server that failed the check is refused this long before it is
+  /// checked again, so a flood of requests does not become a flood of checks.
+  static let recheckAfterFailure: TimeInterval = 5
 
   public init(configuration: Configuration, devices: GatewayDeviceStore, dependencies: Dependencies) {
     self.configuration = configuration
@@ -128,6 +139,9 @@ public final class GatewayServer {
     bootstrap?.finish(nil)
     bootstrap = nil
     capability = nil
+    check?.finish(.unavailable)
+    check = nil
+    trust = .unchecked
   }
 
   static func addressKey(_ address: IPAddress) -> String {
@@ -229,7 +243,7 @@ public final class GatewayServer {
     let authorizations = head.headers.values(GatewayHeader.authorization)
     guard authorizations.count == 1, let token = GatewayHeader.deviceToken(fromAuthorization: authorizations[0]),
           let device = devices.registry.device(tokenHash: token)
-    else { return .error(GatewayError(.unauthorized, "This device is not paired with this Mac.")) }
+    else { return .error(GatewayError(.deviceRevoked, "This device is not paired with this Mac.")) }
     let session = sessions.create(for: device.id, now: now)
     devices.touch(id: device.id, at: now)
     onChange?()
@@ -250,28 +264,120 @@ public final class GatewayServer {
     return values[0].split(separator: ";", maxSplits: 1)[0].trimmingCharacters(in: .whitespaces).lowercased() == "application/json"
   }
 
+  // MARK: The verified server
+
+  /// Whether the last check proved `server` is Hivemind Server.app's own.
+  public var isVerified: Bool {
+    guard let current = deps.server(), case .verified(let known) = trust else { return false }
+    return known == current
+  }
+
+  /// Runs `work` once `server` is known to be verified, or not
+  /// (docs/remote-access.md#verified-server). A server verified before is
+  /// taken as it is unless `fresh` (every WebSocket upgrade, /ws and the
+  /// broker, checks again); one that failed is refused for
+  /// recheckAfterFailure. Concurrent callers share one check.
+  func withVerifiedServer(
+    _ server: GatewayUpstreamServer, fresh: Bool = false, _ work: @escaping @MainActor (GatewayServerVerdict) -> Void
+  ) {
+    switch trust {
+    case .verified(let known) where known == server && !fresh:
+      return work(.verified)
+    case .failed(let known, let at) where known == server && now.timeIntervalSince(at) < Self.recheckAfterFailure:
+      return work(.unverified)
+    default:
+      break
+    }
+    if let check, check.server == server {
+      check.waiters.append(work)
+      return
+    }
+    // A check of a server that is no longer the one running answers nobody.
+    check?.finish(.unavailable)
+    let check = GatewayServerCheck(server: server)
+    check.waiters.append(work)
+    self.check = check
+    check.timer = deps.scheduler.schedule(after: Self.verificationTimeout) { [weak self, weak check] in
+      guard let self, let check, self.check === check else { return }
+      self.check = nil
+      self.deps.log("[gateway] the server on port \(server.port) did not answer the instance check in time")
+      check.finish(.unavailable)
+    }
+    deps.verifier.verify(server) { [weak self, weak check] result in
+      guard let self, let check, self.check === check else { return }
+      self.check = nil
+      check.finish(self.settle(result, for: server))
+    }
+  }
+
+  private func settle(_ result: InstanceVerification, for server: GatewayUpstreamServer) -> GatewayServerVerdict {
+    switch result {
+    case .verified:
+      if trust != .verified(server) { deps.log("[gateway] verified the server on port \(server.port)") }
+      trust = .verified(server)
+      return .verified
+    case .failed(.unreachable(let reason)):
+      trust = .unchecked
+      deps.log("[gateway] the server on port \(server.port) did not answer the instance check (\(reason))")
+      return .unavailable
+    case .failed(let failure):
+      if case .failed(let known, _) = trust, known == server {} else {
+        deps.log("[gateway] refusing devices: the server on port \(server.port) could not be verified: \(failure.logText)")
+      }
+      trust = .failed(server, at: now)
+      // Nothing more goes to it: not the Human capability, not a request,
+      // not a WebSocket, not the terminals.
+      capability = nil
+      bootstrap?.finish(nil)
+      bootstrap = nil
+      for connection in Array(connections.values) where connection.isForwarding { connection.terminate() }
+      return .unverified
+    }
+  }
+
+  /// A loopback connection to the server failed, or it closed without an
+  /// answer: whatever answers next is checked again first.
+  func upstreamLost() {
+    if case .verified = trust { trust = .unchecked }
+  }
+
   // MARK: Human capability
 
-  /// The Human capability for the server on `port`, bootstrapping it first
-  /// when the gateway has none (docs/remote-access.md#proxy). Concurrent
-  /// callers share one bootstrap. nil when the server did not give one.
-  func withCapability(port: Int, _ work: @escaping @MainActor (HumanCapability?) -> Void) {
-    if let capability, capability.port == port { return work(capability.value) }
-    if let bootstrap, bootstrap.port == port {
+  /// The Human capability for `server`, once it is verified and bootstrapping
+  /// the capability first when the gateway has none
+  /// (docs/remote-access.md#proxy). Concurrent callers share one bootstrap.
+  func withCapability(
+    _ server: GatewayUpstreamServer, fresh: Bool = false, _ work: @escaping @MainActor (GatewayUpstreamAccess) -> Void
+  ) {
+    withVerifiedServer(server, fresh: fresh) { [weak self] verdict in
+      guard let self else { return work(.unavailable) }
+      switch verdict {
+      case .unavailable: work(.unavailable)
+      case .unverified: work(.unverified)
+      case .verified: self.capability(for: server) { value in work(value.map(GatewayUpstreamAccess.capability) ?? .unavailable) }
+      }
+    }
+  }
+
+  private func capability(for server: GatewayUpstreamServer, _ work: @escaping @MainActor (HumanCapability?) -> Void) {
+    if let capability, capability.server == server { return work(capability.value) }
+    if let bootstrap, bootstrap.server == server {
       bootstrap.waiters.append(work)
       return
     }
     bootstrap?.finish(nil)
-    let bootstrap = CapabilityBootstrap(port: port, stream: deps.upstream.connect(port: port))
+    let port = server.port
+    let bootstrap = CapabilityBootstrap(server: server, stream: deps.upstream.connect(port: port))
     bootstrap.waiters.append(work)
     self.bootstrap = bootstrap
     bootstrap.onDone = { [weak self, weak bootstrap] value in
       guard let self, let bootstrap, self.bootstrap === bootstrap else { return }
       self.bootstrap = nil
       if let value {
-        self.capability = (port, value)
+        self.capability = (server, value)
       } else {
         self.deps.log("[gateway] the server on port \(port) gave no Human session")
+        self.upstreamLost()
       }
     }
     bootstrap.timer = deps.scheduler.schedule(after: Self.bootstrapTimeout) { [weak bootstrap] in bootstrap?.finish(nil) }
@@ -279,11 +385,20 @@ public final class GatewayServer {
   }
 
   /// The server said the capability is stale (it restarted): the next
-  /// request bootstraps again. Only the one that was used is dropped, so a
-  /// late 401 cannot throw away a newer capability.
+  /// request verifies the server and bootstraps again. Only the one that was
+  /// used is dropped, so a late 401 cannot throw away a newer capability.
   func invalidate(_ used: HumanCapability) {
-    if capability?.value == used { capability = nil }
+    guard capability?.value == used else { return }
+    capability = nil
+    upstreamLost()
   }
+}
+
+/// What a proxied request gets before it goes out.
+enum GatewayUpstreamAccess {
+  case capability(HumanCapability)
+  case unavailable
+  case unverified
 }
 
 /// A reply to a gateway endpoint.
@@ -298,7 +413,9 @@ struct GatewayReply {
   }
 
   static func error(_ error: GatewayError) -> GatewayReply {
-    GatewayReply(status: error.code.httpStatus, headers: HTTPHeaders(), body: (try? JSONEncoder().encode(error)) ?? Data())
+    var headers = HTTPHeaders()
+    if error.code == .unauthorized { headers.add(GatewayHeader.deviceSession, GatewayHeader.deviceSessionRequired) }
+    return GatewayReply(status: error.code.httpStatus, headers: headers, body: (try? JSONEncoder().encode(error)) ?? Data())
   }
 
   /// The whole response. Gateway replies are never cached and never sniffed.
@@ -320,7 +437,8 @@ struct GatewayReply {
 /// One POST /api/ui/session to the Node server, as a native client makes it.
 @MainActor
 final class CapabilityBootstrap {
-  let port: Int
+  let server: GatewayUpstreamServer
+  var port: Int { server.port }
   let stream: any GatewayStream
   var waiters: [@MainActor (HumanCapability?) -> Void] = []
   var onDone: (@MainActor (HumanCapability?) -> Void)?
@@ -328,8 +446,8 @@ final class CapabilityBootstrap {
   private var buffer = Data()
   private var done = false
 
-  init(port: Int, stream: any GatewayStream) {
-    self.port = port
+  init(server: GatewayUpstreamServer, stream: any GatewayStream) {
+    self.server = server
     self.stream = stream
   }
 

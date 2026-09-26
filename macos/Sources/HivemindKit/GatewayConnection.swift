@@ -44,7 +44,9 @@ final class GatewayConnection {
   enum State {
     case head
     case gatewayBody(GatewayBodyRequest)
-    /// Waiting for the Human capability before a proxied request goes out.
+    /// Waiting for the server's instance check (and, for a proxied request,
+    /// the Human capability) before anything goes out. The device is not
+    /// read meanwhile; every way out of here resumes reading or closes.
     case waiting
     case proxy(ProxyExchange)
     /// The answer went out before the request body ended: the rest of the
@@ -70,9 +72,22 @@ final class GatewayConnection {
     self.server = server
   }
 
+  /// A broker bridge, or a broker upgrade waiting for the server's check:
+  /// both count against the per-device limit.
   var isBroker: Bool {
     if case .broker = state { return true }
-    return false
+    return brokerPending
+  }
+  private var brokerPending = false
+
+  /// Whether this connection carries anything to or from the Node server or
+  /// the broker (a proxied request, /ws, terminals): closed when the server
+  /// fails its instance check.
+  var isForwarding: Bool {
+    switch state {
+    case .proxy, .webSocket, .broker: true
+    case .waiting, .head, .gatewayBody, .drain, .closed: false
+    }
   }
 
   func start() {
@@ -248,9 +263,14 @@ final class GatewayConnection {
     switch route {
     case .pair, .session:
       switch framing {
-      case .none: break
+      // An empty body needs its Content-Length: 0 too (framing reads it as none).
+      case .none where head.headers.contains("Content-Length"): break
       case .length(let length) where length <= Int64(GatewayLimits.maxGatewayBodyBytes): break
-      default: return reply(.error(GatewayError(.tooLarge, "the body is too large")), closing: true)
+      case .length: return reply(.error(GatewayError(.tooLarge, "the body is too large")), closing: true)
+      case .none, .chunked, .untilClose:
+        // Chunked, or no length at all: the body cannot be bounded before it
+        // is read, so the connection is not kept either.
+        return reply(.error(GatewayError(.lengthRequired, "\(head.path) needs a Content-Length")), closing: true)
       }
       if expectsContinue { sendToDevice(Self.continueResponse) }
       state = .gatewayBody(GatewayBodyRequest(
@@ -265,40 +285,61 @@ final class GatewayConnection {
       guard server.brokerConnections(of: device.id) < GatewayLimits.maxBrokerConnectionsPerDevice else {
         return deny(GatewayError(.rateLimited, "Too many terminal connections from this device."))
       }
-      guard let token = server.deps.brokerToken() else {
-        return deny(GatewayError(.serverUnavailable, "Terminals are not running in Hivemind Server."))
-      }
+      // Terminals only beside a verified server, as Hivemind.app gives a
+      // page terminals only from one (TerminalTrustGate).
+      guard let target = server.deps.server() else { return deny(Self.serverNotRunning) }
       cancelTimer()
-      sendToDevice(WebSocketHandshake.response(forKey: key).serialized)
-      let bridge = GatewayBrokerBridge(device: device, token: token, connection: self)
-      state = .broker(bridge)
-      bridge.start(connector: server.deps.broker)
+      state = .waiting
+      brokerPending = true
+      server.withVerifiedServer(target, fresh: true) { [weak self] verdict in
+        guard let self, !self.finished, case .waiting = self.state, let server = self.server else { return }
+        self.brokerPending = false
+        switch verdict {
+        case .unavailable: return deny(Self.serverDidNotAnswer)
+        case .unverified: return deny(Self.serverUnverified)
+        case .verified: break
+        }
+        guard let token = server.deps.brokerToken() else {
+          return deny(GatewayError(.serverUnavailable, "Terminals are not running in Hivemind Server."))
+        }
+        self.sendToDevice(WebSocketHandshake.response(forKey: key).serialized)
+        let bridge = GatewayBrokerBridge(device: device, token: token, connection: self)
+        self.state = .broker(bridge)
+        bridge.start(connector: server.deps.broker)
+        self.process()
+      }
 
     case .proxy, .proxyWebSocket:
       guard identify(head) != nil else { return deny(Self.noSession) }
-      guard let port = server.deps.serverPort() else {
-        return deny(GatewayError(.serverUnavailable, "Hivemind Server is not running its server."))
-      }
+      guard let target = server.deps.server() else { return deny(Self.serverNotRunning) }
       if case .length(let length) = framing, length > GatewayLimits.maxProxiedRequestBodyBytes {
         return reply(.error(GatewayError(.tooLarge, "the body is too large")), closing: true)
       }
       cancelTimer()
       state = .waiting
-      server.withCapability(port: port) { [weak self] capability in
+      // A WebSocket is the page (re)connecting: the server is checked again.
+      server.withCapability(target, fresh: route == .proxyWebSocket) { [weak self] access in
         guard let self, !self.finished, case .waiting = self.state, let server = self.server else { return }
-        guard let capability else {
-          return self.refuse(GatewayError(.serverUnavailable, "Hivemind Server did not answer."),
-                             head: head, framing: framing, canDrain: !expectsContinue)
+        switch access {
+        case .unavailable:
+          self.refuse(Self.serverDidNotAnswer, head: head, framing: framing, canDrain: !expectsContinue)
+        case .unverified:
+          self.refuse(Self.serverUnverified, head: head, framing: framing, canDrain: !expectsContinue)
+        case .capability(let capability):
+          self.startProxy(ProxyExchange(
+            request: head, endpoint: endpoint, port: target.port, capability: capability, framing: framing,
+            webSocket: route == .proxyWebSocket, upstream: server.deps.upstream.connect(port: target.port)),
+            expectsContinue: expectsContinue)
         }
-        self.startProxy(ProxyExchange(
-          request: head, endpoint: endpoint, port: port, capability: capability, framing: framing,
-          webSocket: route == .proxyWebSocket, upstream: server.deps.upstream.connect(port: port)),
-          expectsContinue: expectsContinue)
       }
     }
   }
 
   static let noSession = GatewayError(.unauthorized, "The device session is missing or has expired.")
+  static let serverNotRunning = GatewayError(.serverUnavailable, "Hivemind Server is not running its server.")
+  static let serverDidNotAnswer = GatewayError(.serverUnavailable, "Hivemind Server did not answer.")
+  static let serverUnverified = GatewayError(
+    .serverUnverified, "Hivemind Server could not verify the server on its port, so this Mac forwards nothing to it. Restart the server from Hivemind Server’s menu.")
 
   private func identify(_ head: HTTPRequestHead) -> DeviceRecord? {
     guard let device = server?.authenticate(head) else { return nil }
@@ -329,9 +370,16 @@ final class GatewayConnection {
     if closing { finish(nil) } else { enterHead() }
   }
 
+  /// Ready for the next request. Reading resumes here, whoever got the
+  /// connection here: an answer sent from an async completion (the server's
+  /// check, the Human bootstrap, a failed upstream) runs outside the
+  /// process() loop, and in `.waiting` or a finished `.proxy` the device was
+  /// no longer being read. process() re-enables it (and parses whatever
+  /// the device already sent); inside the loop it just runs one more round.
   private func enterHead() {
     state = .head
     armTimer(headDeadline: !buffer.isEmpty)
+    process()
   }
 
   // MARK: Proxy
@@ -463,8 +511,9 @@ final class GatewayConnection {
     server?.deps.log("[gateway] \(exchange.request.method) \(exchange.request.path): \(why)")
     exchange.upstream.close()
     guard exchange.response == nil else { return finish(why) }
-    let error = GatewayError(.serverUnavailable, "Hivemind Server did not answer.")
-    reply(.error(error), closing: !(exchange.requestDone && exchange.keepAlive))
+    // Whatever answers on the port next is checked before it gets anything.
+    server?.upstreamLost()
+    reply(.error(Self.serverDidNotAnswer), closing: !(exchange.requestDone && exchange.keepAlive))
   }
 
   private func beginWebSocket(_ exchange: ProxyExchange, _ head: HTTPResponseHead) {

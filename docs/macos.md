@@ -121,7 +121,10 @@ handler exists, so a normal browser behaves exactly as before. The contract is
 
 - Page → app: `{type: "ready"}`, `{type: "badge", count}` and
   `{type: "notify", title, body, tag, target}`, where `target` is a `#/…` route.
-  Only the main frame of the local server's origin is heard.
+  Only the main frame of the local server's origin is heard. The iOS app also
+  takes `{type: "switch-mac"}` (the Settings menu's **Switch Mac…**) and
+  `{type: "device-session-expired"}` ([Device sessions](remote-access.md#device-sessions));
+  Hivemind.app ignores both, and the page sends neither there.
 - App → page: `window.dispatchEvent(new CustomEvent("hivemind:native", {detail:
   {command, hash?}}))` with `command` one of `jump`, `for-you`, `new-channel`,
   `settings`, `toggle-theme` and `navigate` (with `hash`).
@@ -323,7 +326,9 @@ Server remote access"); choose **Always Allow**. See
 
 The Node server is not changed by any of this: it still listens on `127.0.0.1`
 only, and the gateway reaches it as one more local native client, the way
-Hivemind.app does. Terminals go from the device to the same
+Hivemind.app does, and like Hivemind.app it forwards nothing until the server
+has [proved](#verifying-the-server) it is the one Hivemind Server started
+([Verified server](remote-access.md#verified-server)). Terminals go from the device to the same
 [terminal broker](terminal-broker.md), through the gateway, which holds the
 broker token itself. The protocol, network scope, certificate pinning, tokens,
 revocation, what the gateway rewrites and its limits are in

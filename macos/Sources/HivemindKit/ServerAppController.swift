@@ -132,6 +132,12 @@ public final class ServerAppController {
 
   public var dataHome: URL { settings.launchSettings(paths: paths).dataHome }
 
+  /// The secret the running child was started with (InstanceProof), in
+  /// memory: the remote gateway checks the server with it before it
+  /// forwards anything (docs/remote-access.md#verified-server). Nil while no
+  /// child runs. Never logged.
+  public var instanceSecret: InstanceSecret? { state.pid == nil ? nil : activeSecret }
+
   // MARK: Lifecycle
 
   /// App launch: clear a server.json whose server is gone, then start.

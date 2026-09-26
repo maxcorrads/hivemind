@@ -33,8 +33,11 @@ public enum RemoteClientError: Error, Equatable, Sendable, LocalizedError {
 
   /// The gateway no longer knows this device: its token was revoked (or the
   /// Mac's identity was reset, which revokes every device).
+  /// Only /_hivemind/session says this (device-revoked; a gateway before
+  /// that code said unauthorized there). A 401 anywhere else means the
+  /// device session is gone, which a new session fixes.
   public var isRevoked: Bool {
-    if case .gateway(let error) = self { error.code == .unauthorized } else { false }
+    if case .gateway(let error) = self { error.code == .deviceRevoked || error.code == .unauthorized } else { false }
   }
 
   /// Whether trying the next host of the same Mac could help: only when this
@@ -90,8 +93,15 @@ public enum RemoteClientRequest {
     var request = base(endpoint.sessionURL)
     request.httpMethod = "POST"
     request.setValue(GatewayHeader.bearerPrefix + token.value, forHTTPHeaderField: GatewayHeader.authorization)
+    // A body, however small, so URLSession always sends a Content-Length:
+    // the gateway answers length-required to a /_hivemind/ POST without one.
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.httpBody = sessionBody
     return request
   }
+
+  /// What POST /_hivemind/session carries: nothing the gateway reads.
+  public static let sessionBody = Data("{}".utf8)
 
   private static func base(_ url: URL) -> URLRequest {
     var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: timeout)

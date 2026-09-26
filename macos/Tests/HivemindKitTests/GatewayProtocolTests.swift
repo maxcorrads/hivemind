@@ -132,7 +132,7 @@ struct GatewayMessageTests {
     #expect(try JSONDecoder().decode(GatewayError.self, from: JSONEncoder().encode(known)) == known)
     #expect(GatewayErrorCode.rateLimited.httpStatus == 429)
     #expect(GatewayErrorCode.unauthorized.httpStatus == 401)
-    #expect(Set(GatewayErrorCode.allCases.map(\.httpStatus)).isSubset(of: [400, 401, 403, 404, 409, 413, 423, 429, 500, 502]))
+    #expect(Set(GatewayErrorCode.allCases.map(\.httpStatus)).isSubset(of: [400, 401, 403, 404, 409, 411, 413, 423, 429, 500, 502, 503]))
   }
 }
 

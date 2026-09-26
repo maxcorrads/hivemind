@@ -28,13 +28,19 @@ final class ServerMenuModel: ObservableObject {
     let terminals = TerminalBrokerService(paths: paths)
     self.terminals = terminals
     let controller = self.controller
+    let discovery = DiscoveryStore(paths: paths)
     remote = RemoteAccessService(
       paths: paths,
-      serverPort: {
+      server: {
         // Only a server this app runs and that is up: the gateway never
-        // forwards to whatever else might listen on the port.
-        guard case .running = controller.state else { return nil }
-        return controller.endpoint.port.value
+        // forwards to whatever else might listen on the port, and it checks
+        // that the one answering is this child with its secret (in memory;
+        // server.json, which this app wrote for it, if that is ever gone).
+        guard case .running(let pid, _) = controller.state else { return nil }
+        let port = controller.endpoint.port
+        let secret = controller.instanceSecret
+          ?? discovery.read().flatMap { $0.pid == pid && $0.port == port ? $0.instanceSecret : nil }
+        return GatewayUpstreamServer(port: port.value, secret: secret)
       },
       brokerRunning: { terminals.isRunning })
     controller.onChange = { [weak self] in self?.objectWillChange.send() }

@@ -13,7 +13,7 @@ import SystemConfiguration
 final class RemoteAccessService {
   private let paths: HivemindPaths
   private let settingsStore = GatewaySettingsStore()
-  private let serverPort: @MainActor () -> Int?
+  private let upstream: @MainActor () -> GatewayUpstreamServer?
   private let brokerRunning: @MainActor () -> Bool
   private let log: RotatingLog
   var onChange: (@MainActor () -> Void)?
@@ -30,9 +30,11 @@ final class RemoteAccessService {
   private var pairingWindow: PairingWindowController?
   private var devicesWindow: DevicesWindowController?
 
-  init(paths: HivemindPaths, serverPort: @escaping @MainActor () -> Int?, brokerRunning: @escaping @MainActor () -> Bool) {
+  init(
+    paths: HivemindPaths, server: @escaping @MainActor () -> GatewayUpstreamServer?, brokerRunning: @escaping @MainActor () -> Bool
+  ) {
     self.paths = paths
-    self.serverPort = serverPort
+    self.upstream = server
     self.brokerRunning = brokerRunning
     log = RotatingLog(file: paths.logsDirectory.appendingPathComponent("gateway.log"))
     settings = settingsStore.load()
@@ -101,7 +103,7 @@ final class RemoteAccessService {
         problem = "“\(answer)” is not a port. Enter a number from 1 to 65535."
         continue
       }
-      guard chosen.value != serverPort() else {
+      guard chosen.value != upstream()?.port else {
         problem = "\(chosen) is the server’s own port. Choose another."
         continue
       }
@@ -110,13 +112,15 @@ final class RemoteAccessService {
       settingsStore.save(settings)
       if server != nil {
         // Devices keep their pairing. The iOS app finds the new port through
-        // Bonjour on the same network, but saves only the port it paired
-        // with, so anything else (a VPN such as Tailscale) needs a new pairing.
+        // Bonjour on the same network (pinned by fingerprint, as always) and
+        // saves it; a device that only reaches this Mac over a VPN such as
+        // Tailscale, where Bonjour does not reach, needs that once, or a new
+        // pairing.
         stop()
         start()
       }
       changed()
-      Dialogs.info("Remote access now uses port \(chosen)", "Paired devices on this network find the new port on their own. Devices that reach this Mac another way, such as over Tailscale, must pair again.")
+      Dialogs.info("Remote access now uses port \(chosen)", "Paired devices on this network find the new port on their own and remember it. A device that reaches this Mac only another way, such as over Tailscale, finds it the next time it is on this Mac’s network, or pair it again.")
       return
     }
   }
@@ -141,6 +145,7 @@ final class RemoteAccessService {
 
     let paths = self.paths
     let brokerRunning = self.brokerRunning
+    let upstreamServer = self.upstream
     let log = self.log
     let server = GatewayServer(
       configuration: .init(macName: macName, port: settings.port.value, hostNames: Self.localHostNames(),
@@ -150,7 +155,7 @@ final class RemoteAccessService {
         scheduler: MainQueueScheduler(), upstream: LoopbackConnector(),
         broker: UnixSocketBrokerConnector(path: paths.brokerSocket.path),
         brokerToken: { brokerRunning() ? BrokerTokenFile.read(paths.brokerToken) : nil },
-        serverPort: serverPort,
+        server: upstreamServer, verifier: InstanceServerVerifier(),
         log: { log.append($0) }))
     server.onChange = { [weak self] in self?.changed() }
     let listeners = GatewayListeners(

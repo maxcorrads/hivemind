@@ -91,7 +91,9 @@ struct RemoteClientRequestTests {
     #expect(request.httpMethod == "POST")
     #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(RCFixture.token.value)")
     #expect(GatewayHeader.deviceToken(fromAuthorization: request.value(forHTTPHeaderField: "Authorization")!) == RCFixture.token)
-    #expect(request.httpBody == nil)
+    // "{}", so URLSession always sends a Content-Length (the gateway wants one).
+    #expect(request.httpBody == Data("{}".utf8))
+    #expect(request.value(forHTTPHeaderField: "Content-Type") == "application/json")
     #expect(request.value(forHTTPHeaderField: "Origin") == nil)
     #expect(!request.httpShouldHandleCookies)
   }
