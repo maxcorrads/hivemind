@@ -96,6 +96,12 @@ public struct SessionName: Hashable, Sendable, Comparable, CustomStringConvertib
   /// `hm-acme` can never select `hm-acme-atlas` by prefix.
   public var target: String { "=" + rawValue }
 
+  /// The same exact match for commands whose `-t` is a pane or window
+  /// (`set-option`): tmux resolves `=name` there only with the trailing
+  /// ":" (`=name:`, the session's current window); a bare `=name` fails
+  /// with "no such session".
+  public var windowTarget: String { target + ":" }
+
   public var description: String { rawValue }
 
   public static func < (lhs: SessionName, rhs: SessionName) -> Bool { lhs.rawValue < rhs.rawValue }

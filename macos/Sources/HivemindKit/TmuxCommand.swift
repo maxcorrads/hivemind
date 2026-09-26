@@ -83,10 +83,11 @@ public struct TmuxCommand: Equatable, Sendable {
       "--",
       Self.shell, "-lc", Self.argument(Self.script(cwd: spec.cwd, command: spec.command)),
     ]
-    // ";" as its own argument chains tmux commands in one call.
-    arguments += [";", "set-option", "-t", spec.name.target, Self.projectOption, Self.argument(spec.project)]
+    // ";" as its own argument chains tmux commands in one call. set-option
+    // takes a pane target, which needs "=name:" (SessionName.windowTarget).
+    arguments += [";", "set-option", "-t", spec.name.windowTarget, Self.projectOption, Self.argument(spec.project)]
     if let agent = spec.agent {
-      arguments += [";", "set-option", "-t", spec.name.target, Self.agentOption, Self.argument(agent)]
+      arguments += [";", "set-option", "-t", spec.name.windowTarget, Self.agentOption, Self.argument(agent)]
     }
     return arguments
   }

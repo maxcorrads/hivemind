@@ -112,8 +112,9 @@ punctuation ("Anne Marie" and "anne-marie") share one session. The broker picks
 every name (`BrokerLaunch.sessionNames`); a client never builds one.
 
 Names are only labels. A name reaches tmux as one argv element, and every
-target is an exact `-t =<name>`, so `hm-acme` never matches `hm-acme-atlas` by
-prefix.
+target is an exact `-t =<name>` (`=<name>:` for `set-option`, whose target is
+a pane: tmux refuses a bare `=<name>` there), so `hm-acme` never matches
+`hm-acme-atlas` by prefix.
 
 ### What tmux runs
 
@@ -126,8 +127,8 @@ tmux … new-session -d -s <name> -n <window name> -e HIVEMIND_TMUX_SESSION=<nam
 <command>
 
 exec /bin/zsh -l" \
-  ; set-option -t =<name> @hivemind_project <project> \
-  ; set-option -t =<name> @hivemind_agent <agent>
+  ; set-option -t =<name>: @hivemind_project <project> \
+  ; set-option -t =<name>: @hivemind_agent <agent>
 ```
 
 - tmux runs the shell from argv directly. No shell is ever assembled from

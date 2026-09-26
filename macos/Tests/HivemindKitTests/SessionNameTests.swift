@@ -14,6 +14,14 @@ struct SessionNameTests {
     #expect(SessionName.maxLength == 82)
   }
 
+  @Test func targetsMatchExactlyForSessionAndPaneCommands() throws {
+    let name = try #require(SessionName("hm-acme-atlas"))
+    #expect(name.target == "=hm-acme-atlas")
+    // set-option's -t is a pane: tmux 3.x refuses "=name" there ("no such
+    // session") and needs "=name:", which is still an exact match.
+    #expect(name.windowTarget == "=hm-acme-atlas:")
+  }
+
   @Test func namesAnAgentsSession() {
     #expect(SessionName(project: "acme", agent: "Atlas").rawValue == "hm-acme-atlas")
     #expect(SessionName(project: "my-app", agent: "Anne Marie").rawValue == "hm-my-app-anne-marie")
