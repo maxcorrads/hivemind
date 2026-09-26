@@ -61,6 +61,9 @@ public final class ServerAppController {
   private var active: ServerLaunchSettings?
   /// The port the child announced, which is the truth once it is ready.
   private var announcedPort: ServerPort?
+  /// The secret the current child was started with (InstanceProof), new for
+  /// every launch, restarts included. Never logged.
+  private var activeSecret: InstanceSecret?
   private var preflightFailure: PreflightFailure?
   private var readyWaiters: [@MainActor (ServerEndpoint) -> Void] = []
   private var stoppingPrevious: Int32?
@@ -81,9 +84,9 @@ public final class ServerAppController {
     return supervisor
   }()
 
-  private lazy var publisher = DiscoveryPublisher(store: discovery, version: version) { [unowned self] in
-    self.publishedSettings
-  }
+  private lazy var publisher = DiscoveryPublisher(
+    store: discovery, version: version, settings: { [unowned self] in self.publishedSettings },
+    secret: { [unowned self] in self.activeSecret })
 
   public init(
     paths: HivemindPaths, server: BundledServer?, version: String, store: ServerAppSettingsStore,
@@ -269,12 +272,14 @@ public final class ServerAppController {
     let launch = settings.launchSettings(paths: paths)
     active = launch
     announcedPort = nil
+    let secret = InstanceSecret.generate()
+    activeSecret = secret
     // Process refuses a missing working directory; the server would create it anyway.
     try? FileManager.default.createDirectory(
       at: launch.dataHome, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
     log.append("[app] starting hivemind serve on port \(launch.port), data folder \(launch.dataHome.path)")
     let bundled = server ?? BundledServer(contents: URL(fileURLWithPath: "/nonexistent/Contents"))
-    var spec = launch.spec(server: bundled, baseEnvironment: deps.baseEnvironment, home: paths.home)
+    var spec = launch.spec(server: bundled, baseEnvironment: deps.baseEnvironment, home: paths.home, secret: secret)
     // --port wins over it on the server; set anyway so anything the server
     // spawns sees the same port.
     spec.environment["HIVEMIND_PORT"] = launch.port.description
@@ -303,9 +308,11 @@ public final class ServerAppController {
     case .stopped:
       active = nil
       announcedPort = nil
+      activeSecret = nil
       log.append("[app] server stopped")
     case .failed(let message):
       active = nil
+      activeSecret = nil
       log.append("[app] \(message)")
       flushReadyWaiters()
     }

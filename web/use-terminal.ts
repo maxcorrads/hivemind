@@ -2,7 +2,7 @@ import { useSyncExternalStore } from "react";
 import type { Agent } from "../src/shared/types.ts";
 import { terminalSessionName } from "../src/shared/terminal-session.ts";
 import {
-  BROKER_UNAVAILABLE_HINT, TERMINAL_EVENT, TMUX_INSTALL_HINT, decodeTerminalData, encodeTerminalInput, inNativeApp,
+  BROKER_UNAVAILABLE_HINT, SERVER_UNVERIFIED_HINT, TERMINAL_EVENT, TMUX_INSTALL_HINT, decodeTerminalData, encodeTerminalInput, inNativeApp,
   parseTerminalEvent, postNative, terminalDataLength, terminalSessionLaunchProblem, terminalSize,
   type TerminalEvent, type TerminalMessage, type TerminalSessionInfo, type TerminalSessionLaunch,
 } from "./native-bridge.ts";
@@ -348,11 +348,12 @@ export function liveSession(state: TerminalState, name: string | null): Terminal
   return state.sessions.find(item => item.name === name && item.alive) ?? null;
 }
 
-export type TerminalBlocker = { kind: "server" | "tmux" | "connecting"; message: string };
+export type TerminalBlocker = { kind: "server" | "unverified" | "tmux" | "connecting"; message: string };
 
 /** Why terminals cannot be used right now, or null when they can. */
 export function terminalBlocker(state: TerminalState): TerminalBlocker | null {
   if (!state.native) return null;
+  if (state.broker === "unverified") return { kind: "unverified", message: SERVER_UNVERIFIED_HINT };
   if (state.broker === "unavailable") return { kind: "server", message: BROKER_UNAVAILABLE_HINT };
   if (state.broker !== "connected") return { kind: "connecting", message: "Connecting to Hivemind Server…" };
   if (state.tmux === "missing") return { kind: "tmux", message: TMUX_INSTALL_HINT };

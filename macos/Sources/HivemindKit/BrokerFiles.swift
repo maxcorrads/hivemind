@@ -63,10 +63,15 @@ public struct BrokerFiles: Sendable {
   /// Creates the folder, or tightens an existing one, to 0700, and makes
   /// sure it belongs to this user.
   public func prepareFolder() throws(Failure) {
-    let folder = paths.appSupport
+    try Self.preparePrivateFolder(paths.appSupport)
+  }
+
+  /// `folder`, created or tightened to 0700, and this user's. The discovery
+  /// file shares the folder, so DiscoveryStore uses this too.
+  public static func preparePrivateFolder(_ folder: URL) throws(Failure) {
     do {
       try FileManager.default.createDirectory(
-        at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: Int(Self.folderMode)])
+        at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: Int(folderMode)])
     } catch {
       throw Failure("Cannot create \(folder.path): \(error.localizedDescription)")
     }
@@ -75,7 +80,7 @@ public struct BrokerFiles: Sendable {
       throw Failure("\(folder.path) is not a folder")
     }
     guard info.st_uid == getuid() else { throw Failure("\(folder.path) belongs to another user") }
-    if info.st_mode & 0o7777 != Self.folderMode, chmod(folder.path, Self.folderMode) != 0 {
+    if info.st_mode & 0o7777 != folderMode, chmod(folder.path, folderMode) != 0 {
       throw Failure("Cannot make \(folder.path) private: \(String(cString: strerror(errno)))")
     }
   }

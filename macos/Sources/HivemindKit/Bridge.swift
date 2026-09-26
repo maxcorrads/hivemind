@@ -232,7 +232,8 @@ public struct TerminalSessionLaunch: Equatable, Sendable {
 public enum BridgeTerminalEvent: Equatable, Sendable {
   /// Whether terminals can work at all. Sent on sessions-subscribe and on
   /// every change. `broker` unavailable: the page shows "Start Hivemind
-  /// Server to use terminals" with hivemind-server://start.
+  /// Server to use terminals" with hivemind-server://start; `unverified`:
+  /// terminals are off for this window (TerminalTrustGate).
   case status(tmux: TmuxStatus, broker: BrokerStatus)
   case sessions([BrokerSession])
   case launched(id: String?, names: [SessionName?], created: [SessionName], errors: [BrokerLaunchFailure])
@@ -254,6 +255,9 @@ public enum BridgeTerminalEvent: Equatable, Sendable {
     case connected
     case connecting
     case unavailable
+    /// The window's server could not be verified, so it was opened without
+    /// terminals (TerminalTrustGate): the page says so and offers nothing.
+    case unverified
   }
 
   public var type: String {

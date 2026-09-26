@@ -446,6 +446,11 @@ public final class BrokerConnection {
     send(.welcome(version: spoken, tmuxPath: tmuxPath), id: id)
   }
 
+  static func tooLongForTmux(index: Int, bytes: Int) -> String {
+    "launches[\(index)]: too long for tmux: its command, folder and title come to \(bytes) bytes, "
+      + "more than the \(TmuxCommand.maxCommandLineBytes) a tmux command may take"
+  }
+
   private func launch(_ launches: [BrokerLaunch], id: String?) async {
     guard let broker else { return }
     await broker.launching { [weak self] in await self?.launchNow(launches, id: id) }
@@ -470,12 +475,19 @@ public final class BrokerConnection {
         results.append(name)
         continue
       }
+      let arguments = tmux.newSession(TmuxNewSession(name: name, launch: launch))
+      let bytes = TmuxCommand.commandLineBytes(arguments)
+      guard bytes <= TmuxCommand.maxCommandLineBytes else {
+        results.append(nil)
+        errors.append(BrokerLaunchFailure(index: index, code: .badMessage, message: Self.tooLongForTmux(index: index, bytes: bytes)))
+        continue
+      }
       guard broker.deps.isDirectory(launch.cwd) else {
         results.append(nil)
         errors.append(BrokerLaunchFailure(index: index, code: .cwdMissing, message: "launches[\(index)].cwd: not a folder"))
         continue
       }
-      let result = await broker.run(tmux, tmux.newSession(TmuxNewSession(name: name, launch: launch)))
+      let result = await broker.run(tmux, arguments)
       let started = result.succeeded ? true : await broker.run(tmux, tmux.hasSession(name)).succeeded
       if started {
         // A failure after the session started (setting its options) still

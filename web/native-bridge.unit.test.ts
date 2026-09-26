@@ -8,7 +8,7 @@ import { launchBlockText, type LaunchContext } from "../src/shared/launch-prompt
 import type { DesktopNotifications } from "./desktop-notifications.ts";
 import {
   appLinks, badgeSync, inNativeApp, nativeBridge, notifyNative, postNative, runNativeCommand, startHivemindServer, useNativeBridge,
-  BROKER_UNAVAILABLE_HINT, NATIVE_EVENT, TERMINAL_EVENT, TMUX_INSTALL_HINT, type NativeCommandHandlers, type NativeMessage,
+  BROKER_UNAVAILABLE_HINT, SERVER_UNVERIFIED_HINT, NATIVE_EVENT, TERMINAL_EVENT, TMUX_INSTALL_HINT, type NativeCommandHandlers, type NativeMessage,
   type TerminalSessionLaunch,
 } from "./native-bridge.ts";
 import type { Sel } from "./selection.ts";
@@ -360,6 +360,13 @@ test("the launch buttons wait for Hivemind Server and tmux, and say what is miss
   opened = [];
   await act(async () => { start.click(); });
   assert.deepEqual(opened, ["hivemind-server://start"]);
+
+  // A window opened without terminals on an unverified server: disabled, explained, no Start button.
+  await fromApp({ type: "terminal-status", tmux: "unknown", broker: "unverified" });
+  assert.equal(open().disabled, true);
+  assert.equal(open().title, SERVER_UNVERIFIED_HINT);
+  assert.match(sheet.view.host.querySelector(".term-notice.unverified")?.textContent ?? "", /couldn't verify/);
+  assert.equal(sheet.view.host.querySelectorAll(".term-notice button").length, 0);
 
   await fromApp({ type: "terminal-status", tmux: "missing", broker: "connected" });
   assert.equal(open().disabled, true);

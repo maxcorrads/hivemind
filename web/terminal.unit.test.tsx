@@ -18,7 +18,7 @@ Object.assign(globalThis, { window, document: window.document, localStorage: win
   requestAnimationFrame: (callback: () => void) => setTimeout(callback, 0), cancelAnimationFrame: (id: number) => clearTimeout(id) });
 window.HTMLElement.prototype.getClientRects = function () { return [{}] as unknown as DOMRectList; } as never;
 const { createRoot } = await import("react-dom/client");
-const { TERMINAL_EVENT, BROKER_UNAVAILABLE_HINT, TMUX_INSTALL_HINT, appLinks } = await import("./native-bridge.ts");
+const { TERMINAL_EVENT, BROKER_UNAVAILABLE_HINT, SERVER_UNVERIFIED_HINT, TMUX_INSTALL_HINT, appLinks } = await import("./native-bridge.ts");
 const opened: string[] = [];
 appLinks.open = url => { opened.push(url); };
 const terminal = await import("./use-terminal.ts");
@@ -257,6 +257,8 @@ test("helpers: blockers, session mapping, keys and colors", () => {
   assert.equal(terminalBlocker({ ...state({}), native: false }), null);
   assert.equal(terminalBlocker(state({}))?.kind, "connecting");
   assert.equal(terminalBlocker(state({ broker: "unavailable", tmux: "unknown" }))?.message, BROKER_UNAVAILABLE_HINT);
+  // A window opened on a server the app could not verify has no terminals, whatever tmux does.
+  assert.deepEqual(terminalBlocker(state({ broker: "unverified", tmux: "unknown" })), { kind: "unverified", message: SERVER_UNVERIFIED_HINT });
   assert.equal(terminalBlocker(state({ broker: "connected", tmux: "missing" }))?.message, TMUX_INSTALL_HINT);
   assert.equal(terminalBlocker(state({ broker: "connected", tmux: "available" })), null);
 

@@ -240,7 +240,7 @@ A launch is:
 | `agent` | string or null (null for a new agent); 1–64 characters, not blank, no control characters |
 | `title` | at most 200 characters, no NUL. It becomes the tmux window name (one line, no `#`, at most 60 characters). |
 | `cwd` | absolute (`/…`), at most 1024 bytes, no NUL. The broker refuses a folder that is not a directory with `cwd-missing`. |
-| `command` | not blank, at most 8 KB (bytes), no NUL |
+| `command` | not blank, at most 8 KiB (8192 bytes), no NUL |
 | `session` | optional session name: the session this agent last reported (`agent.terminalSession`). When it is running and was launched for the same project and for no agent or this one, the launch reuses it, so an agent first launched as `hm-<project>-new-<n>` keeps that session on resume. Otherwise it is ignored: the broker never creates a session under a name the client picked. |
 
 ### Broker → client
@@ -280,6 +280,7 @@ Error codes (`BrokerErrorCode`):
 | One client → broker line | 1 MiB. `BrokerLineReader` refuses a longer line before buffering all of it. |
 | One broker → client line | 4 MiB |
 | Launches per message | 24 |
+| One tmux command | A launch's `new-session` arguments (with the folder, title, project and agent) may take at most 15 KiB (`TmuxCommand.maxCommandLineBytes`); tmux refuses a command over about 16 KiB. The field limits above keep every valid launch under it, and the broker still checks each one before running tmux: a longer one fails alone with `bad-message` ("too long for tmux"). |
 | Streams per connection | 16 |
 | Connections at once | 32 |
 | `hello` deadline | 5 s |
@@ -390,7 +391,7 @@ App → page: `window.dispatchEvent(new CustomEvent("hivemind:terminal", {detail
 
 | type | fields |
 | --- | --- |
-| `terminal-status` | `tmux`: `available` \| `missing` \| `unknown`; `broker`: `connected` \| `connecting` \| `unavailable` |
+| `terminal-status` | `tmux`: `available` \| `missing` \| `unknown`; `broker`: `connected` \| `connecting` \| `unavailable` \| `unverified` |
 | `sessions` | `items` as the broker sends them, with `null` for a missing project or agent |
 | `terminal-launched` | `id`, `names`, `created`, `errors` |
 | `terminal-attached` | `id`, `stream`, `session` |
@@ -448,6 +449,7 @@ makes:
 | `no-such-session` | `terminal-open` on a session that is not running | "<name> is not running" |
 | `tmux-missing` | Terminal.app would attach, but tmux is missing | "Install tmux: brew install tmux" |
 | `bad-message` | a folder too long once `~` is expanded | names the launch |
+| `unauthorized` | any `terminal-launch`, `terminal-open`, `terminal-attach` or `terminal-kill` in a window opened on a server the app could not verify | "Terminals are off in this window: Hivemind couldn't verify that Hivemind Server started this server." |
 
 With the broker `unavailable`, the page shows **Start Hivemind Server to use
 terminals** with a **Start Hivemind Server** button. The button opens
@@ -456,6 +458,13 @@ navigation, launches Hivemind Server.app (or asks the running one to start its
 server, as the connect screen does) and retries the broker at once. There is no
 bridge message for it. With tmux `missing`, the page shows **Install tmux: brew
 install tmux**.
+
+With the broker `unverified`, the window was opened with **Open without
+terminals** on a server Hivemind.app could not verify
+([Verifying the server](macos.md#verifying-the-server)). No terminal message
+from that page reaches the broker: `sessions-subscribe` is answered with this
+status and every request with the `unauthorized` error above. The page says
+that terminals are off in this window and offers no button.
 
 ## Security notes
 
@@ -469,7 +478,8 @@ install tmux**.
   the UI itself, and by the user's choice a launch needs no confirmation
   ([security note](macos.md#security-note)). What bounds it:
   - **Origin pinning.** Only the main frame of the pinned loopback origin
-    (`http://127.0.0.1:<port>` of the server the window connected to) is heard;
+    (`http://127.0.0.1:<port>` of the server the window connected to and
+    verified; see the next note) is heard;
     another origin or an iframe is not. A browser has no bridge, so no web page
     in a browser can reach a terminal.
   - **Strict validation and limits.** Every message is parsed strictly and
@@ -485,6 +495,27 @@ install tmux**.
     HTTP to it (another app, a browser tab, an agent over MCP) cannot reach a
     terminal without a page loaded in Hivemind.app. The only terminal field
     the server knows is `agent.terminalSession`, a pattern-checked label.
+- **Squatting the server's port.** Hivemind.app finds its server on a
+  loopback port. While Hivemind is not bound there (not started yet,
+  restarting, stopped), anything else can bind `127.0.0.1:7420` — another macOS
+  user, or a sandboxed app that may not read your files — and answer
+  `/api/health` exactly like Hivemind. Without more, the app would load its page
+  and give it the whole bridge, and so terminals: commands as you. What closes
+  it is the **instance challenge**: Hivemind Server.app starts every server with
+  a fresh 256-bit secret, passed to node only in `HIVEMIND_INSTANCE_SECRET`
+  (which the server deletes from its environment at once, so nothing it spawns
+  inherits it) and written into `server.json`, `0600` in the `0700`
+  app-support folder. Before a window loads a page, the app sends a fresh
+  32-byte nonce to `GET /api/health/instance` and compares
+  `HMAC-SHA256(secret, "hivemind-instance-v1\n" + nonce + "\n" + port)` in
+  constant time. A squatter cannot read the secret, and a replayed or relayed
+  answer is for another nonce or port. A server that fails, or one the
+  discovery file does not name (a `hivemind serve` started by hand), is only
+  ever opened on request with **Open without terminals**, and then no terminal
+  message reaches the broker. The app checks again on every reload, on every
+  page load it did not start itself, and whenever `server.json` changes; while
+  the file is gone, a verified page's terminal messages wait. See
+  [Verifying the server](macos.md#verifying-the-server).
 - **Another local process running as the user** can read `broker.token` and
   use the broker. Processes of other users are refused by the socket's mode and
   by the peer check. It could already run commands as the user, so the token only
@@ -497,6 +528,9 @@ install tmux**.
   [What tmux runs](#what-tmux-runs).
 - **The user's tmux is never touched.** Everything goes to `-L hivemind` with
   Hivemind's own config, and only `hm-*` sessions are listed.
-- **Bounded everything**: line sizes, launches, streams, connections, input and
-  output chunks, and buffered output with backpressure, from the PTY to the
-  page. A misbehaving client can slow only its own streams.
+- **Bounded everything**: line sizes, launches, one tmux command, streams,
+  connections, input and output chunks, and buffered output with backpressure,
+  from the PTY to the page. A PTY stops being read while more than 1 MiB of its
+  output waits for the main queue, and again below 256 KiB (`PTYReadGate`), on
+  top of the per-connection backpressure. A misbehaving client can slow only its
+  own streams.

@@ -183,11 +183,13 @@ final class BrokerHarness {
   var logs: [String] = []
   var changes = 0
   nonisolated static let config = "/Users/me/Library/Application Support/Hivemind/tmux.conf"
+  /// Set before the broker is first used.
+  var configPath = BrokerHarness.config
   nonisolated static let environment = ["PATH": "/usr/bin:/bin", "HOME": "/Users/me", "TMUX": "/private/tmp/tmux-501/default,1,0", "LANG": "it_IT.UTF-8"]
 
   lazy var broker: TerminalBroker = {
     let broker = TerminalBroker(
-      token: token, configPath: Self.config,
+      token: token, configPath: configPath,
       dependencies: .init(
         tmux: tmux, terminals: spawner, scheduler: scheduler,
         locateTmux: { [unowned self] in self.tmuxPath },

@@ -19,6 +19,7 @@ import { WS_HEARTBEAT_MS } from "../shared/realtime.ts";
 import { heartbeatClients, sendRealtime } from "./websocket-policy.ts";
 import { packageRoot } from "../shared/package-root.ts";
 import { retentionDays, startMaintenance } from "./maintenance.ts";
+import { takeInstanceSecret } from "./instance-proof.ts";
 
 /** Hive events forwarded verbatim to every web UI socket; Telegram wake signals stay server-side. */
 const FORWARDED_EVENTS = [
@@ -28,6 +29,8 @@ const FORWARDED_EVENTS = [
 type ForwardedEvent = (typeof FORWARDED_EVENTS)[number];
 
 export function startServer(opts: { port?: number; hive?: Hive; telegram?: boolean; shutdownGraceMs?: number; retentionDays?: number } = {}) {
+  // First, before anything can spawn a child that would inherit it.
+  const instanceSecret = takeInstanceSecret();
   const port = integerArgument(String(opts.port ?? process.env.HIVEMIND_PORT ?? DEFAULT_PORT), 0, 65535);
   const retention = opts.retentionDays ?? retentionDays();
   // Fail fast, before migrating the database or polling Telegram, if this home is already served.
@@ -44,6 +47,7 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
     telegramRunning: () => telegram.running(),
     reloadTelegram: () => telegram.reload(),
     configureTelegram: input => telegram.configure(input),
+    instanceSecret,
   });
 
   const humanAuth = new LocalHumanAuth();

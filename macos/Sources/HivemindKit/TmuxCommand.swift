@@ -42,6 +42,18 @@ public struct TmuxCommand: Equatable, Sendable {
   /// TERM for the tmux client the broker runs in a PTY (what xterm.js emulates).
   public static let clientTerm = "xterm-256color"
 
+  /// tmux hands a command to its server in one message of at most 16 KiB
+  /// (MAX_IMSGSIZE, header included) and refuses a longer one with a
+  /// confusing "command too long". The broker refuses a new-session whose
+  /// arguments would come near that itself, before running tmux. Every
+  /// launch within BrokerLimits fits (TmuxTests checks the largest).
+  public static let maxCommandLineBytes = 15 * 1024
+
+  /// The bytes tmux packs for `arguments`: each one and its NUL.
+  public static func commandLineBytes(_ arguments: [String]) -> Int {
+    arguments.reduce(0) { $0 + $1.utf8.count + 1 }
+  }
+
   public init(executable: String, configPath: String) {
     self.executable = executable
     self.configPath = configPath

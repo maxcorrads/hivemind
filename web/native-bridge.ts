@@ -137,6 +137,13 @@ export const TERMINAL_EVENT = "hivemind:terminal";
 
 export const TMUX_INSTALL_HINT = "Install tmux: brew install tmux";
 export const BROKER_UNAVAILABLE_HINT = "Start Hivemind Server to use terminals";
+/**
+ * Broker `unverified`: Hivemind.app could not prove this server is the one Hivemind Server started (a `hivemind
+ * serve` run by hand, or something else on the port), so this window was opened without terminals
+ * (docs/macos.md#verifying-the-server).
+ */
+export const SERVER_UNVERIFIED_HINT =
+  "Terminals are off in this window: Hivemind couldn't verify that Hivemind Server started this server. Start the server from Hivemind Server, then reload.";
 
 /** The broker's limits (HivemindKit BrokerLimits); the app drops a message that breaks any. */
 export const TERMINAL_BROKER_LIMITS = {
@@ -203,7 +210,7 @@ export type TerminalLaunchFailure = { index: number; code: string; message: stri
 
 /** App → page, as the detail of a TERMINAL_EVENT. */
 export type TerminalEvent =
-  | { type: "terminal-status"; tmux: "available" | "missing" | "unknown"; broker: "connected" | "connecting" | "unavailable" }
+  | { type: "terminal-status"; tmux: "available" | "missing" | "unknown"; broker: "connected" | "connecting" | "unavailable" | "unverified" }
   | { type: "sessions"; items: TerminalSessionInfo[] }
   /** names[i] is launches[i]'s session, or null when it failed (see errors). */
   | { type: "terminal-launched"; id: string | null; names: (string | null)[]; created: string[]; errors: TerminalLaunchFailure[] }
@@ -240,7 +247,7 @@ export function parseTerminalEvent(detail: unknown): TerminalEvent | null {
     case "terminal-status": {
       const { tmux, broker } = detail;
       if (tmux !== "available" && tmux !== "missing" && tmux !== "unknown") return null;
-      if (broker !== "connected" && broker !== "connecting" && broker !== "unavailable") return null;
+      if (broker !== "connected" && broker !== "connecting" && broker !== "unavailable" && broker !== "unverified") return null;
       return { type: "terminal-status", tmux, broker };
     }
     case "sessions": {

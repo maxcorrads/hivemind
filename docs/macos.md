@@ -73,8 +73,13 @@ Hivemind.app finds the server in this order:
    settings, separate from the server app's port.
 3. The default port `7420`.
 
-Each is checked with `GET /api/health` and the first that answers wins. If none
-does, the window shows a connect screen. From it you can start Hivemind
+Each is checked with `GET /api/health`. The server the discovery file names must
+then also pass the [instance challenge](#verifying-the-server); only a verified
+server is opened with the whole bridge. A server that answers but is not
+verified (it failed the challenge, or no discovery file names it, as with a
+`hivemind serve` started by hand) shows the connect screen with **This server
+couldn't be verified** and an **Open without terminals** button. If nothing
+answers, the window shows a connect screen too. From it you can start Hivemind
 Server.app (offered when it is installed), enter another port, or retry; it
 also retries by itself every 2 s. **Start Hivemind Server** launches the server
 app, or, when it is already running with its server stopped or failed, asks it
@@ -123,6 +128,57 @@ handler exists, so a normal browser behaves exactly as before. The contract is
   notice) by opening `hivemind-server://start` in its main frame. The app
   cancels that navigation and does what the connect screen's button does; it is
   not a bridge message.
+
+### Verifying the server
+
+Anything can listen on `127.0.0.1:7420` while Hivemind is not bound there (not
+started yet, restarting, stopped): another macOS user, or a sandboxed app that
+cannot read your files. It could answer `/api/health` exactly like Hivemind, and
+the page it served would get the native bridge, whose terminals run commands as
+you. So Hivemind.app verifies the server before it loads the page:
+
+1. On every start, including restarts, Hivemind Server.app makes a fresh
+   256-bit random secret (`InstanceSecret`). It reaches node only in the
+   environment variable `HIVEMIND_INSTANCE_SECRET`, which the server reads once
+   and deletes from its environment, so plugins, agents and anything else it
+   spawns never inherit it. It is also written into the
+   [discovery file](#discovery-file), and never logged.
+2. Hivemind.app reads `server.json` only when it is a regular file (not a
+   symlink) owned by you with mode `0600`; the folder is kept at `0700`.
+3. It sends a fresh 32-byte nonce to
+   `GET /api/health/instance?nonce=<64 hex>`. The server answers
+   `{"proof": hex(HMAC-SHA256(secret, "hivemind-instance-v1\n" + nonce + "\n" + port))}`,
+   where `port` is the port the request actually arrived on, with
+   `Cache-Control: no-store`. It answers 404 when it has no secret and 400 for a
+   malformed nonce. The endpoint passes the same Host/Origin checks as
+   `/api/health` and needs no Human session
+   ([Local Human security boundary](local-human-security.md)).
+4. The app compares the proof in constant time (CryptoKit). Only then does the
+   page load with terminals.
+
+A server that fails, or that only the configured or default port found (no
+discovery file names it), is not trusted with terminals. The connect screen says
+**This server couldn't be verified** and why, and offers **Open without
+terminals**: the page then loads, notifications and the Dock badge work, but no
+`terminal-*` or `sessions-*` message from that window reaches the broker. The
+page gets `terminal-status` with broker `unverified` and shows that terminals
+are off in this window. The window remembers the choice for that port, so a
+reload does not ask again; it never grants terminals.
+
+The app verifies again:
+
+- on every reload (View → Reload, and when the web content process restarts);
+- when the page loads a document the app did not load itself right after a
+  check (the page reloading itself, back/forward): until the server is verified
+  again as the same process, the page's terminal messages wait;
+- whenever `server.json` changes (it looks once a second while a page shows, and
+  when the app becomes active). A new process, or a new port, means a new
+  document: the page is loaded again from the verified server. While the file is
+  gone (the server stopped or is restarting), a verified page's terminal
+  messages wait and its streams are detached, since nothing proves who answers
+  on the port; the app keeps checking, and if something that cannot be verified
+  answers meanwhile, the window switches to the connect screen. A window opened
+  without terminals is upgraded once Hivemind Server's own server verifies.
 
 ### Terminals
 
@@ -203,12 +259,15 @@ trusted as the UI itself is. What limits this:
 
 - The app accepts terminal messages only from the main frame of the pinned
   loopback origin (`http://127.0.0.1:<port>` of the server it connected to),
-  never from another origin or an iframe.
+  never from another origin or an iframe, and only once that server has
+  [proved](#verifying-the-server) it is the one Hivemind Server.app started. A
+  process that took the port while Hivemind was not bound gets no terminals.
 - Every message is checked strictly and dropped as a whole if any part is off:
   at most 24 launches, each with a project slug, an agent name of at most 64
-  characters or none, a command that is non-empty, at most 8 KB and without NUL
+  characters or none, a command that is non-empty, at most 8 KiB and without NUL
   bytes, a title of at most 200 characters and an absolute folder (`/…` or
-  `~/…`). The broker checks everything again.
+  `~/…`). The broker checks everything again, and refuses a launch whose tmux
+  command would pass 15 KiB (tmux itself stops at about 16 KiB).
 - The app takes at most one `terminal-launch`, one `terminal-open` and one
   `terminal-kill` per second per window, each counted on its own, and answers a
   refused one with an error.
@@ -239,7 +298,7 @@ window: it can then be inspected from Safari's Develop menu (macOS 13.3+).
 | What | Where |
 | --- | --- |
 | Server data (messages, uploads, `server.lock`) | `~/.hivemind/`, or the data folder chosen in the menu |
-| Discovery file | `~/Library/Application Support/Hivemind/server.json` |
+| Discovery file | `~/Library/Application Support/Hivemind/server.json` (`0600`, in a `0700` folder) |
 | Server log | `~/Library/Logs/Hivemind/server.log`, rotated at 5 MB with 3 old files kept |
 | Terminal broker log | `~/Library/Logs/Hivemind/broker.log` |
 | Terminal broker socket and token | `~/Library/Application Support/Hivemind/broker.sock` (`0600`) and `broker.token` (`0600`), new on every broker start |
@@ -253,15 +312,19 @@ the menu before copying the folder.
 
 ### Discovery file
 
-While its server runs, Hivemind Server.app writes `server.json` (mode `0600`).
-It removes the file when the server stops.
+While its server runs, Hivemind Server.app writes `server.json`: a new file
+created with mode `0600` and renamed into place, in the app-support folder it
+keeps at `0700`. It removes the file when the server stops.
 
 ```json
-{ "port": 7420, "pid": 12345, "home": "/Users/you/.hivemind", "startedAt": "2026-01-01T09:00:00Z", "version": "0.5.0" }
+{ "home": "/Users/you/.hivemind", "instanceSecret": "<64 hex characters>", "pid": 12345, "port": 7420, "startedAt": "2026-01-01T09:00:00Z", "version": "0.5.0" }
 ```
 
-Clients treat the file as a hint. They use it only while `pid` is alive and fall
-back to the configured port otherwise. The file holds no secret. The Human
+`instanceSecret` is the server's per-start secret for the
+[instance challenge](#verifying-the-server); keep the file private. Hivemind.app
+refuses a `server.json` that is a symlink, not a regular file, not yours, or not
+mode `0600`. Clients use the file only while `pid` is alive and fall back to the
+configured port otherwise, where a server is found but never verified. The Human
 session still comes from the browser flow described in
 [Local Human security boundary](local-human-security.md).
 
@@ -295,8 +358,11 @@ The apps do not change the [Local Human security boundary](local-human-security.
   check.
 - The app's App Transport Security exception allows plain http to local network
   addresses only (`NSAllowsLocalNetworking`).
-- The health check the apps make uses a cookie-less session. It never touches
-  the Human session in the windows.
+- The health check and the instance challenge the apps make use a cookie-less
+  session. They never touch the Human session in the windows.
+- Hivemind.app gives a page its terminals only once the server has
+  [proved](#verifying-the-server) it is the one Hivemind Server.app started, so
+  a process that took the port while Hivemind was not bound cannot use them.
 - **Terminals**: the page can start agents in tmux sessions without asking,
   and read and type into them, so whatever controls the page (an XSS, or a
   compromised local server, which serves it) can too; see the

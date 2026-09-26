@@ -5,7 +5,8 @@ import type { TerminalBlocker } from "./use-terminal.ts";
 
 /**
  * Why terminals are unavailable: Hivemind Server is not reachable (with a button that starts it, as the
- * connect screen's does), tmux is missing, or the app is still connecting.
+ * connect screen's does), the window was opened on a server Hivemind.app could not verify, tmux is missing, or the
+ * app is still connecting.
  */
 export function TerminalNotice({ blocker, compact }: { blocker: TerminalBlocker; compact?: boolean }) {
   const [asked, setAsked] = useState(false);

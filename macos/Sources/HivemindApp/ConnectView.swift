@@ -6,12 +6,15 @@ import HivemindKit
 @MainActor
 final class ConnectView: NSView {
   var onStartServer: () -> Void = {}
+  /// "Open without terminals", offered for a server that could not be verified.
+  var onOpenWithoutTerminals: () -> Void = {}
   /// Called with the port field's text; the owner validates it.
   var onRetry: (String) -> Void = { _ in }
 
   private let titleLabel = NSTextField(labelWithString: "")
   private let detailLabel = NSTextField(wrappingLabelWithString: "")
   private let startButton = NSButton(title: "Start Hivemind Server", target: nil, action: nil)
+  private let openButton = NSButton(title: ConnectScreenContent.openWithoutTerminals, target: nil, action: nil)
   private let portField = NSTextField(string: "")
   private let retryButton = NSButton(title: "Retry", target: nil, action: nil)
   private let errorLabel = NSTextField(labelWithString: "")
@@ -41,6 +44,13 @@ final class ConnectView: NSView {
     startButton.controlSize = .large
     startButton.target = self
     startButton.action = #selector(startServer)
+    openButton.bezelStyle = .rounded
+    openButton.controlSize = .large
+    openButton.target = self
+    openButton.action = #selector(openWithoutTerminals)
+    let buttons = NSStackView(views: [openButton, startButton])
+    buttons.orientation = .horizontal
+    buttons.spacing = 10
 
     let portLabel = NSTextField(labelWithString: "Port")
     portField.placeholderString = ServerPort.default.description
@@ -62,7 +72,7 @@ final class ConnectView: NSView {
     errorLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
     errorLabel.isHidden = true
 
-    let stack = NSStackView(views: [icon, titleLabel, detailLabel, startButton, portRow, errorLabel])
+    let stack = NSStackView(views: [icon, titleLabel, detailLabel, buttons, portRow, errorLabel])
     stack.orientation = .vertical
     stack.alignment = .centerX
     stack.spacing = 14
@@ -82,6 +92,7 @@ final class ConnectView: NSView {
     titleLabel.stringValue = content.title
     detailLabel.stringValue = content.detail
     startButton.isHidden = !content.offersServerApp
+    openButton.isHidden = !content.offersOpenWithoutTerminals
     // Never overwrite what the user is typing; an automatic retry may land mid-edit.
     if portField.currentEditor() == nil { portField.stringValue = port.description }
     if checking { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
@@ -97,6 +108,8 @@ final class ConnectView: NSView {
   }
 
   @objc private func startServer() { onStartServer() }
+
+  @objc private func openWithoutTerminals() { onOpenWithoutTerminals() }
 
   @objc private func retry() { onRetry(portField.stringValue) }
 }

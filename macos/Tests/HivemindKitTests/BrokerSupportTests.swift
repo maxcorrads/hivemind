@@ -151,3 +151,38 @@ struct TmuxResultTests {
     #expect(TmuxResult(status: 0).succeeded)
   }
 }
+
+struct PTYReadGateTests {
+  @Test func pausesAboveTheHighWaterMarkAndResumesAtTheLowOne() {
+    var gate = PTYReadGate(highWater: 100, lowWater: 25)
+    #expect(gate.reading)
+    #expect(gate.read(60) == nil)
+    #expect(gate.read(40) == nil, "at the mark, not above it")
+    #expect(gate.read(1) == false)
+    #expect(gate.undelivered == 101)
+    #expect(gate.delivered(60) == nil, "41 is still above the low mark")
+    #expect(gate.delivered(16) == true)
+    #expect(gate.reading)
+    #expect(gate.delivered(1_000) == nil)
+    #expect(gate.undelivered == 0, "never below zero")
+  }
+
+  @Test func theBrokersPauseAndTheQueuesAreIndependent() {
+    var gate = PTYReadGate(highWater: 100, lowWater: 25)
+    #expect(gate.setWanted(false) == false)
+    #expect(gate.setWanted(false) == nil)
+    #expect(gate.read(200) == nil, "already paused")
+    #expect(gate.setWanted(true) == nil, "the queue is still full")
+    #expect(!gate.reading)
+    #expect(gate.delivered(200) == true)
+    #expect(gate.read(200) == false)
+    #expect(gate.setWanted(false) == nil)
+    #expect(gate.delivered(200) == nil, "the broker still wants a pause")
+    #expect(gate.setWanted(true) == true)
+  }
+
+  @Test func theDefaultsMatchTheBrokersOwnBackpressure() {
+    #expect(PTYReadGate.highWater == BrokerLimits.maxOutboundBytes)
+    #expect(PTYReadGate.lowWater == BrokerLimits.resumeOutboundBytes)
+  }
+}

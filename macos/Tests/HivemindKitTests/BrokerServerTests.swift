@@ -323,6 +323,26 @@ struct BrokerLaunchTests {
       errors: [BrokerLaunchFailure(index: 0, code: .cwdMissing, message: "launches[0].cwd: not a folder")]))
   }
 
+  @Test func refusesALaunchTooLongForTmuxBeforeRunningIt() async throws {
+    let h = BrokerHarness()
+    // Only a config path far longer than any real one gets a valid launch there.
+    h.configPath = "/" + String(repeating: "c", count: 8000)
+    await h.start()
+    let (transport, connection) = await h.client()
+    let long = try BrokerLaunch(project: "acme", agent: "Long", title: "t", cwd: "/Users/me/acme",
+                                command: String(repeating: "x", count: BrokerLimits.maxCommandBytes))
+    await h.send(connection, .launch([long, brokerLaunch("Atlas")]))
+    let arguments = TmuxCommand(executable: "/opt/homebrew/bin/tmux", configPath: h.configPath)
+      .newSession(TmuxNewSession(name: SessionName("hm-acme-long")!, launch: long))
+    let bytes = TmuxCommand.commandLineBytes(arguments)
+    #expect(bytes > TmuxCommand.maxCommandLineBytes)
+    #expect(transport.events().first == .launched(
+      names: [nil, atlas], created: [atlas],
+      errors: [BrokerLaunchFailure(index: 0, code: .badMessage, message:
+        "launches[0]: too long for tmux: its command, folder and title come to \(bytes) bytes, more than the 15360 a tmux command may take")]))
+    #expect(h.tmux.calls("new-session").count == 1, "tmux never saw the long one")
+  }
+
   @Test func reportsTmuxsOwnErrorPerLaunch() async {
     let h = BrokerHarness()
     await h.start()

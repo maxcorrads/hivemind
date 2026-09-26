@@ -55,6 +55,24 @@ struct TmuxCommandTests {
     #expect(TmuxCommand.argument(";") == "\\;")
   }
 
+  @Test func theLargestValidLaunchFitsInOneTmuxCommand() throws {
+    #expect(TmuxCommand.commandLineBytes(["ab", "é"]) == 3 + 3)
+    // Every field at its limit, in the widest encoding: 4-byte characters
+    // and a folder of quotes, each of which single-quoting makes 4 bytes.
+    let wide = "😀"
+    let launch = try BrokerLaunch(
+      project: String(repeating: "p", count: 32), agent: String(repeating: wide, count: BrokerLimits.maxAgentCharacters),
+      title: String(repeating: wide, count: BrokerLimits.maxTitleCharacters),
+      cwd: "/" + String(repeating: "'", count: BrokerLimits.maxCwdBytes - 1),
+      command: String(repeating: "x", count: BrokerLimits.maxCommandBytes))
+    let name = BrokerLaunch.sessionNames(for: [launch], existing: []).first!
+    // A config path as long as the broker socket's limit allows.
+    let longest = TmuxCommand(executable: "/opt/homebrew/bin/tmux", configPath: "/" + String(repeating: "c", count: BrokerPaths.maxSocketPathBytes))
+    let bytes = TmuxCommand.commandLineBytes(longest.newSession(TmuxNewSession(name: name, launch: launch)))
+    #expect(bytes <= TmuxCommand.maxCommandLineBytes, "\(bytes)")
+    #expect(TmuxCommand.maxCommandLineBytes < 16 * 1024, "below tmux's own message limit")
+  }
+
   @Test func theScriptCdsQuotedAndStaysOpen() throws {
     #expect(TmuxCommand.script(cwd: "/Users/me/it's", command: "echo hi \\\n\n") == "cd -- '/Users/me/it'\\''s' || exit 1\necho hi \\\n\nexec /bin/zsh -l")
   }

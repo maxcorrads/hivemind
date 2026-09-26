@@ -108,6 +108,37 @@ struct ServerAppControllerTests {
     #expect(discovery.read() == nil)
   }
 
+  @Test func everyStartGetsAFreshSecretInTheEnvironmentAndTheDiscoveryFileOnly() throws {
+    let sut = controller()
+    sut.launch()
+    let first = try #require(launcher.specs.first?.environment[InstanceProof.environmentKey])
+    #expect(InstanceSecret(hex: first) != nil)
+    ready()
+    #expect(try #require(discovery.read()).instanceSecret?.hex == first, "the discovery file names the child's secret")
+    sut.restart()
+    let second = try #require(launcher.specs.last?.environment[InstanceProof.environmentKey])
+    #expect(launcher.specs.count == 2)
+    #expect(second != first, "a restart is a new instance")
+    ready()
+    #expect(try #require(discovery.read()).instanceSecret?.hex == second)
+    // Never logged.
+    let log = try logText()
+    #expect(!log.contains(first) && !log.contains(second))
+    let mode = try FileManager.default.attributesOfItem(atPath: discovery.file.path)[.posixPermissions] as? Int
+    #expect(mode == 0o600)
+    let folder = try FileManager.default.attributesOfItem(atPath: paths.appSupport.path)[.posixPermissions] as? Int
+    #expect(folder == 0o700)
+  }
+
+  @Test func anInheritedSecretIsNeverPassedOn() throws {
+    let launch = ServerLaunchSettings(port: .default, dataHome: URL(fileURLWithPath: "/data"))
+    let inherited = [InstanceProof.environmentKey: String(repeating: "0", count: 64), "PATH": "/usr/bin"]
+    #expect(launch.spec(server: server, baseEnvironment: inherited, home: home).environment[InstanceProof.environmentKey] == nil)
+    let secret = InstanceSecret.generate()
+    #expect(launch.spec(server: server, baseEnvironment: inherited, home: home, secret: secret)
+      .environment[InstanceProof.environmentKey] == secret.hex)
+  }
+
   @Test func publishesThePortTheServerAnnounced() throws {
     let sut = controller()
     sut.launch()

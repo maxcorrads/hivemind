@@ -144,3 +144,57 @@ public enum BrokerEnvironment {
     return environment
   }
 }
+
+// MARK: - Reading a PTY
+
+/// Whether a PTY's read source should run: the broker may pause it (its
+/// connection is behind, `wanted` false), and output read but not yet taken
+/// on the main queue is bounded on its own. Past `highWater` undelivered
+/// bytes reading pauses; at or below `lowWater` it resumes, as SocketIO does
+/// for a socket. Each change returns the new "should read" when it flipped,
+/// or nil.
+public struct PTYReadGate: Equatable, Sendable {
+  public static let highWater = 1 << 20
+  public static let lowWater = 256 << 10
+
+  public private(set) var undelivered = 0
+  public private(set) var wanted = true
+  public private(set) var full = false
+  public let highWater: Int
+  public let lowWater: Int
+
+  public init(highWater: Int = Self.highWater, lowWater: Int = Self.lowWater) {
+    precondition(lowWater < highWater)
+    self.highWater = highWater
+    self.lowWater = lowWater
+  }
+
+  public var reading: Bool { wanted && !full }
+
+  /// `bytes` were read and queued for the main queue.
+  public mutating func read(_ bytes: Int) -> Bool? {
+    change { gate in
+      gate.undelivered += bytes
+      if gate.undelivered > gate.highWater { gate.full = true }
+    }
+  }
+
+  /// The main queue took `bytes`.
+  public mutating func delivered(_ bytes: Int) -> Bool? {
+    change { gate in
+      gate.undelivered = max(0, gate.undelivered - bytes)
+      if gate.full, gate.undelivered <= gate.lowWater { gate.full = false }
+    }
+  }
+
+  /// The broker's own backpressure (BrokerTerminal.setReading).
+  public mutating func setWanted(_ wanted: Bool) -> Bool? {
+    change { $0.wanted = wanted }
+  }
+
+  private mutating func change(_ body: (inout Self) -> Void) -> Bool? {
+    let before = reading
+    body(&self)
+    return reading == before ? nil : reading
+  }
+}

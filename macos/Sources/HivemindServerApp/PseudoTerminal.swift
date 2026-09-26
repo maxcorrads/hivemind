@@ -127,8 +127,9 @@ private struct CStrings {
   }
 }
 
-/// The PTY master's I/O, all on one serial queue: reads (paused for
-/// backpressure), queued writes, the window size, and reaping the child.
+/// The PTY master's I/O, all on one serial queue: reads (paused for the
+/// broker's backpressure, and while too much output waits for the main
+/// queue: PTYReadGate), queued writes, the window size, and reaping the child.
 /// The exit is delivered after every read before it, once the child is
 /// reaped; the master is closed only then.
 private final class PseudoTerminalIO: @unchecked Sendable {
@@ -140,6 +141,9 @@ private final class PseudoTerminalIO: @unchecked Sendable {
   private var writeSource: DispatchSourceWrite?
   private var processSource: DispatchSourceProcess?
   private var readSuspended = false
+  /// Whether reading should run: the broker's wish, and output read but not
+  /// yet delivered on the main queue kept under PTYReadGate.highWater.
+  private var readGate = PTYReadGate()
   private var writeSuspended = true
   private var pendingInput = Data()
   private var reaped = false
@@ -163,7 +167,14 @@ private final class PseudoTerminalIO: @unchecked Sendable {
 
   func start(output: @escaping @MainActor @Sendable (Data) -> Void, exit: @escaping @MainActor @Sendable (Int?) -> Void) {
     queue.sync {
-      self.output = { data in DispatchQueue.main.async { MainActor.assumeIsolated { output(data) } } }
+      // Each chunk is counted until the main queue has taken it.
+      self.output = { [weak self] data in
+        let count = data.count
+        DispatchQueue.main.async {
+          MainActor.assumeIsolated { output(data) }
+          self?.queue.async { [weak self] in self?.delivered(count) }
+        }
+      }
       self.exit = { status in DispatchQueue.main.async { MainActor.assumeIsolated { exit(status) } } }
 
       let read = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
@@ -211,14 +222,8 @@ private final class PseudoTerminalIO: @unchecked Sendable {
 
   func setReading(_ reading: Bool) {
     queue.async { [self] in
-      guard !finished, let readSource else { return }
-      if reading, readSuspended {
-        readSuspended = false
-        readSource.resume()
-      } else if !reading, !readSuspended {
-        readSuspended = true
-        readSource.suspend()
-      }
+      _ = readGate.setWanted(reading)
+      syncReading()
     }
   }
 
@@ -239,6 +244,23 @@ private final class PseudoTerminalIO: @unchecked Sendable {
 
   // MARK: On the queue
 
+  private func delivered(_ count: Int) {
+    _ = readGate.delivered(count)
+    syncReading()
+  }
+
+  /// Suspends or resumes the read source to match `readGate`.
+  private func syncReading() {
+    guard !finished, let readSource else { return }
+    if readGate.reading, readSuspended {
+      readSuspended = false
+      readSource.resume()
+    } else if !readGate.reading, !readSuspended {
+      readSuspended = true
+      readSource.suspend()
+    }
+  }
+
   private func readAvailable(limit: Int) {
     var buffer = [UInt8](repeating: 0, count: Self.readSize)
     var total = 0
@@ -246,8 +268,14 @@ private final class PseudoTerminalIO: @unchecked Sendable {
       let count = buffer.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
       if count > 0 {
         total += count
-        output?(Data(buffer[0..<count]))
-        if limit == Self.readSize { return }
+        if let output {
+          output(Data(buffer[0..<count]))
+          _ = readGate.read(count)
+        }
+        if limit == Self.readSize {
+          syncReading()
+          return
+        }
         continue
       }
       if count < 0, errno == EINTR { continue }

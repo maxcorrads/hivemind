@@ -41,7 +41,7 @@ not implicitly authorized.
 | Human reads/writes/files | Current Human capability plus a trusted browser context. |
 | Browser agent requests, including join/name resume | Host/Origin/Fetch Metadata checked before handler execution; JSON for JSON mutations. |
 | Native agent requests without Origin/Fetch Metadata | Existing agent bearer authentication; join/resume behavior unchanged. |
-| `GET /api/health` | No Human capability needed; local Host/browser-origin policy still applies. |
+| `GET /api/health` and `GET /api/health/instance?nonce=<64 hex>` | No Human capability needed; local Host/browser-origin policy still applies. The instance challenge answers `{proof}` (`no-store`) only when the server was started with a per-start secret by Hivemind Server.app, 404 otherwise, 400 for a malformed nonce ([Verifying the server](macos.md#verifying-the-server)). |
 | `/ws` upgrade | Exact path, trusted Origin and current Human capability; no query authentication. |
 
 SameSite cookies are not a substitute for origin checks: ports share a site.

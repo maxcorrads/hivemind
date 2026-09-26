@@ -27,22 +27,27 @@ struct UIServerLocatorTests {
       try store.write(ServerDiscovery(
         port: ServerPort(discoveryPort)!, pid: 4242, home: "/h/.hivemind", startedAt: Date(), version: "0.5.0"))
     }
-    return UIServerLocator(discovery: store, health: HealthChecker(http: PortTableHTTP(answers: answers)), isAlive: { _ in alive })
+    let http = PortTableHTTP(answers: answers)
+    return UIServerLocator(discovery: store, health: HealthChecker(http: http), verifier: InstanceVerifier(http: http),
+                           isAlive: { _ in alive })
   }
 
   @Test func candidatesPutTheLiveDiscoveryFirstWithoutRepeats() throws {
-    #expect(try locator(discoveryPort: 7421, answers: [:]).candidates(configuredPort: ServerPort(7500))
+    #expect(try locator(discoveryPort: 7421, answers: [:]).candidates(configuredPort: ServerPort(7500)).map(\.endpoint)
       == [endpoint(7421), endpoint(7500), endpoint(7420)])
-    #expect(try locator(discoveryPort: 7420, answers: [:]).candidates(configuredPort: .default) == [endpoint(7420)])
+    #expect(try locator(discoveryPort: 7420, answers: [:]).candidates(configuredPort: .default).map(\.endpoint) == [endpoint(7420)])
     // A dead server's discovery file is ignored.
-    #expect(try locator(discoveryPort: 7421, alive: false, answers: [:]).candidates(configuredPort: nil) == [endpoint(7420)])
+    #expect(try locator(discoveryPort: 7421, alive: false, answers: [:]).candidates(configuredPort: nil).map(\.endpoint)
+      == [endpoint(7420)])
   }
 
-  @Test func connectsToTheFirstHealthyCandidate() async throws {
+  /// Health alone never connects (InstanceVerificationTests has the
+  /// verified cases): the first server that answers is only `unverified`.
+  @Test func theFirstHealthyCandidateIsOnlyUnverified() async throws {
     let found = try locator(discoveryPort: 7421, answers: [7421: .refused, 7420: .hivemind])
-    #expect(await found.resolve(configuredPort: nil) == .connected(endpoint(7420)))
+    #expect(await found.resolve(configuredPort: nil) == .unverified(endpoint(7420), .notStartedByServerApp))
     let discovered = try locator(discoveryPort: 7421, answers: [7421: .hivemind, 7420: .hivemind])
-    #expect(await discovered.resolve(configuredPort: nil) == .connected(endpoint(7421)))
+    #expect(await discovered.resolve(configuredPort: nil) == .unverified(endpoint(7421), .failed(.noSecret)))
   }
 
   @Test func reportsHowTheFirstCandidateFailed() async throws {

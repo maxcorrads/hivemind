@@ -15,6 +15,7 @@ import { adaptiveRoutingPublic, saveAdaptiveRouting } from "./adaptive-config.ts
 import { decodeJevCallCursor } from "../shared/jev-calls.ts";
 import { ACTIVITY_REASONS, type ActivityReason } from "../shared/read-state.ts";
 import { installJevDiagnostics } from './adaptive-routing-diagnostics.ts';
+import { installInstanceProof } from "./instance-proof.ts";
 import { adviseAfterWait, assignAdaptiveTask, mutateAdaptiveTask, mutateAdaptiveRoom, sendAdaptiveAgentMessage, setAdaptiveThreadStatus } from './adaptive-topology-actions.ts';
 
 export type AppHooks = {
@@ -22,6 +23,8 @@ export type AppHooks = {
   telegramRunning?: () => boolean;
   reloadTelegram?: () => boolean | Promise<boolean>;
   configureTelegram?: (input: TelegramFileInput) => Promise<boolean>;
+  /** Hivemind Server.app's per-start secret (instance-proof.ts); null or absent answers the challenge with 404. */
+  instanceSecret?: Buffer | null;
 };
 function fileDownload(hive: Hive, actor: Agent, id: string) {
   const opened = hive.files.openAttachment(actor, id);
@@ -46,6 +49,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     return c.json({ error: "Internal server error" }, 500);
   });
   app.get("/api/health", c => c.json({ ok: true, name: "hivemind" }));
+  installInstanceProof(app, hooks.instanceSecret ?? null);
   /** The channel and root of a thread id (a message or task id); null when the id is unknown. */
   const threadOwner = (id: string): { channelId: string; threadId: string } | null => {
     const ref = hive.messageQueries.messageRef(id);

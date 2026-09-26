@@ -70,11 +70,18 @@ public struct ServerLaunchSettings: Equatable, Sendable {
   static let dropped: Set<String> = [
     "NODE_OPTIONS", "NODE_PATH", "NODE_EXTRA_CA_CERTS_FILE", "NODE_REPL_EXTERNAL_MODULE",
     "HIVEMIND_URL", "HIVEMIND_TOKEN", "HIVEMIND_FROM_DIST", "HIVEMIND_PORT", "HIVEMIND_HOME",
+    InstanceProof.environmentKey,
   ]
 
-  public func spec(server: BundledServer, baseEnvironment: [String: String], home: URL) -> LaunchSpec {
+  /// `secret` is this start's InstanceSecret: node reads it from
+  /// HIVEMIND_INSTANCE_SECRET and deletes it from its own environment, so
+  /// nothing the server spawns inherits it.
+  public func spec(
+    server: BundledServer, baseEnvironment: [String: String], home: URL, secret: InstanceSecret? = nil
+  ) -> LaunchSpec {
     var environment = baseEnvironment.filter { !Self.dropped.contains($0.key) }
     environment["HIVEMIND_HOME"] = dataHome.path
+    if let secret { environment[InstanceProof.environmentKey] = secret.hex }
     environment["HOME"] = environment["HOME"] ?? home.path
     // A GUI app inherits launchd's bare PATH. The bundled node comes first so
     // anything the server spawns as `node` is the same runtime; the usual
@@ -110,13 +117,19 @@ public struct ServerLaunchSettings: Equatable, Sendable {
 public final class DiscoveryPublisher {
   private let store: DiscoveryStore
   private let settings: @MainActor () -> ServerLaunchSettings
+  /// The secret the running child was started with.
+  private let secret: @MainActor () -> InstanceSecret?
   private let version: String
   private var published: Int32?
 
-  public init(store: DiscoveryStore, version: String, settings: @escaping @MainActor () -> ServerLaunchSettings) {
+  public init(
+    store: DiscoveryStore, version: String, settings: @escaping @MainActor () -> ServerLaunchSettings,
+    secret: @escaping @MainActor () -> InstanceSecret? = { nil }
+  ) {
     self.store = store
     self.version = version
     self.settings = settings
+    self.secret = secret
   }
 
   public func update(for state: SupervisorState) {
@@ -126,7 +139,8 @@ public final class DiscoveryPublisher {
       let current = settings()
       do {
         try store.write(ServerDiscovery(
-          port: current.port, pid: pid, home: current.dataHome.path, startedAt: since, version: version))
+          port: current.port, pid: pid, home: current.dataHome.path, startedAt: since, version: version,
+          instanceSecret: secret()))
         published = pid
       } catch {
         published = nil

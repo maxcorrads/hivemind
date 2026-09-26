@@ -14,6 +14,7 @@ test("parses every terminal event the app sends", () => {
   assert.equal(TERMINAL_EVENT, "hivemind:terminal");
   const events: unknown[] = [
     { type: "terminal-status", tmux: "missing", broker: "connected" },
+    { type: "terminal-status", tmux: "unknown", broker: "unverified" },
     { type: "sessions", items: [session, { ...session, name: "hm-acme-new-1", agent: null, project: null }] },
     { type: "sessions", items: [] },
     { type: "terminal-launched", id: "r1", names: ["hm-acme-atlas", null], created: ["hm-acme-atlas"],
@@ -35,6 +36,7 @@ test("drops malformed or unknown terminal events", () => {
   const bad: unknown[] = [
     null, "sessions", [], { type: "terminal-shell" },
     { type: "terminal-status", tmux: "yes", broker: "connected" },
+    { type: "terminal-status", tmux: "unknown", broker: "trusted" },
     { type: "sessions", items: [{ ...session, name: "acme" }] },
     { type: "sessions", items: [{ ...session, attached: -1 }] },
     { type: "sessions", items: "x" },

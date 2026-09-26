@@ -19,8 +19,21 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   private var connection: UIConnectionState
   /// The hash route to reopen at; follows the page as the user moves around.
   private var route: String?
+  /// A resolve is in flight; only the latest one's answer is used.
   private var resolving = false
+  private var resolveGeneration = 0
   private var retryTimer: Timer?
+  /// While a page shows: watches the discovery file for a stopped,
+  /// restarted or replaced server (docs/macos.md#verifying-the-server).
+  private var trustTimer: Timer?
+  private var trustWatch = ServerTrustWatch()
+  /// The server the user chose "Open without terminals" for in this window.
+  private var acceptedUnverified: ServerEndpoint?
+  /// Terminal messages reach `terminals` only through this.
+  private var gate = TerminalTrustGate()
+  /// The page load this window started right after verifying the server:
+  /// its document may use terminals. Any other document is checked first.
+  private var verifiedNavigation: WKNavigation?
   private var observations: [NSKeyValueObservation] = []
   private var isClosed = false
   /// This window's terminals (docs/terminal-broker.md#bridge): its own
@@ -38,7 +51,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   }
 
   convenience init(app: HivemindApp, auxiliaryURL: URL, endpoint: ServerEndpoint, zoom: Double) {
-    self.init(app: app, primary: false, zoom: zoom, connection: .connected(endpoint))
+    // No bridge in an auxiliary window, so nothing here needs the server verified.
+    self.init(app: app, primary: false, zoom: zoom, connection: .connected(endpoint, .unverified))
     showWebView()
     webView.load(URLRequest(url: auxiliaryURL))
   }
@@ -98,6 +112,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
       self?.connect()
     }
     connectView.onRetry = { [weak self] text in self?.retry(portText: text) }
+    connectView.onOpenWithoutTerminals = { [weak self] in self?.openWithoutTerminals() }
     observations = [
       webView.observe(\.title) { webView, _ in
         MainActor.assumeIsolated {
@@ -138,45 +153,81 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   // MARK: Connection
 
   private var endpoint: ServerEndpoint? {
-    if case .connected(let endpoint) = connection { endpoint } else { nil }
+    if case .connected(let endpoint, _) = connection { endpoint } else { nil }
   }
 
-  /// Finds a server and loads it, or shows the connect screen and keeps
-  /// trying. The spinner is for checks the user asked for, not the timer's.
-  private func connect(showingProgress: Bool = true) {
-    guard isPrimary, !resolving else { return }
-    resolving = true
+  private var trust: ServerTrust? {
+    if case .connected(_, let trust) = connection { trust } else { nil }
+  }
+
+  static let trustCheckInterval: TimeInterval = 1
+
+  /// Finds a server and verifies it (UIServerLocator), then loads it or
+  /// shows the connect screen. The spinner is for checks the user asked
+  /// for, not the timer's, which never interrupts a check in flight.
+  private func connect(showingProgress: Bool = true, ifIdle: Bool = false) {
+    guard isPrimary else { return }
+    if ifIdle, resolving { return }
     if showingProgress { refreshConnectScreen(checking: true) }
-    let port = app.configuredPort
+    resolve { [weak self] result in self?.apply(result) }
+  }
+
+  /// One resolve; a newer one supersedes it. The discovery file is read
+  /// before, so a change during the resolve is seen by the next watch tick.
+  private func resolve(_ handle: @escaping @MainActor (UIConnectionState) -> Void) {
+    resolveGeneration += 1
+    let generation = resolveGeneration
+    resolving = true
     let locator = app.locator
+    let port = app.configuredPort
+    let basis = locator.liveInstance()
     Task {
       let result = await locator.resolve(configuredPort: port)
+      guard generation == resolveGeneration, !isClosed else { return }
       resolving = false
-      guard !isClosed else { return }
-      apply(result)
+      trustWatch.decided(on: basis)
+      handle(result)
     }
   }
 
   private func apply(_ result: UIConnectionState) {
-    if case .connected(let endpoint) = result {
-      load(endpoint)
-    } else {
+    switch result {
+    case .connected(let endpoint, let trust):
+      load(endpoint, trust: trust)
+    case .unverified(let endpoint, _) where endpoint == acceptedUnverified:
+      load(endpoint, trust: .unverified)
+    default:
       showConnectScreen(result)
     }
   }
 
-  private func load(_ endpoint: ServerEndpoint) {
+  /// A new document from `endpoint`. Verified: this navigation's document
+  /// gets terminals once committed. Unverified: none do.
+  private func load(_ endpoint: ServerEndpoint, trust: ServerTrust) {
     stopRetrying()
-    connection = .connected(endpoint)
+    connection = .connected(endpoint, trust)
     showWebView()
     outbox.pageWillLoad()
-    webView.load(URLRequest(url: UIWindowState(hash: route).url(endpoint: endpoint)))
+    // Whatever the old page left waiting is refused; the new one starts closed.
+    deliverTerminalEvents(gate.close())
+    let navigation = webView.load(URLRequest(url: UIWindowState(hash: route).url(endpoint: endpoint)))
+    verifiedNavigation = trust.allowsTerminals ? navigation : nil
+    startTrustWatch()
+  }
+
+  private func openWithoutTerminals() {
+    guard case .unverified(let endpoint, _) = connection else { return }
+    acceptedUnverified = endpoint
+    load(endpoint, trust: .unverified)
   }
 
   private func showConnectScreen(_ state: UIConnectionState) {
     connection = state
     outbox.discard()
     terminals?.pageDidChange()
+    _ = gate.close()
+    verifiedNavigation = nil
+    stopTrustWatch()
     app.clearBadge(for: id)
     webView.stopLoading()
     webView.isHidden = true
@@ -213,7 +264,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   private func startRetrying() {
     guard retryTimer == nil else { return }
     retryTimer = Timer.scheduledTimer(withTimeInterval: Self.retryInterval, repeats: true) { [weak self] _ in
-      MainActor.assumeIsolated { self?.connect(showingProgress: false) }
+      MainActor.assumeIsolated { self?.connect(showingProgress: false, ifIdle: true) }
     }
   }
 
@@ -222,21 +273,74 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     retryTimer = nil
   }
 
-  /// On app activation: if this window's server went away and the discovery
-  /// file now names another live one (the server app restarted it on a new
-  /// port), follow it. A server that is merely down is left to the page,
-  /// which reconnects by itself.
-  func revalidate() {
-    terminals?.retry()
-    guard isPrimary, let current = endpoint, !resolving else { return }
-    let locator = app.locator
-    let port = app.configuredPort
-    Task {
-      guard await HealthChecker().check(current) != .healthy else { return }
-      if case .connected(let found) = await locator.resolve(configuredPort: port), found != current, endpoint == current {
-        load(found)
+  // MARK: Trust
+
+  private func startTrustWatch() {
+    guard isPrimary, trustTimer == nil else { return }
+    trustTimer = Timer.scheduledTimer(withTimeInterval: Self.trustCheckInterval, repeats: true) { [weak self] _ in
+      MainActor.assumeIsolated { self?.checkTrust() }
+    }
+  }
+
+  private func stopTrustWatch() {
+    trustTimer?.invalidate()
+    trustTimer = nil
+  }
+
+  /// A watch tick: the discovery file against what this window decided on.
+  private func checkTrust() {
+    guard isPrimary, let trust, !resolving else { return }
+    switch trustWatch.observe(app.locator.liveInstance(), trust: trust) {
+    case .lapse: holdTerminals()
+    case .reverify: reverify()
+    case .none:
+      // Held terminals keep looking until a check decides: the server is
+      // back (a new document), something unverified answers (the connect
+      // screen), or it is still away.
+      if trust.allowsTerminals, gate.mode == .held { reverify() }
+    }
+  }
+
+  /// Resolves again while a page shows, and acts on it (UITrustAction).
+  private func reverify() {
+    guard isPrimary, endpoint != nil else { return }
+    resolve { [weak self] result in
+      guard let self, endpoint != nil else { return }
+      switch UITrustAction.decide(current: connection, result: result, acceptedUnverified: acceptedUnverified) {
+      case .keep:
+        if trust?.allowsTerminals == true {
+          for message in gate.open() { terminals?.handle(message) }
+        } else {
+          deliverTerminalEvents(gate.close())
+        }
+      case .load(let endpoint, let trust):
+        load(endpoint, trust: trust)
+      case .hold:
+        holdTerminals()
+      case .connectScreen(let state):
+        showConnectScreen(state)
       }
     }
+  }
+
+  /// Nothing proves who answers on the port now: the page's streams end and
+  /// its terminal messages wait for the next decision.
+  private func holdTerminals() {
+    guard gate.mode != .held else { return }
+    gate.hold()
+    terminals?.pageDidChange()
+  }
+
+  private func deliverTerminalEvents(_ events: [BridgeTerminalEvent]) {
+    for event in events { webView.evaluateJavaScript(event.javaScript, completionHandler: nil) }
+  }
+
+  /// On app activation: retry the broker, and look at the discovery file now
+  /// rather than at the next tick. A server that is merely down is left to
+  /// the page, which reconnects by itself.
+  func revalidate() {
+    terminals?.retry()
+    checkTrust()
   }
 
   // MARK: Page
@@ -259,9 +363,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     route = hash
     if outbox.isReady {
       send(.navigate(hash: hash))
-    } else if let endpoint {
-      // A page without the bridge (an older server) still gets there.
-      load(endpoint)
+    } else if endpoint != nil {
+      // A page without the bridge (an older server) still gets there, on a
+      // server verified again.
+      connect(showingProgress: false)
     }
   }
 
@@ -280,10 +385,18 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     case .notify(let title, let body, let tag, let target):
       app.notifier.post(UIAppNotice(title: title, body: body, tag: tag, target: target, windowID: id))
     default:
-      // Terminals (docs/terminal-broker.md#bridge). No confirmation for a
-      // launch, by the user's choice (docs/macos.md#security-note); the
-      // router throttles launch, open and kill.
-      terminals?.handle(parsed)
+      // Terminals (docs/terminal-broker.md#bridge), only for a page from a
+      // verified server (TerminalTrustGate). No confirmation for a launch,
+      // by the user's choice (docs/macos.md#security-note); the router
+      // throttles launch, open and kill.
+      guard terminals != nil else { return }
+      for route in gate.route(parsed) {
+        switch route {
+        case .relay(let message): terminals?.handle(message)
+        case .answer(let event): deliverTerminalEvents([event])
+        case .drop: break
+        }
+      }
     }
   }
 
@@ -299,7 +412,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     case .newWindow, .help, .closeWindow:
       app.perform(command)
     case .reload:
-      if endpoint != nil { webView.reload() } else { connect() }
+      // Every reload verifies the server again.
+      if isPrimary { connect() } else { webView.reload() }
     case .actualSize: setZoom(PageZoom.actualSize)
     case .zoomIn: setZoom(PageZoom.zoomIn(from: webView.pageZoom))
     case .zoomOut: setZoom(PageZoom.zoomOut(from: webView.pageZoom))
@@ -341,6 +455,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
     isClosed = true
     terminals?.close()
     stopRetrying()
+    stopTrustWatch()
     observations.removeAll()
     webView.stopLoading()
     webView.configuration.userContentController.removeAllScriptMessageHandlers()
@@ -393,6 +508,21 @@ extension BrowserWindowController: WKNavigationDelegate {
     outbox.pageWillLoad()
     // The old page's in-app terminals go with it.
     terminals?.pageDidChange()
+    gate.pageDidChange()
+    guard isPrimary, let trust else { return }
+    if trust.allowsTerminals, let verified = verifiedNavigation, navigation === verified {
+      verifiedNavigation = nil
+      _ = gate.open()
+    } else if trust.allowsTerminals {
+      // A document this window did not load right after verifying (the page
+      // reloaded itself, back/forward): its terminal messages wait until the
+      // server is verified again as the same process.
+      verifiedNavigation = nil
+      holdTerminals()
+      reverify()
+    } else {
+      _ = gate.close()
+    }
   }
 
   func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
@@ -427,7 +557,7 @@ extension BrowserWindowController: WKNavigationDelegate {
   }
 
   func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-    if isPrimary, let endpoint { load(endpoint) } else { webView.reload() }
+    if isPrimary, endpoint != nil { connect(showingProgress: false) } else { webView.reload() }
   }
 
   func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
