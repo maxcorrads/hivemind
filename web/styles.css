@@ -708,7 +708,9 @@ kbd { font-family: var(--mono); font-size: 11px; }
 
 .modal {
   position: fixed;
-  inset: 0;
+  /* The visible part of the page: above an on-screen keyboard too (web/visual-viewport.ts). */
+  inset: var(--visual-top, 0px) 0 auto;
+  height: var(--visual-height, 100dvh);
   display: grid;
   justify-items: center;
   align-items: center;
@@ -717,7 +719,7 @@ kbd { font-family: var(--mono); font-size: 11px; }
 }
 .sheet {
   width: min(32rem, 100%);
-  max-height: calc(100dvh - 2rem);
+  max-height: calc(var(--visual-height, 100dvh) - 2rem);
   overflow: auto;
   overscroll-behavior: contain;
   margin-block: auto;
@@ -729,7 +731,7 @@ kbd { font-family: var(--mono); font-size: 11px; }
 }
 .sheet-wide {
   width: min(44rem, 100%);
-  max-height: calc(100dvh - 2rem);
+  max-height: calc(var(--visual-height, 100dvh) - 2rem);
   overflow: hidden;
 }
 .sheet:has(> .sheet-body) { overflow: hidden; }
@@ -907,7 +909,7 @@ summary:focus-visible, .tool-action:focus-visible { outline: 2px solid var(--wax
 .launch-sheet > .sheet-body > label:not(.check) { grid-column: auto; }
 .launch-sheet > .sheet-body > label.launch-workspace { grid-column: 1 / -1; }
 @media (max-width: 540px) {
-  .sheet { max-height: calc(100dvh - 1.2rem); }
+  .sheet { max-height: calc(var(--visual-height, 100dvh) - 1.2rem); }
   .launch-sheet > .sheet-body { grid-template-columns: minmax(0, 1fr); }
 }
 

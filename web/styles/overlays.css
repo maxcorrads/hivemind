@@ -105,7 +105,7 @@
 /* ---- Quick switcher (Cmd/Ctrl+K) ---------------------------------------------------------------------------------
    A 600px panel high on the page: a 54px search field, results grouped by kind with 26px tiles, a key legend. */
 .modal:has(> .switcher) { align-items: start; padding-top: min(110px, 12dvh); }
-.sheet.switcher { width: min(600px, 100%); max-height: calc(100dvh - min(110px, 12dvh) - 16px); margin-block: 0; padding: 0; gap: 0; overflow: hidden; }
+.sheet.switcher { width: min(600px, 100%); max-height: calc(var(--visual-height, 100dvh) - min(110px, 12dvh) - 16px); margin-block: 0; padding: 0; gap: 0; overflow: hidden; }
 .switcher-field { flex: none; display: flex; align-items: center; gap: 10px; height: 54px; padding: 0 16px; border-bottom: 1px solid var(--line); color: var(--mute); }
 /* The caret is the only other sign of focus in the field: underline it in the accent. */
 .switcher-field:focus-within { box-shadow: inset 0 -1px 0 var(--accent); }
@@ -227,6 +227,6 @@
   .launch-sheet > .sheet-head { padding: 14px 14px 10px; }
   .launch-sheet > .sheet-body { padding: 4px 14px 14px; }
   .modal:has(> .switcher) { padding-top: 10px; }
-  .sheet.switcher { max-height: calc(100dvh - 20px); }
+  .sheet.switcher { max-height: calc(var(--visual-height, 100dvh) - 20px); }
   .switcher-scope, .inbox-bar-rule { display: none; }
 }

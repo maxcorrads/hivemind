@@ -2,6 +2,7 @@ import Foundation
 import HivemindKit
 import Security
 import UIKit
+import WebKit
 import Testing
 @testable import Hivemind
 
@@ -32,6 +33,30 @@ struct HivemindAppTests {
     #expect(scenes?["UIApplicationSupportsMultipleScenes"] as? Bool == true)
     let ats = info["NSAppTransportSecurity"] as? [String: Any]
     #expect(ats?["NSAllowsArbitraryLoads"] == nil)
+  }
+
+  /// The page's own Esc/Ctrl/Tab/arrow row replaces WebKit's form bar above
+  /// the keyboard (HivemindWebView).
+  @MainActor @Test func thePageHasNoInputAccessoryBar() throws {
+    let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 800))
+    let first = HivemindWebView(frame: window.bounds, configuration: WKWebViewConfiguration())
+    let second = HivemindWebView(frame: window.bounds, configuration: WKWebViewConfiguration())
+    window.addSubview(first)
+    window.addSubview(second)
+    let contents = [first, second].compactMap { webView in
+      webView.scrollView.subviews.first { NSStringFromClass(type(of: $0)).hasPrefix("WKContent") }
+    }
+    #expect(contents.count == 2)
+    for content in contents {
+      #expect(content.inputAccessoryView == nil)
+      #expect(content.inputAssistantItem.trailingBarButtonGroups.isEmpty, "no previous/next on an iPad's shortcut bar")
+      #expect(NSStringFromClass(type(of: content)).hasSuffix("_HivemindNoInputAccessory"))
+    }
+    #expect(type(of: contents[0]) == type(of: contents[1]), "one subclass, made once")
+    // Moving a web view to another window does not subclass it twice.
+    first.removeFromSuperview()
+    window.addSubview(first)
+    #expect(!NSStringFromClass(type(of: contents[0])).hasSuffix("_HivemindNoInputAccessory_HivemindNoInputAccessory"))
   }
 }
 

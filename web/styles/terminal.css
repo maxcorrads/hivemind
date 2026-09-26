@@ -54,7 +54,7 @@
 .person.on .person-term { color: var(--ok-ink); }
 
 /* ---- Terminal sessions sheet ------------------------------------------------------------------------------------- */
-.sessions-sheet { width: min(60rem, 100%); height: min(46rem, calc(100dvh - 2rem)); }
+.sessions-sheet { width: min(60rem, 100%); height: min(46rem, calc(var(--visual-height, 100dvh) - 2rem)); }
 .sessions-sheet .sheet-head > .btn { flex: none; }
 .sessions-sheet .sheet-head code { font-family: var(--mono); font-size: 12px; }
 .sessions-sheet .sheet-body { padding-bottom: 18px; }
@@ -73,7 +73,7 @@
   .rail > .sessions-cta { display: none; }
   /* The iPhone/iPad app has no other way to its terminals on a phone; a phone browser has no terminals at all. */
   .rail > .sessions-cta[data-platform="ios"] { display: flex; height: 44px; font-size: 14px; }
-  .sessions-sheet { height: calc(100dvh - 2rem); }
+  .sessions-sheet { height: calc(var(--visual-height, 100dvh) - 2rem); }
   .session-list > li { grid-template-columns: auto minmax(0, 1fr); }
   .session-actions { grid-column: 2; flex-wrap: wrap; }
 }

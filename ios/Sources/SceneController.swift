@@ -229,7 +229,7 @@ final class SceneController {
     configuration.preferences.isElementFullscreenEnabled = true
     let coordinator = WebCoordinator(scene: self, pin: mac.fingerprint)
     configuration.userContentController.add(WeakScriptMessageHandler(coordinator), contentWorld: .page, name: bridgeHandlerName)
-    let webView = WKWebView(frame: .zero, configuration: configuration)
+    let webView: WKWebView = HivemindWebView(frame: .zero, configuration: configuration)
     webView.navigationDelegate = coordinator
     webView.uiDelegate = coordinator
     webView.allowsBackForwardNavigationGestures = true

@@ -127,7 +127,11 @@ The page is the same as in Hivemind.app, with these differences:
   running on your Mac", "Install tmux on your Mac: `brew install tmux`"). The
   app cannot start Hivemind Server on the Mac.
 - The row of Esc, Ctrl, Tab, ^C and arrow keys under the terminal is always
-  shown, also on an iPad with a keyboard.
+  shown, also on an iPad with a keyboard. It stays above the on-screen
+  keyboard: the page's sheets follow the visible part of the page
+  (`web/visual-viewport.ts`), and the app leaves out WebKit's form bar
+  (previous, next, Done) above the keyboard, and the previous/next buttons on
+  an iPad's shortcut bar (`HivemindWebView`).
 
 A plain browser shows none of this: no bridge, no terminals, as before.
 
