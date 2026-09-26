@@ -180,6 +180,9 @@ any VPN that hands out addresses in these ranges works.
 
 - On first use, Hivemind Server.app creates a self-signed identity (ECDSA
   P-256) and keeps it in the login Keychain. The private key never leaves it.
+  Every later start finds the same identity again (the certificate through
+  its key's public-key hash, `GatewayIdentityStore.load`), so the
+  fingerprint, and every device's pin, survives restarts and updates.
 - The gateway speaks TLS 1.3 only. Both ends are Hivemind, so no older
   version is needed.
 - The **fingerprint** is the SHA-256 of the certificate's DER bytes
