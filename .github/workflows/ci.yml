@@ -244,6 +244,9 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+  # The required aggregate. macos_compat is the Node suite's own macOS lane;
+  # the Apple app jobs (macos_apps, ios_app) are informational and must never
+  # be listed here, so a macOS or Xcode runner problem cannot block a merge.
   tests_node24:
     name: Tests / Node 24
     needs: [unit_node24, integration_node24, macos_compat, browser]
