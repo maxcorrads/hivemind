@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.6.0](https://github.com/maxcorrads/hivemind/compare/v0.5.0...v0.6.0) (2026-09-26)
+
+
+### Features
+
+* **ios:** iOS/iPadOS app and remote gateway with QR pairing ([#256](https://github.com/maxcorrads/hivemind/issues/256)) ([63c3c84](https://github.com/maxcorrads/hivemind/commit/63c3c84e61d3096f3bfdbe6b76937c4562e3ea4f))
+* **macos:** native UI and menu-bar server apps, agents in tmux with an in-app terminal ([#253](https://github.com/maxcorrads/hivemind/issues/253)) ([bf44e56](https://github.com/maxcorrads/hivemind/commit/bf44e5635e9592e758e017665c93ed4dc9ddf526))
+* **ui:** neutral redesign with project-rail and single-sidebar layouts ([#251](https://github.com/maxcorrads/hivemind/issues/251)) ([b11136b](https://github.com/maxcorrads/hivemind/commit/b11136bf893643aae8178eba8e9afc297338fcec))
+
+
+### Bug Fixes
+
+* **macos:** refresh the Remote Access submenu when its state changes ([#257](https://github.com/maxcorrads/hivemind/issues/257)) ([c8810d9](https://github.com/maxcorrads/hivemind/commit/c8810d9398ee235acc8debcfdf31aa7e841f2e94))
+
 ## [0.5.0](https://github.com/maxcorrads/hivemind/compare/v0.4.0...v0.5.0) (2026-09-25)
 
 
