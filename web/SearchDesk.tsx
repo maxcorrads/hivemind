@@ -1,3 +1,4 @@
+import { X } from "lucide-react";
 import type { SearchHit } from "../src/shared/types.ts";
 import { Avatar } from "./Avatar.tsx";
 import { BotOrigin } from "./Bots.tsx";
@@ -69,7 +70,8 @@ export function SearchDesk({
             {q ? ` · “${q}”` : ""}
           </p>
         </div>
-        <button type="button" className="text-btn" onClick={onClear}>
+        <button type="button" className="btn" onClick={onClear}>
+          <X size={14} aria-hidden="true" />
           Clear
         </button>
       </header>

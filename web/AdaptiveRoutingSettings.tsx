@@ -1,3 +1,4 @@
+import { ChevronRight, Route } from "lucide-react";
 import { Modal } from "./Modal.tsx";
 import { useEffect, useState } from "react";
 import { api, type AdaptiveRoutingSettings } from "./api.ts";
@@ -56,7 +57,10 @@ export function AdaptiveRoutingSettings({ onClose, onSaved }: { onClose: () => v
             .finally(() => setBusy(false));
         }}
       >
-        <h2>Adaptive routing · Jev</h2>
+        <header className="sheet-head">
+          <span className="sheet-icon" aria-hidden="true"><Route size={17} /></span>
+          <div><h2>Adaptive routing · Jev</h2><p>Advisory only: the brain decides.</p></div>
+        </header>
         <div className="sheet-body">
         <p className="help-p">Jev advises brains on how many agents a request needs. Its advice is never enforced: the brain decides, and your instructions always take precedence.</p>
         <p className="config-status" role="status">{!settings ? "Loading settings…" : settings.enabled ? "Enabled" : "Disabled"} · {settings?.apiKeySet ? "API key configured" : "No API key saved"}</p>
@@ -82,7 +86,7 @@ export function AdaptiveRoutingSettings({ onClose, onSaved }: { onClose: () => v
         </label>
         <p className="help-p">The API key stays in your private local configuration.</p>
         <JevConnectionTest savedSettings={settings} disabled={busy || dirty} />
-        <details className="settings-disclosure"><summary>Advanced options</summary>
+        <details className="settings-disclosure sheet-disclosure"><summary><ChevronRight size={14} aria-hidden="true" />Advanced options</summary>
         <p className="help-p">If Jev is uncertain or unavailable, the brain is told so and simply decides without advice.</p>
         <label>
           Jev model identifier
@@ -100,7 +104,7 @@ export function AdaptiveRoutingSettings({ onClose, onSaved }: { onClose: () => v
         <p className="help-p">Requested model: <code>{settings?.model ?? JEV_MODEL_ALIAS}</code> · {settings?.modelPinned ? "pinned identifier" : "default alias"}. Leave empty to use the alias <code>{settings?.defaultModel ?? JEV_MODEL_ALIAS}</code>, which TypeSafe may resolve to a different model over time. Enter an exact identifier from your provider to pin it for reproducible routing evaluation. Hivemind does not list models or prices and does not verify that an identifier exists or never changes: if TypeSafe rejects it, Jev calls fail visibly and brains get no advice. The Routing log records the requested and the resolved model separately. The TypeSafe endpoint never changes.</p>
         {!modelValid && <p className="err">Use only letters, digits, dot, underscore or hyphen (at most 64 characters), not a URL.</p>}
         </details>
-        <details className="settings-disclosure"><summary>What data is sent to Jev?</summary>
+        <details className="settings-disclosure sheet-disclosure"><summary><ChevronRight size={14} aria-hidden="true" />What data is sent to Jev?</summary>
         <p className="help-p">Every message you address to a brain — in any channel, thread or via Telegram — sends that request and the project name/slug to TypeSafe before delivery. Each brain action (message, file, task, room or thread change, and each wait that delivers mail) sends the request again with worker capacity, the brain's task/dependency/blocker counts, a short summary of the action, recent actions and the previous advice. Worker activity is never sent.</p>
         <p className="help-p">Repository contents, full message history and Hivemind credentials are not sent.</p>
         </details>

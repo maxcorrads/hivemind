@@ -26,7 +26,7 @@ test("channel titles and member names", () => {
 });
 
 test("avatar hue is a stable angle", () => {
-  assert.equal(avatarHue("Ab"), (65 + 98) % 360);
+  assert.equal(avatarHue("Ab"), ((65 + 98) * 37) % 360);
   assert.ok(avatarHue("Forge") >= 0 && avatarHue("Forge") < 360);
 });
 

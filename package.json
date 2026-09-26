@@ -63,6 +63,7 @@
     "concurrently": "^10.0.5",
     "esbuild": "^0.28.2",
     "happy-dom": "20.14.5",
+    "lucide-react": "^1.48.0",
     "markdown-it": "^14.3.2",
     "oxlint": "1.85.0",
     "react": "^19.1.1",

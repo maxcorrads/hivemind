@@ -1,3 +1,4 @@
+import { Info } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 /**
@@ -38,7 +39,7 @@ export function Popover({ className, label, summary, children }: {
 /** One "i" toggle holding the fine print that used to repeat inline on every card. */
 export function InfoTip({ label, notes }: { label: string; notes: string[] }) {
   if (notes.length === 0) return null;
-  return <Popover className="info-tip" label={label} summary="i">
+  return <Popover className="info-tip" label={label} summary={<Info size={15} aria-hidden="true" />}>
     <ul role="note">{notes.map(note => <li key={note}>{note}</li>)}</ul>
   </Popover>;
 }

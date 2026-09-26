@@ -1,0 +1,174 @@
+/* Channel area: the conversation header (channel and DM), message rows, stream cards, the Jev strip and the
+   composer. Loaded after styles.css, so these rules win over the older ones they replace. */
+
+/* Header: 52px, title and muted topic, segmented tabs on --sunk, members and Invite on the right. */
+.desk-h.channel-h { height: 52px; align-items: center; justify-content: flex-start; gap: 12px; padding: 0 16px 0 20px; }
+.channel-h-title { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 10px; }
+/* Not shrinkable: a fraction of a pixel of shrink already shows the ellipsis; max-width caps a very long name. */
+.channel-h h1 { flex: none; max-width: 100%; margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.015em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.channel-h h1 > .lucide { margin-right: 4px; vertical-align: -2px; color: var(--mute); }
+/* Zero-size but inline: .sr-only is absolutely positioned, which makes Chromium name the heading "# name". */
+.h-sigil { font-size: 0; }
+/* The topic gives way first, so a narrow header (thread open) still shows the channel name. */
+.channel-h-title > p { flex: 0 1000 auto; min-width: 0; margin: 0; color: var(--mute); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.channel-tabs.seg { flex: none; margin-left: 12px; padding: 2px; border: 0; overflow: visible; }
+.channel-tabs.seg > [role=tab] { padding: 4px 10px; border: 0; border-radius: 6px; font-size: 12.5px; font-weight: 500; color: var(--mute); }
+.channel-tabs.seg > [role=tab]:hover { color: var(--ink); }
+.channel-tabs.seg > [role=tab][aria-selected=true] { font-weight: 600; color: var(--ink); }
+.channel-tabs .tab-count { min-width: 0; padding: 0; border-radius: 0; background: none; font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(--ink2); }
+.channel-h-tools { flex: none; display: flex; align-items: center; gap: 6px; }
+
+.member-stack > summary { display: flex; align-items: center; height: 30px; gap: 6px; padding: 0 8px 0 6px; border: 1px solid var(--line); border-radius: 7px; }
+.member-stack > summary:hover, .member-stack[open] > summary { background: var(--hover); }
+.member-avatars { display: flex; }
+.member-avatars .avatar { box-shadow: 0 0 0 2px var(--surface); }
+.member-avatars .avatar + .avatar { margin-left: -4px; }
+/* Presence lives in the list below; the stack stays calm. */
+.member-avatars .avatar::after { display: none; }
+.member-count { font-size: 12.5px; font-weight: 500; color: var(--ink2); }
+.member-list li { font-size: 13px; }
+.member-list small { font-size: 11.5px; }
+
+/* DM header: the other side's avatar with presence, name, role in mono and a status line. */
+.dm-title { align-items: center; }
+.dm-avatars { flex: none; display: flex; }
+.dm-avatars .avatar:not(.sm) { width: 28px; height: 28px; border-radius: 7px; font-size: 11px; }
+.dm-avatars .avatar + .avatar { margin-left: -4px; box-shadow: 0 0 0 2px var(--surface); }
+.dm-title > h1 { flex: 0 1 auto; }
+.role-pill { flex: none; padding: 1px 6px; border: 1px solid var(--line); border-radius: 4px; font-family: var(--mono); font-size: 11px; line-height: 1.4; color: var(--ink2); }
+
+.channel-panel { padding: 16px 20px; }
+
+/* Stream and message rows. */
+.channel-messages > .stream { padding: 12px 0 8px; }
+.msg { grid-template-columns: 32px minmax(0, 1fr); gap: 12px; padding: 6px 20px; }
+.msg > .avatar { margin-top: 2px; }
+.msg.grouped { padding-top: 1px; padding-bottom: 2px; }
+.gutter-time { font-family: var(--mono); font-size: 10px; line-height: 22px; }
+.msg-h { gap: 8px; align-items: baseline; }
+.msg-h strong { font-size: 14px; font-weight: 600; color: var(--ink); }
+.msg-h .role { font-family: var(--mono); font-size: 10.5px; color: var(--mute); }
+.msg-h time { font-size: 12px; color: var(--mute); }
+.msg-h .st.tone-chip { align-self: center; padding: 1px 7px; font-size: 11px; }
+.msg-b { margin-top: 2px; font-size: 14px; line-height: 1.55; color: var(--ink2); max-width: 72ch; text-wrap: pretty; }
+.msg-b.md strong { color: var(--ink); font-weight: 600; }
+.msg-b.md code { padding: 1px 4px; border-radius: 4px; background: var(--sunk); font-size: 12.5px; }
+.msg-b.md pre code { padding: 0; background: none; }
+.msg-b.md pre { border: 1px solid var(--line); font-size: 12.5px; }
+.mention { padding: 0 3px; }
+.msg.sys { padding: 6px 20px; }
+.msg.sys p { font-size: 12.5px; }
+.msg.sys time { font-size: 11.5px; }
+
+.stream-divider { gap: 10px; margin: 12px 20px 6px; font-size: 11.5px; font-weight: 600; color: var(--mute); }
+.stream-divider.unread { color: var(--bad-ink); }
+.stream-divider.unread::before, .stream-divider.unread::after { background: color-mix(in oklch, var(--bad) 40%, transparent); }
+
+.jump-pill { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; font-size: 12.5px; font-weight: 600; }
+
+/* Task event card: chip + mono id, title, route, then a --sunk footer with Open task and the raw contract. */
+.stream-card { max-width: 520px; margin: 8px 0 0; padding: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--raised);
+  font-size: 14px; overflow: hidden; }
+.stream-card .card-body { padding: 10px 12px; }
+.stream-card .card-top { flex-wrap: nowrap; gap: 8px; min-width: 0; }
+.stream-card .card-id { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 11px; color: var(--mute); }
+.stream-card .card-title { margin: 8px 0 2px; font-size: 14px; font-weight: 600; color: var(--ink); }
+.stream-card .card-meta { font-size: 12.5px; }
+.stream-card .card-actions { align-items: center; gap: 4px 14px; margin: 0; padding: 7px 12px; border-top: 1px solid var(--line); background: var(--sunk); font-size: 12.5px; }
+.stream-card .card-btn { padding: 0; border: 0; border-radius: 4px; font-size: inherit; font-weight: 600; color: var(--accent); }
+.stream-card .card-btn:hover, .stream-card summary:hover { text-decoration: underline; }
+/* A text action beside Open task, like the design: no disclosure triangle. */
+.stream-card summary { list-style: none; color: var(--mute); font-size: inherit; }
+.stream-card summary::-webkit-details-marker { display: none; }
+.stream-card details[open] > summary { color: var(--ink2); }
+.stream-card .card-raw { max-height: 16rem; overflow: auto; margin-top: 6px; font-size: 12px; color: var(--ink2); }
+
+/* Attachments, reactions and the reply summary. */
+.atts { gap: 6px; margin: 6px 0 0; }
+.att-img { border-radius: 8px; box-shadow: 0 0 0 1px var(--line); }
+.att-chip { align-items: center; gap: 6px; padding: 5px 10px; border-radius: 8px; background: var(--surface); color: var(--ink); font-size: 12.5px; }
+.att-chip:hover { background: var(--hover); }
+.att-chip > .lucide { color: var(--mute); }
+.att-chip small { color: var(--mute); font-size: 11.5px; }
+.reacts { gap: 4px; margin: 6px 0 0; }
+.react { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px; border: 1px solid var(--line); border-radius: 999px;
+  background: transparent; font-size: 12.5px; }
+.react:hover:not(:disabled) { background: var(--hover); }
+.react:disabled { cursor: default; }
+.react.mine { border-color: color-mix(in oklch, var(--accent) 45%, transparent); background: color-mix(in oklch, var(--accent) 10%, transparent); }
+.react em { margin: 0; font-style: normal; font-size: 11.5px; font-weight: 600; color: var(--ink2); font-variant-numeric: tabular-nums; }
+.replies { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; padding: 3px 8px 3px 6px; border-radius: 7px;
+  font-size: 12.5px; font-weight: 600; color: var(--accent); }
+.replies > .lucide { color: var(--mute); }
+.replies:hover { background: var(--hover); }
+/* Its thread is open beside the stream. */
+.replies.open { background: color-mix(in oklch, var(--accent) 10%, transparent); }
+
+/* Hover toolbar: quick reactions | more, reply, copy link, mark unread. */
+.msg-tools { top: -14px; right: 16px; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: var(--raised); box-shadow: var(--shadow); }
+.react-pick { gap: 0; margin-right: 2px; padding-right: 2px; border-right: 1px solid var(--line); }
+.tool-btn { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border-radius: 6px; color: var(--mute); }
+.tool-btn:hover, .tool-btn[aria-expanded="true"] { background: var(--hover); color: var(--ink); }
+.react-pick-btn { width: 28px; height: 28px; padding: 0; border-radius: 6px; font-size: 15px; line-height: 1; }
+.react-pick-btn:hover { background: var(--hover); }
+.react-pick-btn.mine { background: color-mix(in oklch, var(--accent) 12%, transparent); }
+.emoji-picker { top: calc(100% + 4px); grid-template-columns: repeat(6, 30px); gap: 2px; padding: 6px; border-radius: 10px; background: var(--raised); }
+.emoji-picker .react-pick-btn { width: 30px; height: 30px; }
+
+/* Jev strip: advisory, on --sunk, just above the composer. */
+.routing-strip { margin: 0 20px 8px; padding: 6px 10px; gap: 10px; border: 0; border-radius: 8px; background: var(--sunk); font-size: 12.5px; }
+.routing-strip.warning { background: color-mix(in oklch, var(--warn) 14%, var(--sunk)); }
+.routing-strip button { font-size: inherit; flex: none; display: inline-flex; align-items: center; gap: 10px; padding: 0; border-radius: 4px; color: var(--ink2); }
+.routing-strip button > .lucide { color: var(--accent); }
+.routing-strip button > strong { font-weight: 600; color: var(--ink); }
+.routing-strip button:hover > strong { text-decoration: underline; }
+.routing-strip span { margin-left: auto; color: var(--mute); }
+/* --mute on the warn tint is under 4.5:1: the caption leans toward --ink2 there. */
+.routing-strip.warning span { color: color-mix(in oklch, var(--mute) 70%, var(--ink2)); }
+
+/* Composer: a 12px bordered box, the draft above a bar of attach, @, emoji, the key hint and Send. */
+.composer { padding: 0 20px 18px; }
+.composer-box { flex-direction: column; align-items: stretch; gap: 0; padding: 0; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--surface); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03); }
+.composer textarea { display: block; min-height: 44px; padding: 11px 14px 4px; font-size: 14px; line-height: 1.45; color: var(--ink); }
+.composer textarea::placeholder { color: var(--mute); }
+.composer-bar { display: flex; align-items: center; gap: 2px; min-width: 0; padding: 6px 8px; }
+.composer-bar .icon-btn { width: 30px; height: 30px; border-radius: 7px; }
+.composer-hint { min-width: 0; margin: 0 10px 0 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--mute); }
+.composer .send { flex: none; height: 30px; padding: 0 12px; border-radius: 7px; font-size: 13px; }
+.composer .send:disabled { opacity: 0.45; }
+.composer.compact .send { width: 30px; margin-left: auto; padding: 0; }
+/* Mention list and emoji picker float over the stream, just above the box. */
+.composer .hints { position: absolute; z-index: 6; left: 20px; bottom: calc(100% + 6px); width: min(320px, calc(100% - 40px)); margin: 0; padding: 4px;
+  border-radius: 10px; background: var(--raised); }
+.hints button { align-items: baseline; padding: 6px 10px; border-radius: 6px; font-size: 13.5px; font-weight: 500; }
+.hints small { font-family: var(--mono); font-size: 11px; font-weight: 400; }
+.composer-emoji { position: absolute; z-index: 6; left: 20px; bottom: calc(100% + 6px); }
+.composer-emoji .emoji-picker { position: static; }
+.pending-files { gap: 6px; margin: 0 0 8px; }
+.pending-files li { gap: 6px; padding: 3px 4px 3px 8px; border-radius: 7px; background: var(--sunk); font-size: 12.5px; }
+.pending-files li > .lucide { color: var(--mute); }
+.pending-files button { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 4px; color: var(--mute); }
+.pending-files button:hover { background: var(--hover); color: var(--ink); }
+
+@media (max-width: 960px) {
+  /* Phones (#223): the tabs take a second row under the title and tools. */
+  .desk-h.channel-h { height: auto; min-height: 52px; flex-wrap: wrap; row-gap: 8px; padding: 8px 12px; }
+  .desk-h.channel-h > div.channel-tabs, .desk-h.channel-h > div.channel-h-tools { flex: none; }
+  .desk-h.channel-h > div.channel-tabs { order: 5; flex-basis: 100%; margin-left: 0; }
+  .channel-tabs.seg > [role=tab] { flex: 1; }
+  .channel-panel { padding: 12px; }
+  .msg, .msg.sys { padding-inline: 12px; }
+  .stream-divider { margin-inline: 12px; }
+  .msg-tools { right: 8px; }
+  .routing-strip { margin-inline: 12px; }
+  .composer { padding: 0 12px 12px; }
+  .composer .hints, .composer-emoji { left: 12px; }
+}
+@media (max-width: 540px) {
+  .channel-h-title > p { display: none; }
+  .composer-hint { display: none; }
+  .composer .send { margin-left: auto; }
+  .routing-strip span { display: none; }
+}

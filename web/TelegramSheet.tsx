@@ -1,3 +1,4 @@
+import { ChevronRight, Send } from "lucide-react";
 import type { Project } from "../src/shared/types.ts";
 import { api, type TelegramSettings } from "./api.ts";
 import { Modal } from "./Modal.tsx";
@@ -39,7 +40,10 @@ export function TelegramSheet({ form, telegram, projects, onSaved, setErr }: {
             .catch((ex) => setErr(String(ex.message || ex)));
         }}
       >
-        <h2>Telegram</h2>
+        <header className="sheet-head">
+          <span className="sheet-icon" aria-hidden="true"><Send size={17} /></span>
+          <div><h2>Telegram</h2><p>One forum group per project, through your own bot.</p></div>
+        </header>
         <div className="sheet-body">
         <p className="config-status">{telegram.configured ? "Configured" : "Not configured"} · {telegram.running ? "Connected" : "Bridge is off"}</p>
         <h3>Connection</h3>
@@ -62,7 +66,7 @@ export function TelegramSheet({ form, telegram, projects, onSaved, setErr }: {
             placeholder="123456789"
           />
         </label>
-        <details className="settings-disclosure"><summary>Project groups ({projects.filter(p => telegram.projects[p.slug] != null).length}/{projects.length} configured)</summary>
+        <details className="settings-disclosure sheet-disclosure"><summary><ChevronRight size={14} aria-hidden="true" />Project groups ({projects.filter(p => telegram.projects[p.slug] != null).length}/{projects.length} configured)</summary>
         <p className="help-p">Assign one forum group to each project you want to connect.</p>
         {projects.map((p) => (
           <label key={p.id}>

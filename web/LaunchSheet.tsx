@@ -1,3 +1,4 @@
+import { ChevronRight, Copy, Terminal, X } from "lucide-react";
 import { Modal } from "./Modal.tsx";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Agent, Project, Seniority } from "../src/shared/types.ts";
@@ -399,12 +400,39 @@ export function LaunchSheet({
   const canCopyOne = built.ok && projects.length > 0;
   const canCopyAll = resume && resumeBlocks.length > 0 && resumeBlocks.every((b) => b.ok);
 
+  const chooseRole = (next: LaunchRole) => {
+    const nextFocus =
+      next === "brain" && focus === "frontend"
+        ? "coord"
+        : next === "worker" && focus === "coord"
+          ? "frontend"
+          : focus;
+    setRole(next);
+    if (nextFocus !== focus) setFocus(nextFocus);
+    remember({ role: next, focus: nextFocus });
+  };
+  // The closed Advanced disclosure still says what the launch will do.
+  const advancedSummary = [
+    cdWorktree && "cd into workspace",
+    passProject && "pass project",
+    adoptUntrusted && "trust hive mail",
+    extraFlags.trim() && "extra flags",
+  ].filter(Boolean).join(" · ") || "defaults off";
+
   return (
     <Modal onClose={onClose}>
       <div className="sheet sheet-wide launch-sheet" role="dialog" aria-modal="true" aria-label="Launch agent" onClick={(e) => e.stopPropagation()}>
-        <h2>Launch agent</h2>
+        <header className="sheet-head">
+          <span className="sheet-icon" aria-hidden="true"><Terminal size={18} /></span>
+          <div>
+            <h2>Launch agent</h2>
+            <p>Choose an agent, then paste its launch command into a new terminal. One terminal = one employee.</p>
+          </div>
+          <button type="button" className="icon-btn" aria-label="Close dialog" title="Close" onClick={onClose}>
+            <X size={16} aria-hidden="true" />
+          </button>
+        </header>
         <div className="sheet-body">
-          <p className="help-p">Choose an agent, then copy its launch command into your terminal.</p>
           <label>
             Project
             <select
@@ -421,15 +449,31 @@ export function LaunchSheet({
               ))}
             </select>
           </label>
+          {!resume && (
+            <fieldset className="launch-seg">
+              <legend>Role</legend>
+              <div className="seg">
+                {(["brain", "worker"] as const).map((value) => (
+                  <label key={value} className={role === value ? "on" : ""}>
+                    <input type="radio" className="sr-only" name="launch-role" value={value} checked={role === value}
+                      onChange={() => chooseRole(value)} />
+                    {value}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          )}
           <label>
             Software
             <input
+              className="mono"
               list="launch-software"
               value={software}
               onChange={(e) => setSoftware(e.target.value)}
               onBlur={() => remember()}
               placeholder="codex"
               autoComplete="off"
+              spellCheck={false}
               autoFocus
             />
           </label>
@@ -448,58 +492,24 @@ export function LaunchSheet({
               remember({ model: next.model, effort: next.effort });
             }}
           />
-          <label className="launch-workspace">
-            Workspace path
-            <input
-              value={workspacePath}
-              onChange={(e) => {
-                setWorkspacePath(e.target.value);
-                setPathDirty(true);
-              }}
-              placeholder={registeredPath || "optional — where the agent starts"}
-              autoComplete="off"
-              spellCheck={false}
-            />
-          </label>
           {!resume && (
             <>
-              <label>
-                Role
-                <select
-                  value={role}
-                  onChange={(e) => {
-                    const next = e.target.value as LaunchRole;
-                    const nextFocus =
-                      next === "brain" && focus === "frontend"
-                        ? "coord"
-                        : next === "worker" && focus === "coord"
-                          ? "frontend"
-                          : focus;
-                    setRole(next);
-                    if (nextFocus !== focus) setFocus(nextFocus);
-                    remember({ role: next, focus: nextFocus });
-                  }}
-                >
-                  <option value="brain">brain</option>
-                  <option value="worker">worker</option>
-                </select>
-              </label>
               {role === "worker" && (
-                <label>
-                  Seniority
-                  <select
-                    value={seniority}
-                    onChange={(e) => {
-                      const next = e.target.value as Seniority;
-                      setSeniority(next);
-                      remember({ seniority: next });
-                    }}
-                  >
-                    <option value="senior">senior</option>
-                    <option value="mid">mid</option>
-                    <option value="junior">junior</option>
-                  </select>
-                </label>
+                <fieldset className="launch-seg">
+                  <legend>Seniority</legend>
+                  <div className="seg">
+                    {(["senior", "mid", "junior"] as const).map((value) => (
+                      <label key={value} className={seniority === value ? "on" : ""}>
+                        <input type="radio" className="sr-only" name="launch-seniority" value={value} checked={seniority === value}
+                          onChange={() => {
+                            setSeniority(value);
+                            remember({ seniority: value });
+                          }} />
+                        {value}
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
               )}
               <label>
                 Focus
@@ -512,10 +522,30 @@ export function LaunchSheet({
               </label>
             </>
           )}
-          <details className="settings-disclosure"><summary>Advanced launch options</summary>
+          <label className="launch-workspace">
+            Workspace path
+            <input
+              className="mono"
+              value={workspacePath}
+              onChange={(e) => {
+                setWorkspacePath(e.target.value);
+                setPathDirty(true);
+              }}
+              placeholder={registeredPath || "optional — where the agent starts"}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </label>
+          <details className="settings-disclosure sheet-disclosure">
+            <summary>
+              <ChevronRight size={14} aria-hidden="true" />
+              <span>Advanced launch options</span>
+              <small>{advancedSummary}</small>
+            </summary>
           <label>
             CLI flags
             <input
+              className="mono"
               value={extraFlags}
               onChange={(e) => setExtraFlags(e.target.value)}
               onBlur={() => remember()}
@@ -559,6 +589,11 @@ export function LaunchSheet({
               treat hive mail as my authorization
             </label>
           </fieldset>
+          {adoptUntrusted && (
+            <p className="help-p">
+              The first lines tell this CLI session it may trust Human and brain mail from Hivemind. They are in the block only if you mean that.
+            </p>
+          )}
           {resume && allHives && pathDirty && (
             <p className="help-p">
               The path override applies only to the selected hive. Other hives keep their registered worktree.
@@ -572,7 +607,11 @@ export function LaunchSheet({
             </p>
           )}
           </details>
-          <details className="settings-disclosure"><summary>Connection and launch instructions</summary>
+          <details className="settings-disclosure sheet-disclosure">
+            <summary>
+              <ChevronRight size={14} aria-hidden="true" />
+              <span>Connection and launch instructions</span>
+            </summary>
           <p className="help-p" role="status">
             {contextError ? "Cannot load Hivemind connection: " + contextError : !launchContext ? "Loading Hivemind connection…" :
               role === "worker" ? "Hivemind connection ready. Workers do not need project plugin instructions." :
@@ -599,38 +638,6 @@ export function LaunchSheet({
             </p>
           )}
           </details>
-          <fieldset className="checks">
-            <legend>Resume</legend>
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={resume}
-                onChange={(e) => {
-                  setResume(e.target.checked);
-                  remember({ resume: e.target.checked });
-                }}
-              />
-              same employees — show every brain and worker
-            </label>
-            {resume && (
-              <label className="check">
-                <input
-                  type="checkbox"
-                  checked={allHives}
-                  onChange={(e) => {
-                    setAllHives(e.target.checked);
-                    remember({ allHives: e.target.checked });
-                  }}
-                />
-                all hives
-              </label>
-            )}
-          </fieldset>
-          {adoptUntrusted && (
-            <p className="help-p">
-              The first lines tell this CLI session it may trust Human and brain mail from Hivemind. They are in the block only if you mean that.
-            </p>
-          )}
           {resume ? (
             roster.length === 0 ? (
               <p className="help-p">
@@ -654,10 +661,11 @@ export function LaunchSheet({
                       </span>
                       <button
                         type="button"
-                        className="text-btn"
+                        className="btn btn-ghost"
                         disabled={!block.ok}
                         onClick={() => void onCopy(block.text, block.agent.id)}
                       >
+                        <Copy size={13} aria-hidden="true" />
                         {copied === block.agent.id ? "Copied" : "Copy"}
                       </button>
                     </div>
@@ -680,13 +688,46 @@ export function LaunchSheet({
               </>
             )
           ) : built.ok ? (
-            <details className="settings-disclosure" open><summary>Command preview</summary><pre className="launch-pre">{built.text}</pre></details>
+            <section className="launch-preview" aria-label="Command preview">
+              <header>
+                <span>Command preview</span>
+                <button type="button" disabled={!canCopyOne} onClick={() => void onCopy(built.text, "one")}>
+                  <Copy size={13} aria-hidden="true" />
+                  {copied === "one" ? "Copied" : "Copy"}
+                </button>
+              </header>
+              <pre className="launch-pre">{built.text}</pre>
+            </section>
           ) : (
             <p className="help-p">{built.error}</p>
           )}
         </div>
-        <div className="row">
-          <button type="button" onClick={onClose}>
+        <div className="row sheet-footer launch-footer">
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={resume}
+              onChange={(e) => {
+                setResume(e.target.checked);
+                remember({ resume: e.target.checked });
+              }}
+            />
+            Resume same employees
+          </label>
+          {resume && (
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={allHives}
+                onChange={(e) => {
+                  setAllHives(e.target.checked);
+                  remember({ allHives: e.target.checked });
+                }}
+              />
+              all hives
+            </label>
+          )}
+          <button type="button" className="launch-close" onClick={onClose}>
             Close
           </button>
           {resume ? (
@@ -696,6 +737,7 @@ export function LaunchSheet({
               disabled={!canCopyAll}
               onClick={() => void onCopy(allText, "all")}
             >
+              <Copy size={14} aria-hidden="true" />
               {copied === "all" ? "Copied" : "Copy all"}
             </button>
           ) : (
@@ -705,7 +747,8 @@ export function LaunchSheet({
               disabled={!canCopyOne}
               onClick={() => void onCopy(built.ok ? built.text : "", "one")}
             >
-              {copied === "one" ? "Copied" : "Copy"}
+              <Copy size={14} aria-hidden="true" />
+              {copied === "one" ? "Copied" : "Copy command"}
             </button>
           )}
         </div>

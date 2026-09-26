@@ -1526,12 +1526,12 @@ test("opening a side thread keeps the main chat anchored when web fonts swap in 
   await reply.click();
   await expect(page.locator("aside.thread")).toBeVisible();
   await expect.poll(async () => Math.abs(await reply.evaluate(el => el.getBoundingClientRect().bottom) - replyBottom)).toBeLessThan(3);
-  expect(await page.evaluate(() => document.fonts.check('16px "Figtree"'))).toBe(false);
+  expect(await page.evaluate(() => document.fonts.check('16px "IBM Plex Sans"'))).toBe(false);
   const fallbackHeight = await stream.evaluate(el => el.scrollHeight);
 
   // The swap re-wraps every message after the first anchor correction.
   fonts.resolve();
-  await expect.poll(() => page.evaluate(() => document.fonts.check('16px "Figtree"'))).toBe(true);
+  await expect.poll(() => page.evaluate(() => document.fonts.check('16px "IBM Plex Sans"'))).toBe(true);
   await expect.poll(() => stream.evaluate(el => el.scrollHeight)).not.toBe(fallbackHeight);
   await expect.poll(async () => Math.abs(await reply.evaluate(el => el.getBoundingClientRect().bottom) - replyBottom)).toBeLessThan(3);
 });

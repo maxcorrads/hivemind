@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <title>Hivemind</title>
+  <!-- Icon 1a "Gerarchia": the Human (accent, oklch(0.66 0.16 262)) over 2 brains over 3 workers (half opacity). -->
+  <rect width="512" height="512" rx="114" fill="#16171b"/>
+  <polygon points="256.0,120.0 301.0,146.0 301.0,198.0 256.0,224.0 211.0,198.0 211.0,146.0" fill="#5a8ff3"/>
+  <polygon points="205.0,208.4 250.0,234.4 250.0,286.4 205.0,312.4 159.9,286.4 159.9,234.4" fill="#ffffff"/>
+  <polygon points="307.0,208.4 352.1,234.4 352.1,286.4 307.0,312.4 262.0,286.4 262.0,234.4" fill="#ffffff"/>
+  <g fill="#ffffff" opacity="0.5">
+    <polygon points="153.9,296.8 199.0,322.8 199.0,374.8 153.9,400.8 108.9,374.8 108.9,322.8"/>
+    <polygon points="256.0,296.8 301.0,322.8 301.0,374.8 256.0,400.8 211.0,374.8 211.0,322.8"/>
+    <polygon points="358.1,296.8 403.1,322.8 403.1,374.8 358.1,400.8 313.0,374.8 313.0,322.8"/>
+  </g>
+</svg>

@@ -21,8 +21,9 @@ export function memberNames(ch: Channel, agents: Agent[]): string {
   return names.join(", ");
 }
 
+/** The design's avatar hue: the name's char codes summed, spread by 37 degrees so similar names differ. */
 export function avatarHue(name: string): number {
-  return [...name].reduce((n, ch) => n + ch.charCodeAt(0), 0) % 360;
+  return ([...name].reduce((n, ch) => n + ch.charCodeAt(0), 0) * 37) % 360;
 }
 
 export function upsertById<T extends { id: string }>(list: T[], item: T): T[] {

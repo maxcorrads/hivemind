@@ -15,6 +15,7 @@ import { channelBack, mobileScreen, mobileTab, tabTarget, useMobile } from "./mo
 import { MobileDms, MobileTabs, projectDms } from "./MobileNav.tsx";
 import { attentionTotal, documentTitle, loadSelectedProject, projectLanding, saveProjectView, saveSelectedProject, type SwitchItem } from "./nav-model.ts";
 import { ProjectPlugins } from "./ProjectPlugins.tsx";
+import { ProjectRail } from "./ProjectRail.tsx";
 import { CreateProjectSheet, ProjectSettingsSheet } from "./ProjectSheets.tsx";
 import { QuickSwitcher } from "./QuickSwitcher.tsx";
 import { SearchDesk } from "./SearchDesk.tsx";
@@ -23,12 +24,14 @@ import { Sidebar } from "./Sidebar.tsx";
 import { newerTelegramHealth } from "./telegram-health.ts";
 import { TelegramSheet } from "./TelegramSheet.tsx";
 import { ThreadAside } from "./ThreadAside.tsx";
+import { TopBar } from "./TopBar.tsx";
 import { useAdaptiveRouting } from "./use-adaptive-routing.ts";
 import { useChannelPane } from "./use-channel-pane.ts";
 import { useConversationLoads } from "./use-conversation-loads.ts";
 import { useDmNav } from "./use-dm-nav.ts";
 import { useHiveSnapshot } from "./use-hive-snapshot.ts";
 import { useInbox } from "./use-inbox.ts";
+import { useLayout } from "./use-layout.ts";
 import { useNavStatus } from "./use-nav-status.ts";
 import { useRealtime } from "./use-realtime.ts";
 import { useSearch } from "./use-search.ts";
@@ -116,6 +119,7 @@ export function App() {
   useConversationLoads({ selectedChannelId, threadId, missingChannel, query: search.query, hive,
     channel: channelPane, thread: threadState, setErr });
   const [theme, setTheme] = useTheme();
+  const { layout, setLayout, unified } = useLayout();
   const { stickBottom, threadOpenAnchor } = useThreadScrollAnchor({ channelStream: channelPane.channelStream,
     threadStream: threadState.threadStream, pane, threadPane, selectedChannelId, threadId });
   const { openUnread, target: unreadTarget } = useUnreadJump({ selection, channel: channelPane, thread: threadState, go,
@@ -163,9 +167,10 @@ export function App() {
   useEffect(() => { if (live) setWasLive(true); }, [live]);
 
   const selectProject = (slug: string) => { if (snap) navigate(projectLanding(slug, snap)); };
-  const [switcherOpen, setSwitcherOpen] = useState(false);
+  /** The quick switcher, or ("projects") the single-sidebar layout's project picker. */
+  const [switcher, setSwitcher] = useState<"all" | "projects" | null>(null);
   const onSwitch = (item: SwitchItem) => {
-    setSwitcherOpen(false);
+    setSwitcher(null);
     if (item.kind === "project") selectProject(item.project.slug);
     else if (item.kind === "agent") void onAgent(item.agent);
     else navigate({ kind: "channel", id: item.channel.id });
@@ -174,7 +179,7 @@ export function App() {
     const onKey = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== "k") return;
       event.preventDefault();
-      setSwitcherOpen(open => !open);
+      setSwitcher(open => (open ? null : "all"));
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -207,15 +212,27 @@ export function App() {
     );
   }
 
+  const settings = {
+    theme, onToggleTheme: () => setTheme((t) => (t === "dark" ? "light" : "dark")), layout, onLayout: setLayout, notifications,
+    telegram: snap.telegram, onTelegram: () => telegramSheet.openTelegram(snap?.projects ?? []),
+    onAdaptiveRouting: () => setAdaptiveRoutingOpen(true), onLaunch: () => openLaunch(), onHelp: () => setHelpOpen(true),
+  };
+  const railProject = projects.some(p => p.slug === selectedProject) ? selectedProject : projects[0]?.slug ?? "";
+
   return (
     <div className="shell" data-m={screen}>
-      <Sidebar snap={snap} sel={sel} go={navigate} live={live} theme={theme} onUnread={openUnread}
-        onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
-        query={search.query} setQuery={search.setQuery} onSearchNow={search.searchNow}
-        onTelegram={() => telegramSheet.openTelegram(snap?.projects ?? [])}
-        onAdaptiveRouting={() => setAdaptiveRoutingOpen(true)} onLaunch={openLaunch} onHelp={() => setHelpOpen(true)}
-        selectedProject={selectedProject} onSelectProject={selectProject} onSwitcher={() => setSwitcherOpen(true)}
-        agentWork={navStatus.agentWork} notifications={notifications}
+      {unified ? (
+        <TopBar live={live} projectName={projects.find(p => p.slug === railProject)?.name} onSwitcher={() => setSwitcher("all")}
+          settings={settings} />
+      ) : (
+        <ProjectRail snap={snap} selectedProject={railProject} onSelect={selectProject}
+          onNewProject={() => projectSheets.setCreatingProject(true)} settings={settings} live={live} />
+      )}
+      {/* Settings lives at the foot of the rail or in the top bar, never in the sidebar. */}
+      <Sidebar snap={snap} sel={sel} go={navigate} live={live} unified={unified} onUnread={openUnread}
+        query={search.query} setQuery={search.setQuery} onSearchNow={search.searchNow} onLaunch={openLaunch}
+        selectedProject={selectedProject} onSwitcher={() => setSwitcher("all")} onProjectSwitcher={() => setSwitcher("projects")}
+        agentWork={navStatus.agentWork}
         inboxBox={inboxBox} projectSheets={projectSheets}
         onNewChannel={(project) => {
           channelSheets.setCreateIn(project);
@@ -402,8 +419,9 @@ export function App() {
           onCancel={() => agentConfirm.setAgentConfirm(null)} onConfirm={agentConfirm.onAgentConfirm} />
       )}
 
-      {switcherOpen && <QuickSwitcher snap={snap} currentProject={selectedProject} onPick={onSwitch}
-        onClose={() => setSwitcherOpen(false)} />}
+      {switcher && <QuickSwitcher key={switcher} snap={snap} currentProject={selectedProject} onPick={onSwitch} scope={switcher}
+        onNewProject={() => { setSwitcher(null); projectSheets.setCreatingProject(true); }}
+        onClose={() => setSwitcher(null)} />}
 
       {helpOpen && <HelpSheet onClose={() => setHelpOpen(false)} onLaunch={() => openLaunch()} />}
     </div>

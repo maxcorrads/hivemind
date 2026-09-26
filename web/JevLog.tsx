@@ -21,6 +21,9 @@ type Props = {
   onOpenChannel: (channelId: string) => void;
 };
 
+/** Outcome tone as a shared .tone-chip variant: delivered advice is ok, missing advice a warning. */
+const CHIP_TONE = { applied: 'ok', kept: 'accent', warning: 'warn', idle: 'muted' } as const;
+
 const time = (at: number) => new Date(at).toLocaleString([], { dateStyle: 'short', timeStyle: 'medium' });
 
 /** Routing log: Human-only history of every exchange with Jev, grouped by the request that caused it. */
@@ -104,7 +107,7 @@ function RequestCard({ group, selected, channelLabel, agentName, onSelect, onOpe
         <button type="button" className="text-btn" onClick={() => onOpenChannel(group.channelId)}>{channelLabel(group.channelId)}</button>
         {' · '}{group.brainId ? agentName(group.brainId) : 'no owning brain'}{' · '}{time(group.firstAt)}
       </small>
-      {last && <span className={`jev-badge ${outcomeLabel(last).tone}`}>{badgeLabel(last)}</span>}
+      {last && <span className={`jev-badge tone-chip ${CHIP_TONE[outcomeLabel(last).tone]} ${outcomeLabel(last).tone}`}>{badgeLabel(last)}</span>}
     </header>
     <ol className="jev-calls" aria-label={`${group.callCount} Jev calls`}>
       {group.calls.map(call => <CallRow key={call.id} call={call} active={call.id === selected} onSelect={() => onSelect(call.id)} />)}

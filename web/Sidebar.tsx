@@ -1,14 +1,13 @@
-import { useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useRef, type ReactNode } from "react";
+import { ChevronDown, ChevronRight, ChevronsUpDown, Inbox, Plus, Route, Search, SlidersHorizontal, Terminal, TextSearch } from "lucide-react";
 import { isLiveSearchQuery } from "../src/shared/search-query.ts";
 import type { AgentWork } from "../src/shared/tasks.ts";
 import type { Agent, Channel, Project } from "../src/shared/types.ts";
 import { AgentList } from "./AgentList.tsx";
 import type { Snapshot } from "./api.ts";
 import { ChannelItem, DmRow } from "./ChannelNav.tsx";
-import type { DesktopNotifications } from "./desktop-notifications.ts";
-import { ProjectRail } from "./ProjectRail.tsx";
+import { projectAttention, projectInitials, SWITCHER_SHORTCUT } from "./nav-model.ts";
 import type { InboxBox, Sel } from "./selection.ts";
-import { telegramDegraded } from "./telegram-health.ts";
 import type { DmNav } from "./use-dm-nav.ts";
 import type { ProjectSheets } from "./use-sheets.ts";
 
@@ -19,107 +18,54 @@ type AgentActions = {
   onAskAgent: (name: string, kind: "clear" | "remove") => void;
 };
 
-const shortcut = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘K" : "Ctrl+K";
-
 /**
- * The project icon rail plus the sidebar of the selected project: brand and
- * tools, message search (which never filters this navigation), the quick
- * switcher and that project's sections.
+ * The sidebar of the selected project: its header (name, connection, project settings), the quick switcher,
+ * message search (which never filters this navigation), that project's sections and Launch agent pinned at
+ * the bottom. In the single-sidebar layout a project card opens the project picker and the top bar holds the
+ * connection state. Settings sits at the foot of the project rail, or in the top bar.
  */
-export function Sidebar({ snap, sel, go, live, theme, onToggleTheme, query, setQuery, onSearchNow, onTelegram,
-  onAdaptiveRouting, onLaunch, onHelp, selectedProject, onSelectProject, onSwitcher, inboxBox, projectSheets, onNewChannel,
-  dms, agentActions, agentWork, notifications, onUnread }: {
+export function Sidebar({ snap, sel, go, live, unified, query, setQuery, onSearchNow, onLaunch, selectedProject,
+  onSwitcher, onProjectSwitcher, inboxBox, projectSheets, onNewChannel, dms, agentActions, agentWork, onUnread }: {
   snap: Snapshot;
   sel: Sel;
   go: (next: Sel) => void;
   live: boolean;
-  theme: "light" | "dark";
-  onToggleTheme: () => void;
+  unified: boolean;
   query: string;
   setQuery: (query: string) => void;
   onSearchNow: () => void;
-  onTelegram: () => void;
-  onAdaptiveRouting: () => void;
   onLaunch: (project?: string | null) => void;
-  onHelp: () => void;
   selectedProject: string;
-  onSelectProject: (slug: string) => void;
   onSwitcher: () => void;
+  onProjectSwitcher: () => void;
   inboxBox: InboxBox;
   projectSheets: ProjectSheets;
   onNewChannel: (project: string) => void;
   dms: DmNav;
   agentActions: AgentActions;
   agentWork: Record<string, AgentWork>;
-  notifications: DesktopNotifications;
   onUnread: (channelId: string) => void;
 }) {
   const projects = snap.projects ?? [];
   const project = projects.find(item => item.slug === selectedProject) ?? projects[0];
-  return (
-    <>
-      <ProjectRail snap={snap} selectedProject={project?.slug ?? ""}
-        onSelect={onSelectProject} onNewProject={() => projectSheets.setCreatingProject(true)} />
-      <aside className="rail">
-        <div className="brand">
-          <img className="mark" src="/icon.png" alt="Hivemind" />
-          <div>
-            <div className="word">hivemind</div>
-            <div className="you">you are Human</div>
-          </div>
-          <div className="brand-tools">
-            <details className="tools-menu" onClick={event => {
-              if ((event.target as HTMLElement).closest("button")) event.currentTarget.open = false;
-            }}>
-              <summary title="Settings and tools">Settings</summary>
-              <div className="tools-popover">
-                <button
-                  type="button"
-                  className="tool-action"
-                  title={theme === "dark" ? "Light" : "Dark"}
-                  onClick={onToggleTheme}
-                >
-                  {theme === "dark" ? "Light theme" : "Dark theme"}
-                </button>
-                {notifications.supported && (
-                  <button type="button" className="tool-action" aria-pressed={notifications.enabled}
-                    title="Notify mentions and direct messages while Hivemind is in the background"
-                    onClick={() => void notifications.toggle()}>
-                    {notifications.blocked ? "Notifications blocked by the browser"
-                      : `Desktop notifications: ${notifications.enabled ? "on" : "off"}`}
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="tool-action"
-                  title={telegramDegraded(snap.telegram) ? `Telegram · ${snap.telegram?.failures ?? 0} outbound failures · ${snap.telegram?.quarantined ?? 0} quarantined · ${snap.telegram?.retrying ?? 0} retrying${snap.telegram?.lastError ? ` · ${snap.telegram.lastError}` : ""}` : "Telegram"}
-                  onClick={onTelegram}
-                >
-                  Telegram{telegramDegraded(snap.telegram) ? " · Needs attention" : ""}
-                </button>
-                <button
-                  type="button"
-                  className="tool-action"
-                  title="Adaptive routing"
-                  onClick={onAdaptiveRouting}
-                >
-                  Adaptive routing
-                </button>
-                <button type="button" className="tool-action" title="Launch agent" onClick={() => onLaunch()}>
-                  Launch agent
-                </button>
-                <button type="button" className="tool-action" title="How to join" onClick={onHelp}>
-                  Help
-                </button>
-              </div>
-            </details>
-            <span className={`pulse ${live ? "on" : ""}`} title={live ? "live" : "waiting"} role="img"
-              aria-label={live ? "Connected" : "Not connected"} />
-          </div>
-        </div>
+  // The top bar shows the connection in the single-sidebar layout.
+  const tools = !unified && (
+    <span className="side-live">
+      <span className={`pulse ${live ? "on" : ""}`} title={live ? "live" : "waiting"} role="img"
+        aria-label={live ? "Connected" : "Not connected"} />
+      <span aria-hidden="true">{live ? "Live" : "Offline"}</span>
+    </span>
+  );
+  const find = (
+    <div className="side-find">
+      {!unified && (
         <button type="button" className="switcher-open" onClick={onSwitcher} aria-keyshortcuts="Meta+K Control+K">
-          <span>Jump to…</span><kbd>{shortcut}</kbd>
+          <Search size={14} aria-hidden="true" />
+          <span>Jump to…</span><kbd>{SWITCHER_SHORTCUT}</kbd>
         </button>
+      )}
+      <div className="side-search">
+        <TextSearch size={14} aria-hidden="true" />
         <input
           className="search"
           value={query}
@@ -133,38 +79,103 @@ export function Sidebar({ snap, sel, go, live, theme, onToggleTheme, query, setQ
           }}
           placeholder={project ? `Search messages in ${project.name}` : "Search messages"} aria-label="Search messages"
         />
-        {projects.length > 0 && (
-          <button type="button" className="launch-cta" onClick={() => onLaunch()}>
-            <span aria-hidden="true">+</span> Launch agent
+      </div>
+    </div>
+  );
+  return (
+    <aside className="rail">
+      {unified && project && (
+        <div className="project-switch-row">
+          <ProjectSwitch snap={snap} project={project} onOpen={onProjectSwitcher} />
+          <button type="button" className="icon-btn project-settings" title="Project settings" aria-label={`Settings for ${project.name}`}
+            onClick={() => projectSheets.editProject(project)}>
+            <SlidersHorizontal size={15} aria-hidden="true" />
           </button>
-        )}
-
+        </div>
+      )}
+      {/* Only this part scrolls: the project header sticks to its top, Launch agent stays pinned below. */}
+      <div className="side-scroll">
         {!project && (
-          <div className="group-h">
-            <span>No projects.</span>
-            <button type="button" className="plus" onClick={() => projectSheets.setCreatingProject(true)} title="New project"
-              aria-label="New project">
-              +
-            </button>
-          </div>
+          <>
+            <div className="brand side-head">
+              <img className="mark" src="/icon.svg" alt="" />
+              <span className="word">hivemind</span>
+              {tools}
+            </div>
+            {find}
+            <div className="group-h">
+              <span>No projects.</span>
+              <button type="button" className="plus" onClick={() => projectSheets.setCreatingProject(true)} title="New project"
+                aria-label="New project">
+                <Plus size={14} aria-hidden="true" />
+              </button>
+            </div>
+          </>
         )}
         {project && (
-          <ProjectSection key={project.id} project={project} snap={snap} sel={sel} go={go}
+          <ProjectSection key={project.id} project={project} snap={snap} sel={sel} go={go} unified={unified} tools={tools} find={find}
+            onProjectSwitcher={onProjectSwitcher}
             onSettings={() => projectSheets.editProject(project)} inboxBox={inboxBox} onNewChannel={onNewChannel}
             dms={dms} agentActions={agentActions} onLaunch={onLaunch} onUnread={onUnread}
             agentWork={agentWork} />
         )}
-      </aside>
-    </>
+      </div>
+      {projects.length > 0 && (
+        <button type="button" className="launch-cta" onClick={() => onLaunch()}>
+          <Terminal size={15} aria-hidden="true" /> Launch agent
+        </button>
+      )}
+    </aside>
   );
 }
 
-function ProjectSection({ project, snap, sel, go, onSettings, inboxBox, onNewChannel, dms, agentActions, onLaunch,
-  agentWork, onUnread }: {
+/** Single-sidebar layout: the current project as a card that opens the project picker, with other projects' alerts or unread. */
+function ProjectSwitch({ snap, project, onOpen }: { snap: Snapshot; project: Project; onOpen: () => void }) {
+  const online = snap.agents.filter(agent => agent.project === project.slug && agent.online
+    && (agent.role === "brain" || agent.role === "worker")).length;
+  const others = snap.projects.filter(other => other.slug !== project.slug).map(other => projectAttention(snap, other.slug));
+  const elsewhere = others.reduce((sum, other) => sum + other.alerts, 0);
+  // Like the rail: a count for alerts, else a dot for plain unread messages.
+  const unreadElsewhere = !elsewhere && others.some(other => other.unread);
+  const count = snap.projects.length;
+  const label = [`Switch project, current: ${project.name}`,
+    elsewhere ? `${elsewhere} unread for you in other projects` : unreadElsewhere ? "unread messages in other projects" : ""]
+    .filter(Boolean).join(", ");
+  return (
+    <button type="button" className="project-switch" onClick={onOpen} aria-haspopup="dialog" aria-label={label} title={label}>
+      <span className="project-switch-mark" aria-hidden="true">{projectInitials(project.name)}</span>
+      <span className="project-switch-text" aria-hidden="true">
+        <strong>{project.name}</strong>
+        {/* Each clause stays whole, so a narrow card breaks after the "·". */}
+        <small><span>{online} {online === 1 ? "agent" : "agents"} online ·</span> <span>{count} {count === 1 ? "project" : "projects"}</span></small>
+      </span>
+      {elsewhere > 0
+        ? <em className="count" aria-hidden="true">{elsewhere > 99 ? "99+" : elsewhere}</em>
+        : unreadElsewhere && <i className="project-switch-dot" aria-hidden="true" />}
+      <ChevronsUpDown size={14} aria-hidden="true" />
+    </button>
+  );
+}
+
+/** "#general", or "#general +2" for a bot linked to several channels. */
+function botWhere(channels: Channel[], bot: Agent): string | undefined {
+  const linked = channels.filter(ch => ch.type !== "dm" && ch.memberIds.includes(bot.id));
+  if (!linked.length) return undefined;
+  return `#${linked[0]!.name}${linked.length > 1 ? ` +${linked.length - 1}` : ""}`;
+}
+
+function ProjectSection({ project, snap, sel, go, unified, tools, find, onProjectSwitcher, onSettings, inboxBox, onNewChannel, dms,
+  agentActions, onLaunch, agentWork, onUnread }: {
   project: Project;
   snap: Snapshot;
   sel: Sel;
   go: (next: Sel) => void;
+  unified: boolean;
+  /** The connection state for the header (rail layout only). */
+  tools: ReactNode;
+  /** The quick switcher button and message search, under the header. */
+  find: ReactNode;
+  onProjectSwitcher: () => void;
   onSettings: () => void;
   inboxBox: InboxBox;
   onNewChannel: (project: string) => void;
@@ -216,12 +227,19 @@ function ProjectSection({ project, snap, sel, go, onSettings, inboxBox, onNewCha
       if (mine) return mine;
       return a.name.localeCompare(b.name);
     });
+  const withYou = openDms.filter(ch => ch.memberIds.includes("human"));
+  const between = openDms.filter(ch => !ch.memberIds.includes("human"));
   const hiddenDms = projectDms
     .filter((c) => closedDms.includes(c.id))
     .filter((c) => !dmPickQ.trim() || c.name.toLowerCase().includes(dmPickQ.trim().toLowerCase()))
     .sort((a, b) => a.name.localeCompare(b.name));
   const hiveAgents = (snap.agents ?? []).filter((a) => a.role === "human" || a.project === project.slug);
+  const online = hiveAgents.filter(a => a.online && (a.role === "brain" || a.role === "worker")).length;
+  const botChannels = Object.fromEntries(hiveAgents.filter(a => a.role === "bot")
+    .flatMap(bot => { const where = botWhere(channels, bot); return where ? [[bot.id, where]] : []; }));
   const n = snap.mentionCounts[project.slug] ?? 0;
+  const inboxActive = sel.kind === "inbox" && sel.project === project.slug;
+  const jevActive = sel.kind === "jev" && sel.project === project.slug;
   const channelRow = (ch: Channel) => (
     <ChannelItem
       key={ch.id}
@@ -238,6 +256,7 @@ function ProjectSection({ project, snap, sel, go, onSettings, inboxBox, onNewCha
       ch={ch}
       unread={snap.unread[ch.id] ?? 0}
       active={sel.kind === "channel" && sel.id === ch.id}
+      peer={ch.memberIds.includes("human") ? snap.agents.find(a => a.id !== "human" && ch.memberIds.includes(a.id)) : undefined}
       menuOpen={dmMenu === ch.id}
       onClick={() => go({ kind: "channel", id: ch.id })}
       onUnread={() => { setDmMenu(null); onUnread(ch.id); }}
@@ -247,28 +266,39 @@ function ProjectSection({ project, snap, sel, go, onSettings, inboxBox, onNewCha
   );
   return (
     <div className="project-sec">
-      <div className="project-head">
-        <h2 title={project.name}>{project.name}</h2>
-        <button type="button" className="project-settings" title="Project settings" aria-label={`Settings for ${project.name}`}
-          onClick={onSettings}>
-          Settings
-        </button>
+      {/* The card above names the project in the single-sidebar layout; the heading stays for screen readers. */}
+      <div className={`project-head ${unified ? "sr-only" : ""}`}>
+        {unified ? <h2>{project.name}</h2> : <>
+          <h2 title={project.name}>
+            <button type="button" className="project-name" onClick={onProjectSwitcher} aria-haspopup="dialog">
+              <span>{project.name}</span><ChevronDown size={14} aria-hidden="true" />
+            </button>
+          </h2>
+          {tools}
+          <button type="button" className="icon-btn project-settings" title="Project settings" aria-label={`Settings for ${project.name}`}
+            onClick={onSettings}>
+            <SlidersHorizontal size={15} aria-hidden="true" />
+          </button>
+        </>}
       </div>
+      {find}
       <button
-        className={`nav ${sel.kind === "inbox" && sel.project === project.slug ? "active" : ""}`}
-        aria-current={sel.kind === "inbox" && sel.project === project.slug ? "page" : undefined}
+        className={`nav ${inboxActive ? "active" : ""}`}
+        aria-current={inboxActive ? "page" : undefined}
         onClick={() => go({ kind: "inbox", project: project.slug, box: inboxBox })}
       >
+        <Inbox className="nav-icon" size={15} aria-hidden="true" />
         <span>For you</span>
         {n > 0 && <em>{n}</em>}
       </button>
       {snap.jev?.enabled && (
         <button
-          className={`nav ${sel.kind === "jev" && sel.project === project.slug ? "active" : ""}`}
-          aria-current={sel.kind === "jev" && sel.project === project.slug ? "page" : undefined}
+          className={`nav ${jevActive ? "active" : ""}`}
+          aria-current={jevActive ? "page" : undefined}
           onClick={() => go({ kind: "jev", project: project.slug })}
           title="Every request Hivemind sent to Jev (TypeSafe) and its answer"
         >
+          <Route className="nav-icon" size={15} aria-hidden="true" />
           <span>Routing log</span>
         </button>
       )}
@@ -282,13 +312,13 @@ function ProjectSection({ project, snap, sel, go, onSettings, inboxBox, onNewCha
             title="New channel"
             aria-label={`New channel in ${project.name}`}
           >
-            +
+            <Plus size={14} aria-hidden="true" />
           </button>
         </div>
         {activeChannels.map(channelRow)}
         {archivedChannels.length > 0 && (
           <details className="archived-channels" ref={archivedSection}>
-            <summary>Archived <span>{archivedChannels.length}</span></summary>
+            <summary><ChevronRight size={13} aria-hidden="true" />Archived <span>{archivedChannels.length}</span></summary>
             {archivedChannels.map(channelRow)}
           </details>
         )}
@@ -308,7 +338,7 @@ function ProjectSection({ project, snap, sel, go, onSettings, inboxBox, onNewCha
               setDmPicker((cur) => (cur === project.slug ? null : project.slug));
             }}
           >
-            +
+            <Plus size={14} aria-hidden="true" />
           </button>
         </div>
         {dmPicker === project.slug && (
@@ -339,17 +369,17 @@ function ProjectSection({ project, snap, sel, go, onSettings, inboxBox, onNewCha
             ))}
           </div>
         )}
-        <div className="subh">With you</div>
-        {!openDms.some(ch => ch.memberIds.includes("human")) && <p className="empty-mini">No conversations yet.</p>}
-        {openDms.filter(ch => ch.memberIds.includes("human")).map(dmRow)}
-        <details className="agent-conversations" open={sel.kind === "channel" && openDms.some(ch => ch.id === sel.id && !ch.memberIds.includes("human")) ? true : undefined}>
-          <summary>Between agents <span>{openDms.filter(ch => !ch.memberIds.includes("human")).length}</span></summary>
-          {openDms.filter(ch => !ch.memberIds.includes("human")).map(dmRow)}
+        {withYou.length === 0 && <p className="empty-mini">No conversations yet.</p>}
+        {withYou.map(dmRow)}
+        <details className="agent-conversations" open={sel.kind === "channel" && between.some(ch => ch.id === sel.id) ? true : undefined}>
+          <summary><ChevronRight size={13} aria-hidden="true" />Between agents <span>{between.length}</span></summary>
+          {between.map(dmRow)}
         </details>
       </div>
       <div className="group">
         <div className="group-h">
           <span>Hive</span>
+          <small>{online} online</small>
         </div>
         <AgentList
           agents={hiveAgents}
@@ -360,6 +390,7 @@ function ProjectSection({ project, snap, sel, go, onSettings, inboxBox, onNewCha
           queued={snap.queued ?? {}}
           inbox={snap.inbox}
           work={agentWork}
+          botChannels={botChannels}
           onOpen={agentActions.onAgent}
           onAskClear={(name) => agentActions.onAskAgent(name, "clear")}
           onAskRemove={(name) => agentActions.onAskAgent(name, "remove")}

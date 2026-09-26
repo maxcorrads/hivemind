@@ -104,22 +104,25 @@ test("a grouped follow-up has no header; the Thread line appears only when there
   assert.doesNotMatch(grouped, /class="replies"/);
   assert.match(grouped, /aria-label="Reply in thread"/);
   const replied = renderToStaticMarkup(<Msg m={m} replies={2} status={null} onThread={() => undefined} />);
-  assert.match(replied, /class="replies"[^>]*>2 replies</);
+  assert.match(replied, /class="replies"[^>]*><svg[^>]*aria-hidden="true"[\s\S]*?<\/svg>2 replies</);
+  const open = renderToStaticMarkup(<Msg m={m} replies={2} status={null} threadOpen onThread={() => undefined} />);
+  assert.match(open, /class="replies open"/, "the summary of the open thread is highlighted");
   assert.match(renderToStaticMarkup(<Msg m={m} grouped replies={0} status="blocked" />), /msg-h/, "a thread status keeps its header");
 });
 
-test("task messages render as compact cards with the raw text behind Details", () => {
+test("task messages render as compact cards with the raw text behind Contract details", () => {
   const envelope: TaskEnvelope = { taskId: "3f2a9c1e-0000-4000-8000-000000000000", channelId: "c1", revision: 1, contractVersion: 1,
     actorId: "b", actorRole: "brain", assignerId: "b", workerId: "w", action: { type: "assign", contract: {
       objective: "Ship the <b>stream</b>", scope: ["web"], nonGoals: [], acceptanceCriteria: ["Tests pass"], dependencies: [], evidenceSeqs: [],
     } } };
   const task = renderToStaticMarkup(<Msg m={message({ taskEvent: envelope, body: taskBody(envelope) })} replies={0} status={null}
     taskRoute="Atlas → Forge" onThread={() => undefined} />);
-  assert.match(task, /class="chip chip-info">Assigned</);
+  assert.match(task, /class="tone-chip accent">Assigned</);
+  assert.match(task, /class="card-id"[^>]*>3f2a9c1e · rev 1</);
   assert.match(task, /class="card-title">Ship the &lt;b&gt;stream&lt;\/b&gt;</);
   assert.match(task, /Atlas → Forge/);
-  assert.match(task, />Open</);
-  assert.match(task, /<details><summary>Details<\/summary><div class="card-raw">Task assign · 3f2a9c1e/);
+  assert.match(task, />Open task</);
+  assert.match(task, /<details><summary>Contract details<\/summary><div class="card-raw">Task assign · 3f2a9c1e/);
   assert.doesNotMatch(task, /class="msg-b/);
 
   // A request from the removed Human decision queue is plain history now: its text, not a card.

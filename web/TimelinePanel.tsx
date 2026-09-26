@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
+import { Download, RefreshCw } from 'lucide-react';
 import type { TimelineExport, TimelineView } from '../src/shared/timeline.ts';
 import { api } from './api.ts';
+import { Disclosure } from './Disclosure.tsx';
 
 function label(event: TimelineView['events'][number]) {
   if (event.kind === 'delivery') return `${event.stage} → ${event.agentName} · ${event.wakeReason}`;
@@ -28,18 +30,18 @@ export function TimelinePanel({ taskId }: { taskId: string }) {
   };
 
   return <details className="task-timeline">
-    <summary>Coordination timeline{timeline?.truncated ? ' · truncated' : ''}</summary>
+    <Disclosure>Coordination timeline{timeline?.truncated ? ' · truncated' : ''}</Disclosure>
     <div className="timeline-tools">
-      <button type="button" className="text-btn" onClick={() => void load()}>Refresh</button>
-      <button type="button" className="text-btn" onClick={() => void download()}>Export redacted fixture</button>
+      <button type="button" className="btn btn-ghost" onClick={() => void load()}><RefreshCw size={14} aria-hidden="true" />Refresh</button>
+      <button type="button" className="btn btn-ghost" onClick={() => void download()}><Download size={14} aria-hidden="true" />Export redacted fixture</button>
     </div>
     {error && <p role="alert">{error}</p>}
     {!timeline && !error && <p>Loading timeline…</p>}
     {timeline && <>
-      <small>{timeline.warning}</small>
+      <small className="timeline-warning">{timeline.warning}</small>
       {timeline.events.length === 0 && <p>No timeline events retained for this task.</p>}
       <ol className="timeline-list">
-        {timeline.events.map(event => <li key={event.id}>
+        {timeline.events.map(event => <li key={event.id} className={`kind-${event.kind}`}>
           <time>{new Date(event.at).toLocaleTimeString()}</time>
           <span>{label(event)}</span>
           {event.kind === 'message' && event.relation && <small>

@@ -1,9 +1,10 @@
+import { ArrowLeft, Bell, ChevronRight, House, MessagesSquare, type LucideIcon } from "lucide-react";
 import type { Channel } from "../src/shared/types.ts";
 import type { Snapshot } from "./api.ts";
 import { ChannelItem } from "./ChannelNav.tsx";
 import type { MobileTab } from "./mobile-nav.ts";
 
-const TABS: [MobileTab, string][] = [["home", "Home"], ["dms", "DMs"], ["activity", "Activity"]];
+const TABS: [MobileTab, string, LucideIcon][] = [["home", "Home", House], ["dms", "DMs", MessagesSquare], ["activity", "Activity", Bell]];
 
 /** The phone's bottom tab bar (#223). Hidden on wide screens and while a channel or thread is open. */
 export function MobileTabs({ active, badges, onTab }: {
@@ -13,9 +14,10 @@ export function MobileTabs({ active, badges, onTab }: {
 }) {
   return (
     <nav className="m-tabs" aria-label="Sections">
-      {TABS.map(([tab, label]) => (
+      {TABS.map(([tab, label, Icon]) => (
         <button key={tab} type="button" className={active === tab ? "on" : ""} aria-current={active === tab ? "page" : undefined}
           onClick={() => onTab(tab)}>
+          <Icon size={18} aria-hidden="true" />
           <span>{label}</span>
           {(badges[tab] ?? 0) > 0 && <em>{badges[tab]}</em>}
         </button>
@@ -28,7 +30,7 @@ export function MobileTabs({ active, badges, onTab }: {
 export function BackButton({ label, onBack }: { label: string; onBack: () => void }) {
   return (
     <button type="button" className="m-back" aria-label={label} title={label} onClick={onBack}>
-      <span aria-hidden="true">←</span>
+      <ArrowLeft size={18} aria-hidden="true" />
     </button>
   );
 }
@@ -50,6 +52,7 @@ export function MobileDms({ snap, project, onOpen, onUnread }: {
   const { withYou, between } = projectDms(snap, project);
   const row = (ch: Channel) => (
     <ChannelItem key={ch.id} ch={ch} unread={snap.unread[ch.id] ?? 0} active={false}
+      peer={ch.memberIds.includes("human") ? snap.agents.find(a => a.id !== "human" && ch.memberIds.includes(a.id)) : undefined}
       onClick={() => onOpen(ch.id)} onUnread={() => onUnread(ch.id)} />
   );
   return (
@@ -65,7 +68,7 @@ export function MobileDms({ snap, project, onOpen, onUnread }: {
         {withYou.map(row)}
         {between.length > 0 && (
           <details className="agent-conversations">
-            <summary>Between agents <span>{between.length}</span></summary>
+            <summary><ChevronRight size={13} aria-hidden="true" />Between agents <span>{between.length}</span></summary>
             {between.map(row)}
           </details>
         )}

@@ -175,6 +175,56 @@ test('mention autocomplete: arrows move, Enter/Tab insert, Escape closes, Enter 
   await f.key('Enter');
   assert.deepEqual(sent, ['Hi @Adrian and @Ada, @B']);
   assert.equal(f.textarea().value, '');
+
+  // Picking a name that is already typed out changes nothing, and leaves no stale caret for the next keystroke.
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')!.set!.call(f.textarea(), 'Hi @Ada there');
+    f.textarea().setSelectionRange(7, 7);
+    f.textarea().dispatchEvent(new window.Event('input', { bubbles: true }) as unknown as Event);
+  });
+  assert.deepEqual(f.hints().map(h => h.text), ['@Adaworker']);
+  await f.key('Enter');
+  assert.equal(f.textarea().value, 'Hi @Ada there');
+  assert.equal(f.textarea().selectionStart, 7, 'the caret sits after the name');
+  await f.type('Hi @Ada there!');
+  assert.equal(f.textarea().selectionStart, 14, 'the next keystroke keeps its own caret');
+});
+
+test('the @ and emoji buttons type at the caret: @ opens the mention list, emoji comes from the reaction picker', async t => {
+  const f = mount(t);
+  const agents = [agent('Ada'), agent('Bob', 'brain')];
+  await f.render(<Composer agents={agents} placeholder="Message" onSend={async () => true} />);
+  const click = (label: string) => act(async () => f.host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!.click());
+  await click('Mention someone');
+  assert.equal(f.textarea().value, '@');
+  assert.deepEqual(f.hints().map(h => h.text), ['@Adaworker', '@Bobbrain'], 'a bare @ offers everyone');
+  assert.equal(document.activeElement, f.textarea(), 'typing goes on in the draft');
+  await f.key('Escape');
+
+  await f.type('Hello world');
+  f.textarea().setSelectionRange(5, 5);
+  await click('Mention someone');
+  assert.equal(f.textarea().value, 'Hello @ world', 'a mention starts its own word');
+  assert.equal(f.textarea().selectionStart, 7);
+  assert.equal(f.hints().length, 2);
+  await f.key('Enter');
+  assert.equal(f.textarea().value, 'Hello @Ada world', 'the name replaces the fragment before the caret');
+  assert.equal(f.textarea().selectionStart, 10);
+
+  const toggle = f.host.querySelector<HTMLButtonElement>('button[aria-label="Insert emoji"]')!;
+  await click('Insert emoji');
+  assert.equal(toggle.getAttribute('aria-expanded'), 'true');
+  const picker = () => f.host.querySelector('[role="group"][aria-label="Emoji"]');
+  assert.equal(picker()!.querySelectorAll('button').length, 18, 'every reaction emoji');
+  assert.equal(document.activeElement, picker()!.querySelector('button'), 'the picker takes focus');
+  await act(async () => { picker()!.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }) as unknown as Event); });
+  assert.equal(picker(), null);
+  assert.equal(document.activeElement, toggle, 'Escape returns to the button');
+  f.textarea().setSelectionRange(5, 5);
+  await click('Insert emoji');
+  await act(async () => picker()!.querySelector<HTMLButtonElement>('button[title="🎉"]')!.click());
+  assert.equal(f.textarea().value, 'Hello🎉 @Ada world');
+  assert.equal(picker(), null, 'picking closes the picker');
 });
 
 test('typing re-renders only the composer; a live update re-renders only the changed message', async t => {

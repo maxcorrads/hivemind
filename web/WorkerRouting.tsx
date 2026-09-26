@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { TaskSnapshot } from '../src/shared/tasks.ts';
 import type { RoutingSuggestions } from '../src/shared/routing.ts';
 import { api } from './api.ts';
+import { Disclosure } from './Disclosure.tsx';
 
 /** Explicit requests only: opening a task never assigns work or fetches hidden rankings. */
 export function WorkerRouting({ task }: { task: TaskSnapshot }) {
@@ -34,26 +35,28 @@ export function WorkerRouting({ task }: { task: TaskSnapshot }) {
     } catch (e) { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : 'Choice could not be recorded'); }
     finally { if (active.current === controller) setBusy(false); }
   };
-  return <details className="worker-routing"><summary>Advisory worker routing</summary>
-    <p>Worker declarations and limited review evidence, not a verified capability score. This never assigns work or changes a model.</p>
-    <label>Required capabilities (comma-separated)<input value={capabilities} disabled={busy} onChange={e => { setCapabilities(e.target.value); setResult(null); }} /></label>
-    <label>Task category<input value={category} disabled={busy} onChange={e => { setCategory(e.target.value); setResult(null); }} /></label>
-    <label>Mode<select value={mode} disabled={busy} onChange={e => { setMode(e.target.value as typeof mode); setResult(null); }}>
-      <option value="implementation">Implementation</option><option value="review">Separate review</option><option value="read_only">Read only</option>
-    </select></label>
-    <button type="button" disabled={busy} onClick={() => void suggest()}>Find eligible workers</button>
+  return <details className="worker-routing"><Disclosure>Advisory worker routing</Disclosure>
+    <p className="routing-note">Worker declarations and limited review evidence, not a verified capability score. This never assigns work or changes a model.</p>
+    <div className="routing-fields">
+      <label className="routing-wide">Required capabilities (comma-separated)<input value={capabilities} disabled={busy} onChange={e => { setCapabilities(e.target.value); setResult(null); }} /></label>
+      <label>Task category<input value={category} disabled={busy} onChange={e => { setCategory(e.target.value); setResult(null); }} /></label>
+      <label>Mode<select value={mode} disabled={busy} onChange={e => { setMode(e.target.value as typeof mode); setResult(null); }}>
+        <option value="implementation">Implementation</option><option value="review">Separate review</option><option value="read_only">Read only</option>
+      </select></label>
+    </div>
+    <button type="button" className="btn" disabled={busy} onClick={() => void suggest()}>Find eligible workers</button>
     {error && <p role="alert">{error}</p>}
-    {result && <><p>{result.eligibleTotal} eligible opted-in workers; task revision {result.taskRevision}. Provider cost: unknown.</p>
-      {result.candidates.map(candidate => <section key={candidate.workerId} aria-label={`Suggestion ${candidate.name}`}>
-        <strong>{candidate.name}</strong><p>{candidate.card.model ?? 'Unknown model'} / {candidate.card.host ?? 'Unknown host'} · declaration revision {candidate.capabilityRevision}</p>
+    {result && <><p className="routing-note">{result.eligibleTotal} eligible opted-in workers; task revision {result.taskRevision}. Provider cost: unknown.</p>
+      {result.candidates.map(candidate => <section key={candidate.workerId} className="routing-candidate" aria-label={`Suggestion ${candidate.name}`}>
+        <strong>{candidate.name}</strong><p className="routing-note">{candidate.card.model ?? 'Unknown model'} / {candidate.card.host ?? 'Unknown host'} · declaration revision {candidate.capabilityRevision}</p>
         {candidate.reasons.map(text => <p key={text}>{text}</p>)}
         <p>{candidate.evidence.interval95 ? `Descriptive accepted-rate interval: ${(100 * candidate.evidence.interval95[0]).toFixed(0)}–${(100 * candidate.evidence.interval95[1]).toFixed(0)}%` : 'No matching reviewed outcomes.'}</p>
-        <button type="button" disabled={busy} onClick={() => { setWorkerId(candidate.workerId); setSaved(false); }}>Record preference for {candidate.name}</button>
+        <button type="button" className="btn" disabled={busy} onClick={() => { setWorkerId(candidate.workerId); setSaved(false); }}>Record preference for {candidate.name}</button>
       </section>)}
-      {result.nextOffset !== null && <button type="button" disabled={busy} onClick={() => void suggest(result.nextOffset!)}>Next candidates</button>}
-      <p>{result.warning}</p><p>{result.delegationAdvice}</p>
+      {result.nextOffset !== null && <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => void suggest(result.nextOffset!)}>Next candidates</button>}
+      <p className="routing-note">{result.warning}</p><p className="routing-note">{result.delegationAdvice}</p>
       {workerId && <><label>Reason (recorded in task history)<textarea value={reason} maxLength={700} disabled={busy} onChange={e => { setReason(e.target.value); setSaved(false); }} /></label>
-        <button type="button" disabled={busy || !reason.trim() || saved} onClick={() => void record()}>Record choice without assigning</button></>}
+        <button type="button" className="btn btn-primary" disabled={busy || !reason.trim() || saved} onClick={() => void record()}>Record choice without assigning</button></>}
     </>}
     {saved && <p role="status">Choice recorded. Task ownership and running agents are unchanged.</p>}
   </details>;

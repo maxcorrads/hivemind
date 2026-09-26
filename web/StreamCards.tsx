@@ -12,7 +12,7 @@ export function taskEventLabel(envelope: TaskEnvelope): string {
   return TASK_LABELS[action.type] ?? action.type.replaceAll("_", " ");
 }
 
-/** The one line that says what this task event is about; the full contract stays behind "Details". */
+/** The one line that says what this task event is about; the full contract stays behind "Contract details". */
 export function taskEventHeadline(envelope: TaskEnvelope): string {
   const action = envelope.action;
   if ("contract" in action && action.contract) return action.contract.objective;
@@ -27,14 +27,19 @@ export function taskEventHeadline(envelope: TaskEnvelope): string {
   }
 }
 
+/** The chip's tone: blocked or rejected work is bad, changes requested a warning, progress ok, the rest accent. */
 function tone(envelope: TaskEnvelope): string {
-  const type = envelope.action.type;
-  if (type === "block" || type === "reject" || (envelope.action.type === "review" && envelope.action.decision !== "accepted")) return "warn";
-  if (type === "accept" || type === "result" || type === "review") return "ok";
-  return "info";
+  const action = envelope.action;
+  if (action.type === "block" || action.type === "reject") return "bad";
+  if (action.type === "review") return action.decision === "accepted" ? "ok" : "warn";
+  if (action.type === "accept" || action.type === "result") return "ok";
+  return "accent";
 }
 
-/** Compact task event in the stream: status chip, objective, assigner → worker, Open and the raw contract. */
+/**
+ * Compact task event in the stream: status chip and short task id, objective, assigner → worker, then a footer
+ * with Open task and the raw contract behind Contract details.
+ */
 export function TaskEventCard({ envelope, route, body, onOpen }: {
   envelope: TaskEnvelope;
   route: string | undefined;
@@ -43,16 +48,18 @@ export function TaskEventCard({ envelope, route, body, onOpen }: {
 }) {
   return (
     <section className="stream-card task-event" aria-label="Task event">
-      <div className="card-top">
-        <span className={`chip chip-${tone(envelope)}`}>{taskEventLabel(envelope)}</span>
-        <small>Task · revision {envelope.revision}</small>
+      <div className="card-body">
+        <div className="card-top">
+          <span className={`tone-chip ${tone(envelope)}`}>{taskEventLabel(envelope)}</span>
+          <small className="card-id" title={`Task ${envelope.taskId}`}>{`${envelope.taskId.slice(0, 8)} · rev ${envelope.revision}`}</small>
+        </div>
+        <p className="card-title">{taskEventHeadline(envelope)}</p>
+        {route && <p className="card-meta">{route}</p>}
       </div>
-      <p className="card-title">{taskEventHeadline(envelope)}</p>
-      {route && <p className="card-meta">{route}</p>}
       <div className="card-actions">
-        {onOpen && <button type="button" className="card-btn" onClick={onOpen}>Open</button>}
+        {onOpen && <button type="button" className="card-btn" onClick={onOpen}>Open task</button>}
         <details>
-          <summary>Details</summary>
+          <summary>Contract details</summary>
           <div className="card-raw">{body}</div>
         </details>
       </div>

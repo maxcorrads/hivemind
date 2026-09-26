@@ -99,6 +99,9 @@ export function agentStatusLine(agent: Agent, work?: AgentWork): string | null {
   return agent.online ? "idle" : "offline";
 }
 
+/** The quick switcher's shortcut as this platform writes it. */
+export const SWITCHER_SHORTCUT = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘K" : "Ctrl+K";
+
 export type SwitchItem =
   | { key: string; kind: "project"; label: string; hint: string; project: Project }
   | { key: string; kind: "channel" | "dm"; label: string; hint: string; channel: Channel; unread: number }
@@ -152,4 +155,18 @@ export function switcherItems(snap: Pick<Snapshot, "projects" | "channels" | "ag
   });
   ranked.sort((a, b) => a.rank - b.rank || KIND_ORDER[a.item.kind] - KIND_ORDER[b.item.kind] || a.item.label.localeCompare(b.item.label));
   return ranked.slice(0, limit).map(({ item }) => item);
+}
+
+/** The project picker behind the sidebar's project card: every project matching `query`, the current one first. */
+export function projectSwitchItems(snap: Pick<Snapshot, "projects">, query: string, currentProject: string): SwitchItem[] {
+  const q = query.trim().toLowerCase();
+  return snap.projects
+    .flatMap(project => {
+      const rank = q ? score(project.name, q) : 0;
+      return rank === null ? [] : [{ project, rank }];
+    })
+    .sort((a, b) => a.rank - b.rank || Number(b.project.slug === currentProject) - Number(a.project.slug === currentProject)
+      || a.project.name.localeCompare(b.project.name))
+    .map(({ project }) => ({ key: `p:${project.slug}`, kind: "project" as const, label: project.name,
+      hint: project.slug === currentProject ? "current" : "", project }));
 }

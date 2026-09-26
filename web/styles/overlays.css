@@ -1,0 +1,232 @@
+/* Overlays: dialogs and sheets (web/Modal.tsx and every *Sheet), popovers, the quick switcher, For you, search
+   results and the Routing log. Builds on the tokens and primitives of web/styles.css and overrides its older rules. */
+
+/* ---- Dialogs and sheets -------------------------------------------------------------------------------------------
+   One sheet: a 14px card on --raised over --overlay. An optional .sheet-head (icon tile, title, one-line description,
+   close button); fields are 12.5px/500 labels over 34px hairline inputs; the closing .row is a --sunk footer. */
+.modal { padding: 16px; background: var(--overlay); }
+.sheet { padding: 18px 20px; gap: 14px; border-radius: 14px; background: var(--raised); box-shadow: var(--shadow); }
+.sheet:has(> .row:last-child) { padding-bottom: 0; }
+.sheet h2, .sheet > h2 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -0.015em; line-height: 1.3; }
+.sheet > h2 { background: var(--raised); padding-bottom: 2px; }
+.sheet h3 { margin: 4px 0 0; font-size: 13px; font-weight: 600; }
+.sheet .help-p, .sheet .config-status { font-size: 13px; line-height: 1.5; }
+.sheet pre { background: var(--sunk); border: 1px solid var(--line); font-size: 12px; line-height: 1.6; }
+
+.sheet-head { flex: none; display: flex; align-items: flex-start; gap: 12px; }
+.sheet-head > div { flex: 1; min-width: 0; }
+.sheet-head p { margin: 3px 0 0; font-size: 13px; line-height: 1.45; color: var(--mute); }
+.sheet-icon { flex: none; width: 36px; height: 36px; border-radius: 9px; display: grid; place-items: center; background: var(--sunk);
+  border: 1px solid var(--line); color: var(--ink); }
+.sheet-head > .icon-btn { margin: -2px -6px 0 0; }
+
+.sheet label { gap: 6px; font-size: 12.5px; font-weight: 500; color: var(--ink2); }
+.sheet input:where(:not([type="checkbox"], [type="radio"])), .sheet select {
+  min-height: 34px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink);
+  font-size: 13.5px; font-weight: 400; }
+/* The native arrow ignores the tokens; two gradient halves draw a chevron in --mute that follows the theme. */
+.sheet select { appearance: none; padding-right: 30px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--mute) 50%), linear-gradient(135deg, var(--mute) 50%, transparent 50%);
+  background-position: calc(100% - 15px) 50%, calc(100% - 11px) 50%; background-size: 4px 4px; background-repeat: no-repeat; }
+.sheet textarea { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font-size: 13.5px; }
+.sheet input.mono { font-family: var(--mono); font-size: 13px; }
+.sheet input::placeholder, .sheet textarea::placeholder { color: var(--mute); }
+.sheet input[type="checkbox"], .sheet input[type="radio"] { accent-color: var(--accent); }
+.sheet input[aria-invalid="true"] { border-color: var(--bad); }
+.sheet label.check { gap: 8px; font-size: 13px; font-weight: 400; color: var(--ink2); }
+.sheet label.check input[type="checkbox"] { width: 16px; height: 16px; margin: 0; flex: none; }
+.sheet .checks { margin: 0; padding: 8px 12px 10px; border: 1px solid var(--line); border-radius: 8px; gap: 6px; }
+.sheet .checks legend { padding: 0 4px; font-size: 12.5px; font-weight: 500; color: var(--ink2); }
+/* In a sheet the error sits in the flow, not pinned over the page like the conversation's banner. */
+.sheet .err { position: static; margin: 0; border-color: color-mix(in oklch, var(--bad) 45%, transparent); font-size: 13px; }
+
+/* A disclosure; .sheet-disclosure adds a turning chevron and, on the right, what it holds while closed. */
+.sheet .settings-disclosure { padding: 10px 0 0; border-top: 1px solid var(--line); }
+.sheet .settings-disclosure > summary { display: flex; align-items: center; gap: 8px; list-style: none; font-size: 13px; font-weight: 500; color: var(--ink2); }
+.sheet .settings-disclosure > summary::-webkit-details-marker { display: none; }
+.sheet .settings-disclosure > summary:hover { color: var(--ink); }
+.sheet .settings-disclosure > :not(summary) { margin-top: 12px; }
+.sheet-disclosure > summary > .lucide { color: var(--mute); transition: transform 0.15s ease; }
+.sheet-disclosure[open] > summary > .lucide { transform: rotate(90deg); }
+.sheet-disclosure > summary > span { flex: none; white-space: nowrap; }
+.sheet-disclosure > summary > small { margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px;
+  font-weight: 400; color: var(--mute); }
+@media (prefers-reduced-motion: reduce) { .sheet-disclosure > summary > .lucide { transition: none; } }
+
+/* Every sheet ends on its row of buttons, drawn full-bleed on --sunk. */
+.sheet > .row:last-child { flex: none; flex-wrap: wrap; align-items: center; gap: 8px; margin: 2px -20px 0; padding: 12px 20px;
+  border-top: 1px solid var(--line); background: var(--sunk); bottom: 0; }
+.sheet .row > button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 14px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font-size: 13px; font-weight: 500; white-space: nowrap; }
+.sheet .row > button:hover { background: color-mix(in oklch, var(--ink) 4%, var(--surface)); }
+.sheet .row > button.primary { border-color: transparent; background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.sheet .row > button.primary:hover { background: var(--accent); opacity: 0.9; }
+.sheet .row > button.danger { border-color: color-mix(in oklch, var(--bad) 45%, transparent); background: transparent; color: var(--bad-ink); font-weight: 600; }
+.sheet .row > button.danger:hover { background: color-mix(in oklch, var(--bad) 10%, transparent); }
+.sheet .row > button:disabled, .sheet .row > button:disabled:hover { opacity: 0.45; cursor: default; }
+.sheet .danger-block { margin-top: 4px; padding-top: 14px; display: flex; flex-direction: column; gap: 10px; }
+.sheet > .text-btn { align-self: flex-start; }
+
+/* ---- Launch agent -------------------------------------------------------------------------------------------------
+   Two-column fields, segmented Role and Seniority, a terminal-dark command preview in both themes; the footer holds
+   the resume toggle. */
+.launch-sheet { --term: #111216; --term-ink: #d9dbe0; --term-mute: #8f929b; --term-line: rgba(255, 255, 255, 0.08);
+  width: min(680px, 100%); padding: 0; gap: 0; }
+.launch-sheet > .sheet-head { padding: 18px 20px 14px; }
+.launch-sheet > .sheet-body { padding: 4px 20px 16px; gap: 14px 16px; }
+.launch-sheet > .sheet-body > label:first-of-type, .launch-sheet > .sheet-body > .launch-seg { grid-column: auto; }
+.launch-sheet > .row:last-child { margin: 0; }
+.launch-seg { min-width: 0; margin: 0; padding: 0; border: 0; }
+.launch-seg > legend { padding: 0; margin-bottom: 6px; font-size: 12.5px; font-weight: 500; color: var(--ink2); }
+.launch-seg > .seg { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); width: 100%; height: 34px; }
+.sheet .launch-seg > .seg > label { position: relative; display: grid; place-items: center; gap: 0; padding: 0 8px; border-radius: 6px;
+  font-size: 13px; font-weight: 400; color: var(--mute); cursor: pointer; }
+.sheet .launch-seg > .seg > label:hover { color: var(--ink); }
+.sheet .launch-seg > .seg > label.on { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: 0 0 0 1px var(--line); }
+.launch-seg > .seg > label:has(:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
+.launch-preview { grid-column: 1 / -1; border-radius: 10px; background: var(--term); color: var(--term-ink); overflow: hidden;
+  box-shadow: inset 0 0 0 1px var(--line); }
+.launch-preview > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px 6px 12px;
+  border-bottom: 1px solid var(--term-line); font-size: 11.5px; color: var(--term-mute); }
+.launch-preview > header > button { display: inline-flex; align-items: center; gap: 5px; padding: 3px 7px; border-radius: 5px; font-size: 11.5px;
+  font-weight: 500; color: var(--term-ink); }
+.launch-preview > header > button:hover { background: var(--term-line); }
+.launch-preview > header > button:disabled { opacity: 0.5; cursor: default; }
+.sheet .launch-pre { flex: 0 0 auto; overflow-wrap: anywhere; word-break: break-word; margin: 0; padding: 12px; border: 0; border-radius: 0; background: transparent; color: inherit;
+  font-size: 12px; line-height: 1.6; white-space: pre-wrap; max-height: 18rem; overflow: auto; }
+.launch-card { gap: 8px; padding: 10px 12px 12px; border-radius: 10px; background: var(--surface); }
+.launch-card-h { align-items: center; }
+.launch-card-h strong { font-size: 14px; font-weight: 600; }
+.launch-card-h span { font-size: 12.5px; }
+.launch-card-h .btn { margin-left: auto; height: 26px; }
+.sheet .launch-card .launch-pre { border-radius: 8px; background: var(--term); color: var(--term-ink); }
+.launch-footer > .launch-close { margin-left: auto; }
+
+/* ---- Quick switcher (Cmd/Ctrl+K) ---------------------------------------------------------------------------------
+   A 600px panel high on the page: a 54px search field, results grouped by kind with 26px tiles, a key legend. */
+.modal:has(> .switcher) { align-items: start; padding-top: min(110px, 12dvh); }
+.sheet.switcher { width: min(600px, 100%); max-height: calc(100dvh - min(110px, 12dvh) - 16px); margin-block: 0; padding: 0; gap: 0; overflow: hidden; }
+.switcher-field { flex: none; display: flex; align-items: center; gap: 10px; height: 54px; padding: 0 16px; border-bottom: 1px solid var(--line); color: var(--mute); }
+/* The caret is the only other sign of focus in the field: underline it in the accent. */
+.switcher-field:focus-within { box-shadow: inset 0 -1px 0 var(--accent); }
+.switcher .switcher-input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--ink);
+  font-size: 16px; caret-color: var(--accent); }
+.switcher .switcher-input:focus-visible { outline: none; }
+.switcher-options { flex: 1 1 auto; min-height: 0; max-height: min(26rem, 60dvh); padding: 6px; }
+.switcher-options ul { list-style: none; margin: 0; padding: 0; }
+.switcher-options > li[role="presentation"], .switcher-options li.sr-only { display: block; min-height: 0; padding: 0; border-radius: 0; cursor: default; }
+.switcher-options li.switcher-group { display: block; min-height: 0; padding: 10px 10px 4px; cursor: default; font-size: 11.5px; font-weight: 500; color: var(--mute); }
+.switcher-options > li:first-child .switcher-group { padding-top: 6px; }
+.switcher-options li[role="option"] { display: flex; border-radius: 8px; cursor: pointer; align-items: center; gap: 10px; min-height: 40px; padding: 0 10px; }
+.switcher-tile { flex: none; width: 26px; height: 26px; border-radius: 6px; display: grid; place-items: center; background: var(--sunk); color: var(--ink2);
+  font-size: 10px; font-weight: 600; }
+.switcher-tile.avatar { width: 26px; height: 26px; border-radius: 6px; font-size: 10px; background: oklch(var(--avl) 0.06 var(--h, 262)); color: var(--avink); }
+.switcher-label { font-size: 14px; font-weight: 500; }
+.switcher-hint { margin-right: 0; font-size: 12.5px; }
+.switcher-options li[role="option"] > .count, .switcher-options li[role="option"] > .switcher-enter { margin-left: auto; }
+.switcher-options li[role="option"] > .count + .switcher-enter { margin-left: 0; }
+.switcher-options .count { padding: 0 5px; border-radius: 9px; font-size: 11px; font-weight: 600; }
+.switcher-enter { color: var(--mute); }
+.switcher > .empty-mini { padding: 10px 16px 14px; }
+.switcher > .switcher-new { align-self: flex-start; margin: 0 6px 6px; }
+.switcher-keys { flex: none; display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0; padding: 10px 16px; border-top: 1px solid var(--line); background: var(--sunk);
+  font-size: 12px; color: var(--mute); }
+.switcher-keys kbd { font-size: 12px; }
+.switcher-scope { margin-left: auto; }
+
+/* ---- Popovers ------------------------------------------------------------------------------------------------------ */
+.popover-body { border-radius: 8px; background: var(--raised); padding: 6px; font-size: 13px; }
+.info-tip > summary { width: 24px; height: 24px; border: 0; border-radius: 6px; color: var(--mute); }
+.info-tip > summary:hover, .info-tip[open] > summary { background: var(--hover); color: var(--ink); }
+.info-tip .popover-body { padding: 10px 12px; }
+.info-tip .popover-body ul { color: var(--ink2); }
+
+/* ---- For you --------------------------------------------------------------------------------------------------------
+   Header (title, description, Mark all read; Unread | Activity and the type chips), then one row per entry:
+   unread dot | the message's avatar | reason "in" where, the message, actions | time. */
+.inbox-header { display: block; padding: 20px 28px 14px; }
+.inbox-title { display: flex; align-items: flex-start; gap: 16px; }
+.inbox-title > div { flex: 1; min-width: 0; }
+.inbox-header h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }
+.inbox-header p { margin: 4px 0 0; font-size: 13.5px; color: var(--mute); }
+.inbox-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; margin-top: 14px; }
+.inbox-tabs.seg { flex-wrap: nowrap; gap: 2px; margin: 0; }
+.inbox-tabs.seg > button { padding: 4px 12px; border: 0; border-radius: 6px; font-size: 12.5px; font-weight: 500; color: var(--mute); }
+.inbox-tabs.seg > button.on { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: 0 0 0 1px var(--line); }
+.inbox-count { margin: 0; font-style: normal; font-weight: 600; color: var(--bad-ink); font-variant-numeric: tabular-nums; }
+.inbox-bar-rule { flex: none; width: 1px; height: 18px; background: var(--line); }
+.inbox-filters { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; }
+.inbox-stream { padding: 8px 0; }
+.inbox-stream > .empty, .inbox-stream > .loading { padding: 20px 28px; }
+.inbox-stream > .inbox-error { margin: 8px 28px; color: var(--bad-ink); }
+.inbox-card { display: grid; grid-template-columns: 8px 32px minmax(0, 1fr) auto; column-gap: 12px; row-gap: 2px; align-items: start; max-width: none;
+  margin: 0; padding: 14px 28px 14px 20px; border-bottom: 1px solid var(--line); }
+.inbox-dot { grid-column: 1; grid-row: 1; width: 7px; height: 7px; margin-top: 12px; border-radius: 50%; }
+.inbox-card.unread .inbox-dot { background: var(--accent); }
+.inbox-context { display: flex; flex-wrap: wrap; color: var(--mute); grid-column: 3; grid-row: 1; align-items: center; gap: 2px 6px; min-width: 0; padding: 0; font-size: 12.5px; }
+.inbox-reason { display: inline-flex; align-items: center; gap: 5px; font-weight: 500; color: var(--ink2); }
+.inbox-context strong { font-weight: 600; }
+.inbox-unread { font-style: normal; font-weight: 600; font-size: 11.5px; color: var(--accent); }
+.inbox-card.read .inbox-context > span:first-child { opacity: 1; }
+.inbox-time { grid-column: 4; grid-row: 1; font-size: 12px; white-space: nowrap; }
+/* The row reuses the message renderer: its avatar and body drop straight into the row's grid. */
+.inbox-card > .msg { display: contents; }
+.inbox-card > .msg > .avatar { grid-column: 2; grid-row: 1 / span 3; }
+.inbox-card > .msg > div, .inbox-card > .msg.sys > p { grid-column: 3 / -1; grid-row: 2; min-width: 0; margin-top: 2px; }
+.inbox-card .msg-h { gap: 6px; }
+.inbox-card .msg-h strong { font-size: 13.5px; font-weight: 600; }
+/* The row's own time, on the right, replaces the message's. */
+.inbox-card .msg-h time { display: none; }
+.inbox-card .msg-b { max-width: 78ch; font-size: 14px; line-height: 1.5; color: var(--ink2); }
+.inbox-actions { display: flex; flex-wrap: wrap; grid-column: 3 / -1; grid-row: 3; gap: 4px 14px; margin-top: 6px; padding: 0; }
+.inbox-actions .text-btn { padding: 0; border-radius: 4px; font-size: 12.5px; font-weight: 500; color: var(--mute); }
+.inbox-actions .text-btn:hover { background: none; color: var(--ink); }
+.inbox-actions .text-btn.inbox-open, .inbox-actions .text-btn.inbox-open:hover { font-weight: 600; color: var(--accent); }
+.inbox-actions .text-btn:disabled { opacity: 0.6; cursor: default; }
+.inbox-stream > .older { margin: 14px auto; }
+
+/* ---- Search results ------------------------------------------------------------------------------------------------ */
+.inbox-item:has(> .search-hit-open) { border-bottom: 1px solid var(--line); }
+.search-hit-open .msg:hover { background: transparent; }
+.open-link { font-size: 12.5px; color: var(--accent); }
+
+/* ---- Routing log ----------------------------------------------------------------------------------------------------- */
+.jev-request { border-radius: 8px; background: var(--surface); }
+.jev-request > header { background: var(--sunk); }
+.jev-request-text { font-size: 13.5px; }
+.jev-badge.tone-chip { padding: 2px 8px; border: 0; font-size: 11.5px; font-weight: 600; }
+.jev-call { font-size: 12.5px; }
+.jev-call:hover { background: var(--hover); }
+.jev-call.active { background: color-mix(in oklch, var(--accent) 10%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
+.jev-call-answer.unavailable { color: var(--bad-ink); }
+/* .jev-badge takes its colour from its .tone-chip variant, which stays readable on the --sunk header. */
+.jev-call-outcome.applied, .jev-outcome.applied { color: var(--ok-ink); }
+.jev-call-outcome.warning, .jev-outcome.warning { color: var(--warn-ink); }
+.jev-call-detail h2 { font-size: 17px; font-weight: 600; letter-spacing: -0.015em; }
+.jev-call-detail h3 { font-size: 12px; font-weight: 600; text-transform: none; letter-spacing: 0; }
+.jev-request-full { border-left: 2px solid var(--accent); background: var(--sunk); border-radius: 0 8px 8px 0; }
+.jev-context { font-size: 13px; }
+.jev-answers { font-size: 13px; }
+.jev-meter { background: var(--active); }
+.jev-meter > span { background: var(--accent); }
+.jev-call-detail pre { background: var(--sunk); border: 1px solid var(--line); font-size: 11.5px; }
+
+/* ---- Narrow screens: #223 keeps its one-screen layout, only the spacing tightens ---------------------------------------- */
+@media (max-width: 960px) {
+  .inbox-header { padding: 12px 14px; }
+  .inbox-card { column-gap: 10px; padding: 12px 14px 12px 8px; }
+  .inbox-stream > .empty, .inbox-stream > .loading { padding: 16px 14px; }
+  .inbox-stream > .inbox-error { margin: 8px 14px; }
+  .inbox-context { padding-inline: 0; }
+}
+@media (max-width: 540px) {
+  .sheet { padding: 14px; }
+  .sheet > .row:last-child { margin-inline: -14px; padding: 10px 14px; }
+  .launch-sheet, .sheet.switcher { padding: 0; }
+  .launch-sheet > .row:last-child { margin: 0; }
+  .launch-sheet > .sheet-head { padding: 14px 14px 10px; }
+  .launch-sheet > .sheet-body { padding: 4px 14px 14px; }
+  .modal:has(> .switcher) { padding-top: 10px; }
+  .sheet.switcher { max-height: calc(100dvh - 20px); }
+  .switcher-scope, .inbox-bar-rule { display: none; }
+}

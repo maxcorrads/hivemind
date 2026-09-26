@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import { Bot, Ellipsis, Plus } from "lucide-react";
 import type { AgentWork } from "../src/shared/tasks.ts";
 import type { Agent, InboxStatus } from "../src/shared/types.ts";
-import { Avatar } from "./Avatar.tsx";
 import { InboxReceipt, QueueBadge } from "./InboxReceipt.tsx";
-import { seniorityBars } from "./labels.ts";
 import { focusFirstMenuItem, menuKeyDown } from "./menu-keys.ts";
 import { agentStatusLine } from "./nav-model.ts";
 
@@ -16,6 +15,7 @@ export function AgentList({
   queued,
   inbox = {},
   work = {},
+  botChannels = {},
   onOpen,
   onAskClear,
   onAskRemove,
@@ -30,6 +30,8 @@ export function AgentList({
   inbox?: Record<string, InboxStatus>;
   /** Open work per agent id, shown as each brain's and worker's status line. */
   work?: Record<string, AgentWork>;
+  /** Where each bot posts, by agent id, e.g. "#general". */
+  botChannels?: Record<string, string>;
   onOpen: (a: Agent) => void;
   onAskClear: (name: string) => void;
   onAskRemove: (name: string) => void;
@@ -41,7 +43,29 @@ export function AgentList({
   const bots = agents.filter((a) => a.role === "bot");
   const rank = { senior: 0, mid: 1, junior: 2 } as const;
   workers.sort((a, b) => (rank[a.seniority ?? "mid"] ?? 3) - (rank[b.seniority ?? "mid"] ?? 3) || a.name.localeCompare(b.name));
+  const row = (a: Agent, canClear: boolean) => (
+    <PersonRow
+      key={a.id}
+      agent={a}
+      queued={queued[a.id] ?? 0}
+      inbox={inbox[a.id]}
+      status={agentStatusLine(a, work[a.id])}
+      onOpen={() => onOpen(a)}
+      menuOpen={menu === a.name}
+      onMenu={() => setMenu(menu === a.name ? null : a.name)}
+      onCloseMenu={() => setMenu(null)}
+      onAskClear={canClear ? () => {
+        setMenu(null);
+        onAskClear(a.name);
+      } : undefined}
+      onAskRemove={() => {
+        setMenu(null);
+        onAskRemove(a.name);
+      }}
+    />
+  );
 
+  // Brains, then workers by seniority; the role sits beside each name, so the groups need no headings.
   return (
     <div className="agents">
       {human && <PersonRow agent={human} onOpen={() => undefined} self />}
@@ -51,53 +75,15 @@ export function AgentList({
           {onLaunch && <button type="button" className="launch-cta" onClick={onLaunch}>Launch an agent</button>}
         </div>
       )}
-      {brains.length > 0 && <div className="subh">brain</div>}
-      {brains.map((a) => (
-        <PersonRow
-          key={a.id}
-          agent={a}
-          queued={queued[a.id] ?? 0}
-          inbox={inbox[a.id]}
-          status={agentStatusLine(a, work[a.id])}
-          onOpen={() => onOpen(a)}
-          menuOpen={menu === a.name}
-          onMenu={() => setMenu(menu === a.name ? null : a.name)}
-          onCloseMenu={() => setMenu(null)}
-          onAskRemove={() => {
-            setMenu(null);
-            onAskRemove(a.name);
-          }}
-        />
-      ))}
-      {workers.length > 0 && <div className="subh">worker</div>}
-      {workers.map((a) => (
-        <PersonRow
-          key={a.id}
-          agent={a}
-          queued={queued[a.id] ?? 0}
-          inbox={inbox[a.id]}
-          status={agentStatusLine(a, work[a.id])}
-          onOpen={() => onOpen(a)}
-          menuOpen={menu === a.name}
-          onMenu={() => setMenu(menu === a.name ? null : a.name)}
-          onCloseMenu={() => setMenu(null)}
-          onAskClear={() => {
-            setMenu(null);
-            onAskClear(a.name);
-          }}
-          onAskRemove={() => {
-            setMenu(null);
-            onAskRemove(a.name);
-          }}
-        />
-      ))}
-      <div className="subh bot-h" title="Integrations that post updates into channels. Bots never take tasks.">
-        <span>Bots · post updates, no tasks</span>
+      {brains.map((a) => row(a, false))}
+      {workers.map((a) => row(a, true))}
+      <div className="group-h bot-h" title="Integrations that post updates into channels. Bots never take tasks.">
+        <span>Bots</span>
         <button type="button" className="plus" title={`Create bot in ${projectName}`}
-          aria-label={`Create bot in ${projectName}`} onClick={onCreateBot}>+</button>
+          aria-label={`Create bot in ${projectName}`} onClick={onCreateBot}><Plus size={14} aria-hidden="true" /></button>
       </div>
       {bots.map((a) => (
-        <PersonRow key={a.id} agent={a} onOpen={() => undefined} self
+        <PersonRow key={a.id} agent={a} onOpen={() => undefined} self status={botChannels[a.id]}
           onManageCredential={onManageBot ? () => onManageBot(a) : undefined}
           menuOpen={menu === a.name}
           onMenu={onManageBot ? () => setMenu(menu === a.name ? null : a.name) : undefined}
@@ -105,6 +91,13 @@ export function AgentList({
       ))}
     </div>
   );
+}
+
+/** Beside the name, in mono: "you", "brain", or a worker's seniority. */
+function roleLabel(agent: Agent): string | null {
+  if (agent.role === "human") return "you";
+  if (agent.role === "worker") return agent.seniority ?? "worker";
+  return agent.role === "brain" ? "brain" : null;
 }
 
 function PersonRow({
@@ -137,7 +130,8 @@ function PersonRow({
 }) {
   const menuRef = useRef<HTMLDivElement>(null);
   const actionRef = useRef<HTMLButtonElement>(null);
-  const bars = seniorityBars(agent);
+  const role = roleLabel(agent);
+  const queuedCount = inbox?.queued?.atLeast ?? queued ?? 0; // as QueueBadge counts it
 
   useEffect(() => {
     if (menuOpen) focusFirstMenuItem(menuRef.current);
@@ -157,24 +151,21 @@ function PersonRow({
   return (
     <div className={`person ${agent.online ? "on" : "off"}`} ref={menuRef}>
       <button type="button" className="person-main" onClick={onOpen} disabled={self}>
-        <Avatar name={agent.name} role={agent.role} online={agent.online} small />
+        {agent.role === "bot"
+          ? <Bot className="person-icon" size={14} aria-hidden="true" />
+          : <i className={`sdot ${agent.online ? "ok" : ""}`} aria-hidden="true" />}
         <span className="person-details">
           <span className="person-label">
             <span className="pn" title={agent.name}>{agent.name}</span>
-            <QueueBadge count={queued} estimate={inbox?.queued} />
+            {role && <span className="person-role">{role}</span>}
+            {status && <span className={`person-status ${status.startsWith("blocked:") ? "blocked" : ""}`} title={status}>{status}</span>}
           </span>
-          {(agent.seniority || agent.focus) && (
+          {(agent.focus || queuedCount > 0) && (
             <span className="person-meta">
-              {agent.seniority && <span className="person-rank">
-                {bars > 0 && <span className="stripes" aria-hidden="true">
-                  {Array.from({ length: bars }, (_, i) => <i key={i} />)}
-                </span>}
-                <span className="sen">{agent.seniority}</span>
-              </span>}
+              <QueueBadge count={queued} estimate={inbox?.queued} />
               {agent.focus && <span className="focus" title={agent.focus}>{agent.focus}</span>}
             </span>
           )}
-          {status && <span className={`person-status ${status.startsWith("blocked:") ? "blocked" : ""}`} title={status}>{status}</span>}
           <InboxReceipt status={inbox} />
         </span>
       </button>
@@ -189,7 +180,7 @@ function PersonRow({
           aria-expanded={menuOpen}
           onClick={onMenu}
         >
-          ⋯
+          <Ellipsis size={16} aria-hidden="true" />
         </button>
       )}
       {menuOpen && (

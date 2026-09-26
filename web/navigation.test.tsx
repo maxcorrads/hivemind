@@ -209,3 +209,63 @@ test('the page title counts what is waiting for the Human', async t => {
   assert.equal(document.title, '(1) hivemind');
   assert.match(view.railButton(new RegExp(home.name))!.getAttribute('aria-label')!, /1 unread for you/);
 });
+
+test('the Settings menu switches to the single-sidebar layout, saved in this browser', async t => {
+  const { hive, home, other } = fixture(t);
+  localStorage.clear();
+  const view = await mount(t, hive, `#/inbox/${home.slug}`);
+  const radio = (name: string) => [...view.host.querySelectorAll<HTMLButtonElement>('.tools-menu [role="radiogroup"] [role="radio"]')]
+    .find(button => button.textContent === name)!;
+  const group = view.host.querySelector('.tools-menu [role="radiogroup"]')!;
+  assert.equal(document.getElementById(group.getAttribute('aria-labelledby')!)?.textContent, 'Layout');
+  assert.equal(radio('Project rail').getAttribute('aria-checked'), 'true');
+  assert.ok(view.host.querySelector('nav.project-rail'));
+  assert.equal(view.host.querySelector('header.topbar'), null);
+
+  await act(async () => radio('Single sidebar').click());
+  assert.equal(localStorage.getItem('hivemind-layout'), 'unified');
+  assert.ok(document.documentElement.classList.contains('layout-unified'));
+  assert.equal(view.host.querySelector('nav.project-rail'), null, 'no project rail');
+  const bar = view.host.querySelector('header.topbar')!;
+  assert.ok(bar.querySelector('[role="img"][aria-label="Connected"]'));
+  assert.equal(radio('Single sidebar').getAttribute('aria-checked'), 'true');
+  assert.ok(bar.querySelector<HTMLDetailsElement>('.tools-menu')!.open, 'the moved menu stays open on the choice');
+  assert.equal(document.activeElement, radio('Single sidebar'));
+
+  // The top bar's search opens the quick switcher; the project card opens the project picker.
+  await act(async () => bar.querySelector<HTMLButtonElement>('.topbar-search')!.click());
+  assert.ok(view.host.querySelector('[role="dialog"][aria-label="Jump to"]'));
+  await key({ key: 'Escape' });
+  const card = view.sidebar().querySelector<HTMLButtonElement>('.project-switch')!;
+  assert.match(card.getAttribute('aria-label')!, new RegExp(`current: ${home.name}`));
+  await act(async () => card.click());
+  const picker = view.host.querySelector('[role="dialog"][aria-label="Switch project"]')!;
+  const names = [...picker.querySelectorAll('[role="option"] .switcher-label')].map(option => option.textContent);
+  assert.deepEqual(names, [home.name, 'Other Place'], 'every project, the current one first');
+  await act(async () => (picker.querySelectorAll<HTMLElement>('[role="option"]')[1]!).click());
+  assert.equal(window.location.hash, `#/inbox/${other.slug}`);
+  assert.equal(view.sidebar().querySelector('.project-head h2')?.textContent, 'Other Place');
+  // A plain message in the other project (no mention) marks the card with a dot, as the rail does.
+  await act(async () => {
+    const homeBrain = hive.identity.join({ role: 'brain', project: home.slug }).agent;
+    const homeGeneral = hive.channels.listChannels(homeBrain).find(channel => channel.name === 'general' && channel.project === home.slug)!;
+    hive.messages.postMessage(homeBrain, { channel: homeGeneral.id, body: 'status update' });
+  });
+  await settle();
+  const marked = view.sidebar().querySelector<HTMLButtonElement>('.project-switch')!;
+  assert.ok(marked.querySelector('.project-switch-dot'), 'unread elsewhere shows a dot');
+  assert.equal(marked.querySelector('.count'), null, 'no count without alerts');
+  assert.match(marked.getAttribute('aria-label')!, /unread messages in other projects/);
+
+  await act(async () => view.sidebar().querySelector<HTMLButtonElement>('.project-switch')!.click());
+  await act(async () => [...view.host.querySelectorAll<HTMLButtonElement>('[aria-label="Switch project"] button')]
+    .find(button => button.textContent === 'New project')!.click());
+  assert.equal(view.host.querySelector('[aria-label="Switch project"]'), null);
+  assert.ok(view.host.querySelector('form.sheet'), 'New project stays reachable without the rail');
+  await key({ key: 'Escape' });
+
+  await act(async () => radio('Project rail').click());
+  assert.equal(localStorage.getItem('hivemind-layout'), 'rail');
+  assert.ok(!document.documentElement.classList.contains('layout-unified'));
+  assert.ok(view.host.querySelector('nav.project-rail'));
+});

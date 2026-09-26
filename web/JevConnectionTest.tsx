@@ -58,10 +58,10 @@ export function JevConnectionTest({ savedSettings, disabled }: { savedSettings: 
 
   return <section aria-label="Jev connection test">
     <p className="help-p">Test the current saved settings{savedSettings?.model ? <> (model <code>{savedSettings.model}</code>)</> : null} with one small synthetic request to TypeSafe. This can consume provider usage. No project data is sent, no work is changed and no brain receives advice.</p>
-    <button type="button" disabled={!savedSettings || disabled || running} onClick={() => { void run(); }}>
+    <button type="button" className="btn" disabled={!savedSettings || disabled || running} onClick={() => { void run(); }}>
       {running ? 'Testing Jev…' : 'Test Jev connection'}
     </button>
-    {running && <button type="button" onClick={() => {
+    {running && <button type="button" className="btn btn-ghost" onClick={() => {
       active.current?.abort();
       active.current = null;
       setRunning(false);

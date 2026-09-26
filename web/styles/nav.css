@@ -1,0 +1,242 @@
+/* Navigation: the shell's columns, the project rail, the project sidebar, the single-sidebar top bar and the
+   phone's tab bar. Loaded after styles.css, so these rules win over the older ones they share selectors with. */
+
+/* Shell: flush columns split by hairlines. Desktop only, the phone layout (#223) stacks one screen at a time. */
+@media (min-width: 961px) {
+  .shell { grid-template-columns: 60px 264px minmax(0, 1fr); padding: 0; }
+  .shell:has(.thread) { grid-template-columns: 60px 264px minmax(0, 1fr) var(--thread-w); }
+  html.layout-unified .shell { grid-template-columns: 264px minmax(0, 1fr); grid-template-rows: 44px minmax(0, 1fr); row-gap: 0; padding: 0; }
+  html.layout-unified .shell:has(.thread) { grid-template-columns: 264px minmax(0, 1fr) var(--thread-w); }
+}
+
+/* Project rail (layout "rail"): 36px tiles, the current one inked with an accent ring. */
+.project-rail { display: flex; flex-direction: column; align-items: center; gap: 8px; min-height: 0; padding: 12px 0; overflow: visible;
+  background: var(--rail); border-right: 1px solid var(--line); }
+.rail-mark { flex: none; width: 30px; height: 30px; border-radius: 8px; object-fit: cover; }
+/* Room above and beside each tile for its 4px ring and its badge, which the scrolling box would clip. */
+.rail-projects { flex: 1 1 auto; min-height: 0; width: 100%; display: flex; flex-direction: column; align-items: center; gap: 10px;
+  padding: 7px 0; overflow-y: auto; scrollbar-width: none; }
+.rail-projects::-webkit-scrollbar { display: none; }
+.rail-project, .rail-add { position: relative; flex: none; width: 36px; height: 36px; display: grid; place-items: center; border-radius: 9px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink2); font-size: 13px; font-weight: 600; letter-spacing: 0;
+  transition: none; }
+.rail-project:hover, .rail-add:hover { border-radius: 9px; }
+.rail-project:hover { background: color-mix(in oklch, var(--ink) 5%, var(--surface)); color: var(--ink); }
+.rail-project.active { border-color: transparent; background: var(--ink); color: var(--surface); box-shadow: 0 0 0 2px var(--rail), 0 0 0 4px var(--accent); }
+.rail-project.active::before, .rail-project.unread:not(.active)::before { content: none; }
+.rail-add { border-style: dashed; background: transparent; color: var(--mute); }
+.rail-add:hover { color: var(--ink); border-color: color-mix(in oklch, var(--ink) 30%, transparent); }
+.rail-badge { text-align: center; position: absolute; top: -5px; right: -6px; display: grid; place-items: center; min-width: 17px; height: 17px; padding: 0 4px;
+  border-radius: 9px; background: var(--badge); color: var(--badge-ink); font-style: normal; font-size: 10px; font-weight: 600; line-height: 1;
+  font-variant-numeric: tabular-nums; box-shadow: 0 0 0 2px var(--rail); }
+.rail-dot { position: absolute; border-radius: 50%; box-shadow: 0 0 0 2px var(--rail); top: -3px; right: -3px; width: 9px; height: 9px; background: var(--ink2); }
+.rail-tools { flex: none; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.rail-tools .icon-btn { width: 32px; height: 32px; border-radius: 7px; }
+/* The rail is at the left edge: its Settings popover opens to the right, upwards. */
+.project-rail .tools-popover { top: auto; bottom: 0; right: auto; left: calc(100% + 10px); }
+.rail-me { position: relative; flex: none; width: 32px; height: 32px; margin-top: 4px; display: grid; place-items: center; border-radius: 8px;
+  background: var(--ink); color: var(--surface); font-size: 11px; font-weight: 600; }
+.rail-me > .sdot { position: absolute; right: -2px; bottom: -2px; width: 9px; height: 9px; box-shadow: 0 0 0 2px var(--rail); }
+.rail-me > .sdot:not(.ok) { background: var(--mute); }
+
+/* Icon-only Settings trigger (rail, sidebar header, top bar): the .icon-btn look, not the old pill. */
+.tools-menu > summary.icon-btn { padding: 0; background: transparent; }
+.tools-menu > summary.icon-btn:hover, .tools-menu[open] > summary.icon-btn { background: var(--hover); color: var(--ink); }
+
+/* Project sidebar: a sticky header, a scrolling body and Launch agent pinned below it. */
+.rail { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 0; overflow: hidden; background: var(--app); color: var(--ink);
+  border-right: 1px solid var(--line); }
+.rail > * { flex: none; }
+.rail > .side-scroll { flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; }
+.rail > .side-scroll:has(~ .launch-cta) { border-bottom: 1px solid var(--line); }
+.project-sec { margin: 0; padding: 0 8px 12px; display: flex; flex-direction: column; gap: 1px; }
+.project-head:not(.sr-only) { position: sticky; top: 0; z-index: 3; height: 52px; display: flex; align-items: center; gap: 8px;
+  margin: 0 -8px 10px; padding: 0 12px 0 10px; border-bottom: 1px solid var(--line); background: var(--app); }
+.project-head h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; min-width: 0; margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.015em; }
+/* 10px header inset + 6px padding put the name at 16px, as in the design, with room for a hover well. */
+.project-name { display: flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 6px; border-radius: 6px;
+  font-weight: inherit; letter-spacing: inherit; }
+.project-name:hover { background: var(--hover); }
+.project-name > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-name > .lucide { color: var(--mute); }
+.side-live { margin-left: auto; display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--mute); white-space: nowrap; }
+.side-live .pulse, .topbar-live .pulse { width: 6px; height: 6px; flex: none; }
+.side-head .side-live, .project-head .side-live { padding-right: 2px; }
+.project-settings.icon-btn { min-height: 0; padding: 0; border-radius: 6px; background: transparent; color: var(--mute); }
+.project-settings.icon-btn:hover { background: var(--hover); color: var(--ink); }
+/* Without projects there is no project header: the brand row stands in for it. */
+.side-head { position: relative; height: 52px; display: flex; align-items: center; gap: 8px; margin: 0 0 10px; padding: 0 12px 0 16px; border-bottom: 1px solid var(--line); }
+.side-head .mark { width: 22px; height: 22px; border-radius: 6px; box-shadow: none; }
+.side-head .word { font-size: 14px; font-weight: 600; letter-spacing: -0.02em; }
+.side-scroll > .side-find, .side-scroll > .group-h { margin-inline: 8px; }
+.project-head.sr-only + .side-find { margin-top: 4px; }
+
+.side-find { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.switcher-open { display: flex; align-items: center; justify-content: flex-start; gap: 8px; width: 100%; height: 30px; min-height: 0; margin: 0;
+  padding: 0 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--mute); font-size: 13px; }
+.switcher-open:hover { color: var(--ink2); }
+.switcher-open > span { flex: 1; text-align: left; }
+.switcher-open kbd { font-size: 11px; }
+.side-search { position: relative; }
+.side-search > .lucide { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); color: var(--mute); pointer-events: none; }
+.rail .search { display: block; width: 100%; height: 30px; margin: 0; padding: 0 8px 0 29px; border: 1px solid var(--line); border-radius: 7px;
+  background: var(--surface); color: var(--ink); font-size: 13px; }
+.rail .search::placeholder { color: var(--mute); }
+
+/* Rows: 30px, 16px icon column. Active = --active + 600, unread = --ink + 600, the rest --ink2. */
+.nav { display: flex; align-items: center; justify-content: flex-start; gap: 8px; width: 100%; height: 30px; padding: 0 8px; border-radius: 6px;
+  color: var(--ink2); font-size: 14px; font-weight: 400; text-align: left; }
+.nav:hover { background: var(--hover); }
+.nav.active { background: var(--active); color: var(--ink); font-weight: 600; }
+.nav.unread { color: var(--ink); font-weight: 600; }
+.nav > span:not(.nav-avatar) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav:has(.nav-open) { padding: 0; gap: 0; }
+.nav-open { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; height: 100%; padding: 0 8px; border-radius: 6px;
+  color: inherit; font-weight: inherit; text-align: left; }
+.nav-open > span:last-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-icon { color: var(--mute); margin-inline: 1px; }
+.nav > .nav-icon { margin-inline: 0.5px; }
+.nav-avatar { display: grid; flex: none; margin-inline: -1px; }
+.nav-avatar .avatar { width: 18px; height: 18px; }
+.nav .avatar[data-on="1"]::after { width: 7px; height: 7px; box-shadow: 0 0 0 1.5px var(--app); }
+.nav em { display: inline-grid; place-items: center; flex: none; min-width: 18px; height: 18px; margin-left: auto; padding: 0 5px; border-radius: 9px;
+  background: var(--badge); color: var(--badge-ink); font-style: normal; font-size: 11px; font-weight: 600; line-height: 1;
+  font-variant-numeric: tabular-nums; text-align: center; }
+/* Channels count softly; DMs with the Human and For you are the red ones. */
+.between-agents .nav em, .group > .nav em, .archived-channels > .nav em { background: var(--active); color: var(--ink); }
+.unread-jump { display: grid; place-items: center; flex: none; min-width: 30px; min-height: 30px; margin: 0; padding: 0 6px; border-radius: 6px; }
+.unread-jump:hover { background: var(--hover); }
+.unread-jump em { margin: 0; }
+
+.group { display: flex; flex-direction: column; gap: 1px; margin: 0; }
+.project-sec .group { margin-top: 0.35rem; }
+.group-h { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-height: 0; padding: 16px 8px 4px;
+  font-size: 12px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--mute); }
+.group-h > span { margin-right: auto; white-space: nowrap; }
+.group-h > small { font-size: 11.5px; }
+.rail .plus { flex: none; display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border-radius: 5px; color: var(--mute); }
+.rail .plus:hover { background: var(--hover); color: var(--ink); }
+
+/* Collapsed rows: Between agents, Archived. */
+.agent-conversations > summary, .archived-channels > summary { display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 8px;
+  border-radius: 6px; list-style: none; color: var(--mute); font-size: 13px; cursor: pointer; }
+.agent-conversations > summary::-webkit-details-marker, .archived-channels > summary::-webkit-details-marker { display: none; }
+.agent-conversations > summary:hover, .archived-channels > summary:hover { background: var(--hover); color: var(--ink2); }
+.agent-conversations > summary > .lucide, .archived-channels > summary > .lucide { margin-inline: 1.5px; transition: transform 0.12s ease; }
+.agent-conversations[open] > summary > .lucide, .archived-channels[open] > summary > .lucide { transform: rotate(90deg); }
+.agent-conversations > summary span, .archived-channels > summary span { font-variant-numeric: tabular-nums; float: none; margin-left: auto; font-family: var(--mono); font-size: 11px; }
+.agent-conversations, .archived-channels { display: flex; flex-direction: column; gap: 1px; }
+
+/* DM rows: the ··· action overlays the row end and shows on hover or focus (always on touch screens). A row with an
+   unread badge keeps a slot for it instead, so the badge never moves under the pointer that is about to click it. */
+.dm-row { position: relative; display: flex; align-items: center; min-width: 0; }
+.dm-row > .nav { flex: 1; min-width: 0; }
+.kebab { font-weight: 700; line-height: 1; flex: none; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border-radius: 6px; color: var(--mute); }
+.kebab:hover, .kebab.on { background: var(--hover); color: var(--ink); }
+.dm-row > .kebab { position: absolute; right: 3px; top: 50%; transform: translateY(-50%); opacity: 0; }
+.dm-row:has(.unread-jump) > .kebab { position: static; margin-right: 3px; transform: none; }
+.dm-row:hover > .kebab, .dm-row:focus-within > .kebab, .dm-row > .kebab.on { opacity: 1; }
+.dm-row:not(:has(.unread-jump)):is(:hover, :focus-within, :has(> .kebab.on)) > .nav { padding-right: 27px; }
+@media (hover: none) {
+  .dm-row > .kebab { opacity: 1; }
+  .dm-row:not(:has(.unread-jump)) > .nav { padding-right: 27px; }
+}
+.person-menu { position: absolute; right: 0; z-index: 8; color: var(--ink); border: 1px solid var(--line); box-shadow: var(--shadow); top: calc(100% + 2px); min-width: 168px; padding: 4px; border-radius: 8px; background: var(--raised); }
+.person-menu button { display: block; width: 100%; text-align: left; padding: 6px 8px; border-radius: 6px; font-size: 13px; font-weight: 500; }
+.person-menu .bad { color: var(--bad-ink); }
+.dm-picker { margin: 0 0 4px; padding: 6px; border-radius: 8px; background: var(--sunk); }
+.dm-picker input { width: 100%; color: var(--ink); height: 28px; margin: 0 0 4px; padding: 0 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); font-size: 13px; }
+.rail .empty-mini { margin: 0; padding: 4px 8px; font-size: 12.5px; }
+
+/* Hive roster: presence dot, name, role in mono, status on the right (blocked in --bad-ink). */
+.agents { display: flex; flex-direction: column; gap: 1px; }
+.person { position: relative; display: flex; align-items: flex-start; gap: 0; min-width: 0; border-radius: 6px; }
+.person:has(> .person-main:not(:disabled):hover) { background: var(--hover); }
+.person-main { text-align: left; flex: 1; display: flex; align-items: flex-start; gap: 8px; min-width: 0; min-height: 30px; padding: 5px 8px; border-radius: 6px; }
+.person-main:hover { background: transparent; }
+.person-main > .sdot { margin-top: 6.5px; }
+.person-main > .person-icon { margin: 3px 1px 0; color: var(--mute); }
+.person-details { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0; }
+.person-label { display: flex; align-items: baseline; gap: 8px; min-width: 0; line-height: 20px; }
+/* Name and role never shrink (any shrink shows an ellipsis, even beside a long status); the status gives way, and
+   max-width only cuts a very long name. */
+.person .pn { flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; font-weight: 400; color: var(--ink2); }
+.person-role { flex: none; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 10.5px; color: var(--mute); }
+.person-status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; min-width: 0; max-width: 96px; margin-left: auto; font-size: 11.5px; line-height: 20px; color: var(--mute); text-align: right; }
+.person-status.blocked { color: var(--bad-ink); font-weight: 500; }
+.person-meta { display: flex; align-items: center; min-width: 0; gap: 6px; font-size: 11.5px; line-height: 16px; color: var(--mute); }
+.person-meta .focus { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--mute); }
+.person-meta .queue-badge { flex: none; margin: 0; padding: 0 5px; border-radius: 8px; font-size: 10.5px; line-height: 15px; }
+.person-details .inbox-receipt { font-size: 10.5px; line-height: 15px; color: var(--mute); opacity: 1; }
+.person > .kebab { align-self: flex-start; margin: 3px 3px 0 0; opacity: 0; }
+.person:hover > .kebab, .person:focus-within > .kebab, .person > .kebab.on { opacity: 1; }
+@media (hover: none) { .person > .kebab { opacity: 1; } }
+.agents > .bot-h { padding-top: 12px; }
+.roster-empty { margin: 4px 0; padding: 10px; border: 1px dashed var(--line); border-radius: 8px; }
+.roster-empty p { line-height: 1.4; margin: 0 0 8px; font-size: 12.5px; color: var(--mute); }
+.roster-empty .launch-cta { height: 30px; margin: 0; padding: 0 10px; border-radius: 7px; font-size: 13px; }
+
+/* Launch agent, full width in the sidebar footer. */
+.rail > .launch-cta { gap: 7px; width: auto; height: 34px; margin: 10px; padding: 0 10px; border-radius: 8px; background: var(--ink); color: var(--surface);
+  font-size: 13.5px; font-weight: 600; }
+.rail > .launch-cta:hover { filter: none; opacity: 0.9; }
+
+/* Single-sidebar layout (1b, html.layout-unified from web/use-layout.ts, desktop only): a 44px top bar
+   (web/TopBar.tsx) across sidebar | conversation | thread, and the project card atop the sidebar. */
+.topbar { grid-column: 1 / -1; display: grid; grid-template-columns: 260px minmax(0, 1fr) 260px; align-items: center; gap: 12px; min-width: 0;
+  height: 44px; margin: 0; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--rail); }
+.topbar-brand { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 14px; font-weight: 600; letter-spacing: -0.02em; }
+.topbar-brand img { width: 22px; height: 22px; border-radius: 6px; object-fit: cover; }
+.topbar-search { justify-self: center; width: min(560px, 100%); height: 28px; display: flex; align-items: center; gap: 8px; padding: 0 10px;
+  border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--mute); font-size: 13px; }
+.topbar-search > span { flex: 1; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topbar-search:hover { color: var(--ink2); border-color: color-mix(in oklch, var(--ink) 16%, transparent); }
+.topbar-tools { justify-self: end; display: flex; align-items: center; gap: 4px; }
+.topbar-live { display: flex; align-items: center; gap: 6px; padding: 0 8px; font-size: 12px; color: var(--mute); }
+.topbar-tools .icon-btn { color: var(--mute); }
+.topbar .tools-popover { top: calc(100% + 8px); }
+.topbar-me { flex: none; width: 26px; height: 26px; margin-left: 4px; border-radius: 7px; background: var(--ink); color: var(--surface); font-size: 11px; }
+.project-switch-row { display: flex; align-items: center; gap: 4px; padding: 10px 10px 6px; }
+.project-switch { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; margin: 0; padding: 7px 8px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--surface); text-align: left; }
+.project-switch:hover { background: color-mix(in oklch, var(--ink) 3%, var(--surface)); }
+.project-switch-mark { flex: none; width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; background: var(--ink);
+  color: var(--surface); font-size: 12px; font-weight: 600; }
+.project-switch-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.project-switch-text > strong { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Wraps rather than truncates: the project-settings button beside the card leaves too little room for one line. */
+.project-switch-text > small { font-size: 11.5px; line-height: 1.35; color: var(--mute); overflow: hidden; text-overflow: ellipsis; }
+.project-switch-text > small > span { white-space: nowrap; }
+.project-switch > .lucide { color: var(--mute); }
+.project-switch > .count { background: var(--badge); color: var(--badge-ink); }
+.project-switch-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--ink2); }
+.project-switch-row > .project-settings { align-self: center; }
+
+/* Phones (#223): same structure, new tokens. */
+@media (max-width: 960px) {
+  .rail { border-right: 0; }
+  .rail > .side-scroll { border-bottom: 0; }
+  .project-head:not(.sr-only) { margin-inline: -8px; }
+  .nav, .nav:has(.nav-open) { height: 40px; }
+  .m-list .nav { height: 44px; padding: 0 8px; color: var(--ink); }
+  .m-list .nav:has(.nav-open) { padding: 0; }
+  /* The project rail is a horizontal strip on Home, its tools at the end. */
+  .project-rail { flex: none; flex-direction: row; gap: 8px; padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .rail-mark { width: 26px; height: 26px; }
+  .rail-projects { flex-direction: row; overflow-x: auto; overflow-y: hidden; padding: 6px 7px; }
+  .rail-tools { flex-direction: row; }
+  .rail-me { margin: 0 0 0 4px; }
+  .project-rail .tools-popover { top: calc(100% + 8px); bottom: auto; right: 0; left: auto; }
+  /* Search keeps the header and its box on top, hits below. */
+  .shell[data-m="search"] > .rail > .side-scroll:has(.search) { display: block; flex: none; overflow: visible; }
+  .shell[data-m="search"] .project-sec > :not(.project-head):not(.side-find),
+  .shell[data-m="search"] .side-scroll > .group-h,
+  .shell[data-m="search"] .side-find > .switcher-open { display: none; }
+  .m-back { display: grid; place-items: center; flex: none; margin-left: -0.35rem; font-size: 1.3rem; width: 40px; height: 40px; border-radius: 8px; color: var(--ink2); }
+  .m-back:active { background: var(--active); }
+  .m-tabs { display: grid; flex: none; border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); grid-template-columns: repeat(3, minmax(0, 1fr)); background: var(--surface); }
+  .m-tabs button { position: relative; display: flex; justify-content: center; align-items: center; flex-direction: column; gap: 2px; min-height: 56px; font-size: 11.5px; font-weight: 500; color: var(--mute); }
+  .m-tabs button.on { color: var(--ink); font-weight: 600; box-shadow: inset 0 2px 0 var(--accent); }
+  .m-tabs em { font-style: normal; background: var(--badge); color: var(--badge-ink); position: absolute; top: 6px; left: calc(50% + 6px); display: grid; place-items: center; min-width: 17px; height: 17px; padding: 0 4px;
+    border-radius: 9px; font-size: 10px; font-weight: 600; line-height: 1; box-shadow: 0 0 0 2px var(--surface); }
+}

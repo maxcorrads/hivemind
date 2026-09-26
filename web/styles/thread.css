@@ -1,0 +1,191 @@
+/* Thread area: the side thread (web/ThreadAside.tsx), the structured task card (web/TaskCard.tsx) with its
+   routing and timeline disclosures, and the channel contract panel (web/RoomPanel.tsx). Tokens and primitives
+   come from web/styles.css. */
+
+/* The shell's thread column; the nav grid reads it (min() keeps the conversation usable on narrow desktops). */
+:root { --thread-w: min(420px, 38vw); }
+
+.thread { background: var(--surface); border-left: 1px solid var(--line); box-shadow: none; }
+
+/* Header: "Thread #channel", the status pill (or the task chip) and the close button. */
+.thread > .thread-h { height: 52px; align-items: center; justify-content: flex-start; gap: 8px; padding: 0 12px 0 18px; }
+.thread-h > div:not(.thread-tools) { flex: 1; min-width: 0; }
+.thread-h h1 { display: flex; align-items: baseline; gap: 8px; min-width: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; }
+.thread-where { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--mute); font-size: 13px; font-weight: 400; letter-spacing: 0; }
+.thread-tools { gap: 6px; }
+.thread-tools .task-chip { padding-block: 5px; font-size: 12px; }
+
+.status-menu > summary { border-radius: 999px; }
+.status-chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px; border: 1px solid var(--line); border-radius: 999px;
+  font-size: 12px; font-weight: 600; color: var(--ink); white-space: nowrap; text-transform: none; }
+.status-chip.st-blocked, .status-chip.st-done { color: var(--ink); }
+.status-chip::after { content: none; }
+.status-chip > .lucide { color: var(--mute); }
+.status-menu > summary:hover .status-chip, .status-menu[open] .status-chip { background: var(--hover); }
+.status-dot { flex: none; width: 7px; height: 7px; background: color-mix(in oklch, var(--mute) 45%, transparent); }
+.status-menu [role=menuitemradio] { width: 100%; min-height: 30px; padding: 0 8px; border-radius: 6px; font-size: 13px; text-transform: none; }
+.status-menu [role=menuitemradio][aria-checked=true] { font-weight: 600; background: var(--active); }
+
+/* Task state chip, here and in the channel's Tasks tab: the tone-chip look keyed by taskTone(). The dot is painted
+   in the background and the box is inline-block so ::first-letter can sentence-case the raw state ("accepted complete"). */
+.task-chip { --tone: var(--accent); display: inline-block; padding: 2px 8px 2px 19px; border-radius: 999px; font-size: 11.5px; font-weight: 600;
+  line-height: 16px; white-space: nowrap; color: var(--accent); text-transform: none; }
+/* [class] outranks the older per-tone backgrounds in styles.css. */
+.task-chip[class] { background: radial-gradient(circle at 11px 50%, var(--tone) 3px, transparent 3.5px), color-mix(in oklch, var(--tone) 13%, transparent); }
+.task-chip::first-letter { text-transform: uppercase; }
+.task-chip.tone-done { --tone: var(--ok); color: var(--ok-ink); }
+.task-chip.tone-warn { --tone: var(--warn); color: var(--warn-ink); }
+.task-chip.tone-fail { --tone: var(--bad); color: var(--bad-ink); text-decoration: none; }
+
+/* Replies: 28px avatars, 13.5px text, an "N replies" rule after the root. */
+.thread .stream { padding: 0 0 8px; }
+.thread-replies { display: flex; align-items: center; gap: 10px; margin: 10px 18px 4px; font-size: 11.5px; color: var(--mute); }
+.thread-replies::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.thread .stream-divider { margin: 10px 18px 4px; }
+.thread .msg { grid-template-columns: 28px minmax(0, 1fr); gap: 10px; padding: 7px 18px; }
+.thread .msg.grouped { padding-top: 1px; padding-bottom: 3px; }
+.thread .msg.sys { padding: 4px 18px; }
+.thread .msg > .avatar { width: 28px; height: 28px; border-radius: 7px; font-size: 10.5px; }
+.thread .msg .gutter-time { line-height: 1.4rem; }
+.thread .msg-h { gap: 8px; }
+.thread .msg-h strong { font-size: 13.5px; font-weight: 600; }
+.thread .msg-h time, .thread .msg-h .role { font-size: 11.5px; }
+.thread .msg-b { font-size: 13.5px; line-height: 1.5; color: var(--ink2); }
+.thread .older { display: block; margin: 8px auto; padding: 4px 10px; border-radius: 6px; font-size: 12.5px; font-weight: 500; color: var(--accent); }
+.thread .older:hover { background: var(--hover); }
+
+/* Reply composer: Composer's compact mode (attach, @, icon-only Send) in a smaller box. */
+.thread .composer { padding: 0 16px 16px; }
+.thread .composer textarea { min-height: 38px; padding: 10px 12px 2px; font-size: 13.5px; }
+.thread .composer .send { height: 28px; }
+.thread .composer .hints, .thread .composer-emoji { left: 16px; }
+
+/* Task card: summary on --surface, the key facts in a --sunk well, the rest behind disclosures. */
+/* No overflow: hidden here: it would clip the info popover on a short card. */
+.task-card { margin: 14px 16px 6px; padding: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
+  font-size: 13px; overflow-wrap: anywhere; }
+.task-card-main { padding: 14px 14px 12px; }
+.task-card p { margin: 9px 0; white-space: pre-wrap; }
+.task-card header { display: flex; flex-wrap: nowrap; align-items: center; justify-content: flex-start; gap: 8px; }
+.task-card small { opacity: 1; color: var(--mute); }
+.task-rev { font-family: var(--mono); font-size: 11px; white-space: nowrap; }
+.task-card header .info-tip { margin-left: auto; }
+.info-tip > summary { width: 24px; height: 24px; border: 0; border-radius: 6px; display: grid; place-items: center; color: var(--mute); font: inherit; }
+.info-tip > summary:hover, .info-tip[open] > summary { background: var(--hover); color: var(--ink); }
+.info-tip .popover-body ul { color: var(--ink2); }
+.task-card .task-objective { margin: 10px 0 2px; font-size: 15px; font-weight: 600; line-height: 1.35; letter-spacing: -0.01em; color: var(--ink); }
+.task-card .task-meta { margin: 0; font-size: 12.5px; color: var(--mute); }
+.task-card .task-cancelled { margin: 12px 0 0; padding: 8px 10px; border-radius: 6px; font-size: 12.5px; color: var(--bad-ink);
+  background: color-mix(in oklch, var(--bad) 9%, transparent); }
+
+/* Stepper: a line runs into each step from the one before, green once that one is done. */
+.task-stepper { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); list-style: none; margin: 16px 0 4px; padding: 0; font-size: 11.5px; color: var(--mute); }
+.task-stepper li { flex: 1 1 0; display: grid; justify-items: center; gap: 6px; position: relative; text-align: center; line-height: 1.25; }
+.task-stepper li::before { background: var(--line); z-index: 0; content: ""; position: absolute; top: 5px; right: 50%; width: 100%; height: 2px; }
+.task-stepper li[class]::before { background: var(--line); }
+.task-stepper li:first-child::before { display: none; }
+.task-stepper li.step-done + li::before { background: var(--ok); }
+.step-dot { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--line); background: var(--surface); position: relative; z-index: 1; box-sizing: border-box; }
+.step-done .step-dot { border-color: var(--ok); background: var(--ok); }
+.step-current .step-dot { border-color: var(--ok); background: var(--surface); box-shadow: 0 0 0 3px color-mix(in oklch, var(--ok) 20%, transparent); }
+.step-warn .step-dot { border-color: var(--warn); background: var(--warn); box-shadow: 0 0 0 3px color-mix(in oklch, var(--warn) 22%, transparent); }
+.step-fail .step-dot { border-color: var(--bad); background: var(--surface); box-shadow: 0 0 0 3px color-mix(in oklch, var(--bad) 18%, transparent); }
+.task-stepper li[aria-current] { color: var(--ink); font-weight: 600; }
+.task-stepper li.step-warn { color: var(--warn-ink); }
+.task-stepper li.step-fail { color: var(--bad-ink); }
+
+.task-facts { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 6px 10px; margin: 0; padding: 10px 14px; border-top: 1px solid var(--line);
+  background: var(--sunk); font-size: 12.5px; line-height: 1.45; }
+.task-facts dt { color: var(--mute); }
+.task-facts dd { margin: 0; min-width: 0; color: var(--ink2); white-space: pre-wrap; }
+.task-facts dd.mono { font-family: var(--mono); font-size: 12px; color: var(--ink); }
+.task-card .mono { font-family: var(--mono); }
+
+.task-sections > details { padding: 0 14px; border-top: 1px solid var(--line); }
+.task-sections > details[open] { padding-bottom: 10px; }
+.task-sections p { margin: 4px 0; font-size: 12.5px; line-height: 1.45; color: var(--ink2); }
+.task-sections small { font-size: 11.5px; }
+.task-sections [role=alert] { color: var(--bad-ink); }
+.task-handoff > p[role=status] { color: var(--ink); }
+
+/* Disclosures (web/Disclosure.tsx) in the task card and the contract panel. */
+summary.disclosure { display: flex; align-items: center; gap: 6px; min-height: 36px; list-style: none; cursor: pointer;
+  font-size: 12.5px; font-weight: 600; color: var(--ink2); }
+summary.disclosure::-webkit-details-marker { display: none; }
+summary.disclosure:hover { color: var(--ink); }
+summary.disclosure > .lucide { color: var(--mute); transition: transform 0.15s ease; }
+details[open] > summary.disclosure > .lucide { transform: rotate(90deg); }
+
+/* Coordination timeline: a hairline with a dot per event, times in mono. */
+.timeline-tools { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 8px; }
+.timeline-tools .btn { height: 26px; padding: 0 8px; font-size: 12px; }
+.timeline-warning { display: block; margin: 0 0 10px; }
+.timeline-list { list-style: none; display: grid; gap: 10px; margin: 0 0 0 4px; padding: 2px 0 2px 14px; border-left: 1px solid var(--line); }
+.timeline-list li { position: relative; display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: 2px 8px; font-size: 12.5px; line-height: 1.4; }
+.timeline-list li::before { content: ""; position: absolute; left: -18px; top: 5px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
+  box-shadow: 0 0 0 2px var(--surface); }
+.timeline-list li.kind-delivery::before { background: color-mix(in oklch, var(--mute) 60%, transparent); }
+.timeline-list time { opacity: 1; font-family: var(--mono); font-size: 11px; color: var(--mute); }
+.timeline-list span { color: var(--ink2); }
+.timeline-list small { grid-column: 2; opacity: 1; font-size: 11.5px; color: var(--mute); overflow-wrap: anywhere; }
+
+/* Form fields shared by worker routing and the contract editor. */
+.worker-routing label, .room-panel form label:not(.check) { display: grid; gap: 4px; font-size: 12px; font-weight: 500; color: var(--mute); }
+.worker-routing :is(input, select, textarea), .room-panel :is(input:not([type=checkbox]), select, textarea) { width: 100%; min-height: 30px;
+  padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); font-size: 13px; font-weight: 400; }
+.worker-routing textarea, .room-panel textarea { min-height: 70px; resize: vertical; line-height: 1.45; }
+.worker-routing :is(input, select, textarea):disabled, .room-panel :is(input, select, textarea):disabled { opacity: 0.6; }
+
+.worker-routing .routing-note { color: var(--mute); font-size: 12px; }
+.routing-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 8px 0 10px; }
+.routing-fields .routing-wide { grid-column: 1 / -1; }
+.worker-routing > .btn { margin: 4px 8px 4px 0; }
+.worker-routing > label { margin: 8px 0; }
+.routing-candidate { margin: 8px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.routing-candidate strong { font-size: 13px; font-weight: 600; color: var(--ink); }
+.routing-candidate .btn { margin-top: 4px; }
+
+/* Channel contract panel (the channel's Contract tab). */
+.room-panel { overflow-wrap: anywhere; margin: 0 0 16px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
+  font-size: 13px; line-height: 1.5; color: var(--ink2); }
+.room-panel-heading { margin-bottom: 4px; }
+.room-panel-heading strong { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink); }
+.room-panel button { margin-top: 0; }
+.room-panel > .btn { margin: 8px 8px 0 0; }
+.room-panel > p { margin: 6px 0; }
+.room-panel > p[role=status] { padding: 8px 10px; border-radius: 6px; background: var(--sunk); color: var(--ink); }
+.room-panel .room-summary { margin: 8px 0 2px; font-size: 12.5px; color: var(--mute); }
+.room-summary strong { font-weight: 600; color: var(--ink); }
+.room-panel .room-meta { margin: 0; font-size: 12.5px; color: var(--mute); }
+.room-panel .room-purpose { margin: 10px 0; font-size: 14px; color: var(--ink); }
+.room-panel h4 { margin: 12px 0 4px; font-size: 12px; font-weight: 600; color: var(--mute); }
+.room-panel ul { display: grid; gap: 3px; margin: 0; padding-left: 18px; }
+.room-panel details { margin-top: 10px; border-top: 1px solid var(--line); }
+.room-panel details > :not(summary) { margin-bottom: 6px; }
+.room-panel form { gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.room-panel fieldset { display: grid; gap: 10px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.room-panel fieldset fieldset { padding: 8px 10px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.room-panel legend { padding: 0 4px; font-size: 12px; font-weight: 500; color: var(--mute); }
+.room-participant { display: grid; gap: 6px; }
+.room-panel label.check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink); }
+.room-panel input[type=checkbox] { width: auto; accent-color: var(--accent); }
+.room-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.room-controls { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.room-controls > form { align-self: stretch; margin-top: 0; padding-top: 0; border-top: 0; }
+.room-controls > .room-history { align-self: stretch; margin-top: 0; }
+.room-revision { padding: 8px 0; border-top: 1px solid var(--line); }
+.room-revision strong { font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.room-revision p { margin: 2px 0; font-size: 12.5px; }
+
+@media (max-width: 960px) {
+  /* Phones (#223): the thread is a full screen with a back button, so no close button. */
+  .thread { border-left: 0; }
+  .thread-tools > .thread-close { display: none; }
+  .thread > .thread-h { padding: 0 12px; }
+  .thread .msg, .thread .msg.sys { padding-inline: 12px; }
+  .thread-replies, .thread .stream-divider { margin-inline: 12px; }
+  .thread .composer { padding: 0 12px 12px; }
+  .thread .composer .hints { left: 12px; }
+  .task-card { margin: 12px; }
+  .routing-fields { grid-template-columns: minmax(0, 1fr); }
+}

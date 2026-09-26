@@ -1,15 +1,19 @@
+import { Check, CircleDot, Link, MessageSquareText, MessagesSquare, Paperclip, SmilePlus } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
 import type { Message, ThreadStatus } from "../src/shared/types.ts";
 import { EXTRA_REACTION_EMOJIS, REACTION_EMOJIS } from "../src/shared/types.ts";
 import { api } from "./api.ts";
 import { Avatar } from "./Avatar.tsx";
 import { BotOrigin } from "./Bots.tsx";
+import { EmojiPicker } from "./EmojiPicker.tsx";
 import { Markdown } from "./markdown.tsx";
 import { formatTime } from "./message-stream.ts";
 import { hashFor } from "./selection.ts";
 import { TaskEventCard } from "./StreamCards.tsx";
 
 const LONG_PRESS_MS = 450;
+/** Thread status as a tone chip in the message header. */
+const STATUS_TONE: Record<ThreadStatus, string> = { open: "muted", in_progress: "warn", blocked: "bad", done: "ok" };
 
 /** A link that reopens the message: its thread (or the thread it starts) in its channel. */
 export function messageLink(m: Pick<Message, "id" | "channelId" | "threadId">): string {
@@ -18,7 +22,8 @@ export function messageLink(m: Pick<Message, "id" | "channelId" | "threadId">): 
 
 /**
  * One message row. `grouped` hides the header of a follow-up from the same author (time on hover);
- * system messages render as a centered line, task events as compact cards.
+ * system messages render as a centered line, task events as compact cards. `threadOpen` highlights the reply
+ * summary while that thread is open beside the stream.
  * Memoized: a row re-renders only when its message, counts or (stable) handlers change, so keep props
  * primitive or stable (see MessageRow).
  */
@@ -27,6 +32,7 @@ export const Msg = memo(function Msg({
   replies,
   status,
   grouped = false,
+  threadOpen = false,
   taskRoute,
   onThread,
   onReact,
@@ -36,6 +42,7 @@ export const Msg = memo(function Msg({
   replies: number;
   status: ThreadStatus | null;
   grouped?: boolean;
+  threadOpen?: boolean;
   /** "Assigner → Worker" for a task event, resolved by the caller. */
   taskRoute?: string;
   onThread?: (anchor: HTMLElement) => void;
@@ -83,16 +90,8 @@ export const Msg = memo(function Msg({
   const cancelPress = () => { if (press.current !== null) { window.clearTimeout(press.current); press.current = null; } };
   const tools = m.kind === "chat" && onReact;
   const showHeader = !grouped || status !== null;
-  const reactButton = (emoji: string, className: string) => {
-    const hit = m.reactions?.find((r) => r.emoji === emoji);
-    return (
-      <button key={emoji} type="button" className={`${className} ${hit?.mine ? "mine" : ""}`} title={emoji}
-        aria-pressed={Boolean(hit?.mine)} aria-label={`React ${emoji}`}
-        onClick={() => { done(); onReact?.(emoji); }}>
-        {emoji}
-      </button>
-    );
-  };
+  const mine = (emoji: string) => Boolean(m.reactions?.find((r) => r.emoji === emoji)?.mine);
+  const react = (emoji: string) => { done(); onReact?.(emoji); };
   return (
     <article
       ref={row}
@@ -118,7 +117,7 @@ export const Msg = memo(function Msg({
             <strong>{m.authorName}</strong>
             <span className="role">{m.authorRole}</span>
             <time dateTime={stamp.toISOString()} title={stamp.toLocaleString()}>{time}</time>
-            {status && <span className={`st st-${status}`}>{status.replace("_", " ")}</span>}
+            {status && <span className={`st st-${status} tone-chip ${STATUS_TONE[status]}`}>{status.replace("_", " ")}</span>}
           </div>
         )}
         {m.taskEvent ? <TaskEventCard envelope={m.taskEvent} route={taskRoute} body={m.body} onOpen={open} />
@@ -133,6 +132,7 @@ export const Msg = memo(function Msg({
                 </a>
               ) : (
                 <a key={a.id} className="att-chip" href={api.fileUrl(a.id)} target="_blank" rel="noreferrer">
+                  <Paperclip size={14} aria-hidden="true" />
                   {a.name}
                   <small>{Math.max(1, Math.round(a.bytes / 1024))} KB</small>
                 </a>
@@ -158,34 +158,33 @@ export const Msg = memo(function Msg({
           </div>
         )}
         {onThread && m.kind === "chat" && replies > 0 && (
-          <button type="button" className="replies" onClick={(event) => onThread(event.currentTarget)}>
+          <button type="button" className={threadOpen ? "replies open" : "replies"} onClick={(event) => onThread(event.currentTarget)}>
+            <MessagesSquare size={14} aria-hidden="true" />
             {`${replies} ${replies === 1 ? "reply" : "replies"}`}
           </button>
         )}
         {tools && (
           <div className="msg-tools" role="toolbar" aria-label="Message actions">
-            <div className="react-pick" role="group" aria-label="Add reaction">
-              {REACTION_EMOJIS.map((emoji) => reactButton(emoji, "react-pick-btn"))}
-            </div>
+            <EmojiPicker emojis={REACTION_EMOJIS} label="Add reaction" className="react-pick" buttonLabel={(emoji) => `React ${emoji}`}
+              pressed={mine} onPick={react} />
             <button type="button" className="tool-btn" aria-label="More reactions" title="More reactions" aria-expanded={picker}
-              onClick={() => setPicker((value) => !value)}>☺</button>
+              onClick={() => setPicker((value) => !value)}><SmilePlus size={16} aria-hidden="true" /></button>
             {onThread && (
               <button type="button" className="tool-btn" aria-label="Reply in thread" title="Reply in thread"
-                onClick={() => { done(); open?.(); }}>💬</button>
+                onClick={() => { done(); open?.(); }}><MessageSquareText size={16} aria-hidden="true" /></button>
             )}
             <button type="button" className="tool-btn" aria-label="Copy link" title={copied ? "Copied" : "Copy link"}
               onClick={() => {
                 done();
                 void navigator.clipboard?.writeText(messageLink(m)).then(() => setCopied(true), () => undefined);
-              }}>{copied ? "✓" : "🔗"}</button>
+              }}>{copied ? <Check size={16} aria-hidden="true" /> : <Link size={16} aria-hidden="true" />}</button>
             {onMarkUnread && (
               <button type="button" className="tool-btn" aria-label="Mark unread" title="Mark unread from here"
-                onClick={() => { done(); onMarkUnread(m); }}>●</button>
+                onClick={() => { done(); onMarkUnread(m); }}><CircleDot size={16} aria-hidden="true" /></button>
             )}
             {picker && (
-              <div className="emoji-picker" role="group" aria-label="More reactions">
-                {EXTRA_REACTION_EMOJIS.map((emoji) => reactButton(emoji, "react-pick-btn"))}
-              </div>
+              <EmojiPicker emojis={EXTRA_REACTION_EMOJIS} label="More reactions" className="emoji-picker"
+                buttonLabel={(emoji) => `React ${emoji}`} pressed={mine} onPick={react} />
             )}
           </div>
         )}

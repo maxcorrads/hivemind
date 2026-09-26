@@ -1,3 +1,4 @@
+import { Hash, Lock, Sparkles, UserPlus } from "lucide-react";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import type { AdaptiveRoutingView } from "../src/shared/adaptive-topology.ts";
 import type { ChannelTaskPage } from "../src/shared/tasks.ts";
@@ -93,6 +94,7 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
   // A tab belongs to the channel it was picked in: another channel opens on Messages.
   const [picked, setPicked] = useState<{ channelId: string; tab: ChannelTab; unreadTarget?: UnreadTarget | null }>({ channelId, tab: "messages" });
   const room = Boolean(activeChannel && ["private", "public"].includes(activeChannel.type));
+  const dm = activeChannel?.type === "dm";
   const newUnreadJump = unreadTarget?.channelId === channelId && unreadTarget !== picked.unreadTarget;
   const requested = picked.channelId === channelId && !newUnreadJump ? picked.tab : "messages";
   const tab = requested === "contract" && !room ? "messages" : requested;
@@ -110,30 +112,39 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
   ];
   return (
     <>
-      <header className="desk-h channel-h">
+      <header className={dm ? "desk-h channel-h dm-h" : "desk-h channel-h"}>
         <BackButton label="Back" onBack={onBack} />
-        <div>
-          <h1>{activeChannel ? channelTitle(activeChannel) : channelId}</h1>
-          {activeChannel?.topic && <p>{activeChannel.topic}</p>}
-        </div>
-        <div className="channel-h-tools">
-          {activeChannel && <MemberStack channel={activeChannel} agents={agents} />}
-          {room && (
-            <button type="button" className="text-btn" onClick={onInvite}>
-              Invite
+        {dm && activeChannel ? <DmTitle channel={activeChannel} agents={agents} openTasks={openTasks} /> : (
+          <div className="channel-h-title">
+            <h1>
+              {activeChannel?.type === "private" ? <Lock size={15} aria-hidden="true" /> : <Hash size={16} aria-hidden="true" />}
+              {/* The glyph stands in for the "#" that stays in the heading's text and name (see .h-sigil). */}
+              {activeChannel ? <><span className="h-sigil">#</span>{activeChannel.name}</> : channelId}
+            </h1>
+            {activeChannel?.topic && <p>{activeChannel.topic}</p>}
+          </div>
+        )}
+        <div className="seg channel-tabs" role="tablist" aria-label="Channel views">
+          {tabs.map((item) => (
+            <button key={item.id} type="button" role="tab" id={`channel-tab-${item.id}`} aria-selected={tab === item.id}
+              aria-controls={tab === item.id ? `channel-panel-${item.id}` : undefined} onClick={() => setPicked({ channelId, tab: item.id, unreadTarget })}>
+              {item.label}
+              {item.count ? <span className="tab-count">{item.count}</span> : null}
             </button>
-          )}
+          ))}
         </div>
+        {!dm && (
+          <div className="channel-h-tools">
+            {activeChannel && <MemberStack channel={activeChannel} agents={agents} />}
+            {room && (
+              <button type="button" className="btn" onClick={onInvite}>
+                <UserPlus size={14} aria-hidden="true" />
+                Invite
+              </button>
+            )}
+          </div>
+        )}
       </header>
-      <div className="channel-tabs" role="tablist" aria-label="Channel views">
-        {tabs.map((item) => (
-          <button key={item.id} type="button" role="tab" id={`channel-tab-${item.id}`} aria-selected={tab === item.id}
-            aria-controls={tab === item.id ? `channel-panel-${item.id}` : undefined} onClick={() => setPicked({ channelId, tab: item.id, unreadTarget })}>
-            {item.label}
-            {item.count ? <span className="tab-count">{item.count}</span> : null}
-          </button>
-        ))}
-      </div>
       {tab === "tasks" ? (
         <div className="stream channel-panel" role="tabpanel" id="channel-panel-tasks" aria-labelledby="channel-tab-tasks">
           <TaskList page={work.tasks} error={work.error} activeId={threadPaneId}
@@ -175,6 +186,7 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
             key={row.key}
             m={row.message}
             grouped={row.grouped}
+            threadOpen={threadPaneId === row.message.id}
             replies={pane?.replyCounts[row.message.id] ?? 0}
             status={statuses.get(row.message.id) ?? null}
             taskRoute={row.message.taskEvent &&
@@ -209,6 +221,30 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
       />
       </div>
     </>
+  );
+}
+
+/**
+ * A DM's title: the other side's avatar with presence, the name, its role and a status line. A DM between two
+ * agents shows both. The heading keeps the channel name, which is how the DM is listed.
+ */
+function DmTitle({ channel, agents, openTasks }: { channel: Channel; agents: Agent[]; openTasks: number }) {
+  const members = channel.memberIds.flatMap((id) => agents.filter((agent) => agent.id === id));
+  const peers = members.some((agent) => agent.id === "human") ? members.filter((agent) => agent.id !== "human") : members;
+  const peer = peers.length === 1 ? peers[0] : undefined;
+  const status = peer && [peer.role === "worker" ? peer.seniority : null, peer.focus, peer.removedAt != null ? "removed" : peer.online ? "online" : "offline",
+    openTasks > 0 ? `${openTasks} open ${openTasks === 1 ? "task" : "tasks"}` : null].filter(Boolean).join(" · ");
+  return (
+    <div className="channel-h-title dm-title">
+      {peers.length > 0 && (
+        <span className="dm-avatars" aria-hidden="true">
+          {peers.slice(0, 2).map((agent) => <Avatar key={agent.id} name={agent.name} role={agent.role} online={agent.online} size={peers.length > 1 ? "sm" : undefined} />)}
+        </span>
+      )}
+      <h1>{channel.name}</h1>
+      {peer && <span className="role-pill">{peer.role}</span>}
+      {status && <p>{status}</p>}
+    </div>
   );
 }
 
@@ -284,6 +320,7 @@ export function RoutingStrip({ view, channelId, brainNames, onOpen }: {
   return (
     <div className={`routing-strip ${unsure ? "warning" : ""}`}>
       <button type="button" onClick={onOpen}>
+        <Sparkles size={14} aria-hidden="true" />
         <strong>{adviceSummary(state.recommendation)}</strong>
         {brains > 1 ? ` · ${brainNames[state.brainId] ?? "brain"} · ${brains} brains` : ""}
       </button>
