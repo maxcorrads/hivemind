@@ -389,7 +389,7 @@ Page → app (`window.webkit.messageHandlers.hivemind.postMessage`):
 | --- | --- | --- |
 | `terminal-launch` | `id`?, `launches`: `[{project, agent, title, cwd?, command, session?}]`, `openInTerminal` boolean | `agent` is null for a new agent; `session` is the agent's `terminalSession` on resume. `cwd` may be `~` or `~/…`, or absent for home; the app expands it. With `openInTerminal`, the app then opens a Terminal.app window attached to each session the broker returned, even if the page has moved on. At most 1 per second per window. |
 | `terminal-open` | `session` | Opens Terminal.app attached to a running session (the app checks with `sessions.list` first). No answer on success. At most 1 per second per window. |
-| `terminal-attach` | `id`?, `session`, `cols`, `rows` | |
+| `terminal-attach` | `id`?, `session`, `cols`, `rows` | Until `terminal-attached`, the page holds the viewer's resizes (the latest size) and keys (in order, at most 64 KiB, the oldest dropped beyond), and sends them once attached; held keys are discarded if the attach fails or the viewer leaves first |
 | `terminal-input` | `stream`, `data` base64 ≤64 KiB | `encodeTerminalInput` splits a paste into chunks |
 | `terminal-resize` | `stream`, `cols`, `rows` | |
 | `terminal-detach` | `stream` | |

@@ -23,7 +23,7 @@ const { TERMINAL_EVENT, BROKER_UNAVAILABLE_HINT, SERVER_UNVERIFIED_HINT, TMUX_IN
 const opened: string[] = [];
 appLinks.open = url => { opened.push(url); };
 const terminal = await import("./use-terminal.ts");
-const { createTerminalHub, resetTerminalHub, terminalBlocker, touchKey, withControl, agentTerminalSession, liveSession, rgbColor,
+const { createTerminalHub, resetTerminalHub, terminalBlocker, HELD_INPUT_BYTES, touchKey, withControl, agentTerminalSession, liveSession, rgbColor,
   TerminalRequestError } = terminal;
 const { TerminalView, TerminalPanel } = await import("./TerminalView.tsx");
 const { SessionsSheet, sessionOwner } = await import("./SessionsSheet.tsx");
@@ -180,18 +180,23 @@ test("a stream carries keys and sizes to the broker and its output back, until i
   });
   const [attach] = sent("terminal-attach");
   assert.deepEqual(attach, { type: "terminal-attach", id: attach!.id, session: "hm-acme-atlas", cols: 1000, rows: 1 }, "clamped");
-  assert.equal(stream.input("early"), false, "keys before the stream exists are dropped");
+  assert.equal(stream.input("ec"), true, "keys before the stream exists are held");
+  assert.equal(stream.input(new Uint8Array(bytes("ho\r"))), true);
   stream.resize(120, 40);
   assert.equal(sent("terminal-resize").length, 0, "held until attached");
+  assert.equal(sent("terminal-input").length, 0, "held until attached");
 
   await fromApp({ type: "terminal-attached", id: attach!.id, stream: 3, session: "hm-acme-atlas" });
   assert.equal(stream.stream, 3);
   assert.deepEqual(sent("terminal-resize"), [{ type: "terminal-resize", stream: 3, cols: 120, rows: 40 }]);
+  assert.deepEqual(posted.filter(m => m.type === "terminal-resize" || m.type === "terminal-input").map(m => m.type),
+    ["terminal-resize", "terminal-input", "terminal-input"], "the size first, then the held keys");
+  assert.deepEqual(sent("terminal-input").map(m => [m.stream, decode(m.data)]), [[3, "ec"], [3, "ho\r"]], "in order, once");
   stream.resize(120, 40);
   assert.equal(sent("terminal-resize").length, 1, "an unchanged size is not sent again");
 
   assert.equal(stream.input("ls\r"), true);
-  assert.deepEqual(sent("terminal-input").map(m => [m.stream, decode(m.data)]), [[3, "ls\r"]]);
+  assert.deepEqual(sent("terminal-input").map(m => [m.stream, decode(m.data)]), [[3, "ec"], [3, "ho\r"], [3, "ls\r"]]);
   await fromApp({ type: "terminal-output", stream: 3, data: base64("héllo") });
   await fromApp({ type: "terminal-output", stream: 9, data: base64("not mine") });
   assert.deepEqual(output, bytes("héllo"));
@@ -202,6 +207,54 @@ test("a stream carries keys and sizes to the broker and its output back, until i
   assert.equal(stream.input("x"), false);
   stream.detach();
   assert.equal(sent("terminal-detach").length, 0, "an ended stream needs no detach");
+});
+
+test("keys held before the stream is attached are bounded, oldest dropped first, and discarded when the attach fails", async () => {
+  const h = hub();
+  await fromApp(connected);
+  const handlers = { output() {}, exit() {}, error() {}, lost() {} };
+  const heldInput = () => sent("terminal-input").map(m => decode(m.data)).join("");
+  const attachAs = (stream: number) =>
+    fromApp({ type: "terminal-attached", id: sent("terminal-attach").at(-1)!.id, stream, session: "hm-acme-atlas" });
+
+  // Past the bound, whole oldest chunks go; what is left is sent in order, split into the bridge's 64 KiB chunks.
+  const bounded = h.attach("hm-acme-atlas", 80, 24, handlers);
+  bounded.input("a".repeat(40 * 1024));
+  bounded.input("b".repeat(30 * 1024));
+  bounded.input("c");
+  await attachAs(1);
+  assert.equal(heldInput(), "b".repeat(30 * 1024) + "c", "the oldest chunk is dropped past 64 KiB");
+
+  // One paste larger than the bound keeps its end.
+  posted = [];
+  const pasted = h.attach("hm-acme-atlas", 80, 24, handlers);
+  pasted.input("x".repeat(10) + "y".repeat(HELD_INPUT_BYTES));
+  await attachAs(2);
+  assert.equal(heldInput(), "y".repeat(HELD_INPUT_BYTES));
+  assert.equal(sent("terminal-input").length, 1);
+
+  // Held keys never outlive their attach: refused, unanswered, lost with the broker, or left by the viewer.
+  posted = [];
+  const refused = h.attach("hm-acme-gone", 80, 24, handlers);
+  refused.input("rm -rf nothing\r");
+  await fromApp({ type: "terminal-error", id: sent("terminal-attach").at(-1)!.id, code: "no-such-session", message: "gone", stream: null });
+  assert.equal(refused.input("more"), false, "a failed attach takes no more keys");
+  const unanswered = h.attach("hm-acme-atlas", 80, 24, handlers);
+  unanswered.input("late\r");
+  await flush(); await flush(); await flush(); await flush(); await flush(); await flush(); await flush(); await flush(); await flush();
+  await attachAs(5);
+  const lost = h.attach("hm-acme-atlas", 80, 24, handlers);
+  lost.input("lost\r");
+  await fromApp({ type: "terminal-status", tmux: "unknown", broker: "connecting" });
+  await fromApp(connected);
+  await attachAs(6);
+  const left = h.attach("hm-acme-atlas", 80, 24, handlers);
+  left.input("left\r");
+  left.detach();
+  assert.equal(left.input("x"), false);
+  await attachAs(7);
+  assert.equal(sent("terminal-input").length, 0, "nothing held is sent for an attach that failed or was left");
+  assert.deepEqual(sent("terminal-detach").map(m => m.stream), [5, 7], "late answers are detached (one from a lost broker is not its own)");
 });
 
 test("a viewer that leaves before the answer detaches the stream it gets; refusals and lost brokers end streams", async () => {
@@ -321,6 +374,10 @@ test("the terminal attaches at its size, sends keys, draws output, and detaches 
   const [attach] = sent("terminal-attach");
   assert.deepEqual({ ...attach, id: undefined }, { type: "terminal-attach", id: undefined, session: "hm-acme-atlas", cols: 100, rows: 30 });
   assert.match(view.host.querySelector(".term-note")?.textContent ?? "", /Connecting to hm-acme-atlas/);
+  // Keys typed while it says Connecting to … are held, and sent in order once attached.
+  await fake.type("pw");
+  await fake.type("d\r");
+  assert.equal(sent("terminal-input").length, 0);
   await fromApp({ type: "terminal-attached", id: attach!.id, stream: 2, session: "hm-acme-atlas" });
   assert.equal(view.host.querySelector(".term-note"), null);
   assert.equal(fake.record.focused, 1);
@@ -328,7 +385,7 @@ test("the terminal attaches at its size, sends keys, draws output, and detaches 
   await fake.type("echo hi\r");
   await fake.type("\x03");
   await fake.type(new Uint8Array([0x1b, 0x5b, 0x4d]));
-  assert.deepEqual(sent("terminal-input").map(m => decode(m.data)), ["echo hi\r", "\x03", "\x1b[M"]);
+  assert.deepEqual(sent("terminal-input").map(m => decode(m.data)), ["pw", "d\r", "echo hi\r", "\x03", "\x1b[M"]);
   await fake.resize(90, 20);
   assert.deepEqual(sent("terminal-resize"), [{ type: "terminal-resize", stream: 2, cols: 90, rows: 20 }]);
   await fromApp({ type: "terminal-output", stream: 2, data: base64("\x1b[1mhi\x1b[0m") });

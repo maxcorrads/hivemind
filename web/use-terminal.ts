@@ -63,9 +63,14 @@ export type TerminalStreamHandlers = {
   attached?: (stream: number) => void;
 };
 
-/** One viewer's stream: input and resizes before the broker answers are held (only the latest size) or dropped (keys). */
+/**
+ * One viewer's stream. Before the broker answers the attach, resizes are held (only the latest size) and keys are held
+ * in order (at most HELD_INPUT_BYTES, the oldest dropped beyond): both go once the stream is attached, and held keys are
+ * discarded if the attach fails or the viewer detaches first.
+ */
 export type TerminalAttachment = {
   readonly stream: number | null;
+  /** Sends `data`, or holds it until the stream is attached; false once the attachment is over (nothing is sent). */
   input: (data: string | Uint8Array) => boolean;
   resize: (cols: number, rows: number) => void;
   detach: () => void;
@@ -83,7 +88,13 @@ type StreamEntry = {
   size: { cols: number; rows: number };
   sent: { cols: number; rows: number } | null;
   timer: number | null;
+  /** Keys typed before the stream is attached, oldest first; `heldBytes` is their total. */
+  held: Uint8Array[];
+  heldBytes: number;
 };
+
+/** How much input typed before the stream is attached is kept for it (64 KiB); older keys beyond are dropped. */
+export const HELD_INPUT_BYTES = 64 * 1024;
 
 const BROWSER_STATE: TerminalState = { native: false, platform: null, tmux: null, broker: null, sessions: null, lastError: null };
 const NO_ANSWER = "Hivemind did not answer. Is Hivemind Server running?";
@@ -114,9 +125,22 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
   const setState = (patch: Partial<TerminalState>) => { state = { ...state, ...patch }; emit(); };
   const newId = () => `p${++nextId}`;
 
+  const dropHeld = (entry: StreamEntry) => { entry.held = []; entry.heldBytes = 0; };
+  /** Keeps `data` for the stream being attached: whole chunks, oldest dropped past HELD_INPUT_BYTES (a larger one keeps its end). */
+  const hold = (entry: StreamEntry, data: string | Uint8Array) => {
+    const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data.slice();
+    if (bytes.length === 0) return;
+    entry.held.push(bytes.length > HELD_INPUT_BYTES ? bytes.slice(bytes.length - HELD_INPUT_BYTES) : bytes);
+    entry.heldBytes += Math.min(bytes.length, HELD_INPUT_BYTES);
+    while (entry.heldBytes > HELD_INPUT_BYTES) entry.heldBytes -= entry.held.shift()!.length;
+  };
+  const sendInput = (entry: StreamEntry, data: string | Uint8Array) => {
+    for (const chunk of encodeTerminalInput(data)) post({ type: "terminal-input", stream: entry.stream!, data: chunk });
+  };
   const endStream = (entry: StreamEntry, status: number | null) => {
     if (entry.closed) return;
     entry.closed = true;
+    dropHeld(entry);
     if (entry.timer !== null) win.clearTimeout(entry.timer);
     if (entry.stream !== null) streams.delete(entry.stream);
     entry.handlers.exit(status);
@@ -125,6 +149,7 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
   const loseStream = (entry: StreamEntry) => {
     if (entry.closed) return;
     entry.closed = true;
+    dropHeld(entry);
     if (entry.timer !== null) win.clearTimeout(entry.timer);
     if (entry.stream !== null) streams.delete(entry.stream);
     if (entry.handlers.lost) entry.handlers.lost(); else entry.handlers.exit(null);
@@ -132,6 +157,7 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
   const failStream = (entry: StreamEntry, error: TerminalRequestError) => {
     if (entry.closed) return;
     entry.closed = true;
+    dropHeld(entry);
     if (entry.timer !== null) win.clearTimeout(entry.timer);
     if (entry.stream !== null) streams.delete(entry.stream);
     entry.handlers.error(error);
@@ -201,8 +227,14 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
         entry.stream = detail.stream;
         streams.set(detail.stream, entry);
         entry.handlers.attached?.(detail.stream);
-        // Attach carried the size of its time; a resize since then goes now.
+        // Attach carried the size of its time; a resize since then goes now, then the keys typed meanwhile, in order.
         sendSize(entry);
+        const held = entry.held;
+        dropHeld(entry);
+        for (const bytes of held) {
+          if (entry.closed) break;
+          sendInput(entry, bytes);
+        }
         return;
       }
       case "terminal-output": {
@@ -305,7 +337,9 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
       return request<void>("kill", { type: "terminal-kill", id: newId(), session });
     },
     attach(session: string, cols: number, rows: number, handlers: TerminalStreamHandlers): TerminalAttachment {
-      const entry: StreamEntry = { handlers, stream: null, closed: false, size: terminalSize(cols, rows), sent: null, timer: null };
+      const entry: StreamEntry = {
+        handlers, stream: null, closed: false, size: terminalSize(cols, rows), sent: null, timer: null, held: [], heldBytes: 0,
+      };
       const id = newId();
       const fail = (code: string, message: string) => {
         // Reported after attach() returns, as an answer would be.
@@ -321,8 +355,9 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
       return {
         get stream() { return entry.closed ? null : entry.stream; },
         input(data) {
-          if (entry.closed || entry.stream === null) return false;
-          for (const chunk of encodeTerminalInput(data)) post({ type: "terminal-input", stream: entry.stream, data: chunk });
+          if (entry.closed) return false;
+          if (entry.stream === null) hold(entry, data);
+          else sendInput(entry, data);
           return true;
         },
         resize(nextCols, nextRows) {
@@ -333,6 +368,7 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
           if (entry.closed) return;
           const stream = entry.stream;
           entry.closed = true;
+          dropHeld(entry);
           if (entry.timer !== null) { win.clearTimeout(entry.timer); entry.timer = null; }
           if (stream !== null) { streams.delete(stream); post({ type: "terminal-detach", stream }); }
         },
@@ -344,7 +380,10 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
       if (releaseTimer !== null) win.clearTimeout(releaseTimer);
       for (const request of pending.values()) {
         if (request.kind !== "attach") win.clearTimeout(request.timer);
-        else if (request.stream.timer !== null) win.clearTimeout(request.stream.timer);
+        else {
+          if (request.stream.timer !== null) win.clearTimeout(request.stream.timer);
+          dropHeld(request.stream);
+        }
       }
       pending.clear();
       listeners.clear();

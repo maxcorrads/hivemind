@@ -98,8 +98,9 @@ final class HivemindE2ETests: XCTestCase {
     if !open.waitForExistence(timeout: 20) { print(app.webViews.firstMatch.debugDescription) }
     XCTAssertTrue(open.exists, "\(session) is listed with Open")
     open.tap()
-    // Keys typed while it says "Connecting to …" are dropped by design
-    // (web/use-terminal.ts): wait until the stream is live.
+    // Keys typed while it says "Connecting to …" are held and sent once
+    // attached (web/use-terminal.ts), but a failed attach discards them:
+    // wait until the stream is live so a test's keys are not lost that way.
     XCTAssertTrue(app.webViews.firstMatch.textViews.firstMatch.waitForExistence(timeout: 30))
     try waitUntilLive(app)
     return app
