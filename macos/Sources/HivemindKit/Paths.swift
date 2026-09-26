@@ -5,8 +5,18 @@ import Foundation
 public struct HivemindPaths: Sendable, Equatable {
   public let home: URL
 
-  public init(home: URL = FileManager.default.homeDirectoryForCurrentUser) {
+  public init(home: URL = HivemindPaths.userHome) {
     self.home = home
+  }
+
+  /// The user's home folder. iOS has no homeDirectoryForCurrentUser; there
+  /// this is the app container, and none of these paths are used anyway.
+  public static var userHome: URL {
+    #if os(macOS)
+    FileManager.default.homeDirectoryForCurrentUser
+    #else
+    URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+    #endif
   }
 
   /// The server's HIVEMIND_HOME when the user has not chosen another.

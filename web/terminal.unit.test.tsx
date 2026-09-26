@@ -18,7 +18,8 @@ Object.assign(globalThis, { window, document: window.document, localStorage: win
   requestAnimationFrame: (callback: () => void) => setTimeout(callback, 0), cancelAnimationFrame: (id: number) => clearTimeout(id) });
 window.HTMLElement.prototype.getClientRects = function () { return [{}] as unknown as DOMRectList; } as never;
 const { createRoot } = await import("react-dom/client");
-const { TERMINAL_EVENT, BROKER_UNAVAILABLE_HINT, SERVER_UNVERIFIED_HINT, TMUX_INSTALL_HINT, appLinks } = await import("./native-bridge.ts");
+const { TERMINAL_EVENT, BROKER_UNAVAILABLE_HINT, SERVER_UNVERIFIED_HINT, TMUX_INSTALL_HINT, REMOTE_BROKER_UNAVAILABLE_HINT,
+  REMOTE_TMUX_INSTALL_HINT, appLinks, parseTerminalEvent, resetNativePlatform, runNativeCommand } = await import("./native-bridge.ts");
 const opened: string[] = [];
 appLinks.open = url => { opened.push(url); };
 const terminal = await import("./use-terminal.ts");
@@ -59,6 +60,7 @@ beforeEach(() => {
   posted = [];
   delete win.webkit;
   resetTerminalHub();
+  resetNativePlatform();
   document.documentElement.className = "";
 });
 afterEach(() => {
@@ -131,7 +133,7 @@ test("the session list is subscribed while anyone watches it, and follows the ap
   assert.deepEqual(posted.slice(1), [{ type: "sessions-unsubscribe" }]);
 
   const state = () => h.state;
-  assert.deepEqual(state(), { native: true, tmux: null, broker: null, sessions: null, lastError: null });
+  assert.deepEqual(state(), { native: true, platform: "macos", tmux: null, broker: null, sessions: null, lastError: null });
   await fromApp(connected);
   await fromApp({ type: "sessions", items: [session("hm-acme-atlas")] });
   assert.equal(state().sessions?.[0]?.name, "hm-acme-atlas");
@@ -253,7 +255,7 @@ test("kill is answered with killed and drops the session from the list", async (
 
 test("helpers: blockers, session mapping, keys and colors", () => {
   const state = (patch: Partial<ReturnType<typeof createTerminalHub>["state"]>) =>
-    ({ native: true, tmux: null, broker: null, sessions: null, lastError: null, ...patch });
+    ({ native: true, platform: "macos" as const, tmux: null, broker: null, sessions: null, lastError: null, ...patch });
   assert.equal(terminalBlocker({ ...state({}), native: false }), null);
   assert.equal(terminalBlocker(state({}))?.kind, "connecting");
   assert.equal(terminalBlocker(state({ broker: "unavailable", tmux: "unknown" }))?.message, BROKER_UNAVAILABLE_HINT);
@@ -527,4 +529,109 @@ test("a DM with an agent whose session runs has a Terminal tab, inside the app o
   await fromApp({ type: "sessions", items: [] });
   assert.deepEqual(tabs(host), ["Messages", "Tasks"], "the session ended");
   assert.equal(host.querySelector("#channel-panel-terminal"), null);
+});
+
+// ---- The iPhone/iPad app ------------------------------------------------------------------------------------------
+// The same bridge, but the broker is the Mac's (docs/remote-access.md): the app says "ios" in every terminal-status,
+// and the page offers nothing that runs on the Mac's desktop (Terminal.app, Start Hivemind Server).
+
+const onIos = { ...connected, platform: "ios" } as const;
+
+test("terminal-status names the platform; Hivemind.app on the Mac, which sends none, is macos", () => {
+  const status = (platform?: unknown) => parseTerminalEvent({ type: "terminal-status", tmux: "available", broker: "connected",
+    ...(platform === undefined ? {} : { platform }) });
+  assert.deepEqual(status(), { type: "terminal-status", tmux: "available", broker: "connected", platform: "macos" });
+  assert.equal((status(null) as { platform: string }).platform, "macos");
+  assert.equal((status("macos") as { platform: string }).platform, "macos");
+  assert.equal((status("ios") as { platform: string }).platform, "ios");
+  // Anything else is not the Mac, so it is offered no Mac desktop action.
+  assert.equal((status("ipados") as { platform: string }).platform, "ios");
+  assert.equal((status(7) as { platform: string }).platform, "ios");
+});
+
+test("the hub takes the platform from the iOS app's answer to ready, before or after it exists", async () => {
+  const handlers = { jump() {}, forYou() {}, newChannel() {}, settings() {}, toggleTheme() {}, navigate() {} };
+  const before = hub();
+  assert.equal(before.state.platform, "macos", "the Mac app never says");
+  runNativeCommand({ command: "ready", platform: "ios" }, handlers);
+  assert.equal(before.state.platform, "ios");
+  const after = hub();
+  assert.equal(after.state.platform, "ios");
+});
+
+test("on iOS the hub never asks for Terminal.app, and says where the broker and tmux are", async () => {
+  const h = hub();
+  await fromApp(onIos);
+  assert.equal(h.state.platform, "ios");
+  const launch = { project: "acme", agent: "Atlas", title: "Acme - Atlas", cwd: null, command: "claude" };
+  void h.launch([launch], true).catch(() => {});
+  assert.equal(sent("terminal-launch")[0]?.openInTerminal, false, "a launch goes without a Terminal.app window");
+  await fromApp({ type: "sessions", items: [session("hm-acme-atlas")] });
+  assert.equal(h.open("hm-acme-atlas"), false);
+  assert.deepEqual(sent("terminal-open"), []);
+
+  const state = (patch: object) => ({ ...h.state, ...patch });
+  const server = terminalBlocker(state({ broker: "unavailable", tmux: "unknown" }));
+  assert.deepEqual(server, { kind: "server", message: REMOTE_BROKER_UNAVAILABLE_HINT, canStart: false });
+  assert.equal(terminalBlocker(state({ tmux: "missing" }))?.message, REMOTE_TMUX_INSTALL_HINT);
+  assert.equal(terminalBlocker(state({ platform: "macos", broker: "unavailable" }))?.canStart, true);
+
+  // A dropped broker ends the page's requests with the device's hint.
+  const attached = new Promise<string>(resolve => {
+    h.attach("hm-acme-atlas", 80, 24, { output() {}, exit() {}, error: error => resolve(error.message) });
+  });
+  await fromApp({ ...onIos, broker: "unavailable" });
+  assert.equal(await attached, REMOTE_BROKER_UNAVAILABLE_HINT);
+});
+
+test("on iOS the panel explains a missing broker without offering to start it", async () => {
+  installBridge();
+  const fake = fakeScreen();
+  const view = await mount(() => <TerminalPanel session="hm-acme-atlas" loadScreen={fake.load} />);
+  await fromApp({ type: "terminal-status", tmux: "unknown", broker: "unavailable", platform: "ios" });
+  assert.match(view.host.textContent ?? "", /Terminals need Hivemind Server running on your Mac/);
+  assert.equal(view.host.querySelector(".term-notice button"), null, "a device cannot start the Mac's server");
+  await fromApp({ type: "terminal-status", tmux: "missing", broker: "connected", platform: "ios" });
+  await fromApp({ type: "sessions", items: [] });
+  assert.match(view.host.textContent ?? "", /hm-acme-atlas is not running/, "a missing tmux does not hide a panel");
+});
+
+test("on iOS the sessions sheet opens sessions only here, and can open straight on one", async () => {
+  installBridge();
+  const fake = fakeScreen();
+  const atlas = agent("a1", "Atlas", { terminalSession: "hm-acme-atlas" });
+  const view = await mount(() => <SessionsSheet agents={[atlas]} projects={[project]} onClose={() => {}} loadScreen={fake.load}
+    initialSession="hm-acme-atlas" />);
+  await fromApp(onIos);
+  await fromApp({ type: "sessions", items: [session("hm-acme-atlas"), session("hm-acme-new-1")] });
+  await flush();
+  assert.equal(sent("terminal-attach")[0]?.session, "hm-acme-atlas", "the initial session's terminal is shown");
+  assert.match(view.host.querySelector(".sheet-head h2")?.textContent ?? "", /Atlas/);
+  assert.equal(Array.from(view.host.querySelectorAll(".sheet-head button")).some(b => /Open in Terminal/.test(b.textContent ?? "")), false);
+
+  const back = view.host.querySelector('[aria-label="All sessions"]') as unknown as HTMLButtonElement;
+  await act(async () => { back.click(); });
+  assert.equal(view.host.querySelectorAll(".session-list > li").length, 2);
+  assert.ok(view.host.querySelector('[aria-label="Open hm-acme-atlas"]'), "Open stays");
+  assert.equal(view.host.querySelector('[aria-label="Open hm-acme-atlas in Terminal"]'), null, "no Terminal.app on iOS");
+  assert.equal(view.host.querySelector('[aria-label="Terminate hm-acme-atlas"]') !== null, true);
+  assert.match(view.host.textContent ?? "", /tmux sessions on your Mac/);
+});
+
+test("on iOS the touch row always shows, and a key tap keeps the focus in the terminal", async () => {
+  installBridge();
+  const h = terminal.terminalHub()!;
+  await fromApp(onIos);
+  const fake = fakeScreen();
+  const view = await mount(() => <TerminalView session="hm-acme-atlas" hub={h} loadScreen={fake.load} autoFocus={false} />);
+  await flush();
+  assert.equal(view.host.querySelector(".term")?.getAttribute("data-platform"), "ios");
+  const css = readFileSync(new URL("./styles/terminal.css", import.meta.url), "utf8");
+  assert.match(css, /\.term\[data-platform="ios"\] \.term-keys \{ display: flex; \}/);
+  const esc = Array.from(view.host.querySelectorAll(".term-keys button")).find(b => b.textContent === "Esc")!;
+  for (const type of ["pointerdown", "mousedown"]) {
+    const event = new window.Event(type, { bubbles: true, cancelable: true });
+    esc.dispatchEvent(event as unknown as Event);
+    assert.equal(event.defaultPrevented, true, `${type} must not move focus off xterm`);
+  }
 });

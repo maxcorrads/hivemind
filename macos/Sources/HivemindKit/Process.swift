@@ -121,6 +121,9 @@ public struct LineSplitter: Sendable {
   }
 }
 
+// Foundation.Process does not exist on iOS; HivemindKit also builds there
+// for the iOS app, which never spawns children.
+#if os(macOS)
 /// Foundation.Process behind SupervisedProcess. All pipe reads and the exit
 /// go through one serial queue and then the main queue, which is what keeps
 /// the "all output before exit" promise.
@@ -232,3 +235,4 @@ private final class PipeReader: @unchecked Sendable {
     DispatchQueue.main.async { MainActor.assumeIsolated { for line in lines { onOutput(channel, line) } } }
   }
 }
+#endif

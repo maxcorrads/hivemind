@@ -45,7 +45,7 @@ const TOUCH_KEYS = [
 /**
  * An interactive terminal attached to one tmux session through the broker: keys, paste, Ctrl+C, resize
  * and tmux's scrollback (mouse on). Several viewers, here or in Terminal.app, may share a session. On a
- * coarse pointer a row of Esc/Ctrl/Tab/arrow keys shows under it.
+ * coarse pointer, and always in the iPhone/iPad app, a row of Esc/Ctrl/Tab/arrow keys shows under it.
  */
 export function TerminalView({ session, hub = terminalHub(), loadScreen = loadXterm, autoFocus = true }: {
   session: string;
@@ -118,14 +118,19 @@ export function TerminalView({ session, hub = terminalHub(), loadScreen = loadXt
   }, [hub, session, attempt, loadScreen, autoFocus]);
 
   if (!hub) return null;
+  // A key tap must not move focus off xterm: that would blur its textarea and hide the on-screen keyboard. WebKit on
+  // iOS moves focus on the mousedown it synthesizes after a tap, which pointerdown's default does not cover.
+  const keepFocus = (event: { preventDefault: () => void }) => event.preventDefault();
   const send = (key: (typeof TOUCH_KEYS)[number]["key"]) => {
     attachment.current?.input(touchKey(key, screen.current?.applicationCursor));
     screen.current?.focus();
   };
+  // An iPad with a keyboard or trackpad reports a fine pointer, and its keyboards may lack Esc: the row stays.
+  const platform = hub.state.platform;
   const note = phase.kind === "loading" || phase.kind === "attaching" ? `Connecting to ${session}…`
     : phase.kind === "ended" ? `Detached from ${session}.` : phase.kind === "error" ? phase.message : null;
   return (
-    <div className="term" data-phase={phase.kind}>
+    <div className="term" data-phase={phase.kind} data-platform={platform ?? undefined}>
       {/* Keys stay in the terminal: Escape must not close a dialog, Ctrl+K must not open Jump to. ⌘ shortcuts pass.
           xterm opens in .term-fit, which has no padding or border, so the fit addon sizes the grid to the room it has. */}
       <div className="term-screen" aria-label={`Terminal: ${session}`} role="region"
@@ -144,13 +149,13 @@ export function TerminalView({ session, hub = terminalHub(), loadScreen = loadXt
       )}
       <div className="term-keys" role="toolbar" aria-label="Terminal keys">
         <button type="button" aria-pressed={ctrl} title="Ctrl: hold for the next key"
-          onPointerDown={event => event.preventDefault()} onClick={() => { setCtrl(on => !on); screen.current?.focus(); }}>
+          onPointerDown={keepFocus} onMouseDown={keepFocus} onClick={() => { setCtrl(on => !on); screen.current?.focus(); }}>
           Ctrl
         </button>
         {TOUCH_KEYS.map(item => (
           <button key={item.key} type="button" title={"title" in item ? item.title : undefined}
             aria-label={"title" in item ? item.title : undefined}
-            onPointerDown={event => event.preventDefault()} onClick={() => send(item.key)}>
+            onPointerDown={keepFocus} onMouseDown={keepFocus} onClick={() => send(item.key)}>
             {item.label}
           </button>
         ))}

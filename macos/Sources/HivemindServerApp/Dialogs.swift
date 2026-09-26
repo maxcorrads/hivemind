@@ -42,13 +42,13 @@ enum Dialogs {
   }
 
   /// The raw text typed, or nil on Cancel; the caller validates it.
-  static func askPort(current: ServerPort, info: String) -> String? {
+  static func askPort(title: String = "Server Port", current: ServerPort, defaultPort: ServerPort = .default, info: String) -> String? {
     activate()
     let alert = NSAlert()
-    alert.messageText = "Server Port"
+    alert.messageText = title
     alert.informativeText = info
     let field = NSTextField(string: current.description)
-    field.placeholderString = ServerPort.default.description
+    field.placeholderString = defaultPort.description
     field.frame = NSRect(x: 0, y: 0, width: 120, height: 24)
     alert.accessoryView = field
     alert.addButton(withTitle: "Save")
@@ -57,7 +57,7 @@ enum Dialogs {
     alert.window.initialFirstResponder = field
     switch alert.runModal() {
     case .alertFirstButtonReturn: return field.stringValue
-    case .alertThirdButtonReturn: return ServerPort.default.description
+    case .alertThirdButtonReturn: return defaultPort.description
     default: return nil
     }
   }

@@ -2,12 +2,12 @@ import { useSyncExternalStore } from "react";
 import type { Agent } from "../src/shared/types.ts";
 import { terminalSessionName } from "../src/shared/terminal-session.ts";
 import {
-  BROKER_UNAVAILABLE_HINT, SERVER_UNVERIFIED_HINT, TERMINAL_EVENT, TMUX_INSTALL_HINT, decodeTerminalData, encodeTerminalInput, inNativeApp,
-  parseTerminalEvent, postNative, terminalDataLength, terminalSessionLaunchProblem, terminalSize,
-  type TerminalEvent, type TerminalMessage, type TerminalSessionInfo, type TerminalSessionLaunch,
+  TERMINAL_EVENT, brokerUnavailableHint, decodeTerminalData, encodeTerminalInput, inNativeApp, onMacDesktop, onNativePlatform,
+  parseTerminalEvent, postNative, reportedNativePlatform, serverUnverifiedHint, terminalDataLength, terminalSessionLaunchProblem, terminalSize,
+  tmuxInstallHint, type NativePlatform, type TerminalEvent, type TerminalMessage, type TerminalSessionInfo, type TerminalSessionLaunch,
 } from "./native-bridge.ts";
 
-// The page side of Hivemind.app's terminals (docs/terminal-broker.md#bridge):
+// The page side of the apps' terminals (docs/terminal-broker.md#bridge):
 // one hub per page holds the session list and the broker's status, matches
 // answers to requests by id and routes each stream's output to its viewer. In
 // a browser there is no hub, and every hook here reports "not native".
@@ -18,6 +18,11 @@ export type TerminalLaunched = Extract<TerminalEvent, { type: "terminal-launched
 export type TerminalState = {
   /** False in a browser: no terminal UI at all. */
   native: boolean;
+  /**
+   * Which app hosts the page: null in a browser. "macos" until the app says otherwise, as Hivemind.app on the Mac,
+   * which predates the field, never does; the iOS app says "ios" in its answer to ready and in every terminal-status.
+   */
+  platform: NativePlatform | null;
   /** Null until the app reports them. */
   tmux: Status["tmux"] | null;
   broker: Status["broker"] | null;
@@ -70,7 +75,7 @@ type StreamEntry = {
   timer: number | null;
 };
 
-const BROWSER_STATE: TerminalState = { native: false, tmux: null, broker: null, sessions: null, lastError: null };
+const BROWSER_STATE: TerminalState = { native: false, platform: null, tmux: null, broker: null, sessions: null, lastError: null };
 const NO_ANSWER = "Hivemind did not answer. Is Hivemind Server running?";
 
 export type TerminalHub = ReturnType<typeof createTerminalHub>;
@@ -84,7 +89,9 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
   const requestTimeout = timeouts.request ?? 15_000;
   const attachTimeout = timeouts.attach ?? 10_000;
   const linger = timeouts.linger ?? 1_000;
-  let state: TerminalState = { native: true, tmux: null, broker: null, sessions: null, lastError: null };
+  let state: TerminalState = {
+    native: true, platform: reportedNativePlatform() ?? "macos", tmux: null, broker: null, sessions: null, lastError: null,
+  };
   const listeners = new Set<() => void>();
   const pending = new Map<string, Pending>();
   const streams = new Map<number, StreamEntry>();
@@ -120,11 +127,12 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
 
   /** The broker's streams live on the app's connection; when it drops, every stream and request is over. */
   const brokerLost = () => {
+    const hint = brokerUnavailableHint(state.platform);
     for (const entry of streams.values()) endStream(entry, null);
     for (const [id, request] of pending) {
       pending.delete(id);
-      if (request.kind === "attach") failStream(request.stream, new TerminalRequestError("no-answer", BROKER_UNAVAILABLE_HINT));
-      else { win.clearTimeout(request.timer); request.reject(new TerminalRequestError("no-answer", BROKER_UNAVAILABLE_HINT)); }
+      if (request.kind === "attach") failStream(request.stream, new TerminalRequestError("no-answer", hint));
+      else { win.clearTimeout(request.timer); request.reject(new TerminalRequestError("no-answer", hint)); }
     }
   };
 
@@ -134,7 +142,8 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
     switch (detail.type) {
       case "terminal-status": {
         const lost = state.broker === "connected" && detail.broker !== "connected";
-        setState({ tmux: detail.tmux, broker: detail.broker, ...(detail.broker === "connected" ? {} : { sessions: null }) });
+        setState({ platform: detail.platform, tmux: detail.tmux, broker: detail.broker,
+          ...(detail.broker === "connected" ? {} : { sessions: null }) });
         if (lost) brokerLost();
         return;
       }
@@ -212,6 +221,7 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
     }
   };
   win.addEventListener(TERMINAL_EVENT, onEvent);
+  const offPlatform = onNativePlatform(platform => { if (platform !== state.platform) setState({ platform }); });
 
   const retain = () => {
     if (releaseTimer !== null) { win.clearTimeout(releaseTimer); releaseTimer = null; }
@@ -248,20 +258,23 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
         if (listeners.size === 0) release();
       };
     },
-    /** Starts (or reuses) one session per launch; resolves with the session names, rejects when refused or unanswered. */
+    /**
+     * Starts (or reuses) one session per launch; resolves with the session names, rejects when refused or unanswered.
+     * `openInTerminal` asks for Terminal.app windows, which only the Mac has: off it, the launch goes without them.
+     */
     launch(launches: readonly TerminalSessionLaunch[], openInTerminal: boolean): Promise<TerminalLaunched> {
       const problem = terminalSessionLaunchProblem(launches);
       if (problem) return Promise.reject(new TerminalRequestError("bad-message", problem));
       const id = newId();
       return request<TerminalLaunched>("launch", {
-        type: "terminal-launch", id, openInTerminal,
+        type: "terminal-launch", id, openInTerminal: openInTerminal && onMacDesktop(state.platform),
         launches: launches.map(({ project, agent, title, cwd, command, session }) =>
           ({ project, agent, title, ...(cwd ? { cwd } : {}), command, ...(session ? { session } : {}) })),
       });
     },
-    /** Opens Terminal.app attached to a running session; false when the page could not ask. */
+    /** Opens Terminal.app attached to a running session; false when the page could not ask, or off the Mac. */
     open(session: string) {
-      return terminalSessionName(session) !== null && post({ type: "terminal-open", session });
+      return onMacDesktop(state.platform) && terminalSessionName(session) !== null && post({ type: "terminal-open", session });
     },
     kill(session: string): Promise<void> {
       if (!terminalSessionName(session)) return Promise.reject(new TerminalRequestError("bad-message", "Not a Hivemind session"));
@@ -303,6 +316,7 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
     },
     dispose() {
       win.removeEventListener(TERMINAL_EVENT, onEvent);
+      offPlatform();
       if (releaseTimer !== null) win.clearTimeout(releaseTimer);
       for (const request of pending.values()) {
         if (request.kind !== "attach") win.clearTimeout(request.timer);
@@ -316,7 +330,7 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
 
 let shared: TerminalHub | null = null;
 
-/** The page's hub, created on first use inside Hivemind.app; null in a browser. */
+/** The page's hub, created on first use inside either app; null in a browser. */
 export function terminalHub(): TerminalHub | null {
   if (!shared && typeof window !== "undefined" && inNativeApp(window)) shared = createTerminalHub(window);
   return shared;
@@ -348,15 +362,22 @@ export function liveSession(state: TerminalState, name: string | null): Terminal
   return state.sessions.find(item => item.name === name && item.alive) ?? null;
 }
 
-export type TerminalBlocker = { kind: "server" | "unverified" | "tmux" | "connecting"; message: string };
+export type TerminalBlocker = {
+  kind: "server" | "unverified" | "tmux" | "connecting";
+  message: string;
+  /** Offer Start Hivemind Server: only Hivemind.app on the Mac can start it; a device cannot. */
+  canStart?: boolean;
+};
 
 /** Why terminals cannot be used right now, or null when they can. */
 export function terminalBlocker(state: TerminalState): TerminalBlocker | null {
   if (!state.native) return null;
-  if (state.broker === "unverified") return { kind: "unverified", message: SERVER_UNVERIFIED_HINT };
-  if (state.broker === "unavailable") return { kind: "server", message: BROKER_UNAVAILABLE_HINT };
+  if (state.broker === "unverified") return { kind: "unverified", message: serverUnverifiedHint(state.platform) };
+  if (state.broker === "unavailable") {
+    return { kind: "server", message: brokerUnavailableHint(state.platform), canStart: onMacDesktop(state.platform) };
+  }
   if (state.broker !== "connected") return { kind: "connecting", message: "Connecting to Hivemind Server…" };
-  if (state.tmux === "missing") return { kind: "tmux", message: TMUX_INSTALL_HINT };
+  if (state.tmux === "missing") return { kind: "tmux", message: tmuxInstallHint(state.platform) };
   if (state.tmux !== "available") return { kind: "connecting", message: "Looking for tmux…" };
   return null;
 }

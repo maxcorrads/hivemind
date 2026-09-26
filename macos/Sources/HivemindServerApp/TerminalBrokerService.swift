@@ -21,6 +21,9 @@ final class TerminalBrokerService {
     log = RotatingLog(file: paths.logsDirectory.appendingPathComponent("broker.log"))
   }
 
+  /// Whether the broker listens: the remote gateway only offers terminals then.
+  var isRunning: Bool { broker != nil }
+
   var status: BrokerStatus {
     if let failure { return BrokerStatus(state: .failed(failure), tmuxPath: broker?.tmuxPath, sessionCount: nil) }
     return broker?.status ?? BrokerStatus(state: .stopped, tmuxPath: nil, sessionCount: nil)

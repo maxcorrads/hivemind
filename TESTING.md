@@ -43,6 +43,12 @@ its effective scope:
   Only the Node.js release tarballs are cached, and the build re-verifies them
   against their pinned checksums. No gate requires this job yet. See
   [macOS apps](docs/macos.md).
+- A separate `iOS app` job selects Xcode 26 or later, runs `./ios/build.sh`
+  (XcodeGen pinned in `macos/Tools`, unsigned device and Simulator builds),
+  runs `xcodebuild test` for `ios/Tests` on an available iPhone Simulator and
+  uploads the unsigned `.ipa` and the Simulator app. It is the only job that
+  boots a Simulator. No gate requires this job yet. See
+  [iOS and iPadOS app](docs/ios.md#tests).
 - npm's download cache is used; `node_modules` is not cached.
 
 See [ci-performance.md](docs/ci-performance.md) for the measured baseline, shard

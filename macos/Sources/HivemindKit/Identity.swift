@@ -1,9 +1,12 @@
 import Foundation
 
-/// Bundle identifiers the two apps use to find and launch each other.
+/// Bundle identifiers the two macOS apps use to find and launch each other,
+/// and the iOS app's.
 public enum BundleID {
   public static let ui = "com.maxcorrads.hivemind"
   public static let server = "com.maxcorrads.hivemind.server"
+  /// The iOS/iPadOS app (ios/project.yml sets the same; ios/build.sh checks).
+  public static let ios = "com.maxcorrads.hivemind.ios"
   /// The server app's URL scheme (CFBundleURLTypes, written by build.sh).
   public static let serverURLScheme = "hivemind-server"
 }

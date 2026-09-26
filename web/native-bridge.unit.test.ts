@@ -7,8 +7,10 @@ import type { Agent, Channel, Message, Project } from "../src/shared/types.ts";
 import { launchBlockText, type LaunchContext } from "../src/shared/launch-prompt.ts";
 import type { DesktopNotifications } from "./desktop-notifications.ts";
 import {
-  appLinks, badgeSync, inNativeApp, nativeBridge, notifyNative, postNative, runNativeCommand, startHivemindServer, useNativeBridge,
-  BROKER_UNAVAILABLE_HINT, SERVER_UNVERIFIED_HINT, NATIVE_EVENT, TERMINAL_EVENT, TMUX_INSTALL_HINT, type NativeCommandHandlers, type NativeMessage,
+  appLinks, badgeSync, inNativeApp, nativeBridge, notifyNative, postNative, reportedNativePlatform, resetNativePlatform, runNativeCommand,
+  startHivemindServer, useNativeBridge,
+  BROKER_UNAVAILABLE_HINT, NATIVE_EVENT, REMOTE_BROKER_UNAVAILABLE_HINT, REMOTE_TMUX_INSTALL_HINT, SERVER_UNVERIFIED_HINT, TERMINAL_EVENT,
+  TMUX_INSTALL_HINT, type NativeCommandHandlers, type NativeMessage,
   type TerminalSessionLaunch,
 } from "./native-bridge.ts";
 import type { Sel } from "./selection.ts";
@@ -51,6 +53,7 @@ beforeEach(() => {
   focused = false;
   delete win.webkit;
   resetTerminalHub();
+  resetNativePlatform();
   win.Notification = FakeNotification;
   (globalThis as { Notification?: unknown }).Notification = FakeNotification;
   localStorage.clear();
@@ -377,6 +380,80 @@ test("the launch buttons wait for Hivemind Server and tmux, and say what is miss
   await ready();
   assert.equal(open().disabled, false);
   assert.equal(sheet.view.host.querySelector(".term-notice"), null);
+});
+
+// The iPhone/iPad app (docs/remote-access.md): the same launches, started on the Mac, with no Terminal.app.
+const readyOnIos = () => fromApp({ type: "terminal-status", tmux: "available", broker: "connected", platform: "ios" });
+
+test("on iOS the Launch agent sheet starts sessions on the Mac and opens the in-app terminal, never Terminal.app", async () => {
+  installBridge();
+  const sheet = await mountLaunchSheet();
+  await readyOnIos();
+  assert.equal(sheet.button(/Terminal/), undefined, "no Open in Terminal on iOS");
+  assert.ok(sheet.button(/^Copy command$/), "Copy stays");
+  assert.match(sheet.view.host.textContent ?? "", /tmux session on your Mac/);
+  const start = sheet.button(/^Start on Mac$/)!;
+  assert.equal(start.disabled, false);
+  assert.equal(start.className, "primary launch-background");
+  await act(async () => { start.click(); });
+  const [message] = launchesPosted();
+  assert.equal(message.openInTerminal, false);
+  assert.ok(sheet.button(/^Launching…$/)?.disabled);
+  await fromApp({ type: "terminal-launched", id: message.id, names: ["hm-acme-new-1"], created: ["hm-acme-new-1"], errors: [] });
+  // The sheet gives way to the session's terminal.
+  assert.equal(sheet.view.host.querySelector(".launch-sheet"), null);
+  const sessions = sheet.view.host.querySelector("[aria-label='Terminal sessions']");
+  assert.ok(sessions, "the sessions sheet replaces the launch sheet");
+  assert.equal(sessions.querySelector(".sheet-head h2")?.textContent, "hm-acme-new-1");
+  assert.equal(Array.from(sessions.querySelectorAll("button")).some(b => /Open in Terminal/.test(b.textContent ?? "")), false);
+});
+
+test("the iOS app's answer to ready names the platform before any terminal status", async () => {
+  const { calls, handlers } = recorder();
+  assert.equal(runNativeCommand({ command: "ready" }, handlers), false, "a ready answer names its platform");
+  assert.equal(reportedNativePlatform(), null);
+  assert.equal(runNativeCommand({ command: "ready", platform: "ios" }, handlers), true);
+  assert.deepEqual(calls, [], "no handler runs");
+  assert.equal(reportedNativePlatform(), "ios");
+
+  installBridge();
+  const sheet = await mountLaunchSheet();
+  assert.equal(sheet.button(/Terminal/), undefined, "never shown on iOS, not even before the first status");
+  assert.equal(sheet.button(/^Start on Mac$/)?.disabled, true);
+});
+
+test("on iOS a failed launch stays on the sheet, and several open the session list", async () => {
+  localStorage.setItem("hivemind-launch", JSON.stringify({ resume: true }));
+  installBridge();
+  const sheet = await mountLaunchSheet([seat("a1", "Atlas", "brain"), seat("a2", "Bea", "worker")]);
+  await readyOnIos();
+  assert.equal(sheet.button(/terminals/), undefined);
+  await act(async () => { sheet.button(/^Start 2 on Mac$/)!.click(); });
+  await fromApp({ type: "terminal-launched", id: launchesPosted()[0].id, names: ["hm-acme-atlas", null], created: ["hm-acme-atlas"],
+    errors: [{ index: 1, code: "cwd-missing", message: "No such folder" }] });
+  assert.match(sheet.view.host.querySelector("[role=alert]")?.textContent ?? "", /Acme - Bea: No such folder/);
+  assert.ok(sheet.view.host.querySelector(".launch-sheet"), "an error keeps the sheet");
+
+  await act(async () => { sheet.button(/^Start 2 on Mac$/)!.click(); });
+  await fromApp({ type: "terminal-launched", id: launchesPosted()[1].id, names: ["hm-acme-atlas", "hm-acme-bea"], created: ["hm-acme-bea"],
+    errors: [] });
+  assert.equal(sheet.view.host.querySelector(".launch-sheet"), null);
+  assert.equal(sheet.view.host.querySelector("[aria-label='Terminal sessions'] .sheet-head h2")?.textContent, "Terminal sessions");
+});
+
+test("on iOS the launch notice names the Mac and offers no Start Hivemind Server", async () => {
+  installBridge();
+  const sheet = await mountLaunchSheet();
+  await fromApp({ type: "terminal-status", tmux: "unknown", broker: "unavailable", platform: "ios" });
+  const start = sheet.button(/^Start on Mac$/)!;
+  assert.equal(start.disabled, true);
+  assert.equal(start.title, REMOTE_BROKER_UNAVAILABLE_HINT);
+  assert.equal(sheet.view.host.querySelector(".term-notice button"), null);
+  await fromApp({ type: "terminal-status", tmux: "missing", broker: "connected", platform: "ios" });
+  assert.equal(start.title, REMOTE_TMUX_INSTALL_HINT);
+  const notice = sheet.view.host.querySelector(".term-notice");
+  assert.equal(notice?.textContent, "Install tmux on your Mac: brew install tmux");
+  assert.equal(notice?.querySelector("code")?.textContent, "brew install tmux");
 });
 
 test("a workspace path the app cannot cd into disables the launch buttons but not Copy", async () => {

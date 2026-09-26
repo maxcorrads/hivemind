@@ -13,8 +13,9 @@ const session = { name: "hm-acme-atlas", project: "acme", agent: "Atlas", alive:
 test("parses every terminal event the app sends", () => {
   assert.equal(TERMINAL_EVENT, "hivemind:terminal");
   const events: unknown[] = [
-    { type: "terminal-status", tmux: "missing", broker: "connected" },
-    { type: "terminal-status", tmux: "unknown", broker: "unverified" },
+    { type: "terminal-status", tmux: "missing", broker: "connected", platform: "macos" },
+    { type: "terminal-status", tmux: "unknown", broker: "unverified", platform: "macos" },
+    { type: "terminal-status", tmux: "available", broker: "connecting", platform: "ios" },
     { type: "sessions", items: [session, { ...session, name: "hm-acme-new-1", agent: null, project: null }] },
     { type: "sessions", items: [] },
     { type: "terminal-launched", id: "r1", names: ["hm-acme-atlas", null], created: ["hm-acme-atlas"],
@@ -27,6 +28,9 @@ test("parses every terminal event the app sends", () => {
     { type: "terminal-error", id: "a", code: "no-such-session", message: "gone", stream: null },
   ];
   for (const event of events) assert.deepEqual(parseTerminalEvent(event), event);
+  // Hivemind.app on the Mac sends no platform: it is the Mac.
+  assert.deepEqual(parseTerminalEvent({ type: "terminal-status", tmux: "missing", broker: "connected" }),
+    { type: "terminal-status", tmux: "missing", broker: "connected", platform: "macos" });
   // A missing id or stream reads as null, as Swift's NSNull would.
   assert.deepEqual(parseTerminalEvent({ type: "terminal-error", code: "internal", message: "m" }),
     { type: "terminal-error", id: null, code: "internal", message: "m", stream: null });

@@ -2,7 +2,7 @@ import { ArrowLeft, Monitor, SquareTerminal, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Agent, Project } from "../src/shared/types.ts";
 import { Modal } from "./Modal.tsx";
-import type { TerminalSessionInfo } from "./native-bridge.ts";
+import { onMacDesktop, type TerminalSessionInfo } from "./native-bridge.ts";
 import { RelativeTime } from "./RelativeTime.tsx";
 import { TerminalNotice } from "./TerminalNotice.tsx";
 import { TerminalPanel, type ScreenFactory } from "./TerminalView.tsx";
@@ -18,18 +18,21 @@ export function sessionOwner(session: TerminalSessionInfo, agents: Agent[], proj
 }
 
 /**
- * Every Hivemind tmux session (Hivemind.app only), with the agent it belongs to: open it here or in
- * Terminal.app, or terminate it after a confirmation.
+ * Every Hivemind tmux session (the apps only), with the agent it belongs to: open it here or, on the Mac, in
+ * Terminal.app, or terminate it after a confirmation. `initialSession` opens with that session's terminal shown.
  */
-export function SessionsSheet({ agents, projects, onClose, loadScreen }: {
+export function SessionsSheet({ agents, projects, onClose, loadScreen, initialSession = null }: {
   agents: Agent[];
   projects: Project[];
   onClose: () => void;
   loadScreen?: () => Promise<ScreenFactory>;
+  initialSession?: string | null;
 }) {
   const state = useTerminalState();
   const hub = terminalHub();
-  const [open, setOpen] = useState<string | null>(null);
+  // The iPhone/iPad app has no Terminal.app: its sessions show only here, in the page.
+  const terminalApp = onMacDesktop(state.platform);
+  const [open, setOpen] = useState<string | null>(initialSession);
   const [confirm, setConfirm] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -78,9 +81,10 @@ export function SessionsSheet({ agents, projects, onClose, loadScreen }: {
           <div>
             <h2>{open ? viewingOwner?.label ?? open : "Terminal sessions"}</h2>
             <p>{open ? <code>{open}</code>
-              : "Agents launched from Hivemind run in these tmux sessions. Closing a window keeps the session running."}</p>
+              : terminalApp ? "Agents launched from Hivemind run in these tmux sessions. Closing a window keeps the session running."
+                : "Agents launched from Hivemind run in these tmux sessions on your Mac. Closing this keeps them running."}</p>
           </div>
-          {open && (
+          {open && terminalApp && (
             <button type="button" className="btn" onClick={() => openInTerminal(open)}>
               <Monitor size={13} aria-hidden="true" /> Open in Terminal
             </button>
@@ -118,10 +122,12 @@ export function SessionsSheet({ agents, projects, onClose, loadScreen }: {
                           aria-label={`Open ${session.name}`}>
                           <SquareTerminal size={13} aria-hidden="true" /> Open
                         </button>
-                        <button type="button" className="btn" disabled={!session.alive} onClick={() => openInTerminal(session.name)}
-                          aria-label={`Open ${session.name} in Terminal`} title="Open in Terminal.app">
-                          <Monitor size={13} aria-hidden="true" /> Terminal
-                        </button>
+                        {terminalApp && (
+                          <button type="button" className="btn" disabled={!session.alive} onClick={() => openInTerminal(session.name)}
+                            aria-label={`Open ${session.name} in Terminal`} title="Open in Terminal.app">
+                            <Monitor size={13} aria-hidden="true" /> Terminal
+                          </button>
+                        )}
                         <button type="button" className="btn danger" onClick={() => { setError(null); setConfirm(session.name); }}
                           aria-label={`Terminate ${session.name}`} title="Terminate">
                           <Trash2 size={13} aria-hidden="true" />

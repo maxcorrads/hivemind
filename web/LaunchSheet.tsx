@@ -4,7 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Agent, Project, Seniority } from "../src/shared/types.ts";
 import { modelChoiceGroups, parseChoiceId, selectedChoiceId } from "../src/shared/launch-models.ts";
 import { api } from "./api.ts";
-import { inNativeApp, terminalSessionLaunchProblem, type TerminalSessionLaunch } from "./native-bridge.ts";
+import { inNativeApp, onMacDesktop, terminalSessionLaunchProblem, type TerminalSessionLaunch } from "./native-bridge.ts";
+import { SessionsSheet } from "./SessionsSheet.tsx";
 import { TerminalNotice } from "./TerminalNotice.tsx";
 import { agentTerminalSession, terminalBlocker, terminalHub, useTerminalState, type TerminalLaunched } from "./use-terminal.ts";
 import { projectLaunchTools, type LaunchContext } from "../src/shared/launch-prompt.ts";
@@ -222,6 +223,10 @@ export function LaunchSheet({
   const [tunes, setTunes] = useState<Record<string, { model: string; effort: string }>>(initial.tunes);
   const [copied, setCopied] = useState<string | null>(null);
   const terminals = useTerminalState();
+  // Terminal.app is the Mac's. The iPhone/iPad app starts sessions on the Mac and shows them in the page instead.
+  const terminalApp = native && onMacDesktop(terminals.platform);
+  // Off the Mac, after a launch: the sheet gives way to the sessions, opened on the one it started.
+  const [started, setStarted] = useState<{ session: string | null } | null>(null);
   const [launching, setLaunching] = useState(false);
   const [launchNote, setLaunchNote] = useState<{ error: boolean; text: string } | null>(null);
   const copiedTimer = useRef<number | null>(null);
@@ -421,7 +426,8 @@ export function LaunchSheet({
   const terminalKey = resume ? "terminal-all" : "terminal-one";
   const backgroundKey = resume ? "background-all" : "background-one";
   const terminalLabel = copied === terminalKey ? "Opened" : many ? `Open ${terminalLaunches.length} terminals` : "Open in Terminal";
-  const backgroundLabel = copied === backgroundKey ? "Started" : many ? `Start ${terminalLaunches.length} in background` : "Start in background";
+  const backgroundLabel = !terminalApp ? (launching ? "Launching…" : many ? `Start ${terminalLaunches.length} on Mac` : "Start on Mac")
+    : copied === backgroundKey ? "Started" : many ? `Start ${terminalLaunches.length} in background` : "Start in background";
   const describeLaunch = (launches: TerminalSessionLaunch[], result: TerminalLaunched) => {
     if (result.errors.length) {
       return { error: true, text: result.errors.map((e) => `${launches[e.index]?.title ?? "Launch"}: ${e.message}`).join("\n") };
@@ -443,7 +449,14 @@ export function LaunchSheet({
       .then((result) => {
         const note = describeLaunch(launches, result);
         setLaunchNote(note);
-        if (!note?.error) markCopied(openInTerminal ? terminalKey : backgroundKey);
+        if (note?.error) return;
+        if (!terminalApp) {
+          // One session opens in its terminal; several open the list, each a tap away.
+          const names = result.names.filter((name): name is string => name !== null);
+          setStarted({ session: names.length === 1 ? names[0]! : null });
+          return;
+        }
+        markCopied(openInTerminal ? terminalKey : backgroundKey);
       })
       .catch((error: Error) => setLaunchNote({ error: true, text: error.message }))
       .finally(() => setLaunching(false));
@@ -468,6 +481,10 @@ export function LaunchSheet({
     extraFlags.trim() && "extra flags",
   ].filter(Boolean).join(" · ") || "defaults off";
 
+  if (started) {
+    return <SessionsSheet agents={agents} projects={projects} onClose={onClose} initialSession={started.session} />;
+  }
+
   return (
     <Modal onClose={onClose}>
       <div className="sheet sheet-wide launch-sheet" role="dialog" aria-modal="true" aria-label="Launch agent" onClick={(e) => e.stopPropagation()}>
@@ -476,8 +493,10 @@ export function LaunchSheet({
           <div>
             <h2>Launch agent</h2>
             <p>
-              {native
+              {terminalApp
                 ? "Choose an agent, then start it in its own tmux session, or copy its launch command. One session = one employee."
+                : native
+                ? "Choose an agent, then start it in its own tmux session on your Mac, or copy its launch command. One session = one employee."
                 : "Choose an agent, then paste its launch command into a new terminal. One terminal = one employee."}
             </p>
           </div>
@@ -812,16 +831,18 @@ export function LaunchSheet({
           {native && (
             <button
               type="button"
-              className="btn launch-background"
+              className={terminalApp ? "btn launch-background" : "primary launch-background"}
               disabled={!canLaunchTerminal}
-              title={terminalProblem ?? "Start in tmux without a window; open it later from Terminal sessions or the agent’s Terminal tab"}
+              title={terminalProblem ?? (terminalApp
+                ? "Start in tmux without a window; open it later from Terminal sessions or the agent’s Terminal tab"
+                : "Start in tmux on your Mac and open its terminal here")}
               onClick={() => onLaunchTerminal(false)}
             >
               <Play size={14} aria-hidden="true" />
               {backgroundLabel}
             </button>
           )}
-          {native && (
+          {terminalApp && (
             <button
               type="button"
               className="primary launch-terminal"

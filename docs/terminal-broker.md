@@ -5,8 +5,9 @@ a **terminal broker** inside its own process. The broker owns a dedicated tmux
 server and the PTYs attached to it, and it serves clients over a small,
 versioned JSON protocol. Hivemind.app is the first client. It relays the
 broker to the page (the Launch sheet, the Sessions panel and the in-app
-terminal) through the WebKit bridge. An iOS/iPad client will later use the same
-protocol over a remote transport.
+terminal) through the WebKit bridge. The iPhone/iPad app is the second: it
+speaks the same protocol through Hivemind Server.app's
+[remote gateway](remote-access.md#terminal-broker), over TLS.
 
 The Node server has no part in this. It has no API that runs a command or
 touches a terminal. It only stores the session name an agent reports on join,
@@ -178,9 +179,14 @@ transport carries it.
   `sockaddr_un` allows (103 bytes, `BrokerPaths.fitsSocketAddress`) is reported
   as an error, never truncated. Each accepted connection must come from the
   same user (`getpeereid`); any other is closed at once.
-- **Later: remote over TLS**, for the iOS/iPad client. It will use the same
-  frames and the same `hello`, with its own pairing for the token. Until then,
-  the broker listens on nothing but the Unix socket.
+- **Through the remote gateway** (off by default), for the iPhone/iPad app: a
+  WebSocket at `wss://<gateway>/_hivemind/broker`, one frame per text
+  message, with the same frames and the same `hello`. The broker still
+  listens on nothing but the Unix socket: the gateway, inside Hivemind
+  Server.app, is a local client of it that holds `broker.token` itself and
+  puts it into the device's `hello`, so no device ever sees the token. A
+  device is let in by its pairing and device session instead
+  ([Remote access](remote-access.md#terminal-broker)).
 
 ## Authentication
 
@@ -306,8 +312,9 @@ keep running, and the next broker finds them. The broker logs to
 ## Clients
 
 `BrokerClient` (HivemindKit, `ClientBroker.swift`) is the client Hivemind.app
-uses, over `UnixSocketBrokerConnector` (`ClientTransport.swift`); an iOS client
-will reuse it over its own transport.
+uses, over `UnixSocketBrokerConnector` (`ClientTransport.swift`). The iOS app
+reuses it over `WebSocketBrokerConnector` (`GatewayBrokerTransport.swift`),
+which sends the placeholder token the gateway replaces.
 
 - It reads `broker.token` before every connection (refusing a symlink or a file
   over 256 bytes) and sends `hello{version: 1, token, client: "Hivemind.app"}`
@@ -360,9 +367,12 @@ reported on join, stored as `agent.terminalSession` (migration 31,
 
 ## Bridge (Hivemind.app ↔ page)
 
-Only Hivemind.app has the bridge. In a browser none of this exists, and the page
+Only the apps have the bridge: Hivemind.app on the Mac, and the iPhone/iPad
+app with the differences listed in
+[Remote access](remote-access.md#terminal-broker) (no Terminal.app, a
+`platform` of `ios`). In a browser none of this exists, and the page
 shows no terminal UI. The app takes these messages only from the main frame of
-the pinned loopback origin, parses them strictly, and drops a message as a
+the pinned loopback origin (on iOS, the paired Mac's gateway origin), parses them strictly, and drops a message as a
 whole if any part is wrong. Each window keeps its own broker connection, so the
 page's stream ids are that connection's ids. Input, resize and detach go only to
 streams this page attached, and a reload, navigation or the connect screen
@@ -391,7 +401,7 @@ App → page: `window.dispatchEvent(new CustomEvent("hivemind:terminal", {detail
 
 | type | fields |
 | --- | --- |
-| `terminal-status` | `tmux`: `available` \| `missing` \| `unknown`; `broker`: `connected` \| `connecting` \| `unavailable` \| `unverified` |
+| `terminal-status` | `tmux`: `available` \| `missing` \| `unknown`; `broker`: `connected` \| `connecting` \| `unavailable` \| `unverified`; `platform`?: `ios` from the iPhone/iPad app, absent from Hivemind.app (read as `macos`) |
 | `sessions` | `items` as the broker sends them, with `null` for a missing project or agent |
 | `terminal-launched` | `id`, `names`, `created`, `errors` |
 | `terminal-attached` | `id`, `stream`, `session` |

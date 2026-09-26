@@ -430,6 +430,104 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
+  ios_app:
+    name: iOS app
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The app targets iOS 26, whose SDK ships with Xcode 26. Use the runner's
+      # default Xcode when it is new enough, else the newest Xcode 26+ it has.
+      - name: Select Xcode 26 or later
+        run: |
+          major="$(xcodebuild -version | sed -n 's/^Xcode \([0-9]*\).*/\1/p')"
+          if [ "${major:-0}" -lt 26 ]; then
+            newest=""
+            for app in /Applications/Xcode_2[6-9]*.app; do if [ -d "$app" ]; then newest="$app"; fi; done
+            if [ -z "$newest" ]; then
+              echo "::error::The iOS app needs Xcode 26 or later; this runner has Xcode ${major:-none}"
+              exit 1
+            fi
+            sudo xcode-select -s "$newest/Contents/Developer"
+          fi
+          xcodebuild -version
+          swift --version
+
+      # Generates ios/Hivemind.xcodeproj with the XcodeGen pinned in
+      # macos/Tools (built from source by SwiftPM, no Homebrew), then builds the
+      # app unsigned (CODE_SIGNING_ALLOWED=NO) for devices and for the
+      # Simulator and packages both into ios/dist/ (docs/ios.md).
+      - name: Build unsigned device and Simulator apps
+        run: ./ios/build.sh
+
+      # xcodebuild test needs a concrete Simulator: the first available iPhone
+      # on the newest iOS runtime from 26.0 up to the selected Xcode's SDK (a
+      # runner may also carry runtimes of other Xcodes, which this one cannot use).
+      - name: Pick an iPhone Simulator
+        id: simulator
+        run: |
+          sdk="$(xcrun --sdk iphonesimulator --show-sdk-version)"
+          udid="$(xcrun simctl list devices available --json | python3 -c '
+          import json, re, sys
+          devices = json.load(sys.stdin)["devices"]
+          sdk = tuple(int(part) for part in sys.argv[1].split(".")[:2])
+          def version(runtime):
+              match = re.search(r"\.iOS-(\d+)-(\d+)$", runtime)
+              return tuple(map(int, match.groups())) if match else None
+          runtimes = sorted((v, r) for r in devices if (v := version(r)) and (26, 0) <= v <= sdk)
+          for _, runtime in reversed(runtimes):
+              phones = [d for d in devices[runtime] if d["name"].startswith("iPhone")]
+              if phones:
+                  print(phones[0]["udid"])
+                  print("Testing on", phones[0]["name"], runtime, file=sys.stderr)
+                  break
+          ' "$sdk")"
+          if [ -z "$udid" ]; then
+            echo "::error::No available iPhone Simulator with iOS 26.0 to $sdk"
+            xcrun simctl list devices available
+            exit 1
+          fi
+          echo "udid=$udid" >> "${GITHUB_OUTPUT}"
+
+      # The only step that boots a Simulator. Simulator builds are signed ad hoc
+      # ("Sign to Run Locally"), which needs no team or certificate.
+      - name: iOS unit tests
+        run: |
+          mkdir -p artifacts
+          xcodebuild test \
+            -project ios/Hivemind.xcodeproj -scheme Hivemind \
+            -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}" \
+            -derivedDataPath ios/build/TestDerivedData \
+            -resultBundlePath artifacts/HivemindTests.xcresult \
+            -quiet
+
+      - name: Upload unsigned .ipa
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Hivemind-iOS-unsigned
+          path: ios/dist/Hivemind-iOS-*-unsigned.ipa
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Upload Simulator app
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Hivemind-iOS-Simulator
+          path: ios/dist/Hivemind-iOS-Simulator-*.zip
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Retain failing iOS test results
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ios-tests-failure
+          path: artifacts/HivemindTests.xcresult
+          retention-days: 7
+          if-no-files-found: ignore
+
   coverage:
     name: Coverage
     needs: [unit_node24, integration_node24]

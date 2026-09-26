@@ -35,6 +35,7 @@ final class ServerAppDelegate: NSObject, NSApplicationDelegate {
     launched = true
     model.controller.launch()
     model.terminals.start()
+    model.remote.startIfEnabled()
   }
 
   /// hivemind-server://start from Hivemind.app's connect screen. Anything
@@ -54,6 +55,7 @@ final class ServerAppDelegate: NSObject, NSApplicationDelegate {
   /// its PTY children at once; tmux sessions (and the agents in them) keep
   /// running.
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    model.remote.stop()
     model.terminals.stop()
     let controller = model.controller
     guard controller.hasChild else {
@@ -87,6 +89,7 @@ private struct ServerMenu: View {
     Text(status.title)
     if let detail = status.detail { Text(detail) }
     Text(model.terminalsStatus.title)
+    if model.remote.isEnabled { Text(model.remote.status.title) }
     Divider()
     Button("Open Hivemind") { model.openHivemind() }
       .keyboardShortcut("o")
@@ -117,8 +120,28 @@ private struct ServerMenu: View {
     Button("Install Command-Line Tool…") { model.installCommandLineTool() }
       .disabled(!model.canInstallCommandLineTool)
     Divider()
+    RemoteAccessMenu(remote: model.remote)
+    Divider()
     Button("About Hivemind Server") { model.showAbout() }
     Button("Quit Hivemind Server") { model.quit() }
       .keyboardShortcut("q")
+  }
+}
+
+/// Remote access for paired iPhones and iPads (docs/remote-access.md).
+private struct RemoteAccessMenu: View {
+  let remote: RemoteAccessService
+
+  var body: some View {
+    Toggle("Remote Access", isOn: Binding(get: { remote.isEnabled }, set: { remote.setEnabled($0) }))
+    Button("Pair a Device…") { remote.openPairing() }
+      .disabled(!remote.canPair)
+    Button("Devices (\(remote.deviceList.count))…") { remote.showDevices() }
+    Menu("Remote Access Settings") {
+      Button("Port: \(remote.port.description)…") { remote.changePort() }
+      Button("Show Remote Access Log") { remote.showLog() }
+      Divider()
+      Button("Reset Identity…") { remote.resetIdentity() }
+    }
   }
 }

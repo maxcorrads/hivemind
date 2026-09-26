@@ -38,6 +38,9 @@ public final class ServerAppController {
       self.stopTimeout = stopTimeout
     }
 
+    // The live launcher wraps Foundation.Process, which iOS lacks; the iOS
+    // app builds HivemindKit but never runs a server.
+    #if os(macOS)
     @MainActor public static func live() -> Dependencies {
       Dependencies(
         launcher: FoundationProcessLauncher(), scheduler: MainQueueScheduler(), probe: LoopbackPortProbe(),
@@ -45,6 +48,7 @@ public final class ServerAppController {
         processStart: ProcessLiveness.startDate, signal: { _ = Darwin.kill($0, $1) },
         baseEnvironment: ProcessInfo.processInfo.environment)
     }
+    #endif
   }
 
   public let paths: HivemindPaths

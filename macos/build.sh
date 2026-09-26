@@ -279,11 +279,15 @@ if [ "$build_server" = 1 ]; then
   # hivemind-server://start is how Hivemind.app asks a running copy to start
   # its server (HivemindKit/ServerAppURLCommand.swift). Agents in the terminal
   # broker's tmux sessions count as this app's for macOS privacy prompts, so
-  # it says why it may reach protected folders.
+  # it says why it may reach protected folders. The opt-in remote gateway
+  # (docs/remote-access.md) listens on private addresses and advertises
+  # _hivemind._tcp; macOS 15+ local network privacy needs both keys for that.
   assemble "Hivemind Server" "$SERVER_BUNDLE_ID" HivemindServer "Hivemind Server" "$SERVER_MIN_MACOS" \
     "  <key>LSUIElement</key><true/>
   <key>NSSupportsAutomaticTermination</key><false/>
   <key>NSSupportsSuddenTermination</key><false/>
+  <key>NSLocalNetworkUsageDescription</key><string>With Remote Access turned on, Hivemind Server lets the iPhones and iPads you paired reach Hivemind over your local network.</string>
+  <key>NSBonjourServices</key><array><string>_hivemind._tcp</string></array>
   <key>NSDocumentsFolderUsageDescription</key><string>Agents you launch from Hivemind run in terminal sessions of Hivemind Server and may work on projects in your Documents folder.</string>
   <key>NSDesktopFolderUsageDescription</key><string>Agents you launch from Hivemind run in terminal sessions of Hivemind Server and may work on projects on your Desktop.</string>
   <key>NSDownloadsFolderUsageDescription</key><string>Agents you launch from Hivemind run in terminal sessions of Hivemind Server and may work on projects in your Downloads folder.</string>

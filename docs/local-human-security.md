@@ -4,6 +4,9 @@
 
 Hivemind remains local-first: no accounts, passwords, remote login, or external
 identity provider. The production listener remains bound to `127.0.0.1`. The
+only way in from another machine is the opt-in
+[remote gateway](#remote-gateway) of Hivemind Server.app, which is off by
+default and leaves this boundary unchanged. The
 supported browser authorities are canonical `127.0.0.1`, `localhost`, and bracketed
 `[::1]` when used by a loopback proxy. Authority parsing and socket-port handling
 are also exercised against a real IPv6 test listener; this does not change the
@@ -86,6 +89,49 @@ use the same-origin Vite proxy. Changing a backend port creates a different
 cookie name; old cookies are harmless but may remain until the browser clears
 session state. Do not configure a proxy that rewrites an untrusted Origin into a
 trusted one.
+
+## Remote gateway
+
+Hivemind Server.app has an optional remote gateway for paired iPhones and iPads
+([Remote access](remote-access.md)). It is **off by default**; while it is off,
+nothing on this page changes in any way. When it is on:
+
+- **The Node server stays loopback-only and unchanged.** It still binds
+  `127.0.0.1`, accepts only the authorities above, and has no new route,
+  header, exception or configuration for remote use. Nothing in it knows the
+  gateway exists.
+- **The gateway is a native local client, not a reverse proxy the server
+  trusts.** To the Node server it is one more local process on
+  `http://127.0.0.1:<port>`, the case the threat model above already covers.
+  It bootstraps its own Human capability with `POST /api/ui/session` from
+  the loopback origin, and sends it on every forwarded request in
+  `X-Hivemind-Human`, the header this policy already allows native Human
+  clients. It uses no `Forwarded`/`X-Forwarded-*` header and removes any a
+  device sends.
+- **Origin is replaced only after the gateway checked it.** A forwarded request
+  carries `Origin: http://127.0.0.1:<port>` and `Host: 127.0.0.1:<port>` only
+  when the device's own `Origin` (if any) was exactly the gateway's https
+  origin and its `Host` named the gateway. That is not the "proxy that rewrites
+  an untrusted Origin into a trusted one" warned against above: an untrusted
+  Origin is refused at the gateway, never rewritten. `/ws` requires it.
+- **The device never holds the Human capability.** Every `Cookie` from a
+  device is dropped, every `Set-Cookie` from the server is removed, and a
+  device's own `X-Hivemind-Human` is replaced. The capability stays in the
+  gateway's memory, as it stays in the server's.
+- **The boundary moves to device authentication.** For requests that arrive
+  through the gateway, "can reach `127.0.0.1`" is replaced by what the gateway
+  checks: TLS 1.3 pinned to the gateway's self-signed certificate, a
+  device token issued once through a single-use QR pairing code, and a
+  short-lived `__Host-`, `Secure`, `HttpOnly`, `SameSite=Strict` device-session
+  cookie made from it, on private network addresses only. A paired device is
+  therefore trusted exactly as the Human at the Mac is, **terminals included**,
+  which is remote command execution on the Mac by design.
+- **It adds nothing for local processes.** The gateway refuses loopback
+  connections, so a local process gains no path it did not already have.
+  Its device records hold only token hashes (`0600`).
+
+The gateway's own checks, limits and threat model are in
+[Remote access](remote-access.md#threat-model).
 
 ## Recovery and mutation safety
 

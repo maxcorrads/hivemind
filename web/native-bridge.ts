@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { terminalSessionName } from "../src/shared/terminal-session.ts";
 import { hashFor, parseHash, type Sel } from "./selection.ts";
 
-// The macOS app (macos/, contract in HivemindKit/Bridge.swift) loads this UI in
-// a WKWebView and registers window.webkit.messageHandlers.hivemind. Everything
-// here is inert in a browser: no handler, no messages, no listener.
+// Hivemind.app on the Mac (macos/) and the iPhone/iPad app (ios/) load this UI
+// in a WKWebView and register window.webkit.messageHandlers.hivemind; the
+// contract is HivemindKit/Bridge.swift. Everything here is inert in a browser:
+// no handler, no messages, no listener.
 
 /** The DOM event native commands arrive as: CustomEvent with detail {command, hash?}. */
 export const NATIVE_EVENT = "hivemind:native";
@@ -19,6 +20,43 @@ export function nativeBridge(win: unknown = globalThis.window): Poster | null {
 }
 
 export const inNativeApp = (win?: unknown) => nativeBridge(win) !== null;
+
+/**
+ * Which app hosts the page. "macos" is Hivemind.app on the Mac, which can open Terminal.app and start Hivemind
+ * Server; "ios" is the iPhone/iPad app, whose terminals run on the Mac and show only in the page. The iOS app names
+ * it in its answer to ready (a "ready" native command) and in every terminal-status; the Mac app predates both.
+ */
+export type NativePlatform = "macos" | "ios";
+
+/**
+ * The platform the app names. Hivemind.app on the Mac predates the field, so an absent one is "macos";
+ * any other value is a device that is not the Mac and is offered nothing that runs on the Mac's desktop.
+ */
+export function nativePlatform(value: unknown): NativePlatform {
+  return value === undefined || value === null || value === "macos" ? "macos" : "ios";
+}
+
+let reported: NativePlatform | null = null;
+const platformListeners = new Set<(platform: NativePlatform) => void>();
+const reportPlatform = (platform: NativePlatform) => {
+  reported = platform;
+  for (const listener of platformListeners) listener(platform);
+};
+
+/**
+ * The platform the app named in its answer to ready, or null before one (always, from Hivemind.app on the Mac).
+ * The terminal hub starts from it, so a sheet opened after the answer never shows the Mac's actions on a device.
+ */
+export const reportedNativePlatform = () => reported;
+
+/** Calls `listener` with every platform the app reports from now on; returns the unsubscribe. */
+export function onNativePlatform(listener: (platform: NativePlatform) => void): () => void {
+  platformListeners.add(listener);
+  return () => { platformListeners.delete(listener); };
+}
+
+/** Tests only: forget the reported platform. */
+export function resetNativePlatform() { reported = null; }
 
 export type NativeMessage =
   | { type: "ready" }
@@ -65,8 +103,13 @@ export type NativeCommandHandlers = {
 /** Runs one native command; false for anything unknown or malformed. */
 export function runNativeCommand(detail: unknown, handlers: NativeCommandHandlers): boolean {
   if (!detail || typeof detail !== "object") return false;
-  const { command, hash } = detail as { command?: unknown; hash?: unknown };
+  const { command, hash, platform } = detail as { command?: unknown; hash?: unknown; platform?: unknown };
   switch (command) {
+    // The iOS app's answer to the page's ready (Hivemind.app on the Mac sends none): which app hosts the page.
+    case "ready":
+      if (typeof platform !== "string") return false;
+      reportPlatform(nativePlatform(platform));
+      return true;
     case "jump": handlers.jump(); return true;
     case "for-you": handlers.forYou(); return true;
     case "new-channel": handlers.newChannel(); return true;
@@ -127,15 +170,17 @@ export function startHivemindServer(win?: unknown): boolean {
   }
 }
 
-// Terminals (Mac app only; docs/terminal-broker.md#bridge). Agents launched from
-// Hivemind run in tmux sessions that Hivemind Server.app's broker owns; the app
-// relays these messages to it. The page side (requests, streams, the session
-// list) is web/use-terminal.ts.
+// Terminals (the apps only; docs/terminal-broker.md#bridge). Agents launched
+// from Hivemind run in tmux sessions that Hivemind Server.app's broker owns on
+// the Mac; the app relays these messages to it, over a Unix socket on the Mac
+// and through the remote gateway on iOS (docs/remote-access.md). The page side
+// (requests, streams, the session list) is web/use-terminal.ts.
 
 /** The DOM event terminal events arrive as: CustomEvent with detail {type, …}. */
 export const TERMINAL_EVENT = "hivemind:terminal";
 
-export const TMUX_INSTALL_HINT = "Install tmux: brew install tmux";
+export const TMUX_INSTALL_COMMAND = "brew install tmux";
+export const TMUX_INSTALL_HINT = `Install tmux: ${TMUX_INSTALL_COMMAND}`;
 export const BROKER_UNAVAILABLE_HINT = "Start Hivemind Server to use terminals";
 /**
  * Broker `unverified`: Hivemind.app could not prove this server is the one Hivemind Server started (a `hivemind
@@ -144,6 +189,24 @@ export const BROKER_UNAVAILABLE_HINT = "Start Hivemind Server to use terminals";
  */
 export const SERVER_UNVERIFIED_HINT =
   "Terminals are off in this window: Hivemind couldn't verify that Hivemind Server started this server. Start the server from Hivemind Server, then reload.";
+/** The same two hints on a device: tmux and the broker are the Mac's, and the device cannot start either. */
+export const REMOTE_TMUX_INSTALL_HINT = `Install tmux on your Mac: ${TMUX_INSTALL_COMMAND}`;
+export const REMOTE_BROKER_UNAVAILABLE_HINT = "Terminals need Hivemind Server running on your Mac";
+
+/** Terminal.app (Open in Terminal) and Start Hivemind Server exist only for the page in Hivemind.app on the Mac. */
+export const onMacDesktop = (platform: NativePlatform | null) => platform === "macos";
+
+export const brokerUnavailableHint = (platform: NativePlatform | null) =>
+  platform === "ios" ? REMOTE_BROKER_UNAVAILABLE_HINT : BROKER_UNAVAILABLE_HINT;
+export const tmuxInstallHint = (platform: NativePlatform | null) => platform === "ios" ? REMOTE_TMUX_INSTALL_HINT : TMUX_INSTALL_HINT;
+/**
+ * Broker `unverified` on a device: the Mac's Hivemind Server could not verify its local terminal broker
+ * (docs/remote-access.md#verified-server), so the gateway does not carry terminals.
+ */
+export const REMOTE_SERVER_UNVERIFIED_HINT =
+  "Terminals are off: Hivemind Server on your Mac couldn't verify its terminal broker. Restart Hivemind Server on your Mac.";
+export const serverUnverifiedHint = (platform: NativePlatform | null) =>
+  platform === "ios" ? REMOTE_SERVER_UNVERIFIED_HINT : SERVER_UNVERIFIED_HINT;
 
 /** The broker's limits (HivemindKit BrokerLimits); the app drops a message that breaks any. */
 export const TERMINAL_BROKER_LIMITS = {
@@ -172,9 +235,9 @@ export type TerminalSessionLaunch = {
 
 /** Page → app. `id` is the page's own request id (1–64 chars), echoed on the answer. */
 export type TerminalMessage =
-  /** Answered with terminal-launched. openInTerminal: also open a Terminal.app window attached to each. */
+  /** Answered with terminal-launched. openInTerminal: also open a Terminal.app window attached to each (the Mac only). */
   | { type: "terminal-launch"; id?: string; launches: TerminalSessionLaunch[]; openInTerminal: boolean }
-  /** Open a Terminal.app window attached to a running session. */
+  /** Open a Terminal.app window attached to a running session (the Mac only). */
   | { type: "terminal-open"; session: string }
   /** Answered with terminal-attached, then terminal-output until terminal-exit. */
   | { type: "terminal-attach"; id?: string; session: string; cols: number; rows: number }
@@ -210,7 +273,9 @@ export type TerminalLaunchFailure = { index: number; code: string; message: stri
 
 /** App → page, as the detail of a TERMINAL_EVENT. */
 export type TerminalEvent =
-  | { type: "terminal-status"; tmux: "available" | "missing" | "unknown"; broker: "connected" | "connecting" | "unavailable" | "unverified" }
+  /** `platform` is absent from Hivemind.app on the Mac, which predates it; nativePlatform reads that as "macos". */
+  | { type: "terminal-status"; tmux: "available" | "missing" | "unknown"; broker: "connected" | "connecting" | "unavailable" | "unverified";
+      platform: NativePlatform }
   | { type: "sessions"; items: TerminalSessionInfo[] }
   /** names[i] is launches[i]'s session, or null when it failed (see errors). */
   | { type: "terminal-launched"; id: string | null; names: (string | null)[]; created: string[]; errors: TerminalLaunchFailure[] }
@@ -248,7 +313,7 @@ export function parseTerminalEvent(detail: unknown): TerminalEvent | null {
       const { tmux, broker } = detail;
       if (tmux !== "available" && tmux !== "missing" && tmux !== "unknown") return null;
       if (broker !== "connected" && broker !== "connecting" && broker !== "unavailable" && broker !== "unverified") return null;
-      return { type: "terminal-status", tmux, broker };
+      return { type: "terminal-status", tmux, broker, platform: nativePlatform(detail.platform) };
     }
     case "sessions": {
       if (!Array.isArray(detail.items)) return null;

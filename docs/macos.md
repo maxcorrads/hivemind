@@ -13,8 +13,10 @@ server you started yourself with `hivemind serve`.
 | **Hivemind.app** | The Human UI in native windows. Each window is a WebKit view of `http://127.0.0.1:<port>/`, served by the local server. |
 
 The apps are **unsigned** for now: they carry only an ad-hoc signature (see
-[Opening unsigned apps](#opening-unsigned-apps)). Developer ID signing,
-notarization and connecting to a remote server come in later changes.
+[Opening unsigned apps](#opening-unsigned-apps)). Developer ID signing and
+notarization come in later changes. Hivemind Server.app can also let paired
+iPhones and iPads in, through an opt-in [remote gateway](#remote-access) that
+is off by default.
 
 ## Hivemind Server.app
 
@@ -35,6 +37,9 @@ listens on, and the last error line when there is one. From the menu you can:
   to approve it, the item reads "(needs approval)" and the app opens
   System Settings → General → Login Items.
 - **Install command-line tool**: see [Command-line tool](#command-line-tool).
+- **Remote Access**, **Pair a Device…**, **Devices (N)…** and **Remote Access
+  Settings** (Port…, Show Remote Access Log, Reset Identity…): see
+  [Remote access](#remote-access).
 
 A second status line, **Terminals: …**, shows the [terminal broker](terminal-broker.md):
 how many Hivemind tmux sessions run and how many are open in Hivemind.app, or
@@ -280,7 +285,8 @@ trusted as the UI itself is. What limits this:
   cannot read your files; the page never sees the token.
 - The Node server has no terminal API at all, so a client that only talks HTTP
   to it (another app, a browser tab, an agent) cannot reach a terminal; only a
-  page loaded in Hivemind.app can. See the
+  page loaded in Hivemind.app can, or in the iOS app of a paired device through
+  the [remote gateway](#remote-access). See the
   [broker's security notes](terminal-broker.md#security-notes).
 
 The page itself is the local server's own UI. The protections that keep other
@@ -292,6 +298,36 @@ code out of it, and so out of this feature, are the ones in
 To debug the page, run
 `defaults write com.maxcorrads.hivemind webInspector -bool true` and reopen the
 window: it can then be inspected from Safari's Develop menu (macOS 13.3+).
+
+## Remote access
+
+Off by default. When you turn on **Remote Access** in the Hivemind Server menu
+(it asks for confirmation first), the app runs a **remote gateway**: a TLS
+listener (port `7443` by default, **Remote Access Settings → Port…**) on the
+Mac's private network addresses only, so paired iPhones and iPads can use
+Hivemind through the [iOS and iPadOS app](ios.md). **Pair a Device…** shows a QR
+code that is valid for 5 minutes and used once; **Devices (N)…** lists the
+paired devices and revokes them. **Reset Identity…** makes a new certificate
+and revokes every device. While it is on, a status line in the menu shows it.
+
+The first time it listens, macOS may ask to allow incoming connections
+(Firewall) and Local Network access. Because the app is signed ad hoc, macOS
+also asks once after each update whether it may use its Keychain key ("Hivemind
+Server remote access"); choose **Always Allow**. See
+[What you see on the Mac](remote-access.md#what-you-see-on-the-mac).
+
+> [!WARNING]
+> A paired device has the full Human UI **and the terminals**: it can start
+> agents running commands of its choosing and type into their sessions. That
+> is remote command execution on this Mac, as you, by design.
+
+The Node server is not changed by any of this: it still listens on `127.0.0.1`
+only, and the gateway reaches it as one more local native client, the way
+Hivemind.app does. Terminals go from the device to the same
+[terminal broker](terminal-broker.md), through the gateway, which holds the
+broker token itself. The protocol, network scope, certificate pinning, tokens,
+revocation, what the gateway rewrites and its limits are in
+[Remote access](remote-access.md).
 
 ## Files and locations
 
@@ -305,6 +341,10 @@ window: it can then be inspected from Safari's Develop menu (macOS 13.3+).
 | Hivemind's tmux config | `~/Library/Application Support/Hivemind/tmux.conf`, rewritten on every broker start |
 | App settings | Each app's own preferences (`com.maxcorrads.hivemind`, `com.maxcorrads.hivemind.server`) |
 | Open in Terminal scripts | `$TMPDIR/Hivemind/terminal/`, each deleted when Terminal runs it |
+| Paired devices ([remote access](remote-access.md#devices-and-revocation)) | `~/Library/Application Support/Hivemind/devices.json` (`0600`), token hashes only |
+| Remote gateway identity | The login Keychain: a self-signed certificate and its P-256 private key, labelled "Hivemind Server remote access" |
+| Remote gateway log | `~/Library/Logs/Hivemind/gateway.log` (**Show Remote Access Log**) |
+| Remote access settings | `remoteAccess` and `remoteAccessPort` in `com.maxcorrads.hivemind.server`'s preferences |
 
 Backup and restore of the data folder work the same as for any other server:
 see [Storage, backup and restore](storage-and-backup.md). Stop the server from
@@ -350,8 +390,11 @@ the discovery file, unless `HIVEMIND_URL` or `HIVEMIND_HOME` is already set.
 
 The apps do not change the [Local Human security boundary](local-human-security.md):
 
-- The server still listens on `127.0.0.1` only. There is no LAN or remote
-  access and no account system.
+- The server still listens on `127.0.0.1` only, and there is no account
+  system. The only way in from another machine is the opt-in
+  [remote gateway](#remote-access), which is part of Hivemind Server.app, not
+  of the server, and reaches the server as a local native client
+  ([Local Human security boundary](local-human-security.md#remote-gateway)).
 - Hivemind.app loads the UI from `http://127.0.0.1:<port>/`, never from `file://`
   or a custom URL scheme. The Human session therefore passes the same exact
   Origin/Host checks as in a browser. The app does not add or weaken any server
@@ -436,8 +479,9 @@ in `macos/build.sh` together. Take the checksum from
 The Swift code lives in `macos/`:
 
 - `HivemindKit` holds all the logic that can be tested without AppKit, a network
-  or a child process, the terminal broker's included. It uses Foundation only,
-  so a later iOS/iPad client can reuse it.
+  or a child process, the terminal broker's and the remote gateway's included.
+  It uses Foundation only and builds for iOS too: the
+  [iOS and iPadOS app](ios.md) reuses it.
 - `HivemindApp` and `HivemindServerApp` are thin app shells over it.
 
 Its tests use fake processes, a fake tmux and fake PTYs, and never start node or
@@ -447,7 +491,8 @@ tmux, open a PTY or a socket:
 swift test --package-path macos
 ```
 
-CI runs those tests and `./macos/build.sh` on every PR in the `macOS apps` job.
+CI runs those tests and `./macos/build.sh` on every PR in the `macOS apps` job
+(the iOS app has a job of its own; see [iOS and iPadOS app](ios.md#tests)).
 The job uploads both bundles as zipped workflow artifacts. Each release attaches
 `Hivemind-macOS-<version>.zip` and `Hivemind-Server-macOS-<version>.zip`, lists
 them in `SHA256SUMS.txt` and records build provenance for them. See
@@ -457,4 +502,5 @@ them in `SHA256SUMS.txt` and records build provenance for them. See
 
 - Developer ID signing and notarization. Node.js will need the hardened runtime
   with JIT entitlements.
-- Connecting Hivemind.app to a server on another machine.
+- Connecting Hivemind.app to a Hivemind Server on another Mac. iPhones and
+  iPads already can, through the [remote gateway](#remote-access).

@@ -1,4 +1,4 @@
-/* Terminals (Hivemind.app only; web/TerminalView.tsx, web/SessionsSheet.tsx, web/TerminalNotice.tsx): the in-app
+/* Terminals (the apps only; web/TerminalView.tsx, web/SessionsSheet.tsx, web/TerminalNotice.tsx): the in-app
    terminal, the Terminal sessions sheet and its sidebar entry, the roster's session icon and the notices shown when
    Hivemind Server or tmux is missing. xterm's own sheet loads with xterm (web/use-terminal-xterm.ts). */
 
@@ -25,6 +25,8 @@
   border-radius: 8px; background: var(--sunk); color: var(--ink); font-family: var(--mono); font-size: 13px; touch-action: manipulation; }
 .term-keys > button[aria-pressed="true"] { background: var(--accent); border-color: transparent; color: var(--accent-ink); }
 @media (pointer: coarse) { .term-keys { display: flex; } }
+/* The iPhone/iPad app always: an iPad with a trackpad reports a fine pointer, and its keyboard may have no Esc. */
+.term[data-platform="ios"] .term-keys { display: flex; }
 
 .term-empty { flex: 1 1 auto; display: grid; place-items: center; padding: 24px; }
 
