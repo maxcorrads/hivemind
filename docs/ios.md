@@ -208,12 +208,15 @@ swift run --package-path macos/Tools xcodegen generate --spec ios/project.yml
 
 1. Checks that the bundle identifier in `ios/project.yml` equals `BundleID.ios`
    in `macos/Sources/HivemindKit/Identity.swift`.
-2. Generates the project with the pinned XcodeGen.
-3. Builds arm64 for devices and for the Simulator with `CODE_SIGNING_ALLOWED=NO`,
+2. Renders the app icon again if `web/public/icon.svg` or
+   `ios/scripts/render-icon.swift` changed since it was rendered (see below).
+3. Generates the project with the pinned XcodeGen.
+4. Builds arm64 for devices and for the Simulator with `CODE_SIGNING_ALLOWED=NO`,
    with the version from `package.json` and the build number from the commit
    count.
-4. Checks each app's bundle identifier, version and that it is arm64 only.
-5. Writes `ios/dist/Hivemind-iOS-<version>-unsigned.ipa` (`Payload/Hivemind.app`,
+5. Checks each app's bundle identifier, version, that it is arm64 only, and
+   that the icon is compiled in (`Assets.car`, `CFBundleIcons` naming `AppIcon`).
+6. Writes `ios/dist/Hivemind-iOS-<version>-unsigned.ipa` (`Payload/Hivemind.app`,
    zipped) and `ios/dist/Hivemind-iOS-Simulator-<version>.zip`.
 
 It never signs, installs, boots a Simulator or runs the app. The generated
@@ -221,6 +224,15 @@ project, `Sources/Info.plist`, `ios/build/` and `ios/dist/` are gitignored.
 Edit `ios/project.yml`, never the project: Info.plist keys (camera, local
 network and Bonjour, the `hivemind-pair` URL scheme, multiple scenes,
 `NSAllowsLocalNetworking`, no background modes) are written from it.
+
+The app icon is the artwork of `web/public/icon.svg`, as on the Mac, in
+`ios/Sources/Assets.xcassets/AppIcon.appiconset`: one 1024×1024 PNG per
+appearance, full-bleed and square (iOS applies the mask). The light icon is
+opaque, on the artwork's dark background; the dark one is the artwork on
+transparent, over the system's dark backdrop; the tinted one is its luminance
+in grayscale on black. `ios/scripts/render-icon.swift` renders all three, and
+`ios/scripts/render-icon.sha256` records the SVG and script they came from, so
+`ios/build.sh` renders them again only after a change; commit the result.
 
 The app target depends on `HivemindKit` from the local `macos` package, the
 same Foundation-only library the macOS apps use. The pairing, session, gateway

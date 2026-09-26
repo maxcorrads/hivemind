@@ -16,6 +16,11 @@
 #                                                  sign it yourself to install it
 #   ios/dist/Hivemind-iOS-Simulator-<version>.zip  Hivemind.app for the Simulator
 #
+# The app icon (ios/Sources/Assets.xcassets/AppIcon.appiconset) is rendered
+# from web/public/icon.svg by ios/scripts/render-icon.swift. It is committed;
+# when icon.svg or the script changed since it was rendered, this script
+# renders it again first (commit the result).
+#
 # The unit tests (ios/Tests) need a booted Simulator, so this script never
 # runs them; CI does, with xcodebuild test (docs/ios.md#tests).
 #
@@ -36,7 +41,7 @@ for arg in "$@"; do
     --debug) configuration="Debug" ;;
     --no-package) package=0 ;;
     --skip-generate) generate=0 ;;
-    -h|--help) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "build.sh: unknown option $arg (see --help)" >&2; exit 64 ;;
   esac
 done
@@ -69,6 +74,20 @@ SPEC_BUNDLE_ID="$(sed -n 's/^ *PRODUCT_BUNDLE_IDENTIFIER: *\(com\.[A-Za-z0-9.]*\
 [ "$KIT_BUNDLE_ID" = "$SPEC_BUNDLE_ID" ] \
   || die "bundle id differs: Identity.swift has '$KIT_BUNDLE_ID', project.yml '$SPEC_BUNDLE_ID'"
 
+# The icon set is rendered from icon.svg; render-icon.sha256 records the
+# icon.svg and render-icon.swift it was rendered from.
+ICON_SVG="$REPO/web/public/icon.svg"
+ICON_SCRIPT="$IOS/scripts/render-icon.swift"
+ICON_SET="$IOS/Sources/Assets.xcassets/AppIcon.appiconset"
+ICON_STAMP="$IOS/scripts/render-icon.sha256"
+ICON_KEY="$(cat "$ICON_SVG" "$ICON_SCRIPT" | shasum -a 256 | cut -d' ' -f1)"
+if [ "$(cat "$ICON_STAMP" 2>/dev/null)" != "$ICON_KEY" ] \
+  || [ ! -f "$ICON_SET/AppIcon.png" ] || [ ! -f "$ICON_SET/AppIcon-Dark.png" ] || [ ! -f "$ICON_SET/AppIcon-Tinted.png" ]; then
+  step "Icon: rendering $ICON_SVG (commit ios/Sources/Assets.xcassets and ios/scripts/render-icon.sha256)"
+  swift "$ICON_SCRIPT" "$ICON_SVG" "$ICON_SET"
+  echo "$ICON_KEY" > "$ICON_STAMP"
+fi
+
 if [ "$generate" = 1 ]; then
   step "XcodeGen (pinned in macos/Tools)"
   swift run --package-path "$REPO/macos/Tools" --configuration release xcodegen \
@@ -89,7 +108,7 @@ xcode_build() {
     -quiet
 }
 
-# Checks a built app: bundle id, version, and arm64 only.
+# Checks a built app: bundle id, version, arm64 only, and the compiled icon.
 APP=""
 check_app() {
   local platform="$1"
@@ -102,6 +121,10 @@ check_app() {
   [ "$id" = "$KIT_BUNDLE_ID" ] || die "$APP has bundle id $id"
   [ "$version" = "$VERSION" ] || die "$APP has version $version, not $VERSION"
   [ "$archs" = "arm64" ] || die "$APP is $archs, not arm64 only"
+  local icon
+  [ -f "$APP/Assets.car" ] || die "$APP has no Assets.car (the app icon)"
+  icon="$(plutil -extract CFBundleIcons.CFBundlePrimaryIcon.CFBundleIconName raw -o - "$APP/Info.plist" 2>/dev/null || true)"
+  [ "$icon" = "AppIcon" ] || die "$APP has no AppIcon in CFBundleIcons"
 }
 
 mkdir -p "$BUILD"

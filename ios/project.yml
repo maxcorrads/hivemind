@@ -56,6 +56,11 @@ targets:
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
         SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: NO
         GENERATE_INFOPLIST_FILE: NO
+        # Sources/Assets.xcassets: the single-size 1024x1024 icon with light,
+        # dark and tinted variants, rendered from web/public/icon.svg by
+        # ios/scripts/render-icon.swift (ios/build.sh keeps it current). actool
+        # adds CFBundleIcons to the built Info.plist.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
       # Written by XcodeGen on every generate (gitignored); edit the keys here.
       path: Sources/Info.plist
