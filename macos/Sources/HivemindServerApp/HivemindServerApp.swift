@@ -123,7 +123,7 @@ private struct ServerMenu: View {
     Button("Install Command-Line Tool…") { model.installCommandLineTool() }
       .disabled(!model.canInstallCommandLineTool)
     Divider()
-    RemoteAccessMenu(remote: model.remote)
+    RemoteAccessMenu(model: model)
     Divider()
     Button("About Hivemind Server") { model.showAbout() }
     Button("Quit Hivemind Server") { model.quit() }
@@ -133,9 +133,13 @@ private struct ServerMenu: View {
 
 /// Remote access for paired iPhones and iPads (docs/remote-access.md).
 private struct RemoteAccessMenu: View {
-  let remote: RemoteAccessService
+  // Observed like ServerMenu: a plain RemoteAccessService reference never changes, so SwiftUI would
+  // skip re-rendering this submenu and keep showing the state from launch (toggle unchecked, Pair
+  // a Device… disabled). RemoteAccessService reports changes through the model's objectWillChange.
+  @ObservedObject var model: ServerMenuModel
 
   var body: some View {
+    let remote = model.remote
     Toggle("Remote Access", isOn: Binding(get: { remote.isEnabled }, set: { remote.setEnabled($0) }))
     Button("Pair a Device…") { remote.openPairing() }
       .disabled(!remote.canPair)
