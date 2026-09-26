@@ -1,17 +1,19 @@
-import { ChevronRight, Copy, Terminal, X } from "lucide-react";
+import { ChevronRight, Copy, SquareTerminal, Terminal, X } from "lucide-react";
 import { Modal } from "./Modal.tsx";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Agent, Project, Seniority } from "../src/shared/types.ts";
 import { modelChoiceGroups, parseChoiceId, selectedChoiceId } from "../src/shared/launch-models.ts";
 import { api } from "./api.ts";
+import { inNativeApp, launchInTerminal, terminalLaunchProblem, type TerminalLaunch } from "./native-bridge.ts";
 import { projectLaunchTools, type LaunchContext } from "../src/shared/launch-prompt.ts";
 import {
   EFFORTS,
-  buildLaunchBlock,
+  buildLaunchCommand,
   buildRosterPaste,
   codexSessionTitle,
   effectiveSoftware,
   resolveLaunchTune,
+  launchBlockText,
   softwareFamily,
   type LaunchRole,
 } from "../src/shared/launch-prompt.ts";
@@ -197,6 +199,8 @@ export function LaunchSheet({
   onClose: () => void;
 }) {
   const [initial] = useState(loadSaved);
+  // Hivemind.app registers the bridge before the page loads, so this never changes.
+  const [native] = useState(() => inNativeApp());
   const [software, setSoftware] = useState(initial.software);
   const [extraFlags, setExtraFlags] = useState(initial.extraFlags);
   const [softwareUsed, setSoftwareUsed] = useState(initial.softwareUsed);
@@ -274,20 +278,18 @@ export function LaunchSheet({
   const built = useMemo(() => {
     try {
       if (contextError) throw new Error(contextError);
-      return {
-        ok: true as const,
-        text: buildLaunchBlock({
-          ...shared,
-          ...projectLaunchTools(launchContext, project ?? projects.find((p) => p.slug === projectSlug), role),
-          workspacePath,
-          projectSlug: project?.slug ?? projectSlug,
-          hiveName,
-          role,
-          seniority: role === "worker" ? seniority : null,
-          focus,
-          resume: false,
-        }),
-      };
+      const launch = buildLaunchCommand({
+        ...shared,
+        ...projectLaunchTools(launchContext, project ?? projects.find((p) => p.slug === projectSlug), role),
+        workspacePath,
+        projectSlug: project?.slug ?? projectSlug,
+        hiveName,
+        role,
+        seniority: role === "worker" ? seniority : null,
+        focus,
+        resume: false,
+      });
+      return { ok: true as const, launch, text: launchBlockText(launch) };
     } catch (e) {
       return { ok: false as const, error: String((e as Error).message || e) };
     }
@@ -307,25 +309,21 @@ export function LaunchSheet({
           return { agent, hive, ok: false as const, error: "not an agent", text: "" };
         }
         if (contextErrors[hive?.slug ?? ""]) throw new Error(contextErrors[hive!.slug]);
-        return {
-          agent,
-          hive,
-          ok: true as const,
-          text: buildLaunchBlock({
-            ...shared,
-            ...projectLaunchTools(contexts[hive?.slug ?? ""], hive, agent.role),
-            model: seat.model,
-            effort: seat.effort,
-            workspacePath: path,
-            projectSlug: hive?.slug ?? agent.project ?? projectSlug,
-            hiveName: hive?.name ?? "",
-            role: agent.role,
-            seniority: agent.role === "worker" ? agent.seniority : null,
-            focus: agent.focus,
-            resume: true,
-            resumeName: agent.name,
-          }),
-        };
+        const launch = buildLaunchCommand({
+          ...shared,
+          ...projectLaunchTools(contexts[hive?.slug ?? ""], hive, agent.role),
+          model: seat.model,
+          effort: seat.effort,
+          workspacePath: path,
+          projectSlug: hive?.slug ?? agent.project ?? projectSlug,
+          hiveName: hive?.name ?? "",
+          role: agent.role,
+          seniority: agent.role === "worker" ? agent.seniority : null,
+          focus: agent.focus,
+          resume: true,
+          resumeName: agent.name,
+        });
+        return { agent, hive, ok: true as const, launch, text: launchBlockText(launch) };
       } catch (e) {
         return { agent, hive, ok: false as const, error: String((e as Error).message || e), text: "" };
       }
@@ -388,17 +386,33 @@ export function LaunchSheet({
     markCopied(key);
   };
 
+  const seatTitle = (hive: string, agent: string) => codexSessionTitle(hive, agent) || agent;
   const allText = buildRosterPaste(
     resumeBlocks
       .filter((b) => b.ok)
       .map((b) => ({
-        title: codexSessionTitle(b.hive?.name ?? "", b.agent.name) || b.agent.name,
+        title: seatTitle(b.hive?.name ?? "", b.agent.name),
         text: b.text,
       })),
   );
 
   const canCopyOne = built.ok && projects.length > 0;
   const canCopyAll = resume && resumeBlocks.length > 0 && resumeBlocks.every((b) => b.ok);
+
+  // Hivemind.app only: the same launches as the copied text, one Terminal window each.
+  const terminalLaunches: TerminalLaunch[] = resume
+    ? (canCopyAll ? resumeBlocks.flatMap((b) => b.ok ? [{ title: seatTitle(b.hive?.name ?? "", b.agent.name), ...b.launch }] : []) : [])
+    : (canCopyOne && built.ok ? [{ title: seatTitle(hiveName, `new ${role}`), ...built.launch }] : []);
+  const terminalProblem = terminalLaunches.length ? terminalLaunchProblem(terminalLaunches) : null;
+  const canOpenTerminal = native && terminalLaunches.length > 0 && !terminalProblem;
+  const terminalKey = resume ? "terminal-all" : "terminal-one";
+  const terminalLabel = copied === terminalKey ? "Opened"
+    : terminalLaunches.length > 1 ? `Open ${terminalLaunches.length} terminals` : "Open in Terminal";
+  const onOpenTerminal = () => {
+    if (!canOpenTerminal || !launchInTerminal(terminalLaunches)) return;
+    rememberSoftware();
+    markCopied(terminalKey);
+  };
 
   const chooseRole = (next: LaunchRole) => {
     const nextFocus =
@@ -648,6 +662,7 @@ export function LaunchSheet({
                 <p className="help-p">
                   The model at the top (with effort in the name) applies to everyone. Override it on a card if that employee should differ.
                   Copy all pastes a zsh script that opens one macOS Terminal window per employee (title Hive - Name). macOS may ask to control Terminal the first time.
+                  {native && " Open terminals does the same from this app, without the script or the prompt."}
                 </p>
                 {resumeBlocks.map((block) => (
                   <article key={block.agent.id} className="launch-card">
@@ -733,7 +748,7 @@ export function LaunchSheet({
           {resume ? (
             <button
               type="button"
-              className="primary"
+              className={native ? "btn" : "primary"}
               disabled={!canCopyAll}
               onClick={() => void onCopy(allText, "all")}
             >
@@ -743,12 +758,24 @@ export function LaunchSheet({
           ) : (
             <button
               type="button"
-              className="primary"
+              className={native ? "btn" : "primary"}
               disabled={!canCopyOne}
               onClick={() => void onCopy(built.ok ? built.text : "", "one")}
             >
               <Copy size={14} aria-hidden="true" />
               {copied === "one" ? "Copied" : "Copy command"}
+            </button>
+          )}
+          {native && (
+            <button
+              type="button"
+              className="primary launch-terminal"
+              disabled={!canOpenTerminal}
+              title={terminalProblem ?? undefined}
+              onClick={onOpenTerminal}
+            >
+              <SquareTerminal size={14} aria-hidden="true" />
+              {terminalLabel}
             </button>
           )}
         </div>

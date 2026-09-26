@@ -16,6 +16,8 @@ export type SettingsMenuProps = {
   onAdaptiveRouting: () => void;
   onLaunch: () => void;
   onHelp: () => void;
+  /** Bumped by the macOS app's Settings… command to open this menu. */
+  openRequest?: number;
 };
 
 const LAYOUTS: Array<[Layout, string]> = [["rail", "Project rail"], ["unified", "Single sidebar"]];
@@ -26,7 +28,7 @@ let reopenAfterSwitch = 0;
 
 /** The Settings and tools menu: theme, layout, notifications, integrations, launch and help. */
 export function SettingsMenu({ theme, onToggleTheme, layout, onLayout, notifications, telegram, onTelegram, onAdaptiveRouting,
-  onLaunch, onHelp, iconOnly }: SettingsMenuProps & { iconOnly?: boolean }) {
+  onLaunch, onHelp, openRequest, iconOnly }: SettingsMenuProps & { iconOnly?: boolean }) {
   const menu = useRef<HTMLDetailsElement>(null);
   const layoutLabel = useId();
   useEffect(() => {
@@ -40,6 +42,14 @@ export function SettingsMenu({ theme, onToggleTheme, layout, onLayout, notificat
     const group = menu.current?.querySelector('[role="radiogroup"]');
     if (group?.contains(document.activeElement)) group.querySelector<HTMLElement>('[aria-checked="true"]')?.focus();
   }, [layout]);
+  // A copy mounted after a layout switch must not replay an old request.
+  const seenRequest = useRef(openRequest);
+  useEffect(() => {
+    if (openRequest === seenRequest.current || !menu.current) return;
+    seenRequest.current = openRequest;
+    menu.current.open = true;
+    menu.current.querySelector<HTMLElement>('.tools-popover button:not([tabindex="-1"])')?.focus();
+  }, [openRequest]);
   const pick = (next: Layout) => {
     if (next === layout) return;
     reopenAfterSwitch = Date.now();
@@ -76,7 +86,8 @@ export function SettingsMenu({ theme, onToggleTheme, layout, onLayout, notificat
         <button type="button" className="tool-action" title={theme === "dark" ? "Light" : "Dark"} onClick={onToggleTheme}>
           {theme === "dark" ? "Light theme" : "Dark theme"}
         </button>
-        {notifications.supported && (
+        {/* In the macOS app the OS permission stands in for this opt-in. */}
+        {notifications.supported && !notifications.native && (
           <button type="button" className="tool-action" aria-pressed={notifications.enabled}
             title="Notify mentions and direct messages while Hivemind is in the background"
             onClick={() => void notifications.toggle()}>

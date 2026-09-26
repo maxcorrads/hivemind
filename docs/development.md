@@ -14,7 +14,7 @@ PR titles use Conventional Commit syntax because release versioning is derived f
 
 ## Releases
 
-Merges to `main` update an automated draft Release Please PR. When you want a stable release, mark that PR ready for review; CI and CodeQL then validate its current head. Merging the validated release PR creates the SemVer tag and GitHub Release. The release workflow reruns the full checks, builds an installable npm tarball, attaches a SHA-256 checksum, and records GitHub build provenance for the package.
+Merges to `main` update an automated draft Release Please PR. When you want a stable release, mark that PR ready for review; CI and CodeQL then validate its current head. Merging the validated release PR creates the SemVer tag and GitHub Release. The release workflow reruns the full checks and builds an installable npm tarball. It also builds the two Apple Silicon macOS apps as `Hivemind-macOS-X.Y.Z.zip` and `Hivemind-Server-macOS-X.Y.Z.zip`, which are unsigned for now; see [macOS apps](macos.md). All three get a SHA-256 checksum in `SHA256SUMS.txt` and GitHub build provenance.
 
 The generated `.tgz` can be installed directly:
 

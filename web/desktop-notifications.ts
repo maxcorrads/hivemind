@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import type { Channel, Message } from "../src/shared/types.ts";
+import { inNativeApp, notifyNative } from "./native-bridge.ts";
 import { isHumanDm } from "./nav-model.ts";
 import type { Sel } from "./selection.ts";
 
@@ -37,8 +38,13 @@ function loadOptIn() {
  * Opt-in browser notifications, remembered per browser. Nothing is shown
  * unless the Human switched them on and the browser granted permission, and
  * never while the Hivemind tab is focused.
+ *
+ * Inside the macOS app every notice goes to the app instead: the OS permission
+ * replaces the opt-in, and the app (which sees all its windows) decides whether
+ * to show it and turns a click into a "navigate" command.
  */
 export function useDesktopNotifications(channels: Channel[], go: (next: Sel) => void) {
+  const [native] = useState(() => inNativeApp());
   const [optIn, setOptIn] = useState(loadOptIn);
   const [permission, setPermission] = useState<NotificationPermission | "unsupported">(
     () => supported() ? Notification.permission : "unsupported");
@@ -49,7 +55,7 @@ export function useDesktopNotifications(channels: Channel[], go: (next: Sel) => 
   const enabled = optIn && permission === "granted";
 
   const toggle = useCallback(async () => {
-    if (!supported()) return;
+    if (native || !supported()) return;
     let next = !optIn;
     if (next && Notification.permission !== "granted") {
       const granted = await Notification.requestPermission();
@@ -58,17 +64,23 @@ export function useDesktopNotifications(channels: Channel[], go: (next: Sel) => 
     }
     setOptIn(next);
     try { localStorage.setItem(KEY, next ? "on" : "off"); } catch { /* the choice lasts for this tab */ }
-  }, [optIn]);
+  }, [optIn, native]);
 
   const onLiveEvent = useCallback((event: { type: string; payload: unknown }) => {
+    if (native) {
+      const notice = noticeFor(event, channelsRef.current);
+      if (notice) notifyNative(notice);
+      return;
+    }
     if (!enabled) return;
     const notice = noticeFor(event, channelsRef.current);
     if (!notice || (document.visibilityState === "visible" && document.hasFocus())) return;
     const shown = new Notification(notice.title, { body: notice.body, tag: notice.tag, icon: "/icon.png" });
     shown.onclick = () => { window.focus(); goRef.current(notice.target); shown.close(); };
-  }, [enabled]);
+  }, [enabled, native]);
 
-  return { supported: permission !== "unsupported", enabled, blocked: permission === "denied", toggle, onLiveEvent };
+  if (native) return { supported: true, native, enabled: true, blocked: false, toggle, onLiveEvent };
+  return { supported: permission !== "unsupported", native, enabled, blocked: permission === "denied", toggle, onLiveEvent };
 }
 
 export type DesktopNotifications = ReturnType<typeof useDesktopNotifications>;

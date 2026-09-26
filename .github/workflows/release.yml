@@ -20,7 +20,8 @@ jobs:
   release:
     name: Release Please
     runs-on: macos-latest
-    timeout-minutes: 20
+    # The macOS app build adds several minutes to the checks.
+    timeout-minutes: 45
     steps:
       - name: Create or update release PR
         id: release
@@ -77,6 +78,8 @@ jobs:
         with:
           subject-path: ${{ steps.package.outputs.package_file }}
 
+      # The npm package, its SBOM and SHA256SUMS.txt go up first, so a failing
+      # macOS build below can never leave the release without them.
       - name: Attach package to GitHub Release
         if: ${{ steps.release.outputs.release_created }}
         env:
@@ -86,4 +89,49 @@ jobs:
             "${{ steps.package.outputs.package_file }}" \
             release-artifacts/SHA256SUMS.txt \
             release-artifacts/SBOM.cdx.json \
+            --clobber
+
+      # No download cache here: the release always fetches Node.js fresh and
+      # build.sh verifies it against the checksums pinned in the script.
+      - name: Build macOS apps
+        if: ${{ steps.release.outputs.release_created }}
+        id: macos
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift test --package-path macos
+          ./macos/build.sh
+          version="$(node -p 'require("./package.json").version')"
+          ui_zip="release-artifacts/Hivemind-macOS-${version}.zip"
+          server_zip="release-artifacts/Hivemind-Server-macOS-${version}.zip"
+          # ditto keeps the bundles' symlinks, permissions and ad-hoc signatures intact.
+          ditto -c -k --keepParent macos/dist/Hivemind.app "${ui_zip}"
+          ditto -c -k --keepParent "macos/dist/Hivemind Server.app" "${server_zip}"
+          echo "ui_zip=${ui_zip}" >> "${GITHUB_OUTPUT}"
+          echo "server_zip=${server_zip}" >> "${GITHUB_OUTPUT}"
+
+      - name: Attest macOS app provenance
+        if: ${{ steps.release.outputs.release_created }}
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            ${{ steps.macos.outputs.ui_zip }}
+            ${{ steps.macos.outputs.server_zip }}
+
+      # SHA256SUMS.txt gains the zips' lines only together with the zips, and
+      # is replaced on the release in the same upload.
+      - name: Attach macOS apps to GitHub Release
+        if: ${{ steps.release.outputs.release_created }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UI_ZIP: ${{ steps.macos.outputs.ui_zip }}
+          SERVER_ZIP: ${{ steps.macos.outputs.server_zip }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shasum -a 256 "${UI_ZIP}" "${SERVER_ZIP}" >> release-artifacts/SHA256SUMS.txt
+          gh release upload "${{ steps.release.outputs.tag_name }}" \
+            "${UI_ZIP}" \
+            "${SERVER_ZIP}" \
+            release-artifacts/SHA256SUMS.txt \
             --clobber

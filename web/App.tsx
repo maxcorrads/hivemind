@@ -13,6 +13,7 @@ import { channelTitle } from "./labels.ts";
 import { LaunchSheet } from "./LaunchSheet.tsx";
 import { channelBack, mobileScreen, mobileTab, tabTarget, useMobile } from "./mobile-nav.ts";
 import { MobileDms, MobileTabs, projectDms } from "./MobileNav.tsx";
+import { useNativeBridge } from "./native-bridge.ts";
 import { attentionTotal, documentTitle, loadSelectedProject, projectLanding, saveProjectView, saveSelectedProject, type SwitchItem } from "./nav-model.ts";
 import { ProjectPlugins } from "./ProjectPlugins.tsx";
 import { ProjectRail } from "./ProjectRail.tsx";
@@ -193,6 +194,18 @@ export function App() {
   }, [knownProject, selectedProject, sel]);
   const attention = snap ? attentionTotal(snap) : 0;
   useEffect(() => { document.title = documentTitle(attention); }, [attention]);
+  // The macOS app's menus and Dock badge; inert in a browser.
+  const [settingsRequest, setSettingsRequest] = useState(0);
+  const toggleTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
+  useNativeBridge({ ready: Boolean(snap), badge: snap ? attention : null, handlers: {
+    // Opens rather than toggles: a ⌘K the page already handled may reach the app's menu too.
+    jump: () => setSwitcher("all"),
+    forYou: () => { if (selectedProject) navigate({ kind: "inbox", project: selectedProject }); },
+    newChannel: () => { channelSheets.setCreateIn(selectedProject || null); channelSheets.setCreating(true); },
+    settings: () => setSettingsRequest(n => n + 1),
+    toggleTheme,
+    navigate,
+  } });
 
   if (!snap && err) {
     return (
@@ -213,7 +226,7 @@ export function App() {
   }
 
   const settings = {
-    theme, onToggleTheme: () => setTheme((t) => (t === "dark" ? "light" : "dark")), layout, onLayout: setLayout, notifications,
+    theme, onToggleTheme: toggleTheme, layout, onLayout: setLayout, notifications, openRequest: settingsRequest,
     telegram: snap.telegram, onTelegram: () => telegramSheet.openTelegram(snap?.projects ?? []),
     onAdaptiveRouting: () => setAdaptiveRoutingOpen(true), onLaunch: () => openLaunch(), onHelp: () => setHelpOpen(true),
   };

@@ -38,6 +38,11 @@ its effective scope:
   validation remains in the focused native macOS job, avoiding repeated package-manager setup on ephemeral Linux runners.
 - One focused native macOS job runs the launch/plugin shell contracts with the real
   macOS zsh environment. `Tests / Node 24` requires that job as well as every Node 24 shard.
+- A separate `macOS apps` job runs `swift test --package-path macos` and
+  `./macos/build.sh`, then uploads both app bundles as zipped workflow artifacts.
+  Only the Node.js release tarballs are cached, and the build re-verifies them
+  against their pinned checksums. No gate requires this job yet. See
+  [macOS apps](docs/macos.md).
 - npm's download cache is used; `node_modules` is not cached.
 
 See [ci-performance.md](docs/ci-performance.md) for the measured baseline, shard

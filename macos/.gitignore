@@ -1,0 +1,5 @@
+# Built bundles, downloaded Node.js releases, SwiftPM output.
+dist/
+.cache/
+.build/
+.swiftpm/

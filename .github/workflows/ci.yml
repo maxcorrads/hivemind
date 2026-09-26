@@ -362,6 +362,74 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+  macos_apps:
+    name: macOS apps
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      # build.sh packs the server with `npm pack`, whose prepack build needs dev dependencies.
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Show Swift toolchain
+        run: swift --version
+
+      - name: Swift unit tests
+        run: swift test --package-path macos
+
+      - name: Read pinned Node.js version
+        id: bundled-node
+        run: echo "version=$(sed -n 's/^NODE_VERSION="\(.*\)"$/\1/p' macos/build.sh)" >> "${GITHUB_OUTPUT}"
+
+      # Only the release tarballs and SHASUMS are cached: build.sh re-verifies
+      # them against its pinned checksums on every run, whereas a cached
+      # extracted binary would be trusted as is.
+      - name: Restore Node.js release downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            macos/.cache/node/node-*.tar.gz
+            macos/.cache/node/SHASUMS256-*.txt
+          key: macos-node-${{ steps.bundled-node.outputs.version }}
+
+      # macos-latest runs on Apple Silicon, so build.sh also runs the
+      # bundled CLI's --help there.
+      - name: Build Apple Silicon app bundles
+        run: ./macos/build.sh
+
+      # ditto keeps the bundles' symlinks, permissions and ad-hoc signatures intact.
+      - name: Zip app bundles
+        run: |
+          mkdir -p artifacts
+          ditto -c -k --keepParent macos/dist/Hivemind.app artifacts/Hivemind-macOS.zip
+          ditto -c -k --keepParent "macos/dist/Hivemind Server.app" artifacts/Hivemind-Server-macOS.zip
+
+      - name: Upload Hivemind.app
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Hivemind-macOS
+          path: artifacts/Hivemind-macOS.zip
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Upload Hivemind Server.app
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Hivemind-Server-macOS
+          path: artifacts/Hivemind-Server-macOS.zip
+          retention-days: 7
+          if-no-files-found: error
+
   coverage:
     name: Coverage
     needs: [unit_node24, integration_node24]

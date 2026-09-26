@@ -295,7 +295,12 @@ export function buildLaunchPrompt(input: LaunchInput): string {
   return `${ADOPT_UNTRUSTED}\n\n${body}`;
 }
 
-export function buildLaunchBlock(input: LaunchInput): string {
+/**
+ * The launch as its two parts: the folder to start in (null when the cd
+ * toggle is off or there is no path) and the command run there. The copied
+ * block and the macOS app's "Open in Terminal" are both built from this.
+ */
+export function buildLaunchCommand(input: LaunchInput): { cwd: string | null; command: string } {
   const software = sanitizeSoftware(input.software);
   const flags = [
     buildModelFlags(software, input.model, input.effort),
@@ -323,9 +328,17 @@ export function buildLaunchBlock(input: LaunchInput): string {
     : family === "claude" && input.hivemindMcp ? `-- ${quoted}` : quoted;
   const invoke = [software, flags, promptArg].filter(Boolean).join(" ");
   const tree = sanitizeWorkspacePath(input.workspacePath);
-  const command =
-    input.cdWorktree && tree ? `cd -- ${shSingleQuote(tree)} && ${invoke}` : invoke;
+  return { cwd: input.cdWorktree && tree ? tree : null, command: invoke };
+}
+
+/** The copyable block: `cd -- <path> && <command>` (or just the command), newline-terminated. */
+export function launchBlockText(launch: { cwd: string | null; command: string }): string {
+  const command = launch.cwd ? `cd -- ${shSingleQuote(launch.cwd)} && ${launch.command}` : launch.command;
   return command.endsWith("\n") ? command : `${command}\n`;
+}
+
+export function buildLaunchBlock(input: LaunchInput): string {
+  return launchBlockText(buildLaunchCommand(input));
 }
 
 export function buildRosterPaste(blocks: Array<{ title: string; text: string }>): string {

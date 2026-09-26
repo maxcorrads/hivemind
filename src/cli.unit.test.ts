@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, beforeEach, test, type TestContext } from "node:test";
-import { arg, argRest, isCliEntrypoint, mcpLauncher, runCli } from "./cli.ts";
+import { arg, argRest, isCliEntrypoint, mcpLauncher, runCli, stopOnSignals } from "./cli.ts";
 import { BODY_MAX } from "./shared/types.ts";
 
 // Every command runs in-process against a mocked fetch; HIVEMIND_HOME is a
@@ -490,4 +490,22 @@ test("invite accepts --member or --name and names DMs without a hash", async (t)
   assert.deepEqual(out, ["invited Ada to #ops", "invited Bob to Ada·Bob"]);
   await assert.rejects(runCli(["invite", "--channel", "ops"]), /invite --channel NAME --member NAME/);
   await assert.rejects(runCli(["invite", "--member", "Ada"]), /invite --channel NAME --member NAME/);
+});
+
+test("serve drains on SIGTERM or SIGINT and exits by the drain's outcome", async (t) => {
+  const run = async (signal: string, drain: () => Promise<void>) => {
+    const handlers = new Map<string, () => void>();
+    const proc = { once: (event: string, handler: () => void) => { handlers.set(event, handler); return proc; } };
+    const exits: number[] = [];
+    let drains = 0;
+    stopOnSignals(() => { drains += 1; return drain(); }, proc as never, code => exits.push(code));
+    assert.deepEqual([...handlers.keys()].sort(), ["SIGINT", "SIGTERM"]);
+    handlers.get(signal)!();
+    await new Promise(resolve => setImmediate(resolve));
+    return { drains, exits };
+  };
+  assert.deepEqual(await run("SIGTERM", async () => {}), { drains: 1, exits: [0] });
+  const err = t.mock.method(console, "error", () => {});
+  assert.deepEqual(await run("SIGINT", async () => { throw new Error("drain deadline"); }), { drains: 1, exits: [1] });
+  assert.match(String(err.mock.calls[0]?.arguments[0]), /drain deadline/);
 });
