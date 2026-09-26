@@ -100,6 +100,22 @@ final class GatewayConnection {
   /// Revocation, remote access turned off, or the app quitting.
   func terminate() { finish("closed by the gateway") }
 
+  /// The server this connection forwards to is no longer `current` (it
+  /// exited or stopped being ready): its loopback connection closes now. A
+  /// request not answered yet gets server-unavailable, and a kept-alive
+  /// connection stays for the next request; one whose answer or `/ws` is
+  /// under way closes. True when it was forwarding to that server.
+  func serverGone(keeping current: GatewayUpstreamServer?) -> Bool {
+    guard !finished else { return false }
+    switch state {
+    case .proxy(let exchange) where exchange.server != current, .webSocket(let exchange) where exchange.server != current:
+      upstreamFailed(exchange, "the server stopped")
+      return true
+    default:
+      return false
+    }
+  }
+
   // MARK: Device input
 
   private func received(_ data: Data) {
@@ -327,7 +343,7 @@ final class GatewayConnection {
           self.refuse(Self.serverUnverified, head: head, framing: framing, canDrain: !expectsContinue)
         case .capability(let capability):
           self.startProxy(ProxyExchange(
-            request: head, endpoint: endpoint, port: target.port, capability: capability, framing: framing,
+            request: head, endpoint: endpoint, server: target, capability: capability, framing: framing,
             webSocket: route == .proxyWebSocket, upstream: server.deps.upstream.connect(port: target.port)),
             expectsContinue: expectsContinue)
         }
@@ -617,7 +633,9 @@ final class GatewayConnection {
 final class ProxyExchange {
   let request: HTTPRequestHead
   let endpoint: GatewayEndpoint
-  let port: Int
+  /// The server process it goes to: when that one exits, so does this.
+  let server: GatewayUpstreamServer
+  var port: Int { server.port }
   let capability: HumanCapability
   let webSocket: Bool
   let upstream: any GatewayStream
@@ -635,11 +653,11 @@ final class ProxyExchange {
   var downstreamFraming = HTTPBodyFraming.none
   var responseDone = false
 
-  init(request: HTTPRequestHead, endpoint: GatewayEndpoint, port: Int, capability: HumanCapability, framing: HTTPBodyFraming,
-       webSocket: Bool, upstream: any GatewayStream) {
+  init(request: HTTPRequestHead, endpoint: GatewayEndpoint, server: GatewayUpstreamServer, capability: HumanCapability,
+       framing: HTTPBodyFraming, webSocket: Bool, upstream: any GatewayStream) {
     self.request = request
     self.endpoint = endpoint
-    self.port = port
+    self.server = server
     self.capability = capability
     self.webSocket = webSocket
     self.upstream = upstream

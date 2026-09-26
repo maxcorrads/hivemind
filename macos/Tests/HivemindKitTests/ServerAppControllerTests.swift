@@ -266,6 +266,44 @@ struct ServerAppControllerTests {
     #expect(sut.status.canStart && sut.status.canStop)
   }
 
+  // MARK: The remote gateway
+
+  /// Each state change reaches the gateway as it happens, and the gateway is
+  /// offered a server only while it is `.running`.
+  @Test func announcesEveryStateChangeAndOffersTheGatewayOnlyARunningServer() throws {
+    let sut = controller()
+    var seen: [(state: SupervisorState, upstream: GatewayUpstreamServer?)] = []
+    sut.onStateChange = { seen.append(($0, sut.gatewayUpstream)) }
+    sut.launch()
+    #expect(seen.map(\.state) == [.starting(pid: 100)])
+    #expect(seen.last?.upstream == nil, "not while it starts")
+    ready()
+    let running = try #require(sut.gatewayUpstream)
+    #expect(seen.last?.upstream == running)
+    #expect(running.port == 7420)
+    #expect(running.secret?.hex == launcher.specs.last?.environment[InstanceProof.environmentKey])
+
+    // A crash is announced the moment the supervisor sees the exit.
+    launcher.current?.crash()
+    guard case .waitingToRestart = seen.last?.state else { Issue.record("no crash announced"); return }
+    #expect(seen.last?.upstream == nil)
+    #expect(sut.instanceSecret == nil)
+
+    // The restart is a new server: another secret.
+    scheduler.advance(1)
+    ready()
+    let restarted = try #require(sut.gatewayUpstream)
+    #expect(restarted.secret != running.secret)
+
+    // Stopping (the child still alive) is already no server for the gateway.
+    launcher.current?.exitsOnTerminate = false
+    sut.stop()
+    #expect(seen.last?.state == .stopping(pid: 101))
+    #expect(seen.last?.upstream == nil)
+    launcher.current?.crash(status: 0)
+    #expect(seen.last?.state == .stopped)
+  }
+
   // MARK: Open Hivemind
 
   @Test func whenReadyWaitsForTheReadyLine() {

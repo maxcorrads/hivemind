@@ -295,3 +295,146 @@ struct GatewayEndpointLengthTests {
     #expect(!stream.closed)
   }
 }
+
+/// The supervisor saw the server exit or leave `.running`: the gateway stops
+/// forwarding to it at once, event-driven through
+/// GatewayServer.serverChanged (docs/remote-access.md#verified-server).
+@MainActor
+struct GatewayServerGoneTests {
+  let h = GatewayHarness()
+  static let accept = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n"
+
+  func get(_ stream: FakeGatewayStream, _ path: String, _ session: DeviceSessionToken) {
+    stream.receive(h.request("GET", path, [h.cookie(session)]))
+  }
+
+  func webSocket(_ session: DeviceSessionToken) -> FakeGatewayStream {
+    let ws = h.connect()
+    ws.receive(h.request("GET", "/ws", GatewayHarness.upgrade + [h.cookie(session), ("Origin", GatewayHarness.origin)]))
+    return ws
+  }
+
+  @Test func anExitedServerLosesItsTrustCapabilityAndForwardedConnectionsAtOnce() throws {
+    let session = h.signedIn().session
+    let http = h.connect()
+    get(http, "/slow", session)
+    h.answerBootstrap()
+    let pending = h.upstream.streams[1]
+    let ws = webSocket(session)
+    h.upstream.streams[2].receive(Self.accept)
+    let terminals = h.connect()
+    terminals.receive(h.request("GET", GatewayPath.broker, GatewayHarness.upgrade + [h.cookie(session)]))
+    #expect(parseResponses(terminals.take()).first?.status == 101)
+    let idle = h.connect()
+    _ = http.take()
+    _ = ws.take()
+    #expect(h.server.isVerified)
+    let checks = h.verifier.checked.count
+
+    // The Node process exited: the supervisor leaves .running.
+    h.serverPort = nil
+    h.server.serverChanged()
+
+    #expect(!h.server.isVerified)
+    #expect(h.server.trust == .unchecked)
+    let answer = try #require(parseResponses(http.take()).first)
+    #expect(answer.status == 502 && answer.error == .serverUnavailable, "the request in flight is answered, not left hanging")
+    #expect(pending.closed, "its loopback connection closes now")
+    #expect(!http.closed && http.isReceiving, "a kept-alive device connection stays for the next request")
+    #expect(ws.closed && h.upstream.streams[2].closed, "/ws to the old process closes")
+    #expect(!terminals.closed && !h.broker.current.closed, "the broker is this app's own: terminals stay")
+    #expect(!idle.closed)
+    #expect(h.logs.contains { $0.contains("the server stopped") })
+
+    // New requests are refused, and nothing is checked or bootstrapped.
+    let streams = h.upstream.streams.count
+    get(http, "/again", session)
+    #expect(parseResponses(http.take()).first?.error == .serverUnavailable)
+    #expect(h.upstream.streams.count == streams)
+    #expect(h.verifier.checked.count == checks)
+
+    // The restarted server is ready: it proves itself, and a new Human
+    // capability is bootstrapped for it before anything is forwarded.
+    h.serverPort = 7420
+    h.secret = InstanceSecret(hex: String(repeating: "6b", count: 32))
+    h.server.serverChanged()
+    get(http, "/again", session)
+    #expect(h.verifier.checked.count == checks + 1)
+    #expect(h.verifier.checked.last?.secret == h.secret)
+    #expect(h.upstreamRequest(streams).head.target == "/api/ui/session")
+  }
+
+  @Test func aCheckInFlightAnswersUnavailableAndItsLateVerdictServesNobody() {
+    let session = h.signedIn().session
+    h.verifier.holding = true
+    let stream = h.connect()
+    get(stream, "/", session)
+    h.serverPort = nil
+    h.server.serverChanged()
+    #expect(parseResponses(stream.take()).first?.status == 502)
+    #expect(stream.isReceiving)
+    h.verifier.answer(.verified)
+    #expect(h.upstream.streams.isEmpty, "a verdict about the old process forwards nothing")
+    #expect(!h.server.isVerified)
+  }
+
+  @Test func aBootstrapInFlightIsAbandoned() {
+    let session = h.signedIn().session
+    let stream = h.connect()
+    get(stream, "/", session)
+    let bootstrap = h.upstream.streams[0]
+    h.serverPort = nil
+    h.server.serverChanged()
+    #expect(bootstrap.closed)
+    #expect(parseResponses(stream.take()).first?.error == .serverUnavailable)
+    h.answerBootstrap()
+    #expect(h.upstream.streams.count == 1, "a late Human session from the old process is not used")
+  }
+
+  @Test func aResponseUnderWayClosesTheDeviceConnection() {
+    let session = h.signedIn().session
+    let stream = h.connect()
+    get(stream, "/big", session)
+    h.answerBootstrap()
+    h.upstream.streams[1].receive("HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\npartial")
+    h.serverPort = nil
+    h.server.serverChanged()
+    #expect(stream.closed, "half a response cannot be finished: the device sees the connection end")
+    #expect(h.upstream.streams[1].closed)
+  }
+
+  @Test func stoppingOrRestartingCountsAsGoneToo() {
+    // The supervisor's .stopping has a pid but is not .running: the harness
+    // stands for it the way ServerAppController.gatewayUpstream does, nil.
+    let session = h.signedIn().session
+    let ws = webSocket(session)
+    h.answerBootstrap()
+    h.upstream.streams[1].receive(Self.accept)
+    h.serverPort = nil
+    h.server.serverChanged()
+    #expect(ws.closed)
+  }
+
+  @Test func theSameServerKeepsEverything() {
+    let session = h.signedIn().session
+    let stream = h.connect()
+    get(stream, "/", session)
+    h.answerBootstrap()
+    let logs = h.logs.count
+    h.server.serverChanged()
+    #expect(h.server.isVerified)
+    #expect(!h.upstream.streams[1].closed)
+    #expect(h.logs.count == logs, "nothing to say when nothing changed")
+    h.upstream.streams[1].receive("HTTP/1.1 204 No Content\r\n\r\n")
+    get(stream, "/next", session)
+    #expect(h.verifier.checked.count == 1, "no new check")
+    #expect(h.upstreamRequest(2).head.target == "/next", "and no new bootstrap")
+  }
+
+  @Test func aStoppedGatewayIgnoresIt() {
+    h.server.stop()
+    h.serverPort = nil
+    h.server.serverChanged()
+    #expect(h.logs.isEmpty)
+  }
+}

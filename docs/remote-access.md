@@ -137,10 +137,16 @@ What the gateway does **not** defend against:
   the local server and broker directly, as before.
 - **Local processes on the Mac.** They can reach the Node server directly, as
   before. The gateway refuses loopback connections, so it gives them nothing
-  new. A process that races the real server for its port between the moment
-  that server dies and the moment Hivemind Server.app notices could get the
-  requests already in flight; a new request or WebSocket after that is checked
-  against the new server first.
+  new. What is left is a race of microseconds: the gateway runs in the same
+  app as the supervisor and stops forwarding the moment the supervisor sees
+  the Node process exit ([Verified server](#verified-server)), so a process
+  that binds the port in the instant between the kernel freeing it and that
+  exit reaching the app's main thread could, at most, be handed a loopback
+  connection the gateway opens in that instant. It gets no Human capability
+  (that belongs to the old process and is dropped), and nothing after it
+  reaches it before it passes the instance check. Future hardening: talk to
+  the Node server over a private Unix socket in a `0700` folder instead of a
+  TCP port, so there is no port to take at all.
 
 ## Network scope
 
@@ -502,6 +508,20 @@ terminals ([Verifying the server](macos.md#verifying-the-server)):
      5 seconds before it checks again, so a flood of requests is not a flood
      of checks.
 
+**The moment the server goes away**, the gateway stops forwarding to it.
+It runs in the same app as the supervisor, and every supervisor state change
+reaches it as an event (`ServerAppController.onStateChange` →
+`GatewayServer.serverChanged`), without polling. When the Node process exits,
+or its state leaves `.running` (stopping, restarting, crashed), the gateway at
+once drops the server's verification and its Human capability, abandons a
+check or bootstrap in flight (whose requests get `server-unavailable`), and
+closes every proxied loopback connection to it: a request still waiting for
+its answer gets `server-unavailable` on a kept-alive device connection, one
+whose answer or `/ws` was under way closes. From then on every request gets
+`server-unavailable` (502) until the supervisor has a new server running and
+that server passed the instance check with its own new secret; only then is a
+new Human capability bootstrapped. Broker bridges stay open, as below.
+
 **Terminals follow the same rule** as in Hivemind.app, where a page gets
 terminals only from a verified server (`TerminalTrustGate`): the gateway
 bridges `/_hivemind/broker` only while the server is verified (checked afresh
@@ -682,6 +702,9 @@ Network.framework listener, the Keychain identity, the menu) are in
   not offer anything else yet.
 - **Starting Hivemind Server from the device.** If the server is stopped, the
   device shows the error and a retry.
+- **A private Unix socket to the Node server.** The gateway reaches it over
+  its loopback TCP port, checked by the instance proof; a `0700` socket would
+  leave no port for another process to take (see [Threat model](#threat-model)).
 - **Throughput tuning.** The gateway relays on the main queue of Hivemind
   Server.app, which is plenty for the UI and terminals but may cap very large
   downloads.

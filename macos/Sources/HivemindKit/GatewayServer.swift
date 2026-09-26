@@ -335,6 +335,47 @@ public final class GatewayServer {
     }
   }
 
+  /// Hivemind Server.app's supervisor saw its server exit or leave `.running`
+  /// (stopping, restarting, crashed), or a new one become ready
+  /// (docs/remote-access.md#verified-server). Nothing that belongs to a
+  /// server other than the current one is used again: its verification, its
+  /// Human capability, a check or a bootstrap in flight (whose requests get
+  /// server-unavailable), and every proxied request and `/ws` to it, which
+  /// close now. Requests from here on wait for the next server to prove
+  /// itself. Terminal bridges stay: the broker is this app's own, not the
+  /// Node server's. Called on every supervisor state change; nothing happens
+  /// while the current server is the one the gateway already knows.
+  public func serverChanged() {
+    let current = deps.server()
+    var dropped = false
+    switch trust {
+    case .verified(let known) where known != current, .failed(let known, _) where known != current:
+      trust = .unchecked
+      dropped = true
+    default:
+      break
+    }
+    if let held = capability, held.server != current {
+      capability = nil
+      dropped = true
+    }
+    if let pending = check, pending.server != current {
+      check = nil
+      pending.finish(.unavailable)
+      dropped = true
+    }
+    if let pending = bootstrap, pending.server != current {
+      bootstrap = nil
+      pending.finish(nil)
+      dropped = true
+    }
+    var closed = 0
+    for connection in Array(connections.values) where connection.serverGone(keeping: current) { closed += 1 }
+    guard dropped || closed > 0 else { return }
+    let what = current.map { "the server on port \($0.port) is new" } ?? "the server stopped"
+    deps.log("[gateway] \(what): forwarding nothing until it is verified (\(closed) forwarded connection(s) ended)")
+  }
+
   /// A loopback connection to the server failed, or it closed without an
   /// answer: whatever answers next is checked again first.
   func upstreamLost() {

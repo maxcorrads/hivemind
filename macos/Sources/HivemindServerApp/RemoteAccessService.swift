@@ -68,6 +68,12 @@ final class RemoteAccessService {
     return GatewayStatus(state: .on(addresses: addresses, port: port.value), deviceCount: count)
   }
 
+  /// The supervisor's state changed: the gateway drops whatever it holds
+  /// for a server that is gone, at once.
+  func serverChanged() {
+    server?.serverChanged()
+  }
+
   // MARK: On and off
 
   func startIfEnabled() {
