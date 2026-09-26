@@ -139,9 +139,7 @@ final class ServerMenuModel: ObservableObject {
     let script = CommandLineTool.script(server: server, discoveryFile: paths.discoveryFile)
     do {
       if plan.needsAdmin {
-        let staged = try installer.stage(script)
-        defer { installer.unstage(staged) }
-        switch AdminScript.run(installer.adminAppleScript(staged: staged, destination: destination)) {
+        switch AdminScript.run(installer.adminAppleScript(script: script, destination: destination)) {
         case .done: break
         case .cancelled: return
         case .failed(let message): throw InstallError(message: message)

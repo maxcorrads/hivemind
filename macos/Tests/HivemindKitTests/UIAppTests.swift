@@ -276,6 +276,11 @@ struct DownloadNamingTests {
     #expect(DownloadNaming.sanitized("a\u{0}b:c") == "a_b_c")
     #expect(DownloadNaming.sanitized("  ") == "download")
     #expect(DownloadNaming.sanitized("...") == "download")
+    // Cut by UTF-8 bytes (NAME_MAX is 255), at a character, keeping the extension.
+    let long = DownloadNaming.sanitized(String(repeating: "é", count: 300) + ".pdf")
+    #expect(long.utf8.count <= 200)
+    #expect(long.hasSuffix("é.pdf"))
+    #expect(DownloadNaming.sanitized(String(repeating: "a", count: 250)).utf8.count == 200)
   }
 
   @Test func numbersNamesThatAreTaken() {

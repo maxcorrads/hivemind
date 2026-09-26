@@ -64,11 +64,17 @@ final class BrokerSocketListener {
 
     let onAccept = self.onAccept
     let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .main)
-    source.setEventHandler {
+    source.setEventHandler { [weak source] in
       while true {
         let client = accept(fd, nil, nil)
         if client < 0 {
           if errno == EINTR { continue }
+          // Out of descriptors, the pending connection keeps the socket readable: pause instead of spinning on
+          // the main queue. The delayed resume holds the source, so a stop() meanwhile cancels it safely.
+          if errno == EMFILE || errno == ENFILE, let source {
+            source.suspend()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { source.resume() }
+          }
           return
         }
         MainActor.assumeIsolated { onAccept(client) }

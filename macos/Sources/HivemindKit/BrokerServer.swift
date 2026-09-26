@@ -461,7 +461,7 @@ public final class BrokerConnection {
     case .failure(let error): return send(.error(error), id: id)
     }
     var existing = Set(running.map(\.name))
-    let names = BrokerLaunch.sessionNames(for: launches, existing: existing)
+    let names = BrokerLaunch.sessionNames(for: launches, existing: running)
     var results: [SessionName?] = []
     var created: [SessionName] = []
     var errors: [BrokerLaunchFailure] = []

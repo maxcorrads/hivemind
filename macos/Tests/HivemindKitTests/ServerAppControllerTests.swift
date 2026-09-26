@@ -558,22 +558,54 @@ struct CommandLineInstallerTests {
     #expect(CommandLineInstaller(paths: paths).plan(for: paths.userCommandLineTool).existing == .other("a file"))
   }
 
-  @Test func stagesAPrivateCopyAndCleansItUp() throws {
-    let installer = CommandLineInstaller(paths: paths)
-    let staged = try installer.stage(script)
-    #expect(staged.path.hasPrefix(paths.appSupport.path))
-    let folderMode = try FileManager.default.attributesOfItem(atPath: staged.deletingLastPathComponent().path)[.posixPermissions] as? NSNumber
-    #expect(folderMode?.intValue == 0o700)
-    #expect(try String(contentsOf: staged, encoding: .utf8) == script)
-    installer.unstage(staged)
-    #expect(!FileManager.default.fileExists(atPath: staged.deletingLastPathComponent().path))
+  /// Runs the administrator command as the current user, as `do shell script` would run it as root.
+  private func runAdminCommand(to destination: URL) throws -> Int32 {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/sh")
+    process.arguments = ["-c", CommandLineInstaller(paths: paths).adminInstallCommand(script: script, destination: destination)]
+    try process.run()
+    process.waitUntilExit()
+    return process.terminationStatus
   }
 
-  @Test func theAdminScriptRemovesALinkBeforeInstalling() {
-    let installer = CommandLineInstaller(paths: paths)
-    let staged = URL(fileURLWithPath: "/tmp/it's/hivemind")
-    let source = installer.adminAppleScript(staged: staged, destination: paths.systemCommandLineTool)
-    #expect(source.hasPrefix("do shell script \"/bin/rm -f '/usr/local/bin/hivemind' && /bin/mkdir -p '/usr/local/bin' && /usr/bin/install -m 0755 '/tmp/it'\\\\''s/hivemind' '/usr/local/bin/hivemind'\""))
+  @Test func theAdminCommandCarriesTheScriptAndReadsNoFile() throws {
+    let destination = home.appendingPathComponent("it's here/bin/hivemind")
+    #expect(try runAdminCommand(to: destination) == 0)
+    #expect(try String(contentsOf: destination, encoding: .utf8) == script)
+    let mode = try FileManager.default.attributesOfItem(atPath: destination.path)[.posixPermissions] as? NSNumber
+    #expect(mode?.intValue == 0o755)
+    let left = try FileManager.default.contentsOfDirectory(atPath: destination.deletingLastPathComponent().path)
+    #expect(left == ["hivemind"], "no temporary file is left behind")
+    let source = CommandLineInstaller(paths: paths).adminAppleScript(script: script, destination: destination)
+    #expect(source.hasPrefix("do shell script \"umask 022 && "))
     #expect(source.hasSuffix(" with administrator privileges"))
+    #expect(!source.contains(paths.appSupport.path), "nothing is staged for root to read")
   }
+
+  @Test func theAdminCommandReplacesALinkWithoutWritingThroughIt() throws {
+    let fm = FileManager.default
+    let target = home.appendingPathComponent("secret")
+    try Data("keep\n".utf8).write(to: target)
+    let destination = home.appendingPathComponent("bin/hivemind")
+    try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try fm.createSymbolicLink(at: destination, withDestinationURL: target)
+    #expect(try runAdminCommand(to: destination) == 0)
+    #expect(try String(contentsOf: target, encoding: .utf8) == "keep\n")
+    #expect(try fm.attributesOfItem(atPath: destination.path)[.type] as? FileAttributeType == .typeRegular)
+    #expect(try String(contentsOf: destination, encoding: .utf8) == script)
+  }
+
+  @Test func theAdminCommandRefusesAFolderAtTheDestination() throws {
+    let destination = home.appendingPathComponent("bin/hivemind")
+    try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+    #expect(try runAdminCommand(to: destination) != 0)
+    #expect(try FileManager.default.contentsOfDirectory(atPath: destination.path).isEmpty)
+    #expect(try FileManager.default.contentsOfDirectory(atPath: destination.deletingLastPathComponent().path) == ["hivemind"])
+  }
+
+  @Test func aFolderAtTheDestinationIsDescribedWithoutReadingIt() throws {
+    try FileManager.default.createDirectory(at: paths.userCommandLineTool, withIntermediateDirectories: true)
+    #expect(CommandLineInstaller(paths: paths).plan(for: paths.userCommandLineTool).existing == .other("not a regular file"))
+  }
+
 }

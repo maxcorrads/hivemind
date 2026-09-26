@@ -179,20 +179,28 @@ public struct BrokerLaunch: Equatable, Sendable {
   }
 
   /// The session each launch goes to, in order. A launch whose `session`
-  /// is running reuses it. Otherwise a named agent always gets
-  /// hm-<project>-<agent> (reused when it is running), and a new agent the
-  /// first hm-<project>-new-<n> that is neither running nor given to an
-  /// earlier launch of the same batch.
-  public static func sessionNames(for launches: [BrokerLaunch], existing: some Sequence<SessionName>) -> [SessionName] {
-    let running = Set(existing)
-    var taken = running
+  /// is running reuses it when that session was launched for the same
+  /// project and for this agent or a new one (`reusable(_:)`). Otherwise a
+  /// named agent always gets hm-<project>-<agent> (reused when it is
+  /// running), and a new agent the first hm-<project>-new-<n> that is neither
+  /// running nor given to an earlier launch of the same batch.
+  public static func sessionNames(for launches: [BrokerLaunch], existing: some Sequence<BrokerSession>) -> [SessionName] {
+    let running = Dictionary(existing.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+    var taken = Set(running.keys)
     return launches.map { launch in
-      if let session = launch.session, running.contains(session) { return session }
+      if let session = launch.session, let owner = running[session], launch.reusable(owner) { return session }
       let name = launch.agent.map { SessionName(project: launch.project, agent: $0) }
         ?? SessionName.newAgent(project: launch.project, existing: taken)
       taken.insert(name)
       return name
     }
+  }
+
+  /// Whether the `session` hint may name `owner`. The hint comes from the agent's own join (a label any agent can set),
+  /// so it only reuses a session launched for the same project, and for no agent yet (hm-<project>-new-<n>) or for
+  /// this one: resuming one agent never reports another agent's session, or another project's, as its own.
+  func reusable(_ owner: BrokerSession) -> Bool {
+    owner.project == project && (owner.agent == nil || owner.agent == agent)
   }
 }
 

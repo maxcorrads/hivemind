@@ -404,15 +404,6 @@ struct CommandLineToolTests {
     odd.home = #"/Users/h/a"b"#
     #expect(try runWrapper(discovery: odd) == ["url=http://127.0.0.1:7431", "home=", "args=status --json"])
   }
-
-  @Test func adminInstall() {
-    let source = URL(fileURLWithPath: "/tmp/x/hivemind")
-    let destination = URL(fileURLWithPath: "/usr/local/bin/hivemind")
-    #expect(CommandLineTool.installCommand(from: source, to: destination) ==
-      "/bin/mkdir -p '/usr/local/bin' && /usr/bin/install -m 0755 '/tmp/x/hivemind' '/usr/local/bin/hivemind'")
-    #expect(CommandLineTool.adminInstallAppleScript(from: source, to: destination) ==
-      #"do shell script "/bin/mkdir -p '/usr/local/bin' && /usr/bin/install -m 0755 '/tmp/x/hivemind' '/usr/local/bin/hivemind'" with administrator privileges"#)
-  }
 }
 
 struct NavigationPolicyTests {

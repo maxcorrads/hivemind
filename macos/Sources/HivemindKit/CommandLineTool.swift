@@ -44,17 +44,4 @@ public enum CommandLineTool {
   public static func appleScriptLiteral(_ value: String) -> String {
     "\"" + value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
   }
-
-  /// The shell command that installs an already written wrapper at `destination`.
-  public static func installCommand(from source: URL, to destination: URL) -> String {
-    let folder = destination.deletingLastPathComponent().path
-    return "/bin/mkdir -p \(shellQuoted(folder)) && /usr/bin/install -m 0755 \(shellQuoted(source.path)) \(shellQuoted(destination.path))"
-  }
-
-  /// AppleScript that runs `installCommand` behind the system administrator
-  /// prompt; only the "Install command-line tool" click runs it, for
-  /// destinations the user cannot write (e.g. /usr/local/bin).
-  public static func adminInstallAppleScript(from source: URL, to destination: URL) -> String {
-    "do shell script \(appleScriptLiteral(installCommand(from: source, to: destination))) with administrator privileges"
-  }
 }

@@ -9,8 +9,22 @@ public enum DownloadNaming {
       .trimmingCharacters(in: .whitespaces)
     // No hidden files and no "..".
     while name.hasPrefix(".") { name.removeFirst() }
-    if name.utf8.count > 200 { name = String(name.prefix(200)) }
+    name = truncated(name, maxBytes: 200)
     return name.isEmpty ? "download" : name
+  }
+
+  /// At most `maxBytes` of UTF-8 (NAME_MAX is 255 bytes, and `destination` may add " 9999"), cut at a
+  /// character and keeping a short extension.
+  static func truncated(_ name: String, maxBytes: Int) -> String {
+    guard name.utf8.count > maxBytes else { return name }
+    let ext = (name as NSString).pathExtension
+    let keepExtension = !ext.isEmpty && ext.utf8.count <= 16
+    var stem = keepExtension ? (name as NSString).deletingPathExtension : name
+    let budget = maxBytes - (keepExtension ? ext.utf8.count + 1 : 0)
+    while stem.utf8.count > budget { stem.removeLast() }
+    stem = stem.trimmingCharacters(in: .whitespaces)
+    if stem.isEmpty { stem = "download" }
+    return keepExtension ? "\(stem).\(ext)" : stem
   }
 
   /// `directory/name`, or `name 2.ext`, `name 3.ext`… when taken, like Safari.

@@ -54,26 +54,12 @@ public struct CommandLineInstaller: Sendable {
       let target = (try? fm.destinationOfSymbolicLink(atPath: destination.path)) ?? "?"
       return .other("a link to \(target)")
     }
+    // Only a regular file is read: a directory would raise on read and a FIFO would block.
+    guard attributes[.type] as? FileAttributeType == .typeRegular else { return .other("not a regular file") }
     guard let handle = FileHandle(forReadingAtPath: destination.path) else { return .other("a file") }
     defer { try? handle.close() }
-    let head = String(decoding: handle.readData(ofLength: 512), as: UTF8.self)
+    let head = String(decoding: (try? handle.read(upToCount: 512)) ?? Data(), as: UTF8.self)
     return head.contains(Self.marker) ? .ours : .other("a file")
-  }
-
-  /// A private copy of the wrapper for the administrator `install` to read.
-  public func stage(_ script: String) throws -> URL {
-    let fm = FileManager.default
-    try fm.createDirectory(at: paths.appSupport, withIntermediateDirectories: true)
-    let folder = paths.appSupport.appendingPathComponent("cli-\(UUID().uuidString)", isDirectory: true)
-    try fm.createDirectory(at: folder, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-    let file = folder.appendingPathComponent("hivemind")
-    try Data(script.utf8).write(to: file)
-    try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
-    return file
-  }
-
-  public func unstage(_ staged: URL) {
-    try? FileManager.default.removeItem(at: staged.deletingLastPathComponent())
   }
 
   /// Writes the wrapper where the user can write, replacing what is there
@@ -86,11 +72,22 @@ public struct CommandLineInstaller: Sendable {
     try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destination.path)
   }
 
-  /// `do shell script … with administrator privileges` installing `staged`.
-  /// rm -f first: install(1) would write through a symlink to its target.
-  public func adminAppleScript(staged: URL, destination: URL) -> String {
-    let command = "/bin/rm -f \(CommandLineTool.shellQuoted(destination.path)) && "
-      + CommandLineTool.installCommand(from: staged, to: destination)
-    return "do shell script \(CommandLineTool.appleScriptLiteral(command)) with administrator privileges"
+  /// The shell command the administrator prompt runs. The wrapper travels inside the command (as base64), so root
+  /// never reads a file a user process could swap for a symlink while the prompt is open. It is written to a fresh
+  /// temporary file next to the destination and renamed over it. rm -f first: a link (even to a folder) is removed,
+  /// never written or moved through, and a real folder there fails the install.
+  public func adminInstallCommand(script: String, destination: URL) -> String {
+    let folder = CommandLineTool.shellQuoted(destination.deletingLastPathComponent().path)
+    let target = CommandLineTool.shellQuoted(destination.path)
+    let payload = Data(script.utf8).base64EncodedString()
+    return "umask 022 && /bin/mkdir -p \(folder) && t=$(/usr/bin/mktemp \(folder)/.hivemind.XXXXXX) && "
+      + "{ /usr/bin/printf '%s' '\(payload)' | /usr/bin/base64 --decode > \"$t\" && /bin/chmod 0755 \"$t\""
+      + " && /bin/rm -f \(target) && /bin/mv -f \"$t\" \(target)"
+      + " || { /bin/rm -f \"$t\"; exit 1; }; }"
+  }
+
+  /// `do shell script … with administrator privileges` running `adminInstallCommand`.
+  public func adminAppleScript(script: String, destination: URL) -> String {
+    "do shell script \(CommandLineTool.appleScriptLiteral(adminInstallCommand(script: script, destination: destination))) with administrator privileges"
   }
 }

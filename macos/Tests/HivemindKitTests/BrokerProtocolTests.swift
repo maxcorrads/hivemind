@@ -183,8 +183,12 @@ struct BrokerRequestTests {
     #expect(!BrokerProtocolError(.badMessage, "").closesConnection)
   }
 
+  private func running(_ name: String, project: String? = "acme", agent: String? = nil) -> BrokerSession {
+    BrokerSession(name: SessionName(name)!, project: project, agent: agent, alive: true, attached: 0, createdAt: 0)
+  }
+
   @Test func launchesGetTheirSessionNames() throws {
-    let running = [SessionName("hm-acme-new-1")!, SessionName("hm-acme-atlas")!]
+    let running = [running("hm-acme-new-1"), running("hm-acme-atlas", agent: "Atlas")]
     let names = BrokerLaunch.sessionNames(
       for: [try launch(), try launch(agent: nil), try launch(agent: nil), try launch(project: "beta", agent: nil), try launch(agent: "Atlas")],
       existing: running)
@@ -196,11 +200,25 @@ struct BrokerRequestTests {
   @Test func aLaunchReusesTheAgentsRunningSession() throws {
     let first = SessionName("hm-acme-new-1")!
     let resume = try BrokerLaunch(project: "acme", agent: "Atlas", title: "t", cwd: "/", command: "c", session: first)
-    #expect(BrokerLaunch.sessionNames(for: [resume], existing: [first]) == [first])
+    #expect(BrokerLaunch.sessionNames(for: [resume], existing: [running(first.rawValue)]) == [first])
+    #expect(BrokerLaunch.sessionNames(for: [resume], existing: [running(first.rawValue, agent: "Atlas")]) == [first])
     #expect(BrokerLaunch.sessionNames(for: [resume], existing: []) == [atlas])
     // Never a name the client made up: a session that is not running is ignored.
     let madeUp = try BrokerLaunch(project: "acme", agent: nil, title: "t", cwd: "/", command: "c", session: SessionName("hm-mine")!)
     #expect(BrokerLaunch.sessionNames(for: [madeUp], existing: []) == [SessionName("hm-acme-new-1")!])
+  }
+
+  /// The hint is the agent's own join label, which any agent can set: it never reuses another agent's session,
+  /// another project's, or one the broker did not launch.
+  @Test func theSessionHintNeverReusesAnotherAgentsSession() throws {
+    let other = SessionName("hm-acme-new-1")!
+    let resume = try BrokerLaunch(project: "acme", agent: "Atlas", title: "t", cwd: "/", command: "c", session: other)
+    #expect(BrokerLaunch.sessionNames(for: [resume], existing: [running(other.rawValue, agent: "Nova")]) == [atlas])
+    #expect(BrokerLaunch.sessionNames(for: [resume], existing: [running(other.rawValue, project: "beta")]) == [atlas])
+    #expect(BrokerLaunch.sessionNames(for: [resume], existing: [running(other.rawValue, project: nil)]) == [atlas])
+    let nova = SessionName("hm-acme-nova")!
+    let claim = try BrokerLaunch(project: "acme", agent: "Atlas", title: "t", cwd: "/", command: "c", session: nova)
+    #expect(BrokerLaunch.sessionNames(for: [claim], existing: [running(nova.rawValue, agent: "Nova")]) == [atlas])
   }
 }
 

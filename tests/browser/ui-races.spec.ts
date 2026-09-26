@@ -1499,6 +1499,35 @@ for (const reading of ["live", "held-bottom", "held-middle"] as const) {
   });
 }
 
+test("a live channel stays on its newest message when web fonts swap in after the first paint", async ({ page }) => {
+  const alpha = project("alpha", "Alpha Hive"), a = channel("a", "Alpha", alpha);
+  const messages = Array.from({ length: 20 }, (_, index) => message(`root-${index}`, index + 1, a.id,
+    `Message ${index}. ${"Text that wraps into more lines when the side thread opens. ".repeat(12)}`));
+  const last = messages.at(-1)!;
+  const fonts = deferred();
+  await page.route("**/*.woff2", async route => {
+    await fonts.promise;
+    await route.continue();
+  });
+  await installSnapshot(page, () => snapshot([alpha], [a]));
+  await installSocketHarness(page);
+  await installMessages(page, async route => fulfillJson(route,
+    payload(a, messages, [{ id: last.id, channelId: a.id, status: "open" }], { [last.id]: 1 })));
+  await page.setViewportSize({ width: 1440, height: 800 });
+  await page.goto("/#/c/a");
+  const stream = page.locator("main .stream");
+  await expect(page.locator("main .msg")).toHaveCount(20);
+  expect(await stream.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(1);
+  const fallbackHeight = await stream.evaluate(el => el.scrollHeight);
+
+  // The swap re-wraps every message; overflow anchoring alone would leave the newest one a few pixels short.
+  fonts.resolve();
+  await expect.poll(() => page.evaluate(() => document.fonts.check('16px "IBM Plex Sans"'))).toBe(true);
+  await expect.poll(() => stream.evaluate(el => el.scrollHeight)).not.toBe(fallbackHeight);
+  await expect.poll(() => stream.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(1);
+  await expect(page.locator("main").getByRole("button", { name: "Jump to recent", exact: true })).toHaveCount(0);
+});
+
 test("opening a side thread keeps the main chat anchored when web fonts swap in late", async ({ page }) => {
   const alpha = project("alpha", "Alpha Hive"), a = channel("a", "Alpha", alpha);
   const messages = Array.from({ length: 20 }, (_, index) => message(`root-${index}`, index + 1, a.id,

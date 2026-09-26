@@ -92,7 +92,11 @@ characters):
 - `hm-<project>-<agent>` for a named agent. It is always the same session, so
   relaunching the agent reuses it (for example with **Resume same employees**).
   A launch that names the agent's running session (`session`, from
-  `agent.terminalSession`) reuses that one instead, whatever its name.
+  `agent.terminalSession`) reuses that one instead, whatever its name, but
+  only when the broker launched that session for the same project and for no
+  agent yet or for this agent: the label is whatever an agent reported on
+  join, so it never makes one agent's resume report another agent's session
+  as its own.
 - `hm-<project>-new-<n>` for a new agent the server has not named yet. `n` is
   the lowest number free at launch. The broker runs launches one at a time,
   across all connections (`TerminalBroker.launching`), so two new agents
@@ -237,7 +241,7 @@ A launch is:
 | `title` | at most 200 characters, no NUL. It becomes the tmux window name (one line, no `#`, at most 60 characters). |
 | `cwd` | absolute (`/…`), at most 1024 bytes, no NUL. The broker refuses a folder that is not a directory with `cwd-missing`. |
 | `command` | not blank, at most 8 KB (bytes), no NUL |
-| `session` | optional session name: the session this agent last reported (`agent.terminalSession`). When it is running, the launch reuses it, so an agent first launched as `hm-<project>-new-<n>` keeps that session on resume. Otherwise it is ignored: the broker never creates a session under a name the client picked. |
+| `session` | optional session name: the session this agent last reported (`agent.terminalSession`). When it is running and was launched for the same project and for no agent or this one, the launch reuses it, so an agent first launched as `hm-<project>-new-<n>` keeps that session on resume. Otherwise it is ignored: the broker never creates a session under a name the client picked. |
 
 ### Broker → client
 
