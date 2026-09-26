@@ -23,6 +23,12 @@ struct SceneRoot: View {
     }
     .focusedSceneValue(\.sceneController, controller)
     .onAppear(perform: start)
+    // hivemind-pair:// (the Camera app reading the Mac's QR code): the
+    // pairing screen, for confirmation. Never paired without the Pair button.
+    .onOpenURL { url in
+      guard url.scheme?.lowercased() == PairingPayload.scheme else { return }
+      controller?.openPairingLink(url)
+    }
     .onDisappear { controller?.close() }
     .onChange(of: scenePhase) { _, phase in
       if phase == .active { controller?.sceneDidBecomeActive() }
@@ -64,8 +70,12 @@ private struct SceneContent: View {
       .sheet(isPresented: $controller.showingPairing) {
         PairingView(onPaired: { mac in
           controller.showingPairing = false
+          controller.pairingLink = nil
           controller.connect(to: mac.id)
-        }, onCancel: { controller.showingPairing = false })
+        }, onCancel: {
+          controller.showingPairing = false
+          controller.pairingLink = nil
+        }, initialLink: controller.pairingLink)
       }
       .sheet(item: $controller.auxiliary) { page in
         AuxiliaryPageView(page: page, dataStore: model.dataStore(for: page.macID))
@@ -75,7 +85,10 @@ private struct SceneContent: View {
   @ViewBuilder private var content: some View {
     if model.macs.isEmpty {
       // First launch, or every Mac removed: pairing is the only thing to do.
-      PairingView(onPaired: { controller.connect(to: $0.id) }, onCancel: nil)
+      PairingView(onPaired: {
+        controller.pairingLink = nil
+        controller.connect(to: $0.id)
+      }, onCancel: nil, initialLink: controller.pairingLink)
     } else {
       switch controller.phase {
       case .choosing:

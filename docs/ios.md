@@ -25,7 +25,10 @@ Store or TestFlight build, and you sign it yourself to install it (see
 2. In the app (**Pair with a Mac**, shown at first launch), tap **Scan the
    Pairing Code** and point the camera at it. iOS asks for camera access the
    first time. Without a camera, use **Copy Pairing Link** on the Mac and paste
-   the link under **Or paste the pairing link**, then **Continue**.
+   the link under **Or paste the pairing link**, then **Continue**. The app
+   also opens `hivemind-pair://` links: scanning the code with the system
+   **Camera** app (or tapping the link anywhere) opens Hivemind at the same
+   confirmation screen. Such a link never pairs by itself; only **Pair** does.
 3. The app shows the Mac's name and the short certificate fingerprint: check
    that the Mac's window shows the same one. Edit **This device's name** if you
    like (the Mac lists the device under it in **Devices (N)…**), then tap
@@ -50,8 +53,12 @@ The app keeps every Mac it paired with. **Macs…** (on the connection screen, o
 web data from the device; revoke it on the Mac too, from **Devices (N)…**.
 Pairing the same Mac again replaces its entry. When a Mac's address changes, the app finds it again by its
 Bonjour advertisement, matched by the pinned fingerprint, or tries the other
-addresses from the pairing link. The app pairs again only when the Mac says the
-device was revoked or the Mac's certificate changed (its identity was reset).
+addresses from the pairing link. When the Mac's remote access **port** changes
+(**Port…** in Hivemind Server's menu), the app finds the new port through Bonjour
+the same way and, once the Mac answered there with the pinned certificate,
+saves it for all of the Mac's addresses. The app pairs again only when the Mac
+says the device was revoked or the Mac's certificate changed (its identity was
+reset).
 
 Each Mac's metadata (name, addresses, port, fingerprint) is in the app's
 settings. Its device token is in the iOS Keychain, readable only after the
@@ -73,14 +80,29 @@ each web view on the Mac's origin: links elsewhere open in Safari.
   ⌘K and For You ⌘⇧I, plus **Switch Mac…** ⌘⇧M and **Pair with a Mac…**.
   Hold ⌘ to see them.
 - **Connection screen.** When the Mac cannot be reached, its certificate does not
-  match, the device was revoked or the Hivemind server behind the gateway is
-  stopped, the window says which and offers **Try Again** (it also retries by
-  itself every 5 seconds while that can help), **Pair Again…** when the pairing
-  is gone, and **Macs…**.
+  match, the device was revoked ("This device was removed from <Mac>. Pair
+  again"), the Hivemind server behind the gateway is stopped, or the Mac could
+  not verify that server ("Hivemind on <Mac> couldn't be verified",
+  [Verified server](remote-access.md#verified-server)), the window says which
+  and offers **Try Again** (it also retries by itself every 5 seconds while
+  that can help), **Pair Again…** when the pairing is gone, and **Macs…**.
 - **Sessions.** The app keeps a device session per Mac and renews it by
-  itself, 30 minutes before its hour is up and when a window comes forward
-  (if the session is more than a minute old). See
+  itself with the device token, 30 minutes before its hour is up and when a
+  window comes forward (if the session is more than a minute old). You never
+  sign in again: reopening the app after days, when the session has long run
+  out, renews it first and then loads the page. See
   [Device sessions](remote-access.md#device-sessions).
+- **Reconnecting.** After a network blip, the Mac waking up, or Hivemind
+  Server restarting (the gateway then forgets the device's session), the app
+  gets a new session by itself, the page reconnects, and every terminal you
+  had open shows the same tmux session again, with "Reconnecting…" while it
+  waits. Only a revoked device closes the Mac's windows. See
+  [Reconnecting](remote-access.md#reconnecting).
+- **Switch Mac…** In the page's **Settings** menu (only in this app, not in a
+  browser or Hivemind.app on the Mac), and ⌘⇧M with a keyboard: opens the list
+  of paired Macs.
+- **Terminal sessions** stays in the navigation on iPhone-sized screens too
+  (in a plain browser, which has no terminals, it is not shown).
 - **Files.** Downloads open the share sheet (save to Files, AirDrop, …).
   Pages the UI opens in a new window, such as attachments, show in a sheet.
 
@@ -111,17 +133,27 @@ A plain browser shows none of this: no bridge, no terminals, as before.
 
 ### Notifications
 
-New messages that need you show as local notifications while the app is running
-but not in front, as Hivemind.app does on the Mac. The app icon's badge shows the
-attention count (the largest of each Mac's windows, added up over Macs). iOS
-asks for permission with the first notification, never at launch; the badge
-shows only once it is granted.
+New messages that need you (a DM, a mention, a message addressed to you) are
+shown as local notifications (`UNUserNotificationCenter`):
 
-There are **no push notifications**: once iOS suspends the app in the
-background, nothing arrives until you open it again. Push needs APNs, which
-needs a paid Apple Developer account, an App ID with the Push Notifications
-capability, and a push provider on the Mac holding an APNs key. None of that
-exists yet, so the app declares no background modes.
+- **While the app is in front**, as an in-app banner (presentation `.banner`
+  and `.list`, with sound), unless a window of that Mac in front already shows
+  the conversation the notice is about (the same channel, or the same thread);
+  its unread marks say it there (`RemoteNoticePolicy`).
+- **In the background**, as a normal notification, for as long as iOS lets the
+  app run after you left it (usually seconds).
+
+Tapping one brings back the window that raised it (or any window) at that
+conversation. The app icon's badge shows the attention count (the largest of
+each Mac's windows, added up over Macs). iOS asks for permission with the
+first notification, never at launch; the badge shows only once it is granted.
+
+There are **no push notifications** yet: once iOS suspends the app in the
+background, nothing arrives until you open it again. Background delivery needs
+APNs, which needs a paid Apple Developer account, an App ID with the Push
+Notifications capability, and a push provider on the Mac holding an APNs key.
+That is planned for a later change; until then the app declares no background
+modes.
 
 ## Installing on a device
 
@@ -183,8 +215,8 @@ swift run --package-path macos/Tools xcodegen generate --spec ios/project.yml
 It never signs, installs, boots a Simulator or runs the app. The generated
 project, `Sources/Info.plist`, `ios/build/` and `ios/dist/` are gitignored.
 Edit `ios/project.yml`, never the project: Info.plist keys (camera, local
-network and Bonjour, multiple scenes, `NSAllowsLocalNetworking`, no background
-modes) are written from it.
+network and Bonjour, the `hivemind-pair` URL scheme, multiple scenes,
+`NSAllowsLocalNetworking`, no background modes) are written from it.
 
 The app target depends on `HivemindKit` from the local `macos` package, the
 same Foundation-only library the macOS apps use. The pairing, session, gateway
@@ -222,7 +254,9 @@ Simulator app as workflow artifacts (`Hivemind-iOS-unsigned`,
 ## Not included yet
 
 - App Store, TestFlight or any signed build.
-- Push notifications (see [Notifications](#notifications)).
+- Push notifications (APNs) for background delivery (see
+  [Notifications](#notifications)); a later change, with an Apple developer
+  account.
 - Reaching the Mac from outside private networks. Use a VPN that hands out
   private addresses; see [Network scope](remote-access.md#network-scope).
 - A read-only or chat-only device: every device has full access.

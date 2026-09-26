@@ -41,6 +41,7 @@ struct RemoteClientNavigationTests {
     #expect(RemoteClientNavigation.mainFrameStatus(404) == .show)
     #expect(RemoteClientNavigation.mainFrameStatus(401) == .renewSession)
     #expect(RemoteClientNavigation.mainFrameStatus(502) == .serverStopped)
+    #expect(RemoteClientNavigation.mainFrameStatus(503) == .serverUnverified)
   }
 }
 
@@ -187,6 +188,8 @@ struct RemoteConnectScreenTests {
     #expect(RemoteConnectionProblem(.unreachable("timed out")) == .unreachable("timed out"))
     #expect(RemoteConnectionProblem(.pinMismatch) == .pinMismatch)
     #expect(RemoteConnectionProblem(.gateway(GatewayError(.unauthorized, "x"))) == .revoked)
+    #expect(RemoteConnectionProblem(.gateway(GatewayError(.deviceRevoked, "x"))) == .revoked)
+    #expect(RemoteConnectionProblem(.gateway(GatewayError(.serverUnverified, "x"))) == .serverUnverified)
     #expect(RemoteConnectionProblem(.gateway(GatewayError(.serverUnavailable, "x"))) == .serverStopped)
     #expect(RemoteConnectionProblem(.gateway(GatewayError(.tooLarge, "Too large."))) == .other("Too large."))
     guard case .other = RemoteConnectionProblem(.gateway(GatewayError(.rateLimited, "x"))) else { Issue.record("rate limit"); return }
@@ -198,6 +201,10 @@ struct RemoteConnectScreenTests {
     #expect(!connecting.offersRetry && !connecting.offersPairAgain)
     let revoked = RemoteConnectScreenContent(problem: .revoked, macName: "Studio")
     #expect(revoked.offersPairAgain && !revoked.offersRetry)
+    #expect(revoked.title == "This device was removed from Studio")
+    #expect(revoked.detail.hasPrefix("Pair again"))
+    let unverified = RemoteConnectScreenContent(problem: .serverUnverified, macName: "Studio")
+    #expect(unverified.offersRetry && !unverified.offersPairAgain)
     let pin = RemoteConnectScreenContent(problem: .pinMismatch, macName: "Studio")
     #expect(pin.offersPairAgain && pin.offersRetry)
     let asleep = RemoteConnectScreenContent(problem: .unreachable("timed out"), macName: "Studio")
@@ -231,5 +238,26 @@ struct RemoteDiscoveryTests {
     #expect(RemoteDiscovery.endpoint(host: "127.0.0.1", port: 7443) == nil)
     #expect(RemoteDiscovery.endpoint(host: "studio.local", port: 7443) == nil)
     #expect(RemoteDiscovery.endpoint(host: "10.0.0.4", port: 0) == nil)
+  }
+}
+
+struct RemoteNoticePolicyTests {
+  @Test func conversationsFromRoutes() {
+    #expect(RemoteNoticePolicy.conversation("#/c/general") == "general")
+    #expect(RemoteNoticePolicy.conversation("#/c/general/t/m1") == "general/t/m1")
+    #expect(RemoteNoticePolicy.conversation("#/for-you/acme") == nil)
+    #expect(RemoteNoticePolicy.conversation("#/c/") == nil)
+    #expect(RemoteNoticePolicy.conversation(nil) == nil)
+  }
+
+  @Test func onlyTheOpenConversationIsQuiet() {
+    let open: [String?] = ["#/c/general", nil, "#/inbox/acme"]
+    #expect(RemoteNoticePolicy.isAboutOpenConversation(target: "#/c/general", openRoutes: open))
+    // A reply in a thread that is not open, another channel, a notice without a target: shown.
+    #expect(!RemoteNoticePolicy.isAboutOpenConversation(target: "#/c/general/t/m1", openRoutes: open))
+    #expect(!RemoteNoticePolicy.isAboutOpenConversation(target: "#/c/dm-atlas", openRoutes: open))
+    #expect(!RemoteNoticePolicy.isAboutOpenConversation(target: nil, openRoutes: open))
+    #expect(RemoteNoticePolicy.isAboutOpenConversation(target: "#/c/general/t/m1", openRoutes: ["#/c/general/t/m1"]))
+    #expect(!RemoteNoticePolicy.isAboutOpenConversation(target: "#/c/general", openRoutes: []))
   }
 }

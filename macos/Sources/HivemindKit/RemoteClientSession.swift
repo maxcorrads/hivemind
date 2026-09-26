@@ -66,6 +66,31 @@ public final class RemoteSessionKeeper {
     issuedAt = nil
   }
 
+  /// Reports of a forgotten session closer together than this after the
+  /// last one share its renewal: every scene and page of the Mac may report
+  /// the same loss at once.
+  public nonisolated static let expiryReportInterval: TimeInterval = 5
+  private var lastExpiryReport: Date?
+
+  /// A page said the gateway forgot its device session (401 with
+  /// X-Hivemind-Device-Session: required): get a new one now, so the page's
+  /// own retries (its /ws reconnect) find a live cookie. Throttled; a
+  /// revoked device ends up in onRevoked as with any renewal.
+  public func pageReportedExpiry() async {
+    let now = scheduler.now()
+    if let lastExpiryReport, now.timeIntervalSince(lastExpiryReport) < Self.expiryReportInterval { return }
+    lastExpiryReport = now
+    invalidate()
+    _ = try? await current()
+  }
+
+  /// Whether a scene coming forward must get a new session before its page
+  /// may load anything: the app was away longer than the session lasts (or
+  /// it has none). Then the scene renews first and loads the page again.
+  public func isExpired(at now: Date) -> Bool {
+    session.map { $0.isExpired(at: now) } ?? true
+  }
+
   /// Forgets the session and stops the timer (the Mac was removed, or the
   /// last scene showing it went away).
   public func stop() {

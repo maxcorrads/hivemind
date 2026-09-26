@@ -51,12 +51,16 @@ public enum RemoteClientNavigation {
     /// The Node server is not running behind the gateway (502): show the
     /// connection screen instead of the gateway's JSON.
     case serverStopped
+    /// The gateway could not verify the server on its port (503
+    /// server-unverified): it forwards nothing, so say so.
+    case serverUnverified
   }
 
   public static func mainFrameStatus(_ status: Int) -> MainFrameStatus {
     switch status {
     case GatewayErrorCode.unauthorized.httpStatus: .renewSession
     case GatewayErrorCode.serverUnavailable.httpStatus: .serverStopped
+    case GatewayErrorCode.serverUnverified.httpStatus: .serverUnverified
     default: .show
     }
   }
@@ -179,6 +183,8 @@ public enum RemoteConnectionProblem: Equatable, Sendable {
   case revoked
   /// The gateway answered, but Hivemind (the Node server) is not running.
   case serverStopped
+  /// The gateway answered, but could not verify the server on its port.
+  case serverUnverified
   /// Anything else the gateway or the app said.
   case other(String)
 
@@ -186,8 +192,9 @@ public enum RemoteConnectionProblem: Equatable, Sendable {
     switch error {
     case .unreachable(let reason): self = .unreachable(reason)
     case .pinMismatch: self = .pinMismatch
-    case .gateway(let error) where error.code == .unauthorized: self = .revoked
+    case .gateway(let error) where error.code == .deviceRevoked || error.code == .unauthorized: self = .revoked
     case .gateway(let error) where error.code == .serverUnavailable: self = .serverStopped
+    case .gateway(let error) where error.code == .serverUnverified: self = .serverUnverified
     case .gateway(let error) where error.code == .rateLimited: self = .other("Too many attempts from this device. Wait a minute, then try again.")
     case .gateway, .badResponse, .invalid: self = .other(error.errorDescription ?? "Something went wrong.")
     }
@@ -220,13 +227,18 @@ public struct RemoteConnectScreenContent: Equatable, Sendable {
       offersPairAgain = true
       offersRetry = true
     case .revoked:
-      title = "This device is no longer paired"
-      detail = "\(macName) removed this device. Pair it again from Hivemind Server’s menu: Pair a Device…"
+      title = "This device was removed from \(macName)"
+      detail = "Pair again: on the Mac, choose Pair a Device… in Hivemind Server’s menu, then scan the new code."
       offersPairAgain = true
       offersRetry = false
     case .serverStopped:
       title = "Hivemind isn’t running on \(macName)"
       detail = "Remote Access is on, but the Hivemind server is stopped. Start it from Hivemind Server’s menu on the Mac."
+      offersPairAgain = false
+      offersRetry = true
+    case .serverUnverified:
+      title = "Hivemind on \(macName) couldn’t be verified"
+      detail = "Something answers on the Hivemind server’s port that Hivemind Server did not start, so the Mac forwards nothing to it. Restart the server from Hivemind Server’s menu on the Mac."
       offersPairAgain = false
       offersRetry = true
     case .other(let message):
@@ -235,5 +247,27 @@ public struct RemoteConnectScreenContent: Equatable, Sendable {
       offersPairAgain = false
       offersRetry = true
     }
+  }
+}
+
+/// Which notices the iOS app shows while it is in front (docs/ios.md#notifications):
+/// every one except those about the conversation a window in front shows
+/// already, where the page's own unread marks say it.
+public enum RemoteNoticePolicy {
+  /// The conversation a hash route shows: its channel and thread, or nil
+  /// for anything but a channel ("#/c/<id>[/t/<thread>]", web/selection.ts).
+  public static func conversation(_ hash: String?) -> String? {
+    guard let hash, hash.hasPrefix("#/c/") else { return nil }
+    let parts = hash.dropFirst("#/c/".count).split(separator: "/", omittingEmptySubsequences: false)
+    guard let channel = parts.first, !channel.isEmpty else { return nil }
+    if parts.count >= 3, parts[1] == "t", !parts[2].isEmpty { return "\(channel)/t/\(parts[2])" }
+    return String(channel)
+  }
+
+  /// Whether a notice for `target` is about what one of `openRoutes` (the
+  /// routes of that Mac's windows in front) shows.
+  public static func isAboutOpenConversation(target: String?, openRoutes: [String?]) -> Bool {
+    guard let wanted = conversation(target) else { return false }
+    return openRoutes.contains { conversation($0) == wanted }
   }
 }

@@ -55,8 +55,10 @@ On the Mac, in the Hivemind Server menu:
    every device).
 
 After a port change, a device on the same network finds the new port through
-Bonjour. The app saves only the port it paired with, though, so a device that
-reaches the Mac another way (over Tailscale, say) must pair again.
+Bonjour, still pinned to the Mac's fingerprint, and saves it: from then on it
+uses the new port on every saved address, Tailscale ones included. A device
+that only ever reaches the Mac over a VPN, where Bonjour does not reach, learns
+the new port the next time it is on the Mac's network, or pairs again.
 
 ### What you see on the Mac
 
@@ -109,6 +111,7 @@ What the gateway defends against:
 | A stolen device-session cookie | It lasts 1 hour, is sent only to the exact gateway origin, and dies when the device is revoked. |
 | A copy of `devices.json` | It holds only SHA-256 hashes of 256-bit tokens, which cannot be reversed. |
 | A paired device that must stop working | Revoking it deletes its record, drops its sessions and closes its live connections (HTTP, `/ws`, broker). |
+| A process that took the Node server's loopback port (another user, a sandboxed app, anything that got there while Hivemind was not bound) | The gateway forwards only to a server that answers the instance challenge with the secret Hivemind Server.app started it with ([Verified server](#verified-server)). Anything else gets no request, no Human capability and no terminals, and devices get `503 server-unverified`. |
 
 What the gateway does **not** defend against:
 
@@ -134,7 +137,10 @@ What the gateway does **not** defend against:
   the local server and broker directly, as before.
 - **Local processes on the Mac.** They can reach the Node server directly, as
   before. The gateway refuses loopback connections, so it gives them nothing
-  new.
+  new. A process that races the real server for its port between the moment
+  that server dies and the moment Hivemind Server.app notices could get the
+  requests already in flight; a new request or WebSocket after that is checked
+  against the new server first.
 
 ## Network scope
 
@@ -219,6 +225,22 @@ Errors look like this:
 The codes are in `GatewayErrorCode`, each with its HTTP status. A client reads
 any code it does not know as `internal`.
 
+| Code | Status | When |
+| --- | --- | --- |
+| `bad-request` | 400 | Malformed JSON, wrong media type, a field out of range, a malformed request |
+| `unauthorized` | 401 | No live device session: missing, expired, or forgotten because Hivemind Server restarted. Sent with `X-Hivemind-Device-Session: required`. The app gets a new session with its device token, without asking |
+| `device-revoked` | 401 | `POST /_hivemind/session` with a device token the Mac does not know: the device was revoked, or the Mac's identity was reset. The only answer that makes the app close the Mac's windows and offer to pair again |
+| `invalid-code`, `pairing-closed`, `forbidden-origin` | 403 | Pairing refused; an `Origin` that is not allowed |
+| `not-found` | 404 | An unknown `/_hivemind/` path |
+| `too-many-devices` | 409 | 32 devices paired |
+| `length-required` | 411 | A `/_hivemind/` POST without a `Content-Length` (chunked, or none at all); the connection closes after it |
+| `too-large` | 413 | A head or body over its limit |
+| `pairing-locked` | 423 | Too many wrong codes |
+| `rate-limited` | 429 | Too many attempts from this address |
+| `internal` | 500 | Anything else |
+| `server-unavailable` | 502 | The Node server (or the broker) is not running or did not answer |
+| `server-unverified` | 503 | Something answers on the Node server's port that could not prove it is the server Hivemind Server.app started ([Verified server](#verified-server)) |
+
 The gateway answers everything under `/_hivemind/` itself
 (`GatewayPath.isGatewayOwned`). It never proxies those paths; an unknown one
 gets `not-found`. **The gateway endpoints refuse any request that carries an
@@ -260,8 +282,11 @@ the Mac.
    `platform` is `ios` or `ipados`. `deviceName` is trimmed and must be 1 to
    64 characters, with no control or invisible format characters
    (`PairRequest.validated()`, `DeviceName`). The request must carry exactly
-   one `Content-Type: application/json` and a body of at most 4 KiB, with a
-   `Content-Length` (`bad-request` otherwise).
+   one `Content-Type: application/json` (`bad-request` otherwise) and a body
+   of at most 4 KiB (`too-large`, 413) with a `Content-Length`. A chunked body,
+   or one without any length, gets `length-required` (411), and the gateway
+   closes the connection after that answer, since it cannot tell where such a
+   body ends without reading all of it.
 4. The gateway checks, in this order:
    - the rate limit for the remote address (10 attempts per minute),
    - whether a pairing window is open (`pairing-closed`),
@@ -286,12 +311,19 @@ the Mac.
 ```http
 POST /_hivemind/session
 Authorization: Bearer <device token>
+Content-Type: application/json
+Content-Length: 2
+
+{}
 ```
 
-- The body is empty. There is no `Origin`, and the rate limit is 30 attempts
-  per address per minute.
-- The gateway hashes the token and looks it up. It answers `unauthorized` for
-  an unknown or revoked token.
+- The gateway reads nothing from the body, which the app sends as `{}` so that
+  URLSession always sends a `Content-Length`; an empty body needs
+  `Content-Length: 0`, and none at all is `length-required`, as for pairing.
+  There is no `Origin`, and the rate limit is 30 attempts per address per
+  minute.
+- The gateway hashes the token and looks it up. It answers `device-revoked`
+  for an unknown or revoked token.
 - On success it creates a `DeviceSessionToken`, updates the device's
   `lastSeenAt`, and replies:
 
@@ -317,17 +349,35 @@ Authorization: Bearer <device token>
 - The app counts the session's hour on its own clock from the moment it asked
   (or the Mac's `expiresAt`, if that is sooner), so a Mac and a device whose
   clocks differ cannot break sessions.
-- It renews the session when less than 30 minutes are left
-  (`GatewayLimits.sessionRenewBefore`), and when a scene becomes active and
-  the session is more than 60 seconds old, so several iPad windows coming
-  forward together do not each make one. A device holds at most 8 live
-  sessions; the oldest one goes first.
-- An `unauthorized` reply from `/session` means the Mac revoked the device
-  (or its identity was reset). The app then offers to pair again.
+- Sessions are **renewed silently** with the long-lived device token: when
+  less than 30 minutes are left (`GatewayLimits.sessionRenewBefore`), and
+  when a scene becomes active and the session is more than 60 seconds old, so
+  several iPad windows coming forward together do not each make one. A
+  device holds at most 8 live sessions; the oldest one goes first. The person
+  never sees a session expire.
+- **Reopening after days works without pairing again.** When a scene comes
+  forward (the app opened again, or brought back after iOS suspended it) and
+  the session it had has run out meanwhile, the app first gets a new session
+  with the device token, puts its cookie into the web view, and only then
+  loads the page again (`RemoteSessionKeeper.isExpired(at:)`,
+  `SceneController.sceneDidBecomeActive`). Only a revoked device (or a reset
+  identity) has to pair again.
+- A `device-revoked` reply from `/session` means the Mac revoked the device
+  (or its identity was reset). The app then closes that Mac's windows with
+  "This device was removed from <Mac>. Pair again". For an older gateway, an
+  `unauthorized` reply from `/session` means the same. Nothing else makes the
+  app give up on a pairing.
 - Hivemind Server keeps sessions in memory only. After it restarts (or remote
-  access is turned off and on), a device's page gets `unauthorized` until the
-  app makes a new session: at the next renewal, when a scene becomes active,
-  or when the main page or the broker connection gets a `401`.
+  access is turned off and on), the gateway answers the device's requests
+  `unauthorized` with `X-Hivemind-Device-Session: required`. The app gets a
+  new session at once, whoever notices first: the page (which cannot renew it
+  itself, since it never holds the device token) posts the bridge message
+  `device-session-expired`; the broker WebSocket gets a `401` on its upgrade;
+  the main document gets a `401`. Reports from every window and page of one
+  Mac within 5 seconds share one renewal
+  (`RemoteSessionKeeper.pageReportedExpiry()`). The page's own retries (its
+  `/ws` reconnect) then find the new cookie; see
+  [Reconnecting](#reconnecting).
 
 ### Proxy
 
@@ -371,8 +421,8 @@ It also rewrites the response:
 | Hop-by-hop headers | removed |
 | Everything else (`Cache-Control`, `X-Frame-Options`, CSP…) | passed on |
 
-The **Human capability**: the gateway bootstraps it like any native local
-client. It sends `POST /api/ui/session` with `Origin: http://127.0.0.1:<port>`
+The **Human capability**: once the server is [verified](#verified-server),
+the gateway bootstraps it like any native local client. It sends `POST /api/ui/session` with `Origin: http://127.0.0.1:<port>`
 and `Content-Type: application/json`, reads the `hivemind_human_<port>` value
 from `Set-Cookie`, and keeps it in memory. It sends that value as
 `X-Hivemind-Human` on every proxied request (see
@@ -381,8 +431,8 @@ share one bootstrap; if it takes more than 10 seconds they get
 `server-unavailable`. When the Node server answers `401` with
 `X-Hivemind-Session-Required: 1`, for example after a restart, the gateway
 drops that capability and passes the `401` on. It does not bootstrap at once:
-the next request does, so the page's own bootstrap-and-replay succeeds
-against the fresh capability. The page's `POST /api/ui/session` is proxied
+the next request verifies the server again and bootstraps, so the page's own
+bootstrap-and-replay succeeds against the fresh capability. The page's `POST /api/ui/session` is proxied
 like any request; its `Set-Cookie` is removed, and the page never needs it.
 
 Each proxied request gets a fresh loopback connection that closes after its
@@ -405,12 +455,70 @@ beyond that it closes it. `/ws` is an upgrade with the same
 checks, where `Origin` is required. After the `101` the gateway splices bytes
 both ways until either side closes, or until the device is revoked or remote
 access is turned off. If the Node server is not running, the reply is
-`server-unavailable` (502).
+`server-unavailable` (502); if it cannot be verified, `server-unverified`
+(503).
+
+Every answer the gateway sends while it holds a request back (waiting for the
+server's check or the Human bootstrap, or after the server closed without
+answering) leaves a kept-alive device connection being read again, so the
+device's next request on it is served; any other way out closes the
+connection.
+
+### Verified server
+
+Anything can listen on the Node server's loopback port while Hivemind is not
+bound there (not started yet, restarting, crashed): another macOS user, or a
+sandboxed app that cannot read your files. The gateway would hand it the
+devices' requests and its pages would reach the Mac's terminals. So the gateway
+checks the server exactly as Hivemind.app does before it gives a page
+terminals ([Verifying the server](macos.md#verifying-the-server)):
+
+1. Hivemind Server.app starts every server with a fresh 256-bit secret. The
+   gateway runs in the same app and takes that secret from memory
+   (`ServerAppController.instanceSecret`); only if that is ever missing does
+   it read it from the `0600` discovery file written for the same process
+   (the same pid and port). Nothing else is trusted, and the secret is never
+   logged.
+2. It sends a fresh nonce to `GET /api/health/instance?nonce=<64 hex>` on
+   `http://127.0.0.1:<port>` and checks the HMAC proof in constant time
+   (`InstanceVerifier`, `InstanceServerVerifier`, `GatewayServerTrust.swift`).
+3. It checks **before its Human bootstrap and on every (re)connection to the
+   server**: the first request after Hivemind Server.app (re)started it (a new
+   secret, or a new port), after a loopback connection to it failed or closed
+   without an answer, after it asked for a new Human session, and on every
+   WebSocket upgrade (`/ws` and `/_hivemind/broker`, which is how pages and
+   terminals reconnect). Requests in between on the same verified server are
+   forwarded without another check. Concurrent requests share one check, which
+   may take 10 seconds.
+4. The outcome:
+   - **Verified**: forwarded as described above.
+   - **Nothing answered** (stopped, restarting): `server-unavailable` (502),
+     and the next request checks again.
+   - **Anything else** (no proof, a wrong one, `404` because the process has no
+     secret, another status): `server-unverified` (503). The gateway forwards
+     nothing: no request, no Human capability (it drops the one it had), no
+     `/ws`, and it closes every connection already forwarding (proxied
+     requests, `/ws`, terminals). It logs why, and refuses every request for
+     5 seconds before it checks again, so a flood of requests is not a flood
+     of checks.
+
+**Terminals follow the same rule** as in Hivemind.app, where a page gets
+terminals only from a verified server (`TerminalTrustGate`): the gateway
+bridges `/_hivemind/broker` only while the server is verified (checked afresh
+on each upgrade), answers `server-unverified` or `server-unavailable`
+otherwise, and closes the bridges when a check fails. The broker itself is
+Hivemind Server.app's own, reached through its `0600` socket with the token
+read from `broker.token` like Hivemind.app does; a broker connection that is
+already open is not closed because the Node server merely stopped or
+restarted, only when something unverified answers in its place.
+
+The app shows a `server-unverified` answer on its connection screen:
+"Hivemind on <Mac> couldn't be verified", with **Try Again**.
 
 ### Terminal broker
 
 `GET /_hivemind/broker` is a WebSocket upgrade. It requires a device session
-cookie and no `Origin`: the app's `URLSessionWebSocketTask` sets `Cookie`
+cookie, a [verified](#verified-server) server, and no `Origin`: the app's `URLSessionWebSocketTask` sets `Cookie`
 itself and sends no Origin. The gateway bridges it to the local broker socket
 (`broker.sock`) and speaks the same protocol there
 ([Terminal broker](terminal-broker.md#protocol)):
@@ -458,6 +566,32 @@ with these differences (`RemoteTerminalPolicy`, `RemoteClientBridge`):
   keys, even on an iPad with a keyboard or trackpad, whose keyboards may lack
   Esc.
 
+## Reconnecting
+
+Whatever breaks the connection for a moment, the app and the page put it back
+by themselves, and every open terminal shows the same tmux session again, as
+if nothing had happened:
+
+| What happened | What recovers it |
+| --- | --- |
+| The device session is about to expire | Renewed ahead of time; nothing is closed. A session that expires does not close the `/ws` or terminal WebSockets opened with it |
+| The app was away longer than a session lasts | The session is renewed with the device token first, then the page loads again ([Device sessions](#device-sessions)) |
+| Hivemind Server.app (and with it the gateway) restarted, or remote access was turned off and on | The gateway forgot the session: the first `401` with `X-Hivemind-Device-Session: required` makes the app renew it; the page's `/ws` retries then find the new cookie |
+| The Node server restarted | The gateway checks the new server and bootstraps a new Human capability; the page reconnects `/ws` as it does in a browser. Terminals are not affected |
+| A network blip, the Mac asleep for a while | The page's `/ws` retries with backoff; `BrokerClient` retries the broker WebSocket forever (0.5 s, 1 s, 2 s, 4 s, then every 5 s) |
+
+When the broker connection comes back, the page attaches every terminal view
+it still shows to the **same** tmux session again, with the size it has now;
+tmux redraws the screen on attach. While it waits, the terminal keeps what it
+showed under a "Reconnecting…" note. Only a session that really ended (the
+broker lists it no longer running, or refuses the attach with
+`no-such-session`) shows "Session ended". Hivemind.app on the Mac does the same
+for its local broker ([Terminal broker: Clients](terminal-broker.md#clients)).
+
+The one thing that is not recovered is revocation: `device-revoked` closes the
+Mac's windows on the device and shows "This device was removed from <Mac>.
+Pair again".
+
 ## Devices and revocation
 
 `~/Library/Application Support/Hivemind/devices.json` (`0600`,
@@ -493,6 +627,8 @@ request and every new WebSocket needs a live session.
 | Sessions per device | 8 |
 | Broker connections per device | 8 |
 | Human bootstrap | 10 s |
+| Server instance check / refused after a failed one | 10 s / 5 s |
+| Session renewals for "the gateway forgot it" reports, per Mac | 1 per 5 s |
 | Request head | 32 KiB, 100 headers, 15 s to arrive |
 | Response head from Node | 64 KiB |
 | Refused body read and dropped | up to 1 MiB |
@@ -521,6 +657,7 @@ request and every new WebSocket needs a live session.
 | `GatewayState.swift` | The pairing window, device sessions and rate limits (`GatewayRateLimiter`, `GatewayPairing`, `GatewaySessionStore`) |
 | `GatewayWebSocket.swift` | The WebSocket handshake and frames for `/_hivemind/broker` |
 | `GatewayServer.swift`, `GatewayConnection.swift`, `GatewayBrokerBridge.swift` | The gateway itself: connections, pairing and sessions, the Human capability, the proxy state machine and the broker bridge, over `GatewayStream` (`GatewayTransport.swift`) |
+| `GatewayServerTrust.swift` | The server the gateway forwards to (`GatewayUpstreamServer`: port and instance secret), its verification (`GatewayServerVerifying`, `InstanceServerVerifier` over `InstanceVerifier`) and what the gateway knows about it (`GatewayServerTrust`) |
 | `GatewaySettings.swift`, `GatewayCertificate.swift` | The on/off and port settings, and the self-signed certificate the app signs with its Keychain key |
 | `RemoteClientHTTP.swift`, `RemoteClientSession.swift`, `RemoteClientStore.swift`, `RemoteClientWebSocket.swift`, `RemoteClientDiscovery.swift`, `RemoteClientWindow.swift` | The iOS app's side: pairing and session calls, session renewal, saved Macs, the broker WebSocket, Bonjour matching, and the per-scene navigation, bridge and terminal rules |
 
@@ -534,8 +671,10 @@ Network.framework listener, the Keychain identity, the menu) are in
 ## Not included
 
 - **Push notifications (APNs).** They need an Apple developer account, an App
-  ID with the push entitlement and a push provider on the Mac. Notifications
-  reach the device only while the app runs in the foreground; see
+  ID with the push entitlement and a push provider on the Mac, and are planned
+  for a later change. Until then notices reach the device only while the app
+  runs: as in-app banners while it is in front, and as notifications for the
+  short time iOS lets it run in the background; see
   [iOS and iPadOS app](ios.md#notifications).
 - **Access from outside private networks.** Use a VPN that gives private
   addresses (Tailscale, Headscale, WireGuard).

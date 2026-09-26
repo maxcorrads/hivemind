@@ -1,5 +1,5 @@
 import { Hash, Lock, Sparkles, UserPlus } from "lucide-react";
-import { useCallback, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import type { AdaptiveRoutingView } from "../src/shared/adaptive-topology.ts";
 import type { ChannelTaskPage } from "../src/shared/tasks.ts";
 import type { Agent, Channel, Message, ThreadStatus } from "../src/shared/types.ts";
@@ -99,11 +99,21 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
   const dm = activeChannel?.type === "dm";
   const newUnreadJump = unreadTarget?.channelId === channelId && unreadTarget !== picked.unreadTarget;
   const requested = picked.channelId === channelId && !newUnreadJump ? picked.tab : "messages";
-  // Hivemind.app only: a DM with an agent whose tmux session runs (or whose server is down, to say so) has a Terminal tab.
+  // The apps only: a DM with an agent whose tmux session runs (or whose server is down, to say so) has a Terminal tab.
+  // Once it had one, the tab stays while the broker reconnects and the session list is not known yet (TerminalPanel
+  // then keeps the terminal, which attaches again by itself).
   const terminals = useTerminalState();
   const dmPeer = dm && activeChannel ? dmPeerOf(activeChannel, agents) : undefined;
   const peerSession = terminals.native ? agentTerminalSession(dmPeer) : null;
-  const terminalSession = peerSession && (liveSession(terminals, peerSession) || terminals.broker === "unavailable") ? peerSession : null;
+  const peerLive = peerSession !== null && liveSession(terminals, peerSession) !== null;
+  const listUnknown = terminals.sessions === null && terminals.broker !== "unverified";
+  const [hadTerminal, setHadTerminal] = useState<string | null>(null);
+  useEffect(() => {
+    if (peerLive) setHadTerminal(peerSession);
+    else if (!listUnknown) setHadTerminal(null);
+  }, [peerLive, listUnknown, peerSession]);
+  const terminalSession = peerSession && (peerLive || terminals.broker === "unavailable"
+    || (listUnknown && hadTerminal === peerSession)) ? peerSession : null;
   const tab = (requested === "contract" && !room) || (requested === "terminal" && !terminalSession) ? "messages" : requested;
   const work = useChannelWork(activeChannel, roomTick);
   // The hidden stream loses its scroll position; coming back to a live pane lands on its newest message.

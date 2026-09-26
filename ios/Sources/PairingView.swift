@@ -12,6 +12,9 @@ struct PairingView: View {
   let onPaired: (PairedMac) -> Void
   /// Nil when pairing is the only thing the app can show (no Mac yet).
   let onCancel: (() -> Void)?
+  /// A hivemind-pair:// link opened from outside the app: read at once and
+  /// shown for confirmation. Pairing still needs the Pair button.
+  var initialLink: String? = nil
 
   @State private var link = ""
   @State private var payload: PairingPayload?
@@ -48,6 +51,9 @@ struct PairingView: View {
         }
       }
       .disabled(pairing)
+      .task(id: initialLink) {
+        if let initialLink { read(initialLink) }
+      }
     }
   }
 

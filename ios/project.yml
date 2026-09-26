@@ -85,6 +85,14 @@ targets:
         NSLocalNetworkUsageDescription: Hivemind connects to Hivemind Server on your Mac over your local network.
         NSBonjourServices:
           - _hivemind._tcp
+        # The pairing link in the Mac's QR code: opening it (from the Camera
+        # app, say) shows the pairing screen to confirm; it never pairs by
+        # itself (docs/ios.md#pairing).
+        CFBundleURLTypes:
+          - CFBundleURLName: com.maxcorrads.hivemind.ios.pair
+            CFBundleTypeRole: Viewer
+            CFBundleURLSchemes:
+              - hivemind-pair
         # The gateway is reached by IP address or a .local name with a
         # self-signed certificate that the app pins itself (docs/remote-access.md).
         # ATS does not apply to IP literals; this covers .local names. No

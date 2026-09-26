@@ -384,6 +384,9 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
       app.setBadge(count, for: id)
     case .notify(let title, let body, let tag, let target):
       app.notifier.post(UIAppNotice(title: title, body: body, tag: tag, target: target, windowID: id))
+    case .switchMac, .deviceSessionExpired:
+      // The iOS app's; there is one Mac here and no device session.
+      break
     default:
       // Terminals (docs/terminal-broker.md#bridge), only for a page from a
       // verified server (TerminalTrustGate). No confirmation for a launch,

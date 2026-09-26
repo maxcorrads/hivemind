@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, type KeyboardEvent } from "react";
 import { Settings } from "lucide-react";
 import type { Snapshot } from "./api.ts";
 import type { DesktopNotifications } from "./desktop-notifications.ts";
+import { switchMac, useNativePlatform } from "./native-bridge.ts";
 import { telegramDegraded } from "./telegram-health.ts";
 import type { Layout } from "./use-layout.ts";
 
@@ -63,6 +64,8 @@ export function SettingsMenu({ theme, onToggleTheme, layout, onLayout, notificat
     pick(LAYOUTS[(index + step + LAYOUTS.length) % LAYOUTS.length]![0]);
   };
   const degraded = telegramDegraded(telegram);
+  // Only the iPhone/iPad app shows one Mac of several; it answers with its Macs list.
+  const onDevice = useNativePlatform() === "ios";
   return (
     <details className="tools-menu" ref={menu} onClick={event => {
       const button = (event.target as HTMLElement).closest("button");
@@ -112,6 +115,11 @@ export function SettingsMenu({ theme, onToggleTheme, layout, onLayout, notificat
         <button type="button" className="tool-action" title="How to join" onClick={onHelp}>
           Help
         </button>
+        {onDevice && (
+          <button type="button" className="tool-action" title="Show another paired Mac" onClick={() => switchMac()}>
+            Switch Mac…
+          </button>
+        )}
       </div>
     </details>
   );

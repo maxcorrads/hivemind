@@ -3,10 +3,12 @@ import UIKit
 import UserNotifications
 
 /// Local notifications for the notices web/native-bridge.ts forwards, and
-/// the app icon's badge. Like Hivemind.app on the Mac, a notice is shown only
-/// while the app is not in front, and permission is asked for the first time
-/// there is something to show, never at launch. There is no push (APNs): a
-/// notice exists only while the app still runs (docs/ios.md).
+/// the app icon's badge (docs/ios.md#notifications). While the app is in
+/// front a notice shows as a banner (AppModel.post already dropped those
+/// about the conversation a window in front shows); in the background it
+/// is a normal notification while iOS still lets the app run. Permission is
+/// asked for the first time there is something to show, never at launch.
+/// There is no push (APNs) yet: once iOS suspends the app, nothing arrives.
 @MainActor
 final class Notifier: NSObject, UNUserNotificationCenterDelegate {
   /// A tap: the notice's route and the scene that raised it.
@@ -24,8 +26,6 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
   func post(_ notice: UIAppNotice) {
     // Each scene sees the same event; the first copy wins.
     guard deduper.admit(tag: notice.tag) else { return }
-    // The person is looking at Hivemind already; the badge and unread marks say it.
-    guard UIApplication.shared.applicationState != .active else { return }
     Task {
       guard await authorized(asking: true) else { return }
       let content = UNMutableNotificationContent()
@@ -80,11 +80,12 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     completionHandler()
   }
 
-  /// A notice can land just after the person came back to the app: list it only.
+  /// The app is in front: an in-app banner, also kept in Notification
+  /// Center. Only notices worth it get here (AppModel.post).
   nonisolated func userNotificationCenter(
     _ center: UNUserNotificationCenter, willPresent notification: UNNotification,
     withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
   ) {
-    completionHandler([.list])
+    completionHandler([.banner, .list, .sound])
   }
 }

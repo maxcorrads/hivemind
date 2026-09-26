@@ -413,6 +413,26 @@ App → page: `window.dispatchEvent(new CustomEvent("hivemind:terminal", {detail
 `terminal-status` is sent on every `sessions-subscribe`, and then on every
 change once the page has sent any terminal message.
 
+### Reconnecting a terminal
+
+A stream that ends without an exit status the page did not ask for is
+**lost**, not ended: the app's broker connection dropped (Hivemind Server
+restarted, a network blip, on iOS the gateway going away), or the broker no
+longer knows the stream (`no-such-stream`). The in-app terminal then keeps its
+screen under **Reconnecting…** and, once `terminal-status` says the broker is
+`connected` again and the session list shows the session alive, attaches the
+same screen to the **same** tmux session again, at its current size (after
+250 ms, then 1, 2 and 5 s between attempts, 5 s from then on); tmux redraws it
+on attach. An attach refused while the broker settles is retried; only
+`no-such-session` stops it. An exit **with** a status is real: the terminal says
+**Session ended.** once the broker no longer lists the session, and
+**Detached from <name>.** (with **Reconnect**) while it still runs. While a
+terminal reconnects, the panel and a DM's **Terminal** tab stay; only a broker
+that is `unverified`, or a session list without the session, replaces them.
+This is the page's behavior in both apps (`web/use-terminal.ts`, handler
+`lost`; `web/TerminalView.tsx`); `BrokerClient` reconnects the broker by itself
+([Clients](#clients)).
+
 ### Flow control to the page
 
 The page draws output more slowly than a busy agent can print it, so the app

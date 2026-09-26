@@ -1,11 +1,44 @@
 type Fetcher = (path: string, init?: RequestInit) => Promise<Response>;
 import { connectRealtime } from "../src/shared/realtime-client.ts";
+import { inNativeApp, postNative } from "./native-bridge.ts";
+
+/**
+ * The remote gateway's mark on a 401 that is about the device session, not the Human one: Hivemind Server.app on the
+ * Mac forgot it (it restarted) or it expired. Only the iPhone/iPad app holds the device token, so the page asks it to
+ * renew (docs/remote-access.md#device-sessions); the page's own retries then go through with the new cookie.
+ */
+export const DEVICE_SESSION_HEADER = "x-hivemind-device-session";
+/** At most one device-session-expired per this many ms per page. */
+export const DEVICE_SESSION_NOTICE_INTERVAL = 2_000;
+
+export type DeviceSessionNotifier = {
+  /** Whether the page runs in an app that can renew the device session. */
+  native: () => boolean;
+  /** Tells the app; false when it could not. */
+  post: () => boolean;
+  now: () => number;
+};
+
+const liveNotifier: DeviceSessionNotifier = {
+  native: () => inNativeApp(),
+  post: () => postNative({ type: "device-session-expired" }),
+  now: () => Date.now(),
+};
 
 /** One coordinator per tab; the HttpOnly cookie itself is shared by all tabs. */
-export function createHumanSession(fetcher: Fetcher = (path, init) => fetch(path, init)) {
+export function createHumanSession(fetcher: Fetcher = (path, init) => fetch(path, init), device: DeviceSessionNotifier = liveNotifier) {
   let valid = false;
   let generation = 0;
   let flight: Promise<number> | null = null;
+  let noticedAt: number | null = null;
+
+  /** A gateway 401 for the device session: ask the app to renew it, throttled. */
+  function checkDeviceSession(response: Response) {
+    if (response.status !== 401 || response.headers.get(DEVICE_SESSION_HEADER) !== "required" || !device.native()) return;
+    const now = device.now();
+    if (noticedAt !== null && now - noticedAt < DEVICE_SESSION_NOTICE_INTERVAL) return;
+    if (device.post()) noticedAt = now;
+  }
 
   async function establish(force = false, rejectedGeneration?: number): Promise<number> {
     if (flight) return flight;
@@ -23,6 +56,7 @@ export function createHumanSession(fetcher: Fetcher = (path, init) => fetch(path
         signal: controller.signal,
       });
       await response.body?.cancel();
+      checkDeviceSession(response);
       if (!response.ok) throw new Error(`Human session bootstrap failed (HTTP ${response.status})`);
       valid = true;
       return ++generation;
@@ -44,6 +78,7 @@ export function createHumanSession(fetcher: Fetcher = (path, init) => fetch(path
     headers.set("x-hivemind-ui", "1");
     const options: RequestInit = { ...init, headers, credentials: "same-origin", redirect: "error" };
     const response = await fetcher(path, options);
+    checkDeviceSession(response);
     if (response.status !== 401 || response.headers.get("x-hivemind-session-required") !== "1") return response;
 
     // A network exception or a generic handler 401 NEVER reaches this branch.
@@ -57,7 +92,9 @@ export function createHumanSession(fetcher: Fetcher = (path, init) => fetch(path
     }
     if (init.body instanceof ReadableStream) return response; // Non-replayable body.
     await response.body?.cancel();
-    return fetcher(path, options); // At most one replay, even after a second 401.
+    const replay = await fetcher(path, options); // At most one replay, even after a second 401.
+    checkDeviceSession(replay);
+    return replay;
   }
 
   return { request, refresh: () => establish(true) };

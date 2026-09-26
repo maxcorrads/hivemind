@@ -430,6 +430,9 @@ struct NavigationPolicyTests {
 struct BridgeTests {
   @Test func parsesMessages() {
     #expect(BridgeMessage(body: ["type": "ready"]) == .ready)
+    // The iOS app's own two; Hivemind.app ignores them.
+    #expect(BridgeMessage(body: ["type": "switch-mac"]) == .switchMac)
+    #expect(BridgeMessage(body: ["type": "device-session-expired"]) == .deviceSessionExpired)
     #expect(BridgeMessage(body: ["type": "badge", "count": NSNumber(value: 3)]) == .badge(count: 3))
     #expect(BridgeMessage(body: ["type": "badge", "count": NSNumber(value: 0)]) == .badge(count: 0))
     #expect(BridgeMessage(body: [

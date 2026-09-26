@@ -45,6 +45,7 @@ struct ConnectionView: View {
     case .pinMismatch: return "exclamationmark.lock"
     case .revoked: return "lock.slash"
     case .serverStopped: return "stop.circle"
+    case .serverUnverified: return "exclamationmark.shield"
     case .other: return "exclamationmark.triangle"
     }
   }

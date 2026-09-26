@@ -105,8 +105,15 @@ struct PairedMacTests {
     #expect(mac.hosts == ["100.101.102.103", "192.168.1.20"])
     mac.remember(GatewayEndpoint(host: "studio.local", port: 7443)!)
     #expect(mac.hosts.first == "studio.local")
+    // The pinned Mac answered on another port: its gateway moved (Port… in
+    // the menu, found through Bonjour). Every saved host follows it.
     mac.remember(GatewayEndpoint(host: "10.0.0.9", port: 9999)!)
-    #expect(!mac.hosts.contains("10.0.0.9"))
+    #expect(mac.port == 9999)
+    #expect(mac.hosts.first == "10.0.0.9")
+    #expect(mac.endpoints.allSatisfy { $0.port == 9999 })
+    #expect(mac.fingerprint == fingerprint, "the pin does not change")
+    let data = try JSONEncoder().encode(mac)
+    #expect(try JSONDecoder().decode(PairedMac.self, from: data).port == 9999)
   }
 
   @Test func bonjourMatchesByFingerprintOnly() throws {

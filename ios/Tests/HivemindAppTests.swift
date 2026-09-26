@@ -25,6 +25,9 @@ struct HivemindAppTests {
     #expect((info["NSLocalNetworkUsageDescription"] as? String)?.isEmpty == false)
     #expect(info["NSBonjourServices"] as? [String] == [GatewayAdvertisement.serviceType])
     #expect(info["UIBackgroundModes"] == nil)
+    // hivemind-pair:// opens the pairing screen (for confirmation).
+    let urlTypes = info["CFBundleURLTypes"] as? [[String: Any]]
+    #expect(urlTypes?.flatMap { $0["CFBundleURLSchemes"] as? [String] ?? [] } == [PairingPayload.scheme])
     let scenes = info["UIApplicationSceneManifest"] as? [String: Any]
     #expect(scenes?["UIApplicationSupportsMultipleScenes"] as? Bool == true)
     let ats = info["NSAppTransportSecurity"] as? [String: Any]

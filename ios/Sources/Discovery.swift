@@ -55,6 +55,16 @@ final class DiscoveryBrowser {
     resolving = [:]
     results = [:]
     nearby = []
+    // Resolved again when the app comes back: the Mac's address or port
+    // may have changed meanwhile.
+    resolved = [:]
+  }
+
+  /// A Mac could not be reached where Bonjour said: resolve it again (its
+  /// gateway may listen on a new port now).
+  func forget(_ fingerprint: CertificateFingerprint) {
+    guard resolved.removeValue(forKey: fingerprint) != nil else { return }
+    resolveWanted()
   }
 
   /// Addresses Bonjour found for a Mac, to try before its saved ones.
@@ -72,10 +82,13 @@ final class DiscoveryBrowser {
       byName[name] = result
       found.append(mac)
     }
+    // A service that went away and came back (the gateway restarted, on a
+    // new port after Port… in the menu, say) is resolved again.
+    let changed = Set(found.filter { self.results[$0.id] != byName[$0.id] }.map(\.advertisement.fingerprint))
     self.results = byName
     nearby = found.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     let live = Set(found.map(\.advertisement.fingerprint))
-    resolved = resolved.filter { live.contains($0.key) }
+    resolved = resolved.filter { live.contains($0.key) && !changed.contains($0.key) }
     resolveWanted()
   }
 

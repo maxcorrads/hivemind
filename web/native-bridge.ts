@@ -58,11 +58,37 @@ export function onNativePlatform(listener: (platform: NativePlatform) => void): 
 /** Tests only: forget the reported platform. */
 export function resetNativePlatform() { reported = null; }
 
+/**
+ * Which app hosts the page, kept current: null in a browser; inside an app the platform it reported, "macos" until it
+ * reports one (Hivemind.app on the Mac never does). Follows a ready answer that arrives after the first render.
+ */
+export function useNativePlatform(win?: unknown): NativePlatform | null {
+  const [platform, setPlatform] = useState<NativePlatform | null>(() => inNativeApp(win) ? reported ?? "macos" : null);
+  useEffect(() => {
+    if (!inNativeApp(win)) return;
+    setPlatform(reported ?? "macos");
+    return onNativePlatform(setPlatform);
+  }, [win]);
+  return platform;
+}
+
+/** Asks the iPhone/iPad app to show its list of paired Macs (only it has one); false elsewhere. */
+export function switchMac(win?: unknown): boolean {
+  return postNative({ type: "switch-mac" }, win);
+}
+
 export type NativeMessage =
   | { type: "ready" }
   /** `target` is the hash route the notice opens; the app hands it back as a "navigate" command on click. */
   | { type: "notify"; title: string; body: string; tag: string; target: string }
   | { type: "badge"; count: number }
+  /** The iPhone/iPad app only (Settings → Switch Mac…): show the paired Macs to pick another. */
+  | { type: "switch-mac" }
+  /**
+   * The iPhone/iPad app only: the gateway answered 401 with X-Hivemind-Device-Session: required (it forgot or expired
+   * the device session). The app renews it with its device token and installs the new cookie; the page just retries.
+   */
+  | { type: "device-session-expired" }
   | TerminalMessage;
 
 /** Posts to the app; false in a browser or when WebKit refuses the message. */

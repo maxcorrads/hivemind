@@ -27,6 +27,9 @@ final class SceneController {
   private(set) var webViewGeneration = 0
   var showingMacs = false
   var showingPairing = false
+  /// A hivemind-pair:// link opened from outside the app (the Camera, say):
+  /// the pairing screen shows it for confirmation, never pairs by itself.
+  var pairingLink: String?
   /// A same-origin page the UI opened in a new window (an attachment),
   /// shown in a sheet with a web view of its own.
   var auxiliary: AuxiliaryPage?
@@ -134,7 +137,7 @@ final class SceneController {
     retryTask?.cancel()
     switch problem {
     case .revoked, .pinMismatch: return
-    case .unreachable, .serverStopped, .other: break
+    case .unreachable, .serverStopped, .serverUnverified, .other: break
     }
     retryTask = Task { [weak self] in
       try? await Task.sleep(for: Self.retryInterval)
@@ -146,11 +149,16 @@ final class SceneController {
 
   /// The scene came to the front: renew the session (which also finds out
   /// whether the device was revoked meanwhile), retry terminals, and try a
-  /// failed connection again.
+  /// failed connection again. After longer away than a session lasts (the
+  /// app reopened after days), the session is renewed with the device token
+  /// first and the page loaded again after, so it never runs on an expired
+  /// session (docs/remote-access.md#device-sessions).
   func sceneDidBecomeActive() {
     guard let model, let macID else { return }
     switch phase {
     case .failed(_, let problem) where problem != .revoked && problem != .pinMismatch:
+      connect(to: macID)
+    case .showing where model.keeper(for: macID).isExpired(at: Date()):
       connect(to: macID)
     case .showing:
       terminals?.retry()
@@ -300,6 +308,20 @@ final class SceneController {
     terminals?.retry()
   }
 
+  /// A hivemind-pair:// link: the pairing screen, with the link to confirm.
+  func openPairingLink(_ url: URL) {
+    pairingLink = url.absoluteString
+    showingMacs = false
+    // With no Mac yet, the scene shows the pairing screen already.
+    if model?.macs.isEmpty == false { showingPairing = true }
+  }
+
+  /// Whether this scene's window is in front and showing its page: what a
+  /// notice about its conversation would repeat.
+  var isInFront: Bool {
+    isShowingPage && webView?.window?.windowScene?.activationState == .foregroundActive
+  }
+
   /// Brings this scene's window to the front (a notification was tapped).
   func activate() {
     guard let session = webView?.window?.windowScene?.session else { return }
@@ -353,7 +375,16 @@ final class SceneController {
     case .badge(let count):
       model.setBadge(count, scene: windowID, mac: macID)
     case .notify(let title, let body, let tag, let target):
-      model.notifier.post(UIAppNotice(title: title, body: body, tag: tag, target: target, windowID: windowID))
+      model.post(UIAppNotice(title: title, body: body, tag: tag, target: target, windowID: windowID), mac: macID)
+    case .switchMac:
+      // The Settings menu's "Switch Mac…" (shown only in this app).
+      showingPairing = false
+      showingMacs = true
+    case .deviceSessionExpired:
+      // The gateway forgot the session (Hivemind Server restarted): a new one
+      // now, so the page's own retries find a live cookie.
+      let keeper = model.keeper(for: macID)
+      Task { await keeper.pageReportedExpiry() }
     default:
       // Terminals, on the Mac's broker through the gateway. No confirmation
       // for a launch, as on the Mac (docs/remote-access.md#threat-model);
@@ -388,6 +419,9 @@ final class SceneController {
     case .serverStopped:
       show(.serverStopped)
       return false
+    case .serverUnverified:
+      show(.serverUnverified)
+      return false
     }
   }
 
@@ -400,8 +434,12 @@ final class SceneController {
     // not in this domain.
     guard error.domain == NSURLErrorDomain, error.code != NSURLErrorCancelled else { return }
     // The session is bound to the host that issued it, which just did not
-    // answer: the next attempt asks every host (and Bonjour) for a new one.
-    if let macID { model?.keeper(for: macID).invalidate() }
+    // answer: the next attempt asks every host (and Bonjour, resolved
+    // afresh in case the Mac's port changed) for a new one.
+    if let macID, let model {
+      model.keeper(for: macID).invalidate()
+      model.connectionFailed(macID)
+    }
     show(.unreachable(error.localizedDescription))
   }
 

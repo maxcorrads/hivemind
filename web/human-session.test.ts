@@ -359,3 +359,63 @@ test("consecutive failed connections back off and an opened socket resets the ba
   assert.deepEqual(attempts, [0, 1, 0]);
   assert.equal(sockets.length, 4);
 });
+
+// ---- The remote gateway's device session (the iPhone/iPad app) ----------------------------------------------------
+
+const deviceExpired = () => new Response('{"v":1,"error":"unauthorized","message":"The device session is missing or has expired."}', {
+  status: 401, headers: { "content-type": "application/json", "x-hivemind-device-session": "required" },
+});
+
+function fakeDevice(native = true) {
+  const device = { posts: 0, clock: 0, native: () => native, post: () => { device.posts++; return true; }, now: () => device.clock };
+  return device;
+}
+
+test("a device-session 401 from the gateway asks the app, at most once per 2 s, from the bootstrap and from requests", async () => {
+  const device = fakeDevice();
+  const responses = [deviceExpired(), ok(), deviceExpired(), deviceExpired(), deviceExpired()];
+  const session = createHumanSession(async () => responses.shift()!, device);
+  await assert.rejects(session.request("/api/snapshot"), /HTTP 401/, "the bootstrap itself was refused");
+  assert.equal(device.posts, 1);
+  const refused = await session.request("/api/snapshot");
+  assert.equal(refused.status, 401, "the page gets the 401 as it is: nothing to replay");
+  assert.equal(device.posts, 1, "within 2 s of the last");
+  device.clock = 1_999;
+  await session.request("/api/snapshot");
+  assert.equal(device.posts, 1);
+  device.clock = 2_000;
+  await session.request("/api/snapshot");
+  assert.equal(device.posts, 2);
+});
+
+test("the server's own session-required 401 and a plain 401 never ask the app; a browser never posts", async () => {
+  const device = fakeDevice();
+  const plain = () => new Response("{}", { status: 401 });
+  const responses = [ok(), expired(), ok(), ok(), plain()];
+  const session = createHumanSession(async () => responses.shift()!, device);
+  assert.equal((await session.request("/api/snapshot")).status, 200, "replayed after the Human bootstrap");
+  assert.equal((await session.request("/api/snapshot")).status, 401);
+  assert.equal(device.posts, 0);
+
+  const browser = fakeDevice(false);
+  const inBrowser = createHumanSession(async () => deviceExpired(), browser);
+  await assert.rejects(inBrowser.request("/api/snapshot"));
+  assert.equal(browser.posts, 0);
+});
+
+test("inside the app the notice is the bridge message device-session-expired; without the bridge nothing is posted", async () => {
+  const posted: unknown[] = [];
+  const global = globalThis as unknown as { window?: unknown };
+  const before = global.window;
+  try {
+    const live = createHumanSession(async () => deviceExpired());
+    await assert.rejects(live.request("/api/snapshot"));
+    assert.equal(posted.length, 0, "no window, no bridge");
+    global.window = { webkit: { messageHandlers: { hivemind: { postMessage: (message: unknown) => posted.push(message) } } } };
+    const app = createHumanSession(async () => deviceExpired());
+    await assert.rejects(app.request("/api/snapshot"));
+    assert.deepEqual(posted, [{ type: "device-session-expired" }]);
+  } finally {
+    global.window = before;
+  }
+});

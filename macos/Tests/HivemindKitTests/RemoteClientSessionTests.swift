@@ -100,6 +100,45 @@ struct RemoteSessionKeeperTests {
     await #expect(throws: RemoteClientError.unreachable("asleep")) { try await keeper.current() }
   }
 
+  /// Reopening after days: the session ran out while the app was away, and
+  /// the device token gets a new one without pairing again.
+  @Test func anExpiredSessionIsRenewedWithTheDeviceToken() async throws {
+    #expect(keeper.isExpired(at: scheduler.now()), "no session yet")
+    let first = try await keeper.current()
+    #expect(!keeper.isExpired(at: scheduler.now()))
+    scheduler.clock = scheduler.clock.addingTimeInterval(3 * 24 * 3600)
+    #expect(keeper.isExpired(at: scheduler.now()))
+    let renewed = try await keeper.sceneDidBecomeActive()
+    #expect(renewed != first)
+    #expect(!keeper.isExpired(at: scheduler.now()))
+    #expect(source.fetches == 2)
+  }
+
+  @Test func aPageReportingAForgottenSessionRenewsItOnceForEveryone() async throws {
+    var changes = 0
+    keeper.onChange = { _ in changes += 1 }
+    _ = try await keeper.current()
+    await keeper.pageReportedExpiry()
+    #expect(source.fetches == 2, "a new session at once, though the old one had time left")
+    #expect(changes == 2)
+    // Every scene and page of the Mac reports the same loss.
+    await keeper.pageReportedExpiry()
+    await keeper.pageReportedExpiry()
+    #expect(source.fetches == 2)
+    scheduler.clock = scheduler.clock.addingTimeInterval(RemoteSessionKeeper.expiryReportInterval)
+    await keeper.pageReportedExpiry()
+    #expect(source.fetches == 3)
+  }
+
+  @Test func aPageReportFindsARevokedDevice() async throws {
+    var revoked = 0
+    keeper.onRevoked = { revoked += 1 }
+    _ = try await keeper.current()
+    source.results = [.failure(.gateway(GatewayError(.deviceRevoked, "This device is not paired with this Mac.")))]
+    await keeper.pageReportedExpiry()
+    #expect(revoked == 1)
+  }
+
   @Test func revocationStopsEverything() async throws {
     var revoked = 0
     keeper.onRevoked = { revoked += 1 }
@@ -179,9 +218,10 @@ struct PairedMacListTests {
     var list = PairedMacList([RCFixture.mac()])
     list.remember(GatewayEndpoint(host: "10.0.0.9", port: 7443)!, for: RCFixture.deviceID)
     #expect(list.macs[0].hosts.first == "10.0.0.9")
-    // Another port is not this Mac's gateway.
+    // Remembered only after it answered pinned: the gateway's new port.
     list.remember(GatewayEndpoint(host: "10.0.0.8", port: 9999)!, for: RCFixture.deviceID)
-    #expect(list.macs[0].hosts.first == "10.0.0.9")
+    #expect(list.macs[0].hosts.first == "10.0.0.8")
+    #expect(list.macs[0].port == 9999)
     let advert = GatewayAdvertisement(fingerprint: RCFixture.fingerprint, name: "Somebody else's name")
     #expect(list.macs(advertisedBy: advert).map(\.id) == [RCFixture.deviceID])
     #expect(list.macs(advertisedBy: GatewayAdvertisement(fingerprint: CertificateFingerprint(certificateDER: Data()), name: "Studio Mac")).isEmpty)

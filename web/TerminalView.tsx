@@ -1,9 +1,9 @@
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, RotateCcw } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { TerminalNotice } from "./TerminalNotice.tsx";
 import {
   liveSession, terminalBlocker, terminalHub, touchKey, useTerminalState, withControl,
-  type TerminalAttachment, type TerminalHub,
+  type TerminalAttachment, type TerminalHub, type TerminalState,
 } from "./use-terminal.ts";
 
 /** What TerminalView draws on: xterm.js in the app (web/use-terminal-xterm.ts), a fake in tests. */
@@ -31,10 +31,27 @@ const loadXterm = (): Promise<ScreenFactory> => import("./use-terminal-xterm.ts"
 
 type Phase =
   | { kind: "loading" }
-  | { kind: "attaching" }
+  /** `again`: attaching after a lost stream, on the screen it had. */
+  | { kind: "attaching"; again?: boolean }
   | { kind: "live" }
+  /** The stream was lost (the broker connection dropped): the screen stays, and the view attaches again by itself. */
+  | { kind: "reconnecting" }
+  /** The attach client exited: "Session ended." once the broker no longer lists the session, else "Detached from …". */
   | { kind: "ended" }
   | { kind: "error"; message: string };
+
+/**
+ * A lost stream attaches again after these (ms, the last repeating). The first wait lets the app's status catch up:
+ * it ends the streams just before it says the broker went, and an attach in between would only be refused.
+ */
+export const RECONNECT_DELAYS = [250, 1000, 2000, 5000] as const;
+
+const noHub = () => () => {};
+const noState = () => null;
+
+/** The session is known not to run: the broker is connected and its list lacks it (or has it dead). */
+const sessionGone = (state: TerminalState | null, session: string) =>
+  state !== null && state.broker === "connected" && state.sessions !== null && !liveSession(state, session);
 
 const TOUCH_KEYS = [
   { key: "esc", label: "Esc" }, { key: "tab", label: "Tab" }, { key: "ctrl-c", label: "^C", title: "Ctrl+C" },
@@ -47,11 +64,15 @@ const TOUCH_KEYS = [
  * and tmux's scrollback (mouse on). Several viewers, here or in Terminal.app, may share a session. On a
  * coarse pointer, and always in the iPhone/iPad app, a row of Esc/Ctrl/Tab/arrow keys shows under it.
  */
-export function TerminalView({ session, hub = terminalHub(), loadScreen = loadXterm, autoFocus = true }: {
+export function TerminalView({
+  session, hub = terminalHub(), loadScreen = loadXterm, autoFocus = true, reconnectDelays = RECONNECT_DELAYS,
+}: {
   session: string;
   hub?: TerminalHub | null;
   loadScreen?: () => Promise<ScreenFactory>;
   autoFocus?: boolean;
+  /** How long a lost stream waits before each attempt to attach again, in ms; the last one repeats. */
+  reconnectDelays?: readonly number[];
 }) {
   const host = useRef<HTMLDivElement>(null);
   const screen = useRef<TerminalScreen | null>(null);
@@ -61,6 +82,11 @@ export function TerminalView({ session, hub = terminalHub(), loadScreen = loadXt
   const [ctrl, setCtrl] = useState(false);
   const ctrlHeld = useRef(false);
   ctrlHeld.current = ctrl;
+  const hubState = useSyncExternalStore(hub ? hub.subscribe : noHub, hub ? () => hub.state : noState, noState);
+  /** Attaches the mounted screen to the session again (after a lost stream); set while a screen is up. */
+  const reattach = useRef<(() => void) | null>(null);
+  /** Attempts since the stream was last live, for reconnectDelays. */
+  const attempts = useRef(0);
 
   useEffect(() => {
     const element = host.current;
@@ -78,22 +104,44 @@ export function TerminalView({ session, hub = terminalHub(), loadScreen = loadXt
       }
       if (disposed) { view.dispose(); return; }
       screen.current = view;
+      // Each attach has its own handlers; a late event of an earlier one changes nothing. A lost stream keeps the
+      // screen: attaching again to the same session makes tmux redraw it, as if nothing had happened.
+      const attach = (again = false) => {
+        if (disposed) return;
+        const stream: TerminalAttachment = hub.attach(session, view.cols, view.rows, {
+          output: (data, drawn) => view.write(data, drawn),
+          attached: () => {
+            if (disposed || attachment.current !== stream) return;
+            attempts.current = 0;
+            setPhase({ kind: "live" });
+          },
+          exit: () => { if (!disposed && attachment.current === stream) setPhase({ kind: "ended" }); },
+          lost: () => { if (!disposed && attachment.current === stream) setPhase({ kind: "reconnecting" }); },
+          error: error => {
+            if (disposed || attachment.current !== stream) return;
+            // Attaching again, only a session that is gone ends it; anything else (the broker not back yet) waits more.
+            if (again && error.code !== "no-such-session") setPhase({ kind: "reconnecting" });
+            else setPhase({ kind: "error", message: error.message });
+          },
+        });
+        attachment.current = stream;
+      };
+      reattach.current = () => {
+        if (disposed) return;
+        attempts.current++;
+        setPhase({ kind: "attaching", again: true });
+        attach(true);
+      };
       setPhase({ kind: "attaching" });
-      const stream = hub.attach(session, view.cols, view.rows, {
-        output: (data, drawn) => view.write(data, drawn),
-        attached: () => { if (!disposed) setPhase({ kind: "live" }); },
-        exit: () => { if (!disposed) setPhase({ kind: "ended" }); },
-        error: error => { if (!disposed) setPhase({ kind: "error", message: error.message }); },
-      });
-      attachment.current = stream;
+      attach();
       const offInput = view.onInput(data => {
         if (ctrlHeld.current && typeof data === "string") {
           data = withControl(data);
           setCtrl(false);
         }
-        stream.input(data);
+        attachment.current?.input(data);
       });
-      const offResize = view.onResize((cols, rows) => stream.resize(cols, rows));
+      const offResize = view.onResize((cols, rows) => attachment.current?.resize(cols, rows));
       let frame = 0;
       const refit = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(() => view.fit()); };
       const resizes = typeof ResizeObserver === "function" ? new ResizeObserver(refit) : null;
@@ -105,17 +153,28 @@ export function TerminalView({ session, hub = terminalHub(), loadScreen = loadXt
       teardown = [
         () => { cancelAnimationFrame(frame); resizes?.disconnect(); themes.disconnect(); },
         offInput, offResize,
-        () => stream.detach(),
+        () => attachment.current?.detach(),
         () => view.dispose(),
       ];
     })();
     return () => {
       disposed = true;
+      reattach.current = null;
       for (const step of teardown) step();
       screen.current = null;
       attachment.current = null;
     };
   }, [hub, session, attempt, loadScreen, autoFocus]);
+
+  // Back from a lost stream: once the broker is connected again and lists the session as running, attach the same
+  // screen to it. While the list is unknown this waits; a session that is gone ends here instead.
+  const canReattach = phase.kind === "reconnecting" && hubState?.broker === "connected" && liveSession(hubState, session) !== null;
+  useEffect(() => {
+    if (!canReattach) return;
+    const delay = reconnectDelays[Math.min(attempts.current, reconnectDelays.length - 1)] ?? 0;
+    const timer = setTimeout(() => reattach.current?.(), delay);
+    return () => clearTimeout(timer);
+  }, [canReattach, reconnectDelays]);
 
   if (!hub) return null;
   // A key tap must not move focus off xterm: that would blur its textarea and hide the on-screen keyboard. WebKit on
@@ -127,10 +186,15 @@ export function TerminalView({ session, hub = terminalHub(), loadScreen = loadXt
   };
   // An iPad with a keyboard or trackpad reports a fine pointer, and its keyboards may lack Esc: the row stays.
   const platform = hub.state.platform;
-  const note = phase.kind === "loading" || phase.kind === "attaching" ? `Connecting to ${session}…`
-    : phase.kind === "ended" ? `Detached from ${session}.` : phase.kind === "error" ? phase.message : null;
+  const gone = sessionGone(hubState, session);
+  const shown = phase.kind === "reconnecting" && gone ? "ended" : phase.kind;
+  const again = shown === "reconnecting" || (phase.kind === "attaching" && phase.again === true);
+  const note = again ? "Reconnecting…"
+    : shown === "loading" || shown === "attaching" ? `Connecting to ${session}…`
+    : shown === "ended" ? (gone ? "Session ended." : `Detached from ${session}.`)
+    : phase.kind === "error" ? phase.message : null;
   return (
-    <div className="term" data-phase={phase.kind} data-platform={platform ?? undefined}>
+    <div className="term" data-phase={shown} data-platform={platform ?? undefined}>
       {/* Keys stay in the terminal: Escape must not close a dialog, Ctrl+K must not open Jump to. ⌘ shortcuts pass.
           xterm opens in .term-fit, which has no padding or border, so the fit addon sizes the grid to the room it has. */}
       <div className="term-screen" aria-label={`Terminal: ${session}`} role="region"
@@ -138,9 +202,9 @@ export function TerminalView({ session, hub = terminalHub(), loadScreen = loadXt
         <div className="term-fit" ref={host} />
       </div>
       {note && (
-        <div className="term-note" role={phase.kind === "error" ? "alert" : "status"}>
+        <div className="term-note" role={shown === "error" ? "alert" : "status"}>
           <span>{note}</span>
-          {(phase.kind === "ended" || phase.kind === "error") && (
+          {(shown === "ended" || shown === "error") && (
             <button type="button" className="btn" onClick={() => setAttempt(n => n + 1)}>
               <RotateCcw size={13} aria-hidden="true" /> Reconnect
             </button>
@@ -166,16 +230,30 @@ export function TerminalView({ session, hub = terminalHub(), loadScreen = loadXt
 
 /**
  * A session's terminal, or why there is none: Hivemind Server not running (with Start), tmux missing,
- * or the session no longer running. Nothing in a browser.
+ * or the session no longer running. Nothing in a browser. Once the terminal shows, a broker that is only reconnecting
+ * (connecting, unavailable, sessions not known yet) keeps it: the view says "Reconnecting…" and attaches again by itself.
  */
-export function TerminalPanel({ session, loadScreen }: { session: string; loadScreen?: () => Promise<ScreenFactory> }) {
+export function TerminalPanel({ session, loadScreen, reconnectDelays }: {
+  session: string;
+  loadScreen?: () => Promise<ScreenFactory>;
+  reconnectDelays?: readonly number[];
+}) {
   const state = useTerminalState();
+  const [shown, setShown] = useState<string | null>(null);
+  const blocker = state.native ? terminalBlocker(state) : null;
+  const live = liveSession(state, session) !== null;
+  const passing = blocker ? blocker.kind === "connecting" || blocker.kind === "server" : state.sessions === null;
+  const keep = shown === session && passing;
+  useEffect(() => {
+    if (live) setShown(session);
+    else if (!passing) setShown(null);
+  }, [live, passing, session]);
   if (!state.native) return null;
-  const blocker = terminalBlocker(state);
+  if (keep || (live && (!blocker || blocker.kind === "tmux"))) return <TerminalView key={session} session={session} loadScreen={loadScreen} reconnectDelays={reconnectDelays} />;
   if (blocker && blocker.kind !== "tmux") return <div className="term-empty"><TerminalNotice blocker={blocker} /></div>;
   if (!state.sessions) return <div className="term-empty"><TerminalNotice blocker={{ kind: "connecting", message: "Loading sessions…" }} /></div>;
   if (!liveSession(state, session)) {
     return <div className="term-empty"><p className="empty">{session} is not running.</p></div>;
   }
-  return <TerminalView key={session} session={session} loadScreen={loadScreen} />;
+  return <TerminalView key={session} session={session} loadScreen={loadScreen} reconnectDelays={reconnectDelays} />;
 }

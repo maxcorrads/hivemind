@@ -253,6 +253,27 @@ test("the app's Settings… command opens the menu, and a remounted copy does no
   assert.equal((fresh.host.querySelector("details") as unknown as HTMLDetailsElement).open, false);
 });
 
+test("Switch Mac… shows only in the iPhone/iPad app, also when its ready answer comes after the menu, and asks the app", async () => {
+  const handlers = { jump() {}, forYou() {}, newChannel() {}, settings() {}, toggleTheme() {}, navigate() {} };
+  const entry = (host: HTMLElement) => Array.from(host.querySelectorAll(".tool-action")).find(button => button.textContent === "Switch Mac…");
+  const browser = await mount(() => createElement(SettingsMenu, menuProps({})));
+  assert.equal(entry(browser.host as unknown as HTMLElement), undefined, "not in a browser");
+  browser.unmount();
+
+  installBridge();
+  const mac = await mount(() => createElement(SettingsMenu, menuProps({ native: true })));
+  assert.equal(entry(mac.host as unknown as HTMLElement), undefined, "not in Hivemind.app on the Mac");
+  await act(async () => { runNativeCommand({ command: "ready", platform: "ios" }, handlers); });
+  const button = entry(mac.host as unknown as HTMLElement) as unknown as HTMLButtonElement | undefined;
+  assert.ok(button, "the iOS app's answer to ready shows it");
+  await act(async () => { button.click(); });
+  assert.deepEqual(posted, [{ type: "switch-mac" }]);
+  mac.unmount();
+
+  const later = await mount(() => createElement(SettingsMenu, menuProps({ native: true })));
+  assert.ok(entry(later.host as unknown as HTMLElement), "a menu mounted after the answer shows it at once");
+});
+
 let opened: string[] = [];
 appLinks.open = url => { opened.push(url); };
 

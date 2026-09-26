@@ -18,6 +18,14 @@ public enum BridgeMessage: Equatable, Sendable {
   /// `target` is the hash route the notice opens ("#" + hashFor(notice.target)).
   case notify(title: String, body: String, tag: String?, target: String?)
   case badge(count: Int)
+  /// The iOS app only (docs/ios.md): the Settings menu's "Switch Mac…",
+  /// which opens the app's Macs picker. Hivemind.app on the Mac ignores it.
+  case switchMac
+  /// The iOS app only (docs/remote-access.md#device-sessions): the gateway
+  /// answered the page 401 with X-Hivemind-Device-Session: required (it
+  /// forgot the device session, say after Hivemind Server restarted). The
+  /// app renews the session and puts the new cookie in the web view.
+  case deviceSessionExpired
 
   // Terminals (docs/terminal-broker.md#bridge). The app relays each to the
   // broker; `id` is the page's own request id, echoed on the answer.
@@ -49,6 +57,10 @@ public enum BridgeMessage: Equatable, Sendable {
     switch type {
     case "ready":
       self = .ready
+    case "switch-mac":
+      self = .switchMac
+    case "device-session-expired":
+      self = .deviceSessionExpired
     case "notify":
       guard let title = Self.text(object["title"]), !title.isEmpty else { return nil }
       self = .notify(

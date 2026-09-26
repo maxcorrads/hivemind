@@ -46,8 +46,18 @@ export type TerminalStreamHandlers = {
    * the app, which stops reading the broker while too much output is not acked (docs/terminal-broker.md).
    */
   output: (data: Uint8Array, drawn: () => void) => void;
-  /** Detached, the session ended or the broker went away; the attachment is over. */
+  /**
+   * The attach client exited with `status` (the session ended or was killed, or it was detached with tmux's own key),
+   * or, with null, the stream ended without a status; the attachment is over.
+   */
   exit: (status: number | null) => void;
+  /**
+   * The stream was lost, not ended: the app's connection to the broker dropped (a restart, a network blip, a session
+   * that expired) or the broker forgot the stream, while the tmux session may well still run. The attachment is over;
+   * attach again to the same session once the broker is connected and lists it as alive (TerminalView does). Without
+   * this handler a lost stream is reported as exit(null).
+   */
+  lost?: () => void;
   /** The attach was refused (no-such-session, too-many-streams, …); the attachment is over. */
   error: (error: TerminalRequestError) => void;
   attached?: (stream: number) => void;
@@ -111,6 +121,14 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
     if (entry.stream !== null) streams.delete(entry.stream);
     entry.handlers.exit(status);
   };
+  /** Over without the viewer asking and without an exit status: the session may still run (TerminalStreamHandlers.lost). */
+  const loseStream = (entry: StreamEntry) => {
+    if (entry.closed) return;
+    entry.closed = true;
+    if (entry.timer !== null) win.clearTimeout(entry.timer);
+    if (entry.stream !== null) streams.delete(entry.stream);
+    if (entry.handlers.lost) entry.handlers.lost(); else entry.handlers.exit(null);
+  };
   const failStream = (entry: StreamEntry, error: TerminalRequestError) => {
     if (entry.closed) return;
     entry.closed = true;
@@ -125,13 +143,16 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
     post({ type: "terminal-resize", stream: entry.stream, ...entry.size });
   };
 
-  /** The broker's streams live on the app's connection; when it drops, every stream and request is over. */
+  /**
+   * The broker's streams live on the app's connection; when it drops, every stream and request is over. Streams and
+   * attaches still waiting are lost, not ended: their viewers attach again once the broker is back.
+   */
   const brokerLost = () => {
     const hint = brokerUnavailableHint(state.platform);
-    for (const entry of streams.values()) endStream(entry, null);
+    for (const entry of streams.values()) loseStream(entry);
     for (const [id, request] of pending) {
       pending.delete(id);
-      if (request.kind === "attach") failStream(request.stream, new TerminalRequestError("no-answer", hint));
+      if (request.kind === "attach") loseStream(request.stream);
       else { win.clearTimeout(request.timer); request.reject(new TerminalRequestError("no-answer", hint)); }
     }
   };
@@ -199,8 +220,11 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
         return;
       }
       case "terminal-exit": {
+        // A stream the viewer detached is no longer listed, so an exit without a status here was not asked for: the
+        // app's connection to the broker went (it ends every stream so) or the broker detached it. The session may run.
         const entry = streams.get(detail.stream);
-        if (entry) endStream(entry, detail.status);
+        if (entry && detail.status === null) loseStream(entry);
+        else if (entry) endStream(entry, detail.status);
         return;
       }
       case "terminal-error": {
@@ -214,7 +238,7 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
         }
         // A stream the broker no longer knows is over; other stream errors (a refused input) are not.
         const entry = detail.stream !== null ? streams.get(detail.stream) : undefined;
-        if (entry && detail.code === "no-such-stream") endStream(entry, null);
+        if (entry && detail.code === "no-such-stream") loseStream(entry);
         if (!entry) setState({ lastError: { code: detail.code, message: detail.message } });
         return;
       }

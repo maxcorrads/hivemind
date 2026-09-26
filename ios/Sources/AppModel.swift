@@ -122,9 +122,10 @@ final class AppModel {
       throw .gateway(GatewayError(.unauthorized, "This device is not paired with that Mac any more."))
     }
     // The host the current session came from first: the cookie is bound to
-    // that origin, and the pages showing it stay on it. Then what Bonjour
-    // found, then the saved hosts.
-    let current = keepers[id]?.session.map { [$0.endpoint] } ?? []
+    // that origin, and the pages showing it stay on it (the scenes' origin
+    // too, for a session that was dropped because the gateway forgot it).
+    // Then what Bonjour found, then the saved hosts.
+    let current = (keepers[id]?.session.map { [$0.endpoint] } ?? []) + scenes(showing: id).compactMap(\.endpoint)
     let session = try await client.session(mac, token: token, nearby: current + discovery.endpoints(for: mac.fingerprint))
     store.remember(session.endpoint, for: id)
     refresh()
@@ -160,6 +161,23 @@ final class AppModel {
 
   private func scenes(showing id: UUID) -> [SceneController] {
     scenes.values.compactMap(\.scene).filter { $0.macID == id }
+  }
+
+  /// A notice from a scene showing `mac`. While the app is in front it
+  /// shows as a banner, unless a window in front already shows that
+  /// conversation (docs/ios.md#notifications).
+  func post(_ notice: UIAppNotice, mac: UUID) {
+    let open = scenes(showing: mac).filter(\.isInFront).map(\.route)
+    if UIApplication.shared.applicationState == .active,
+       RemoteNoticePolicy.isAboutOpenConversation(target: notice.target, openRoutes: open) { return }
+    notifier.post(notice)
+  }
+
+  /// A scene could not reach `id`: Bonjour resolves its address (and port)
+  /// again for the next attempt.
+  func connectionFailed(_ id: UUID) {
+    guard let mac = mac(id) else { return }
+    discovery.forget(mac.fingerprint)
   }
 
   func setBadge(_ count: Int, scene: String, mac: UUID) {

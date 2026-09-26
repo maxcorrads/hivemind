@@ -16,7 +16,10 @@
   max-width: calc(100% - 32px); padding: 6px 8px 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--raised);
   box-shadow: var(--shadow); font-size: 12.5px; color: var(--ink2); }
 .term-note > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.term[data-phase="loading"] .term-note, .term[data-phase="attaching"] .term-note { padding-right: 12px; }
+.term[data-phase="loading"] .term-note, .term[data-phase="attaching"] .term-note,
+.term[data-phase="reconnecting"] .term-note { padding-right: 12px; }
+/* A lost stream keeps its screen under "Reconnecting…", dimmed until tmux redraws it. */
+.term[data-phase="reconnecting"] .term-fit { opacity: 0.55; }
 .term-note .btn { height: 26px; border-radius: 999px; }
 
 /* Esc / Ctrl / Tab / ^C / arrows for touch screens, which have none of them. */
@@ -68,6 +71,8 @@
 
 @media (max-width: 960px) {
   .rail > .sessions-cta { display: none; }
+  /* The iPhone/iPad app has no other way to its terminals on a phone; a phone browser has no terminals at all. */
+  .rail > .sessions-cta[data-platform="ios"] { display: flex; height: 44px; font-size: 14px; }
   .sessions-sheet { height: calc(100dvh - 2rem); }
   .session-list > li { grid-template-columns: auto minmax(0, 1fr); }
   .session-actions { grid-column: 2; flex-wrap: wrap; }

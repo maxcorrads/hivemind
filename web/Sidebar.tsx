@@ -127,7 +127,8 @@ export function Sidebar({ snap, sel, go, live, unified, query, setQuery, onSearc
         )}
       </div>
       {terminals.native && (
-        <button type="button" className="sessions-cta" onClick={() => setSessionsOpen(true)} aria-haspopup="dialog">
+        <button type="button" className="sessions-cta" data-platform={terminals.platform ?? undefined} onClick={() => setSessionsOpen(true)}
+          aria-haspopup="dialog">
           <SquareTerminal size={14} aria-hidden="true" /> <span>Terminal sessions</span>
           {running > 0 && <em className="count soft" aria-label={`${running} running`}>{running}</em>}
         </button>
