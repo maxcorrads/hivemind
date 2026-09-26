@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { childEnv } from "../test-support/child-process.ts";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import { parseChoiceId, selectedChoiceId } from "./launch-models.ts";
 import {
   ADOPT_UNTRUSTED,
   buildLaunchBlock,
@@ -272,6 +273,23 @@ test("cursor family skips effort flags", () => {
   assert.match(block, /^agent --model gpt-5\.3-codex-high /);
   assert.equal(block.includes("--effort"), false);
   assert.equal(block.includes("model_reasoning_effort"), false);
+});
+
+test("Grok 4.7 dropdown selection launches a senior frontend worker with the original prompt", () => {
+  const input = {
+    ...base,
+    software: "agent",
+    role: "worker" as const,
+    seniority: "senior" as const,
+    focus: "frontend",
+  };
+  for (const model of ["grok-4.7-xhigh", "grok-4.7-xhigh-fast"]) {
+    const selection = parseChoiceId(selectedChoiceId(input.software, model, ""));
+    const block = buildLaunchBlock({ ...input, ...selection });
+    assert.equal(block, `cd -- '/tmp/hive-work' && agent --model ${model} ${shSingleQuote(buildLaunchPrompt(input))}\n`);
+    assert.match(block, /join with role=worker, seniority=senior, focus=frontend, project=alpha/);
+    assert.doesNotMatch(block, /--effort|model_reasoning_effort|cursor-grok-4\.7/);
+  }
 });
 
 test("roster paste is a macOS script that opens one Terminal window per employee", () => {
