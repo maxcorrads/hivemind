@@ -686,9 +686,9 @@ export function LaunchSheet({
             </summary>
           <p className="help-p" role="status">
             {contextError ? "Cannot load Hivemind connection: " + contextError : !launchContext ? "Loading Hivemind connection…" :
-              role === "worker" ? "Hivemind connection ready. Workers do not need project plugin instructions." :
-              launchContext.pluginError ? "Cannot load project tools: " + launchContext.pluginError :
-              "Project plugins: " + (launchContext.plugins.map((p) => p.name).join(", ") || "none enabled") + ". Instructions are included; no tool is started here."}
+              role === "worker" ? "Hivemind connection ready. Workers do not need project bot instructions." :
+              launchContext.botError ? "Cannot load project tools: " + launchContext.botError :
+              "Project bots: " + (launchContext.botDefinitions.map((p) => p.name).join(", ") || "none enabled") + ". Instructions are included; no tool is started here."}
           </p>
           {launchContext && softwareFamily(software) !== "claude" && <p className="help-p">
             Use this CLI’s normal Hivemind MCP configuration. Automatic server binding is available for Claude launchers.

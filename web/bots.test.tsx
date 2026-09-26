@@ -11,8 +11,8 @@ import { createBotSchema } from "../src/shared/bot-message.ts";
 test("the create action lives in the bot section even with no bots", () => {
   const html = renderToStaticMarkup(<AgentList agents={[]} projectName="Example"
     onCreateBot={() => {}} queued={{}} onOpen={() => {}} onAskClear={() => {}} onAskRemove={() => {}} />);
-  assert.match(html, /class="group-h bot-h" title="Integrations that post updates into channels. Bots never take tasks."><span>Bots<\/span><button/);
-  assert.match(html, /aria-label="Create bot in Example"/);
+  assert.match(html, /class="group-h bot-h" title="Services with Publish, Receive and Tools capabilities. Bots never take agent tasks."><span>Bots<\/span><button/);
+  assert.match(html, /aria-label="Manage bots in Example"/);
 });
 
 test("bot roster rows are visible but do not offer a DM or clear-context action", () => {

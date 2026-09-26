@@ -127,11 +127,11 @@ export const settingsSchema = z
     }
   });
 
-export type PluginSettings = z.infer<typeof settingsSchema>;
-export const emptySettings: PluginSettings = { version: 1, fields: [] };
+export type BotSettingsSchema = z.infer<typeof settingsSchema>;
+export const emptySettings: BotSettingsSchema = { version: 1, fields: [] };
 
 export function validateSettings(
-  schema: PluginSettings,
+  schema: BotSettingsSchema,
   input: unknown,
 ): SettingsValues {
   if (!input || typeof input !== "object" || Array.isArray(input))
@@ -156,7 +156,7 @@ export function validateSettings(
 
 /** Recover a form draft, not a valid configuration. Saving still validates every field. */
 export function recoverSettings(
-  schema: PluginSettings,
+  schema: BotSettingsSchema,
   input: unknown,
 ): SettingsValues {
   const raw =
@@ -180,10 +180,13 @@ export function recoverSettings(
   return result;
 }
 
-export type ProjectPluginView = {
+/** An installed bot's configuration in one project; not a second service identity. */
+export type ProjectBotConfiguration = {
+  capabilities?: import('./bot-capabilities.ts').BotCapability[];
+  tools?: import('./bot-tools.ts').BotTool[];
   id: string;
   name: string;
-  settings?: PluginSettings;
+  settings?: BotSettingsSchema;
   values: SettingsValues;
   enabled: boolean;
   configured: boolean;

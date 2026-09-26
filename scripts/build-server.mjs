@@ -2,7 +2,7 @@
 // Compiles the Node side (CLI, server, MCP, client, shared) from src/ into
 // dist/node/ so an installed package runs plain JavaScript without tsx.
 // One ESM entry (cli.js) plus lazily loaded chunks for `serve`, `mcp` and
-// `plugins`, so every command only parses the code it needs. npm packages and
+// `bots`, so every command only parses the code it needs. npm packages and
 // node: builtins (including node:sqlite) stay external imports. The bundle is
 // not minified, so stack traces stay readable without shipping source maps.
 import { rm } from "node:fs/promises";

@@ -59,6 +59,7 @@ type ServiceRegistry = Core & {
   messageQueries: MessageQueries;
   delivery: DeliveryService;
   messages: MessageService;
+  bots: BotService;
   readState: ReadState;
   sendRequests: SendRequests;
   inbox: InboxDeliveryStore;
@@ -134,7 +135,7 @@ export class Hive {
       this.delivery = services.delivery = new DeliveryService(services);
       this.messages = services.messages = new MessageService(services);
       this.reads = new ReadService(services);
-      this.bots = new BotService(services);
+      this.bots = services.bots = new BotService(services);
       this.storage.transaction(() => this.bootstrap());
       this.storage.transaction(() => { pruneTelegramUpdates(this.db); pruneTelegramFailures(this.db); });
       services.readState = new ReadState(this.db);

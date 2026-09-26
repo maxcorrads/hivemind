@@ -1,4 +1,7 @@
 import { Readable } from "node:stream";
+import { z } from 'zod';
+import { botAccessSchema } from '../shared/bot-capabilities.ts';
+import { createBotSchema } from '../shared/bot-message.ts';
 import { Hono } from "hono";
 import { requestJson, validateRequest } from "./api-input.ts";
 import { threadResponseSchema, uploadLength } from "../shared/api-contract.ts";
@@ -9,8 +12,8 @@ import { Hive, describeAgent } from "./hive.ts";
 import { safeFileName } from "./files.ts";
 import { telegramDestinationForSeq, loadTelegramConfig, telegramConfigKey, publicTelegramView, readTelegramFile, removeTelegramProjectSlug, writeTelegramFile, type TelegramFileInput } from "./telegram.ts";
 import { parseProjectSlug } from "../shared/project.ts";
-import { launchContext, projectPlugins, saveProjectPlugin, setProjectPluginAvailability, pluginErrorMessage } from "./plugins.ts";
-import { BotIngressBudget, readLimitedJson, assertLocalHumanRequest, BOT_JSON_BYTES, PLUGIN_REQUEST_BYTES, CREDENTIAL_JSON_BYTES } from "./ingress.ts";
+import { launchContext, projectBotConfigurations, saveProjectBotConfiguration, setProjectBotAvailability, botErrorMessage, callProjectBot, connectProjectBot } from "./bot-definitions.ts";
+import { BotIngressBudget, readLimitedJson, assertLocalHumanRequest, BOT_JSON_BYTES, BOT_CONFIGURATION_REQUEST_BYTES, CREDENTIAL_JSON_BYTES } from "./ingress.ts";
 import { adaptiveRoutingPublic, saveAdaptiveRouting } from "./adaptive-config.ts";
 import { decodeJevCallCursor } from "../shared/jev-calls.ts";
 import { ACTIVITY_REASONS, type ActivityReason } from "../shared/read-state.ts";
@@ -39,6 +42,11 @@ function windowRoots(messages: readonly { id: string }[], threadId: string | nul
 }
 
 export function createApp(hive: Hive, hooks: AppHooks = {}) {
+  const parseBotInput = <T>(schema: z.ZodType<T>, input: unknown): T => {
+    const parsed = schema.safeParse(input);
+    if (!parsed.success) throw new HiveError(400, 'Invalid bot request');
+    return parsed.data;
+  };
   const app = new Hono();
   app.onError((err, c) => {
     if (err instanceof HiveError) {
@@ -66,28 +74,116 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     await next();
   });
   const jevDiagnostics = installJevDiagnostics(ui, hive, hooks.jevDiagnosticFetch);
+  // Register the static catalog before identity routes: a definition may be named "access".
+  ui.get("/projects/:slug/bots/catalog", c => c.json({ configurations: projectBotConfigurations(hive.home, hive.projects.getProjectBySlug(c.req.param("slug"))) }));
+  ui.patch("/projects/:slug/bots/catalog/:id", async c => {
+    const project = hive.projects.getProjectBySlug(c.req.param("slug"));
+    try {
+      return c.json({ configuration: await setProjectBotAvailability(hive.home, project, c.req.param("id"), await readLimitedJson(c.req.raw, BOT_CONFIGURATION_REQUEST_BYTES)) });
+    } catch (error) {
+      if (error instanceof HiveError) throw error;
+      throw new HiveError(400, botErrorMessage(error));
+    }
+  });
+  ui.put("/projects/:slug/bots/catalog/:id", async c => {
+    const project = hive.projects.getProjectBySlug(c.req.param("slug"));
+    try {
+      return c.json({ configuration: await saveProjectBotConfiguration(hive.home, project, c.req.url, c.req.param("id"), await readLimitedJson(c.req.raw, BOT_CONFIGURATION_REQUEST_BYTES)) });
+    } catch (error) {
+      if (error instanceof HiveError) throw error;
+      throw new HiveError(400, botErrorMessage(error));
+    }
+  });
+  const botDefinition = (projectId: string, id: string) => {
+    const project = hive.projects.getProject(projectId);
+    const definition = projectBotConfigurations(hive.home, project).find(p => p.id === id);
+    if (!definition || definition.error) throw new HiveError(409, 'Bot definition is unavailable; check its configuration');
+    return { project, definition };
+  };
+  ui.get('/projects/:id/bots/:botId/access', c => c.json(hive.bots.botAccess(hive.identity.getAgent('human'), c.req.param('id'), c.req.param('botId'))));
+  ui.get('/projects/:id/bots', c => {
+    const human = hive.identity.getAgent('human'), project = hive.projects.requireActorProject(human, c.req.param('id'));
+    // Catalog/profile metadata must not make identity and credential recovery
+    // unavailable. Mutations that need a definition still validate it separately.
+    let catalog: { definitions: ReturnType<typeof projectBotConfigurations>; catalogError?: string };
+    try { catalog = { definitions: projectBotConfigurations(hive.home, project) }; }
+    catch { catalog = { definitions: [], catalogError: 'Bot catalog unavailable. Existing identities, access and credentials remain manageable. Repair the local catalog/configuration files and refresh. Running processes are unchanged.' }; }
+    return c.json({ bots: hive.identity.listAgents(human).filter(bot => bot.role === 'bot' && bot.projectId === project.id)
+      .map(bot => ({ bot, access: hive.bots.access(bot), credential: hive.bots.botCredential(human, project.id, bot.id).credential })),
+      ...catalog, channels: hive.channels.listChannels(human).filter(channel => channel.projectId === project.id) });
+  });
+  ui.put('/projects/:id/bots/:botId/access', async c => {
+    const input = parseBotInput(botAccessSchema, await readLimitedJson(c.req.raw, CREDENTIAL_JSON_BYTES));
+    const current = hive.bots.botAccess(hive.identity.getAgent('human'), c.req.param('id'), c.req.param('botId'));
+    // Revoking access must not depend on a healthy executable or readable profile.
+    // New capabilities, subscriptions or bindings still validate the current definition.
+    const reduction = input.definitionId === current.definitionId && input.capabilities.every(cap => current.capabilities.includes(cap)) &&
+      input.receiveChannels.every(channel => current.receiveChannels.includes(channel));
+    if (input.definitionId && !reduction) {
+      const { definition } = botDefinition(c.req.param('id'), input.definitionId);
+      if (!Array.isArray(input.capabilities) || input.capabilities.some((cap: unknown) => !definition.capabilities?.includes(cap as never)))
+        throw new HiveError(400, 'Selected capabilities are not supported by this bot definition');
+    }
+    return c.json(hive.bots.setAccess(hive.identity.getAgent('human'), c.req.param('id'), c.req.param('botId'), input));
+  });
+  ui.post('/projects/:id/bots/:botId/control', async c => {
+    const human = hive.identity.getAgent('human');
+    const { bot } = hive.bots.botCredential(human, c.req.param('id'), c.req.param('botId'));
+    const access = hive.bots.access(bot), body = parseBotInput(z.object({ action: z.enum(['status', 'start', 'stop']),
+      expectedAccessRevision: z.number().int().positive().safe() }).strict(), await readLimitedJson(c.req.raw, CREDENTIAL_JSON_BYTES));
+    if (access.revision !== body.expectedAccessRevision) throw new HiveError(409, 'Bot access changed; refresh before this operation');
+    if (!access.definitionId) throw new HiveError(409, 'Connect a bot definition first');
+    if (!['status', 'start', 'stop'].includes(body?.action)) throw new HiveError(400, 'Choose status, start or stop');
+    try {
+      const { project } = botDefinition(bot.projectId!, access.definitionId);
+      return c.json({ result: await callProjectBot(hive.home, project, c.req.url, access.definitionId, bot, { tool: body.action, arguments: {} }, true, () => {
+        const current = hive.bots.botCredential(human, project.id, bot.id);
+        if (hive.bots.access(current.bot).revision !== access.revision) throw new HiveError(409, 'Bot access changed; refresh before this operation');
+        if (body.action === 'start' && current.credential.revoked) throw new HiveError(403, 'Reconnect active credentials before starting');
+      }) });
+    } catch (error) { if (error instanceof HiveError) throw error; throw new HiveError(400, botErrorMessage(error)); }
+  });
+  ui.post('/projects/:id/bots/setup', async c => {
+    const human = hive.identity.getAgent('human'), body = parseBotInput(createBotSchema.extend({ definitionId: z.string().min(1).max(64) }), await readLimitedJson(c.req.raw, CREDENTIAL_JSON_BYTES));
+    const project = hive.projects.requireActorProject(human, c.req.param('id'));
+    if (typeof body?.definitionId !== 'string') throw new HiveError(400, 'Choose a bot definition');
+    const { definition } = botDefinition(project.id, body.definitionId);
+    if (!definition.configured || !definition.enabled) throw new HiveError(409, 'Configure and enable this bot definition first');
+    if (hive.identity.listAgents(human).some(bot => bot.role === 'bot' && bot.projectId === project.id && hive.bots.access(bot).definitionId === definition.id))
+      throw new HiveError(409, 'A bot already uses this definition in the project');
+    const created = hive.bots.createBot(human, project.id, { name: body.name });
+    hive.bots.setAccess(human, project.id, created.bot.id, { capabilities: definition.capabilities!.filter(cap => cap !== 'receive'),
+      definitionId: definition.id, receiveChannels: [], expectedRevision: 1 });
+    try {
+      await connectProjectBot(hive.home, project, c.req.url, definition.id, created.bot, created.token, () => {
+        const bot = hive.identity.agentByToken(created.token);
+        if (hive.bots.access(bot).definitionId !== definition.id) throw new HiveError(409, 'Bot connection changed before setup');
+      });
+      return c.json({ bot: created.bot, connected: true }, 201);
+    } catch {
+      // Preserve the created identity on ambiguous outcomes. A new request must not duplicate it.
+      return c.json({ bot: created.bot, connected: false, error: 'Identity created; definition connection needs attention. Open its settings and reconnect instead of creating another bot.' }, 201);
+    }
+  });
+  ui.post('/projects/:id/bots/:botId/connect', async c => {
+    const human = hive.identity.getAgent('human'), input = parseBotInput(z.object({ expectedRevision: z.number().int().positive().safe(),
+      expectedAccessRevision: z.number().int().positive().safe() }).strict(), await readLimitedJson(c.req.raw, CREDENTIAL_JSON_BYTES));
+    const current = hive.bots.botCredential(human, c.req.param('id'), c.req.param('botId'));
+    const access = hive.bots.access(current.bot);
+    if (access.revision !== input.expectedAccessRevision) throw new HiveError(409, 'Bot access changed; refresh before reconnecting');
+    if (!access.definitionId) throw new HiveError(409, 'Select and save a definition first');
+    const { project, definition } = botDefinition(current.bot.projectId!, access.definitionId);
+    if (!definition.configured) throw new HiveError(409, 'Configure the definition first');
+    const rotated = hive.bots.changeBotCredential(human, project.id, current.bot.id, { action: 'rotate', expectedRevision: input?.expectedRevision });
+    try { return c.json(await connectProjectBot(hive.home, project, c.req.url, access.definitionId, current.bot, rotated.token!, () => {
+      const bot = hive.identity.agentByToken(rotated.token!);
+      if (hive.bots.access(bot).revision !== access.revision) throw new HiveError(409, 'Bot access changed before connection');
+    })); }
+    catch { throw new HiveError(502, 'Credential replaced; connection outcome is unknown. Check definition status before reconnecting.'); }
+  });
   ui.get("/launch-context", c => {
     const slug = c.req.query("project");
     return c.json(launchContext(hive.home, c.req.url, slug ? hive.projects.getProjectBySlug(slug) : undefined));
-  });
-  ui.get("/projects/:slug/plugins", c => c.json({ plugins: projectPlugins(hive.home, hive.projects.getProjectBySlug(c.req.param("slug"))) }));
-  ui.patch("/projects/:slug/plugins/:id", async c => {
-    const project = hive.projects.getProjectBySlug(c.req.param("slug"));
-    try {
-      return c.json({ plugin: await setProjectPluginAvailability(hive.home, project, c.req.param("id"), await readLimitedJson(c.req.raw, PLUGIN_REQUEST_BYTES)) });
-    } catch (error) {
-      if (error instanceof HiveError) throw error;
-      throw new HiveError(400, pluginErrorMessage(error));
-    }
-  });
-  ui.put("/projects/:slug/plugins/:id", async c => {
-    const project = hive.projects.getProjectBySlug(c.req.param("slug"));
-    try {
-      return c.json({ plugin: await saveProjectPlugin(hive.home, project, c.req.url, c.req.param("id"), await readLimitedJson(c.req.raw, PLUGIN_REQUEST_BYTES)) });
-    } catch (error) {
-      if (error instanceof HiveError) throw error;
-      throw new HiveError(400, pluginErrorMessage(error));
-    }
   });
   ui.get("/adaptive-routing", c => {
     hive.identity.getAgent("human");
@@ -364,6 +460,36 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   });
   // terminalSession is a Human UI label; agents' roster stays as it was.
   agent.get('/agents', c => c.json({ agents: hive.identity.listAgents(c.get('me')).map(({ createdAt: _c, terminalSession: _t, ...a }) => a) }));
+  agent.get('/bot-tools', c => {
+    const me = c.get('me');
+    if (me.role !== 'brain' || !me.projectId) throw new HiveError(403, 'Bot tools require a project brain');
+    const definitions = projectBotConfigurations(hive.home, hive.projects.getProject(me.projectId));
+    const bots = hive.identity.listAgents(me).filter(bot => bot.role === 'bot' && bot.projectId === me.projectId);
+    return c.json({ bots: bots.flatMap(bot => {
+      const access = hive.bots.access(bot), definition = definitions.find(p => p.id === access.definitionId);
+      const credential = hive.bots.botCredential(hive.identity.getAgent('human'), me.projectId!, bot.id).credential;
+      return !credential.revoked && access.capabilities.includes('tools') && definition?.enabled && definition.configured && !definition.error
+        ? [{ id: bot.id, name: bot.name, tools: definition.tools ?? [] }] : [];
+    }) });
+  });
+  agent.post('/bots/:botId/tools', async c => {
+    const me = c.get('me');
+    if (me.role !== 'brain' || !me.projectId) throw new HiveError(403, 'Bot tools require a project brain');
+    const { bot, credential } = hive.bots.botCredential(hive.identity.getAgent('human'), me.projectId, c.req.param('botId'));
+    if (credential.revoked) throw new HiveError(403, 'Bot credentials are revoked');
+    const access = hive.bots.requireCapability(bot, 'tools');
+    if (!access.definitionId) throw new HiveError(409, 'Bot definition is not connected');
+    const input = await readLimitedJson(c.req.raw, BOT_CONFIGURATION_REQUEST_BYTES);
+    try {
+      return c.json({ result: await callProjectBot(hive.home, hive.projects.getProject(me.projectId), c.req.url, access.definitionId, bot, input, false, () => {
+        const actor = hive.identity.agentByToken(c.get('token'));
+        if (actor.role !== 'brain' || actor.projectId !== bot.projectId) throw new HiveError(403, 'Project brain access changed');
+        const current = hive.bots.botCredential(hive.identity.getAgent('human'), actor.projectId!, bot.id);
+        if (current.credential.revoked || hive.bots.requireCapability(current.bot, 'tools').revision !== access.revision)
+          throw new HiveError(403, 'Bot access changed before execution');
+      }) });
+    } catch (error) { if (error instanceof HiveError) throw error; throw new HiveError(400, botErrorMessage(error)); }
+  });
   agent.get('/search', c => {
     const me = c.get('me');
     return c.json(hive.messageQueries.searchMessages(me, { q: String(c.req.query('q') ?? ''), project: c.req.query('project') || me.project,
@@ -482,12 +608,24 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const result = hive.bots.postBotMessage(actor, c.req.param('id'), body);
     return c.json(result, result.duplicate ? 200 : 201);
   });
+  bot.get('/channels/:id/messages', c => c.json(hive.bots.receive(c.get('me'), c.req.param('id'), Number(c.req.query('afterSeq') ?? 0), Number(c.req.query('limit') ?? 50))));
   bot.get('/channels/:id/links', c => c.json({ links: hive.rooms.botLinks(c.get('me'), c.req.param('id')) }));
-  bot.post('/channels/:id/links', async c => c.json({ link: hive.rooms.registerLink(c.get('me'), c.req.param('id'), await requestJson(c.req.raw)) }));
-  bot.post('/channels/:id/links/:link/status', async c => c.json({ link: hive.rooms.reportLink(c.get('me'), c.req.param('id'), c.req.param('link'), await requestJson(c.req.raw)) }));
+  bot.post('/channels/:id/links', async c => {
+    const body = await requestJson(c.req.raw);
+    const actor = hive.identity.agentByToken(c.get('token'));
+    return c.json({ link: hive.rooms.registerLink(actor, c.req.param('id'), body) });
+  });
+  bot.post('/channels/:id/links/:link/status', async c => {
+    const body = await requestJson(c.req.raw);
+    const actor = hive.identity.agentByToken(c.get('token'));
+    return c.json({ link: hive.rooms.reportLink(actor, c.req.param('id'), c.req.param('link'), body) });
+  });
   bot.post('/files', async c => {
+    hive.bots.requireCapability(c.get('me'), 'publish');
     const name = c.req.header('x-file-name') || 'file';
-    const file = await hive.files.createFile(c.get('me'), { authorize: () => hive.identity.agentByToken(c.get('token')), name,
+    const file = await hive.files.createFile(c.get('me'), { authorize: () => {
+      const actor = hive.identity.agentByToken(c.get('token')); hive.bots.requireCapability(actor, 'publish'); return actor;
+    }, name,
       mime: resolveUploadMime(c.req.header('x-file-mime'), name), body: c.req.raw.body, signal: c.req.raw.signal,
       declaredBytes: uploadLength(c.req.header('content-length') ?? null) });
     return c.json({ file }, 201);

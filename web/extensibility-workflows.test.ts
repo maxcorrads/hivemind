@@ -7,8 +7,8 @@ import { Window } from "happy-dom";
 import { act, createElement } from "react";
 import { Hive } from "../src/server/hive.ts";
 import { createApp } from "../src/server/app.ts";
-import { registerPlugin } from "../src/server/plugins.ts";
-import { ProjectPlugins } from "./ProjectPlugins.tsx";
+import { registerBotDefinition } from "../src/server/bot-definitions.ts";
+import { ProjectBots } from './ProjectBots.tsx';
 import type { LaunchContext } from "../src/shared/launch-prompt.ts";
 import { api } from "./api.ts";
 import { App } from "./App.tsx";
@@ -93,22 +93,23 @@ async function fixture(t: TestContext) {
   };
   const context = (slug: string): LaunchContext => {
     const project = [a, b].find(p => p.slug === slug)!;
-    return { project: { id: project.id, slug }, plugins: [{ id: "feed", name: `Feed for ${slug}` }],
-      pluginInstructions: `ONLY_PROJECT_${slug.toUpperCase()}_TOOLS`,
+    return { project: { id: project.id, slug }, botDefinitions: [{ id: "feed", name: `Feed for ${slug}` }],
+      botInstructions: `ONLY_PROJECT_${slug.toUpperCase()}_TOOLS`,
       hivemindMcp: { command: "node", args: ["/fixture/hive.ts", "mcp"], env: { HIVEMIND_URL: "http://127.0.0.1:7421" } } };
   };
   return { home: dir, hive, human, a, b, brainA, brainB, worker, botA, botB, channel, host, root,
     requests, copies, button, click, change, field, renderLaunch, context, closed: () => closed };
 }
 
-test("App routes project bot creation, one-time credentials and plugin settings through the real scoped API", async t => {
+test("App routes project bot creation, one-time credentials and bot settings through the real scoped API", async t => {
   const f = await fixture(t);
   await act(async () => f.root.render(createElement(App)));
   const socket = SocketFixture.instances[0]!;
   await act(async () => { socket.onopen?.(); });
   assert.ok(f.host.querySelector('[title="live"]'));
-  await f.click(f.host.querySelector<HTMLButtonElement>(`[aria-label="Create bot in ${f.a.name}"]`)!);
-  let dialog = f.host.querySelector('[aria-label="Create project bot"]')!;
+  await f.click(f.host.querySelector<HTMLButtonElement>(`[aria-label="Manage bots in ${f.a.name}"]`)!);
+  let dialog = f.host.querySelector(`[aria-label="Bots for ${f.a.name}"]`)!;
+  await f.click(f.button('Add bot', dialog));
   await f.change(dialog.querySelector("input")!, "CreatedFeed");
   await f.click(f.button("Create bot", dialog));
   const created = f.hive.identity.listAgents(f.human).find(agent => agent.name === "CreatedFeed")!;
@@ -117,19 +118,19 @@ test("App routes project bot creation, one-time credentials and plugin settings 
   assert.equal(f.hive.identity.agentByToken(secret).id, created.id);
   assert.equal(f.hive.identity.agentByToken(f.botB.token).id, f.botB.bot.id);
   await f.click(f.button("Close", dialog));
-  assert.equal(f.host.querySelector('[aria-label="Create project bot"]'), null);
+  assert.equal(f.host.querySelector(`[aria-label="Bots for ${f.a.name}"]`), null);
   await f.click(f.host.querySelector<HTMLButtonElement>('[aria-label="Actions for CreatedFeed"]')!);
-  await f.click(f.host.querySelector<HTMLButtonElement>('[aria-label="Manage credentials for CreatedFeed"]')!);
-  dialog = f.host.querySelector('[aria-label="Manage bot credentials"]')!;
-  assert.match(dialog.textContent!, /revision 1/);
+  await f.click(f.host.querySelector<HTMLButtonElement>('[aria-label="Manage bot CreatedFeed"]')!);
+  dialog = f.host.querySelector(`[aria-label="Bots for ${f.a.name}"]`)!;
+  assert.match(dialog.textContent!, /Capabilities/);
   assert.equal(dialog.querySelector('[aria-label="New bot token"]'), null);
   await f.click(f.button("Close", dialog));
   await f.click(f.host.querySelector<HTMLButtonElement>('[title="Project settings"]')!);
-  await f.click(f.button("Plugins…"));
-  assert.match(f.host.textContent!, /No installed plugins/);
-  assert.ok(f.requests.includes(`/api/ui/projects/${f.a.slug}/plugins`));
-  assert.ok(!f.requests.includes(`/api/ui/projects/${f.b.slug}/plugins`));
-  await f.click(f.button("Close")); await f.click(f.button("Cancel"));
+  await f.click(f.button("Bots…"));
+  assert.match(f.host.textContent!, /Add bot/);
+  assert.ok(f.requests.includes(`/api/ui/projects/${f.a.id}/bots`));
+  assert.ok(!f.requests.includes(`/api/ui/projects/${f.b.id}/bots`));
+  await f.click(f.button("Close"));
   await f.click(f.host.querySelector<HTMLButtonElement>('[title="Dark"]')!);
   assert.equal(window.localStorage.getItem("hivemind-theme"), "dark");
   for (let i = 0; i < window.localStorage.length; i++) {
@@ -162,16 +163,16 @@ test("mounted launch switches project tools safely, excludes bot seats and only 
   const f = await fixture(t);
   t.mock.method(api, "launchContext", async (slug: string) => f.context(slug));
   await f.renderLaunch();
-  assert.match(f.host.querySelector("pre")!.textContent!, new RegExp(f.context(f.a.slug).pluginInstructions));
+  assert.match(f.host.querySelector("pre")!.textContent!, new RegExp(f.context(f.a.slug).botInstructions));
   await f.click(f.field("worker"));
   assert.doesNotMatch(f.host.querySelector("pre")!.textContent!, /ONLY_PROJECT/);
-  assert.match(f.host.textContent!, /Workers do not need project plugin instructions/);
+  assert.match(f.host.textContent!, /Workers do not need project bot instructions/);
   await f.click(f.field("junior"));
   assert.match(f.host.querySelector("pre")!.textContent!, /junior/);
   await f.click(f.field("brain"));
   await f.change(f.field("Project"), f.b.slug);
   assert.match(f.host.querySelector("pre")!.textContent!, /ONLY_PROJECT_OTHER_TOOLS/);
-  assert.doesNotMatch(f.host.querySelector("pre")!.textContent!, new RegExp(f.context(f.a.slug).pluginInstructions));
+  assert.doesNotMatch(f.host.querySelector("pre")!.textContent!, new RegExp(f.context(f.a.slug).botInstructions));
   await f.change(f.field("CLI flags"), "; untrusted-command");
   assert.ok(f.button("Copy command").disabled);
   assert.match(f.host.textContent!, /metacharacters/);
@@ -187,8 +188,8 @@ test("mounted launch switches project tools safely, excludes bot seats and only 
     if (name === f.worker.name) assert.doesNotMatch(prompt, /ONLY_PROJECT/);
     else {
       const slug = name === f.brainA.name ? f.a.slug : f.b.slug;
-      assert.match(prompt, new RegExp(f.context(slug).pluginInstructions));
-      assert.doesNotMatch(prompt, new RegExp(f.context(slug === f.a.slug ? f.b.slug : f.a.slug).pluginInstructions));
+      assert.match(prompt, new RegExp(f.context(slug).botInstructions));
+      assert.doesNotMatch(prompt, new RegExp(f.context(slug === f.a.slug ? f.b.slug : f.a.slug).botInstructions));
     }
   }
   await f.click(f.button("Copy all"));
@@ -308,11 +309,11 @@ test("observation threads support Human replies and reactions without granting b
   assert.ok(hasRow(f.hive, "messages", { body: "Human channel update", author_id: "human" }));
 });
 
-test("mounted plugin configuration persists typed fields privately and availability remains project-scoped", async t => {
-  const f = await fixture(t), pkg = path.join(f.home, "fixture-plugin");
+test("mounted bot configuration persists typed fields privately and availability remains project-scoped", async t => {
+  const f = await fixture(t), pkg = path.join(f.home, "fixture-bot");
   mkdirSync(pkg);
-  writeFileSync(path.join(pkg, "hivemind-plugin.json"), JSON.stringify({
-    version: 1, id: "typed-feed", name: "Typed Feed", instructions: "TOOLS.md", settings: "settings.json", command: "tool",
+  writeFileSync(path.join(pkg, "hivemind-bot.json"), JSON.stringify({
+    version: 1, kind: 'bot', capabilities: ['publish'], tools: [], id: "typed-feed", name: "Typed Feed", instructions: "TOOLS.md", settings: "settings.json", command: "tool",
   }));
   writeFileSync(path.join(pkg, "TOOLS.md"), "Use {{command}} only when asked.");
   writeFileSync(path.join(pkg, "settings.json"), JSON.stringify({ version: 1, fields: [
@@ -323,8 +324,14 @@ test("mounted plugin configuration persists typed fields privately and availabil
     { key: "active", label: "Active", type: "boolean" },
   ] }));
   writeFileSync(path.join(pkg, "tool"), `#!${process.execPath}\nconst fs=require('node:fs'),path=require('node:path');let input='';process.stdin.on('data',chunk=>input+=chunk);process.stdin.on('end',()=>{const request=JSON.parse(input);fs.writeFileSync(path.join(process.argv[4],'config.json'),JSON.stringify(request.config),{mode:0o600});console.log(JSON.stringify({configured:true}));});\n`, { mode: 0o700 });
-  registerPlugin(f.home, path.join(pkg, "hivemind-plugin.json"));
-  await act(async () => f.root.render(createElement(ProjectPlugins, { project: f.a, onClose: () => {} })));
+  await act(async () => f.root.render(createElement(ProjectBots, { project: f.a, onClose: () => {}, onChanged: () => {} })));
+  await f.click(f.button('Add bot'));
+  assert.match(f.host.textContent!, /Bots are installed as external packages/);
+  assert.deepEqual(Array.from((f.field('Service') as HTMLSelectElement).options).map(option => option.value), ['']);
+  registerBotDefinition(f.home, path.join(pkg, "hivemind-bot.json"));
+  await f.click(f.button('Refresh'));
+  assert.deepEqual(Array.from((f.field('Service') as HTMLSelectElement).options).map(option => option.value), ['', 'typed-feed']);
+  await f.change(f.field('Service'), 'typed-feed');
   await f.click(f.button("Configure"));
   await f.change(f.field("Host"), "example.invalid");
   await f.change(f.field("Count"), "2");
@@ -333,26 +340,26 @@ test("mounted plugin configuration persists typed fields privately and availabil
   await f.change(f.field("Mode"), "all");
   await f.change(f.field("Tags"), " alpha \n\nalpha");
   await f.click(f.field("Active"));
-  await f.click(f.field("Available to this project"));
+  await f.click(f.field("Enable service for this project"));
   // Wait on the real API operation, not a timer: React act alone does not wait for a child process.
-  let saved!: Promise<{ plugin: Awaited<ReturnType<typeof api.projectPlugins>>["plugins"][number] }>;
-  const save = api.saveProjectPlugin;
-  t.mock.method(api, "saveProjectPlugin", (...args: Parameters<typeof save>) => { saved = save(...args); return saved; });
+  let saved!: Promise<{ configuration: Awaited<ReturnType<typeof api.projectBotConfigurations>>["configurations"][number] }>;
+  const save = api.saveProjectBotConfiguration;
+  t.mock.method(api, "saveProjectBotConfiguration", (...args: Parameters<typeof save>) => { saved = save(...args); return saved; });
   await act(async () => { f.button("Save locally").click(); await saved; });
-  const view = (await api.projectPlugins(f.a.slug)).plugins[0]!;
+  const view = (await api.projectBotConfigurations(f.a.slug)).configurations[0]!;
   assert.equal(view.enabled, true);
   assert.deepEqual(view.values, { host: "example.invalid", count: 3, mode: "all", tags: [" alpha ", "", "alpha"], active: true });
   assert.deepEqual(JSON.parse(readFileSync(path.join(view.home, "config.json"), "utf8")), { ...view.values, hiveUrl: "http://127.0.0.1" });
-  assert.equal((await api.projectPlugins(f.b.slug)).plugins[0]!.configured, false);
+  assert.equal((await api.projectBotConfigurations(f.b.slug)).configurations[0]!.configured, false);
   await f.click(f.button("Disable for project"));
-  assert.equal((await api.projectPlugins(f.a.slug)).plugins[0]!.enabled, false);
+  assert.equal((await api.projectBotConfigurations(f.a.slug)).configurations[0]!.enabled, false);
   await f.click(f.button("Enable for project"));
-  assert.equal((await api.projectPlugins(f.a.slug)).plugins[0]!.enabled, true);
+  assert.equal((await api.projectBotConfigurations(f.a.slug)).configurations[0]!.enabled, true);
   await f.click(f.button("Configure"));
   assert.equal(f.field("Tags").value, " alpha \n\nalpha");
   await f.click(f.button("Hide settings"));
-  await f.click(f.button("Reload saved"));
-  assert.match(f.host.textContent!, /Available to brain/);
+  await f.click(f.button("Refresh"));
+  assert.match(f.host.textContent!, /Service enabled/);
 });
 
 test("launch preferences and per-seat overrides survive remount without persisting project tool context", async t => {

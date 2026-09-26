@@ -38,6 +38,13 @@ if [[ ! -f "$package_root/dist/node/cli.js" || -e "$package_root/src" || -e "$in
 fi
 "$hivemind" mcp-config 2>/dev/null | grep -q "dist/node/cli.js"
 
+# Providers are external packages. A clean core has no implicit bots.
+if [[ -e "$package_root/bots/gitlab" ]]; then
+  echo "Packaged Hivemind must not bundle the external GitLab bot" >&2
+  exit 1
+fi
+HIVEMIND_HOME="$home_root" "$hivemind" bots list | grep -Eq '^\[\]$'
+
 # Every local Markdown page the packaged README links (e.g. docs/adaptive-routing.md) ships with it.
 if [[ ! -f "$package_root/docs/adaptive-routing.md" ]]; then
   echo "Packaged hivemind is missing docs/adaptive-routing.md linked from the README" >&2

@@ -22,7 +22,7 @@ export function RoomDetails({ view }: { view: RoomView }) {
       {view.tasksHasMore && <p>Showing up to 100 tasks. Older tasks remain in channel history; agents can page with get_room beforeTask.</p>}
     </details>
     {(view.links.length > 0 || view.unmanagedBots.length > 0) && <details open={room.state === 'archived'}><Disclosure>Source suspension reports</Disclosure>
-      <p>These are plugin reports, not independent verification. Pending or unsupported does not mean stopped.</p>
+      <p>These are bot reports, not independent verification. Pending or unsupported does not mean stopped.</p>
       <ul>{view.links.map(l => <li key={`${l.botId}:${l.id}`}>{l.label}: requested {l.desired}, reported {l.observed} (generation {l.generation}){l.detail && ` · ${l.detail}`}</li>)}</ul>
       {view.unmanagedBots.length > 0 && <p role="status">No lifecycle registration: {view.unmanagedBots.join(', ')}. Suspend these integrations explicitly; Hivemind cannot confirm they stopped.</p>}
     </details>}

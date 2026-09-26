@@ -1,29 +1,29 @@
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, watch, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Hive } from "./hive.ts";
 import { readValue } from "./test-fixtures.ts";
 import { createApp } from "./app.ts";
-import { configurePlugin, launchContext, projectPlugins, registerPlugin, saveProjectPlugin } from "./plugins.ts";
+import { configureBot, launchContext, projectBotConfigurations, registerBotDefinition, saveProjectBotConfiguration } from "./bot-definitions.ts";
 import { preparePrivateDatabase } from "./private-database.ts";
-import { PLUGIN_REQUEST_BYTES } from "./ingress.ts";
+import { BOT_CONFIGURATION_REQUEST_BYTES } from "./ingress.ts";
 
 function fixture(t: TestContext) {
-  const dir = mkdtempSync(path.join(os.tmpdir(), "hive-plugin-security-"));
+  const dir = mkdtempSync(path.join(os.tmpdir(), "hive-definition-security-"));
   const home = path.join(dir, "hive"), pkg = path.join(dir, "package");
   mkdirSync(pkg);
   const tool = path.join(pkg, "tool");
-  const manifest = path.join(pkg, "hivemind-plugin.json");
-  writeFileSync(manifest, JSON.stringify({ version: 1, id: "safe-tool", name: "Safe Tool", command: "tool", instructions: "TOOLS.md", settings: "settings.json" }));
+  const manifest = path.join(pkg, "hivemind-bot.json");
+  writeFileSync(manifest, JSON.stringify({ version: 1, kind: 'bot', capabilities: ['publish'], tools: [], id: "safe-tool", name: "Safe Tool", command: "tool", instructions: "TOOLS.md", settings: "settings.json" }));
   writeFileSync(path.join(pkg, "TOOLS.md"), "Use {{command}} only for Human-assigned work.");
   writeFileSync(path.join(pkg, "settings.json"), JSON.stringify({ version: 1, fields: [{ key: "label", label: "Label", type: "string" }] }));
   const install = (source: string) => writeFileSync(tool, `#!${process.execPath}\n${source}\n`, { mode: 0o700 });
   install('console.log(JSON.stringify({configured:false}));process.exit(1);');
   const hive = new Hive(path.join(home, "hive.db"));
   t.after(() => { hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
-  registerPlugin(home, manifest);
+  registerBotDefinition(home, manifest);
   const project = hive.projects.listProjects()[0]!;
   return { dir, home, pkg, tool, manifest, install, hive, project };
 }
@@ -34,15 +34,15 @@ test("configure receipts never return provider secrets, and subsequent configura
   const f = fixture(t), app = createApp(f.hive);
   const secret = "fixture-provider-credential-not-for-ui";
   f.install(`console.log(JSON.stringify({configured:false,error:${JSON.stringify(secret)}}));process.exit(2);`);
-  const response = await app.request(`/api/ui/projects/${f.project.slug}/plugins/safe-tool`, { method: "PUT", body: JSON.stringify(change) });
+  const response = await app.request(`/api/ui/projects/${f.project.slug}/bots/catalog/safe-tool`, { method: "PUT", body: JSON.stringify(change) });
   assert.equal(response.status, 400);
   const text = await response.text();
   assert.equal(text.includes(secret), false);
-  assert.match(text, /Plugin rejected configuration/);
-  assert.equal(existsSync(path.join(f.home, "plugins.lock")), false);
-  assert.equal(projectPlugins(f.home, f.project)[0]!.configured, false);
+  assert.match(text, /Bot rejected configuration/);
+  assert.equal(existsSync(path.join(f.home, "bot-configurations.lock")), false);
+  assert.equal(projectBotConfigurations(f.home, f.project)[0]!.configured, false);
   f.install(goodConfigure);
-  const saved = await saveProjectPlugin(f.home, f.project, "http://localhost", "safe-tool", change);
+  const saved = await saveProjectBotConfiguration(f.home, f.project, "http://localhost", "safe-tool", change);
   assert.equal(saved.revision, 1);
   assert.deepEqual(readdirSync(f.home).filter(name => name.endsWith(".next") || name.endsWith(".lock")), []);
 });
@@ -56,7 +56,7 @@ test("configuration gets an explicit profile/cwd but no inherited service creden
   process.env.AWS_SECRET_ACCESS_KEY = "fixture-cloud-secret";
   process.env.NODE_OPTIONS = "--definitely-not-a-real-node-option";
   f.install(`const keys=${JSON.stringify(keys)};if(keys.some(k=>k in process.env)||process.cwd()!==process.argv[4])process.exit(4);${goodConfigure}`);
-  const saved = await saveProjectPlugin(f.home, f.project, "http://localhost", "safe-tool", change);
+  const saved = await saveProjectBotConfiguration(f.home, f.project, "http://localhost", "safe-tool", change);
   assert.equal(saved.configured, true);
   const persisted = readFileSync(path.join(saved.home, "config.json"), "utf8");
   assert.equal(persisted.includes("fixture-hive-secret"), false);
@@ -69,29 +69,51 @@ test("configure deadline kills the child and releases its timer without real sle
   f.install('setInterval(()=>{},1000);');
   const profile = path.join(f.home, "timeout-profile"); mkdirSync(profile);
   t.mock.timers.enable({ apis: ["setTimeout"] });
-  const outcome = assert.rejects(configurePlugin(f.tool, profile, {}), /Plugin rejected configuration/);
+  const outcome = assert.rejects(configureBot(f.tool, profile, {}), /Bot rejected configuration/);
   t.mock.timers.tick(15000);
   await outcome;
-  assert.equal(existsSync(path.join(f.home, "plugins.lock")), false);
+  assert.equal(existsSync(path.join(f.home, "bot-configurations.lock")), false);
 });
 
 test("configure cannot strand a process on unserializable input or a missing executable", async t => {
   const f = fixture(t), cycle: Record<string, unknown> = {};
   cycle.self = cycle;
-  await assert.rejects(configurePlugin(f.tool, f.home, cycle));
-  await assert.rejects(configurePlugin(path.join(f.pkg, "missing"), f.home, {}), /Could not run/);
+  await assert.rejects(configureBot(f.tool, f.home, cycle));
+  await assert.rejects(configureBot(path.join(f.pkg, "missing"), f.home, {}), /Could not run/);
 });
 
-test("HTTP plugin budgets and unknown identities never execute installed code", async t => {
+test("configure deadline settles when a detached descendant retains output pipes", { timeout: 5000 }, async t => {
+  const f = fixture(t), marker = path.join(f.home, 'descendant-ready');
+  f.install(`const {spawn}=require('node:child_process');
+    const child=spawn(process.execPath,['-e',"require('node:fs').writeFileSync(process.argv[1],String(process.pid));setInterval(()=>{},1000)",${JSON.stringify(marker)}],{detached:true,stdio:['ignore',1,2]});
+    child.unref();`);
+  let descendant: number | undefined;
+  t.after(() => { if (descendant) { try { process.kill(descendant, 'SIGKILL'); } catch { /* already exited */ } } });
+  const ready = new Promise<void>(resolve => {
+    const watcher = watch(f.home, () => { if (existsSync(marker)) { watcher.close(); resolve(); } });
+    t.after(() => watcher.close());
+  });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const outcome = assert.rejects(saveProjectBotConfiguration(f.home, f.project, 'http://localhost', 'safe-tool', change), /Bot rejected configuration/);
+  await ready; descendant = Number(readFileSync(marker, 'utf8'));
+  assert.ok(Number.isSafeInteger(descendant) && descendant > 0);
+  t.mock.timers.tick(15000);
+  await outcome;
+  assert.equal(existsSync(path.join(f.home, 'bot-configurations.lock')), false);
+  f.install(goodConfigure);
+  assert.equal((await saveProjectBotConfiguration(f.home, f.project, 'http://localhost', 'safe-tool', change)).revision, 1);
+});
+
+test("HTTP definition budgets and unknown identities never execute installed code", async t => {
   const f = fixture(t), app = createApp(f.hive);
   const marker = path.join(f.home, "executed");
   f.install(`require('node:fs').writeFileSync(${JSON.stringify(marker)},'ran');process.exit(1);`);
-  const endpoint = `/api/ui/projects/${f.project.slug}/plugins/safe-tool`;
+  const endpoint = `/api/ui/projects/${f.project.slug}/bots/catalog/safe-tool`;
   for (const [url, body, status] of [
-    [endpoint, "x".repeat(PLUGIN_REQUEST_BYTES + 1), 413],
+    [endpoint, "x".repeat(BOT_CONFIGURATION_REQUEST_BYTES + 1), 413],
     [endpoint, '{"secret":"fixture-private",', 400],
-    [`/api/ui/projects/${f.project.slug}/plugins/unknown`, JSON.stringify(change), 400],
-    ["/api/ui/projects/unknown/plugins/safe-tool", JSON.stringify(change), 404],
+    [`/api/ui/projects/${f.project.slug}/bots/catalog/unknown`, JSON.stringify(change), 400],
+    ["/api/ui/projects/unknown/bots/catalog/safe-tool", JSON.stringify(change), 404],
   ] as const) {
     const response = await app.request(url, { method: "PUT", body });
     assert.equal(response.status, status);
@@ -103,14 +125,14 @@ test("HTTP plugin budgets and unknown identities never execute installed code", 
 test("malformed retained JSON cannot leak source fragments into launch instructions or settings", async t => {
   const f = fixture(t);
   f.install(goodConfigure);
-  const saved = await saveProjectPlugin(f.home, f.project, "http://localhost", "safe-tool", change);
+  const saved = await saveProjectBotConfiguration(f.home, f.project, "http://localhost", "safe-tool", change);
   writeFileSync(path.join(saved.home, "config.json"), '{"secret":"fixture-source-secret",');
   const context = launchContext(f.home, "http://localhost", f.project);
-  assert.ok(context.pluginError);
+  assert.ok(context.botError);
   assert.equal(JSON.stringify(context).includes("fixture-source-secret"), false);
-  assert.equal(JSON.stringify(projectPlugins(f.home, f.project)).includes("fixture-source-secret"), false);
+  assert.equal(JSON.stringify(projectBotConfigurations(f.home, f.project)).includes("fixture-source-secret"), false);
   writeFileSync(path.join(saved.home, "config.json"), JSON.stringify({ hiveUrl: "http://localhost", "fixture-unknown-secret-key": "private" }));
-  assert.equal(JSON.stringify(projectPlugins(f.home, f.project)).includes("fixture-unknown-secret-key"), false);
+  assert.equal(JSON.stringify(projectBotConfigurations(f.home, f.project)).includes("fixture-unknown-secret-key"), false);
 });
 
 test("SQLite credentials and existing sidecars are private; symlink targets are untouched", t => {
@@ -137,7 +159,7 @@ test("new bot uploads create private files and never retain plaintext credential
 });
 
 
-test("plugin admission bounds queued saves, preserves revision fencing, and recovers after rejection", async t => {
+test("definition admission bounds queued saves, preserves revision fencing, and recovers after rejection", async t => {
   const f = fixture(t);
   let release!: () => void, entered!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
@@ -149,19 +171,19 @@ test("plugin admission bounds queued saves, preserves revision fencing, and reco
     await gate;
     writeFileSync(path.join(profile, "config.json"), JSON.stringify((raw as { config: unknown }).config));
   };
-  const pending = Array.from({ length: 8 }, () => saveProjectPlugin(f.home, f.project, "http://localhost", "safe-tool", change, configure));
+  const pending = Array.from({ length: 8 }, () => saveProjectBotConfiguration(f.home, f.project, "http://localhost", "safe-tool", change, configure));
   const results = Promise.allSettled(pending);
   try {
     await started;
-    assert.equal(existsSync(path.join(f.home, "plugins.lock")), true);
-    await assert.rejects(saveProjectPlugin(f.home, f.project, "http://localhost", "safe-tool", change, configure),
+    assert.equal(existsSync(path.join(f.home, "bot-configurations.lock")), true);
+    await assert.rejects(saveProjectBotConfiguration(f.home, f.project, "http://localhost", "safe-tool", change, configure),
       (error: unknown) => !!error && typeof error === "object" && "status" in error && error.status === 429);
   } finally { release(); await results; }
   const settled = await results;
   assert.equal(settled.filter(item => item.status === "fulfilled").length, 1);
   assert.equal(settled.filter(item => item.status === "rejected").length, 7);
   assert.equal(calls, 1, "Stale queued revisions must not run a command");
-  assert.equal(existsSync(path.join(f.home, "plugins.lock")), false);
-  const next = await saveProjectPlugin(f.home, f.project, "http://localhost", "safe-tool", { ...change, expectedRevision: 1 }, configure);
+  assert.equal(existsSync(path.join(f.home, "bot-configurations.lock")), false);
+  const next = await saveProjectBotConfiguration(f.home, f.project, "http://localhost", "safe-tool", { ...change, expectedRevision: 1 }, configure);
   assert.equal(next.revision, 2);
 });

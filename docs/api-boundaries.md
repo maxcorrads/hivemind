@@ -15,7 +15,7 @@ service layer). A JSON-escaped body costs at most 6 bytes per unit (120,000 byte
 so the JSON caps below keep headroom for the other request fields.
 
 Ordinary JSON is measured while streaming (256 KiB, 10 seconds, 32 simultaneous
-body readers), rather than trusting Content-Length. Bot/plugin/credential routes
+body readers), rather than trusting Content-Length. Bot/configuration/credential routes
 retain their own narrower byte budgets. Missing bodies are accepted only for
 explicit empty actions/mark-all-seen; malformed/null bodies are not replaced by
 empty objects. Mark-all-seen is still an explicit Human action. Validation happens

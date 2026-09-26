@@ -5,7 +5,7 @@
 // end. V8 has already read the variable when this runs, so the test process
 // still writes its own coverage; removing it from process.env keeps every
 // descendant out of that directory, including children started by production
-// code or scripts under test (plugins, bin launcher, topology study host) that
+// code or scripts under test (bots, bin launcher, topology study host) that
 // cannot use childEnv() from src/test-support/child-process.ts. A descendant
 // killed or orphaned while writing there leaves an empty or truncated file and
 // the runner then aborts the whole coverage report.

@@ -148,7 +148,7 @@ you. So Hivemind.app verifies the server before it loads the page:
 1. On every start, including restarts, Hivemind Server.app makes a fresh
    256-bit random secret (`InstanceSecret`). It reaches node only in the
    environment variable `HIVEMIND_INSTANCE_SECRET`, which the server reads once
-   and deletes from its environment, so plugins, agents and anything else it
+   and deletes from its environment, so bots, agents and anything else it
    spawns never inherit it. It is also written into the
    [discovery file](#discovery-file), and never logged.
 2. Hivemind.app reads `server.json` only when it is a regular file (not a
@@ -376,7 +376,7 @@ session still comes from the browser flow described in
 ## Command-line tool
 
 **Install command-line tool** writes a small `hivemind` shell script. It runs
-the app's bundled Node.js on the bundled CLI, so `hivemind plugins …` and the
+the app's bundled Node.js on the bundled CLI, so `hivemind bots …` and the
 other commands work without installing Node or the npm package. There are two
 destinations to choose from:
 

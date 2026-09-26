@@ -143,6 +143,12 @@ export async function startMcp() {
     return text(await agentRequest("GET", "/api/agent/agents", undefined, token()));
   });
 
+  server.tool("bot_tools", TOOL_DESCRIPTIONS.bot_tools, async () =>
+    text(await agentRequest('GET', '/api/agent/bot-tools', undefined, token())));
+  server.tool("call_bot_tool", TOOL_DESCRIPTIONS.call_bot_tool, {
+    botId: z.string().min(1), tool: z.string().min(1), arguments: z.record(z.string(), z.unknown()),
+  }, async ({ botId, tool, arguments: args }) => text(await agentRequest('POST', `/api/agent/bots/${encodeURIComponent(botId)}/tools`, { tool, arguments: args }, token(), 35000)));
+
   server.tool("channels", TOOL_DESCRIPTIONS.channels, {
     unread: z.boolean().optional(),
   }, async ({ unread }) => {

@@ -204,7 +204,7 @@ test('archive with finish allows completion but not new assignments or revised w
   assert.throws(() => f.taskEvent(task.id, { type: 'revise', reason: 'More work', worker: f.a.agent.name, contract: f.taskContract }, f.brain.agent), /archived/);
 });
 
-test('plugin suspension is channel-scoped, restart-safe and generation-checked; unsupported is explicit', t => {
+test('bot suspension is channel-scoped, restart-safe and generation-checked; unsupported is explicit', t => {
   const f = fixture(t); f.configure();
   const bot = f.hive.bots.createBot(f.human, f.channel.projectId, { name: 'FixtureFeed' }).bot;
   const second = f.hive.channels.createChannel(f.brain.agent, { name: 'other-feed', type: 'private', memberNames: [bot.name] });
@@ -337,6 +337,29 @@ test('source reports are bot-owned, transactional and cannot claim the opposite 
   failWrites(f.hive, 'messages', { message: 'fixture failure', persistent: true });
   assert.throws(() => f.hive.rooms.reportLink(bot, f.channel.id, 'stream', { generation: 2, observed: 'paused' }), /fixture failure/);
   assert.equal(f.hive.rooms.botLinks(bot, f.channel.id)[0]!.observed, 'pending');
+});
+
+test('source lifecycle stays readable after Publish is revoked without posting messages or waking the coordinator', t => {
+  const f = fixture(t); f.configure();
+  const bot = f.hive.bots.createBot(f.human, f.channel.projectId, { name: 'LifecycleFeed' }).bot;
+  f.hive.channels.invite(f.human, f.channel.id, [bot.name]);
+  f.hive.rooms.registerLink(bot, f.channel.id, { id: 'stream', label: 'Synthetic', suspendSupported: true });
+  f.hive.bots.setAccess(f.human, f.channel.projectId, bot.id, {
+    capabilities: [], receiveChannels: [], definitionId: null, expectedRevision: 1,
+  });
+  const messages = countRows(f.hive, 'messages'), published: unknown[] = [];
+  f.hive.bus.on('message', message => published.push(message));
+  const inbox = f.hive.delivery.inboxStatuses();
+  f.hive.rooms.reportLink(bot, f.channel.id, 'stream', { generation: 1, observed: 'failed', detail: 'Fixture failure' });
+  assert.equal(f.hive.rooms.botLinks(bot, f.channel.id)[0]!.observed, 'failed');
+  assert.equal(countRows(f.hive, 'messages'), messages);
+  assert.deepEqual(published, []);
+  assert.deepEqual(f.hive.delivery.inboxStatuses(), inbox);
+  f.event({ type: 'archive', reason: 'Stop source' }, f.human);
+  const archivedMessages = countRows(f.hive, 'messages');
+  f.hive.rooms.reportLink(bot, f.channel.id, 'stream', { generation: 2, observed: 'paused' });
+  assert.equal(f.hive.rooms.botLinks(bot, f.channel.id)[0]!.observed, 'paused');
+  assert.equal(countRows(f.hive, 'messages'), archivedMessages, 'a stop acknowledgement does not require Publish');
 });
 
 test('task lists and history are bounded; running work cannot grow without limit', t => {

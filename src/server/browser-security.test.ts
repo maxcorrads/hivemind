@@ -9,7 +9,7 @@ import { createServer as createViteServer } from "vite";
 import { Hive } from "./hive.ts";
 import { listRows } from "./test-fixtures.ts";
 import { startServer } from "./serve.ts";
-import { registerPlugin, projectPlugins } from "./plugins.ts";
+import { registerBotDefinition, projectBotConfigurations } from "./bot-definitions.ts";
 
 // Uses the runner's installed Chrome/ChromeDriver through the standard WebDriver
 // protocol: no downloaded browsers, npm dependencies, or browser-security flags.
@@ -107,9 +107,9 @@ async function browser(t: TestContext, executable: string) {
 
 async function instance(t: TestContext) {
   const home = mkdtempSync(path.join(os.tmpdir(), "hive-browser-server-"));
-  const pkg = path.join(home, "browser-plugin"); mkdirSync(pkg);
-  const manifest = path.join(pkg, "hivemind-plugin.json");
-  writeFileSync(manifest, JSON.stringify({ version: 1, id: "browser-fixture", name: "Browser Fixture",
+  const pkg = path.join(home, "browser-bot"); mkdirSync(pkg);
+  const manifest = path.join(pkg, "hivemind-bot.json");
+  writeFileSync(manifest, JSON.stringify({ version: 1, kind: 'bot', capabilities: ['publish'], tools: [], id: "browser-fixture", name: "Browser Fixture",
     command: "tool", instructions: "TOOLS.md", settings: "settings.json" }));
   writeFileSync(path.join(pkg, "TOOLS.md"), "Use {{command}} only for this project.");
   writeFileSync(path.join(pkg, "settings.json"), JSON.stringify({ version: 1,
@@ -126,7 +126,7 @@ process.stdin.on('end', () => {
   console.log(JSON.stringify({ configured: true }));
 });
 `, { mode: 0o700 });
-  registerPlugin(home, manifest);
+  registerBotDefinition(home, manifest);
   const db = path.join(home, "hive.db");
   let hive = new Hive(db);
   let server = startServer({ port: 0, hive, telegram: false });
@@ -153,9 +153,9 @@ process.stdin.on('end', () => {
   return {
     base, port, page: `http://127.0.0.1:${address.port}/__human_security_test__`,
     get hive() { return hive; },
-    profile() { return projectPlugins(home, hive.projects.listProjects()[0]!)[0]!; },
+    profile() { return projectBotConfigurations(home, hive.projects.listProjects()[0]!)[0]!; },
     executions() {
-      const file = path.join(projectPlugins(home, hive.projects.listProjects()[0]!)[0]!.home, "executions");
+      const file = path.join(projectBotConfigurations(home, hive.projects.listProjects()[0]!)[0]!.home, "executions");
       return existsSync(file) ? Number(readFileSync(file, "utf8")) : 0;
     },
     async restart() {
@@ -230,7 +230,7 @@ test("Chrome: real cookies isolate tabs/instances, reject cross-origin attacks, 
     assert.equal(a.hive.bots.botCredential(a.hive.identity.getAgent("human"), "acme", victim.bot.id).credential.revision, 1);
   }
   await chrome.evaluate(`
-    await fetch(${JSON.stringify(`${a.base}/api/ui/projects/acme/plugins/browser-fixture`)}, {
+    await fetch(${JSON.stringify(`${a.base}/api/ui/projects/acme/bots/catalog/browser-fixture`)}, {
       method: 'PUT', credentials: 'include', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ enabled: true, values: { host: 'hostile' }, expectedRevision: 0 })
     }).catch(() => {});
@@ -267,13 +267,13 @@ test("Chrome: real cookies isolate tabs/instances, reject cross-origin attacks, 
   `), { status: 200, body: "browser upload" });
   assert.deepEqual(await chrome.evaluate(`
     window.browserBot = await window.client.api.createBot('acme', 'BrowserFeed');
-    const configured = await window.client.api.saveProjectPlugin('acme', 'browser-fixture', {
+    const configured = await window.client.api.saveProjectBotConfiguration('acme', 'browser-fixture', {
       enabled: true, values: { host: 'browser-before-restart' }, expectedRevision: 0
     });
     const rotated = await window.client.api.changeBotCredential('acme', window.browserBot.bot.id, 'rotate', 1);
     const state = await window.client.api.botCredential('acme', window.browserBot.bot.id);
     return { revision: state.credential.revision, tokenHidden: !('token' in state),
-      changed: rotated.token !== window.browserBot.token, configured: configured.plugin.revision };
+      changed: rotated.token !== window.browserBot.token, configured: configured.configuration.revision };
   `), { revision: 2, tokenHidden: true, changed: true, configured: 1 });
   assert.equal(a.executions(), 1); assert.equal(b.executions(), 0);
   await a.restart();
@@ -281,7 +281,7 @@ test("Chrome: real cookies isolate tabs/instances, reject cross-origin attacks, 
     await Promise.all([
       window.client.api.createProject('After restart', 'after-restart'),
       window.client.api.changeBotCredential('acme', window.browserBot.bot.id, 'revoke', 2),
-      window.client.api.saveProjectPlugin('acme', 'browser-fixture', {
+      window.client.api.saveProjectBotConfiguration('acme', 'browser-fixture', {
         enabled: true, values: { host: 'browser-after-restart' }, expectedRevision: 1
       })
     ]);

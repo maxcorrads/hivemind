@@ -175,12 +175,12 @@ Hive after other integrations have drained.
 - `web/human-session.test.ts`: concurrent/late responses, failed bootstrap and
   restart recovery, safe replay limits, cancellation/deadline cleanup and socket
   reconnect/disposal with deterministic mocks rather than sleeps.
-- `web/extensibility-session.test.ts`: real protected bot/plugin/credential routes,
+- `web/extensibility-session.test.ts`: real protected bot/configuration/credential routes,
   zero mutations or Configure execution after rejected requests, credential/project
   scope, durable event replay, shared restart recovery, and no mutation replay after
   an ambiguous committed response.
 - `browser-security.test.ts`: normal-security Chrome through Vite and the real web
-  client, including plugin execution, bot lifecycle and concurrent restart recovery.
+  client, including bot execution, bot lifecycle and concurrent restart recovery.
 - Existing HTTP/Telegram UI and thread HTTP/WS tests acquire a Human session while
   preserving their behavior and isolation assertions. CLI/MCP, package smoke,
   coverage, release, license and repository protection policies are not weakened.

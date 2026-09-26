@@ -1,41 +1,4 @@
-import type { Agent, Project } from "../src/shared/types.ts";
-import { BotCredentials, BotSetup } from "./Bots.tsx";
 import { Modal } from "./Modal.tsx";
-
-export function BotSheet({ project, busy, onBusy, onCreated, onClose }: {
-  project: Project;
-  busy: boolean;
-  onBusy: (busy: boolean) => void;
-  onCreated: () => void;
-  onClose: () => void;
-}) {
-  return (
-    <Modal onClose={() => { if (!busy) onClose(); }}>
-      <div className="sheet" role="dialog" aria-modal="true" aria-label="Create project bot">
-        <h2>Create bot</h2>
-        <BotSetup key={project.id} project={project} onBusy={onBusy} onCreated={onCreated} />
-        <div className="row"><button type="button" disabled={busy} onClick={onClose}>Close</button></div>
-      </div>
-    </Modal>
-  );
-}
-
-export function CredentialSheet({ bot, busy, onBusy, onClose }: {
-  bot: Agent;
-  busy: boolean;
-  onBusy: (busy: boolean) => void;
-  onClose: () => void;
-}) {
-  return (
-    <Modal onClose={() => { if (!busy) onClose(); }}>
-      <div className="sheet" role="dialog" aria-modal="true" aria-label="Manage bot credentials">
-        <h2>Bot credentials</h2>
-        <BotCredentials key={bot.id} bot={bot} onBusy={onBusy} />
-        <div className="row"><button type="button" disabled={busy} onClick={onClose}>Close</button></div>
-      </div>
-    </Modal>
-  );
-}
 
 /** Confirms clearing a worker's context or removing an agent from the roster. */
 export function AgentConfirmSheet({ target, busy, onCancel, onConfirm }: {

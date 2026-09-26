@@ -4,18 +4,18 @@ import { Children, isValidElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Window } from "happy-dom";
 import {
-  PluginEditor,
-  PluginFields,
-  ProjectPlugins,
-  pluginFormValues,
-  pluginSavePayload,
-} from "./ProjectPlugins.tsx";
+  BotSettingsEditor,
+  BotSettingsFields,
+  botFormValues,
+  botSavePayload,
+} from "./BotSettings.tsx";
+import { ProjectBots } from './ProjectBots.tsx';
 import {
   settingsSchema,
   validateSettings,
-  type ProjectPluginView,
+  type ProjectBotConfiguration,
   type SettingsValues,
-} from "../src/shared/plugin-settings.ts";
+} from "../src/shared/bot-settings.ts";
 
 const project = {
   id: "fixture-project",
@@ -24,7 +24,7 @@ const project = {
   worktree: null,
   createdAt: 0,
 };
-const plugin: ProjectPluginView = {
+const configuration: ProjectBotConfiguration = {
   id: "example-source",
   name: "Example Source",
   home: "/tmp/example-profile",
@@ -55,13 +55,13 @@ for (const [name, choices] of [
       emptyEntry: [""],
     };
     const original = structuredClone(saved);
-    const values = pluginFormValues({ settings, values: saved });
-    const payload = pluginSavePayload(settings, values, false, 7);
+    const values = botFormValues({ settings, values: saved });
+    const payload = botSavePayload(settings, values, false, 7);
     assert.deepEqual(payload, { enabled: false, values: original, expectedRevision: 7 });
     assert.deepEqual(saved, original, "Saved settings must not be mutated");
     assert.deepEqual(values, original, "The form draft must not be mutated");
     assert.deepEqual(
-      pluginSavePayload(settings, pluginFormValues({ settings, values: payload.values }), true, 8),
+      botSavePayload(settings, botFormValues({ settings, values: payload.values }), true, 8),
       { enabled: true, values: original, expectedRevision: 8 },
     );
   });
@@ -76,7 +76,7 @@ test("saving retains schema list defaults and validates blank entries rather tha
       { key: "required", label: "Required", type: "strings", required: true },
     ],
   });
-  assert.deepEqual(pluginSavePayload(settings, { required: ["ok"], bounded: [] }, true, 0).values,
+  assert.deepEqual(botSavePayload(settings, { required: ["ok"], bounded: [] }, true, 0).values,
     { defaults: [" spaced ", ""], bounded: [], required: ["ok"] });
   const invalidValues: SettingsValues[] = [
     { required: ["ok", ""] },
@@ -84,7 +84,7 @@ test("saving retains schema list defaults and validates blank entries rather tha
     { required: ["ok"], bounded: ["valid", ""] },
   ];
   for (const values of invalidValues) {
-    assert.throws(() => pluginSavePayload(settings, values, true, 0), /invalid value/);
+    assert.throws(() => botSavePayload(settings, values, true, 0), /invalid value/);
   }
 });
 
@@ -106,17 +106,17 @@ test("editing list fields preserves spaces and blank lines; clearing the editor 
     fields: [{ key: "values", label: "Values", type: "strings" }],
   });
   let values: SettingsValues = { values: ["initial"] };
-  const control = textareaProps(PluginFields({ settings, values, disabled: false,
+  const control = textareaProps(BotSettingsFields({ settings, values, disabled: false,
     onChange: (key, value) => { assert.notEqual(value, undefined); values = { [key]: value! }; },
   }));
   assert.ok(control);
   assert.equal(control.value, "initial");
   control.onChange({ target: { value: "  first  \n\n\t\nlast\n" } });
-  assert.deepEqual(pluginSavePayload(settings, values, true, 2).values,
+  assert.deepEqual(botSavePayload(settings, values, true, 2).values,
     { values: ["  first  ", "", "\t", "last", ""] });
   control.onChange({ target: { value: "" } });
   assert.deepEqual(values, { values: [] });
-  assert.deepEqual(pluginSavePayload(settings, values, true, 2).values, { values: [] });
+  assert.deepEqual(botSavePayload(settings, values, true, 2).values, { values: [] });
 });
 
 test("untouched required and optional checkboxes submit explicit false without mutating saved values", () => {
@@ -133,12 +133,12 @@ test("untouched required and optional checkboxes submit explicit false without m
     ],
   });
   const saved = {};
-  const values = pluginFormValues({ settings, values: saved });
+  const values = botFormValues({ settings, values: saved });
   assert.deepEqual(values, { includeResolved: false, optionalFlag: false });
   assert.deepEqual(validateSettings(settings, values), values);
   assert.deepEqual(saved, {});
   const html = renderToStaticMarkup(
-    <PluginFields
+    <BotSettingsFields
       settings={settings}
       values={values}
       disabled={false}
@@ -176,7 +176,7 @@ test("checkbox initialization preserves schema defaults and explicit false overr
     ],
   });
   const saved = { overridden: false, selected: true };
-  const values = pluginFormValues({ settings, values: saved });
+  const values = botFormValues({ settings, values: saved });
   assert.deepEqual(values, {
     overridden: false,
     selected: true,
@@ -195,14 +195,14 @@ test("checkbox initialization does not bypass required fields or coerce invalid 
       { key: "flag", label: "Flag", type: "boolean", required: true },
     ],
   });
-  const values = pluginFormValues({ settings, values: {} });
+  const values = botFormValues({ settings, values: {} });
   assert.deepEqual(values, { flag: false });
   assert.throws(() => validateSettings(settings, values), /Host is required/);
   assert.throws(
     () =>
       validateSettings(
         settings,
-        pluginFormValues({
+        botFormValues({
           settings,
           values: { host: "example.invalid", flag: "invalid" },
         }),
@@ -211,17 +211,17 @@ test("checkbox initialization does not bypass required fields or coerce invalid 
   );
 });
 
-test("project plugin settings explain local configuration and independent monitor lifecycle", () => {
+test("project configuration settings explain local configuration and independent monitor lifecycle", () => {
   const html = renderToStaticMarkup(
-    <ProjectPlugins project={project} onClose={() => {}} />,
+    <ProjectBots project={project} onClose={() => {}} onChanged={() => {}} />,
   );
-  assert.match(html, /aria-label="Plugins for Example"/);
-  assert.match(html, /Opening this panel reads local files only/);
-  assert.match(html, /does not start or stop existing monitors/);
-  assert.match(html, /Loading…/);
+  assert.match(html, /aria-label="Bots for Example"/);
+  assert.match(html, /Combine capabilities/);
+  assert.match(html, /no agent or AI model is required/);
+  assert.match(html, /Loading bots…/);
 });
 
-test("field-free plugins remain configurable, without injecting package markup", t => {
+test("field-free bots remain configurable, without injecting package markup", t => {
   const window = new Window({ settings: {
     enableJavaScriptEvaluation: false,
     disableJavaScriptFileLoading: true,
@@ -230,8 +230,8 @@ test("field-free plugins remain configurable, without injecting package markup",
   t.after(() => window.happyDOM.close());
   for (const name of ["<script>Example</script>", "<SCRIPT>Example</SCRIPT>", '<ScRiPt src="https://example.invalid/injected.js">Example</ScRiPt>']) {
     const html = renderToStaticMarkup(
-      <PluginEditor
-        plugin={{ ...plugin, name }}
+      <BotSettingsEditor
+        configuration={{ ...configuration, name }}
         project={project}
         busy={false}
         onBusy={() => {}}
@@ -248,11 +248,11 @@ test("field-free plugins remain configurable, without injecting package markup",
   }
 });
 
-test("a broken enabled plugin can be disabled without configuring it", () => {
+test("a broken enabled configuration can be disabled without configuring it", () => {
   const html = renderToStaticMarkup(
-    <PluginEditor
-      plugin={{
-        ...plugin,
+    <BotSettingsEditor
+      configuration={{
+        ...configuration,
         enabled: true,
         configured: true,
         settings: undefined,
@@ -271,9 +271,9 @@ test("a broken enabled plugin can be disabled without configuring it", () => {
 test("invalid saved values keep Configure available but cannot be enabled before repair", () => {
   for (const enabled of [false, true]) {
     const html = renderToStaticMarkup(
-      <PluginEditor
-        plugin={{
-          ...plugin,
+      <BotSettingsEditor
+        configuration={{
+          ...configuration,
           enabled,
           configured: true,
           error: "Region is required. Open Configure to correct it.",
@@ -320,7 +320,7 @@ test("generic form renders all field types and required choices have an explicit
     ],
   });
   const html = renderToStaticMarkup(
-    <PluginFields
+    <BotSettingsFields
       settings={settings}
       values={{ enabled: true, count: 2, names: ["a", "b"] }}
       disabled={false}
@@ -333,10 +333,10 @@ test("generic form renders all field types and required choices have an explicit
   assert.match(html, /<textarea[^>]*>a\nb<\/textarea>/);
 });
 
-test("a pending save disables actions on other plugin cards", () => {
+test("a pending save disables actions on other configuration cards", () => {
   const html = renderToStaticMarkup(
-    <PluginEditor
-      plugin={{ ...plugin, configured: true }}
+    <BotSettingsEditor
+      configuration={{ ...configuration, configured: true }}
       project={project}
       busy={true}
       onBusy={() => {}}

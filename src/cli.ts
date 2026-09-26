@@ -60,9 +60,9 @@ function help() {
   hivemind leave
   hivemind mcp
   hivemind mcp-config
-  hivemind plugins add /absolute/hivemind-plugin.json [--home /hive]
-  hivemind plugins list | remove ID [--home /hive]
-  hivemind plugins bind ID --project SLUG --config-home /existing/profile [--home /hive]
+  hivemind bots add /absolute/hivemind-bot.json [--home /hive]
+  hivemind bots list | remove ID [--home /hive]
+  hivemind bots bind ID --project SLUG --config-home /existing/profile [--home /hive]
 
 Environment: HIVEMIND_URL (default ${hiveUrl()})  HIVEMIND_TOKEN  HIVEMIND_HOME
 `);
@@ -127,9 +127,9 @@ export async function runCli(argv: string[]): Promise<void> {
     return;
   }
 
-  if (cmd === "plugins") {
-    const { pluginsMain } = await import("./server/plugins.ts");
-    await pluginsMain(argv.slice(1));
+  if (cmd === "bots") {
+    const { botsMain } = await import("./server/bot-definitions.ts");
+    await botsMain(argv.slice(1));
     return;
   }
 

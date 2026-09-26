@@ -139,7 +139,7 @@ test("HTTP rejects malformed/oversized ingress, unknown fields and credential UR
   const url = `http://localhost/api/bot/channels/${f.channelA.id}/messages`;
   const before = countRows(f.hive, "messages");
   for (const body of ["{", JSON.stringify({ eventId: "too-large", body: "x".repeat(BOT_JSON_BYTES) }),
-    JSON.stringify({ eventId: "wrong-plugin", body: "test", pluginId: "unknown" }),
+    JSON.stringify({ eventId: "wrong-bot", body: "test", definitionId: "unknown" }),
     JSON.stringify({ eventId: "wrong-type", body: "test", type: "execute" })]) {
     const response = await app.request(url, { method: "POST", body, headers: { authorization: `Bearer ${f.botA.token}` } });
     assert.ok([400, 413].includes(response.status));
@@ -172,6 +172,26 @@ test("a credential revoked while JSON is streaming cannot commit an observation"
   assert.equal(countRows(f.hive, "bot_events"), 0);
 });
 
+for (const operation of ['register', 'status'] as const) test(`a credential revoked while source ${operation} is streaming cannot change lifecycle state`, async t => {
+  const f = fixture(t), app = createApp(f.hive);
+  const initial = f.hive.rooms.registerLink(f.botA.bot, f.channelA.id, { id: 'existing', label: 'Fixture', suspendSupported: true });
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  let began!: () => void;
+  const reading = new Promise<void>(resolve => { began = resolve; });
+  const stream = new ReadableStream<Uint8Array>({ start(c) { controller = c; }, pull() { began(); } }, { highWaterMark: 0 });
+  const suffix = operation === 'status' ? '/existing/status' : '';
+  const request = new Request(`http://localhost/api/bot/channels/${f.channelA.id}/links${suffix}`, {
+    method: 'POST', headers: { authorization: `Bearer ${f.botA.token}` }, body: stream, duplex: 'half',
+  } as RequestInit & { duplex: string });
+  const result = app.request(request);
+  await reading;
+  f.hive.bots.changeBotCredential(f.human, f.a.id, f.botA.bot.id, { action: 'revoke', expectedRevision: 1 });
+  const body = operation === 'status' ? { generation: 1, observed: 'running' } : { id: 'new', label: 'Fixture', suspendSupported: true };
+  controller.enqueue(new TextEncoder().encode(JSON.stringify(body))); controller.close();
+  assert.equal((await result).status, 401);
+  assert.deepEqual(f.hive.rooms.botLinks(f.botA.bot, f.channelA.id), [initial]);
+});
+
 test("parallel retries publish one event, retry conflicts do not poison the next transaction on Node 22.13", async t => {
   const f = fixture(t), app = createApp(f.hive);
   // Node 24 exposes a non-configurable native property. Intercept through a
@@ -199,9 +219,9 @@ test("parallel retries publish one event, retry conflicts do not poison the next
   assert.throws(() => f.hive.identity.agentByToken(f.botA.token), status(401));
 });
 
-test("bot HTTP credentials cannot enumerate another project, use Human/plugin settings, or cross-route events", async t => {
+test("bot HTTP credentials cannot enumerate another project, use Human/bot settings, or cross-route events", async t => {
   const f = fixture(t), app = createApp(f.hive);
-  for (const route of ["/api/ui/snapshot", "/api/ui/launch-context?project=other", `/api/ui/projects/${f.b.slug}/plugins`,
+  for (const route of ["/api/ui/snapshot", "/api/ui/launch-context?project=other", `/api/ui/projects/${f.b.slug}/bots/catalog`,
     `/api/ui/projects/${f.b.id}/bots/${f.botB.bot.id}/credential`, "/api/agent/agents", "/api/agent/search?q=private"]) {
     const response = await app.request(route, { headers: { authorization: `Bearer ${f.botA.token}` } });
     assert.equal(response.status, 403, route);

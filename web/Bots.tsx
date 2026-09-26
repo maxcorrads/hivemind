@@ -52,7 +52,9 @@ export function BotSetup({ project, onCreated, onBusy }: {
   );
 }
 
-export function BotCredentials({ bot, onBusy }: { bot: Agent; onBusy: (busy: boolean) => void }) {
+export function BotCredentials({ bot, onBusy, disabled = false, onChanged }: {
+  bot: Agent; onBusy: (busy: boolean) => void; disabled?: boolean; onChanged?: () => void;
+}) {
   const [current, setCurrent] = useState<BotCredentialView | null>(null);
   const [token, setToken] = useState(''), [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false), [confirm, setConfirm] = useState<'rotate' | 'revoke' | null>(null);
@@ -69,7 +71,7 @@ export function BotCredentials({ bot, onBusy }: { bot: Agent; onBusy: (busy: boo
   }, [bot.id, bot.projectId, bot.role, onBusy]);
   useEffect(() => { mounted.current = true; void load(); return () => { mounted.current = false; ++request.current; }; }, [load]);
   const change = async () => {
-    if (!current || !confirm || mutating.current) return;
+    if (!current || !confirm || mutating.current || disabled) return;
     mutating.current = true; setBusy(true); onBusy(true); setToken(''); setNotice('');
     try {
       const result = await api.changeBotCredential(bot.projectId!, bot.id, confirm, current.credential.revision);
@@ -81,19 +83,19 @@ export function BotCredentials({ bot, onBusy }: { bot: Agent; onBusy: (busy: boo
         setCurrent(null);
         setNotice(`${(e as Error).message}. The outcome may be unknown. Reload credential state before another operation; a lost token cannot be retrieved, only replaced.`);
       }
-    } finally { mutating.current = false; if (mounted.current) { setConfirm(null); setBusy(false); onBusy(false); } }
+    } finally { mutating.current = false; if (mounted.current) { setConfirm(null); setBusy(false); onBusy(false); onChanged?.(); } }
   };
   return <section aria-label="Bot credentials">
     <p>Manage <strong>{bot.name}</strong> in {bot.project}. Identity, channel invitations and observation history are preserved.</p>
     <p>This does not stop an external process or update its configuration. Previously authorized requests may already be in flight.</p>
     {current && <p>Credential: {current.credential.revoked ? 'revoked' : 'active'} · revision {current.credential.revision}</p>}
-    <button type="button" disabled={busy} onClick={() => void load()}>Reload credential state</button>
-    <button type="button" disabled={busy || !current} onClick={() => setConfirm('rotate')}>Rotate token</button>
-    <button type="button" disabled={busy || !current || current.credential.revoked} onClick={() => setConfirm('revoke')}>Revoke token</button>
+    <button type="button" disabled={busy || disabled} onClick={() => void load()}>Reload credential state</button>
+    <button type="button" disabled={busy || disabled || !current} onClick={() => setConfirm('rotate')}>Rotate token</button>
+    <button type="button" disabled={busy || disabled || !current || current.credential.revoked} onClick={() => setConfirm('revoke')}>Revoke token</button>
     {confirm && <div role="alert">
       <p>{confirm === 'rotate' ? 'Replace the current credential? The old token stops authenticating new requests immediately. Store the new token when shown.' : 'Revoke this credential? The integration will fail authentication until you rotate and configure a new token.'}</p>
-      <button type="button" disabled={busy} onClick={() => void change()}>{confirm === 'rotate' ? 'Confirm rotation' : 'Confirm revocation'}</button>
-      <button type="button" disabled={busy} onClick={() => setConfirm(null)}>Cancel</button>
+      <button type="button" disabled={busy || disabled} onClick={() => void change()}>{confirm === 'rotate' ? 'Confirm rotation' : 'Confirm revocation'}</button>
+      <button type="button" disabled={busy || disabled} onClick={() => setConfirm(null)}>Cancel</button>
     </div>}
     {token && <>
       <label>New credential — shown only now<input aria-label="New bot token" type="password" readOnly autoComplete="off" value={token} /></label>

@@ -288,7 +288,7 @@ test("Start Hivemind Server opens the app's hivemind-server://start, and only in
 });
 
 const project: Project = { id: "p1", slug: "acme", name: "Acme", worktree: "/Users/me/My Acme", createdAt: 0 };
-const launchContext: LaunchContext = { project: { id: "p1", slug: "acme" }, plugins: [], pluginInstructions: "",
+const launchContext: LaunchContext = { project: { id: "p1", slug: "acme" }, botDefinitions: [], botInstructions: "",
   hivemindMcp: { command: "hivemind", args: ["mcp"], env: {} } };
 const seat = (id: string, name: string, role: "brain" | "worker"): Agent => ({ id, name, role, seniority: role === "worker" ? "mid" : null,
   focus: role === "brain" ? "coord" : "frontend", online: false, lastSeenAt: 0, createdAt: 0, projectId: "p1", project: "acme" });
@@ -492,4 +492,3 @@ test("a workspace path the app cannot cd into disables the launch buttons but no
   assert.match(open.title, /absolute workspace path/);
   assert.equal(sheet.button(/^Copy command$/)!.disabled, false);
 });
-

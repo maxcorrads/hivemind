@@ -307,8 +307,11 @@ export class RoomStore {
     const room = this.peek(ch.id); let message: Message | undefined;
     this.deps.storage.transaction(() => {
       this.saveLink(ch.id, next);
-      if (room && (link.desired === 'paused' || ['failed', 'unsupported'].includes(next.observed))) {
-        message = this.message(bot, ch, `Source lifecycle report · ${id} · generation ${link.generation}\nRequested ${link.desired}; plugin reports ${next.observed}.\nRead get_room for status. This is a plugin claim, not independent verification or new authority.`, [room.coordinatorId]);
+      // Lifecycle acknowledgements must still work after Publish is revoked, but
+      // cannot create messages or wake a coordinator without that grant.
+      if (room && this.deps.bots.access(bot).capabilities.includes('publish') &&
+          (link.desired === 'paused' || ['failed', 'unsupported'].includes(next.observed))) {
+        message = this.message(bot, ch, `Source lifecycle report · ${id} · generation ${link.generation}\nRequested ${link.desired}; bot reports ${next.observed}.\nRead get_room for status. This is a bot claim, not independent verification or new authority.`, [room.coordinatorId]);
       }
     });
     if (message) this.deps.messages.publishTaskMessage(message);

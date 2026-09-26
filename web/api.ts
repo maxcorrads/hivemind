@@ -6,7 +6,8 @@ import type { Agent, BotCredentialView, AttachmentMeta, Channel, Message, Projec
 import type { ActivityPage, ActivityReason, MentionPage, ReadSnapshot } from "../src/shared/read-state.ts";
 import { resolveUploadMime } from "../src/shared/mime.ts";
 import type { LaunchContext } from "../src/shared/launch-prompt.ts";
-import type { ProjectPluginView, SettingsValues } from "../src/shared/plugin-settings.ts";
+import type { ProjectBotConfiguration, SettingsValues } from "../src/shared/bot-settings.ts";
+import type { BotAccess } from '../src/shared/bot-capabilities.ts';
 import { humanSession, connectHumanWs } from "./human-session.ts";
 import type { AgentWork, ChannelTaskPage, TaskSnapshot } from '../src/shared/tasks.ts';
 import type { RoomView, Room } from '../src/shared/rooms.ts';
@@ -40,6 +41,13 @@ export type Snapshot = ReadSnapshot & {
   telegram?: { running: boolean; configured: boolean } & TelegramHealth;
   /** Whether Jev adaptive routing is on; the Routing log is offered only then. */
   jev?: { enabled: boolean };
+};
+
+export type ProjectBotsView = {
+  bots: { bot: Agent; access: BotAccess; credential: BotCredentialView['credential'] }[];
+  definitions: ProjectBotConfiguration[];
+  catalogError?: string;
+  channels: Channel[];
 };
 
 /** Roster status lines. */
@@ -122,6 +130,15 @@ export const api = {
   recordRoutingChoice: (id: string, body: { expectedRevision: number; workerId: string; reason: string; requestId: string }, signal?: AbortSignal) => req<{ assigned: false }>(`/api/ui/tasks/${encodeURIComponent(id)}/routing-override`, { method: 'POST', body: JSON.stringify(body), signal }),
   botCredential: (project: string, bot: string) => req<BotCredentialView>(
     `/api/ui/projects/${encodeURIComponent(project)}/bots/${encodeURIComponent(bot)}/credential`),
+  projectBots: (project: string) => req<ProjectBotsView>(`/api/ui/projects/${encodeURIComponent(project)}/bots`),
+  setBotAccess: (project: string, bot: string, access: Omit<BotAccess, 'revision'> & { expectedRevision: number }) =>
+    req<BotAccess>(`/api/ui/projects/${encodeURIComponent(project)}/bots/${encodeURIComponent(bot)}/access`, { method: 'PUT', body: JSON.stringify(access) }),
+  setupBot: (project: string, name: string, definitionId: string) => req<{ bot: Agent; connected: boolean; error?: string }>(
+    `/api/ui/projects/${encodeURIComponent(project)}/bots/setup`, { method: 'POST', body: JSON.stringify({ name, definitionId }) }),
+  controlBot: (project: string, bot: string, action: string, expectedAccessRevision: number) => req<{ result: unknown }>(
+    `/api/ui/projects/${encodeURIComponent(project)}/bots/${encodeURIComponent(bot)}/control`, { method: 'POST', body: JSON.stringify({ action, expectedAccessRevision }) }),
+  connectBot: (project: string, bot: string, expectedRevision: number, expectedAccessRevision: number) => req<{ connected: boolean }>(
+    `/api/ui/projects/${encodeURIComponent(project)}/bots/${encodeURIComponent(bot)}/connect`, { method: 'POST', body: JSON.stringify({ expectedRevision, expectedAccessRevision }) }),
   changeBotCredential: (project: string, bot: string, action: 'rotate' | 'revoke', expectedRevision: number) =>
     req<BotCredentialView & { token?: string }>(`/api/ui/projects/${encodeURIComponent(project)}/bots/${encodeURIComponent(bot)}/credential`,
       { method: 'POST', body: JSON.stringify({ action, expectedRevision }) }),
@@ -131,12 +148,12 @@ export const api = {
   roomHistory: (channel: string, before?: number) => req<{ history: Room[] }>(`/api/ui/channels/${encodeURIComponent(channel)}/room/history?before=${before ?? Number.MAX_SAFE_INTEGER}`),
   roomEvent: (channel: string, body: unknown) => req<RoomView>(`/api/ui/channels/${encodeURIComponent(channel)}/room`, { method: 'POST', body: JSON.stringify(body) }),
   launchContext: (project: string) => req<LaunchContext>(`/api/ui/launch-context?project=${encodeURIComponent(project)}`),
-  projectPlugins: (slug: string) => req<{ plugins: ProjectPluginView[] }>(`/api/ui/projects/${encodeURIComponent(slug)}/plugins`),
-  setPluginAvailability: (slug: string, id: string, body: { enabled: boolean; expectedRevision: number }) =>
-    req<{ plugin: ProjectPluginView }>(`/api/ui/projects/${encodeURIComponent(slug)}/plugins/${encodeURIComponent(id)}`,
+  projectBotConfigurations: (slug: string) => req<{ configurations: ProjectBotConfiguration[] }>(`/api/ui/projects/${encodeURIComponent(slug)}/bots/catalog`),
+  setBotAvailability: (slug: string, id: string, body: { enabled: boolean; expectedRevision: number }) =>
+    req<{ configuration: ProjectBotConfiguration }>(`/api/ui/projects/${encodeURIComponent(slug)}/bots/catalog/${encodeURIComponent(id)}`,
       { method: "PATCH", body: JSON.stringify(body) }),
-  saveProjectPlugin: (slug: string, id: string, body: { enabled: boolean; values: SettingsValues; expectedRevision: number }) =>
-    req<{ plugin: ProjectPluginView }>(`/api/ui/projects/${encodeURIComponent(slug)}/plugins/${encodeURIComponent(id)}`,
+  saveProjectBotConfiguration: (slug: string, id: string, body: { enabled: boolean; values: SettingsValues; expectedRevision: number }) =>
+    req<{ configuration: ProjectBotConfiguration }>(`/api/ui/projects/${encodeURIComponent(slug)}/bots/catalog/${encodeURIComponent(id)}`,
       { method: "PUT", body: JSON.stringify(body) }),
   createBot: (projectId: string, name: string) => req<{ bot: Agent; token: string }>(
     `/api/ui/projects/${encodeURIComponent(projectId)}/bots`, { method: "POST", body: JSON.stringify({ name }) },

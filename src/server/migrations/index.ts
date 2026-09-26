@@ -6,6 +6,7 @@ import * as telegram from "./baseline-telegram.ts";
 import { agentTerminalSession } from "./agent-terminal-session.ts";
 import { agentTombstones } from "./agent-tombstones.ts";
 import { dropDecisionRequests } from "./drop-decision-requests.ts";
+import { botCapabilities } from './bot-capabilities.ts';
 import { jevAdvisory } from "./jev-advisory.ts";
 import { performanceRetention } from "./performance-retention.ts";
 import { schemaShape, validateCoreStorage, validateSchema, type SchemaShape } from "./validate.ts";
@@ -63,6 +64,12 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 29, name: "agent_tombstones", up: agentTombstones },
   { version: 30, name: "drop_decision_requests", up: dropDecisionRequests },
   { version: 31, name: "agent_terminal_session", up: agentTerminalSession },
+  { version: 32, name: "bot_capabilities", up(db) {
+    // The local Bot preview also used version 31, before upstream shipped terminal sessions.
+    // Complete that schema without resetting its version or changing existing Bot grants.
+    agentTerminalSession(db);
+    botCapabilities(db);
+  } },
 ];
 
 /** The last idempotent baseline migration; later migrations may assume its schema. */

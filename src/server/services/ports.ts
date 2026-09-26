@@ -9,6 +9,7 @@ import type { ChannelService } from "./channels.ts";
 import type { IdentityService } from "./identity.ts";
 import type { MessageQueries } from "./message-queries.ts";
 import type { MessageService } from "./messages.ts";
+import type { BotService } from "./bots.ts";
 
 /**
  * Narrow interfaces the domain services (and the sub-stores) depend on instead of
@@ -114,7 +115,10 @@ export type TaskStoreDeps = TaskCoordinationDeps & Agents & Messages<"getMessage
     readonly rooms: RoomStore;
   };
 export type RoomStoreDeps = Core & Channels & Agents & Messages<"getMessageById" | "getVisibleMessage"> &
-  Poster<"publishTaskMessage"> & CoordinationWriter<"insertCoordinationMessage"> & { readonly tasks: Pick<TaskStore, "get"> };
+  Poster<"publishTaskMessage"> & CoordinationWriter<"insertCoordinationMessage"> & {
+    readonly tasks: Pick<TaskStore, "get">;
+    readonly bots: Pick<BotService, "access">;
+  };
 export type NotificationDeps = Core & Channels<"getChannel" | "canSeeChannel"> & {
   readonly messageQueries: Pick<MessageQueries, "messageRef">;
   readonly rooms: Pick<RoomStore, "peek">;

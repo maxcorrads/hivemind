@@ -2,7 +2,7 @@
 
 Notification rules decide which existing messages reach an agent's `wait`. They do
 not grant channel access, authorize work, launch agents, or change task state. This
-works without room contracts or provider-specific plugins. An optional active
+works without room contracts or provider-specific bots. An optional active
 [channel contract](ROOMS.md) makes its coordinator the default observer of bot
 observations in that channel, including public channels; explicit subscriptions
 still override that default. The contract, not the bot content, records the mandate.

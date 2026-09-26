@@ -17,21 +17,21 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { childEnv } from "../test-support/child-process.ts";
 import {
-  registerPlugin,
-  listPlugins,
-  removePlugin,
+  registerBotDefinition,
+  listBotDefinitions,
+  removeBotDefinition,
   launchContext,
-  projectPlugins,
-  saveProjectPlugin,
-  configurePlugin,
-  setProjectPluginAvailability,
-  MAX_PLUGIN_JSON_BYTES,
-} from "./plugins.ts";
+  projectBotConfigurations,
+  saveProjectBotConfiguration,
+  configureBot,
+  setProjectBotAvailability,
+  MAX_BOT_DEFINITION_JSON_BYTES,
+} from "./bot-definitions.ts";
 import {
   settingsSchema,
   validateSettings,
   recoverSettings,
-} from "../shared/plugin-settings.ts";
+} from "../shared/bot-settings.ts";
 import {
   buildLaunchBlock,
   buildLaunchPrompt,
@@ -41,17 +41,17 @@ import {
 import { Hive } from "./hive.ts";
 import { createApp } from "./app.ts";
 function setup(t: TestContext) {
-  const dir = mkdtempSync(path.join(os.tmpdir(), "hive-plugins-"));
+  const dir = mkdtempSync(path.join(os.tmpdir(), "hive-definitions-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const pkg = path.join(dir, "package with ' quote"),
     home = path.join(dir, "hive");
   mkdirSync(pkg);
   mkdirSync(home);
-  const manifest = path.join(pkg, "hivemind-plugin.json");
+  const manifest = path.join(pkg, "hivemind-bot.json");
   writeFileSync(
     manifest,
     JSON.stringify({
-      version: 1,
+      version: 1, kind: 'bot', capabilities: ['publish'], tools: [],
       id: "invented-source",
       name: "Invented Source",
       instructions: "TOOLS.md",
@@ -95,20 +95,33 @@ const base = {
   role: "brain" as const,
   adoptUntrusted: true,
 };
-test("registration is explicit, package-relative, idempotent and never executes the plugin", (t) => {
+test("registration is explicit, package-relative, idempotent and never executes the definition", (t) => {
   const f = setup(t);
-  registerPlugin(f.home, f.manifest);
-  registerPlugin(f.home, f.manifest);
-  assert.equal(listPlugins(f.home).length, 1);
-  assert.match(listPlugins(f.home)[0]!.instructions, /follow URL/);
+  assert.deepEqual(listBotDefinitions(f.home), []);
+  registerBotDefinition(f.home, f.manifest);
+  registerBotDefinition(f.home, f.manifest);
+  assert.equal(listBotDefinitions(f.home).length, 1);
+  assert.match(listBotDefinitions(f.home)[0]!.instructions, /follow URL/);
+  const stored = JSON.parse(readFileSync(path.join(f.home, 'bot-definitions.json'), 'utf8'));
+  assert.deepEqual(stored.map((entry: { id: string }) => entry.id), ['invented-source']);
   assert.equal(
-    readFileSync(path.join(f.home, "plugins.json"), "utf8").includes("Use "),
+    readFileSync(path.join(f.home, "bot-definitions.json"), "utf8").includes("Use "),
     false,
   );
-  removePlugin(f.home, "invented-source");
-  assert.equal(listPlugins(f.home).length, 0);
+  removeBotDefinition(f.home, "invented-source");
+  assert.deepEqual(listBotDefinitions(f.home), []);
 });
-test("path escape, symlink escape, bad manifest and missing registered plugin are visible errors", (t) => {
+test('GitLab is an external bot: its ID can be explicitly registered and removed', t => {
+  const f = setup(t);
+  const manifest = JSON.parse(readFileSync(f.manifest, 'utf8'));
+  writeFileSync(f.manifest, JSON.stringify({ ...manifest, id: 'hivemind-gitlab', name: 'GitLab' }));
+  registerBotDefinition(f.home, f.manifest);
+  assert.deepEqual(listBotDefinitions(f.home).map(entry => entry.id), ['hivemind-gitlab']);
+  assert.equal(listBotDefinitions(f.home)[0]!.manifest, realpathSync(f.manifest));
+  removeBotDefinition(f.home, 'hivemind-gitlab');
+  assert.deepEqual(listBotDefinitions(f.home), []);
+});
+test("path escape, symlink escape, bad manifest and missing registered definition are visible errors", (t) => {
   const f = setup(t);
   writeFileSync(path.join(f.dir, "outside.md"), "outside");
   symlinkSync(path.join(f.dir, "outside.md"), path.join(f.pkg, "escape.md"));
@@ -116,48 +129,48 @@ test("path escape, symlink escape, bad manifest and missing registered plugin ar
     writeFileSync(
       f.manifest,
       JSON.stringify({
-        version: 1,
+        version: 1, kind: 'bot', capabilities: ['publish'], tools: [],
         id: "invented-source",
         name: "X",
         instructions,
         command: "tool",
       }),
     );
-    assert.throws(() => registerPlugin(f.home, f.manifest), /inside/);
+    assert.throws(() => registerBotDefinition(f.home, f.manifest), /inside/);
   }
   writeFileSync(
     f.manifest,
     JSON.stringify({
-      version: 1,
+      version: 1, kind: 'bot', capabilities: ['publish'], tools: [],
       id: "invented-source",
       name: "X",
       instructions: "TOOLS.md",
       command: "tool",
     }),
   );
-  registerPlugin(f.home, f.manifest);
+  registerBotDefinition(f.home, f.manifest);
   rmSync(path.join(f.pkg, "TOOLS.md"));
-  assert.throws(() => listPlugins(f.home));
+  assert.throws(() => listBotDefinitions(f.home));
 });
 test("launch instructions apply to brains, survive quoting, and MCP is bound to this hive without overriding corporate MCP", async (t) => {
   const f = setup(t);
   const instructions = path.join(f.pkg, "TOOLS.md");
   writeFileSync(instructions, readFileSync(instructions, "utf8") +
     "\nLiteral shell probes: $(touch substitution-ran) `touch backtick-ran` ' ; touch separator-ran; #");
-  registerPlugin(f.home, f.manifest);
+  registerBotDefinition(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
   const project = hive.projects.createProject(hive.identity.getAgent("human"), {
     name: "Example",
     slug: "example",
   });
-  await saveProjectPlugin(
+  await saveProjectBotConfiguration(
     f.home,
     project,
     "http://127.0.0.1:12345",
     "invented-source",
     { enabled: true, values: { host: "example.invalid" }, expectedRevision: 0 },
-    configurePlugin,
+    configureBot,
     path.join(f.dir, "profile ' quoted"),
   );
   const context = projectLaunchTools(
@@ -171,7 +184,7 @@ test("launch instructions apply to brains, survive quoting, and MCP is bound to 
   assert.ok(!command.includes("skip-permissions"));
   assert.match(
     buildLaunchPrompt({ ...base, ...context }),
-    /Installed plugin: Invented Source/,
+    /Bot service: Invented Source/,
   );
   assert.ok(
     !buildLaunchPrompt({
@@ -183,7 +196,7 @@ test("launch instructions apply to brains, survive quoting, and MCP is bound to 
   );
   // Execute the generated launcher as a private script, not an interpolated
   // bash -c argument. Only this test creates the script; the runtime is argv
-  // data. Harmless canaries prove plugin text stays literal through the shell.
+  // data. Harmless canaries prove definition text stays literal through the shell.
   const script = path.join(f.dir, "launch-contract.sh");
   writeFileSync(script,
     "runtime=$1; shift\n" +
@@ -196,7 +209,7 @@ test("launch instructions apply to brains, survive quoting, and MCP is bound to 
     });
     assert.equal(result.error, undefined);
     for (const canary of ["substitution-ran", "backtick-ran", "separator-ran"]) {
-      assert.equal(existsSync(path.join(f.dir, canary)), false, `Executed plugin text: ${canary}`);
+      assert.equal(existsSync(path.join(f.dir, canary)), false, `Executed definition text: ${canary}`);
     }
     assert.equal(result.status, 0, result.stderr);
     const args = JSON.parse(result.stdout);
@@ -217,7 +230,7 @@ test("launch instructions apply to brains, survive quoting, and MCP is bound to 
 });
 test("HTTP launch context exposes only generic installed instructions and exact local MCP binding", async (t) => {
   const f = setup(t);
-  registerPlugin(f.home, f.manifest);
+  registerBotDefinition(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
   const response = await createApp(hive).request(
@@ -225,20 +238,45 @@ test("HTTP launch context exposes only generic installed instructions and exact 
   );
   assert.equal(response.status, 200);
   const context = (await response.json()) as any;
-  assert.equal(context.plugins.length, 0);
+  assert.equal(context.botDefinitions.length, 0);
   assert.equal(context.hivemindMcp.env.HIVEMIND_URL, "http://127.0.0.1:23456");
   const view = await createApp(hive).request(
-    "/api/ui/projects/acme/plugins",
+    "/api/ui/projects/acme/bots/catalog",
   );
   assert.equal(view.status, 200);
-  const plugins = ((await view.json()) as any).plugins;
-  assert.equal(plugins[0].configured, false);
-  assert.equal(plugins[0].enabled, false);
+  const definitions = ((await view.json()) as any).configurations;
+  assert.equal(definitions[0].configured, false);
+  assert.equal(definitions[0].enabled, false);
   assert.equal(hive.identity.listAgents().filter((a) => a.role === "bot").length, 0);
+});
+test("bot catalog uses the canonical contract even for a definition named access", async t => {
+  const f = setup(t);
+  const manifest = JSON.parse(readFileSync(f.manifest, 'utf8'));
+  writeFileSync(f.manifest, JSON.stringify({ ...manifest, id: 'access' }));
+  registerBotDefinition(f.home, f.manifest);
+  const hive = new Hive(path.join(f.home, 'hive.db'));
+  t.after(() => hive.close());
+  const app = createApp(hive), url = 'http://127.0.0.1:23456';
+  const response = await app.request(url + '/api/ui/projects/acme/bots/catalog/access', {
+    method: 'PUT', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ values: { host: 'fixture.invalid' }, enabled: true, expectedRevision: 0 }),
+  });
+  assert.equal(response.status, 200, await response.clone().text());
+  const saved = await response.json() as { configuration: { id: string } };
+  assert.deepEqual(Object.keys(saved), ['configuration']);
+  assert.equal(saved.configuration.id, 'access');
+  const catalog = await (await app.request(url + '/api/ui/projects/acme/bots/catalog')).json();
+  assert.deepEqual(Object.keys(catalog as object), ['configurations']);
+  const project = hive.projects.getProjectBySlug('acme');
+  const context = launchContext(f.home, url, project);
+  assert.deepEqual(Object.keys(context).sort(), ['botDefinitions', 'botInstructions', 'hivemindMcp', 'project']);
+  const bindings = JSON.parse(readFileSync(path.join(f.home, 'project-bots.json'), 'utf8'));
+  assert.deepEqual(Object.keys(bindings[0]).sort(), ['definitionId', 'enabled', 'home', 'projectId', 'revision']);
+  assert.equal(bindings[0].definitionId, 'access');
 });
 test("project settings round trip through local configure; profiles and launch instructions are isolated", async (t) => {
   const f = setup(t);
-  registerPlugin(f.home, f.manifest);
+  registerBotDefinition(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
   const a = hive.projects.getProjectBySlug("acme"),
@@ -254,18 +292,18 @@ test("project settings round trip through local configure; profiles and launch i
     expectedRevision: number,
     enabled = true,
   ) =>
-    app.request(url + "/api/ui/projects/" + slug + "/plugins/invented-source", {
+    app.request(url + "/api/ui/projects/" + slug + "/bots/catalog/invented-source", {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ values, expectedRevision, enabled }),
     });
-  const before = projectPlugins(f.home, a)[0]!;
+  const before = projectBotConfigurations(f.home, a).find(p => p.id === "invented-source")!;
   assert.equal(before.configured, false);
   assert.equal(before.values.interval, 300);
   assert.equal((await put(a.slug, { host: "a.invalid" }, 0)).status, 200);
   assert.equal((await put(b.slug, { host: "b.invalid" }, 0)).status, 200);
-  const pa = projectPlugins(f.home, a)[0]!,
-    pb = projectPlugins(f.home, b)[0]!;
+  const pa = projectBotConfigurations(f.home, a).find(p => p.id === "invented-source")!,
+    pb = projectBotConfigurations(f.home, b).find(p => p.id === "invented-source")!;
   assert.notEqual(pa.home, pb.home);
   assert.equal(pa.values.host, "a.invalid");
   assert.equal(pb.values.host, "b.invalid");
@@ -274,18 +312,18 @@ test("project settings round trip through local configure; profiles and launch i
       await app.request(url + "/api/ui/launch-context?project=" + p.slug)
     ).json()) as any;
     assert.equal(ctx.project.id, p.id);
-    assert.equal(ctx.plugins.length, 1);
+    assert.equal(ctx.botDefinitions.length, 1);
     assert.ok(
-      ctx.pluginInstructions.includes(projectPlugins(f.home, p)[0]!.home),
+      ctx.botInstructions.includes(projectBotConfigurations(f.home, p).find(p => p.id === "invented-source")!.home),
     );
     const other = p.id === a.id ? pb : pa;
-    assert.ok(!ctx.pluginInstructions.includes(other.home));
+    assert.ok(!ctx.botInstructions.includes(other.home));
     assert.throws(
       () =>
         buildLaunchPrompt({
           ...base,
           ...ctx,
-          pluginProject: p.slug,
+          botProject: p.slug,
           projectSlug: "wrong",
         }),
       /matching launch project/,
@@ -303,16 +341,16 @@ test("project settings round trip through local configure; profiles and launch i
     (await put(a.slug, { host: "a.invalid" }, 1, false)).status,
     200,
   );
-  assert.equal(launchContext(f.home, url, a).plugins.length, 0);
-  assert.equal(launchContext(f.home, url, b).plugins.length, 1);
-  assert.equal(launchContext(f.home, url).plugins.length, 0);
+  assert.equal(launchContext(f.home, url, a).botDefinitions.length, 0);
+  assert.equal(launchContext(f.home, url, b).botDefinitions.length, 1);
+  assert.equal(launchContext(f.home, url).botDefinitions.length, 0);
   assert.equal(hive.identity.listAgents().filter((x) => x.role === "bot").length, 0);
   assert.equal(
     (await app.request(url + "/api/ui/launch-context?project=missing")).status,
     404,
   );
 });
-test("HTTP load and unchanged save retain exact list values in the plugin profile", async (t) => {
+test("HTTP load and unchanged save retain exact list values in the definition profile", async (t) => {
   const f = setup(t);
   writeFileSync(path.join(f.pkg, "settings.json"), JSON.stringify({
     version: 1,
@@ -324,13 +362,13 @@ test("HTTP load and unchanged save retain exact list values in the plugin profil
       { key: "unset", label: "Unset", type: "strings" },
     ],
   }));
-  registerPlugin(f.home, f.manifest);
+  registerBotDefinition(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
   const project = hive.projects.getProjectBySlug("acme");
   const app = createApp(hive);
   const url = "http://127.0.0.1:23456";
-  const endpoint = url + `/api/ui/projects/${project.slug}/plugins`;
+  const endpoint = url + `/api/ui/projects/${project.slug}/bots/catalog`;
   const values = {
     free: ["  significant whitespace  ", "", "ordinary", "\t", "line\nbreak", "\r", "ordinary"],
     choices: [" padded ", "", "ordinary"],
@@ -343,18 +381,18 @@ test("HTTP load and unchanged save retain exact list values in the plugin profil
     body: JSON.stringify({ values: input, expectedRevision, enabled: true }),
   });
   assert.equal((await save(values, 0)).status, 200);
-  const loaded = await (await app.request(endpoint)).json() as { plugins: Array<{
-    values: typeof values; revision: number; home: string;
+  const loaded = await (await app.request(endpoint)).json() as { configurations: Array<{
+    id: string; values: typeof values; revision: number; home: string;
   }> };
-  const view = loaded.plugins[0]!;
+  const view = loaded.configurations.find((p: { id: string }) => p.id === "invented-source")!;
   assert.deepEqual(view.values, values);
   const configFile = path.join(view.home, "config.json");
   const before = readFileSync(configFile, "utf8");
   const saved = await save(view.values, view.revision);
   assert.equal(saved.status, 200);
-  assert.deepEqual((await saved.json() as { plugin: { values: unknown } }).plugin.values, values);
+  assert.deepEqual((await saved.json() as { configuration: { values: unknown } }).configuration.values, values);
   assert.equal(readFileSync(configFile, "utf8"), before);
-  assert.deepEqual(projectPlugins(f.home, project)[0]!.values, values);
+  assert.deepEqual(projectBotConfigurations(f.home, project).find(p => p.id === "invented-source")!.values, values);
 });
 
 test("schema rejects unknown fields, duplicate keys, reserved keys and invalid values", () => {
@@ -403,7 +441,7 @@ test("schema rejects unknown fields, duplicate keys, reserved keys and invalid v
 });
 test("configure failure does not enable a profile, and an adopted profile cannot be shared across projects", async (t) => {
   const f = setup(t);
-  registerPlugin(f.home, f.manifest);
+  registerBotDefinition(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
   const a = hive.projects.getProjectBySlug("acme"),
@@ -417,7 +455,7 @@ test("configure failure does not enable a profile, and an adopted profile cannot
       expectedRevision: 0,
     };
   await assert.rejects(
-    saveProjectPlugin(
+    saveProjectBotConfiguration(
       f.home,
       a,
       "http://127.0.0.1:23456",
@@ -429,73 +467,73 @@ test("configure failure does not enable a profile, and an adopted profile cannot
     ),
     /fixture failure/,
   );
-  assert.equal(projectPlugins(f.home, a)[0]!.configured, false);
+  assert.equal(projectBotConfigurations(f.home, a).find(p => p.id === "invented-source")!.configured, false);
   const old = path.join(f.dir, "existing");
-  await saveProjectPlugin(
+  await saveProjectBotConfiguration(
     f.home,
     a,
     "http://127.0.0.1:23456",
     "invented-source",
     change,
-    configurePlugin,
+    configureBot,
     old,
   );
   await assert.rejects(
-    saveProjectPlugin(
+    saveProjectBotConfiguration(
       f.home,
       b,
       "http://127.0.0.1:23456",
       "invented-source",
       change,
-      configurePlugin,
+      configureBot,
       old,
     ),
     /already belongs/,
   );
   rmSync(path.join(f.pkg, "TOOLS.md"));
-  assert.ok(launchContext(f.home, "http://127.0.0.1:23456", a).pluginError);
+  assert.ok(launchContext(f.home, "http://127.0.0.1:23456", a).botError);
 });
-test("availability changes never run configure and a broken or unregistered plugin can be disabled", async (t) => {
+test("availability changes never run configure and a broken or unregistered definition can be disabled", async (t) => {
   const f = setup(t);
-  registerPlugin(f.home, f.manifest);
+  registerBotDefinition(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
   const project = hive.projects.getProjectBySlug("acme");
-  await saveProjectPlugin(
+  await saveProjectBotConfiguration(
     f.home,
     project,
     "http://127.0.0.1:23456",
     "invented-source",
     { enabled: true, values: { host: "example.invalid" }, expectedRevision: 0 },
   );
-  const profile = projectPlugins(f.home, project)[0]!.home;
+  const profile = projectBotConfigurations(f.home, project).find(p => p.id === "invented-source")!.home;
   const config = readFileSync(path.join(profile, "config.json"), "utf8");
   rmSync(path.join(f.pkg, "tool"));
   assert.ok(
-    launchContext(f.home, "http://127.0.0.1:23456", project).pluginError,
+    launchContext(f.home, "http://127.0.0.1:23456", project).botError,
   );
   const app = createApp(hive);
   const patch = (enabled: boolean, expectedRevision: number) =>
-    app.request("/api/ui/projects/acme/plugins/invented-source", {
+    app.request("/api/ui/projects/acme/bots/catalog/invented-source", {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ enabled, expectedRevision }),
     });
   assert.equal((await patch(false, 1)).status, 200);
   assert.equal(
-    launchContext(f.home, "http://127.0.0.1:23456", project).plugins.length,
+    launchContext(f.home, "http://127.0.0.1:23456", project).botDefinitions.length,
     0,
   );
   assert.equal((await patch(true, 2)).status, 400);
-  removePlugin(f.home, "invented-source");
-  assert.equal(projectPlugins(f.home, project)[0]!.configured, true);
-  assert.match(projectPlugins(f.home, project)[0]!.error!, /unavailable/);
+  removeBotDefinition(f.home, "invented-source");
+  assert.equal(projectBotConfigurations(f.home, project).find(p => p.id === "invented-source")!.configured, true);
+  assert.match(projectBotConfigurations(f.home, project).find(p => p.id === "invented-source")!.error!, /unavailable/);
   assert.equal((await patch(false, 2)).status, 200);
   assert.equal(readFileSync(path.join(profile, "config.json"), "utf8"), config);
 });
 test("profile aliases cannot bind one profile to different projects", async (t) => {
   const f = setup(t);
-  registerPlugin(f.home, f.manifest);
+  registerBotDefinition(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
   const a = hive.projects.getProjectBySlug("acme");
@@ -511,23 +549,23 @@ test("profile aliases cannot bind one profile to different projects", async (t) 
     values: { host: "example.invalid" },
     expectedRevision: 0,
   };
-  await saveProjectPlugin(
+  await saveProjectBotConfiguration(
     f.home,
     a,
     "http://127.0.0.1:23456",
     "invented-source",
     change,
-    configurePlugin,
+    configureBot,
     path.join(parent, "one"),
   );
   await assert.rejects(
-    saveProjectPlugin(
+    saveProjectBotConfiguration(
       f.home,
       b,
       "http://127.0.0.1:23456",
       "invented-source",
       change,
-      configurePlugin,
+      configureBot,
       path.join(f.dir, "alias", "one"),
     ),
     /already belongs/,
@@ -535,14 +573,14 @@ test("profile aliases cannot bind one profile to different projects", async (t) 
 });
 test("concurrent stale saves configure a profile only once and registries are private", async (t) => {
   const f = setup(t);
-  registerPlugin(f.home, f.manifest);
+  registerBotDefinition(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
   const project = hive.projects.getProjectBySlug("acme");
   let calls = 0;
-  const configure = async (...args: Parameters<typeof configurePlugin>) => {
+  const configure = async (...args: Parameters<typeof configureBot>) => {
     calls++;
-    await configurePlugin(...args);
+    await configureBot(...args);
   };
   const change = {
     enabled: true,
@@ -551,7 +589,7 @@ test("concurrent stale saves configure a profile only once and registries are pr
   };
   const results = await Promise.allSettled(
     [1, 2].map(() =>
-      saveProjectPlugin(
+      saveProjectBotConfiguration(
         f.home,
         project,
         "http://127.0.0.1:23456",
@@ -566,20 +604,20 @@ test("concurrent stale saves configure a profile only once and registries are pr
     1,
   );
   assert.equal(calls, 1);
-  for (const file of ["plugins.json", "project-plugins.json"])
+  for (const file of ["bot-definitions.json", "project-bots.json"])
     assert.equal(statSync(path.join(f.home, file)).mode & 0o777, 0o600);
 });
-test("plugins without fields can still configure an isolated profile", async (t) => {
+test("definitions without fields can still configure an isolated profile", async (t) => {
   const f = setup(t);
   const manifest = JSON.parse(readFileSync(f.manifest, "utf8"));
   delete manifest.settings;
   writeFileSync(f.manifest, JSON.stringify(manifest));
-  registerPlugin(f.home, f.manifest);
+  registerBotDefinition(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
   const project = hive.projects.getProjectBySlug("acme");
   assert.equal(existsSync(path.join(f.home, "profiles")), false);
-  const saved = await saveProjectPlugin(
+  const saved = await saveProjectBotConfiguration(
     f.home,
     project,
     "http://127.0.0.1:23456",
@@ -588,17 +626,17 @@ test("plugins without fields can still configure an isolated profile", async (t)
   );
   assert.deepEqual(saved.settings?.fields, []);
   assert.equal(
-    launchContext(f.home, "http://127.0.0.1:23456", project).plugins.length,
+    launchContext(f.home, "http://127.0.0.1:23456", project).botDefinitions.length,
     1,
   );
 });
 test("launch fails visibly for invalid retained settings or a profile pointing at another server", async (t) => {
   const f = setup(t);
-  registerPlugin(f.home, f.manifest);
+  registerBotDefinition(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
   const project = hive.projects.getProjectBySlug("acme");
-  const saved = await saveProjectPlugin(
+  const saved = await saveProjectBotConfiguration(
     f.home,
     project,
     "http://127.0.0.1:23456",
@@ -606,7 +644,7 @@ test("launch fails visibly for invalid retained settings or a profile pointing a
     { enabled: true, values: { host: "example.invalid" }, expectedRevision: 0 },
   );
   assert.match(
-    launchContext(f.home, "http://127.0.0.1:34567", project).pluginError!,
+    launchContext(f.home, "http://127.0.0.1:34567", project).botError!,
     /different Hivemind server/,
   );
   writeFileSync(
@@ -614,11 +652,11 @@ test("launch fails visibly for invalid retained settings or a profile pointing a
     JSON.stringify({ hiveUrl: "http://127.0.0.1:23456", host: false }),
   );
   assert.match(
-    launchContext(f.home, "http://127.0.0.1:23456", project).pluginError!,
+    launchContext(f.home, "http://127.0.0.1:23456", project).botError!,
     /invalid value/,
   );
 });
-test("configuration byte limits include defaults and hiveUrl before invoking the plugin", async (t) => {
+test("configuration byte limits include defaults and hiveUrl before invoking the definition", async (t) => {
   const url = "http://127.0.0.1:23456";
   for (const symbol of ["x", "é", "🙂", '"']) {
     const f = setup(t);
@@ -635,7 +673,7 @@ test("configuration byte limits include defaults and hiveUrl before invoking the
       ],
     });
     writeFileSync(path.join(f.pkg, "settings.json"), JSON.stringify(schema));
-    registerPlugin(f.home, f.manifest);
+    registerBotDefinition(f.home, f.manifest);
     const hive = new Hive(path.join(f.home, "hive.db"));
     t.after(() => hive.db.close());
     const project = hive.projects.getProjectBySlug("acme");
@@ -659,13 +697,13 @@ test("configuration byte limits include defaults and hiveUrl before invoking the
       return values;
     };
     let calls = 0;
-    const configure = async (...args: Parameters<typeof configurePlugin>) => {
+    const configure = async (...args: Parameters<typeof configureBot>) => {
       calls++;
-      await configurePlugin(...args);
+      await configureBot(...args);
     };
     let revision = 0;
-    for (const bytes of [MAX_PLUGIN_JSON_BYTES - 1, MAX_PLUGIN_JSON_BYTES]) {
-      const saved = await saveProjectPlugin(
+    for (const bytes of [MAX_BOT_DEFINITION_JSON_BYTES - 1, MAX_BOT_DEFINITION_JSON_BYTES]) {
+      const saved = await saveProjectBotConfiguration(
         f.home,
         project,
         url,
@@ -680,25 +718,25 @@ test("configuration byte limits include defaults and hiveUrl before invoking the
       revision = saved.revision;
       assert.equal(statSync(path.join(saved.home, "config.json")).size, bytes);
       assert.equal(saved.error, undefined);
-      assert.equal(launchContext(f.home, url, project).pluginError, undefined);
+      assert.equal(launchContext(f.home, url, project).botError, undefined);
     }
-    const before = projectPlugins(f.home, project)[0]!;
+    const before = projectBotConfigurations(f.home, project).find(p => p.id === "invented-source")!;
     const configFile = path.join(before.home, "config.json");
-    const registryFile = path.join(f.home, "project-plugins.json");
+    const registryFile = path.join(f.home, "project-bots.json");
     const config = readFileSync(configFile, "utf8");
     const registry = readFileSync(registryFile, "utf8");
     const stateFile = path.join(before.home, "retained-state.json");
     writeFileSync(stateFile, '{"cursor":"invented-retained-state"}');
-    const oversized = valuesOfSize(MAX_PLUGIN_JSON_BYTES + 1);
+    const oversized = valuesOfSize(MAX_BOT_DEFINITION_JSON_BYTES + 1);
     // The user values alone fit; only the complete persisted configuration exceeds the limit.
     assert.ok(
       Buffer.byteLength(JSON.stringify(oversized), "utf8") <
-        MAX_PLUGIN_JSON_BYTES,
+        MAX_BOT_DEFINITION_JSON_BYTES,
     );
     if (symbol === "é" || symbol === "🙂")
-      assert.ok(JSON.stringify(oversized).length < MAX_PLUGIN_JSON_BYTES);
+      assert.ok(JSON.stringify(oversized).length < MAX_BOT_DEFINITION_JSON_BYTES);
     await assert.rejects(
-      saveProjectPlugin(
+      saveProjectBotConfiguration(
         f.home,
         project,
         url,
@@ -710,7 +748,7 @@ test("configuration byte limits include defaults and hiveUrl before invoking the
         },
         configure,
       ),
-      /65536 UTF-8 bytes.*plugin was not run/,
+      /65536 UTF-8 bytes.*definition was not run/,
     );
     assert.equal(calls, 2, "Rejected input must not invoke configure");
     assert.equal(readFileSync(configFile, "utf8"), config);
@@ -719,11 +757,11 @@ test("configuration byte limits include defaults and hiveUrl before invoking the
       readFileSync(stateFile, "utf8"),
       '{"cursor":"invented-retained-state"}',
     );
-    assert.deepEqual(projectPlugins(f.home, project)[0], before);
-    assert.equal(launchContext(f.home, url, project).pluginError, undefined);
-    assert.equal(existsSync(path.join(f.home, "plugins.lock")), false);
+    assert.deepEqual(projectBotConfigurations(f.home, project).find(p => p.id === "invented-source"), before);
+    assert.equal(launchContext(f.home, url, project).botError, undefined);
+    assert.equal(existsSync(path.join(f.home, "bot-configurations.lock")), false);
     // A rejected save also releases the queue/lock and leaves the revision usable.
-    const retried = await saveProjectPlugin(
+    const retried = await saveProjectBotConfiguration(
       f.home,
       project,
       url,
@@ -757,12 +795,12 @@ test("oversized first configuration is rejected over HTTP without creating a pro
     path.join(f.pkg, "tool"),
     `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(marker)},'invoked');process.exit(1);\n`,
   );
-  registerPlugin(f.home, f.manifest);
+  registerBotDefinition(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
   const app = createApp(hive);
   const response = await app.request(
-    "http://127.0.0.1:23456/api/ui/projects/acme/plugins/invented-source",
+    "http://127.0.0.1:23456/api/ui/projects/acme/bots/catalog/invented-source",
     {
       method: "PUT",
       headers: { "content-type": "application/json" },
@@ -776,21 +814,21 @@ test("oversized first configuration is rejected over HTTP without creating a pro
   assert.equal(response.status, 400);
   assert.match(
     ((await response.json()) as { error: string }).error,
-    /65536 UTF-8 bytes.*plugin was not run/,
+    /65536 UTF-8 bytes.*definition was not run/,
   );
   assert.equal(existsSync(marker), false);
   assert.equal(existsSync(path.join(f.home, "profiles")), false);
-  assert.equal(existsSync(path.join(f.home, "project-plugins.json")), false);
-  assert.equal(existsSync(path.join(f.home, "plugins.lock")), false);
+  assert.equal(existsSync(path.join(f.home, "project-bots.json")), false);
+  assert.equal(existsSync(path.join(f.home, "bot-configurations.lock")), false);
 });
 
-test("persisted output is still size-checked if the external plugin expands valid input", async (t) => {
+test("persisted output is still size-checked if the external definition expands valid input", async (t) => {
   const f = setup(t);
-  registerPlugin(f.home, f.manifest);
+  registerBotDefinition(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
   await assert.rejects(
-    saveProjectPlugin(
+    saveProjectBotConfiguration(
       f.home,
       hive.projects.getProjectBySlug("acme"),
       "http://127.0.0.1:23456",
@@ -801,27 +839,27 @@ test("persisted output is still size-checked if the external plugin expands vali
         expectedRevision: 0,
       },
       async (...args) => {
-        await configurePlugin(...args);
+        await configureBot(...args);
         const file = path.join(args[1], "config.json");
         writeFileSync(
           file,
-          readFileSync(file, "utf8") + " ".repeat(MAX_PLUGIN_JSON_BYTES),
+          readFileSync(file, "utf8") + " ".repeat(MAX_BOT_DEFINITION_JSON_BYTES),
         );
       },
     ),
-    /Plugin file exceeds 64 KB/,
+    /Bot file exceeds 64 KB/,
   );
-  assert.equal(existsSync(path.join(f.home, "project-plugins.json")), false);
+  assert.equal(existsSync(path.join(f.home, "project-bots.json")), false);
 });
 
 test("schema upgrades retain repairable form values and can be saved through the HTTP API", async (t) => {
   const f = setup(t);
-  registerPlugin(f.home, f.manifest);
+  registerBotDefinition(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
   const project = hive.projects.getProjectBySlug("acme");
   const url = "http://127.0.0.1:23456";
-  const saved = await saveProjectPlugin(
+  const saved = await saveProjectBotConfiguration(
     f.home,
     project,
     url,
@@ -845,9 +883,9 @@ test("schema upgrades retain repairable form values and can be saved through the
   });
   writeFileSync(path.join(f.pkg, "settings.json"), JSON.stringify(schema));
   const app = createApp(hive);
-  const endpoint = url + "/api/ui/projects/acme/plugins";
+  const endpoint = url + "/api/ui/projects/acme/bots/catalog";
   const response = await app.request(endpoint);
-  const view = ((await response.json()) as any).plugins[0];
+  const view = ((await response.json()) as any).configurations.find((p: { id: string }) => p.id === "invented-source");
   assert.equal(response.status, 200);
   assert.equal(view.settings.fields.length, 3);
   assert.deepEqual(view.values, { host: "example.invalid", interval: 600 });
@@ -859,7 +897,7 @@ test("schema upgrades retain repairable form values and can be saved through the
     "Viewing a draft must not write settings",
   );
   assert.match(
-    launchContext(f.home, url, project).pluginError!,
+    launchContext(f.home, url, project).botError!,
     /Region is required/,
   );
   const put = (values: unknown) =>
@@ -880,23 +918,23 @@ test("schema upgrades retain repairable form values and can be saved through the
   assert.equal(readFileSync(configFile, "utf8"), original);
   const repairedResponse = await put({ ...view.values, region: "test-region" });
   assert.equal(repairedResponse.status, 200);
-  const repaired = ((await repairedResponse.json()) as any).plugin;
+  const repaired = ((await repairedResponse.json()) as any).configuration;
   assert.equal(repaired.error, undefined);
   assert.equal(repaired.revision, 2);
   assert.equal(repaired.home, saved.home);
   assert.equal(repaired.values.region, "test-region");
-  assert.equal(launchContext(f.home, url, project).pluginError, undefined);
-  assert.equal(launchContext(f.home, url, project).plugins.length, 1);
+  assert.equal(launchContext(f.home, url, project).botError, undefined);
+  assert.equal(launchContext(f.home, url, project).botDefinitions.length, 1);
 });
 
 test("unreadable saved settings remain repairable without treating defaults as a valid profile", async (t) => {
   const f = setup(t);
-  registerPlugin(f.home, f.manifest);
+  registerBotDefinition(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
   const project = hive.projects.getProjectBySlug("acme");
   const url = "http://127.0.0.1:23456";
-  const saved = await saveProjectPlugin(
+  const saved = await saveProjectBotConfiguration(
     f.home,
     project,
     url,
@@ -910,19 +948,19 @@ test("unreadable saved settings remain repairable without treating defaults as a
   const configFile = path.join(saved.home, "config.json");
   for (const contents of ["{broken JSON", "null", "[]"]) {
     writeFileSync(configFile, contents);
-    const draft = projectPlugins(f.home, project)[0]!;
+    const draft = projectBotConfigurations(f.home, project).find(p => p.id === "invented-source")!;
     assert.ok(draft.settings);
     assert.deepEqual(draft.values, { interval: 300 });
     assert.match(draft.error!, /unreadable.*Configure/);
     assert.equal(readFileSync(configFile, "utf8"), contents);
     await assert.rejects(
-      setProjectPluginAvailability(f.home, project, "invented-source", {
+      setProjectBotAvailability(f.home, project, "invented-source", {
         enabled: true,
         expectedRevision: 1,
       }),
     );
   }
-  const repaired = await saveProjectPlugin(
+  const repaired = await saveProjectBotConfiguration(
     f.home,
     project,
     url,
@@ -973,12 +1011,12 @@ test("repair drafts keep compatible fields only, including false and zero, and o
 test("worker launch keeps exact MCP binding when packages, profiles or registries fail", async (t) => {
   for (const failure of ["package", "profile", "catalog", "bindings"]) {
     const f = setup(t);
-    registerPlugin(f.home, f.manifest);
+    registerBotDefinition(f.home, f.manifest);
     const hive = new Hive(path.join(f.home, "hive.db"));
     t.after(() => hive.db.close());
     const project = hive.projects.getProjectBySlug("acme");
     const url = "http://127.0.0.1:23456";
-    const saved = await saveProjectPlugin(
+    const saved = await saveProjectBotConfiguration(
       f.home,
       project,
       url,
@@ -994,18 +1032,18 @@ test("worker launch keeps exact MCP binding when packages, profiles or registrie
     if (failure === "profile")
       writeFileSync(path.join(saved.home, "config.json"), "{}");
     if (failure === "catalog")
-      writeFileSync(path.join(f.home, "plugins.json"), "{broken");
+      writeFileSync(path.join(f.home, "bot-definitions.json"), "{broken");
     if (failure === "bindings")
-      writeFileSync(path.join(f.home, "project-plugins.json"), "{broken");
+      writeFileSync(path.join(f.home, "project-bots.json"), "{broken");
     const response = await createApp(hive).request(
       url + "/api/ui/launch-context?project=acme",
     );
     assert.equal(response.status, 200, failure);
     const context = (await response.json()) as ReturnType<typeof launchContext>;
-    assert.ok(context.pluginError, failure);
+    assert.ok(context.botError, failure);
     assert.deepEqual(context.hivemindMcp, binding, failure);
-    assert.deepEqual(context.plugins, []);
-    assert.equal(context.pluginInstructions, "");
+    assert.deepEqual(context.botDefinitions, []);
+    assert.equal(context.botInstructions, "");
     assert.throws(() => projectLaunchTools(context, project, "brain"));
     const tools = projectLaunchTools(context, project, "worker");
     assert.deepEqual(tools, { hivemindMcp: binding });
@@ -1022,14 +1060,14 @@ test("worker launch keeps exact MCP binding when packages, profiles or registrie
       });
       assert.match(command, /--mcp-config/);
       assert.ok(command.includes('"HIVEMIND_URL":"' + url + '"'));
-      assert.doesNotMatch(command, /Installed plugin:/);
+      assert.doesNotMatch(command, /Bot service:/);
     }
   }
 });
 
-test("configure failures and invalid receipts never enable the plugin", async (t) => {
+test("configure failures and invalid receipts never enable the definition", async (t) => {
   const f = setup(t);
-  registerPlugin(f.home, f.manifest);
+  registerBotDefinition(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
   const project = hive.projects.getProjectBySlug("acme");
@@ -1045,7 +1083,7 @@ test("configure failures and invalid receipts never enable the plugin", async (t
       { mode: 0o700 },
     );
     await assert.rejects(
-      saveProjectPlugin(
+      saveProjectBotConfiguration(
         f.home,
         project,
         "http://127.0.0.1:23456",
@@ -1057,7 +1095,7 @@ test("configure failures and invalid receipts never enable the plugin", async (t
         },
       ),
     );
-    assert.equal(projectPlugins(f.home, project)[0]!.configured, false);
+    assert.equal(projectBotConfigurations(f.home, project).find(p => p.id === "invented-source")!.configured, false);
   }
 });
 test("schemas reject contradictory types, invalid defaults and null or empty required values", () => {
@@ -1079,7 +1117,7 @@ test("schemas reject contradictory types, invalid defaults and null or empty req
 });
 test("fresh and resumed launch uses only the selected project across all CLI families", async (t) => {
   const f = setup(t);
-  registerPlugin(f.home, f.manifest);
+  registerBotDefinition(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
   const project = hive.projects.getProjectBySlug("acme");
@@ -1087,7 +1125,7 @@ test("fresh and resumed launch uses only the selected project across all CLI fam
     name: "Other",
     slug: "other",
   });
-  await saveProjectPlugin(
+  await saveProjectBotConfiguration(
     f.home,
     project,
     "http://127.0.0.1:23456",
@@ -1129,7 +1167,7 @@ test("fresh and resumed launch uses only the selected project across all CLI fam
       };
       const prompt = buildLaunchPrompt(input);
       assert.ok(prompt.startsWith(ADOPT_UNTRUSTED));
-      assert.match(prompt, /Installed plugin: Invented Source/);
+      assert.match(prompt, /Bot service: Invented Source/);
       assert.match(prompt, /or do the work yourself when that serves the request better: you decide/);
       assert.doesNotMatch(
         prompt,
@@ -1155,7 +1193,7 @@ test("CLI registers and lists only installed local code; binding uses an explici
         "--import",
         import.meta.resolve("tsx"),
         path.resolve("src/cli.ts"),
-        "plugins",
+        "bots",
         ...args,
         "--home",
         f.home,
@@ -1179,7 +1217,7 @@ test("CLI registers and lists only installed local code; binding uses an explici
 
 test("localhost uses the same numeric-loopback profile and non-local origins never configure", async (t) => {
   const f = setup(t);
-  registerPlugin(f.home, f.manifest);
+  registerBotDefinition(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
   const project = hive.projects.getProjectBySlug("acme");
@@ -1194,11 +1232,11 @@ test("localhost uses the same numeric-loopback profile and non-local origins nev
     "http://user:pass@127.0.0.1:12345",
   ]) {
     await assert.rejects(
-      saveProjectPlugin(f.home, project, url, "invented-source", change),
+      saveProjectBotConfiguration(f.home, project, url, "invented-source", change),
       /local Hivemind/,
     );
   }
-  const saved = await saveProjectPlugin(
+  const saved = await saveProjectBotConfiguration(
     f.home,
     project,
     "http://localhost:12345",
@@ -1218,18 +1256,18 @@ test("localhost uses the same numeric-loopback profile and non-local origins nev
 
 test("a server update and another CLI process cannot mutate the catalog or profiles concurrently", async (t) => {
   const f = setup(t);
-  registerPlugin(f.home, f.manifest);
+  registerBotDefinition(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   t.after(() => hive.db.close());
   const project = hive.projects.getProjectBySlug("acme");
-  const configure = async (...args: Parameters<typeof configurePlugin>) => {
+  const configure = async (...args: Parameters<typeof configureBot>) => {
     const result = spawnSync(
       process.execPath,
       [
         "--import",
         import.meta.resolve("tsx"),
         path.resolve("src/cli.ts"),
-        "plugins",
+        "bots",
         "remove",
         "invented-source",
         "--home",
@@ -1238,10 +1276,10 @@ test("a server update and another CLI process cannot mutate the catalog or profi
       { encoding: "utf8", env: childEnv() },
     );
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /plugins.lock/);
-    await configurePlugin(...args);
+    assert.match(result.stderr, /bot-configurations.lock/);
+    await configureBot(...args);
   };
-  await saveProjectPlugin(
+  await saveProjectBotConfiguration(
     f.home,
     project,
     "http://127.0.0.1:12345",
@@ -1249,17 +1287,17 @@ test("a server update and another CLI process cannot mutate the catalog or profi
     { enabled: true, values: { host: "example.invalid" }, expectedRevision: 0 },
     configure,
   );
-  assert.equal(listPlugins(f.home).length, 1);
-  assert.equal(existsSync(path.join(f.home, "plugins.lock")), false);
-  writeFileSync(path.join(f.home, "plugins.lock"), "retained test lock");
-  assert.throws(() => removePlugin(f.home, "invented-source"), /plugins.lock/);
-  unlinkSync(path.join(f.home, "plugins.lock"));
-  removePlugin(f.home, "invented-source");
+  assert.equal(listBotDefinitions(f.home).length, 1);
+  assert.equal(existsSync(path.join(f.home, "bot-configurations.lock")), false);
+  writeFileSync(path.join(f.home, "bot-configurations.lock"), "retained test lock");
+  assert.throws(() => removeBotDefinition(f.home, "invented-source"), /bot-configurations.lock/);
+  unlinkSync(path.join(f.home, "bot-configurations.lock"));
+  removeBotDefinition(f.home, "invented-source");
 });
 
 test("CLI binds an existing profile without copying or erasing retained state", (t) => {
   const f = setup(t);
-  registerPlugin(f.home, f.manifest);
+  registerBotDefinition(f.home, f.manifest);
   const hive = new Hive(path.join(f.home, "hive.db"));
   const project = hive.projects.getProjectBySlug("acme");
   hive.db.close();
@@ -1280,7 +1318,7 @@ test("CLI binds an existing profile without copying or erasing retained state", 
         "--import",
         import.meta.resolve("tsx"),
         path.resolve("src/cli.ts"),
-        "plugins",
+        "bots",
         ...args,
         "--home",
         f.home,
@@ -1301,10 +1339,10 @@ test("CLI binds an existing profile without copying or erasing retained state", 
     readFileSync(path.join(profile, "cursor.json"), "utf8"),
     '{"cursor":42}',
   );
-  assert.equal(projectPlugins(f.home, project)[0]!.home, realpathSync(profile));
+  assert.equal(projectBotConfigurations(f.home, project).find(p => p.id === "invented-source")!.home, realpathSync(profile));
   assert.notEqual(
     invoke(["remove", "invented-source", "--project", "acme"]).status,
     0,
   );
-  assert.equal(listPlugins(f.home).length, 1);
+  assert.equal(listBotDefinitions(f.home).length, 1);
 });

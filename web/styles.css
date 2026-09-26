@@ -1,3 +1,4 @@
+@import './bots.css';
 /* Self-hosted fonts (SIL OFL 1.1, see the OFL texts in web/fonts), from Fontsource
    @fontsource/ibm-plex-sans@5.3.0 and @fontsource/ibm-plex-mono@5.3.0.
    The UI must never fetch fonts (or anything else) from a third-party host. */
@@ -183,17 +184,17 @@ html.dark {
 .bot-origin { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 6px 0; }
 .bot-origin a { color: var(--moss); }
 
-.plugin-card { margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); }
-.plugin-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
-.plugin-card p { margin: 8px 0; font-size: 0.9em; }
-.plugin-card small { color: var(--mute); font-size: 0.8em; }
-.plugin-card code { overflow-wrap: anywhere; }
-.plugin-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin: 16px 0; }
-.plugin-fields label { display: flex; flex-direction: column; gap: 5px; }
-.plugin-fields label.check { flex-direction: row; align-items: center; }
-.plugin-fields input, .plugin-fields select, .plugin-fields textarea { width: 100%; padding: 8px; }
-.plugin-card input[type=checkbox] { width: auto; }
-.plugin-fields textarea { resize: vertical; min-height: 75px; border: 1px solid var(--line); border-radius: 6px; background: var(--desk); }
+.bot-settings-card { margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); }
+.bot-settings-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.bot-settings-card p { margin: 8px 0; font-size: 0.9em; }
+.bot-settings-card small { color: var(--mute); font-size: 0.8em; }
+.bot-settings-card code { overflow-wrap: anywhere; }
+.bot-settings-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin: 16px 0; }
+.bot-settings-fields label { display: flex; flex-direction: column; gap: 5px; }
+.bot-settings-fields label.check { flex-direction: row; align-items: center; }
+.bot-settings-fields input, .bot-settings-fields select, .bot-settings-fields textarea { width: 100%; padding: 8px; }
+.bot-settings-card input[type=checkbox] { width: auto; }
+.bot-settings-fields textarea { resize: vertical; min-height: 75px; border: 1px solid var(--line); border-radius: 6px; background: var(--desk); }
 
 * { box-sizing: border-box; }
 html, body, #root {

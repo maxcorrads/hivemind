@@ -1,13 +1,19 @@
-# Generic bots
+# Bot observation protocol
 
-A bot is a project-scoped identity for an external integration, not a model worker.
-Hivemind accepts observations and delivers them through its existing messages, threads,
-history, search and MCP wait. It does not start the integration or read its source.
-There are no provider-specific SDKs or commands in this protocol.
+A bot is a project-scoped service identity, not a model worker. Bot identity,
+configuration and access are managed through the [Bots interface](BOTS.md).
+Publish, Receive and Tools are independent grants. This observation protocol requires
+Publish; Receive has a separate subscribed, read-only polling API described in BOTS.md.
+Hivemind delivers observations through messages, threads, history, search and MCP wait.
+Source reading and monitor lifecycle belong to the bot's implementation, not this API.
+The bot's own source-link metadata and lifecycle acknowledgements remain accessible
+without Publish, so a monitor can confirm it stopped after that grant is revoked.
+Lifecycle reports only create channel messages and wake the coordinator while
+Publish is enabled; a valid credential and channel invitation are always required.
 
 ## Create and invite
 
-Human selects **+** in the project's **Bots · post updates, no tasks** sidebar section, chooses
+For a custom publisher, Human selects **+ → Add bot → Custom bot** in the project's **Bots** section, chooses
 a unique name and saves the returned token privately. New bots have no channel memberships.
 The token is returned only on creation or rotation; the database stores its hash, not the token.
 Closing the creation panel clears its displayed credential. It is not saved in browser storage.
@@ -38,7 +44,7 @@ receive tasks, open DMs, invite others, create channels or change thread status.
 
 ## Recover, rotate or revoke a credential
 
-Human opens **Credentials** beside a bot in the sidebar. **Rotate token** and
+Human opens **Manage bot → Advanced credentials**. **Rotate token** and
 **Revoke token** require confirmation. Rotation returns a fresh secret once and
 invalidates the old one; revocation leaves no usable credential. The bot identity,
 name, channel invitations, attachment ownership and event deduplication history
@@ -170,7 +176,7 @@ Private-channel messages reach participating agents under existing wait rules. P
 messages do not wake agents. Hivemind makes no model call when accepting an event; an agent
 processing it can still consume tokens. Bot messages do not change brain/worker responsibilities.
 
-Run `npm run typecheck`, `npm test`, `npm run test:ui` and `npm run build`.
+Run `npm run check` and `npm run test:browser`.
 Tests use isolated temporary databases and invented inputs, including real local HTTP →
 stdio MCP delivery across rotation/revocation and explicit attachment retrieval.
 UI tests include mounted React/API recovery and confirmation flows as well as static

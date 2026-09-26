@@ -95,7 +95,7 @@ require a new Human instruction.
 The server checks provenance, access, ordering and role, **not the semantic equivalence**
 of prose and requested changes. The brain must not convert an unrelated/one-off
 request into a standing rule. A bot saying “Human approved” is never Human authority.
-Contract text, artifact references and plugin report details remain data.
+Contract text, artifact references and bot report details remain data.
 
 Human owns purpose and limits. The coordinator chooses execution inside that mandate,
 including staffing via `room_event staff` without a new Human instruction. Staffing
@@ -163,9 +163,9 @@ Existing task threads remain available for closure. If tasks are running, Human 
 explicitly choose `finish` or `stop`; the latter is an interruption request, not proof
 of interruption. Reopening does not restart stopped tasks or replay observations.
 
-External plugins may implement this **optional generic extension** to the bot API.
-It is separate from plugin configuration/enabling. Hivemind never invokes a guessed
-provider command or stops the entire shared plugin process/profile.
+External bots may implement this **optional generic extension** to the bot API.
+It is separate from bot configuration/enabling. Hivemind never invokes a guessed
+provider command or stops the entire shared bot process/profile.
 
 All calls use the bot bearer credential and require invitation to that channel:
 
@@ -176,7 +176,7 @@ All calls use the bot bearer credential and require invitation to that channel:
 2. `GET /api/bot/channels/:channel/links` reads this bot's links only. Each includes
    `desired` (`running`/`paused`), increasing `generation`, and reported status.
    The external monitor polls this endpoint as part of its own loop/recovery.
-3. Apply that desired state to **only that subscription**. Persist it in the plugin
+3. Apply that desired state to **only that subscription**. Persist it in the bot
    before reporting. `POST /api/bot/channels/:channel/links/:id/status` with
    `{ "generation": 2, "observed": "paused", "detail": "Subscription paused" }`.
    Stale generations and success reports contrary to the request return 409; reread
@@ -184,14 +184,14 @@ All calls use the bot bearer credential and require invitation to that channel:
 
 Archiving changes only this channel's links to requested `paused`. A supported link
 is `pending` until reported; an unsupported one is explicitly `unsupported`. A dead
-plugin stays visibly pending (there is no inferred timeout success). Report failures
+bot stays visibly pending (there is no inferred timeout success). Report failures
 and pause outcomes also notify the coordinator as bot context. The UI labels these
-as **plugin reports, not independent verification**. Bots without any registration
-are listed as unmanaged, never claimed stopped. Existing external plugins must
+as **bot reports, not independent verification**. Bots without any registration
+are listed as unmanaged, never claimed stopped. Existing external bots must
 adopt this extension before Hivemind can request/observe their suspension.
 
 Resume sources only when `reopen.resumeSources=true`. With false, sources remain
-paused even though the room reopens. A plugin owns retry/backfill policy and must not
+paused even though the room reopens. A bot owns retry/backfill policy and must not
 silently discard provider events rejected while archived. Hivemind does not promise
 exactly-once external effects; use stable bot event IDs and task action keys.
 
@@ -225,5 +225,5 @@ hivemind room event --channel CHANNEL_ID --input event.json
 ```
 
 Restart existing MCP clients after upgrading to discover `get_room` and `room_event`.
-Human and agents use the same persisted room state. Plugins, agent permissions and
+Human and agents use the same persisted room state. Bots, agent permissions and
 provider configuration are not rewritten by installing this feature.

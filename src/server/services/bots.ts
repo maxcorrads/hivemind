@@ -7,6 +7,7 @@ import type { FileService } from "./files.ts";
 import { hashToken, newToken } from "./identity.ts";
 import type { AgentDirectory, ChannelAccess, Core, MessageReader, ProjectDirectory } from "./ports.ts";
 import { now } from "./rows.ts";
+import { botAccessSchema, type BotAccess, type BotCapability } from '../../shared/bot-capabilities.ts';
 
 export type BotServiceDeps = Core & {
   readonly projects: Pick<ProjectDirectory, "requireActorProject">;
@@ -36,9 +37,13 @@ export class BotService {
     const id = crypto.randomUUID();
     const token = newToken();
     const t = now();
+    this.deps.storage.transaction(() => {
     this.db.prepare(`INSERT INTO agents
       (id, name, role, token_hash, online, last_seen_at, created_at, project_id)
       VALUES (?, ?, 'bot', ?, 0, ?, ?, ?)`).run(id, name, hashToken(token), t, t, project.id);
+    this.db.prepare(`INSERT INTO bot_access(bot_id,capabilities,receive_channels,definition_id,revision)
+      VALUES (?, '["publish"]', '[]', NULL, 1)`).run(id);
+    });
     const bot = this.deps.identity.getAgent(id);
     this.deps.bus.emit("agent", bot);
     return { bot, token };
@@ -50,6 +55,64 @@ export class BotService {
     if (bot.role !== 'bot' || bot.projectId !== project.id || bot.removedAt !== undefined) throw new HiveError(404, 'Bot not found in this project');
     const row = this.db.prepare('SELECT revision, revoked FROM bot_credentials WHERE bot_id=?').get(bot.id);
     return { bot, credential: { revision: row ? Number(row.revision) : 1, revoked: Boolean(row?.revoked) } };
+  }
+
+  access(bot: Agent): BotAccess {
+    if (bot.role !== 'bot' || bot.removedAt !== undefined) throw new HiveError(404, 'Bot not found');
+    const row = this.db.prepare('SELECT * FROM bot_access WHERE bot_id=?').get(bot.id);
+    if (!row) throw new HiveError(409, 'Bot access is not configured');
+    return { capabilities: JSON.parse(String(row.capabilities)), receiveChannels: JSON.parse(String(row.receive_channels)),
+      definitionId: row.definition_id === null ? null : String(row.definition_id), revision: Number(row.revision) };
+  }
+
+  requireCapability(bot: Agent, capability: BotCapability): BotAccess {
+    const access = this.access(bot);
+    if (!access.capabilities.includes(capability)) throw new HiveError(403, `Bot capability is disabled: ${capability}`);
+    return access;
+  }
+
+  botAccess(actor: Agent, projectRef: string, botId: string): BotAccess {
+    return this.access(this.botCredential(actor, projectRef, botId).bot);
+  }
+
+  setAccess(actor: Agent, projectRef: string, botId: string, raw: unknown): BotAccess {
+    const parsed = botAccessSchema.safeParse(raw);
+    if (!parsed.success) throw new HiveError(400, 'Invalid bot access settings');
+    return this.deps.storage.transaction(() => {
+      const bot = this.botCredential(actor, projectRef, botId).bot;
+      const current = this.access(bot), input = parsed.data;
+      if (current.revision !== input.expectedRevision) throw new HiveError(409, 'Bot access changed; reload before saving');
+      const receiveChannels = input.receiveChannels.map(id => {
+        const channel = this.deps.channels.getChannel(id, bot.projectId);
+        if (channel.projectId !== bot.projectId || !['public', 'private'].includes(channel.type) ||
+            !channel.memberIds.includes(bot.id)) throw new HiveError(403, 'Receive requires an invitation to each selected project channel');
+        return channel.id;
+      });
+      if (new Set(receiveChannels).size !== receiveChannels.length) throw new HiveError(400, 'Duplicate channel subscription');
+      if (input.definitionId && this.db.prepare(`SELECT 1 FROM bot_access b JOIN agents a ON a.id=b.bot_id
+        WHERE a.project_id=? AND a.removed_at IS NULL AND b.definition_id=? AND b.bot_id<>?`).get(bot.projectId!, input.definitionId, bot.id))
+        throw new HiveError(409, 'This bot definition is already connected to another bot in the project');
+      this.db.prepare('UPDATE bot_access SET capabilities=?,receive_channels=?,definition_id=?,revision=revision+1 WHERE bot_id=?')
+        .run(JSON.stringify(input.capabilities), JSON.stringify(receiveChannels), input.definitionId, bot.id);
+      return this.access(bot);
+    });
+  }
+
+  /** A polling feed, not an agent inbox. Reading never acknowledges deliveries or changes Human unread state. */
+  receive(bot: Agent, channelId: string, afterSeq = 0, limit = 50) {
+    const access = this.requireCapability(bot, 'receive');
+    if (!Number.isSafeInteger(afterSeq) || afterSeq < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+      throw new HiveError(400, 'Use a nonnegative afterSeq and limit from 1 to 100');
+    const channel = this.deps.channels.getChannel(channelId, bot.projectId);
+    if (channel.projectId !== bot.projectId || !['public', 'private'].includes(channel.type) ||
+        !channel.memberIds.includes(bot.id) || !access.receiveChannels.includes(channel.id))
+      throw new HiveError(403, 'Bot is not subscribed to this channel');
+    const rows = this.db.prepare('SELECT id,seq FROM messages WHERE channel_id=? AND seq>? ORDER BY seq LIMIT ?')
+      .all(channel.id, afterSeq, limit + 1);
+    const page = rows.slice(0, limit);
+    return { messages: page.map(row => this.deps.messageQueries.getMessageById(String(row.id))),
+      nextAfterSeq: page.length ? Number(page.at(-1)!.seq) : afterSeq, hasMore: rows.length > limit,
+      authority: 'context-only' as const };
   }
 
   changeBotCredential(actor: Agent, projectRef: string, botId: string, raw: unknown): BotCredentialView & { token?: string } {
@@ -72,6 +135,7 @@ export class BotService {
 
   postBotMessage(actor: Agent, channel: string, raw: unknown): { message: Message; duplicate: boolean } {
     if (actor.role !== "bot") throw new HiveError(403, "A bot identity is required");
+    this.requireCapability(actor, 'publish');
     const parsed = botMessageSchema.safeParse(raw);
     if (!parsed.success) throw new HiveError(400, parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "));
     const input = parsed.data;

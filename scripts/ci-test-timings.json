@@ -17,7 +17,7 @@
     "src/server/query-contracts.test.ts": 2486.042,
     "src/server/history-contracts.test.ts": 2000.180376,
     "src/mcp/notifications.test.ts": 1670.433084,
-    "src/server/plugins.test.ts": 1683.540748,
+    "src/server/bot-definitions.test.ts": 1683.540748,
     "src/mcp/digests.test.ts": 1317.060833,
     "src/mcp/coordination-contracts.test.ts": 1258.093083,
     "src/mcp/rooms.test.ts": 1224.221417,

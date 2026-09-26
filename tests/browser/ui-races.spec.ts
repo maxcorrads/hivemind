@@ -167,6 +167,287 @@ async function installMessages(
 
 type FixtureSocket = Pick<WebSocketRoute, "close"> & { send: (data: string) => void };
 
+test('composable bots have one accessible panel, scoped Receive and explicit monitor controls', async ({ page }, testInfo) => {
+  const p = project('bots', 'Example'), ch = channel('bot-channel', 'review-updates', p);
+  const custom: Agent = { ...human, id: 'feed', name: 'BuildFeed', role: 'bot', projectId: p.id, project: p.slug };
+  const gitlab: Agent = { ...custom, id: 'gitlab', name: 'GitLab' };
+  ch.memberIds.push(custom.id, gitlab.id);
+  const snap = snapshot([p], [ch]); snap.agents.push(custom, gitlab);
+  let access = { capabilities: ['publish'], receiveChannels: [] as string[], definitionId: null, revision: 1 };
+  const controls: string[] = [];
+  await installSnapshot(page, () => snap); await installSocketHarness(page);
+  await installMessages(page, route => fulfillJson(route, payload(ch, [])));
+  await page.route(`**/api/ui/projects/${p.id}/bots`, route => fulfillJson(route, {
+    bots: [{ bot: custom, access, credential: { revision: 1, revoked: false } },
+      { bot: gitlab, access: { capabilities: ['publish', 'tools'], receiveChannels: [], definitionId: 'hivemind-gitlab', revision: 1 }, credential: { revision: 1, revoked: false } }],
+    channels: [ch], definitions: [{ id: 'hivemind-gitlab', name: 'GitLab', capabilities: ['publish', 'tools'], configured: true, enabled: true,
+      revision: 1, home: '/fixture/private-profile', settings: { version: 1, fields: [] }, values: {},
+      tools: ['status', 'start', 'stop'].map(name => ({ name, description: 'Local monitor control.', effect: name === 'status' ? 'read' : 'configure', parameters: { version: 1, fields: [] } })) }],
+  }));
+  await page.route(`**/api/ui/projects/${p.id}/bots/feed/access`, async route => {
+    expect(route.request().method()).toBe('PUT');
+    const body = route.request().postDataJSON();
+    expect(body).toEqual({ capabilities: ['publish', 'receive'], receiveChannels: [ch.id], definitionId: null, expectedRevision: 1 });
+    access = { ...body, revision: 2 }; await fulfillJson(route, access);
+  });
+  await page.route(`**/api/ui/projects/${p.id}/bots/gitlab/control`, async route => {
+    expect(route.request().postDataJSON().expectedAccessRevision).toBe(1);
+    controls.push(route.request().postDataJSON().action); await fulfillJson(route, { result: { monitorRunning: false } });
+  });
+  await page.goto(`/#/c/${ch.id}`);
+  await page.getByRole('button', { name: 'Manage bots in Example', exact: true }).click();
+  const panel = page.getByRole('dialog', { name: 'Bots for Example', exact: true });
+  await expect(panel.getByRole('button', { name: 'Add bot', exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('bots-overview.png') });
+  await panel.getByRole('button', { name: /^BuildFeed/ }).click();
+  await panel.getByRole('checkbox', { name: /^Receive Read/ }).check();
+  await panel.getByRole('checkbox', { name: '#review-updates', exact: true }).check();
+  await expect(panel.getByRole('checkbox', { name: /^Tools Expose/ })).toBeDisabled();
+  await panel.getByRole('button', { name: 'Save access', exact: true }).click();
+  await expect(panel.getByRole('status')).toContainText('Bot access saved');
+  expect(access.revision).toBe(2);
+  const { default: AxeBuilder } = await import('@axe-core/playwright');
+  expect((await new AxeBuilder({ page }).include('.bots-sheet').analyze()).violations).toEqual([]);
+  await panel.getByRole('button', { name: '← All bots', exact: true }).click();
+  await panel.getByRole('button', { name: /^GitLab/ }).click();
+  expect(controls).toEqual([]);
+  await panel.getByRole('button', { name: 'Check status', exact: true }).click();
+  expect(controls).toEqual(['status']);
+  await expect(panel.getByRole('status')).toContainText('Status checked');
+  for (const [width, dark] of [[1280, false], [390, true]] as const) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.evaluate(value => document.documentElement.classList.toggle('dark', value), dark);
+    await expect(panel).toBeVisible();
+    expect(await panel.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+    await panel.locator('.sheet-body').evaluate(el => { el.scrollTop = 0; });
+    await page.screenshot({ path: testInfo.outputPath(`bots-detail-${width}.png`) });
+  }
+});
+
+test('unavailable bot catalog preserves bindings and credential controls until an explicit refresh recovers it', async ({ page }) => {
+  const p = project('bot-catalog', 'Catalog recovery'), ch = channel('catalog-room', 'updates', p);
+  const bot: Agent = { ...human, id: 'feed', name: 'Feed', role: 'bot', projectId: p.id, project: p.slug };
+  const custom: Agent = { ...bot, id: 'custom', name: 'Independent' };
+  const snap = snapshot([p], [ch]); snap.agents.push(bot, custom);
+  let broken = true, accessRevision = 1, credentialRevision = 1, revoked = false;
+  let capabilities = ['publish', 'tools'];
+  const controls: string[] = [];
+  await installSnapshot(page, () => snap); await installSocketHarness(page);
+  await installMessages(page, route => fulfillJson(route, payload(ch, [])));
+  await page.route(`**/api/ui/projects/${p.id}/bots`, route => fulfillJson(route, {
+    bots: [{ bot, access: { capabilities, receiveChannels: [], definitionId: 'fixture', revision: accessRevision },
+      credential: { revision: credentialRevision, revoked } },
+    { bot: custom, access: { capabilities: ['publish'], receiveChannels: [], definitionId: null, revision: 1 },
+      credential: { revision: 1, revoked: false } }], channels: [ch],
+    ...(broken ? { definitions: [], catalogError: 'Bot catalog unavailable. Existing identities and credentials remain manageable.' }
+      : { definitions: [{ id: 'fixture', name: 'Fixture', capabilities: ['publish', 'tools'], configured: true, enabled: true,
+        revision: 1, home: '/fixture/profile', values: {}, settings: { version: 1, fields: [] },
+        tools: [{ name: 'status', description: 'Local status', effect: 'read', parameters: { version: 1, fields: [] } }] }] }),
+  }));
+  await page.route(`**/api/ui/projects/${p.id}/bots/feed/access`, async route => {
+    expect(route.request().postDataJSON()).toEqual({ capabilities: ['publish'], receiveChannels: [], definitionId: 'fixture', expectedRevision: 1 });
+    capabilities = ['publish']; accessRevision++;
+    await fulfillJson(route, { capabilities, receiveChannels: [], definitionId: 'fixture', revision: accessRevision });
+  });
+  await page.route(`**/api/ui/projects/${p.id}/bots/feed/credential`, route => {
+    if (route.request().method() === 'POST') {
+      expect(route.request().postDataJSON()).toEqual({ action: 'revoke', expectedRevision: 1 });
+      credentialRevision++; revoked = true;
+    }
+    return fulfillJson(route, { bot, credential: { revision: credentialRevision, revoked } });
+  });
+  await page.route(`**/api/ui/projects/${p.id}/bots/custom/credential`, route => fulfillJson(route, {
+    bot: custom, credential: { revision: 1, revoked: false },
+  }));
+  await page.route(`**/api/ui/projects/${p.id}/bots/feed/control`, route => {
+    controls.push(route.request().postDataJSON().action);
+    return fulfillJson(route, { result: { monitorRunning: false } });
+  });
+  await page.goto(`/#/c/${ch.id}`);
+  await page.getByRole('button', { name: 'Manage bots in Catalog recovery', exact: true }).click();
+  const panel = page.getByRole('dialog', { name: 'Bots for Catalog recovery' });
+  await expect(panel.getByRole('alert')).toContainText('Bot catalog unavailable');
+  await panel.getByRole('button', { name: /^Feed/ }).click();
+  await expect(panel.locator('select')).toHaveValue('fixture');
+  await expect(panel.locator('select')).toBeDisabled();
+  await expect(panel.getByRole('checkbox', { name: /^Receive Read/ })).toBeDisabled();
+  await expect(panel.getByRole('button', { name: 'Check status', exact: true })).toHaveCount(0);
+  await expect(panel.getByRole('button', { name: 'Reconnect service…', exact: true })).toHaveCount(0);
+  await panel.getByRole('checkbox', { name: /^Tools Expose/ }).uncheck();
+  await panel.getByRole('button', { name: 'Save access', exact: true }).click();
+  await expect(panel.getByRole('status')).toContainText('Bot access saved');
+  await expect(panel.locator('select')).toHaveValue('fixture');
+  await expect(panel.getByRole('checkbox', { name: /^Tools Expose/ })).toBeDisabled();
+  await panel.locator('summary', { hasText: 'Advanced · credentials and connection' }).click();
+  await panel.getByRole('button', { name: 'Revoke token', exact: true }).click();
+  await panel.getByRole('button', { name: 'Confirm revocation', exact: true }).click();
+  await expect(panel.getByText('Credential: revoked · revision 2', { exact: true })).toBeVisible();
+  broken = false;
+  await panel.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await expect(panel.getByRole('alert')).toHaveCount(0);
+  await expect(panel.locator('select')).toHaveValue('fixture');
+  await expect(panel.locator('select')).toBeEnabled();
+  await expect(panel.getByRole('button', { name: 'Check status', exact: true })).toBeVisible();
+  expect(controls).toEqual([]);
+  broken = true;
+  await panel.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await expect(panel.getByRole('alert')).toContainText('Bot catalog unavailable');
+  await panel.getByRole('button', { name: '← All bots', exact: true }).click();
+  await panel.getByRole('button', { name: /^Independent/ }).click();
+  await panel.locator('summary', { hasText: 'Advanced · credentials and connection' }).click();
+  await expect(panel.getByRole('button', { name: 'Rotate token', exact: true })).toBeEnabled();
+  await expect(panel.getByRole('button', { name: 'Revoke token', exact: true })).toBeEnabled();
+});
+
+test('a catalog failure during bot creation retains the selected service instead of creating a custom bot', async ({ page }) => {
+  const p = project('catalog-create', 'Catalog creation'), ch = channel('catalog-create-room', 'updates', p);
+  let broken = false;
+  await installSnapshot(page, () => snapshot([p], [ch])); await installSocketHarness(page);
+  await installMessages(page, route => fulfillJson(route, payload(ch, [])));
+  await page.route(`**/api/ui/projects/${p.id}/bots`, route => fulfillJson(route, {
+    bots: [], channels: [ch],
+    ...(broken ? { definitions: [], catalogError: 'Bot catalog unavailable.' } : {
+      definitions: [{ id: 'fixture', name: 'Fixture', capabilities: ['publish'], configured: true, enabled: true,
+        revision: 1, home: '/fixture/profile', values: {}, settings: { version: 1, fields: [] }, tools: [] }],
+    }),
+  }));
+  await page.goto(`/#/c/${ch.id}`);
+  await page.getByRole('button', { name: 'Manage bots in Catalog creation', exact: true }).click();
+  const panel = page.getByRole('dialog', { name: 'Bots for Catalog creation' });
+  await panel.getByRole('button', { name: 'Add bot', exact: true }).click();
+  const service = panel.getByRole('combobox', { name: 'Service', exact: true });
+  await service.selectOption('fixture');
+  await expect(panel.getByRole('button', { name: 'Create and connect bot', exact: true })).toBeEnabled();
+  broken = true;
+  await panel.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await expect(panel.getByRole('alert')).toContainText('Bot catalog unavailable');
+  await expect(service).toHaveValue('fixture');
+  await expect(service).toBeDisabled();
+  await expect(panel.getByText('Selected service unavailable.', { exact: false })).toBeVisible();
+  await expect(panel.locator('form')).toHaveCount(0);
+  broken = false;
+  await panel.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await expect(panel.getByRole('alert')).toHaveCount(0);
+  await expect(service).toHaveValue('fixture');
+  await expect(panel.getByRole('button', { name: 'Create and connect bot', exact: true })).toBeEnabled();
+});
+
+test('bot credentials cannot overlap an in-flight access update, including opening Advanced while busy', async ({ page }) => {
+  const p = project('bot-busy', 'Bot race'), ch = channel('bot-room', 'updates', p);
+  const bot: Agent = { ...human, id: 'feed', name: 'Feed', role: 'bot', projectId: p.id, project: p.slug };
+  const snap = snapshot([p], [ch]); snap.agents.push(bot);
+  let revision = 1, credentialReads = 0;
+  const started = deferred(), release = deferred();
+  await installSnapshot(page, () => snap); await installSocketHarness(page);
+  await installMessages(page, route => fulfillJson(route, payload(ch, [])));
+  await page.route(`**/api/ui/projects/${p.id}/bots`, route => fulfillJson(route, { bots: [{ bot,
+    access: { capabilities: ['publish'], receiveChannels: [], definitionId: null, revision }, credential: { revision: 1, revoked: false } }], channels: [ch], definitions: [] }));
+  await page.route(`**/api/ui/projects/${p.id}/bots/feed/credential`, route => {
+    credentialReads++; return fulfillJson(route, { bot, credential: { revision: 1, revoked: false } });
+  });
+  await page.route(`**/api/ui/projects/${p.id}/bots/feed/access`, async route => {
+    started.resolve(); await release.promise;
+    await fulfillJson(route, { ...route.request().postDataJSON(), revision: ++revision });
+  });
+  await page.goto(`/#/c/${ch.id}`);
+  await page.getByRole('button', { name: 'Manage bots in Bot race', exact: true }).click();
+  const panel = page.getByRole('dialog', { name: 'Bots for Bot race' });
+  await panel.getByRole('button', { name: /^Feed/ }).click();
+  const advanced = panel.locator('details').filter({ has: page.locator('summary', { hasText: 'Advanced · credentials and connection' }) });
+  try {
+    await panel.getByRole('button', { name: 'Save access', exact: true }).click();
+    await started.promise;
+    await advanced.locator('summary').click();
+    await expect(advanced).not.toHaveAttribute('open', '');
+    expect(credentialReads).toBe(0);
+  } finally { release.resolve(); }
+  await expect(panel.getByRole('button', { name: 'Save access', exact: true })).toBeEnabled();
+  await advanced.locator('summary').click();
+  await expect(panel.getByRole('button', { name: 'Rotate token', exact: true })).toBeEnabled();
+  const second = deferred(), secondRelease = deferred();
+  await page.route(`**/api/ui/projects/${p.id}/bots/feed/access`, async route => {
+    second.resolve(); await secondRelease.promise;
+    await fulfillJson(route, { ...route.request().postDataJSON(), revision: ++revision });
+  });
+  try {
+    await panel.getByRole('button', { name: 'Save access', exact: true }).click();
+    await second.promise;
+    await expect(panel.getByRole('button', { name: 'Rotate token', exact: true })).toBeDisabled();
+    await expect(panel.getByRole('button', { name: 'Reload credential state', exact: true })).toBeDisabled();
+    await expect(panel.getByRole('button', { name: 'Close', exact: true })).toBeDisabled();
+  } finally { secondRelease.resolve(); }
+});
+
+test('bot monitor controls reject an obsolete page until Human refreshes, without retrying', async ({ page }) => {
+  const p = project('bot-stale-control', 'Stale Controls'), ch = channel('stale-control-room', 'updates', p);
+  const bot: Agent = { ...human, id: 'feed', name: 'Feed', role: 'bot', projectId: p.id, project: p.slug };
+  const snap = snapshot([p], [ch]); snap.agents.push(bot);
+  let revision = 1, requests = 0, executions = 0;
+  await installSnapshot(page, () => snap); await installSocketHarness(page);
+  await installMessages(page, route => fulfillJson(route, payload(ch, [])));
+  await page.route(`**/api/ui/projects/${p.id}/bots`, route => fulfillJson(route, { bots: [{ bot,
+    access: { capabilities: ['tools'], receiveChannels: [], definitionId: 'fixture', revision }, credential: { revision: 1, revoked: false } }], channels: [ch],
+    definitions: [{ id: 'fixture', name: 'Fixture', capabilities: ['tools'], configured: true, enabled: true, revision: 1,
+      home: '/fixture/profile', values: {}, settings: { version: 1, fields: [] },
+      tools: [{ name: 'stop', description: 'Stop monitor', effect: 'configure', parameters: { version: 1, fields: [] } }] }] }));
+  await page.route(`**/api/ui/projects/${p.id}/bots/feed/control`, route => {
+    requests++;
+    if (route.request().postDataJSON().expectedAccessRevision !== revision)
+      return fulfillJson(route, { error: 'Bot access changed; refresh before this operation' }, 409);
+    executions++;
+    return fulfillJson(route, { result: { stopRequested: true, monitorRunning: false } });
+  });
+  await page.goto(`/#/c/${ch.id}`);
+  await page.getByRole('button', { name: 'Manage bots in Stale Controls', exact: true }).click();
+  const panel = page.getByRole('dialog', { name: 'Bots for Stale Controls' });
+  await panel.getByRole('button', { name: /^Feed/ }).click();
+  await expect(panel.getByRole('button', { name: 'Stop monitor', exact: true })).toBeVisible();
+  revision = 2; // Another Human tab changed the saved binding/access.
+  await panel.getByRole('button', { name: 'Stop monitor', exact: true }).click();
+  await expect(panel.getByRole('alert')).toContainText('Bot access changed');
+  expect(requests).toBe(1); expect(executions).toBe(0);
+  await panel.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await expect(panel.getByRole('alert')).toHaveCount(0);
+  await panel.getByRole('button', { name: 'Stop monitor', exact: true }).click();
+  await expect(panel.getByRole('status')).toContainText('Stop requested');
+  expect(requests).toBe(2); expect(executions).toBe(1);
+});
+
+test('bot reconnect clears obsolete displayed tokens and reloads credential state even on an ambiguous failure', async ({ page }) => {
+  const p = project('bot-reconnect', 'Reconnect'), ch = channel('reconnect-room', 'updates', p);
+  const bot: Agent = { ...human, id: 'feed', name: 'Feed', role: 'bot', projectId: p.id, project: p.slug };
+  const snap = snapshot([p], [ch]); snap.agents.push(bot);
+  let revision = 1;
+  await installSnapshot(page, () => snap); await installSocketHarness(page);
+  await installMessages(page, route => fulfillJson(route, payload(ch, [])));
+  await page.route(`**/api/ui/projects/${p.id}/bots`, route => fulfillJson(route, { bots: [{ bot,
+    access: { capabilities: ['publish', 'tools'], receiveChannels: [], definitionId: 'fixture', revision: 1 }, credential: { revision, revoked: false } }], channels: [ch],
+    definitions: [{ id: 'fixture', name: 'Fixture', capabilities: ['publish', 'tools'], configured: true, enabled: true, revision: 1,
+      home: '/fixture/profile', values: {}, settings: { version: 1, fields: [] }, tools: [] }] }));
+  await page.route(`**/api/ui/projects/${p.id}/bots/feed/credential`, route => {
+    const rotate = route.request().method() === 'POST';
+    if (rotate) revision++;
+    return fulfillJson(route, { bot, credential: { revision, revoked: false }, ...(rotate ? { token: 'obsolete-fixture-token' } : {}) });
+  });
+  await page.route(`**/api/ui/projects/${p.id}/bots/feed/connect`, route => {
+    expect(route.request().postDataJSON()).toEqual({ expectedRevision: 2, expectedAccessRevision: 1 }); revision++;
+    return fulfillJson(route, { error: 'Credential replaced; connection outcome is unknown.' }, 502);
+  });
+  await page.goto(`/#/c/${ch.id}`);
+  await page.getByRole('button', { name: 'Manage bots in Reconnect', exact: true }).click();
+  const panel = page.getByRole('dialog', { name: 'Bots for Reconnect' });
+  await panel.getByRole('button', { name: /^Feed/ }).click();
+  await panel.locator('summary', { hasText: 'Advanced · credentials and connection' }).click();
+  await panel.getByRole('button', { name: 'Rotate token', exact: true }).click();
+  await panel.getByRole('button', { name: 'Confirm rotation', exact: true }).click();
+  await expect(panel.getByLabel('New bot token', { exact: true })).toHaveValue('obsolete-fixture-token');
+  await panel.getByRole('button', { name: 'Reconnect service…', exact: true }).click();
+  await panel.getByRole('button', { name: 'Replace token and connect', exact: true }).click();
+  await expect(panel.getByLabel('New bot token', { exact: true })).toHaveCount(0);
+  await expect(panel.getByRole('alert')).toContainText('Credential replaced');
+  await expect(panel.getByText('Credential: active · revision 3', { exact: true })).toBeVisible();
+});
+
 async function installSocketHarness(page: Page) {
   const sockets: FixtureSocket[] = [];
   const harness = harnesses.get(page)!;
@@ -1315,7 +1596,7 @@ test("settings stay inside the viewport and backdrop dismissal requires a comple
     configured: false, running: false, tokenSet: false, tokenHint: null, allowUserIds: [], projects: {},
   }));
   await page.route("**/api/ui/launch-context?*", route => fulfillJson(route, {
-    project: { id: alpha.id, slug: alpha.slug }, plugins: [], pluginInstructions: "",
+    project: { id: alpha.id, slug: alpha.slug }, botDefinitions: [], botInstructions: "",
     hivemindMcp: { command: "hivemind", args: ["mcp"], env: {} },
   }));
   await page.setViewportSize({ width: 1180, height: 700 });

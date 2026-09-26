@@ -111,7 +111,17 @@ test("stopProcessGroup waits for the whole group before SIGKILLing survivors", {
   await stopProcessGroup(pid, closed, { graceMs: 300 });
   await closed;
   const until = performance.now() + 5_000;
-  const alive = () => { try { process.kill(-pid, 0); return true; } catch { return false; } };
+  const alive = () => {
+    try { process.kill(-pid, 0); return true; }
+    catch (error) {
+      // EPERM is not proof that the group disappeared. Wait for ESRCH before testing
+      // the already-gone no-op; never mask an actual signalling denial.
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ESRCH') return false;
+      if (code === 'EPERM') return true;
+      throw error;
+    }
+  };
   while (alive() && performance.now() < until) await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(alive(), false, "a group member survived");
   await stopProcessGroup(pid, Promise.resolve()); // already gone: no-op

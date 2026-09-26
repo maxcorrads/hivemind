@@ -66,6 +66,8 @@ test("production MCP schemas and calls retain their observable contracts", { tim
   await t.test("all advertised production inputs retain types, required fields and enums", async () => {
     const { tools } = await connected.listTools({}, { timeout: 5000, signal: t.signal });
     const expected: Record<string, [string[], Record<string, string>]> = {
+      bot_tools: [[], {}],
+      call_bot_tool: [['botId', 'tool', 'arguments'], { botId: 'string', tool: 'string', arguments: 'object' }],
       join: [["role"], { role: "string", seniority: "string", focus: "string", resume: "string", project: "string" }],
       get_worker_capabilities: [["workerId"], { workerId: "string" }],
       set_capabilities: [["expectedRevision", "card"], { expectedRevision: "integer", card: "object" }],

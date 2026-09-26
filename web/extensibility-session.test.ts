@@ -5,10 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { Hive } from "../src/server/hive.ts";
 import { startServer } from "../src/server/serve.ts";
-import { registerPlugin, projectPlugins } from "../src/server/plugins.ts";
+import { registerBotDefinition, projectBotConfigurations } from "../src/server/bot-definitions.ts";
 import { createHumanSession } from "./human-session.ts";
 import type { Agent, BotCredentialView, Message } from "../src/shared/types.ts";
-import type { ProjectPluginView } from "../src/shared/plugin-settings.ts";
+import type { ProjectBotConfiguration } from "../src/shared/bot-settings.ts";
 import { countRows, listRows } from "../src/server/test-fixtures.ts";
 
 // A real, deliberately installed local executable. Its persistent counter proves
@@ -17,8 +17,8 @@ async function fixture(t: TestContext) {
   const home = mkdtempSync(path.join(os.tmpdir(), "hive-extensibility-session-"));
   const db = path.join(home, "hive.db"), pkg = path.join(home, "package");
   mkdirSync(pkg);
-  const manifest = path.join(pkg, "hivemind-plugin.json");
-  writeFileSync(manifest, JSON.stringify({ version: 1, id: "session-fixture", name: "Session Fixture",
+  const manifest = path.join(pkg, "hivemind-bot.json");
+  writeFileSync(manifest, JSON.stringify({ version: 1, kind: 'bot', capabilities: ['publish'], tools: [], id: "session-fixture", name: "Session Fixture",
     command: "tool", instructions: "TOOLS.md", settings: "settings.json" }));
   writeFileSync(path.join(pkg, "TOOLS.md"), "Use {{command}} only for this project.");
   writeFileSync(path.join(pkg, "settings.json"), JSON.stringify({ version: 1,
@@ -36,7 +36,7 @@ process.stdin.on('end', () => {
   console.log(JSON.stringify({ configured: true }));
 });
 `, { mode: 0o700 });
-  registerPlugin(home, manifest);
+  registerBotDefinition(home, manifest);
   let hive = new Hive(db), started = startServer({ port: 0, hive, telegram: false });
   t.after(async () => {
     try { await started.shutdown(); } finally { hive.db.close(); rmSync(home, { recursive: true, force: true }); }
@@ -52,8 +52,8 @@ process.stdin.on('end', () => {
   hive.channels.invite(human, channel.id, [bot.bot.name]);
   hive.channels.invite(human, channelB.id, [botB.bot.name]);
   const credentialPath = `/api/ui/projects/${a.id}/bots/${bot.bot.id}/credential`;
-  const pluginPath = `/api/ui/projects/${a.slug}/plugins/session-fixture`;
-  const profile = (project = a) => projectPlugins(home, project)[0]!;
+  const configurationPath = `/api/ui/projects/${a.slug}/bots/catalog/session-fixture`;
+  const profile = (project = a) => projectBotConfigurations(home, project)[0]!;
   const file = (name: string) => existsSync(name) ? readFileSync(name, "utf8") : null;
   const executions = (project = a) => Number(file(path.join(profile(project).home, "executions")) ?? 0);
   // No assertions print real tokens, cookies, or raw database state on success.
@@ -62,11 +62,11 @@ process.stdin.on('end', () => {
     credentials: listRows(hive, "bot_credentials", { orderBy: "bot_id" }),
     members: listRows(hive, "channel_members", { orderBy: ["channel_id", "agent_id"] }),
     events: listRows(hive, "bot_events", { orderBy: "message_id" }),
-    registry: file(path.join(home, "plugins.json")), bindings: file(path.join(home, "project-plugins.json")),
+    registry: file(path.join(home, "bot-definitions.json")), bindings: file(path.join(home, "project-bots.json")),
     profiles: [a, b].map(p => ({ config: file(path.join(profile(p).home, "config.json")), calls: executions(p) })),
   });
   const status = () => hive.bots.botCredential(human, a.id, bot.bot.id).credential;
-  return { home, base, port, human, a, b, bot, botB, worker, channel, channelB, credentialPath, pluginPath,
+  return { home, base, port, human, a, b, bot, botB, worker, channel, channelB, credentialPath, configurationPath,
     profile, executions, state, status,
     get hive() { return hive; },
     async restart() {
@@ -125,7 +125,7 @@ function client(base: string) {
 }
 
 for (const restart of [false, true]) {
-  test(`real Human bot/plugin routes reject ${restart ? "stale after restart" : "missing and forged"} sessions without state changes`, { timeout: 20_000 }, async t => {
+  test(`real Human bot/bot routes reject ${restart ? "stale after restart" : "missing and forged"} sessions without state changes`, { timeout: 20_000 }, async t => {
     const f = await fixture(t);
     const oldCookie = await bootstrap(f.base);
     if (restart) await f.restart();
@@ -146,9 +146,9 @@ for (const restart of [false, true]) {
       { path: f.credentialPath, method: "GET" },
       { path: f.credentialPath, method: "POST", body: { action: "rotate", expectedRevision: 1 } },
       { path: f.credentialPath, method: "POST", body: { action: "revoke", expectedRevision: 1 } },
-      { path: f.pluginPath, method: "PUT", body: { enabled: true, values: { host: "do-not-save" }, expectedRevision: 0 } },
-      { path: f.pluginPath, method: "PATCH", body: { enabled: true, expectedRevision: 0 } },
-      { path: `/api/ui/projects/${f.a.slug}/plugins`, method: "GET" },
+      { path: f.configurationPath, method: "PUT", body: { enabled: true, values: { host: "do-not-save" }, expectedRevision: 0 } },
+      { path: f.configurationPath, method: "PATCH", body: { enabled: true, expectedRevision: 0 } },
+      { path: `/api/ui/projects/${f.a.slug}/bots/catalog`, method: "GET" },
       { path: `/api/ui/launch-context?project=${f.a.slug}`, method: "GET" },
       { path: "/api/ui/projects/missing/bots", method: "POST", body: { name: "DoNotCreate" } },
       { path: `/api/ui/projects/${f.b.id}/bots/${f.bot.bot.id}/credential`, method: "GET" },
@@ -215,7 +215,7 @@ test("real session recovery replays rejected rotation and configure exactly once
   await f.restart();
   const [rotation, configure] = await Promise.all([
     c.session.request(f.credentialPath, change({ action: "rotate", expectedRevision: 1 }, {})),
-    c.session.request(f.pluginPath, change({ enabled: true, values: { host: "accepted" }, expectedRevision: 0 }, {}, "PUT")),
+    c.session.request(f.configurationPath, change({ enabled: true, values: { host: "accepted" }, expectedRevision: 0 }, {}, "PUT")),
   ]);
   assert.equal(rotation.status, 200); await rotation.body?.cancel();
   assert.equal(configure.status, 200); await configure.body?.cancel();
@@ -224,8 +224,8 @@ test("real session recovery replays rejected rotation and configure exactly once
   assert.equal(JSON.stringify(f.profile(f.b)), otherBefore); assert.equal(f.executions(f.b), 0);
   assert.equal(c.bootstraps(), 2, "one shared refresh for concurrent stale requests");
   assert.equal(c.calls.filter(call => call.path === f.credentialPath && call.status === 401).length, 1);
-  assert.equal(c.calls.filter(call => call.path === f.pluginPath && call.status === 401).length, 1);
-  const unavailable = await c.session.request(f.pluginPath, change({ enabled: false, expectedRevision: 1 }, {}, "PATCH"));
+  assert.equal(c.calls.filter(call => call.path === f.configurationPath && call.status === 401).length, 1);
+  const unavailable = await c.session.request(f.configurationPath, change({ enabled: false, expectedRevision: 1 }, {}, "PATCH"));
   assert.equal(unavailable.status, 200); await unavailable.body?.cancel();
   assert.equal(f.executions(), 1, "availability never starts Configure");
   assert.equal(f.profile().enabled, false);
@@ -240,10 +240,10 @@ test("network loss after real creation/rotation/configure never causes automatic
   c.loseNextResponse(f.credentialPath);
   await assert.rejects(c.session.request(f.credentialPath, change({ action: "rotate", expectedRevision: 1 }, {})), /response lost/);
   assert.equal(f.status().revision, 2);
-  c.loseNextResponse(f.pluginPath);
-  await assert.rejects(c.session.request(f.pluginPath, change({ enabled: true, values: { host: "lost" }, expectedRevision: 0 }, {}, "PUT")), /response lost/);
+  c.loseNextResponse(f.configurationPath);
+  await assert.rejects(c.session.request(f.configurationPath, change({ enabled: true, values: { host: "lost" }, expectedRevision: 0 }, {}, "PUT")), /response lost/);
   assert.equal(f.executions(), 1); assert.equal(f.profile().revision, 1);
-  for (const target of [creationPath, f.credentialPath, f.pluginPath]) {
+  for (const target of [creationPath, f.credentialPath, f.configurationPath]) {
     assert.equal(c.calls.filter(call => call.path === target).length, 1);
   }
   assert.equal(c.bootstraps(), 1);
@@ -254,19 +254,19 @@ test("network loss after real creation/rotation/configure never causes automatic
   assert.equal(f.status().revision, 3);
 });
 
-test("authorized plugin configuration rejects unknown projects/plugins and stale revisions before execution", async t => {
+test("authorized bot configuration rejects unknown projects/bots and stale revisions before execution", async t => {
   const f = await fixture(t), headers = { cookie: await bootstrap(f.base), origin: f.base };
   const before = f.state();
-  for (const target of [`/api/ui/projects/missing/plugins/session-fixture`, `/api/ui/projects/${f.a.slug}/plugins/unknown`]) {
+  for (const target of [`/api/ui/projects/missing/bots/catalog/session-fixture`, `/api/ui/projects/${f.a.slug}/bots/catalog/unknown`]) {
     const result = await json(f.base, target, change({ enabled: true, values: { host: "rejected" }, expectedRevision: 0 }, headers, "PUT"));
     assert.ok(result.status === 400 || result.status === 404);
     assert.equal(f.state() === before, true); assert.equal(f.executions(), 0);
   }
-  const saved = await json<{ plugin: ProjectPluginView }>(f.base, f.pluginPath,
+  const saved = await json<{ configuration: ProjectBotConfiguration }>(f.base, f.configurationPath,
     change({ enabled: true, values: { host: "project-a" }, expectedRevision: 0 }, headers, "PUT"));
-  assert.equal(saved.status, 200); assert.equal(saved.data.plugin.revision, 1);
+  assert.equal(saved.status, 200); assert.equal(saved.data.configuration.revision, 1);
   const good = f.state();
-  const stale = await json(f.base, f.pluginPath, change({ enabled: true, values: { host: "stale" }, expectedRevision: 0 }, headers, "PUT"));
+  const stale = await json(f.base, f.configurationPath, change({ enabled: true, values: { host: "stale" }, expectedRevision: 0 }, headers, "PUT"));
   assert.equal(stale.status, 400); assert.equal(f.state() === good, true); assert.equal(f.executions(), 1);
   assert.equal(f.executions(f.b), 0);
   const created = await json<{ bot: Agent; token: string }>(f.base, `/api/ui/projects/${f.a.id}/bots`, change({ name: "ValidCreation" }, headers));

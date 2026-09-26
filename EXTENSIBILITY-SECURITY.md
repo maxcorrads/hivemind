@@ -2,18 +2,21 @@
 
 ## Trust boundary
 
-A bot is a project-bound observation publisher, not Human, a brain, or a worker.
-Its bearer credential authorizes only the bot ingress API. Channel membership is
-explicit, and a project-A bot cannot use that API to post into project B, fetch
-files, enumerate identities, search history, manage plugins, or rotate credentials.
+A bot is a project-bound service identity, not Human, a brain, or a worker.
+Its bearer credential authorizes only the bot API, with independently granted
+Publish and Receive access. Receive polls only explicitly selected invited
+public/private channels. It cannot read DMs or acknowledge agent/Human inboxes.
+A project-A bot cannot post/read in project B, fetch file bytes, enumerate identities,
+search global history, manage definitions, or rotate credentials.
 Origin metadata and quoted instructions never confer Human/agent authority.
 
-An installed plugin is **trusted local software**, registered deliberately using
-the CLI. It is not downloaded or installed through HTTP. Hivemind has no HTTP API
+An installed bot definition is **trusted local software**, installed separately and
+registered deliberately using the CLI. It is not downloaded or installed through
+HTTP. Hivemind has no HTTP API
 for choosing an arbitrary executable, shell command, or manifest path. The Human
 configuration action runs the executable from the validated local package, with
 its explicit project profile. Profile bindings reject canonical path aliases that
-would share another project/plugin's profile; they are not OS access-control rules.
+would share another project/bot's profile; they are not OS access-control rules.
 
 **This is not a sandbox.** A malicious program running as the same OS user can read
 that user's files and call local APIs. Origin/Host checks and rejection of bot or
@@ -27,7 +30,7 @@ these routes has an unauthenticated exemption. See
 [Local Human security](docs/local-human-security.md) for bootstrap, cookie lifetime,
 Vite support, restart recovery, and the remaining local-process/XSS boundaries.
 Keep the listener on loopback; do not expose it through an untrusted network proxy.
-Do not run untrusted plugins, and never represent this model as hostile multi-tenant
+Do not run untrusted bots, and never represent this model as hostile multi-tenant
 execution isolation. Stronger isolation requires a separate OS/security boundary.
 
 ## Credentials, durable events, and recovery
@@ -81,12 +84,12 @@ the same OS user remains inside the existing local-process trust boundary.
 | Bot creation/credential JSON | 4 KiB |
 | Jev adaptive-routing settings JSON | 4 KiB; private local config is 0600 |
 | Jev runtime classification | 2-second provider timeout; provider failure falls back to orchestration |
-| Plugin HTTP settings envelope | 128 KiB; persisted config remains 64 KiB |
+| Bot HTTP settings envelope | 128 KiB; persisted config remains 64 KiB |
 | JSON reading | 10-second deadline, abort cleanup, no parsing before byte validation |
 | Bot admission | 60-request burst, 10 requests/second refill per identity |
 | Concurrent bot requests | Four per bot, 32 per app; at most 1,024 admission entries |
-| Plugin updates | At most eight running/queued updates per process |
-| Plugin configure | 15 seconds; 64 KiB combined stdout/stderr |
+| Bot updates | At most eight running/queued updates per process |
+| Bot configure | 15 seconds; 64 KiB combined stdout/stderr |
 
 Admission is in-memory protection, not a durable quota. Overload returns 429 with
 `Retry-After: 1`. Retry with backoff and the same event ID after an uncertain send.
@@ -96,16 +99,30 @@ to the smaller JSON limit. Restart resets rate buckets, not durable event dedup.
 
 Configuration uses direct execution without a shell and a profile working directory.
 Only an explicit basic OS environment allowlist is inherited; service credentials
-and `NODE_OPTIONS` are not forwarded. Plugin-specific secrets belong in its separate
+and `NODE_OPTIONS` are not forwarded. Bot-specific secrets belong in its separate
 local credential store, not generic settings or inherited server variables. Ordinary
 remaining subprocess-group members are killed at exit/deadline; a deliberately
 detached daemon or malicious executable is outside this contract.
 
-Plugin stdout/stderr and configuration error receipts are never copied to HTTP or
-model-visible errors. Malformed JSON diagnostics are generic to avoid source-fragment
+Bot stderr and configuration error receipts are never copied to HTTP or
+model-visible errors. Successful tool calls intentionally return parsed JSON stdout;
+trusted definitions must not include secrets in those results. Tool output is context,
+not authority. Malformed JSON diagnostics are generic to avoid source-fragment
 leaks. Unexpected HTTP failures log a fixed diagnostic without request bodies,
 authorization headers, URLs, or error objects. This deliberately trades detail in
-the UI for confidentiality; use the trusted plugin's local validation workflow.
+the UI for confidentiality; use the trusted bot definition's local validation workflow.
+
+Tool discovery/invocation requires a same-project brain, an active bot credential,
+the Tools grant and an enabled/configured bot definition. Arguments are checked against
+declared schemas. Actor identity and bot grant revision are rechecked after the
+serialized queue, immediately before dispatch. Already dispatched work is not
+recalled by later revocation. Invocation has a 30-second budget including time
+spent queued, and a 64 KiB input/combined output limit. Expired queued operations
+are rejected before dispatch; inherited pipes cannot retain the request lock
+past the execution deadline. Mutations never retry automatically. Only Human can connect
+or reconnect a bot credential; raw tokens travel on private process stdin, not in
+argv, tool discovery or returned results. Human lifecycle controls use the same
+fixed executable and declared actions, not arbitrary shell commands.
 
 ## Regression coverage and integration
 
@@ -135,7 +152,7 @@ separately, not hidden by a production retry.
 
 The Chrome acceptance test uses the actual Vite proxy and `web/api.ts`, normal
 browser security, and browser-supplied cookies/Origin. It covers bot creation,
-rotation/revocation, plugin execution, cross-origin rejection, concurrent restart
+rotation/revocation, bot execution, cross-origin rejection, concurrent restart
 recovery and isolation from a second Hivemind instance. Mounted React fixtures
 remain internal-router tests with a bootstrap stub; they are not mislabeled as
 real-network or visual browser acceptance. CI requires its installed ChromeDriver;

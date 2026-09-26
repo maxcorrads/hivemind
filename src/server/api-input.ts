@@ -65,7 +65,7 @@ function schemaFor(path: string, method: string): z.ZodType | undefined {
   if (/\/channels\/[^/]+\/links$/.test(path)) return sourceLinkSchema;
   if (/\/channels\/[^/]+\/links\/[^/]+\/status$/.test(path)) return sourceReportSchema;
   if (/\/(?:ping|leave)$/.test(path) || /\/(?:retry|discard)$/.test(path)) return empty;
-  // Bot/plugin/recovery schemas have their own narrower ingress readers.
+  // Bot/configuration/recovery schemas have their own narrower ingress readers.
   return undefined;
 }
 /** Agent coordination routes where older clients may still send the removed `executionId` (#211, #218). */

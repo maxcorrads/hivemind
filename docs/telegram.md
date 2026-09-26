@@ -67,4 +67,4 @@ Configuration publication is the authoritative restart boundary. The old bridge 
 The regression suite uses fake Telegram responses, controlled promises and fake timers, plus local SQLite/HTTP/WebSocket boundaries. It does not contact a live bot or verify Telegram's production quotas. Run `npm run check` and `npm run test:coverage`; the standard CI additionally covers Node 22.13.0/24 on macOS, package smoke tests and security checks.
 
 See [Extensibility security](../EXTENSIBILITY-SECURITY.md) for bot ingress limits,
-credential recovery, plugin execution boundaries, and the trusted-local deployment model.
+credential recovery, bot execution boundaries, and the trusted-local deployment model.

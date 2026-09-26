@@ -97,9 +97,9 @@ test("mcp-config launcher uses plain node and the compiled CLI for an installed 
   assert.deepEqual(mcpLauncher(false, "/pkg"), { command: "npx", args: ["tsx", path.resolve("/pkg", "src/cli.ts"), "mcp"] });
 });
 
-test("plugins delegates to the plugin manager", async (t) => {
+test("bots delegates to the bot definition manager", async (t) => {
   harness(t);
-  await assert.rejects(runCli(["plugins", "list", "--home", "relative"]), /absolute Hivemind --home/);
+  await assert.rejects(runCli(["bots", "list", "--home", "relative"]), /absolute Hivemind --home/);
 });
 
 const joined = (created: boolean, standingOrders?: string) => ({

@@ -1,20 +1,19 @@
-import { Modal } from "./Modal.tsx";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { api } from "./api.ts";
 import type { Project } from "../src/shared/types.ts";
 import {
   validateSettings,
-  type PluginSettings,
-  type ProjectPluginView,
+  type BotSettingsSchema,
+  type ProjectBotConfiguration,
   type SettingsValues,
-} from "../src/shared/plugin-settings.ts";
+} from "../src/shared/bot-settings.ts";
 
-/** Checkboxes have two states: retain explicit values/defaults, otherwise start at false. */
-export function pluginFormValues(
-  plugin: Pick<ProjectPluginView, "settings" | "values">,
+/** Bot settings retain explicit values/defaults; an unset checkbox starts at false. */
+export function botFormValues(
+  configuration: Pick<ProjectBotConfiguration, "settings" | "values">,
 ): SettingsValues {
-  const values = { ...plugin.values };
-  for (const field of plugin.settings?.fields ?? []) {
+  const values = { ...configuration.values };
+  for (const field of configuration.settings?.fields ?? []) {
     if (field.type === "boolean" && !Object.hasOwn(values, field.key)) {
       values[field.key] = field.default ?? false;
     }
@@ -23,8 +22,8 @@ export function pluginFormValues(
 }
 
 /** Validate the draft without normalizing schema-valid list entries. */
-export function pluginSavePayload(
-  settings: PluginSettings,
+export function botSavePayload(
+  settings: BotSettingsSchema,
   values: SettingsValues,
   enabled: boolean,
   expectedRevision: number,
@@ -36,19 +35,19 @@ export function pluginSavePayload(
   };
 }
 
-export function PluginFields({
+export function BotSettingsFields({
   settings,
   values,
   disabled,
   onChange,
 }: {
-  settings: PluginSettings;
+  settings: BotSettingsSchema;
   values: SettingsValues;
   disabled: boolean;
   onChange: (key: string, value: SettingsValues[string] | undefined) => void;
 }) {
   return (
-    <div className="plugin-fields">
+    <div className="bot-settings-fields">
       {settings.fields.map((field) => {
         const value = values[field.key];
         return (
@@ -149,28 +148,28 @@ export function PluginFields({
   );
 }
 
-export function PluginEditor({
-  plugin,
+export function BotSettingsEditor({
+  configuration,
   project,
   busy,
   onBusy,
   onSaved,
 }: {
-  plugin: ProjectPluginView;
+  configuration: ProjectBotConfiguration;
   project: Project;
   busy: boolean;
   onBusy: (busy: boolean) => void;
-  onSaved: (plugin: ProjectPluginView) => void;
+  onSaved: (configuration: ProjectBotConfiguration) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [enabled, setEnabled] = useState(plugin.enabled);
-  const [values, setValues] = useState(() => pluginFormValues(plugin));
+  const [enabled, setEnabled] = useState(configuration.enabled);
+  const [values, setValues] = useState(() => botFormValues(configuration));
   const [error, setError] = useState("");
-  const run = async (action: () => Promise<{ plugin: ProjectPluginView }>) => {
+  const run = async (action: () => Promise<{ configuration: ProjectBotConfiguration }>) => {
     setError("");
     onBusy(true);
     try {
-      onSaved((await action()).plugin);
+      onSaved((await action()).configuration);
     } catch (error) {
       setError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -178,65 +177,65 @@ export function PluginEditor({
     }
   };
   return (
-    <section className="plugin-card">
-      <div className="plugin-heading">
-        <strong>{plugin.name}</strong>
+    <section className="bot-settings-card">
+      <div className="bot-settings-heading">
+        <strong>{configuration.name}</strong>
         <span>
-          {plugin.enabled
-            ? "Available to brain"
-            : plugin.configured
-              ? "Configured · not available to brain"
+          {configuration.enabled
+            ? "Service enabled"
+            : configuration.configured
+              ? "Configured · service disabled"
               : "Not configured"}
         </span>
-        {plugin.configured && (
+        {configuration.configured && (
           <button
             type="button"
-            disabled={busy || (!!plugin.error && !plugin.enabled)}
+            disabled={busy || (!!configuration.error && !configuration.enabled)}
             onClick={() =>
               void run(() =>
-                api.setPluginAvailability(project.slug, plugin.id, {
-                  enabled: !plugin.enabled,
-                  expectedRevision: plugin.revision,
+                api.setBotAvailability(project.slug, configuration.id, {
+                  enabled: !configuration.enabled,
+                  expectedRevision: configuration.revision,
                 }),
               )
             }
           >
-            {plugin.enabled ? "Disable for project" : "Enable for project"}
+            {configuration.enabled ? "Disable for project" : "Enable for project"}
           </button>
         )}
         <button
           type="button"
-          disabled={busy || !plugin.settings}
+          disabled={busy || !configuration.settings}
           onClick={() => setOpen(!open)}
         >
           {open ? "Hide settings" : "Configure"}
         </button>
       </div>
-      {plugin.error && <p role="alert">{plugin.error}</p>}
+      {configuration.error && <p role="alert">{configuration.error}</p>}
       {error && (
         <p role="alert">
           {error} Reload saved settings before retrying a stale change.
         </p>
       )}
-      {open && plugin.settings && (
+      {open && configuration.settings && (
         <form
           onSubmit={(event) => {
             event.preventDefault();
             void run(async () => {
-              return api.saveProjectPlugin(
+              return api.saveProjectBotConfiguration(
                 project.slug,
-                plugin.id,
-                pluginSavePayload(
-                  plugin.settings!,
+                configuration.id,
+                botSavePayload(
+                  configuration.settings!,
                   values,
                   enabled,
-                  plugin.revision,
+                  configuration.revision,
                 ),
               );
             });
           }}
         >
-          {plugin.settings.description && <p>{plugin.settings.description}</p>}
+          {configuration.settings.description && <p>{configuration.settings.description}</p>}
           <label className="check">
             <input
               type="checkbox"
@@ -244,10 +243,10 @@ export function PluginEditor({
               disabled={busy}
               onChange={(event) => setEnabled(event.target.checked)}
             />{" "}
-            Available to this project’s brain after saving
+            Enable service for this project after saving
           </label>
-          <PluginFields
-            settings={plugin.settings}
+          <BotSettingsFields
+            settings={configuration.settings}
             values={values}
             disabled={busy}
             onChange={(key, value) => {
@@ -260,7 +259,7 @@ export function PluginEditor({
             }}
           />
           <p className="help-p">
-            Local profile: <code>{plugin.home}</code>
+            Local profile: <code>{configuration.home}</code>
           </p>
           <p className="help-p">
             Stop the profile’s monitor before changing its settings. Credentials
@@ -272,107 +271,5 @@ export function PluginEditor({
         </form>
       )}
     </section>
-  );
-}
-
-export function ProjectPlugins({
-  project,
-  onClose,
-}: {
-  project: Project;
-  onClose: () => void;
-}) {
-  const [plugins, setPlugins] = useState<ProjectPluginView[] | null>(null);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [reload, setReload] = useState(0);
-  useEffect(() => {
-    let active = true;
-    setPlugins(null);
-    setError("");
-    api
-      .projectPlugins(project.slug)
-      .then((result) => {
-        if (active) setPlugins(result.plugins);
-      })
-      .catch((error) => {
-        if (active) setError(String(error.message || error));
-      });
-    return () => {
-      active = false;
-    };
-  }, [project.slug, reload]);
-  return (
-    <Modal onClose={() => { if (!busy) onClose(); }}>
-      <div
-        className="sheet sheet-wide"
-        role="dialog"
-        aria-modal="true"
-        aria-label={"Plugins for " + project.name}
-      >
-        <h2>{project.name} · Plugins</h2>
-        <div className="sheet-body">
-          <p>
-            Installed code is shared. Configuration, source state and
-            availability are specific to this project.
-          </p>
-          <p className="help-p">
-            Opening this panel reads local files only. Save invokes the trusted
-            plugin’s configuration command, which must not start monitors or
-            read providers.
-          </p>
-          <p className="help-p">
-            Enabling or disabling changes launch instructions only. It does not
-            start or stop existing monitors, or change running agents.
-          </p>
-          {error && <p role="alert">{error}</p>}
-          {notice && <p role="status">{notice}</p>}
-          {plugins === null && !error && <p>Loading…</p>}
-          {plugins?.length === 0 && (
-            <p>
-              No installed plugins. Register a trusted package with{" "}
-              <code>
-                hivemind plugins add /path/hivemind-plugin.json --home
-                /path/to/this/hive
-              </code>
-              .
-            </p>
-          )}
-          {plugins?.map((plugin) => (
-            <PluginEditor
-              key={plugin.id + ":" + plugin.revision}
-              plugin={plugin}
-              project={project}
-              busy={busy}
-              onBusy={setBusy}
-              onSaved={(saved) => {
-                setPlugins((old) =>
-                  old!.map((entry) => (entry.id === saved.id ? saved : entry)),
-                );
-                setNotice(
-                  "Saved locally. Reopen the launch sheet to use the updated instructions.",
-                );
-              }}
-            />
-          ))}
-        </div>
-        <div className="row">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => {
-              setReload((value) => value + 1);
-              setNotice("");
-            }}
-          >
-            Reload saved
-          </button>
-          <button type="button" disabled={busy} onClick={onClose}>
-            Close
-          </button>
-        </div>
-      </div>
-    </Modal>
   );
 }

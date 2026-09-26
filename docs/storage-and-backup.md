@@ -2,7 +2,7 @@
 
 ## Where data lives
 
-All runtime state is under `~/.hivemind/` (or `HIVEMIND_HOME`): `hive.db` (plus its `hive.db-wal` / `hive.db-shm` sidecars while running), `files/` (attachment blobs), `pending-sends/` (the local send retry journal) and optional configuration such as `telegram.json`, `adaptive-routing.json` and plugin registrations. Agent downloads go to `<cwd>/.hivemind-inbox/`. Nothing in those paths belongs in git.
+All runtime state is under `~/.hivemind/` (or `HIVEMIND_HOME`): `hive.db` (plus its `hive.db-wal` / `hive.db-shm` sidecars while running), `files/` (attachment blobs), `pending-sends/` (the local send retry journal) and optional configuration such as `telegram.json`, `adaptive-routing.json` and bot registrations. Agent downloads go to `<cwd>/.hivemind-inbox/`. Nothing in those paths belongs in git.
 
 Only one `hivemind serve` may run per home. A running server holds `server.lock` (its pid); a second server on the same home exits at once with an error naming that pid. The lock is removed on shutdown, and a lock left by a crashed server (its pid no longer running) is reclaimed automatically on the next start. To run several servers, give each its own `HIVEMIND_HOME`.
 
@@ -23,6 +23,7 @@ The schema has a single source: the ordered, versioned migrations in `src/server
 - A database with a `user_version` newer than this build is refused with a clear error before anything writes to it. Upgrade Hivemind rather than lowering `user_version`.
 - Migration 28 (`performance_retention`, #217) adds indexes on `threads(channel_id)`, `room_events(channel_id, revision)` and `attachments(sha256)`. It also adds the per-message `inbox_receipts` table, backfilled from the delivery ledger and kept current by triggers, and recomputes the upload quota over distinct blobs.
 - Migration 30 (`drop_decision_requests`) drops `decision_requests` and `decision_mutations`: the Human decision queue was removed. Messages posted by decision requests, and replies in their threads, stay as ordinary history. The migration deletes the request records (options, recommendation, state), so back up first if you need them.
+- Migration 31 (`agent_terminal_session`) adds the optional terminal-session label. Migration 32 (`bot_capabilities`) adds Bot access records. It also completes the terminal column for databases from the local Bot preview that used version 31 for Bot access: existing capabilities, subscriptions, definition bindings and revisions are preserved. Do not lower the schema version to switch between these builds; keep a backup before upgrading.
 - Versions 0 (unversioned) and 2 (the project-storage marker of earlier releases) are legacy: such a database runs the whole baseline (versions 3–26). Every baseline step is idempotent and detects what already exists, so databases from any earlier release upgrade without data loss; version 2 must first pass the core-table checks.
 - The Telegram routing migration is deferred: it assigns legacy Telegram rows to the bot that is active when the bridge first starts, so the bridge runs it (it is idempotent and keeps its own marker table).
 - To change the schema, append a migration with the next version; never edit or reorder a shipped one. A unit test rejects `CREATE`/`ALTER`/`DROP` statements outside `src/server/migrations/`.

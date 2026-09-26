@@ -283,6 +283,12 @@
  },
  {
   "type": "table",
+  "name": "bot_access",
+  "tbl": "bot_access",
+  "sql": "CREATE TABLE bot_access ( bot_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE, capabilities TEXT NOT NULL, receive_channels TEXT NOT NULL, definition_id TEXT, revision INTEGER NOT NULL CHECK(revision > 0) )"
+ },
+ {
+  "type": "table",
   "name": "bot_credentials",
   "tbl": "bot_credentials",
   "sql": "CREATE TABLE bot_credentials ( bot_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE, revision INTEGER NOT NULL, revoked INTEGER NOT NULL )"

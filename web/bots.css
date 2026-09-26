@@ -1,0 +1,21 @@
+.bots-sheet { max-width: 860px; }
+.bots-sheet header p, .bot-project, .bot-empty p { color: var(--mute); }
+.bot-project { font-size: .7em; font-weight: 400; }
+.bot-list { padding: 0; margin: 1rem 0; list-style: none; display: grid; gap: .65rem; }
+.bot-list-item { width: 100%; display: flex; align-items: center; gap: .8rem; text-align: left; padding: 1rem; border: 1px solid var(--line); border-radius: 12px; }
+.bot-list-item > span:first-child { flex: 1; min-width: 0; }
+.bot-list-item strong, .bot-list-item small { display: block; overflow-wrap: anywhere; }
+.bot-list-item small { font-size: .8rem; color: var(--mute); margin-top: .3rem; }
+.bot-capabilities { display: inline-flex; flex-wrap: wrap; gap: .35rem; font-size: .8rem; }
+.bot-capability { padding: .15rem .5rem; border: 1px solid var(--line); border-radius: 999px; }
+.bots-sheet .bot-access-choice { display: flex; flex-direction: row; gap: .75rem; align-items: flex-start; padding: .65rem 0; }
+.bots-sheet fieldset { border: 1px solid var(--line); border-radius: 10px; padding: .75rem; margin: 1rem 0; }
+.bots-sheet legend { padding: 0 .3rem; color: var(--mute); }
+.bot-access-choice input { flex: 0 0 auto; margin-top: .25rem; }
+.bot-access-choice small { display: block; color: var(--mute); margin-top: .15rem; }
+.bot-section { border-top: 1px solid var(--line); margin-top: 1.25rem; padding-top: 1rem; }
+.bot-section summary { cursor: pointer; padding: .4rem 0; }
+.bot-tools dd { margin: .3rem 0 1rem; color: var(--mute); }
+.bot-result { max-height: 18rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.bot-empty { border: 1px dashed var(--line); border-radius: 12px; padding: 1.5rem; margin: 1rem 0; }
+@media (max-width: 600px) { .bot-list-item { flex-wrap: wrap; } .bot-list-item > span:first-child { flex-basis: 80%; } }

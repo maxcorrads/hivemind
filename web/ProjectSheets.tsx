@@ -3,12 +3,12 @@ import { api } from "./api.ts";
 import { Modal } from "./Modal.tsx";
 import type { ProjectSheets } from "./use-sheets.ts";
 
-export function ProjectSettingsSheet({ form, project, agents, onPlugins, refreshSnap, setErr }: {
+export function ProjectSettingsSheet({ form, project, agents, onBots, refreshSnap, setErr }: {
   form: ProjectSheets;
   /** Slug of the project being edited. */
   project: string;
   agents: Agent[];
-  onPlugins: () => void;
+  onBots: () => void;
   refreshSnap: () => Promise<unknown>;
   setErr: (error: string) => void;
 }) {
@@ -44,7 +44,7 @@ export function ProjectSettingsSheet({ form, project, agents, onPlugins, refresh
         }}
       >
         <h2>Project {project}</h2>
-        <button type="button" className="text-btn" onClick={onPlugins}>Plugins…</button>
+        <button type="button" className="text-btn" onClick={onBots}>Bots…</button>
         <label>
           Name
           <input value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)} autoFocus />
