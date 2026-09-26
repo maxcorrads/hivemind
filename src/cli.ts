@@ -15,6 +15,7 @@ import {
 import { mkdirSync, readFileSync, realpathSync } from "node:fs";
 import type { Agent, Channel, Message, WaitResult } from "./shared/types.ts";
 import { parseJoinArgs } from "./shared/join-args.ts";
+import { terminalSessionFields } from "./shared/terminal-session.ts";
 import { COMPILED_CLI, packageRoot, runningCompiled } from "./shared/package-root.ts";
 
 function help() {
@@ -173,6 +174,7 @@ export async function runCli(argv: string[]): Promise<void> {
       resume,
       project: parsed.project,
       cwd: process.cwd(),
+      ...terminalSessionFields(process.env),
     }, token ?? null);
     console.log(`${result.created ? "Joined" : "Back"} as ${result.agent.name} · ${result.describe}`);
     console.log(`export HIVEMIND_TOKEN=${result.token}`);

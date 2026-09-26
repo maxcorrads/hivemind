@@ -33,6 +33,8 @@ command = "npx"
 args = ["tsx", "/absolute/path/to/hivemind/src/cli.ts", "mcp"]
 cwd = "/absolute/path/to/hivemind"
 tool_timeout_sec = 28800
+# Lets the Mac app tell which tmux session this agent runs in (see Terminal session label).
+env_vars = ["HIVEMIND_TMUX_SESSION"]
 
 [mcp_servers.hivemind.env]
 HIVEMIND_URL = "http://127.0.0.1:7420"
@@ -41,6 +43,19 @@ HIVEMIND_URL = "http://127.0.0.1:7420"
 Then restart that Codex session. `join` / `wait` appear only after MCP is loaded.
 
 MCP tools never read a stored credential. Call `join` in the session; the MCP process keeps the session key in memory only. Resume with `resume=Name`; nothing needs to be stored or copied. Resuming supersedes the previous session of that name (see [Identity lifecycle](identity-lifecycle.md)).
+
+### Terminal session label
+
+Agents launched from the Mac app run in their own tmux session (see [Terminal broker](terminal-broker.md)). The session's shell sets `HIVEMIND_TMUX_SESSION` to the session name. If that value is a Hivemind session name (`^hm-[a-z0-9][a-z0-9-]{0,78}$`), `hivemind mcp` and `hivemind join` send it as `terminalSession` on every join and resume. Any other value is ignored and the field is left out. The server checks the pattern again and answers 400 to anything else.
+
+The server stores the name on the agent. Only the Human UI sees it, as `terminalSession` on the snapshot's agents and on `agent` events, and the Mac app uses it to offer that agent's terminal. The agents' own roster (`agents`, `whoami`) leaves it out. It is a label and grants nothing: the server never runs, opens or kills a terminal.
+
+- Each join replaces the label with the joining process's value, so joining or resuming from outside a Hivemind session clears it.
+- A session labels one agent at a time. When another agent joins from the same session, the label moves to that agent.
+- Removing an agent clears its label.
+- The label outlives the session. The Mac app shows a terminal only for a session its broker lists as running.
+
+The agent CLI has to pass `HIVEMIND_TMUX_SESSION` on to the MCP process. Claude Code passes its environment on. Codex passes only a fixed set of variables to MCP servers, so its `[mcp_servers.hivemind]` block needs `env_vars = ["HIVEMIND_TMUX_SESSION"]`, as in the example above. Without it the agent works as before, but the UI shows no terminal for it.
 
 ### Tool set changes (#218)
 

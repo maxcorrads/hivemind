@@ -1,12 +1,13 @@
 import Foundation
 
-// "Open in Terminal": the Launch agent sheet asks the app to open Terminal.app
-// windows running its launch commands. Each one becomes a self-deleting
-// .command file that Terminal opens like a double-clicked script, so no Apple
-// Events (Automation permission) are needed. There is no confirmation, by
-// the user's choice: docs/macos.md#open-in-terminal has the security note.
+// "Open in Terminal": Terminal.app windows attached to Hivemind's tmux
+// sessions. The app builds each launch itself (TerminalBridgeRouter, from
+// TmuxCommand.attachShellLine); the page never supplies the command. Each
+// one becomes a self-deleting .command file that Terminal opens like a
+// double-clicked script, so no Apple Events (Automation permission) are
+// needed. docs/macos.md#security-note has the security note.
 
-/// One terminal to open, as the page sent it in a `launch-terminal` message.
+/// One Terminal.app window to open.
 public struct TerminalLaunch: Equatable, Sendable {
   /// Window title, e.g. "Acme - Atlas".
   public let title: String
@@ -15,7 +16,6 @@ public struct TerminalLaunch: Equatable, Sendable {
   /// Shell text run in the folder, as the sheet's Copy would copy it.
   public let command: String
 
-  public static let maxLaunches = 24
   public static let maxCommandBytes = 8 * 1024
   public static let maxTitleLength = 200
   public static let maxPathBytes = 1024
@@ -32,33 +32,6 @@ public struct TerminalLaunch: Equatable, Sendable {
     self.title = title
     self.cwd = cwd
     self.command = command
-  }
-
-  /// A WebKit message value ({title, cwd?, command}). A missing or null cwd
-  /// is none; a cwd of any other type makes the launch invalid.
-  init?(body: Any) {
-    guard let object = body as? [String: Any],
-          let title = object["title"] as? String,
-          let command = object["command"] as? String else { return nil }
-    let cwd: String?
-    switch object["cwd"] {
-    case nil, is NSNull: cwd = nil
-    case let path as String: cwd = path
-    default: return nil
-    }
-    self.init(title: title, cwd: cwd, command: command)
-  }
-
-  /// All launches of a message, or nil when the list or any one is invalid:
-  /// a message is never run in part.
-  static func list(_ value: Any?) -> [TerminalLaunch]? {
-    guard let items = value as? [Any], (1...maxLaunches).contains(items.count) else { return nil }
-    var launches: [TerminalLaunch] = []
-    for item in items {
-      guard let launch = TerminalLaunch(body: item) else { return nil }
-      launches.append(launch)
-    }
-    return launches
   }
 
   /// `cwd` with a leading "~" replaced by `home`.
@@ -290,8 +263,8 @@ public enum TerminalLaunchError: LocalizedError, Equatable {
   }
 }
 
-/// A script running in the page could post launch-terminal in a loop; one
-/// message per interval per window is plenty for a button.
+/// A script running in the page could post terminal-launch (or -open, or
+/// -kill) in a loop; one message per interval per window is plenty for a button.
 public struct TerminalLaunchThrottle: Sendable {
   public static let interval: TimeInterval = 1
   private var last: Date?

@@ -1,10 +1,12 @@
-import { ChevronRight, Copy, SquareTerminal, Terminal, X } from "lucide-react";
+import { ChevronRight, Copy, Play, SquareTerminal, Terminal, X } from "lucide-react";
 import { Modal } from "./Modal.tsx";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Agent, Project, Seniority } from "../src/shared/types.ts";
 import { modelChoiceGroups, parseChoiceId, selectedChoiceId } from "../src/shared/launch-models.ts";
 import { api } from "./api.ts";
-import { inNativeApp, launchInTerminal, terminalLaunchProblem, type TerminalLaunch } from "./native-bridge.ts";
+import { inNativeApp, terminalSessionLaunchProblem, type TerminalSessionLaunch } from "./native-bridge.ts";
+import { TerminalNotice } from "./TerminalNotice.tsx";
+import { agentTerminalSession, terminalBlocker, terminalHub, useTerminalState, type TerminalLaunched } from "./use-terminal.ts";
 import { projectLaunchTools, type LaunchContext } from "../src/shared/launch-prompt.ts";
 import {
   EFFORTS,
@@ -219,6 +221,9 @@ export function LaunchSheet({
   const [allHives, setAllHives] = useState(initial.allHives);
   const [tunes, setTunes] = useState<Record<string, { model: string; effort: string }>>(initial.tunes);
   const [copied, setCopied] = useState<string | null>(null);
+  const terminals = useTerminalState();
+  const [launching, setLaunching] = useState(false);
+  const [launchNote, setLaunchNote] = useState<{ error: boolean; text: string } | null>(null);
   const copiedTimer = useRef<number | null>(null);
   const [contexts, setContexts] = useState<Record<string, LaunchContext>>({});
   const [contextErrors, setContextErrors] = useState<Record<string, string>>({});
@@ -399,19 +404,49 @@ export function LaunchSheet({
   const canCopyOne = built.ok && projects.length > 0;
   const canCopyAll = resume && resumeBlocks.length > 0 && resumeBlocks.every((b) => b.ok);
 
-  // Hivemind.app only: the same launches as the copied text, one Terminal window each.
-  const terminalLaunches: TerminalLaunch[] = resume
-    ? (canCopyAll ? resumeBlocks.flatMap((b) => b.ok ? [{ title: seatTitle(b.hive?.name ?? "", b.agent.name), ...b.launch }] : []) : [])
-    : (canCopyOne && built.ok ? [{ title: seatTitle(hiveName, `new ${role}`), ...built.launch }] : []);
-  const terminalProblem = terminalLaunches.length ? terminalLaunchProblem(terminalLaunches) : null;
-  const canOpenTerminal = native && terminalLaunches.length > 0 && !terminalProblem;
+  // Hivemind.app only: the same launches as the copied text, each in its own tmux session (reused when that
+  // employee's is still running), optionally with a Terminal window attached.
+  const terminalLaunches: TerminalSessionLaunch[] = resume
+    ? (canCopyAll ? resumeBlocks.flatMap((b) => b.ok ? [{
+        project: b.hive?.slug ?? b.agent.project ?? projectSlug, agent: b.agent.name,
+        title: seatTitle(b.hive?.name ?? "", b.agent.name), ...b.launch,
+        // The session this employee already runs in, even one named hm-<project>-new-<n>, is reused.
+        session: agentTerminalSession(b.agent),
+      }] : []) : [])
+    : (canCopyOne && built.ok ? [{ project: project?.slug ?? projectSlug, agent: null, title: seatTitle(hiveName, `new ${role}`), ...built.launch }] : []);
+  const terminalBlock = native ? terminalBlocker(terminals) : null;
+  const terminalProblem = terminalBlock?.message ?? (terminalLaunches.length ? terminalSessionLaunchProblem(terminalLaunches) : null);
+  const canLaunchTerminal = native && terminalLaunches.length > 0 && !terminalProblem && !launching;
+  const many = terminalLaunches.length > 1;
   const terminalKey = resume ? "terminal-all" : "terminal-one";
-  const terminalLabel = copied === terminalKey ? "Opened"
-    : terminalLaunches.length > 1 ? `Open ${terminalLaunches.length} terminals` : "Open in Terminal";
-  const onOpenTerminal = () => {
-    if (!canOpenTerminal || !launchInTerminal(terminalLaunches)) return;
+  const backgroundKey = resume ? "background-all" : "background-one";
+  const terminalLabel = copied === terminalKey ? "Opened" : many ? `Open ${terminalLaunches.length} terminals` : "Open in Terminal";
+  const backgroundLabel = copied === backgroundKey ? "Started" : many ? `Start ${terminalLaunches.length} in background` : "Start in background";
+  const describeLaunch = (launches: TerminalSessionLaunch[], result: TerminalLaunched) => {
+    if (result.errors.length) {
+      return { error: true, text: result.errors.map((e) => `${launches[e.index]?.title ?? "Launch"}: ${e.message}`).join("\n") };
+    }
+    const reused = result.names.filter((name) => name && !result.created.includes(name)).length;
+    if (!reused) return null;
+    return { error: false, text: reused === result.names.length
+      ? (many ? "All of them were already running; nothing was started again." : "Already running; nothing was started again.")
+      : `${reused} already running; only the others were started.` };
+  };
+  const onLaunchTerminal = (openInTerminal: boolean) => {
+    const hub = terminalHub();
+    if (!canLaunchTerminal || !hub) return;
+    const launches = terminalLaunches;
+    setLaunching(true);
+    setLaunchNote(null);
     rememberSoftware();
-    markCopied(terminalKey);
+    hub.launch(launches, openInTerminal)
+      .then((result) => {
+        const note = describeLaunch(launches, result);
+        setLaunchNote(note);
+        if (!note?.error) markCopied(openInTerminal ? terminalKey : backgroundKey);
+      })
+      .catch((error: Error) => setLaunchNote({ error: true, text: error.message }))
+      .finally(() => setLaunching(false));
   };
 
   const chooseRole = (next: LaunchRole) => {
@@ -440,7 +475,11 @@ export function LaunchSheet({
           <span className="sheet-icon" aria-hidden="true"><Terminal size={18} /></span>
           <div>
             <h2>Launch agent</h2>
-            <p>Choose an agent, then paste its launch command into a new terminal. One terminal = one employee.</p>
+            <p>
+              {native
+                ? "Choose an agent, then start it in its own tmux session, or copy its launch command. One session = one employee."
+                : "Choose an agent, then paste its launch command into a new terminal. One terminal = one employee."}
+            </p>
           </div>
           <button type="button" className="icon-btn" aria-label="Close dialog" title="Close" onClick={onClose}>
             <X size={16} aria-hidden="true" />
@@ -662,7 +701,7 @@ export function LaunchSheet({
                 <p className="help-p">
                   The model at the top (with effort in the name) applies to everyone. Override it on a card if that employee should differ.
                   Copy all pastes a zsh script that opens one macOS Terminal window per employee (title Hive - Name). macOS may ask to control Terminal the first time.
-                  {native && " Open terminals does the same from this app, without the script or the prompt."}
+                  {native && " Open terminals starts each employee in its own tmux session instead (an employee whose session still runs keeps it) and opens a Terminal window on each."}
                 </p>
                 {resumeBlocks.map((block) => (
                   <article key={block.agent.id} className="launch-card">
@@ -715,6 +754,10 @@ export function LaunchSheet({
             </section>
           ) : (
             <p className="help-p">{built.error}</p>
+          )}
+          {native && terminalBlock && <TerminalNotice blocker={terminalBlock} compact />}
+          {native && launchNote && (
+            <p className={launchNote.error ? "err launch-note" : "help-p launch-note"} role={launchNote.error ? "alert" : "status"}>{launchNote.text}</p>
           )}
         </div>
         <div className="row sheet-footer launch-footer">
@@ -769,13 +812,25 @@ export function LaunchSheet({
           {native && (
             <button
               type="button"
+              className="btn launch-background"
+              disabled={!canLaunchTerminal}
+              title={terminalProblem ?? "Start in tmux without a window; open it later from Terminal sessions or the agent’s Terminal tab"}
+              onClick={() => onLaunchTerminal(false)}
+            >
+              <Play size={14} aria-hidden="true" />
+              {backgroundLabel}
+            </button>
+          )}
+          {native && (
+            <button
+              type="button"
               className="primary launch-terminal"
-              disabled={!canOpenTerminal}
+              disabled={!canLaunchTerminal}
               title={terminalProblem ?? undefined}
-              onClick={onOpenTerminal}
+              onClick={() => onLaunchTerminal(true)}
             >
               <SquareTerminal size={14} aria-hidden="true" />
-              {terminalLabel}
+              {launching ? "Launching…" : terminalLabel}
             </button>
           )}
         </div>

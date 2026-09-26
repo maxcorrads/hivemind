@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { Bot, Ellipsis, Plus } from "lucide-react";
+import { Bot, Ellipsis, Plus, SquareTerminal } from "lucide-react";
 import type { AgentWork } from "../src/shared/tasks.ts";
 import type { Agent, InboxStatus } from "../src/shared/types.ts";
 import { InboxReceipt, QueueBadge } from "./InboxReceipt.tsx";
 import { focusFirstMenuItem, menuKeyDown } from "./menu-keys.ts";
 import { agentStatusLine } from "./nav-model.ts";
+import { agentTerminalSession, liveSession, useTerminalState } from "./use-terminal.ts";
 
 export function AgentList({
   agents,
@@ -37,6 +38,9 @@ export function AgentList({
   onAskRemove: (name: string) => void;
 }) {
   const [menu, setMenu] = useState<string | null>(null);
+  // Hivemind.app only: which agents run in a live tmux session.
+  const terminals = useTerminalState();
+  const sessionOf = (a: Agent) => terminals.native ? liveSession(terminals, agentTerminalSession(a))?.name ?? null : null;
   const human = agents.find((a) => a.role === "human");
   const brains = agents.filter((a) => a.role === "brain");
   const workers = agents.filter((a) => a.role === "worker");
@@ -50,6 +54,7 @@ export function AgentList({
       queued={queued[a.id] ?? 0}
       inbox={inbox[a.id]}
       status={agentStatusLine(a, work[a.id])}
+      terminalSession={sessionOf(a)}
       onOpen={() => onOpen(a)}
       menuOpen={menu === a.name}
       onMenu={() => setMenu(menu === a.name ? null : a.name)}
@@ -106,6 +111,7 @@ function PersonRow({
   queued,
   inbox,
   status,
+  terminalSession,
   onOpen,
   self,
   menuOpen,
@@ -120,6 +126,8 @@ function PersonRow({
   inbox?: InboxStatus;
   /** What the agent is doing, e.g. "blocked: API contract". */
   status?: string | null;
+  /** The live tmux session the agent runs in (Hivemind.app only). */
+  terminalSession?: string | null;
   onOpen: () => void;
   self?: boolean;
   menuOpen?: boolean;
@@ -158,6 +166,12 @@ function PersonRow({
           <span className="person-label">
             <span className="pn" title={agent.name}>{agent.name}</span>
             {role && <span className="person-role">{role}</span>}
+            {terminalSession && (
+              <span className="person-term" role="img" aria-label="Running in a terminal session"
+                title={`Running in tmux session ${terminalSession}`}>
+                <SquareTerminal size={12} aria-hidden="true" />
+              </span>
+            )}
             {status && <span className={`person-status ${status.startsWith("blocked:") ? "blocked" : ""}`} title={status}>{status}</span>}
           </span>
           {(agent.focus || queuedCount > 0) && (

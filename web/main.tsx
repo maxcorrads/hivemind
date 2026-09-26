@@ -7,6 +7,7 @@ import "./styles/nav.css";
 import "./styles/channel.css";
 import "./styles/thread.css";
 import "./styles/overlays.css";
+import "./styles/terminal.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

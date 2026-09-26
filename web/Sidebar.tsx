@@ -1,5 +1,5 @@
-import { useLayoutEffect, useRef, type ReactNode } from "react";
-import { ChevronDown, ChevronRight, ChevronsUpDown, Inbox, Plus, Route, Search, SlidersHorizontal, Terminal, TextSearch } from "lucide-react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { ChevronDown, ChevronRight, ChevronsUpDown, Inbox, Plus, Route, Search, SlidersHorizontal, SquareTerminal, Terminal, TextSearch } from "lucide-react";
 import { isLiveSearchQuery } from "../src/shared/search-query.ts";
 import type { AgentWork } from "../src/shared/tasks.ts";
 import type { Agent, Channel, Project } from "../src/shared/types.ts";
@@ -7,8 +7,10 @@ import { AgentList } from "./AgentList.tsx";
 import type { Snapshot } from "./api.ts";
 import { ChannelItem, DmRow } from "./ChannelNav.tsx";
 import { projectAttention, projectInitials, SWITCHER_SHORTCUT } from "./nav-model.ts";
+import { SessionsSheet } from "./SessionsSheet.tsx";
 import type { InboxBox, Sel } from "./selection.ts";
 import type { DmNav } from "./use-dm-nav.ts";
+import { useTerminalState } from "./use-terminal.ts";
 import type { ProjectSheets } from "./use-sheets.ts";
 
 type AgentActions = {
@@ -48,6 +50,10 @@ export function Sidebar({ snap, sel, go, live, unified, query, setQuery, onSearc
 }) {
   const projects = snap.projects ?? [];
   const project = projects.find(item => item.slug === selectedProject) ?? projects[0];
+  // Hivemind.app only: the tmux sessions agents run in, beside Launch agent.
+  const terminals = useTerminalState();
+  const [sessionsOpen, setSessionsOpen] = useState(false);
+  const running = terminals.sessions?.filter(item => item.alive).length ?? 0;
   // The top bar shows the connection in the single-sidebar layout.
   const tools = !unified && (
     <span className="side-live">
@@ -120,6 +126,13 @@ export function Sidebar({ snap, sel, go, live, unified, query, setQuery, onSearc
             agentWork={agentWork} />
         )}
       </div>
+      {terminals.native && (
+        <button type="button" className="sessions-cta" onClick={() => setSessionsOpen(true)} aria-haspopup="dialog">
+          <SquareTerminal size={14} aria-hidden="true" /> <span>Terminal sessions</span>
+          {running > 0 && <em className="count soft" aria-label={`${running} running`}>{running}</em>}
+        </button>
+      )}
+      {sessionsOpen && <SessionsSheet agents={snap.agents ?? []} projects={projects} onClose={() => setSessionsOpen(false)} />}
       {projects.length > 0 && (
         <button type="button" className="launch-cta" onClick={() => onLaunch()}>
           <Terminal size={15} aria-hidden="true" /> Launch agent

@@ -34,6 +34,7 @@ final class ServerAppDelegate: NSObject, NSApplicationDelegate {
   func applicationDidFinishLaunching(_ notification: Notification) {
     launched = true
     model.controller.launch()
+    model.terminals.start()
   }
 
   /// hivemind-server://start from Hivemind.app's connect screen. Anything
@@ -49,8 +50,11 @@ final class ServerAppDelegate: NSObject, NSApplicationDelegate {
   }
 
   /// Quit waits for the server to exit (SIGTERM, SIGKILL after the timeout)
-  /// so no orphan keeps the data folder locked.
+  /// so no orphan keeps the data folder locked. The terminal broker hangs up
+  /// its PTY children at once; tmux sessions (and the agents in them) keep
+  /// running.
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    model.terminals.stop()
     let controller = model.controller
     guard controller.hasChild else {
       controller.shutdown {}
@@ -82,6 +86,7 @@ private struct ServerMenu: View {
     // Plain Text rows render as disabled menu items: status, not actions.
     Text(status.title)
     if let detail = status.detail { Text(detail) }
+    Text(model.terminalsStatus.title)
     Divider()
     Button("Open Hivemind") { model.openHivemind() }
       .keyboardShortcut("o")

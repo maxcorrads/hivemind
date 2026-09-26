@@ -277,11 +277,18 @@ if [ "$build_server" = 1 ]; then
   step "Hivemind Server.app"
   # Menu-bar only; never auto- or sudden-terminated while it owns a child.
   # hivemind-server://start is how Hivemind.app asks a running copy to start
-  # its server (HivemindKit/ServerAppURLCommand.swift).
+  # its server (HivemindKit/ServerAppURLCommand.swift). Agents in the terminal
+  # broker's tmux sessions count as this app's for macOS privacy prompts, so
+  # it says why it may reach protected folders.
   assemble "Hivemind Server" "$SERVER_BUNDLE_ID" HivemindServer "Hivemind Server" "$SERVER_MIN_MACOS" \
     "  <key>LSUIElement</key><true/>
   <key>NSSupportsAutomaticTermination</key><false/>
   <key>NSSupportsSuddenTermination</key><false/>
+  <key>NSDocumentsFolderUsageDescription</key><string>Agents you launch from Hivemind run in terminal sessions of Hivemind Server and may work on projects in your Documents folder.</string>
+  <key>NSDesktopFolderUsageDescription</key><string>Agents you launch from Hivemind run in terminal sessions of Hivemind Server and may work on projects on your Desktop.</string>
+  <key>NSDownloadsFolderUsageDescription</key><string>Agents you launch from Hivemind run in terminal sessions of Hivemind Server and may work on projects in your Downloads folder.</string>
+  <key>NSRemovableVolumesUsageDescription</key><string>Agents you launch from Hivemind run in terminal sessions of Hivemind Server and may work on projects on removable volumes.</string>
+  <key>NSNetworkVolumesUsageDescription</key><string>Agents you launch from Hivemind run in terminal sessions of Hivemind Server and may work on projects on network volumes.</string>
   <key>CFBundleURLTypes</key>
   <array>
     <dict>

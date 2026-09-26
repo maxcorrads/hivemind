@@ -21,6 +21,7 @@ import { subscriptionSchema } from '../shared/notifications.ts';
 import { packageVersion } from "../shared/package-root.ts";
 import { attachablePath } from "./attach-guard.ts";
 import { MESSAGE_EVENT_TYPES } from "../shared/types.ts";
+import { terminalSessionFields } from "../shared/terminal-session.ts";
 import { JOIN_SESSION, PARAM_DESCRIPTIONS, SEARCH_NEXT, TOOL_DESCRIPTIONS, joinNext } from "./tool-text.ts";
 import { MCP_HEARTBEAT_MS, MCP_WAIT_POLL_MS, WAIT_NEXT, type Agent, type Channel, type WaitResult } from "../shared/types.ts";
 
@@ -113,6 +114,7 @@ export async function startMcp() {
           resume: resume ?? null,
           project: project ?? null,
           cwd: process.cwd(),
+          ...terminalSessionFields(process.env),
         },
         auth ?? null,
       );

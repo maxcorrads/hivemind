@@ -1,0 +1,72 @@
+/* Terminals (Hivemind.app only; web/TerminalView.tsx, web/SessionsSheet.tsx, web/TerminalNotice.tsx): the in-app
+   terminal, the Terminal sessions sheet and its sidebar entry, the roster's session icon and the notices shown when
+   Hivemind Server or tmux is missing. xterm's own sheet loads with xterm (web/use-terminal-xterm.ts). */
+
+/* ---- The terminal ------------------------------------------------------------------------------------------------ */
+.term { position: relative; flex: 1 1 auto; min-height: 240px; display: flex; flex-direction: column; gap: 8px; }
+/* The frame (padding, border) is .term-screen's; xterm opens in .term-fit inside it. The fit addon sizes rows and
+   columns to its parent's computed width and height, which under the global border-box would include padding and
+   border, so that parent must have neither: .term-fit is exactly the room the grid has. Colors come from the tokens. */
+.term-screen { flex: 1 1 auto; min-height: 0; display: flex; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r);
+  background: var(--surface); overflow: hidden; }
+.term-fit { flex: 1 1 auto; min-width: 0; min-height: 0; position: relative; overflow: hidden; }
+.term-fit .xterm { height: 100%; }
+.term-screen .xterm-viewport { background: transparent !important; }
+.term-note { position: absolute; left: 50%; top: 14px; transform: translateX(-50%); z-index: 2; display: flex; align-items: center; gap: 10px;
+  max-width: calc(100% - 32px); padding: 6px 8px 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--raised);
+  box-shadow: var(--shadow); font-size: 12.5px; color: var(--ink2); }
+.term-note > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.term[data-phase="loading"] .term-note, .term[data-phase="attaching"] .term-note { padding-right: 12px; }
+.term-note .btn { height: 26px; border-radius: 999px; }
+
+/* Esc / Ctrl / Tab / ^C / arrows for touch screens, which have none of them. */
+.term-keys { display: none; flex: none; gap: 6px; overflow-x: auto; }
+.term-keys > button { flex: none; min-width: 44px; height: 36px; padding: 0 10px; display: inline-grid; place-items: center; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--sunk); color: var(--ink); font-family: var(--mono); font-size: 13px; touch-action: manipulation; }
+.term-keys > button[aria-pressed="true"] { background: var(--accent); border-color: transparent; color: var(--accent-ink); }
+@media (pointer: coarse) { .term-keys { display: flex; } }
+
+.term-empty { flex: 1 1 auto; display: grid; place-items: center; padding: 24px; }
+
+/* A DM's Terminal tab: the terminal takes the whole pane under the header. */
+.channel-panel.terminal-panel { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; padding: 12px 16px 16px; }
+
+/* ---- Notices ----------------------------------------------------------------------------------------------------- */
+.term-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 12px; border: 1px solid var(--line);
+  border-radius: var(--r); background: var(--sunk); font-size: 13px; line-height: 1.45; color: var(--ink2); }
+.term-notice.tmux, .term-notice.server { border-color: color-mix(in oklch, var(--warn) 45%, transparent); }
+.term-notice code { font-family: var(--mono); font-size: 12px; }
+.term-notice.compact { padding: 8px 10px; font-size: 12.5px; }
+.launch-note { white-space: pre-line; }
+
+/* ---- Sidebar entry and roster icon ------------------------------------------------------------------------------- */
+.rail > .sessions-cta { display: flex; align-items: center; gap: 7px; height: 30px; margin: 8px 10px -2px; padding: 0 10px; border-radius: 8px;
+  color: var(--ink2); font-size: 13px; font-weight: 500; }
+.rail > .sessions-cta:hover { background: var(--hover); color: var(--ink); }
+.rail > .sessions-cta > .count { margin-left: auto; }
+.rail > .side-scroll:has(~ .sessions-cta) { border-bottom: 1px solid var(--line); }
+.person-term { flex: none; display: inline-grid; place-items: center; color: var(--mute); }
+.person.on .person-term { color: var(--ok-ink); }
+
+/* ---- Terminal sessions sheet ------------------------------------------------------------------------------------- */
+.sessions-sheet { width: min(60rem, 100%); height: min(46rem, calc(100dvh - 2rem)); }
+.sessions-sheet .sheet-head > .btn { flex: none; }
+.sessions-sheet .sheet-head code { font-family: var(--mono); font-size: 12px; }
+.sessions-sheet .sheet-body { padding-bottom: 18px; }
+.session-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.session-list > li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 10px 12px;
+  border: 1px solid var(--line); border-radius: 10px; }
+.session-list > li.dead { opacity: 0.7; }
+.session-main { display: grid; gap: 2px; min-width: 0; }
+.session-main strong { font-size: 13.5px; font-weight: 600; }
+.session-main small { font-size: 12px; color: var(--mute); }
+.session-main code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 11.5px; color: var(--ink2); }
+.session-actions { display: flex; gap: 6px; }
+.session-actions .btn.danger { color: var(--bad-ink); }
+
+@media (max-width: 960px) {
+  .rail > .sessions-cta { display: none; }
+  .sessions-sheet { height: calc(100dvh - 2rem); }
+  .session-list > li { grid-template-columns: auto minmax(0, 1fr); }
+  .session-actions { grid-column: 2; flex-wrap: wrap; }
+}

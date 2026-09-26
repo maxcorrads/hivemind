@@ -347,7 +347,8 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const body = await requestJson(c.req.raw);
     const bearer = (c.req.header('authorization') ?? '').replace(/^Bearer\s+/i, '').trim();
     const result = hive.identity.join({ role: body.role, seniority: body.seniority ?? null, focus: body.focus ?? null,
-      token: bearer || body.token || null, resumeName: body.resume || body.resumeName || null, project: body.project ?? null, cwd: body.cwd ?? null });
+      token: bearer || body.token || null, resumeName: body.resume || body.resumeName || null, project: body.project ?? null, cwd: body.cwd ?? null,
+      terminalSession: body.terminalSession ?? null });
     return c.json({ ...result, describe: describeAgent(result.agent), standingOrders: result.created ? standingOrders(result.agent) : undefined,
       ordersRef: result.created ? undefined : 'unchanged', handoffs: hive.tasks.handoffs(result.agent) });
   });
@@ -357,7 +358,8 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     return c.json({ you: { name: me.name, role: me.role, seniority: me.seniority, focus: me.focus, online: me.online, project: me.project },
       ordersRef: 'unchanged' });
   });
-  agent.get('/agents', c => c.json({ agents: hive.identity.listAgents(c.get('me')).map(({ createdAt: _c, ...a }) => a) }));
+  // terminalSession is a Human UI label; agents' roster stays as it was.
+  agent.get('/agents', c => c.json({ agents: hive.identity.listAgents(c.get('me')).map(({ createdAt: _c, terminalSession: _t, ...a }) => a) }));
   agent.get('/search', c => {
     const me = c.get('me');
     return c.json(hive.messageQueries.searchMessages(me, { q: String(c.req.query('q') ?? ''), project: c.req.query('project') || me.project,

@@ -9,7 +9,7 @@ server you started yourself with `hivemind serve`.
 
 | App | What it is |
 | --- | --- |
-| **Hivemind Server.app** | A menu-bar app with no Dock icon. It runs and supervises `hivemind serve` with its own bundled Node.js, so nothing else needs to be installed. |
+| **Hivemind Server.app** | A menu-bar app with no Dock icon. It runs and supervises `hivemind serve` with its own bundled Node.js, so nothing else needs to be installed. It also runs the [terminal broker](terminal-broker.md), which keeps launched agents in tmux sessions. |
 | **Hivemind.app** | The Human UI in native windows. Each window is a WebKit view of `http://127.0.0.1:<port>/`, served by the local server. |
 
 The apps are **unsigned** for now: they carry only an ad-hoc signature (see
@@ -35,6 +35,13 @@ listens on, and the last error line when there is one. From the menu you can:
   to approve it, the item reads "(needs approval)" and the app opens
   System Settings → General → Login Items.
 - **Install command-line tool**: see [Command-line tool](#command-line-tool).
+
+A second status line, **Terminals: …**, shows the [terminal broker](terminal-broker.md):
+how many Hivemind tmux sessions run and how many are open in Hivemind.app, or
+"tmux not found (brew install tmux)", or why the broker could not start. The
+broker runs for the life of the app, whether or not the server does. Quitting
+the app detaches every terminal open in Hivemind.app but leaves the tmux
+sessions, and the agents in them, running.
 
 The app restarts a server that crashes, waiting longer after each crash: 1 s,
 doubling up to 60 s. It gives up after 8 attempts in a row, and a run that lasts
@@ -102,59 +109,120 @@ handler named `hivemind`. `web/native-bridge.ts` is active only when that
 handler exists, so a normal browser behaves exactly as before. The contract is
 `macos/Sources/HivemindKit/Bridge.swift`:
 
-- Page → app: `{type: "ready"}`, `{type: "badge", count}`,
-  `{type: "notify", title, body, tag, target}`, where `target` is a `#/…` route,
-  and `{type: "launch-terminal", launches: [{title, cwd?, command}]}` (see
-  [Open in Terminal](#open-in-terminal)). Only the main frame of the local
-  server's origin is heard.
+- Page → app: `{type: "ready"}`, `{type: "badge", count}` and
+  `{type: "notify", title, body, tag, target}`, where `target` is a `#/…` route.
+  Only the main frame of the local server's origin is heard.
 - App → page: `window.dispatchEvent(new CustomEvent("hivemind:native", {detail:
   {command, hash?}}))` with `command` one of `jump`, `for-you`, `new-channel`,
   `settings`, `toggle-theme` and `navigate` (with `hash`).
+- Terminals: the `terminal-*` and `sessions-*` messages and the
+  `hivemind:terminal` event are described in
+  [Terminal broker](terminal-broker.md#bridge-hivemindapp--page). See
+  [Terminals](#terminals) for what they do.
+- The page starts Hivemind Server (for **Start Hivemind Server** on a terminal
+  notice) by opening `hivemind-server://start` in its main frame. The app
+  cancels that navigation and does what the connect screen's button does; it is
+  not a bridge message.
 
-### Open in Terminal
+### Terminals
 
-In Hivemind.app, the **Launch agent** sheet has an **Open in Terminal** button
-next to **Copy command**. It opens a new Terminal.app window that runs the same
-command Copy would copy, in the same workspace folder. With **Resume same
-employees** on, the button reads **Open N terminals** and opens one window per
-employee of the project (or of all hives) at once. Copy works as before, and a
-browser shows neither button.
+Agents launched from Hivemind.app always run in **tmux sessions** that Hivemind
+Server.app's [terminal broker](terminal-broker.md) owns, on a tmux server of
+Hivemind's own (`tmux -L hivemind`). Your own tmux sessions are never touched.
+tmux comes from Homebrew (`brew install tmux`); Hivemind never bundles it. A
+browser shows none of this: it has no bridge, and the Launch sheet offers only
+**Copy** there.
 
-For each window the app writes a `.command` script (mode `0700`) into a private
-folder (`0700`) under the user's temporary folder,
-`$TMPDIR/Hivemind/terminal/`, and opens it with Terminal.app, as if you had
-double-clicked it. The script:
+**Launch agent sheet.** Next to **Copy command** there are two buttons:
 
-1. runs in a login `zsh` (`#!/bin/zsh -l`), so your `PATH` and tools such as
-   `claude` or `codex` are there as in any new Terminal window;
-2. deletes itself (`rm -f -- "$0"`) and sets the window title;
-3. changes to the workspace folder (`~` expanded, the path single-quoted);
-4. runs the launch command;
-5. then `exec`s your login shell, so the window stays open after the agent
-   exits.
+- **Open in Terminal** starts the agent in its own tmux session and opens a
+  Terminal.app window attached to it.
+- **Start in background** starts the session without a window. Open it later
+  from **Terminal sessions** or the agent's **Terminal** tab.
 
-Opening a file with Terminal needs no Apple Events, so macOS does not ask for
-Automation permission (the pasted **Copy all** script, which drives Terminal
-with AppleScript, still does). If a workspace folder does not exist, the app
-says so in an alert and skips that window. The page must send an absolute path
-(`/…` or `~/…`); the button is disabled for any other path.
+With **Resume same employees** on, they read **Open N terminals** and **Start
+N in background** and launch one session per employee of the project (or of all
+hives). An employee whose session is still running keeps it, even one first
+launched as a new agent: the sheet says "already running" and nothing is
+started again. Both buttons are disabled with
+a notice while the app connects to the broker, with **Start Hivemind Server to
+use terminals** (and a button that starts it) when Hivemind Server is not
+running, and with **Install tmux: `brew install tmux`** when tmux is missing.
+There is no launch outside tmux. **Copy** and **Copy all** work as before: the
+pasted text opens plain Terminal windows, not tmux.
 
-**Security note.** By the user's choice there is **no confirmation dialog**:
-one click opens the terminals and runs the commands. The flip side is that any
-script running in the Hivemind page could do the same. For example, an XSS in
-the web UI could open Terminal windows running commands of its choosing, as
-you. What limits this:
+Each session is named `hm-<project>-<agent>`, or `hm-<project>-new-<n>` for a
+new agent whose name is not known yet. It starts in the workspace folder and
+runs the same command **Copy** would copy, in a login `zsh`, then stays open in
+a login shell after the agent exits. The session's shell carries
+`HIVEMIND_TMUX_SESSION=<name>`, which the agent's `hivemind mcp` reports on
+join; the UI maps agents to sessions by that label
+([Terminal session label](agent-connection.md#terminal-session-label)).
 
-- The app accepts the message only from the main frame of the pinned loopback
-  origin (`http://127.0.0.1:<port>` of the server it connected to), never from
-  another origin or an iframe.
+**In the app:**
+
+- **Terminal sessions** (above **Launch agent** in the sidebar, with the number
+  running) lists every Hivemind session: the agent it maps to, running or
+  exited, attached clients and start time. **Open** shows the session in an
+  in-app terminal, **Open in Terminal** attaches a Terminal.app window, and
+  **Terminate** ends the session and everything in it after a confirmation.
+- A DM with an agent whose session is running has a **Terminal** tab with the
+  same in-app terminal.
+- Roster rows show a small terminal icon for an agent with a running session.
+
+The in-app terminal is xterm.js, loaded only when a terminal is first shown. It
+takes typing, paste, Ctrl+C and resizes, and keeps tmux's scrollback (50,000
+lines). A Terminal.app window and any number of in-app terminals can show one
+session at once; the one typed in last sets the size. On a touch screen a row of
+Esc, Ctrl, Tab, ^C and arrow keys is shown. Reloading or closing the window
+detaches its in-app terminals; the sessions keep running.
+
+**Open in Terminal** writes a `.command` script (mode `0700`) into a private
+folder (`0700`) under the user's temporary folder, `$TMPDIR/Hivemind/terminal/`,
+and opens it with Terminal.app, as if you had double-clicked it. The script
+deletes itself (`rm -f -- "$0"`), sets the window title and runs
+`exec tmux -L hivemind … attach-session -t =<name>`. The app builds that line
+itself; the page never supplies what the script runs. Opening a file with
+Terminal needs no Apple Events, so macOS does not ask for Automation permission
+(the pasted **Copy all** script, which drives Terminal with AppleScript, still
+does). Closing the window detaches it; the session keeps running.
+
+Processes in the sessions are started by Hivemind Server.app, so macOS privacy
+prompts (for example for the Documents folder) name **Hivemind Server**.
+
+#### Security note
+
+By the user's choice there is **no confirmation dialog** for a launch: one click
+starts the sessions and runs the commands. The flip side is that any script
+running in the Hivemind page could do the same. The app hears terminal messages
+from the page of the local server it connected to, and that server serves the
+page, so an XSS in the web UI or a compromised local server could start
+sessions running commands of its choosing, as you, read their output, type into
+them or terminate them. This is accepted because the page is Hivemind's own UI,
+trusted as the UI itself is. What limits this:
+
+- The app accepts terminal messages only from the main frame of the pinned
+  loopback origin (`http://127.0.0.1:<port>` of the server it connected to),
+  never from another origin or an iframe.
 - Every message is checked strictly and dropped as a whole if any part is off:
-  at most 24 launches, each command non-empty, at most 8 KB and without NUL
-  bytes, a title of at most 200 characters, and an absolute folder.
-- The app takes at most one such message per second per window.
-- Scripts are created exclusively in a folder only you can read, and delete
-  themselves when Terminal runs them; ones Terminal never ran are removed
-  after a day.
+  at most 24 launches, each with a project slug, an agent name of at most 64
+  characters or none, a command that is non-empty, at most 8 KB and without NUL
+  bytes, a title of at most 200 characters and an absolute folder (`/…` or
+  `~/…`). The broker checks everything again.
+- The app takes at most one `terminal-launch`, one `terminal-open` and one
+  `terminal-kill` per second per window, each counted on its own, and answers a
+  refused one with an error.
+- Streams belong to the page that attached them: another page load in the
+  window detaches them, and input goes only to a stream the page attached.
+- `.command` scripts are created exclusively in a folder only you can read, and
+  delete themselves when Terminal runs them; ones Terminal never ran are
+  removed after a day.
+- The broker's token and its `0600` socket keep out other users and apps that
+  cannot read your files; the page never sees the token.
+- The Node server has no terminal API at all, so a client that only talks HTTP
+  to it (another app, a browser tab, an agent) cannot reach a terminal; only a
+  page loaded in Hivemind.app can. See the
+  [broker's security notes](terminal-broker.md#security-notes).
 
 The page itself is the local server's own UI. The protections that keep other
 code out of it, and so out of this feature, are the ones in
@@ -173,6 +241,9 @@ window: it can then be inspected from Safari's Develop menu (macOS 13.3+).
 | Server data (messages, uploads, `server.lock`) | `~/.hivemind/`, or the data folder chosen in the menu |
 | Discovery file | `~/Library/Application Support/Hivemind/server.json` |
 | Server log | `~/Library/Logs/Hivemind/server.log`, rotated at 5 MB with 3 old files kept |
+| Terminal broker log | `~/Library/Logs/Hivemind/broker.log` |
+| Terminal broker socket and token | `~/Library/Application Support/Hivemind/broker.sock` (`0600`) and `broker.token` (`0600`), new on every broker start |
+| Hivemind's tmux config | `~/Library/Application Support/Hivemind/tmux.conf`, rewritten on every broker start |
 | App settings | Each app's own preferences (`com.maxcorrads.hivemind`, `com.maxcorrads.hivemind.server`) |
 | Open in Terminal scripts | `$TMPDIR/Hivemind/terminal/`, each deleted when Terminal runs it |
 
@@ -226,8 +297,12 @@ The apps do not change the [Local Human security boundary](local-human-security.
   addresses only (`NSAllowsLocalNetworking`).
 - The health check the apps make uses a cookie-less session. It never touches
   the Human session in the windows.
-- **Open in Terminal** runs commands the page sends without asking; see its
-  [security note](#open-in-terminal).
+- **Terminals**: the page can start agents in tmux sessions without asking,
+  and read and type into them, so whatever controls the page (an XSS, or a
+  compromised local server, which serves it) can too; see the
+  [security note](#security-note). The
+  terminal broker listens only on a Unix socket only you can reach, and checks
+  a token on every connection ([Terminal broker](terminal-broker.md#authentication)).
 - `hivemind-server://start` can be opened by any app or page (a browser asks
   first). It only starts the server, as the menu's **Start Server** does.
 
@@ -277,7 +352,9 @@ The script:
    `SHASUMS256.txt` (fetched again once if a cached copy does not list it).
 5. Writes `Info.plist` (bundle identifiers from `HivemindKit/Identity.swift`,
    which the apps also use to find each other; `LSArchitecturePriority` arm64
-   and `LSRequiresNativeExecution`, so macOS never offers Rosetta) and signs
+   and `LSRequiresNativeExecution`, so macOS never offers Rosetta; for the
+   server app also the folder privacy strings macOS shows when an agent in one
+   of its tmux sessions reaches a protected folder) and signs
    both bundles ad-hoc. It checks with `lipo -archs` that every executable is
    arm64 only.
 6. Runs only `node bin/hivemind.mjs --help` from the bundle, and only on an
@@ -293,10 +370,12 @@ in `macos/build.sh` together. Take the checksum from
 The Swift code lives in `macos/`:
 
 - `HivemindKit` holds all the logic that can be tested without AppKit, a network
-  or a child process.
+  or a child process, the terminal broker's included. It uses Foundation only,
+  so a later iOS/iPad client can reuse it.
 - `HivemindApp` and `HivemindServerApp` are thin app shells over it.
 
-Its tests use fake processes and never start node or open a port:
+Its tests use fake processes, a fake tmux and fake PTYs, and never start node or
+tmux, open a PTY or a socket:
 
 ```bash
 swift test --package-path macos

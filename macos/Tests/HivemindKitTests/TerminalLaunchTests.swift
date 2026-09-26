@@ -17,10 +17,6 @@ final class FakeTerminalOpener: TerminalOpening {
   }
 }
 
-private func message(_ launches: Any) -> BridgeMessage? {
-  BridgeMessage(body: ["type": "launch-terminal", "launches": launches])
-}
-
 private func launch(_ title: String = "Acme - Atlas", cwd: String? = "/Users/me/acme", command: String = "codex 'hi'\n") -> TerminalLaunch {
   TerminalLaunch(title: title, cwd: cwd, command: command)!
 }
@@ -76,63 +72,35 @@ private let awkwardPaths = [
 ]
 
 struct TerminalLaunchMessageTests {
-  @Test func parsesLaunchesWithAndWithoutAFolder() {
-    let parsed = message([
-      ["title": "Acme - Atlas", "cwd": "/Users/me/acme", "command": "codex 'hi'\n"],
-      ["title": "Acme - Bea", "command": "cd -- '/x' && claude\n"],
-      ["title": "", "cwd": NSNull(), "command": "claude"],
-      ["title": "Home", "cwd": "~/src", "command": "claude"],
-    ])
-    #expect(parsed == .launchTerminal([
-      launch(),
-      launch("Acme - Bea", cwd: nil, command: "cd -- '/x' && claude\n"),
-      launch("", cwd: nil, command: "claude"),
-      launch("Home", cwd: "~/src", command: "claude"),
-    ]))
+  /// Agents only run in tmux now: the page can no longer hand the app a
+  /// command to run in a plain Terminal window.
+  @Test func refusesTheRemovedLaunchTerminalMessage() {
+    let body: [String: Any] = ["type": "launch-terminal", "launches": [["title": "t", "command": "claude"]]]
+    #expect(BridgeMessage(body: body) == nil)
   }
 
-  @Test func dropsTheWholeMessageWhenAnyLaunchIsInvalid() {
-    let good: [String: Any] = ["title": "ok", "command": "claude"]
-    let bad: [[String: Any]] = [
-      ["title": "t"],
-      ["command": "claude"],
-      ["title": "t", "command": ""],
-      ["title": "t", "command": " \n\t "],
-      ["title": "t", "command": "claude\0rm"],
-      ["title": "t", "command": String(repeating: "x", count: TerminalLaunch.maxCommandBytes + 1)],
+  @Test func refusesLaunchesOutsideTheLimits() {
+    let bad: [(title: String, cwd: String?, command: String)] = [
+      ("t", nil, ""),
+      ("t", nil, " \n\t "),
+      ("t", nil, "claude\0rm"),
+      ("t", nil, String(repeating: "x", count: TerminalLaunch.maxCommandBytes + 1)),
       // 8 KB is bytes, not characters.
-      ["title": "t", "command": String(repeating: "é", count: TerminalLaunch.maxCommandBytes / 2 + 1)],
-      ["title": String(repeating: "t", count: TerminalLaunch.maxTitleLength + 1), "command": "claude"],
-      ["title": "t\0", "command": "claude"],
-      ["title": 7, "command": "claude"],
-      ["title": "t", "command": ["claude"]],
-      ["title": "t", "cwd": "relative/path", "command": "claude"],
-      ["title": "t", "cwd": "", "command": "claude"],
-      ["title": "t", "cwd": "~other/x", "command": "claude"],
-      ["title": "t", "cwd": "/x\0y", "command": "claude"],
-      ["title": "t", "cwd": 3, "command": "claude"],
-      ["title": "t", "cwd": "/" + String(repeating: "a", count: TerminalLaunch.maxPathBytes), "command": "claude"],
+      ("t", nil, String(repeating: "é", count: TerminalLaunch.maxCommandBytes / 2 + 1)),
+      (String(repeating: "t", count: TerminalLaunch.maxTitleLength + 1), nil, "claude"),
+      ("t\0", nil, "claude"),
+      ("t", "relative/path", "claude"),
+      ("t", "", "claude"),
+      ("t", "~other/x", "claude"),
+      ("t", "/x\0y", "claude"),
+      ("t", "/" + String(repeating: "a", count: TerminalLaunch.maxPathBytes), "claude"),
     ]
     for item in bad {
-      #expect(message([good, item]) == nil, "\(item)")
+      #expect(TerminalLaunch(title: item.title, cwd: item.cwd, command: item.command) == nil, "\(item)")
     }
-    #expect(message([Any]()) == nil)
-    #expect(message(Array(repeating: good, count: TerminalLaunch.maxLaunches + 1)) == nil)
-    #expect(message(good) == nil)
-    #expect(message("claude") == nil)
-    #expect(message(["not an object"]) == nil)
-    #expect(BridgeMessage(body: ["type": "launch-terminal"]) == nil)
-  }
-
-  @Test func acceptsTheLimitsExactly() {
     let command = String(repeating: "x", count: TerminalLaunch.maxCommandBytes)
     let title = String(repeating: "t", count: TerminalLaunch.maxTitleLength)
-    let items = Array(repeating: ["title": title, "command": command] as [String: Any], count: TerminalLaunch.maxLaunches)
-    guard case .launchTerminal(let launches) = message(items) else {
-      Issue.record("expected launch-terminal")
-      return
-    }
-    #expect(launches.count == TerminalLaunch.maxLaunches)
+    #expect(TerminalLaunch(title: title, cwd: nil, command: command) != nil)
   }
 
   @Test func expandsTheHomeFolderOnly() {

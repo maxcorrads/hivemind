@@ -6,6 +6,9 @@ import HivemindKit
 @MainActor
 final class ServerMenuModel: ObservableObject {
   let controller: ServerAppController
+  /// The terminal broker: tmux sessions and the PTYs attached to them. It
+  /// runs for the life of the app, whether or not the server does.
+  let terminals: TerminalBrokerService
   private let loginItem: any LoginItemControlling
   private let installer: CommandLineInstaller
 
@@ -19,12 +22,15 @@ final class ServerMenuModel: ObservableObject {
       log: RotatingLog(file: paths.serverLog), dependencies: .live())
     loginItem = MainAppLoginItem()
     installer = CommandLineInstaller(paths: paths)
+    terminals = TerminalBrokerService(paths: paths)
     controller.onChange = { [weak self] in self?.objectWillChange.send() }
+    terminals.onChange = { [weak self] in self?.objectWillChange.send() }
   }
 
   private var paths: HivemindPaths { controller.paths }
 
   var status: ServerAppStatus { controller.status }
+  var terminalsStatus: BrokerStatus { terminals.status }
   var port: ServerPort { controller.settings.port }
   var dataFolderLabel: String { paths.abbreviated(controller.dataHome) }
   var usesDefaultDataFolder: Bool { controller.settings.dataHome == nil }

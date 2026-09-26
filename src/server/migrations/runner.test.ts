@@ -115,17 +115,18 @@ test("a populated current-main (user_version 2) hive upgrades with every row and
 
   const after = inspect(file, db => ({ schema: schemaOf(db), rows: rowsOf(db) }));
   // #211 (jev_advisory) drops what only served enforced topologies, #215 (agent_tombstones) adds agents.removed_at
-  // and replaces the constant Human token hash, and drop_decision_requests removes the Human decision queue (its
-  // messages stay); every other row and object is untouched.
+  // and replaces the constant Human token hash, drop_decision_requests removes the Human decision queue (its
+  // messages stay) and agent_terminal_session adds agents.terminal_session (empty); every other row and object is untouched.
   const dropped = ["adaptive_topology_locks", "adaptive_topology_tasks", "adaptive_topology_evaluated", "adaptive_topology_messages",
     "decision_requests", "decision_mutations"];
   const rewritten = ["adaptive_topology_executions", "adaptive_topology_events", "agents"];
   // #217 (performance_retention) adds the per-message receipt index, backfilled from the delivery ledger.
   const added = ["inbox_receipts"];
-  type AgentRow = { id: string; token_hash: string; removed_at?: number | null };
+  type AgentRow = { id: string; token_hash: string; removed_at?: number | null; terminal_session?: string | null };
   const beforeAgents = before.rows.agents as AgentRow[], afterAgents = after.rows.agents as AgentRow[];
-  assert.deepEqual(afterAgents.map(({ token_hash: _t, removed_at, ...row }) => ({ ...row, removed_at })),
-    beforeAgents.map(({ token_hash: _t, ...row }) => ({ ...row, removed_at: null })), "every agent is kept, none removed");
+  assert.deepEqual(afterAgents.map(({ token_hash: _t, removed_at, terminal_session, ...row }) => ({ ...row, removed_at, terminal_session })),
+    beforeAgents.map(({ token_hash: _t, ...row }) => ({ ...row, removed_at: null, terminal_session: null })),
+    "every agent is kept, none removed, none labelled with a terminal session");
   for (const [i, row] of afterAgents.entries()) {
     if (row.id === "human") assert.match(row.token_hash, /^[0-9a-f]{64}$/);
     if (row.id === "human") assert.notEqual(row.token_hash, beforeAgents[i]!.token_hash, "the constant Human hash is replaced");

@@ -11,6 +11,7 @@ import { after, test } from "node:test";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const NOT_LOADABLE_IN_NODE = new Map([
   ["web/main.tsx", "Vite browser bootstrap: imports CSS and mounts the app into #root (covered by Playwright)"],
+  ["web/use-terminal-xterm.ts", "xterm.js behind TerminalView: imports xterm's CSS and its browser ESM entry, which Node cannot load; Hivemind.app only (web/terminal.unit.test.tsx covers TerminalView with a fake screen)"],
 ]);
 
 function sources(relative: string): string[] {

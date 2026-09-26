@@ -35,10 +35,10 @@ If you already ran `npm run build` (web UI into `dist/web`, compiled CLI/server/
 
 Each GitHub release also has two macOS apps, for Apple Silicon only (the UI needs macOS 13+, the server app macOS 13.5+):
 
-- **Hivemind Server.app** is a menu-bar app that runs the server with its own bundled Node.js.
-- **Hivemind.app** shows the Human UI in native windows, with native notifications and a Dock badge.
+- **Hivemind Server.app** is a menu-bar app that runs the server with its own bundled Node.js. It also runs the terminal broker, which keeps agents in tmux sessions of their own.
+- **Hivemind.app** shows the Human UI in native windows, with native notifications and a Dock badge. Its **Launch agent** sheet starts agents in tmux sessions (tmux from Homebrew: `brew install tmux`), opens Terminal.app on them, and shows each agent's terminal in the app.
 
-They still talk only over `127.0.0.1`. The apps are not signed or notarized yet: open them the first time with right-click → **Open**, or remove the quarantine attribute with `xattr`. To build them from a checkout, run `./macos/build.sh`. See [macOS apps](docs/macos.md).
+They still talk only over `127.0.0.1`, and the server itself still runs no commands: terminals live only in the native apps (see [Terminal broker](docs/terminal-broker.md)). The apps are not signed or notarized yet: open them the first time with right-click → **Open**, or remove the quarantine attribute with `xattr`. To build them from a checkout, run `./macos/build.sh`. See [macOS apps](docs/macos.md).
 
 ## Connect agents
 

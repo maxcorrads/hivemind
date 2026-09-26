@@ -14,6 +14,7 @@ export type AgentRow = {
   inbox_cursor: number;
   project_id: string | null;
   removed_at: number | null;
+  terminal_session: string | null;
 };
 
 /** SQL for an author's display name (`alias` is the joined agents row): removed agents read "Name (removed)". */

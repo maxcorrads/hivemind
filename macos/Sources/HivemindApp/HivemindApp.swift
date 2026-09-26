@@ -136,7 +136,8 @@ final class HivemindApp: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     if let target { controller.navigate(to: target) }
   }
 
-  /// "Open in Terminal" from a window's Launch agent sheet.
+  /// Terminal.app windows attached to tmux sessions (Open in Terminal,
+  /// terminal-open): each runs `exec tmux attach`, never an agent's command.
   func openTerminals(_ launches: [TerminalLaunch], from window: NSWindow?) {
     TerminalAlerts.report(terminalLauncher.launch(launches), window: window)
   }

@@ -30,6 +30,8 @@ export type JoinInput = {
   resumeName?: string | null;
   project?: string | null;
   cwd?: string | null;
+  /** The Hivemind tmux session the joining process runs in; null or absent clears the agent's label. */
+  terminalSession?: string | null;
 };
 
 export type IdentityServiceDeps = Core & {
@@ -134,6 +136,7 @@ export class IdentityService implements AgentDirectory {
       projectId: row.project_id,
       project: projectSlug,
       ...(row.removed_at != null ? { removedAt: row.removed_at } : {}),
+      ...(row.terminal_session ? { terminalSession: row.terminal_session } : {}),
     };
   }
 
@@ -200,8 +203,11 @@ export class IdentityService implements AgentDirectory {
         throw new HiveError(403, `This session is ${agent.name}, not ${input.resumeName}`);
       }
       assertResumable(agent);
-      this.touch(agent.id, true);
-      return { agent, token: input.token!, created: false };
+      return storage.transaction(() => {
+        this.touch(agent.id, true);
+        this.claimTerminalSession(agent.id, input.terminalSession ?? null);
+        return { agent: this.getAgent(agent.id), token: input.token!, created: false };
+      });
     }
     // Brains and workers have no stored credentials: resuming by name opens a new session
     // and supersedes the previous one, whose key stops working.
@@ -217,6 +223,7 @@ export class IdentityService implements AgentDirectory {
       return storage.transaction(() => {
         const token = this.replaceAgentSession(agent.id);
         this.touch(agent.id, true);
+        this.claimTerminalSession(agent.id, input.terminalSession ?? null);
         return { agent: this.getAgent(agent.id), token, created: false };
       });
     }
@@ -266,9 +273,26 @@ export class IdentityService implements AgentDirectory {
       }
       const maxSeq = this.db.prepare("SELECT COALESCE(MAX(seq), 0) AS n FROM messages").get() as { n: number };
       this.db.prepare("UPDATE agents SET inbox_cursor = ? WHERE id = ?").run(maxSeq.n, id);
-      storage.afterCommit(() => bus.emit("agent", agent));
+      this.claimTerminalSession(id, input.terminalSession ?? null, false);
+      storage.afterCommit(() => bus.emit("agent", this.getAgent(id)));
       return { agent: this.getAgent(id), token, created: true };
     });
+  }
+
+  /**
+   * Records the tmux session the agent's current process reported (or clears it). A session holds one agent at a
+   * time, so an agent that joins from a session another agent held takes the label over. Only a label: nothing runs by it.
+   */
+  private claimTerminalSession(agentId: string, session: string | null, announce = true): void {
+    const changed: string[] = [];
+    if (session) {
+      const holders = this.db.prepare("SELECT id FROM agents WHERE terminal_session = ? AND id != ?").all(session, agentId) as { id: string }[];
+      this.db.prepare("UPDATE agents SET terminal_session = NULL WHERE terminal_session = ? AND id != ?").run(session, agentId);
+      changed.push(...holders.map(row => row.id));
+    }
+    const own = this.db.prepare("UPDATE agents SET terminal_session = ? WHERE id = ? AND terminal_session IS NOT ?").run(session, agentId, session);
+    if (announce && Number(own.changes) > 0) changed.push(agentId);
+    if (changed.length) this.deps.storage.afterCommit(() => { for (const id of changed) this.deps.bus.emit("agent", this.getAgent(id)); });
   }
 
   /** Issues a new session key and fences the previous session's waits and receipts in the same commit. */
@@ -329,7 +353,7 @@ export class IdentityService implements AgentDirectory {
    * attributed), goes offline and gets an unguessable session key, so no earlier key authenticates it again.
    */
   markRemoved(agentId: string, at: number): void {
-    this.db.prepare("UPDATE agents SET removed_at = ?, online = 0, token_hash = ? WHERE id = ? AND removed_at IS NULL")
+    this.db.prepare("UPDATE agents SET removed_at = ?, online = 0, token_hash = ?, terminal_session = NULL WHERE id = ? AND removed_at IS NULL")
       .run(at, hashToken(newToken()), agentId);
   }
 }

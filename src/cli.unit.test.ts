@@ -10,11 +10,13 @@ import { BODY_MAX } from "./shared/types.ts";
 // Every command runs in-process against a mocked fetch; HIVEMIND_HOME is a
 // throwaway directory so send journals and gc never touch a real hive.
 const home = mkdtempSync(path.join(os.tmpdir(), "hivemind-cli-"));
-const saved = { home: process.env.HIVEMIND_HOME, url: process.env.HIVEMIND_URL, token: process.env.HIVEMIND_TOKEN };
+const saved = { home: process.env.HIVEMIND_HOME, url: process.env.HIVEMIND_URL, token: process.env.HIVEMIND_TOKEN,
+  session: process.env.HIVEMIND_TMUX_SESSION };
 process.env.HIVEMIND_HOME = home;
 process.env.HIVEMIND_URL = "http://127.0.0.1:7999";
 after(() => {
-  for (const [key, value] of [["HIVEMIND_HOME", saved.home], ["HIVEMIND_URL", saved.url], ["HIVEMIND_TOKEN", saved.token]] as const) {
+  for (const [key, value] of [["HIVEMIND_HOME", saved.home], ["HIVEMIND_URL", saved.url], ["HIVEMIND_TOKEN", saved.token],
+    ["HIVEMIND_TMUX_SESSION", saved.session]] as const) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
@@ -22,6 +24,7 @@ after(() => {
 });
 beforeEach(() => {
   process.env.HIVEMIND_TOKEN = "env-token";
+  delete process.env.HIVEMIND_TMUX_SESSION;
 });
 
 type Call = { method: string; path: string; body: unknown; auth: string | null };
@@ -120,6 +123,16 @@ test("join --resume sends no stored credential and reports unchanged orders", as
   assert.equal(calls[0]!.auth, null);
   assert.deepEqual(calls[0]!.body, { role: "brain", seniority: null, focus: null, resume: "Ada", project: null, cwd: process.cwd() });
   assert.deepEqual(out, ["Back as Ada · worker · senior", "export HIVEMIND_TOKEN=new-token", "orders unchanged — hivemind standing-orders"]);
+});
+
+test("join inside a Hivemind tmux session reports it; any other value is not sent", async (t) => {
+  const { calls } = harness(t, joined(false));
+  process.env.HIVEMIND_TMUX_SESSION = "hm-demo-ada";
+  await runCli(["join", "--as", "brain", "--resume", "Ada"]);
+  assert.equal((calls[0]!.body as { terminalSession?: string }).terminalSession, "hm-demo-ada");
+  process.env.HIVEMIND_TMUX_SESSION = "my-own-session";
+  await runCli(["join", "--as", "brain", "--resume", "Ada"]);
+  assert.equal("terminalSession" in (calls[1]!.body as object), false);
 });
 
 test("join keeps an explicit session token, even when resuming", async (t) => {

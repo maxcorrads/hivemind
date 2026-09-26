@@ -23,7 +23,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   private var retryTimer: Timer?
   private var observations: [NSKeyValueObservation] = []
   private var isClosed = false
-  private var terminalThrottle = TerminalLaunchThrottle()
+  /// This window's terminals (docs/terminal-broker.md#bridge): its own
+  /// broker connection, so its streams end with it. Primary windows only;
+  /// the others have no bridge.
+  private var terminals: TerminalBridgeRouter?
 
   static let retryInterval: TimeInterval = 2
   static let windowIdentifier = NSUserInterfaceItemIdentifier("hivemind.browser")
@@ -89,6 +92,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
       webView.configuration.userContentController.add(
         WeakScriptMessageHandler(self), contentWorld: .page, name: bridgeHandlerName)
     }
+    if primary { terminals = makeTerminalRouter() }
     connectView.onStartServer = { [weak self] in
       self?.app.startServerApp()
       self?.connect()
@@ -109,6 +113,27 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   }
 
   required init?(coder: NSCoder) { fatalError("not used") }
+
+  private func makeTerminalRouter() -> TerminalBridgeRouter {
+    let paths = app.paths
+    let client = BrokerClient(
+      configuration: .init(
+        connector: UnixSocketBrokerConnector(path: paths.brokerSocket.path),
+        token: { BrokerTokenFile.read(paths.brokerToken) },
+        clientLabel: "Hivemind.app"),
+      scheduler: MainQueueScheduler())
+    return TerminalBridgeRouter(client: client, environment: .init(
+      home: FileManager.default.homeDirectoryForCurrentUser.path,
+      tmuxConfigPath: paths.tmuxConfig.path,
+      deliver: { [weak self] event in
+        guard let self, !self.isClosed else { return }
+        self.webView.evaluateJavaScript(event.javaScript, completionHandler: nil)
+      },
+      openTerminals: { [weak self] launches in
+        guard let self else { return }
+        self.app.openTerminals(launches, from: self.window)
+      }))
+  }
 
   // MARK: Connection
 
@@ -151,6 +176,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   private func showConnectScreen(_ state: UIConnectionState) {
     connection = state
     outbox.discard()
+    terminals?.pageDidChange()
     app.clearBadge(for: id)
     webView.stopLoading()
     webView.isHidden = true
@@ -201,6 +227,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
   /// port), follow it. A server that is merely down is left to the page,
   /// which reconnects by itself.
   func revalidate() {
+    terminals?.retry()
     guard isPrimary, let current = endpoint, !resolving else { return }
     let locator = app.locator
     let port = app.configuredPort
@@ -252,10 +279,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
       app.setBadge(count, for: id)
     case .notify(let title, let body, let tag, let target):
       app.notifier.post(UIAppNotice(title: title, body: body, tag: tag, target: target, windowID: id))
-    case .launchTerminal(let launches):
-      // No confirmation, by the user's choice (docs/macos.md#open-in-terminal).
-      guard terminalThrottle.allow(at: Date()) else { return }
-      app.openTerminals(launches, from: window)
+    default:
+      // Terminals (docs/terminal-broker.md#bridge). No confirmation for a
+      // launch, by the user's choice (docs/macos.md#security-note); the
+      // router throttles launch, open and kill.
+      terminals?.handle(parsed)
     }
   }
 
@@ -311,6 +339,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSMen
 
   func windowWillClose(_ notification: Notification) {
     isClosed = true
+    terminals?.close()
     stopRetrying()
     observations.removeAll()
     webView.stopLoading()
@@ -333,6 +362,7 @@ extension BrowserWindowController: WKNavigationDelegate {
   ) {
     if action.shouldPerformDownload { return decisionHandler(.download) }
     guard let url = action.request.url, let endpoint else { return decisionHandler(.cancel) }
+    if startsServerApp(url, isMainFrame: action.targetFrame?.isMainFrame ?? true) { return decisionHandler(.cancel) }
     let decision = UIAppNavigation.decide(
       url, endpoint: endpoint, isMainFrame: action.targetFrame?.isMainFrame ?? true,
       userActivated: action.navigationType == .linkActivated)
@@ -361,6 +391,8 @@ extension BrowserWindowController: WKNavigationDelegate {
     // The badge stays: the page resends it once it has a snapshot, and
     // clearing it here would blink the Dock on every reload.
     outbox.pageWillLoad()
+    // The old page's in-app terminals go with it.
+    terminals?.pageDidChange()
   }
 
   func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
@@ -369,6 +401,19 @@ extension BrowserWindowController: WKNavigationDelegate {
 
   func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
     failed(error)
+  }
+
+  /// hivemind-server://start from the page ("Start Hivemind Server to use
+  /// terminals"): the same as the connect screen's button, then terminals
+  /// retry at once. It only ever starts the server, so it needs no gate
+  /// beyond coming from the main frame of this window.
+  private func startsServerApp(_ url: URL, isMainFrame: Bool) -> Bool {
+    guard ServerAppURLCommand(url: url) == .start else { return false }
+    if isPrimary, isMainFrame {
+      app.startServerApp()
+      terminals?.retry()
+    }
+    return true
   }
 
   private func failed(_ error: any Error) {
@@ -407,6 +452,7 @@ extension BrowserWindowController: WKUIDelegate {
     for action: WKNavigationAction, windowFeatures: WKWindowFeatures
   ) -> WKWebView? {
     guard let url = action.request.url, let endpoint else { return nil }
+    if startsServerApp(url, isMainFrame: action.sourceFrame.isMainFrame) { return nil }
     if endpoint.isSameOrigin(url) {
       if url.path.isEmpty || url.path == "/" {
         // The UI itself: a full window at that route.

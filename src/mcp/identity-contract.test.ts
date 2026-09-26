@@ -39,3 +39,19 @@ test("real concurrent/repeated MCP joins reuse the active identity without expos
   const bad = await client.callTool({name:"join",arguments:{role:"worker",seniority:"mid"}});
   assert.equal(bad.isError,true); assert.equal(hive.identity.listAgents().filter(a=>a.role!=="human").length,1);
 });
+
+test("an MCP client launched in a Hivemind tmux session reports it on join; the server keeps it as a label", { timeout: 20_000 }, async t => {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+  const dir = mkdtempSync(path.join(os.tmpdir(), "hive-join-terminal-"));
+  const hive = new Hive(path.join(dir, "hive.db")), service = startServer({ hive, port: 0, telegram: false });
+  const client = new Client({ name: "join-terminal-fixture", version: "0" });
+  const transport = new StdioClientTransport({ command: process.execPath, args: ["--import", path.join(root,"node_modules/tsx/dist/loader.mjs"), path.join(root,"src/cli.ts"), "mcp"], cwd: dir,
+    env: childEnv({ PATH: process.env.PATH ?? "", HIVEMIND_HOME: path.join(dir,"identity"), HIVEMIND_URL: `http://127.0.0.1:${await service.ready}`, HIVEMIND_TOKEN: "",
+      HIVEMIND_TMUX_SESSION: "hm-acme-new-1" }), stderr: "pipe" });
+  t.after(async () => { await client.close(); await transport.close(); await service.shutdown(); hive.db.close(); rmSync(dir,{ recursive:true,force:true }); });
+  await client.connect(transport);
+  const result = await client.callTool({ name: "join", arguments: { role: "worker", seniority: "mid" } });
+  assert.notEqual(result.isError, true, JSON.stringify(result));
+  const { name } = JSON.parse((result.content as Array<{ type: string; text: string }>)[0]!.text) as { name: string };
+  assert.equal(hive.identity.getAgentByName(name)!.terminalSession, "hm-acme-new-1");
+});

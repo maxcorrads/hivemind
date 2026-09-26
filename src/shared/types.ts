@@ -86,6 +86,11 @@ export type Agent = {
   project: string | null;
   /** Set once Human removed the agent: a tombstone that keeps its history but can no longer act (#215). */
   removedAt?: number;
+  /**
+   * The Hivemind tmux session (`hm-…`) the agent's MCP client reported on its latest join, when it runs in one.
+   * A display label with no capability: the server never runs, opens or kills anything by it (docs/terminal-broker.md).
+   */
+  terminalSession?: string;
 };
 
 /** How history names a removed agent. Removed names stay reserved, so the label is unambiguous. */

@@ -7,8 +7,9 @@ import type { Agent, Channel, Message, Project } from "../src/shared/types.ts";
 import { launchBlockText, type LaunchContext } from "../src/shared/launch-prompt.ts";
 import type { DesktopNotifications } from "./desktop-notifications.ts";
 import {
-  badgeSync, inNativeApp, launchInTerminal, nativeBridge, notifyNative, postNative, runNativeCommand, terminalLaunchProblem,
-  useNativeBridge, NATIVE_EVENT, TERMINAL_LIMITS, type NativeCommandHandlers, type NativeMessage, type TerminalLaunch,
+  appLinks, badgeSync, inNativeApp, nativeBridge, notifyNative, postNative, runNativeCommand, startHivemindServer, useNativeBridge,
+  BROKER_UNAVAILABLE_HINT, NATIVE_EVENT, TERMINAL_EVENT, TMUX_INSTALL_HINT, type NativeCommandHandlers, type NativeMessage,
+  type TerminalSessionLaunch,
 } from "./native-bridge.ts";
 import type { Sel } from "./selection.ts";
 
@@ -20,6 +21,7 @@ const { useDesktopNotifications } = await import("./desktop-notifications.ts");
 const { SettingsMenu } = await import("./SettingsMenu.tsx");
 const { LaunchSheet } = await import("./LaunchSheet.tsx");
 const { api } = await import("./api.ts");
+const { resetTerminalHub } = await import("./use-terminal.ts");
 after(() => window.happyDOM.close());
 
 type Win = typeof window & { webkit?: unknown; Notification?: unknown };
@@ -48,6 +50,7 @@ beforeEach(() => {
   permissionAsks = 0;
   focused = false;
   delete win.webkit;
+  resetTerminalHub();
   win.Notification = FakeNotification;
   (globalThis as { Notification?: unknown }).Notification = FakeNotification;
   localStorage.clear();
@@ -247,36 +250,17 @@ test("the app's Settings… command opens the menu, and a remounted copy does no
   assert.equal((fresh.host.querySelector("details") as unknown as HTMLDetailsElement).open, false);
 });
 
-test("Open in Terminal posts the launches, and only ones the app would take", () => {
-  const one: TerminalLaunch = { title: "Acme - Atlas", cwd: "/Users/me/acme", command: "codex 'hi'" };
-  assert.equal(launchInTerminal([one]), false, "no bridge in a browser");
-  assert.deepEqual(posted, []);
+let opened: string[] = [];
+appLinks.open = url => { opened.push(url); };
 
+test("Start Hivemind Server opens the app's hivemind-server://start, and only inside it", () => {
+  opened = [];
+  assert.equal(startHivemindServer(), false);
+  assert.deepEqual(opened, []);
   installBridge();
-  assert.equal(launchInTerminal([one, { title: "Acme - Bea", cwd: null, command: "claude" }]), true);
-  assert.deepEqual(posted, [{ type: "launch-terminal", launches: [one, { title: "Acme - Bea", command: "claude" }] }]);
-
-  posted = [];
-  const long = "x".repeat(TERMINAL_LIMITS.titleChars + 10);
-  assert.equal(launchInTerminal([{ title: long, command: "claude" }]), true);
-  assert.equal((posted[0] as { launches: TerminalLaunch[] }).launches[0].title.length, TERMINAL_LIMITS.titleChars);
-
-  posted = [];
-  const refused: TerminalLaunch[][] = [
-    [],
-    Array.from({ length: TERMINAL_LIMITS.launches + 1 }, () => ({ title: "t", command: "claude" })),
-    [{ title: "t", command: "  \n" }],
-    [{ title: "t", command: "a\0b" }],
-    [{ title: "t", command: "é".repeat(TERMINAL_LIMITS.commandBytes / 2 + 1) }],
-    [{ title: "t", cwd: "relative/dir", command: "claude" }],
-    [{ title: "t", cwd: "~bob/dir", command: "claude" }],
-  ];
-  for (const launches of refused) {
-    assert.notEqual(terminalLaunchProblem(launches), null, JSON.stringify(launches).slice(0, 80));
-    assert.equal(launchInTerminal(launches), false);
-  }
+  assert.equal(startHivemindServer(), true);
+  assert.deepEqual(opened, ["hivemind-server://start"]);
   assert.deepEqual(posted, []);
-  assert.equal(terminalLaunchProblem([{ title: "t", cwd: "~/src", command: "x".repeat(TERMINAL_LIMITS.commandBytes) }]), null);
 });
 
 const project: Project = { id: "p1", slug: "acme", name: "Acme", worktree: "/Users/me/My Acme", createdAt: 0 };
@@ -297,46 +281,101 @@ async function mountLaunchSheet(agents: Agent[] = []) {
   return { view, button, blocks };
 }
 
-test("the Launch agent sheet opens the command it would copy in Terminal, inside the app only", async () => {
+/** What the app sends the page (HivemindKit BridgeTerminalEvent), as the app delivers it. */
+const fromApp = (detail: unknown) => act(async () => {
+  window.dispatchEvent(new window.CustomEvent(TERMINAL_EVENT, { detail: detail as object }));
+});
+const ready = () => fromApp({ type: "terminal-status", tmux: "available", broker: "connected" });
+const launchesPosted = () => posted.filter((m): m is Extract<NativeMessage, { type: "terminal-launch" }> => m.type === "terminal-launch");
+
+test("the Launch agent sheet starts the command it would copy in a tmux session, inside the app only", async () => {
   const browser = await mountLaunchSheet();
   assert.ok(browser.button(/^Copy command$/));
-  assert.equal(browser.button(/Terminal/), undefined);
+  assert.equal(browser.button(/Terminal|background/), undefined);
+  assert.deepEqual(posted, [], "a browser sends nothing");
   for (const unmount of unmounts.splice(0).reverse()) unmount();
 
   installBridge();
   const sheet = await mountLaunchSheet();
+  assert.deepEqual(posted, [{ type: "sessions-subscribe" }]);
+  await ready();
   assert.ok(sheet.button(/^Copy command$/), "Copy stays");
   const open = sheet.button(/^Open in Terminal$/)!;
   assert.equal(open.disabled, false);
   await act(async () => { open.click(); });
-  assert.equal(posted.length, 1);
-  const { type, launches } = posted[0] as { type: string; launches: TerminalLaunch[] };
-  assert.equal(type, "launch-terminal");
-  assert.equal(launches.length, 1);
-  assert.equal(launches[0].title, "Acme - new brain");
-  assert.equal(launches[0].cwd, "/Users/me/My Acme");
-  assert.match(launches[0].command, /^codex /);
+  const [message] = launchesPosted();
+  assert.equal(message.openInTerminal, true);
+  assert.equal(message.launches.length, 1);
+  const [launch] = message.launches;
+  assert.deepEqual({ project: launch.project, agent: launch.agent, title: launch.title, cwd: launch.cwd },
+    { project: "acme", agent: null, title: "Acme - new brain", cwd: "/Users/me/My Acme" });
+  assert.match(launch.command, /^codex /);
   // One source of truth: the copied block is this launch with its cd.
-  assert.equal(launchBlockText({ cwd: launches[0].cwd ?? null, command: launches[0].command }), sheet.blocks()[0]);
+  assert.equal(launchBlockText({ cwd: launch.cwd ?? null, command: launch.command }), sheet.blocks()[0]);
+  assert.ok(sheet.button(/^Launching…$/)?.disabled);
+  await fromApp({ type: "terminal-launched", id: message.id, names: ["hm-acme-new-1"], created: ["hm-acme-new-1"], errors: [] });
+  assert.ok(sheet.button(/^Opened$/));
+
+  posted = [];
+  const background = sheet.button(/^Start in background$/)!;
+  await act(async () => { background.click(); });
+  assert.equal(launchesPosted()[0].openInTerminal, false);
+  await fromApp({ type: "terminal-launched", id: launchesPosted()[0].id, names: [null],  created: [],
+    errors: [{ index: 0, code: "cwd-missing", message: "No such folder" }] });
+  assert.match(sheet.view.host.querySelector("[role=alert]")?.textContent ?? "", /Acme - new brain: No such folder/);
+});
+
+test("Resume same employees starts one session per employee at once, each named for its employee", async () => {
+  localStorage.setItem("hivemind-launch", JSON.stringify({ resume: true }));
+  installBridge();
+  // Atlas was first launched as a new agent and still runs in that session: resuming reuses it.
+  const sheet = await mountLaunchSheet([{ ...seat("a1", "Atlas", "brain"), terminalSession: "hm-acme-new-1" }, seat("a2", "Bea", "worker")]);
+  await ready();
+  assert.ok(sheet.button(/^Copy all$/));
+  assert.ok(sheet.button(/^Start 2 in background$/));
+  const open = sheet.button(/^Open 2 terminals$/)!;
+  await act(async () => { open.click(); });
+  const [{ id, launches }] = launchesPosted();
+  assert.deepEqual(launches.map((l: TerminalSessionLaunch) => [l.project, l.agent, l.title]),
+    [["acme", "Atlas", "Acme - Atlas"], ["acme", "Bea", "Acme - Bea"]]);
+  assert.deepEqual(launches.map(l => l.session ?? null), ["hm-acme-new-1", null], "the session hint travels only when known");
+  assert.deepEqual(launches.map(l => launchBlockText({ cwd: l.cwd ?? null, command: l.command })), sheet.blocks());
+  assert.ok(launches.every(l => l.cwd === "/Users/me/My Acme"));
+  await fromApp({ type: "terminal-launched", id, names: ["hm-acme-new-1", "hm-acme-bea"], created: ["hm-acme-bea"], errors: [] });
+  assert.match(sheet.view.host.querySelector(".launch-note")?.textContent ?? "", /1 already running/);
   assert.ok(sheet.button(/^Opened$/));
 });
 
-test("Resume same employees opens one terminal per employee at once", async () => {
-  localStorage.setItem("hivemind-launch", JSON.stringify({ resume: true }));
-  installBridge();
-  const sheet = await mountLaunchSheet([seat("a1", "Atlas", "brain"), seat("a2", "Bea", "worker")]);
-  assert.ok(sheet.button(/^Copy all$/));
-  const open = sheet.button(/^Open 2 terminals$/)!;
-  await act(async () => { open.click(); });
-  const { launches } = posted[0] as { launches: TerminalLaunch[] };
-  assert.deepEqual(launches.map(l => l.title), ["Acme - Atlas", "Acme - Bea"]);
-  assert.deepEqual(launches.map(l => launchBlockText({ cwd: l.cwd ?? null, command: l.command })), sheet.blocks());
-  assert.ok(launches.every(l => l.cwd === "/Users/me/My Acme"));
-});
-
-test("a workspace path the app cannot cd into disables Open in Terminal but not Copy", async () => {
+test("the launch buttons wait for Hivemind Server and tmux, and say what is missing", async () => {
   installBridge();
   const sheet = await mountLaunchSheet();
+  const open = () => sheet.button(/^Open in Terminal$/)!;
+  assert.equal(open().disabled, true, "no status from the app yet");
+
+  await fromApp({ type: "terminal-status", tmux: "unknown", broker: "unavailable" });
+  assert.equal(open().disabled, true);
+  assert.equal(open().title, BROKER_UNAVAILABLE_HINT);
+  assert.match(sheet.view.host.querySelector(".term-notice")?.textContent ?? "", /Start Hivemind Server to use terminals/);
+  const start = Array.from(sheet.view.host.querySelectorAll(".term-notice button"))[0] as unknown as HTMLButtonElement;
+  opened = [];
+  await act(async () => { start.click(); });
+  assert.deepEqual(opened, ["hivemind-server://start"]);
+
+  await fromApp({ type: "terminal-status", tmux: "missing", broker: "connected" });
+  assert.equal(open().disabled, true);
+  assert.equal(open().title, TMUX_INSTALL_HINT);
+  assert.equal(sheet.button(/background/)!.disabled, true);
+  assert.match(sheet.view.host.querySelector(".term-notice")?.textContent ?? "", /brew install tmux/);
+
+  await ready();
+  assert.equal(open().disabled, false);
+  assert.equal(sheet.view.host.querySelector(".term-notice"), null);
+});
+
+test("a workspace path the app cannot cd into disables the launch buttons but not Copy", async () => {
+  installBridge();
+  const sheet = await mountLaunchSheet();
+  await ready();
   const input = sheet.view.host.querySelector(".launch-workspace input") as unknown as HTMLInputElement;
   await act(async () => {
     const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input), "value")!.set!;
