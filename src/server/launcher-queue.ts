@@ -315,6 +315,21 @@ export class LauncherQueue {
     });
   }
 
+  /** A reservation timed out before claim: preserve expiry, scrub launch escrow, and close any uncertain dispatch. */
+  expireReservationRequest(requestId: string): void {
+    this.deps.storage.transaction(() => {
+      const row = this.row(requestId);
+      if ((row.state === 'awaiting_approval' || row.state === 'approved') && !row.session) {
+        this.db.prepare("UPDATE launch_requests SET state='expired' WHERE id=?").run(requestId);
+        this.db.prepare(`UPDATE launcher_commands SET state='cancelled',payload='',updated_at=?
+          WHERE request_id=? AND kind='launch'`).run(Date.now(), requestId);
+        this.changed(requestId);
+      } else if (row.session || row.state === 'launching' || row.state === 'launched') {
+        this.kill(requestId);
+      }
+    });
+  }
+
   /** Template deletion may proceed only after no live worker or pending command uses it. */
   hasActiveTemplateRequests(templateId: string): boolean {
     return Boolean(this.db.prepare("SELECT 1 FROM launch_requests WHERE template_id = ? AND state IN ('awaiting_approval','approved','launching') LIMIT 1")

@@ -120,8 +120,9 @@ test("the reported label carries no capability; the launcher validates independe
   const mentions = (pattern: RegExp) => sources(src).filter(file => pattern.test(readFileSync(path.join(src, file), "utf8"))).sort();
   assert.deepEqual(mentions(/\bterminal_session\b/),
     ["server/migrations/agent-terminal-session.ts", "server/services/identity.ts", "server/services/rows.ts"]);
-  assert.deepEqual(mentions(/terminalSession/), ["cli.ts", "mcp/index.ts", "server/app.ts", "server/launcher-queue.ts", "server/services/identity.ts",
-    "shared/api-contract.ts", "shared/terminal-session.ts", "shared/types.ts"]);
+  assert.deepEqual(mentions(/terminalSession/), ["cli.ts", "mcp/index.ts", "server/app.ts", "server/launcher-queue.ts", "server/services/agent-management.ts", "server/services/identity.ts",
+    "shared/agent-management.ts", "shared/api-contract.ts", "shared/terminal-session.ts", "shared/types.ts"]);
+  // Human management exposes display/impact metadata and UI observations, never Node execution authority.
   // The queue may reuse the name validator, but never turn an agent's self-reported label into kill authority.
   assert.doesNotMatch(readFileSync(path.join(src, "server/launcher-queue.ts"), "utf8"), /\.terminalSession\b/);
 });

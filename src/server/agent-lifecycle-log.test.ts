@@ -59,5 +59,6 @@ test('lifecycle log validates bounds and rolls back with the enclosing mutation'
     assert.throws(() => log.list(human.id, before, limit),
       (error: unknown) => error instanceof HiveError && error.status === 400);
   }
-  assert.throws(() => log.prune(-1), (error: unknown) => error instanceof HiveError && error.status === 400);
+  assert.equal(log.prune(-1), 0, 'a retention window may extend before the epoch');
+  assert.throws(() => log.prune(0.5), (error: unknown) => error instanceof HiveError && error.status === 400);
 });
