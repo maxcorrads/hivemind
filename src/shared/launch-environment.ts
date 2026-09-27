@@ -60,7 +60,7 @@ export function launchEnvironmentValueProblem(value: string): string | null {
 
 /**
  * Why the app would refuse `environment`, a launch's variables, or null: what the page checks before it sends one
- * (terminalSessionLaunchProblem) and what HivemindKit's LaunchEnvironment checks again. Never quotes a value.
+ * (web/native-bridge.ts) and what HivemindKit's LaunchEnvironment checks again. Never quotes a value.
  */
 export function launchEnvironmentProblem(environment: unknown): string | null {
   if (!environment || typeof environment !== "object" || Array.isArray(environment)) return "Environment variables must be an object";
