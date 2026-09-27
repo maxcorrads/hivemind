@@ -476,6 +476,7 @@ Page → app (`window.webkit.messageHandlers.hivemind.postMessage`):
 | `terminal-detach` | `stream` | |
 | `terminal-ack` | `stream`, `bytes` int ≥1 | The page drew `bytes` (decoded) of the stream's `terminal-output`; see [Flow control to the page](#flow-control-to-the-page) |
 | `terminal-kill` | `id`?, `session` | The page confirms with a modal first. At most 1 per second per window. |
+| `terminal-kill` (batch) | `id`?, `sessions`: 1–24 names | **Terminate all**, after its confirm modal. Instead of `session`, never with it; every name must be a Hivemind session name or the message is dropped, and repeats are dropped. The app sends the broker one `kill` after another (a failure does not stop the rest) and answers once. The batch counts as one request against the kill throttle; the page sends more than 24 in batches a second apart (`TerminalHub.killAll`). |
 | `sessions-subscribe` / `sessions-unsubscribe` | none | Subscribing also sends `terminal-status` |
 
 App → page: `window.dispatchEvent(new CustomEvent("hivemind:terminal", {detail}))`
@@ -489,7 +490,7 @@ App → page: `window.dispatchEvent(new CustomEvent("hivemind:terminal", {detail
 | `terminal-attached` | `id`, `stream`, `session` |
 | `terminal-output` | `stream`, `data` base64 |
 | `terminal-exit` | `stream`, `status` |
-| `terminal-killed` | `id`, `session` |
+| `terminal-killed` | `id`, `session`; or, answering a batch `terminal-kill`, `id`, `sessions` (the names that ended, in order) and `errors`: `[{session, code, message}]` (`no-such-session` for one that had already ended) |
 | `terminal-error` | `id`, `code`, `message`, `stream` |
 
 `terminal-status` is sent on every `sessions-subscribe`, and then on every
@@ -598,7 +599,8 @@ that terminals are off in this window and offers no button.
     dropped whole if any part is off, with the sizes of
     [Limits](#limits-and-flow-control-brokerlimits); the broker checks
     everything again. `terminal-launch`, `terminal-open` and `terminal-kill`
-    are each throttled to one per second per window. Streams belong to the
+    are each throttled to one per second per window (a batch `terminal-kill`
+    of at most 24 sessions counts once). Streams belong to the
     page that attached them.
   - **The broker token and the socket's mode** keep out other local users and
     anything that cannot read the user's files; the page never sees the token.

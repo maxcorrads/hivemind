@@ -4,7 +4,8 @@ import { terminalSessionName } from "../src/shared/terminal-session.ts";
 import {
   TERMINAL_EVENT, brokerUnavailableHint, decodeTerminalData, encodeTerminalInput, inNativeApp, onMacDesktop, onNativePlatform,
   parseTerminalEvent, postNative, reportedNativePlatform, serverUnverifiedHint, terminalDataLength, terminalSessionLaunchProblem, terminalSize,
-  tmuxInstallHint, type NativePlatform, type TerminalEvent, type TerminalMessage, type TerminalSessionInfo, type TerminalSessionLaunch,
+  tmuxInstallHint, TERMINAL_BROKER_LIMITS, type NativePlatform, type TerminalEvent, type TerminalKillFailure, type TerminalMessage,
+  type TerminalSessionInfo, type TerminalSessionLaunch,
 } from "./native-bridge.ts";
 
 // The page side of the apps' terminals (docs/terminal-broker.md#bridge):
@@ -14,6 +15,8 @@ import {
 
 type Status = Extract<TerminalEvent, { type: "terminal-status" }>;
 export type TerminalLaunched = Extract<TerminalEvent, { type: "terminal-launched" }>;
+/** What a batch kill (Terminate all) ended, and why the rest did not. */
+export type TerminalKilledMany = { sessions: string[]; errors: TerminalKillFailure[] };
 
 export type TerminalState = {
   /** False in a browser: no terminal UI at all. */
@@ -80,6 +83,7 @@ type Win = Window & typeof globalThis;
 type Pending =
   | { kind: "launch"; resolve: (event: TerminalLaunched) => void; reject: (error: TerminalRequestError) => void; timer: number }
   | { kind: "kill"; resolve: () => void; reject: (error: TerminalRequestError) => void; timer: number }
+  | { kind: "kill-many"; resolve: (result: TerminalKilledMany) => void; reject: (error: TerminalRequestError) => void; timer: number }
   | { kind: "attach"; stream: StreamEntry };
 type StreamEntry = {
   handlers: TerminalStreamHandlers;
@@ -104,10 +108,13 @@ export type TerminalHub = ReturnType<typeof createTerminalHub>;
 /**
  * The hub for `win`'s bridge. `timeouts.request` bounds how long a launch, kill or attach waits for its
  * answer (the app answers a throttled one with an error, but drops a malformed one silently); `timeouts.linger` keeps the
- * sessions subscription a moment after the last viewer leaves, so remounts do not churn it.
+ * sessions subscription a moment after the last viewer leaves, so remounts do not churn it; `timeouts.batchGap` spaces
+ * the batches of a Terminate all of more sessions than one batch takes.
  */
-export function createTerminalHub(win: Win, timeouts: { request?: number; attach?: number; linger?: number } = {}) {
+export function createTerminalHub(win: Win, timeouts: { request?: number; attach?: number; linger?: number; batchGap?: number } = {}) {
   const requestTimeout = timeouts.request ?? 15_000;
+  /** Between two batch kills: past the app's one-kill-a-second throttle. */
+  const batchGap = timeouts.batchGap ?? 1_100;
   const attachTimeout = timeouts.attach ?? 10_000;
   const linger = timeouts.linger ?? 1_000;
   let state: TerminalState = {
@@ -206,14 +213,16 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
         return;
       }
       case "terminal-killed": {
-        if (state.sessions?.some(item => item.name === detail.session)) {
-          setState({ sessions: state.sessions.filter(item => item.name !== detail.session) });
+        const ended = "sessions" in detail ? detail.sessions : [detail.session];
+        if (state.sessions?.some(item => ended.includes(item.name))) {
+          setState({ sessions: state.sessions.filter(item => !ended.includes(item.name)) });
         }
         const request = detail.id ? pending.get(detail.id) : undefined;
-        if (request?.kind !== "kill") return;
+        if (!request || request.kind !== ("sessions" in detail ? "kill-many" : "kill")) return;
         pending.delete(detail.id!);
-        win.clearTimeout(request.timer);
-        request.resolve();
+        win.clearTimeout((request as { timer: number }).timer);
+        if (request.kind === "kill-many" && "sessions" in detail) request.resolve({ sessions: detail.sessions, errors: detail.errors });
+        else if (request.kind === "kill") request.resolve();
         return;
       }
       case "terminal-attached": {
@@ -291,14 +300,14 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
     }, linger);
   };
 
-  function request<T>(kind: "launch" | "kill", message: TerminalMessage & { id?: string }) {
+  function request<T>(kind: "launch" | "kill" | "kill-many", message: TerminalMessage & { id?: string }, timeout = requestTimeout) {
     return new Promise<T>((resolve, reject) => {
       const id = message.id!;
       if (!post(message)) { reject(new TerminalRequestError("not-sent", "Terminals are available only in Hivemind.app")); return; }
       const timer = win.setTimeout(() => {
         pending.delete(id);
         reject(new TerminalRequestError("no-answer", NO_ANSWER));
-      }, requestTimeout);
+      }, timeout);
       pending.set(id, { kind, resolve, reject, timer } as Pending);
     });
   }
@@ -335,6 +344,28 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
     kill(session: string): Promise<void> {
       if (!terminalSessionName(session)) return Promise.reject(new TerminalRequestError("bad-message", "Not a Hivemind session"));
       return request<void>("kill", { type: "terminal-kill", id: newId(), session });
+    },
+    /**
+     * Terminate all: ends every one of `sessions` with batch terminal-kills of at most TERMINAL_BROKER_LIMITS.kills,
+     * which the app runs one kill after another and counts as one throttled request, so none is refused or dropped.
+     * More than one batch waits out the throttle between them. Resolves with what ended and what did not.
+     */
+    async killAll(sessions: readonly string[]): Promise<TerminalKilledMany> {
+      const names = [...new Set(sessions)];
+      if (names.length === 0 || names.some(name => !terminalSessionName(name))) {
+        throw new TerminalRequestError("bad-message", "Not a Hivemind session");
+      }
+      const result: TerminalKilledMany = { sessions: [], errors: [] };
+      for (let start = 0; start < names.length; start += TERMINAL_BROKER_LIMITS.kills) {
+        if (start > 0) await new Promise(resolve => win.setTimeout(resolve, batchGap));
+        const batch = names.slice(start, start + TERMINAL_BROKER_LIMITS.kills);
+        // One kill after another in the app: give each its share of time on top of the usual wait.
+        const answer = await request<TerminalKilledMany>("kill-many", { type: "terminal-kill", id: newId(), sessions: batch },
+          requestTimeout + batch.length * 1_000);
+        result.sessions.push(...answer.sessions);
+        result.errors.push(...answer.errors);
+      }
+      return result;
     },
     attach(session: string, cols: number, rows: number, handlers: TerminalStreamHandlers): TerminalAttachment {
       const entry: StreamEntry = {

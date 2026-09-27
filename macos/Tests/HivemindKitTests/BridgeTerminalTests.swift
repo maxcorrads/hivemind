@@ -91,6 +91,31 @@ struct BridgeTerminalMessageTests {
     #expect(BridgeMessage(body: ["type": "sessions-unsubscribe"]) == .sessionsUnsubscribe)
   }
 
+  @Test func parsesABatchKill() {
+    let bea = SessionName("hm-acme-bea")!
+    #expect(BridgeMessage(body: ["type": "terminal-kill", "id": "all", "sessions": ["hm-acme-atlas", "hm-acme-bea", "hm-acme-atlas"]])
+      == .terminalKillMany(id: "all", sessions: [atlas, bea]), "repeats are dropped, in order")
+    let most = (1...BridgeMessage.maxKillSessions).map { "hm-acme-a\($0)" }
+    if case .terminalKillMany(_, let sessions) = BridgeMessage(body: ["type": "terminal-kill", "sessions": most]) {
+      #expect(sessions.count == BridgeMessage.maxKillSessions)
+    } else {
+      Issue.record("\(BridgeMessage.maxKillSessions) sessions are one batch")
+    }
+    let bad: [[String: Any]] = [
+      ["type": "terminal-kill", "sessions": []],
+      ["type": "terminal-kill", "sessions": most + ["hm-acme-more"]],
+      ["type": "terminal-kill", "sessions": ["hm-acme-atlas", "acme"]],
+      ["type": "terminal-kill", "sessions": ["hm-acme-atlas", 7]],
+      ["type": "terminal-kill", "sessions": "hm-acme-atlas"],
+      ["type": "terminal-kill", "sessions": NSNull()],
+      ["type": "terminal-kill", "session": "hm-acme-atlas", "sessions": ["hm-acme-bea"]],
+      ["type": "terminal-kill", "id": 5, "sessions": ["hm-acme-atlas"]],
+    ]
+    for body in bad {
+      #expect(BridgeMessage(body: body) == nil, "\(body)")
+    }
+  }
+
   @Test func dropsBadStreamMessages() {
     let bad: [[String: Any]] = [
       ["type": "terminal-attach", "session": "acme", "cols": 80, "rows": 24],
@@ -159,6 +184,13 @@ struct BridgeTerminalEventTests {
     #expect(try detail(.exit(stream: 3, status: nil))["status"] is NSNull)
     #expect(try detail(.attached(id: nil, stream: 3, session: atlas))["id"] is NSNull)
     #expect(try detail(.killed(id: "k", session: atlas))["type"] as? String == "terminal-killed")
+    let many = try detail(.killedMany(id: "all", sessions: [atlas],
+                                      errors: [BridgeKillFailure(session: SessionName("hm-acme-bea")!, code: .noSuchSession, message: "gone")]))
+    #expect(many["type"] as? String == "terminal-killed")
+    #expect(many["id"] as? String == "all")
+    #expect(many["session"] == nil)
+    #expect(many["sessions"] as? [String] == ["hm-acme-atlas"])
+    #expect((many["errors"] as? [[String: String]]) == [["session": "hm-acme-bea", "code": "no-such-session", "message": "gone"]])
     let error = try detail(.error(id: "a", code: .noSuchSession, message: "</script>\u{2028}", stream: nil))
     #expect(error["message"] as? String == "</script>\u{2028}")
   }

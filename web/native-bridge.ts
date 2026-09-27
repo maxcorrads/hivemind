@@ -236,7 +236,7 @@ export const serverUnverifiedHint = (platform: NativePlatform | null) =>
 
 /** The broker's limits (HivemindKit BrokerLimits); the app drops a message that breaks any. */
 export const TERMINAL_BROKER_LIMITS = {
-  launches: 24, commandBytes: 8 * 1024, titleChars: 200, pathBytes: 1024, agentChars: 64, requestIdChars: 64,
+  launches: 24, kills: 24, commandBytes: 8 * 1024, titleChars: 200, pathBytes: 1024, agentChars: 64, requestIdChars: 64,
   inputBytes: 64 * 1024, streams: 16, cols: { min: 2, max: 1000 }, rows: { min: 1, max: 500 },
 } as const;
 
@@ -306,6 +306,11 @@ export type TerminalMessage =
   | { type: "terminal-ack"; stream: number; bytes: number }
   /** Answered with terminal-killed. The page confirms with the user first. */
   | { type: "terminal-kill"; id?: string; session: string }
+  /**
+   * Terminate all: 1–24 sessions (TERMINAL_BROKER_LIMITS.kills), killed one after another and counted as one request
+   * against the app's kill throttle. Answered once, with terminal-killed carrying `sessions` and `errors`.
+   */
+  | { type: "terminal-kill"; id?: string; sessions: string[] }
   /** terminal-status and sessions now, then sessions on every change. */
   | { type: "sessions-subscribe" }
   | { type: "sessions-unsubscribe" };
@@ -323,6 +328,8 @@ export type TerminalSessionInfo = {
 };
 
 export type TerminalLaunchFailure = { index: number; code: string; message: string };
+/** A session of a batch terminal-kill that did not end; `code` no-such-session when it had already gone. */
+export type TerminalKillFailure = { session: string; code: string; message: string };
 
 /** App → page, as the detail of a TERMINAL_EVENT. */
 export type TerminalEvent =
@@ -337,6 +344,8 @@ export type TerminalEvent =
   | { type: "terminal-output"; stream: number; data: string }
   | { type: "terminal-exit"; stream: number; status: number | null }
   | { type: "terminal-killed"; id: string | null; session: string }
+  /** The answer to a batch terminal-kill: the sessions that ended, in order, and why the others did not. */
+  | { type: "terminal-killed"; id: string | null; sessions: string[]; errors: TerminalKillFailure[] }
   /** `code` is a BrokerErrorCode (bad-message, no-such-session, tmux-missing, …). */
   | { type: "terminal-error"; id: string | null; code: string; message: string; stream: number | null };
 
@@ -395,6 +404,14 @@ export function parseTerminalEvent(detail: unknown): TerminalEvent | null {
       return isStream(detail.stream) && status !== undefined ? { type: "terminal-exit", stream: detail.stream, status } : null;
     }
     case "terminal-killed": {
+      if (detail.sessions !== undefined) {
+        const { sessions, errors } = detail;
+        if (detail.session !== undefined || !Array.isArray(sessions) || !sessions.every(name => terminalSessionName(name))) return null;
+        if (!Array.isArray(errors) || !errors.every(e => isRecord(e) && terminalSessionName(e.session) &&
+            typeof e.code === "string" && typeof e.message === "string")) return null;
+        return { type: "terminal-killed", id, sessions: sessions as string[],
+          errors: (errors as TerminalKillFailure[]).map(({ session, code, message }) => ({ session, code, message })) };
+      }
       const session = terminalSessionName(detail.session);
       return session ? { type: "terminal-killed", id, session } : null;
     }

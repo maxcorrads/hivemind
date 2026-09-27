@@ -226,6 +226,40 @@ struct TerminalBridgeRouterTests {
     #expect(recorder.delivered == [.killed(id: "k1", session: atlas)])
   }
 
+  @Test func killsABatchOneAfterAnotherAsOneThrottledRequest() {
+    let bea = SessionName("hm-acme-bea")!
+    let cleo = SessionName("hm-acme-cleo")!
+    router.handle(.terminalKillMany(id: "all", sessions: [atlas, bea, cleo]))
+    #expect(client.sent == [.kill(session: atlas)], "one at a time")
+    client.answer(.killed(session: atlas))
+    #expect(client.sent == [.kill(session: atlas), .kill(session: bea)])
+    client.answer(.error(code: .noSuchSession, message: "hm-acme-bea is not running", stream: nil))
+    #expect(client.sent.last == .kill(session: cleo), "a failure does not stop the rest")
+    #expect(recorder.delivered.isEmpty, "one answer, at the end")
+    client.answer(.killed(session: cleo))
+    #expect(recorder.delivered == [.killedMany(id: "all", sessions: [atlas, cleo], errors: [
+      BridgeKillFailure(session: bea, code: .noSuchSession, message: "hm-acme-bea is not running"),
+    ])])
+
+    // The whole batch counted once: the next kill in the same second is refused, a second later it goes.
+    router.handle(.terminalKill(id: "k", session: atlas))
+    #expect(recorder.delivered.last == .error(id: "k", code: .internal, message: TerminalBridgeRouter.throttledMessage, stream: nil))
+    #expect(client.sent.count == 3)
+    tick()
+    router.handle(.terminalKill(id: "k2", session: atlas))
+    #expect(client.sent.count == 4)
+  }
+
+  @Test func aBatchKillGoesOnAfterThePageLeavesButIsNotAnswered() {
+    let bea = SessionName("hm-acme-bea")!
+    router.handle(.terminalKillMany(id: "all", sessions: [atlas, bea]))
+    client.answer(.killed(session: atlas))
+    router.pageDidChange()
+    #expect(client.sent.last == .kill(session: bea), "the user confirmed it")
+    client.answer(.killed(session: bea))
+    #expect(recorder.delivered.isEmpty)
+  }
+
   @Test func aNewPageDetachesTheOldPagesStreams() {
     router.handle(.sessionsSubscribe)
     router.handle(.terminalAttach(id: "a1", session: atlas, size: size))

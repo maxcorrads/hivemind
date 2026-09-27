@@ -1,5 +1,5 @@
 /* Terminals (the apps only; web/TerminalView.tsx, web/SessionsSheet.tsx, web/TerminalNotice.tsx): the in-app
-   terminal, the Terminal sessions sheet and its sidebar entry, the roster's session icon and the notices shown when
+   terminal, the Terminals sheet and its Terminal sessions sidebar entry, the roster's session icon and the notices shown when
    Hivemind Server or tmux is missing. xterm's own sheet loads with xterm (web/use-terminal-xterm.ts). */
 
 /* ---- The terminal ------------------------------------------------------------------------------------------------ */
@@ -53,27 +53,100 @@
 .person-term { flex: none; display: inline-grid; place-items: center; color: var(--mute); }
 .person.on .person-term { color: var(--ok-ink); }
 
-/* ---- Terminal sessions sheet ------------------------------------------------------------------------------------- */
-.sessions-sheet { width: min(60rem, 100%); height: min(46rem, calc(var(--visual-height, 100dvh) - 2rem)); }
+/* ---- Terminals sheet ---------------------------------------------------------------------------------------------
+   One row per session of the current project (avatar, who, status chip, meta, actions), the other projects counted in a
+   --sunk footer and listed under their names on request; Terminate all confirms in its own dialog. */
+.sessions-sheet { width: min(65rem, 100%); height: min(46rem, calc(var(--visual-height, 100dvh) - 2rem)); padding: 0; gap: 0; }
+.sessions-sheet > .sheet-head { align-items: center; gap: 14px; padding: 18px 20px 16px 22px; border-bottom: 1px solid var(--line); }
 .sessions-sheet .sheet-head > .btn { flex: none; }
+.sessions-sheet .sheet-head > .icon-btn { margin: 0 -4px 0 0; }
 .sessions-sheet .sheet-head code { font-family: var(--mono); font-size: 12px; }
-.sessions-sheet .sheet-body { padding-bottom: 18px; }
-.session-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-.session-list > li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 10px 12px;
-  border: 1px solid var(--line); border-radius: 10px; }
-.session-list > li.dead { opacity: 0.7; }
-.session-main { display: grid; gap: 2px; min-width: 0; }
-.session-main strong { font-size: 13.5px; font-weight: 600; }
-.session-main small { font-size: 12px; color: var(--mute); }
-.session-main code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 11.5px; color: var(--ink2); }
-.session-actions { display: flex; gap: 6px; }
-.session-actions .btn.danger { color: var(--bad-ink); }
+.sessions-sheet .sheet-icon { color: var(--ink2); }
+.sheet-head > .term-head-actions { flex: none; display: flex; align-items: center; gap: 8px; }
+.term-head-actions > .btn { height: 32px; padding: 0 12px; border-radius: 8px; }
+.sessions-sheet .btn-danger { border-color: color-mix(in oklch, var(--bad) 45%, transparent); background: transparent; color: var(--bad-ink); font-weight: 600; }
+.sessions-sheet .btn-danger:hover:not(:disabled) { background: color-mix(in oklch, var(--bad) 10%, transparent); }
+.sessions-sheet > .sheet-body { padding: 8px 10px 12px; gap: 8px; }
+.sessions-sheet > .sheet-body > :is(.err, .term-notice, .term-copied) { margin: 4px 2px 0; }
+.sessions-sheet > .sheet-body > .term { margin: 4px 10px 6px; }
+.term-copied { margin: 0; font-size: 12.5px; color: var(--mute); }
+.term-copied::before { content: "✓ "; color: var(--ok-ink); }
+
+.term-group { display: flex; flex-direction: column; gap: 4px; }
+.term-group > h3 { display: flex; align-items: center; gap: 8px; margin: 10px 12px 2px; font-size: 12px; font-weight: 600;
+  letter-spacing: 0.04em; text-transform: uppercase; color: var(--mute); }
+.term-group > h3 > small { font-size: 11px; font-weight: 500; letter-spacing: 0; text-transform: none; }
+.term-others { display: flex; flex-direction: column; gap: 8px; padding-top: 4px; border-top: 1px solid var(--line); }
+.term-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.term-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) 150px minmax(0, 220px) auto;
+  grid-template-areas: "avatar who status meta actions"; align-items: center; gap: 14px; padding: 12px; border: 1px solid transparent;
+  border-radius: 10px; }
+.term-row:hover { background: var(--hover); }
+/* The session last shown in this sheet. */
+.term-row[aria-current="true"] { border-color: color-mix(in oklch, var(--accent) 40%, transparent); background: var(--hover); }
+.term-row[data-status="reconnecting"] { opacity: 0.85; }
+.term-row[data-status="ended"] { opacity: 0.8; }
+.term-row > .avatar { grid-area: avatar; }
+.term-row > .tone-chip { grid-area: status; justify-self: start; }
+.term-who { grid-area: who; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.term-name { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.term-name > strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14.5px; font-weight: 600; }
+.term-role { flex: none; font-family: var(--mono); font-size: 11px; color: var(--mute); }
+.term-session { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 11.5px; color: var(--mute); }
+.term-meta { grid-area: meta; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--mute); }
+.term-actions { grid-area: actions; display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.term-actions > .btn:not(.btn-primary) { background: transparent; color: var(--ink2); }
+.term-actions > .btn:not(.btn-primary):hover:not(:disabled) { background: var(--hover); color: var(--ink); }
+.term-menu-box { position: relative; }
+.term-menu-box > .icon-btn { width: 30px; height: 30px; border-radius: 7px; }
+.term-menu { top: calc(100% + 4px); min-width: 190px; }
+.term-menu button:disabled { opacity: 0.45; cursor: default; }
+
+.term-empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; min-height: 150px;
+  margin: 8px 2px; padding: 20px; border: 1px dashed color-mix(in oklch, var(--ink) 14%, transparent); border-radius: 12px; text-align: center; }
+.term-empty-state > strong { font-size: 15px; font-weight: 600; }
+.term-empty-state > span { font-size: 13px; color: var(--mute); }
+.term-empty-state > .btn { margin-top: 4px; height: 32px; padding: 0 14px; border-radius: 8px; }
+
+.term-foot { flex: none; display: flex; align-items: center; gap: 10px; padding: 12px 22px; border-top: 1px solid var(--line); background: var(--sunk);
+  font-size: 12.5px; color: var(--mute); border-radius: 0 0 14px 14px; }
+.term-foot > span { flex: 1; min-width: 0; }
+.term-foot > .btn { flex: none; height: 28px; background: transparent; font-size: 12.5px; color: var(--ink2); }
+.term-foot > .btn > .lucide { transition: transform 0.15s ease; }
+.term-foot > .btn[aria-expanded="true"] > .lucide { transform: rotate(180deg); }
+@media (prefers-reduced-motion: reduce) { .term-foot > .btn > .lucide { transition: none; } }
+
+/* Terminate all: a red tile, the question, what it ends, and a filled red button. */
+.terminate-all { width: min(26.25rem, 100%); gap: 10px; }
+.terminate-all-icon { width: 36px; height: 36px; border-radius: 9px; display: grid; place-items: center; color: var(--bad-ink);
+  background: color-mix(in oklch, var(--bad) 15%, transparent); }
+.terminate-all > h2 { font-size: 16px; }
+.terminate-all > .help-p { margin: 0; color: var(--ink2); }
+.terminate-all-list { margin: 4px 0 0; padding: 10px 12px; list-style: none; border-radius: 8px; background: var(--sunk); font-family: var(--mono);
+  font-size: 11.5px; line-height: 1.7; color: var(--mute); overflow-wrap: anywhere; }
+.terminate-all .row > button.danger-fill { border-color: transparent; background: var(--badge); color: var(--badge-ink); font-weight: 600; }
+.terminate-all .row > button.danger-fill:hover { background: var(--badge); opacity: 0.9; }
+
+/* Narrower sheets: status and meta share a second line, the actions a third. */
+@media (max-width: 760px) {
+  .term-row { grid-template-columns: 32px minmax(0, 1fr) auto; grid-template-areas: "avatar who status" ". meta meta" ". actions actions";
+    gap: 6px 12px; }
+  .term-actions { justify-content: flex-start; flex-wrap: wrap; }
+  .sessions-sheet > .sheet-head { flex-wrap: wrap; }
+  .sessions-sheet > .sheet-head > .term-head-actions { order: 3; flex-basis: 100%; }
+  .term-foot { flex-wrap: wrap; padding: 10px 14px; }
+}
+@media (max-width: 540px) {
+  .sessions-sheet { padding: 0; }
+  .sessions-sheet > .sheet-head { padding: 14px 14px 12px; gap: 10px 12px; }
+  .sessions-sheet > .sheet-body { padding: 6px 6px 10px; }
+  .term-row { padding: 10px; }
+  .term-head-actions > .btn { flex: 1; }
+}
 
 @media (max-width: 960px) {
   .rail > .sessions-cta { display: none; }
   /* The iPhone/iPad app has no other way to its terminals on a phone; a phone browser has no terminals at all. */
   .rail > .sessions-cta[data-platform="ios"] { display: flex; height: 44px; font-size: 14px; }
   .sessions-sheet { height: calc(var(--visual-height, 100dvh) - 2rem); }
-  .session-list > li { grid-template-columns: auto minmax(0, 1fr); }
-  .session-actions { grid-column: 2; flex-wrap: wrap; }
 }

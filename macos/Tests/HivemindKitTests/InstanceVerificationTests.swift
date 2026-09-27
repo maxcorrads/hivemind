@@ -376,6 +376,8 @@ struct TerminalTrustGateTests {
       == [.answer(.error(id: nil, code: .unauthorized, message: TerminalTrustGate.unverifiedMessage, stream: nil))])
     #expect(gate.route(.terminalKill(id: "k", session: SessionName("hm-acme-atlas")!))
       == [.answer(.error(id: "k", code: .unauthorized, message: TerminalTrustGate.unverifiedMessage, stream: nil))])
+    #expect(gate.route(.terminalKillMany(id: "all", sessions: [SessionName("hm-acme-atlas")!]))
+      == [.answer(.error(id: "all", code: .unauthorized, message: TerminalTrustGate.unverifiedMessage, stream: nil))])
     #expect(gate.route(.terminalAttach(id: "a", session: SessionName("hm-acme-atlas")!, size: TerminalSize(columns: 80, rows: 24)!))
       == [.answer(.error(id: "a", code: .unauthorized, message: TerminalTrustGate.unverifiedMessage, stream: nil))])
     for quiet in [BridgeMessage.terminalInput(stream: 1, data: Data("x".utf8)), .terminalResize(stream: 1, size: TerminalSize(columns: 80, rows: 24)!),

@@ -423,7 +423,7 @@ test("on iOS the Launch agent sheet starts sessions on the Mac and opens the in-
   await fromApp({ type: "terminal-launched", id: message.id, names: ["hm-acme-new-1"], created: ["hm-acme-new-1"], errors: [] });
   // The sheet gives way to the session's terminal.
   assert.equal(sheet.view.host.querySelector(".launch-sheet"), null);
-  const sessions = sheet.view.host.querySelector("[aria-label='Terminal sessions']");
+  const sessions = sheet.view.host.querySelector("[aria-label='Terminals']");
   assert.ok(sessions, "the sessions sheet replaces the launch sheet");
   assert.equal(sessions.querySelector(".sheet-head h2")?.textContent, "hm-acme-new-1");
   assert.equal(Array.from(sessions.querySelectorAll("button")).some(b => /Open in Terminal/.test(b.textContent ?? "")), false);
@@ -459,7 +459,7 @@ test("on iOS a failed launch stays on the sheet, and several open the session li
   await fromApp({ type: "terminal-launched", id: launchesPosted()[1].id, names: ["hm-acme-atlas", "hm-acme-bea"], created: ["hm-acme-bea"],
     errors: [] });
   assert.equal(sheet.view.host.querySelector(".launch-sheet"), null);
-  assert.equal(sheet.view.host.querySelector("[aria-label='Terminal sessions'] .sheet-head h2")?.textContent, "Terminal sessions");
+  assert.equal(sheet.view.host.querySelector("[aria-label='Terminals'] .sheet-head h2")?.textContent, "Terminals");
 });
 
 test("on iOS the launch notice names the Mac and offers no Start Hivemind Server", async () => {

@@ -133,7 +133,10 @@ export function Sidebar({ snap, sel, go, live, unified, query, setQuery, onSearc
           {running > 0 && <em className="count soft" aria-label={`${running} running`}>{running}</em>}
         </button>
       )}
-      {sessionsOpen && <SessionsSheet agents={snap.agents ?? []} projects={projects} onClose={() => setSessionsOpen(false)} />}
+      {sessionsOpen && (
+        <SessionsSheet agents={snap.agents ?? []} projects={projects} project={project?.slug ?? null} onClose={() => setSessionsOpen(false)}
+          onLaunch={projects.length > 0 ? () => { setSessionsOpen(false); onLaunch(project?.slug ?? null); } : undefined} />
+      )}
       {projects.length > 0 && (
         <button type="button" className="launch-cta" onClick={() => onLaunch()}>
           <Terminal size={15} aria-hidden="true" /> Launch agent

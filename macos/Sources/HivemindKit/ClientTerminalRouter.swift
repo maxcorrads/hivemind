@@ -177,6 +177,11 @@ public final class TerminalBridgeRouter {
       guard killThrottle.allow(at: environment.now()) else { return throttled(id: id) }
       begin()
       kill(id: id, session: session)
+    case .terminalKillMany(let id, let sessions):
+      // Terminate all: one request against the throttle, however many it names.
+      guard killThrottle.allow(at: environment.now()) else { return throttled(id: id) }
+      begin()
+      killMany(id: id, sessions: sessions[...])
     case .sessionsSubscribe:
       begin()
       subscribed = true
@@ -267,6 +272,29 @@ public final class TerminalBridgeRouter {
     client.send(.kill(session: session)) { [weak self] event in
       guard let self, self.page == page else { return }
       self.deliver(BridgeTerminalEvent(BrokerEventFrame(event), id: id))
+    }
+  }
+
+  /// The broker's kills, one after another (it takes one session per kill),
+  /// then one answer with what ended and what did not. They go on if the
+  /// page moves on, since the user confirmed them; only the answer is dropped.
+  private func killMany(
+    id: String?, sessions: ArraySlice<SessionName>, page: Int? = nil,
+    killed: [SessionName] = [], errors: [BridgeKillFailure] = []
+  ) {
+    let page = page ?? self.page
+    guard let session = sessions.first else {
+      if self.page == page { deliver(.killedMany(id: id, sessions: killed, errors: errors)) }
+      return
+    }
+    client.send(.kill(session: session)) { [weak self] event in
+      var killed = killed, errors = errors
+      switch event {
+      case .killed: killed.append(session)
+      case .error(let code, let message, _): errors.append(BridgeKillFailure(session: session, code: code, message: message))
+      default: errors.append(BridgeKillFailure(session: session, code: .internal, message: "No answer to the kill"))
+      }
+      self?.killMany(id: id, sessions: sessions.dropFirst(), page: page, killed: killed, errors: errors)
     }
   }
 

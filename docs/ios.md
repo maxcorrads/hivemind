@@ -117,8 +117,10 @@ The page is the same as in Hivemind.app, with these differences:
   background** in the Launch agent sheet. It starts the session on the Mac and
   then shows its terminal in the app; several launches open **Terminal
   sessions**.
-- There is no **Open in Terminal**: Terminal.app is on the Mac. Sessions open in
-  the app's own terminal (Terminal sessions, or the agent's **Terminal** tab).
+- There is no **Open in Terminal** (nor a row's **Terminal.app**): Terminal.app
+  is on the Mac. Sessions open in the app's own terminal (Terminal sessions, or
+  the agent's **Terminal** tab). **Terminate all** works as on the Mac, one
+  batch `terminal-kill` through the gateway.
   The app sends every launch without opening Terminal and refuses the bridge's
   `terminal-open`, whatever the page asks.
 - A launch without a folder, or with `~`, uses the Mac user's home folder,

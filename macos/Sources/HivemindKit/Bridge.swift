@@ -46,11 +46,19 @@ public enum BridgeMessage: Equatable, Sendable {
   case terminalAck(stream: BrokerStreamID, bytes: Int)
   /// Kill a session (after the page's confirm modal); answered with terminal-killed.
   case terminalKill(id: String?, session: SessionName)
+  /// Kill several sessions (Terminate all, after the page's confirm modal):
+  /// terminal-kill with `sessions` instead of `session`, 1–`maxKillSessions`
+  /// names, each valid, repeats dropped. The app kills them one after
+  /// another, counted as one request against the kill throttle, and answers
+  /// once with terminal-killed carrying `sessions` and `errors`.
+  case terminalKillMany(id: String?, sessions: [SessionName])
   /// terminal-status and sessions now, then sessions on every change.
   case sessionsSubscribe
   case sessionsUnsubscribe
 
   static let maxText = 4096
+  /// The most sessions one terminal-kill may name (web TERMINAL_BROKER_LIMITS.kills).
+  public static let maxKillSessions = 24
 
   public init?(body: Any) {
     guard let object = body as? [String: Any], let type = object["type"] as? String else { return nil }
@@ -102,8 +110,15 @@ public enum BridgeMessage: Equatable, Sendable {
       guard let stream = Self.stream(object["stream"]), let bytes = Self.integer(object["bytes"]), bytes >= 1 else { return nil }
       self = .terminalAck(stream: stream, bytes: bytes)
     case "terminal-kill":
-      guard let id = Self.requestID(object["id"]), let session = Self.session(object["session"]) else { return nil }
-      self = .terminalKill(id: id, session: session)
+      guard let id = Self.requestID(object["id"]) else { return nil }
+      if let names = object["sessions"] {
+        // Exactly one of `session` and `sessions`.
+        guard object["session"] == nil, let sessions = Self.sessions(names) else { return nil }
+        self = .terminalKillMany(id: id, sessions: sessions)
+      } else {
+        guard let session = Self.session(object["session"]) else { return nil }
+        self = .terminalKill(id: id, session: session)
+      }
     case "sessions-subscribe":
       self = .sessionsSubscribe
     case "sessions-unsubscribe":
@@ -133,6 +148,17 @@ public enum BridgeMessage: Equatable, Sendable {
 
   private static func session(_ value: Any?) -> SessionName? {
     (value as? String).flatMap(SessionName.init)
+  }
+
+  /// 1–maxKillSessions valid names, repeats dropped in order; nil if any is not a session name.
+  private static func sessions(_ value: Any?) -> [SessionName]? {
+    guard let items = value as? [Any], (1...maxKillSessions).contains(items.count) else { return nil }
+    var names: [SessionName] = []
+    for item in items {
+      guard let name = session(item) else { return nil }
+      if !names.contains(name) { names.append(name) }
+    }
+    return names
   }
 
   private static func size(_ object: [String: Any]) -> TerminalSize? {
@@ -276,6 +302,9 @@ public enum BridgeTerminalEvent: Equatable, Sendable {
   case output(stream: BrokerStreamID, data: Data)
   case exit(stream: BrokerStreamID, status: Int?)
   case killed(id: String?, session: SessionName)
+  /// The answer to a terminal-kill with `sessions`: the ones that ended, in
+  /// order, and why each other one did not.
+  case killedMany(id: String?, sessions: [SessionName], errors: [BridgeKillFailure])
   case error(id: String?, code: BrokerErrorCode, message: String, stream: BrokerStreamID?)
 
   public enum TmuxStatus: String, Sendable, Equatable {
@@ -303,7 +332,7 @@ public enum BridgeTerminalEvent: Equatable, Sendable {
     case .attached: "terminal-attached"
     case .output: "terminal-output"
     case .exit: "terminal-exit"
-    case .killed: "terminal-killed"
+    case .killed, .killedMany: "terminal-killed"
     case .error: "terminal-error"
     }
   }
@@ -354,6 +383,10 @@ public enum BridgeTerminalEvent: Equatable, Sendable {
     case .killed(let id, let session):
       put("id", id)
       detail["session"] = session.rawValue
+    case .killedMany(let id, let sessions, let errors):
+      put("id", id)
+      detail["sessions"] = sessions.map(\.rawValue)
+      detail["errors"] = errors.map { ["session": $0.session.rawValue, "code": $0.code.rawValue, "message": $0.message] as [String: Any] }
     case .error(let id, let code, let message, let stream):
       put("id", id)
       detail["code"] = code.rawValue
@@ -365,6 +398,20 @@ public enum BridgeTerminalEvent: Equatable, Sendable {
 
   public var javaScript: String {
     BridgeScript.dispatch(event: bridgeTerminalEventName, detail: detail)
+  }
+}
+
+/// One session of a terminal-kill with `sessions` that the broker did not
+/// kill (no-such-session when it had already ended).
+public struct BridgeKillFailure: Equatable, Sendable {
+  public let session: SessionName
+  public let code: BrokerErrorCode
+  public let message: String
+
+  public init(session: SessionName, code: BrokerErrorCode, message: String) {
+    self.session = session
+    self.code = code
+    self.message = message
   }
 }
 

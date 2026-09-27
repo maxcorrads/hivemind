@@ -658,25 +658,38 @@ test("the panel shows why there is no terminal, and nothing at all in a browser"
 
 // ---- Sessions sheet, roster and DM tab ---------------------------------------------------------------------------
 
+const rowsOf = (host: ParentNode) => Array.from(host.querySelectorAll(".term-row"));
+const byLabel = (host: ParentNode, label: string) => host.querySelector(`[aria-label="${label}"]`) as unknown as HTMLButtonElement;
+const byText = (host: ParentNode, text: string | RegExp) => Array.from(host.querySelectorAll("button"))
+  .find(b => typeof text === "string" ? b.textContent?.trim() === text : text.test(b.textContent ?? "")) as unknown as HTMLButtonElement;
+const killSessions = (m: NativeMessage) => (m as { sessions?: string[] }).sessions;
+const killSession = (m: NativeMessage | undefined) => (m as { session?: string } | undefined)?.session;
+const beta: Project = { id: "p2", slug: "beta", name: "Beta", worktree: "/Users/me/beta", createdAt: 0 };
+
 test("the sessions sheet maps sessions to agents, opens them here or in Terminal, and terminates after confirming", async () => {
   installBridge();
   const fake = fakeScreen();
   const atlas = agent("a1", "Atlas", { terminalSession: "hm-acme-atlas" });
-  const view = await mount(() => <SessionsSheet agents={[atlas]} projects={[project]} onClose={() => {}} loadScreen={fake.load} />);
+  const view = await mount(() => <SessionsSheet agents={[atlas]} projects={[project]} project="acme" onClose={() => {}} loadScreen={fake.load} />);
   assert.deepEqual(sent("sessions-subscribe").length, 1);
   await fromApp(connected);
   await fromApp({ type: "sessions", items: [session("hm-acme-atlas", { attached: 2 }), session("hm-acme-new-1", { agent: null })] });
-  const rows = () => Array.from(view.host.querySelectorAll(".session-list > li"));
+  const rows = () => rowsOf(view.host);
   assert.equal(rows().length, 2);
-  assert.match(rows()[0]!.textContent ?? "", /Atlas.*brain · Acme · running · 2 attached · started 2m ago.*hm-acme-atlas/);
-  assert.match(rows()[1]!.textContent ?? "", /New agent.*not joined · Acme/);
-  const button = (label: string) => view.host.querySelector(`[aria-label="${label}"]`) as unknown as HTMLButtonElement;
+  assert.equal(view.host.querySelector(".sheet-head h2")?.textContent, "Terminals");
+  assert.equal(view.host.querySelector(".sheet-head p")?.textContent, "Acme · 2 sessions · closing a view keeps the agent running");
+  assert.match(rows()[0]!.textContent ?? "", /^AtAtlasbrainhm-acme-atlasRunningstarted 2m ago · 2 attached/);
+  assert.ok(rows()[0]!.querySelector(".avatar"), "the agent's avatar");
+  assert.match(rows()[1]!.textContent ?? "", /New agent.*hm-acme-new-1.*Waiting to join.*not joined yet/);
+  assert.equal(view.host.querySelector(".term-foot"), null, "no other projects, no footer");
+  const button = (label: string) => byLabel(view.host, label);
 
   await act(async () => { button("Open hm-acme-new-1 in Terminal").click(); });
   assert.deepEqual(sent("terminal-open"), [{ type: "terminal-open", session: "hm-acme-new-1" }]);
   await fromApp({ type: "terminal-error", id: null, code: "no-such-session", message: "hm-acme-new-1 is not running", stream: null });
   assert.equal(view.host.querySelector("[role=alert]")?.textContent, "hm-acme-new-1 is not running");
 
+  assert.equal(rows().some(row => row.getAttribute("aria-current")), false, "nothing opened yet");
   await act(async () => { button("Open hm-acme-atlas").click(); });
   await flush();
   assert.equal(sent("terminal-attach")[0]?.session, "hm-acme-atlas");
@@ -684,19 +697,231 @@ test("the sessions sheet maps sessions to agents, opens them here or in Terminal
   await act(async () => { button("All sessions").click(); });
   assert.deepEqual(sent("terminal-detach").length, 0, "never attached, nothing to detach");
   assert.equal(rows().length, 2);
+  assert.deepEqual(rows().map(row => row.getAttribute("aria-current")), ["true", null], "the session just shown is highlighted");
 
-  await act(async () => { button("Terminate hm-acme-atlas").click(); });
+  await act(async () => { button("More actions for hm-acme-atlas").click(); });
+  const menu = view.host.querySelector("[role=menu]")!;
+  assert.equal(button("More actions for hm-acme-atlas").getAttribute("aria-expanded"), "true");
+  await act(async () => { byText(menu, "Terminate").click(); });
+  assert.equal(view.host.querySelector("[role=menu]"), null, "the menu closes");
   const confirm = document.querySelector("[role=alertdialog]")!;
   assert.match(confirm.textContent ?? "", /Terminate Atlas\?.*hm-acme-atlas.*Atlas’s CLI/);
   assert.equal(sent("terminal-kill").length, 0, "nothing is killed before the confirmation");
-  const yes = Array.from(confirm.querySelectorAll("button")).find(b => b.textContent === "Terminate") as unknown as HTMLButtonElement;
-  await act(async () => { yes.click(); });
+  await act(async () => { byText(confirm, "Terminate").click(); });
   const [kill] = sent("terminal-kill");
-  assert.equal(kill?.session, "hm-acme-atlas");
+  assert.equal(killSession(kill), "hm-acme-atlas");
   await fromApp({ type: "terminal-killed", id: kill!.id, session: "hm-acme-atlas" });
   await flush();
   assert.equal(document.querySelector("[role=alertdialog]"), null);
   assert.equal(rows().length, 1);
+});
+
+test("the sheet shows only the current project's sessions, counts the others, and shows them all on request", async () => {
+  installBridge();
+  const bea = agent("a2", "Bea", { role: "worker", seniority: "senior", project: "beta", terminalSession: "hm-beta-bea" });
+  const view = await mount(() => <SessionsSheet agents={[bea]} projects={[project, beta]} project="acme" onClose={() => {}} />);
+  await fromApp(connected);
+  await fromApp({ type: "sessions", items: [
+    session("hm-acme-atlas"), session("hm-beta-bea", { project: "beta" }), session("hm-beta-cleo", { project: "beta" }),
+    session("hm-gone-dan", { project: null }), session("hm-acme-new-1"),
+    // No project recorded and no agent joined from it: the name alone does not make it Beta's.
+    session("hm-beta-new-2", { project: null }),
+  ] });
+  assert.deepEqual(rowsOf(view.host).map(row => row.querySelector(".term-session")?.textContent), ["hm-acme-atlas", "hm-acme-new-1"]);
+  assert.match(view.host.querySelector(".sheet-head p")?.textContent ?? "", /^Acme · 2 sessions ·/);
+  const foot = view.host.querySelector(".term-foot")!;
+  assert.equal(foot.querySelector("span")?.textContent,
+    "Only this project's sessions are shown. Other projects have 4: Beta (2), Unknown project (2).");
+  const toggle = byText(foot, "Show all projects");
+  assert.equal(toggle.getAttribute("aria-expanded"), "false");
+
+  await act(async () => { toggle.click(); });
+  assert.equal(toggle.getAttribute("aria-expanded"), "true");
+  assert.equal(toggle.textContent?.trim(), "Hide other projects");
+  assert.equal(document.getElementById(toggle.getAttribute("aria-controls")!)?.className, "term-others");
+  const groups = Array.from(view.host.querySelectorAll(".term-group")).map(group => [
+    group.getAttribute("aria-label"), Array.from(group.querySelectorAll(".term-session")).map(code => code.textContent)]);
+  assert.deepEqual(groups, [
+    ["Acme sessions", ["hm-acme-atlas", "hm-acme-new-1"]],
+    ["Beta sessions", ["hm-beta-bea", "hm-beta-cleo"]],
+    ["Unknown project sessions", ["hm-gone-dan", "hm-beta-new-2"]],
+  ]);
+  assert.match(view.host.querySelector(".term-others h3")?.textContent ?? "", /^Beta 2$/);
+  const beaRow = rowsOf(view.host).find(row => row.textContent?.includes("hm-beta-bea"))!;
+  assert.match(beaRow.textContent ?? "", /Beaworker · senior.*Running/, "another project's rows work the same");
+  assert.match(view.host.querySelector(".sheet-head p")?.textContent ?? "", /^Acme · 2 sessions ·/, "the count stays the project's");
+
+  await act(async () => { toggle.click(); });
+  assert.equal(view.host.querySelector(".term-others"), null);
+  // The agent's project stands in for a session that recorded none.
+  await fromApp({ type: "sessions", items: [session("hm-beta-bea", { project: null }), session("hm-acme-atlas")] });
+  assert.equal(foot.querySelector("span")?.textContent, "Only this project's sessions are shown. Other projects have 1: Beta (1).");
+  await fromApp({ type: "sessions", items: [session("hm-acme-atlas")] });
+  assert.equal(view.host.querySelector(".term-foot"), null, "no other project has sessions");
+});
+
+test("Terminate all confirms, then ends only this project's sessions in one batch message", async () => {
+  installBridge();
+  const view = await mount(() => <SessionsSheet agents={[]} projects={[project, beta]} project="acme" onClose={() => {}} />);
+  await fromApp(connected);
+  const acme = ["hm-acme-atlas", "hm-acme-bea", "hm-acme-cleo", "hm-acme-dan"];
+  await fromApp({ type: "sessions", items: [...acme.map(name => session(name)), session("hm-beta-eve", { project: "beta" })] });
+  await act(async () => { byText(view.host, "Terminate all").click(); });
+  const dialog = () => document.querySelector("[role=alertdialog]");
+  assert.equal(dialog()?.getAttribute("aria-label"), "Terminate all sessions");
+  assert.equal(dialog()?.querySelector("h2")?.textContent, "Terminate all 4 sessions in Acme?");
+  assert.match(dialog()?.textContent ?? "", /Every agent in these sessions stops at once and unsaved work in their terminals is lost\. Other projects' sessions\s+are not touched\./);
+  assert.deepEqual(Array.from(dialog()!.querySelectorAll("li")).map(li => li.textContent),
+    ["hm-acme-atlas", "hm-acme-bea", "hm-acme-cleo", "+ 1 more"]);
+  assert.equal(sent("terminal-kill").length, 0, "nothing before the confirmation");
+
+  await act(async () => { byText(dialog()!, "Cancel").click(); });
+  assert.equal(dialog(), null);
+  assert.equal(sent("terminal-kill").length, 0);
+
+  await act(async () => { byText(view.host, "Terminate all").click(); });
+  await act(async () => { byText(dialog()!, "Terminate 4 sessions").click(); });
+  const [kill] = sent("terminal-kill");
+  assert.deepEqual(kill, { type: "terminal-kill", id: kill!.id, sessions: acme }, "one message, this project's only");
+  assert.equal(byText(dialog()!, "Terminating…").disabled, true);
+  await fromApp({ type: "terminal-killed", id: kill!.id, sessions: acme.slice(0, 3),
+    errors: [{ session: "hm-acme-dan", code: "no-such-session", message: "hm-acme-dan is not running" }] });
+  await flush();
+  assert.equal(dialog(), null);
+  assert.equal(view.host.querySelector("[role=alert]"), null, "a session that had already ended is not a failure");
+  assert.deepEqual(rowsOf(view.host).map(row => row.querySelector(".term-session")?.textContent), ["hm-acme-dan"]);
+
+  // A real failure is reported.
+  await act(async () => { byText(view.host, "Terminate all").click(); });
+  assert.equal(dialog()?.querySelector("h2")?.textContent, "Terminate the 1 session in Acme?");
+  await act(async () => { byText(dialog()!, "Terminate 1 session").click(); });
+  const again = sent("terminal-kill")[1]!;
+  await fromApp({ type: "terminal-killed", id: again.id, sessions: [],
+    errors: [{ session: "hm-acme-dan", code: "tmux-failed", message: "server exited" }] });
+  await flush();
+  assert.equal(view.host.querySelector("[role=alert]")?.textContent, "Could not terminate hm-acme-dan: server exited");
+});
+
+test("a Terminate all of more sessions than one batch takes goes in batches past the app's throttle", async () => {
+  installBridge();
+  const h = createTerminalHub(window as never, { request: 40, attach: 40, linger: 0, batchGap: 5 });
+  unmounts.push(() => h.dispose());
+  await fromApp(connected);
+  const names = Array.from({ length: 26 }, (_, i) => `hm-acme-a${i}`);
+  const done = h.killAll([...names, names[0]!]);
+  const [first] = sent("terminal-kill");
+  assert.deepEqual(killSessions(first!), names.slice(0, 24), "at most 24 at once, repeats dropped");
+  await fromApp({ type: "terminal-killed", id: first!.id, sessions: names.slice(0, 24), errors: [] });
+  await flush();
+  const second = sent("terminal-kill")[1]!;
+  assert.deepEqual(killSessions(second), names.slice(24));
+  await fromApp({ type: "terminal-killed", id: second.id, sessions: names.slice(24), errors: [] });
+  assert.deepEqual((await done).sessions, names);
+
+  const before = posted.length;
+  await assert.rejects(h.killAll(["hm-acme-a0", "../etc"]), /Not a Hivemind session/);
+  await assert.rejects(h.killAll([]), /Not a Hivemind session/);
+  assert.equal(posted.length, before, "nothing the app would refuse is sent");
+  // A single kill's answer does not settle a batch, nor a batch's a single kill.
+  const single = h.kill("hm-acme-a0");
+  const batch = h.killAll(["hm-acme-a1"]);
+  const [kill, many] = sent("terminal-kill").slice(-2);
+  await fromApp({ type: "terminal-killed", id: kill!.id, sessions: ["hm-acme-a0"], errors: [] });
+  await fromApp({ type: "terminal-killed", id: many!.id, session: "hm-acme-a1" });
+  await assert.rejects(single, /did not answer/);
+  await assert.rejects(batch, /did not answer/);
+});
+
+test("with no sessions in the project the sheet says so and offers Launch agent", async () => {
+  installBridge();
+  let launched = 0;
+  const view = await mount(() => <SessionsSheet agents={[]} projects={[project, beta]} project="acme" onClose={() => {}}
+    onLaunch={() => { launched++; }} />);
+  await fromApp(connected);
+  assert.equal(view.host.querySelector(".term-empty-state"), null, "not before the list is known");
+  await fromApp({ type: "sessions", items: [session("hm-beta-eve", { project: "beta" })] });
+  const empty = view.host.querySelector(".term-empty-state")!;
+  assert.equal(empty.querySelector("strong")?.textContent, "No terminals in Acme yet");
+  assert.equal(empty.querySelector("span")?.textContent, "Launch an agent and its tmux session appears here.");
+  assert.equal(byText(view.host, "Terminate all").disabled, true);
+  assert.match(view.host.querySelector(".sheet-head p")?.textContent ?? "", /^Acme · 0 sessions ·/);
+  assert.match(view.host.querySelector(".term-foot")?.textContent ?? "", /Other projects have 1: Beta \(1\)/);
+  await act(async () => { byText(empty, "Launch agent").click(); });
+  await act(async () => { byText(view.host.querySelector(".term-head-actions")!, "Launch agent").click(); });
+  assert.equal(launched, 2);
+});
+
+test("rows say Running, Waiting to join, Ended, and Reconnecting while the broker is away", async () => {
+  installBridge();
+  const atlas = agent("a1", "Atlas", { terminalSession: "hm-acme-atlas" });
+  const view = await mount(() => <SessionsSheet agents={[atlas]} projects={[project]} project="acme" onClose={() => {}} />);
+  await fromApp(connected);
+  await fromApp({ type: "sessions", items: [session("hm-acme-atlas", { attached: 1 }), session("hm-acme-new-1", { agent: "Kerf" }),
+    session("hm-acme-plum", { alive: false })] });
+  const states = () => rowsOf(view.host).map(row => [row.getAttribute("data-status"), row.querySelector(".tone-chip")?.textContent,
+    row.querySelector(".tone-chip")?.className]);
+  assert.deepEqual(states(), [
+    ["running", "Running", "tone-chip ok"], ["waiting", "Waiting to join", "tone-chip accent"], ["ended", "Ended", "tone-chip muted"]]);
+  assert.match(rowsOf(view.host)[1]!.textContent ?? "", /Kerf/, "the launch's agent name until one joins");
+  assert.equal(byLabel(view.host, "Open hm-acme-plum").disabled, true, "an ended session has nothing to show");
+  assert.equal(byLabel(view.host, "Open hm-acme-plum in Terminal").disabled, true);
+  assert.match(rowsOf(view.host)[2]!.querySelector(".term-meta")?.textContent ?? "", /· ended$/);
+
+  // Hivemind Server restarted: the list stays, every row Reconnecting, nothing that needs the broker offered.
+  await fromApp({ type: "terminal-status", tmux: "unknown", broker: "connecting" });
+  assert.deepEqual(states().map(state => state[1]), ["Reconnecting", "Reconnecting", "Reconnecting"]);
+  assert.match(rowsOf(view.host)[0]!.querySelector(".term-meta")?.textContent ?? "", /the agent keeps running/);
+  assert.equal(byText(view.host, "Terminate all").disabled, true);
+  assert.equal(byLabel(view.host, "Open hm-acme-atlas").disabled, false, "the terminal reconnects by itself");
+  assert.equal(byLabel(view.host, "Open hm-acme-atlas in Terminal").disabled, true);
+  assert.match(view.host.querySelector(".term-notice")?.textContent ?? "", /Connecting to Hivemind Server/);
+  await fromApp(connected);
+  assert.equal(states()[0]![1], "Reconnecting", "until the list is back");
+  await fromApp({ type: "sessions", items: [session("hm-acme-atlas")] });
+  assert.deepEqual(states(), [["running", "Running", "tone-chip ok"]]);
+
+  // An unverified server has no terminals: no list at all.
+  await fromApp({ type: "terminal-status", tmux: "unknown", broker: "unverified" });
+  assert.equal(rowsOf(view.host).length, 0);
+});
+
+test("the row menu copies the attach command and works from the keyboard", async () => {
+  installBridge();
+  const copies: string[] = [];
+  const nav = globalThis.navigator as unknown as { clipboard?: unknown };
+  const original = Object.getOwnPropertyDescriptor(globalThis.navigator, "clipboard");
+  Object.defineProperty(globalThis.navigator, "clipboard", { configurable: true,
+    value: { writeText: async (text: string) => { copies.push(text); } } });
+  unmounts.push(() => {
+    if (original) Object.defineProperty(globalThis.navigator, "clipboard", original); else delete nav.clipboard;
+  });
+  let closed = 0;
+  const view = await mount(() => <SessionsSheet agents={[]} projects={[project]} project="acme" onClose={() => { closed++; }} />);
+  await fromApp(connected);
+  await fromApp({ type: "sessions", items: [session("hm-acme-atlas")] });
+  const trigger = byLabel(view.host, "More actions for hm-acme-atlas");
+  assert.equal(trigger.getAttribute("aria-haspopup"), "menu");
+  await act(async () => { trigger.click(); });
+  const items = () => Array.from(view.host.querySelectorAll("[role=menuitem]")) as unknown as HTMLButtonElement[];
+  assert.deepEqual(items().map(item => item.textContent?.trim()), ["Copy attach command", "Terminate"]);
+  assert.equal(document.activeElement, items()[0], "the first item takes the focus");
+  const key = (target: Element, name: string) => act(async () => {
+    target.dispatchEvent(new window.KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true }) as unknown as Event);
+  });
+  await key(items()[0]!, "ArrowDown");
+  assert.equal(document.activeElement, items()[1]);
+  await key(items()[1]!, "ArrowDown");
+  assert.equal(document.activeElement, items()[0], "wraps");
+  await key(items()[0]!, "Escape");
+  assert.equal(view.host.querySelector("[role=menu]"), null);
+  assert.equal(document.activeElement, trigger, "back on the trigger");
+  assert.equal(closed, 0, "Escape closes the menu, not the sheet");
+
+  await act(async () => { trigger.click(); });
+  await act(async () => { items()[0]!.click(); });
+  await flush();
+  assert.deepEqual(copies, ["tmux -L hivemind attach -t hm-acme-atlas"]);
+  assert.equal(view.host.querySelector(".term-copied")?.textContent, "Copied tmux -L hivemind attach -t hm-acme-atlas");
 });
 
 test("the roster marks agents running in a live session, inside the app only", async () => {
@@ -835,10 +1060,10 @@ test("on iOS the sessions sheet opens sessions only here, and can open straight 
   installBridge();
   const fake = fakeScreen();
   const atlas = agent("a1", "Atlas", { terminalSession: "hm-acme-atlas" });
-  const view = await mount(() => <SessionsSheet agents={[atlas]} projects={[project]} onClose={() => {}} loadScreen={fake.load}
+  const view = await mount(() => <SessionsSheet agents={[atlas]} projects={[project, beta]} onClose={() => {}} loadScreen={fake.load}
     initialSession="hm-acme-atlas" />);
   await fromApp(onIos);
-  await fromApp({ type: "sessions", items: [session("hm-acme-atlas"), session("hm-acme-new-1")] });
+  await fromApp({ type: "sessions", items: [session("hm-acme-atlas"), session("hm-acme-new-1"), session("hm-beta-eve", { project: "beta" })] });
   await flush();
   assert.equal(sent("terminal-attach")[0]?.session, "hm-acme-atlas", "the initial session's terminal is shown");
   assert.match(view.host.querySelector(".sheet-head h2")?.textContent ?? "", /Atlas/);
@@ -846,11 +1071,14 @@ test("on iOS the sessions sheet opens sessions only here, and can open straight 
 
   const back = view.host.querySelector('[aria-label="All sessions"]') as unknown as HTMLButtonElement;
   await act(async () => { back.click(); });
-  assert.equal(view.host.querySelectorAll(".session-list > li").length, 2);
+  assert.equal(rowsOf(view.host).length, 2, "without a project given, the initial session's project");
+  assert.match(view.host.querySelector(".sheet-head p")?.textContent ?? "", /^Acme · 2 sessions/);
+  assert.equal(rowsOf(view.host)[0]!.getAttribute("aria-current"), "true");
   assert.ok(view.host.querySelector('[aria-label="Open hm-acme-atlas"]'), "Open stays");
   assert.equal(view.host.querySelector('[aria-label="Open hm-acme-atlas in Terminal"]'), null, "no Terminal.app on iOS");
-  assert.equal(view.host.querySelector('[aria-label="Terminate hm-acme-atlas"]') !== null, true);
-  assert.match(view.host.textContent ?? "", /tmux sessions on your Mac/);
+  assert.equal(byText(view.host, /Terminal\.app/), undefined);
+  assert.ok(view.host.querySelector('[aria-label="More actions for hm-acme-atlas"]'), "Terminate stays, in the row menu");
+  assert.equal(byText(view.host, "Launch agent"), undefined, "no Launch agent without a way to open it");
 });
 
 test("on iOS the touch row always shows, and a key tap keeps the focus in the terminal", async () => {

@@ -239,10 +239,21 @@ join; the UI maps agents to sessions by that label
 **In the app:**
 
 - **Terminal sessions** (above **Launch agent** in the sidebar, with the number
-  running) lists every Hivemind session: the agent it maps to, running or
-  exited, attached clients and start time. **Open** shows the session in an
-  in-app terminal, **Open in Terminal** attaches a Terminal.app window, and
-  **Terminate** ends the session and everything in it after a confirmation.
+  running) opens **Terminals**: one row per tmux session of the current project,
+  with the agent it maps to (avatar, name, role and seniority), the session
+  name, its state (**Running**, **Waiting to join** while no agent has joined
+  from it, **Reconnecting** while Hivemind Server is away, **Ended** when its
+  pane is dead), start time and attached clients. **Open** shows the session in
+  an in-app terminal (the row stays highlighted once you go back),
+  **Terminal.app** attaches a Terminal.app window, and the row's **⋯** menu has
+  **Copy attach command** (`tmux -L hivemind attach -t <name>`) and
+  **Terminate**, which ends the session and everything in it after a
+  confirmation. **Terminate all** ends every session of the current project
+  after one confirmation (other projects' sessions are not touched), and
+  **Launch agent** opens the Launch agent sheet. A session belongs to the
+  project its launch recorded (`@hivemind_project`), else to its agent's; the
+  footer counts the other projects' sessions, and **Show all projects** lists
+  them under their project's name.
 - A DM with an agent whose session is running has a **Terminal** tab with the
   same in-app terminal.
 - Roster rows show a small terminal icon for an agent with a running session.
@@ -294,7 +305,9 @@ trusted as the UI itself is. What limits this:
   It never reaches a command line or a log.
 - The app takes at most one `terminal-launch`, one `terminal-open` and one
   `terminal-kill` per second per window, each counted on its own, and answers a
-  refused one with an error.
+  refused one with an error. **Terminate all** is one `terminal-kill` naming up
+  to 24 sessions (each checked), which the app kills one after another and
+  counts once, so none is refused or dropped by the throttle.
 - Streams belong to the page that attached them: another page load in the
   window detaches them, and input goes only to a stream the page attached.
 - `.command` scripts are created exclusively in a folder only you can read, and
