@@ -64,7 +64,8 @@ public struct TmuxCommand: Equatable, Sendable {
   public var baseArguments: [String] { ["-u", "-L", Self.socketName, "-f", configPath] }
 
   /// Starts the session detached, then records project and agent on it.
-  /// tmux runs `/bin/zsh -lc <script>` directly (argv, no shell of ours).
+  /// tmux runs `/bin/zsh -lic <script>` directly (argv, no shell of ours): a login
+  /// *interactive* shell, so ~/.zshrc (aliases, nvm, rbenv…) applies as in a terminal.
   /// Precondition: has-session said it does not exist, and the broker
   /// checked that `cwd` is a directory.
   ///
@@ -81,7 +82,7 @@ public struct TmuxCommand: Equatable, Sendable {
       "-n", Self.argument(Self.windowName(spec.title)),
       "-e", "\(SessionName.environmentVariable)=\(spec.name.rawValue)",
       "--",
-      Self.shell, "-lc", Self.argument(Self.script(cwd: spec.cwd, command: spec.command)),
+      Self.shell, "-lic", Self.argument(Self.script(cwd: spec.cwd, command: spec.command)),
     ]
     // ";" as its own argument chains tmux commands in one call. set-option
     // takes a pane target, which needs "=name:" (SessionName.windowTarget).
@@ -124,7 +125,7 @@ public struct TmuxCommand: Equatable, Sendable {
     "exec " + ([executable] + attach(name)).map(TerminalScript.shellQuoted).joined(separator: " ")
   }
 
-  /// The script zsh -lc runs: cd to the folder (single-quoted), the command
+  /// The script zsh -lic runs: cd to the folder (single-quoted), the command
   /// as the sheet built it, then an interactive login shell so the session
   /// outlives the agent. Joined by a blank line, not "; ", so a trailing
   /// comment or backslash in the command cannot swallow the exec.

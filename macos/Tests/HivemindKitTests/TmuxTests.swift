@@ -28,7 +28,7 @@ struct TmuxCommandTests {
     #expect(tmux.newSession(try spec()) == base + [
       "new-session", "-d", "-s", "hm-acme-atlas", "-n", "Acme - Atlas",
       "-e", "HIVEMIND_TMUX_SESSION=hm-acme-atlas",
-      "--", "/bin/zsh", "-lc", "cd -- '/Users/me/My Acme' || exit 1\nclaude --model opus\n\nexec /bin/zsh -l",
+      "--", "/bin/zsh", "-lic", "cd -- '/Users/me/My Acme' || exit 1\nclaude --model opus\n\nexec /bin/zsh -l",
       ";", "set-option", "-t", "=hm-acme-atlas:", "@hivemind_project", "acme",
       ";", "set-option", "-t", "=hm-acme-atlas:", "@hivemind_agent", "Atlas",
     ])

@@ -123,7 +123,7 @@ running, in which case it is reused and its command is not run again:
 
 ```text
 tmux … new-session -d -s <name> -n <window name> -e HIVEMIND_TMUX_SESSION=<name> \
-  -- /bin/zsh -lc "cd -- '<cwd>' || exit 1
+  -- /bin/zsh -lic "cd -- '<cwd>' || exit 1
 <command>
 
 exec /bin/zsh -l" \
@@ -131,6 +131,9 @@ exec /bin/zsh -l" \
   ; set-option -t =<name>: @hivemind_agent <agent>
 ```
 
+- The shell is a login *interactive* zsh (`-lic`), so the command sees ~/.zshrc as in a
+  terminal: aliases (e.g. `codex2`), nvm, rbenv. Anything in ~/.zshrc that prompts or prints runs
+  at every launch too.
 - tmux runs the shell from argv directly. No shell is ever assembled from
   strings on the broker side. The folder is single-quoted inside the script,
   not passed with `-c`, because tmux expands formats (`#{…}`, and `#(…)`, which

@@ -250,7 +250,7 @@ export type TerminalSessionLaunch = {
   title: string;
   /** Absolute, "~" or "~/…"; null or absent: the home folder. */
   cwd?: string | null;
-  /** Shell text run by /bin/zsh -lc in the folder, as Copy would copy it (without its cd). */
+  /** Shell text run by /bin/zsh -lic in the folder, as Copy would copy it (without its cd). */
   command: string;
   /**
    * The session the agent last reported (agent.terminalSession): the broker reuses it while it runs, so an agent

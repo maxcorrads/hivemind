@@ -130,7 +130,7 @@ public struct BrokerLaunch: Equatable, Sendable {
   public let title: String
   /// Absolute folder the session starts in.
   public let cwd: String
-  /// Shell text run by `/bin/zsh -lc`, as the Launch agent sheet builds it.
+  /// Shell text run by `/bin/zsh -lic`, as the Launch agent sheet builds it.
   public let command: String
   /// The session this agent last reported (agent.terminalSession), to reuse
   /// when it is still running: an agent first launched as hm-<p>-new-<n>
