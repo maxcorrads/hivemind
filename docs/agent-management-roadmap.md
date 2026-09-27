@@ -1,24 +1,24 @@
-# Agent management and token efficiency roadmap
+# Agent orchestration and token efficiency roadmap
 
-Status: planned, not started. Written on 2026-09-27 against `8f0e583` (#265).
+Status: Phase T implemented in #275 (not merged yet). Plan revised on 2026-09-27 around brain-launched, task-bound workers; phases A1–A5 not started. Written against `8f0e583` (#265).
 
-This document is the single source of truth for a multi-phase effort to improve how Hivemind manages brains and workers, in the UI and in the server/MCP logic, and to reduce the tokens agents spend. It is written so that work can resume from here alone, without the conversation that produced it. Each phase has its own GitHub issue; the tracking issue, #274, lists them all (see [Issues](#issues)).
+This document is the single source of truth for a multi-phase effort: brains launch task-bound workers from Human-defined templates (automatically or after Human approval), Human follows every job and task with its progress and can pause, cancel or discuss it, and agents spend fewer tokens on Hivemind traffic. It is written so that work can resume from here alone, without the conversation that produced it. Each phase has its own GitHub issue; the tracking issue, #274, lists them all (see [Issues](#issues)).
 
 ## How to resume work
 
 1. Read [Decisions](#decisions) and [Development safety rules](#development-safety-rules) first.
 2. Open the tracking issue and pick the first unchecked phase. The recommended order is the order of [Phases](#phases).
-3. Each phase section lists its goal, the files involved, concrete steps, acceptance criteria and risks. Its issue repeats the same content; if they diverge, update both.
+3. Each phase section lists its goal, design, steps, acceptance criteria and risks. Its issue repeats the same content; if they diverge, update both.
 4. When a phase changes what agents receive (MCP tool text, wait payloads, standing orders), follow the [protocol-change checklist](#protocol-change-checklist).
 5. Tick the phase in the tracking issue and update the **Status** line at the top of this document when a phase is merged.
 
 ## Goals
 
+- Brains launch the workers they need, one per task, from worker templates Human defined for the project, either automatically or after Human approves each launch.
+- Task-bound workers live exactly as long as their task: they are closed and archived when the task is accepted or cancelled.
+- Human sees every job (a request to a brain) with its tasks and their progress, per project and across projects, and can pause, resume, cancel or discuss any task with its brain.
 - Show what each agent is really doing (ready, working, stalled, offline), not only whether its MCP process is alive.
-- Make launch, resume and restart per agent, reproducible from any device (Mac and iPhone/iPad), with the launch configuration stored on the server.
-- Make the agent ↔ tmux session link reliable, without heuristics.
-- Give the Human one place to see and act on an agent, including editing its identity.
-- Give brains enough information to delegate to a free worker.
+- Keep the Node server unable to run commands: launches happen only in Hivemind Server.app, only from Human-defined templates.
 - Reduce the tokens agents spend on Hivemind traffic, and measure it.
 
 ## Decisions
@@ -27,12 +27,24 @@ Taken by Human on 2026-09-27. Do not reopen them without a new Human decision.
 
 | Topic | Decision |
 | --- | --- |
-| Platforms to optimize for | Hivemind.app on the Mac and the iPhone/iPad app (both have terminals through the broker). The plain browser keeps working but is not the design target. |
-| Typical scale | 1–3 agents per project. Prefer a rich per-agent view over roster grouping and bulk actions. |
-| Auto-resume | **Never.** Mail for an offline agent whose session ended is only signalled in the UI. The principle "agents never open themselves" stays. |
-| Launch configuration on the server | **Yes.** Software, model, effort, focus, workspace and non-secret environment variables are stored per agent in the local database. Secrets (the OpenCode Go API key) are never stored. |
-| Identity editing by Human | Human may choose the name at launch and rename, change focus, change seniority and edit a worker's capability card. |
-| Work order | Token quick wins first (Phase T), then foundations, presence, launch, agent panel, brain delegation, role-scoped tools. |
+| Platforms to optimize for | Hivemind.app on the Mac and the iPhone/iPad app. The plain browser keeps working but cannot launch or approve launches. |
+| Who launches | **Hivemind Server.app** (always running in the menu bar), so launches and approvals work with no window open and from the iPhone. The Node server never runs a command. |
+| What a brain may launch | Only **worker templates** Human defines per project: command (e.g. `codex2`, `opencode-hm`), model, effort, flags, environment variables, secrets, seniority and a "when to use" description. A brain picks a template and a task; it never supplies a command. |
+| Limits | A maximum number of concurrent instances **per template**. No other cap. |
+| Auto vs approval | A toggle **per brain**. A new brain starts in **Approval** mode. |
+| Approvals | In Hivemind.app on the Mac and in the iPhone/iPad app (card plus native notification). Not in Telegram. |
+| Template secrets | Human enters them in the template like any other field. They go only to Hivemind Server.app, which keeps them in the macOS Keychain and hands them to the session through the existing private launch file. They are never stored in the Node database. |
+| Worker lifecycle | A task-bound worker is created for one task. When its task is accepted-complete (or cancelled) its session is closed and the worker is **archived**: gone from the roster, history kept. |
+| Worker names | Tied to the task, e.g. `Forge-settings-page` (mentionable, valid in a tmux session name; a numeric suffix on collision). |
+| Isolation | Each task-bound worker creates its own git worktree and branch for its task as its first action. |
+| Pause | **Both** kinds, chosen per action: *soft* (the worker saves a checkpoint and stops; its session stays) and *hard* (checkpoint, then the session is closed; Resume relaunches the same worker with its handoff). |
+| Cancel | Cancels the task and **closes its worker at once**. |
+| Task views | Grouped by **job** (the Human request) with its tasks; per project in the sidebar **and** a global view; detailed progress (checkpoints, completed steps, next action). |
+| Talking about a task | Both: post in the **task thread** (brain and worker read it) or open the **brain's DM** with the task referenced. |
+| Fixed workers | Workers launched by hand as today **stay** and coexist with task-bound workers. |
+| Auto-resume | Hivemind never relaunches an agent by itself because mail arrived. The only automatic launches are brain requests from templates, gated by the brain's mode. |
+| Identity editing by Human | Human may rename, change focus and seniority, and edit a worker's capability card (Phase 3). |
+| Work order | Phase T first (done), then the orchestration phases A1–A5 in order; Phase 0 refactors happen where each phase needs them. |
 
 ## Development safety rules
 
@@ -41,8 +53,8 @@ Human runs a production Hivemind while this work happens. Nothing done for this 
 - **The running setup lives in another checkout.** Hivemind Server.app, Hivemind.app and every agent's `hivemind mcp` process run from `~/Documents/develop/hivemind` (server on `127.0.0.1:7420`, state in `~/.hivemind`, tmux server `-L hivemind`). Development happens in a separate checkout, `~/Documents/develop/hivemind-dev/hivemind`. Never edit, build, install or run anything in the production checkout.
 - **Never bind 7420 or 7421.** Do not run `npm run dev`, `npm start`, `browser:server` or the coordination benchmarks' live executor (it uses port 7420) from the development checkout while the production server runs. The unit and integration suites start their own servers on ephemeral ports and are safe.
 - **Never touch `~/.hivemind`.** Any manual server run uses a throwaway home and a free port, for example `HIVEMIND_HOME=$(mktemp -d) npx tsx src/cli.ts serve --port 7520` (`HIVEMIND_PORT` also works). The instance lock is per home, so a separate home never conflicts with the production server.
-- **Never touch the production tmux server** (`tmux -L hivemind`) or `~/Library/Application Support/Hivemind/`.
-- **Migrations.** Phases 1–3 add SQLite migrations. They apply to `~/.hivemind` the first time Human runs the new code in production. Call this out in each PR, and remind Human to back up `~/.hivemind` with every server stopped before upgrading (see [Storage, backup and restore](storage-and-backup.md)).
+- **Never touch the production tmux server** (`tmux -L hivemind`), the production broker socket or `~/Library/Application Support/Hivemind/`. Never run a development build of Hivemind Server.app while the production one runs: they share the broker socket, the discovery file and the Keychain service name. Swift work is tested with `swift test` in `macos/` (fakes only) until Human decides how to run a development app side by side.
+- **Migrations.** Phases A1–A4 add SQLite migrations. They apply to `~/.hivemind` the first time Human runs the new code in production. Call this out in each PR, and remind Human to back up `~/.hivemind` with every server stopped before upgrading (see [Storage, backup and restore](storage-and-backup.md)).
 - **Agent protocol changes need MCP restarts.** After upgrading, every running agent's MCP client must be restarted (see the [protocol-change checklist](#protocol-change-checklist)).
 
 ## Current state
@@ -103,124 +115,121 @@ Where the waste is, in code:
 5. **Context growth.** `clear_context` is only an instruction (`src/server/services/messages.ts`); it cannot reset the CLI's context. Long sessions keep growing.
 6. **One tool set for all roles.** Tools are registered at MCP start, before `join`, so workers see brain-only tools and their schemas.
 
+
+### Tasks and launching
+
+- Brains split work with `assign_task` (`src/server/tasks.ts`, `src/shared/tasks.ts`), but only to workers Human launched by hand. Task states: `sent`, `delivered`, `accepted`, `blocked`, `result_submitted`, `changes_requested`, `rejected`, `accepted_complete`, `cancelled` (the last only when the worker is removed). There is no pause, no Human cancel and no parent "job" grouping tasks.
+- Tasks are listed only per channel, in the channel's Tasks tab (`web/ChannelDesk.tsx`, `web/TaskCard.tsx`); `agentWork` gives one status line per agent. There is no cross-channel or cross-project task view.
+- Only the terminal broker inside Hivemind Server.app can start a terminal. Today it takes requests only from a page in Hivemind.app or the iPhone/iPad app ([Terminal broker](terminal-broker.md)). The Node server has no terminal API.
+- Hivemind Server.app starts the Node server with a per-start instance secret (`HIVEMIND_INSTANCE_SECRET`, read and deleted by `src/server/instance-proof.ts`; kept by the app in memory and in the `0600` `server.json`). Only Hivemind Server.app and that server know it ([Verifying the server](macos.md#verifying-the-server)).
+- Launch secrets reach a session through a private `0600` file the session reads and deletes; today the only allowed secret name is `OPENCODE_API_KEY` (`LaunchSecrets.swift`).
+
 ## Phases
 
-Recommended order: T → 0 → 1 → 2 → 3 → 4 → T2. Phase T is independent. Phases 1–4 build on Phase 0.
+Recommended order: T (done) → A1 → A2 → A3 → A4 → A5, then 3 and T2. Phase 0 refactors are done inside the phase that first needs them (listed there). Superseded phases are listed at the end.
 
-### Phase T — Token efficiency quick wins
+### Phase T — Token efficiency quick wins (done, #275)
 
-**Goal.** Cut the bytes Hivemind returns to agents without changing semantics, and start measuring them.
+Implemented in #275: compact JSON for MCP tool results and the CLI `wait`; the MCP `wait` shows `you` only on the first wake of a session and when it changes, the full `next` only on the first wake (then a short reminder), no duplicate `instruction`, no empty legacy arrays; compact task mail carries only the body's header line beside the full `taskEvent`; task bodies lose disclaimers the standing orders already state; the Human snapshot has `agentTraffic`, the JSON bytes the agent API returned per brain/worker since server start (in memory, no migration). Measured −33% to −41% on task wakes. Breaking for agents: restart MCP clients after upgrading.
 
-**Steps.**
+### Phase 0 — Foundations (folded into the phases that need them)
 
-1. Compact JSON in MCP tool results: `text()` in `src/mcp/index.ts` uses `JSON.stringify(data)`. Update `waitWireBytes` in `src/server/wait-format.ts` to budget the compact MCP form, keeping the budget honest for the HTTP JSON and CLI forms (the CLI may keep pretty output for people; check `src/cli.ts`).
-2. Send a task contract once per mail item: in `packWait`, keep `taskEvent` and replace `body` for task events with a short header (task id, action, revision, contract version), or keep `body` and drop the contract from `taskEvent`. Pick one and document it in [Inbox delivery protocol](../DELIVERY-PROTOCOL.md) and [Task protocol](../TASK-PROTOCOL.md). History and the UI keep the full rendered body.
-3. Send `you` and `next` only when needed: on the first wait of an inbox session and whenever `you` changes (resume, identity edit). Standing orders and the `wait` tool description must still say what to do after mail (ack, reply, wait again).
-4. Remove fixed disclaimers from `taskBody` where the standing orders already hold the rule. Keep one short phrase per action only where it changes behaviour.
-5. Measure: count, per agent, the bytes Hivemind returned through wait and other tool results (a per-agent counter on the server, grouped by tool, reset with retention). Expose it on the Human snapshot for Phase 3's agent panel. Record a before/after baseline with the storage/coordination benchmarks' fixtures (not live providers).
+- A single pure selector `agentRuntime(agent, snapshot, terminals, work)` replacing the agent ↔ session and status logic spread over `web/use-terminal.ts`, `web/ChannelDesk.tsx`, `web/SessionsSheet.tsx` and `web/nav-model.ts` (needed by A4/A5).
+- Agent work delivered with presence (snapshot and realtime events) instead of the separate `/api/ui/nav-status` polling (needed by A4).
+- `web/LaunchSheet.tsx` split into a `useLaunchForm` hook and sub-components (needed by A1, which reuses its command builder for templates).
 
-**Files.** `src/mcp/index.ts`, `src/server/wait-format.ts`, `src/shared/tasks.ts`, `src/shared/types.ts` (`WaitResult`, `WaitMailItem`), `src/server/services/delivery.ts`, tests in `src/mcp/*.test.ts`, `src/server/inbox-bounds.test.ts`, `src/shared/agent-instructions.unit.test.ts`, `src/shared/agent-rules.checklist.ts`.
+### Phase A1 — Worker templates and task-bound identities
 
-**Acceptance.** All tests green (`npm run check`, `npm run test:coverage`). Wait pages carry at least as many messages as before under the same 64 KiB cap. A recorded baseline shows the byte reduction. Docs updated.
+**Goal.** Human defines, per project, the workers brains may launch; a launched worker gets a reserved, task-bound identity before its process starts.
 
-**Risks.** Agents parse fields by name: renaming or removing fields is a protocol change (restart MCP clients). Hosts that display raw tool output get less readable text; that is acceptable.
+**Design.**
 
-### Phase 0 — Foundations
+- Table `worker_templates` (migration): `id`, `project_id`, `slug` (unique per project), `label`, `description` ("when to use", shown to brains), `software`, `model`, `effort`, `extra_flags`, `environment` (non-secret, rules of `src/shared/launch-environment.ts`), `secret_names` (names only), `seniority`, `focus`, `max_concurrent` (required, ≥1), `enabled`, `revision`, timestamps.
+- Human-only API: `GET/POST/PATCH/DELETE /api/ui/projects/:id/worker-templates` with revision checks. Deleting a template with running instances is refused.
+- Secrets: the template editor sends secret values only to Hivemind Server.app over the native bridge (new messages, e.g. `template-secret-set {templateId, name, value}` / `template-secret-delete`, relayed to the broker or the launcher service; from iOS through the remote gateway). Server.app stores them in the Keychain under `hivemind.template.<templateId>.<NAME>`. The Node server stores only `secret_names`. Generalize `LaunchSecrets` from the single `OPENCODE_API_KEY` to template-declared names (same value rules, same denylist as environment variables).
+- Launch command: built by the Node server from the template with the shared launch builder (`src/shared/launch-prompt.ts`), the reserved name and a one-time claim ticket. The prompt never contains brain-supplied text: the worker reads its task with `get_task` after joining.
+- Task-bound identity: a **pending** agent row (new state; no session, invisible to agents, excluded from roster, mentions, delivery and Jev capacity) with a reserved name `<Base>-<task-slug>` (numeric suffix on collision) and `template_id`, `task_id`, `origin` (`template`). The launch prompt joins with `claim=<ticket>` (random, single-use, expires after 30 minutes; stored hashed). Claiming turns the pending row into a normal worker and records its tmux session. An unclaimed identity expires and its launch request fails.
+- The tmux session is `hm-<project>-<name>` from the start, so no `new-<n>` session and no dependency on Codex `env_vars` for mapping.
+- UI: a **Worker templates** sheet in Project settings (list, create, edit, duplicate, disable), with a command preview; secrets are masked, write-only fields.
 
-**Goal.** One place computes an agent's runtime state, one source delivers it, and the Launch sheet becomes maintainable. No visible behaviour change.
+**Steps.** Migration and store; API with validation and tests; pending identities and `join` claim (identity service, MCP `join`, CLI); launch-command builder for templates; bridge messages and Keychain storage in Server.app (Swift, `swift test` with fakes); template editor UI; docs ([Identity lifecycle](identity-lifecycle.md), [Agent connection](agent-connection.md), [Terminal broker](terminal-broker.md), [macOS apps](macos.md)).
 
-**Steps.**
+**Acceptance.** Templates round-trip with revisions; secrets never reach the Node database or any log (tested); a pending identity can be claimed once with its ticket and never by name; pending identities are invisible where specified (tested); the launch command contains no brain-supplied text.
 
-1. Add a pure selector, for example `web/agent-runtime.ts`: `agentRuntime(agent, snapshot, terminals, work)` returning `{ presence, session, sessionStatus, attention, statusLine }`. Move into it the logic now in `agentStatusLine` (`nav-model.ts`), `agentLiveSession`/`recordedSession` (`use-terminal.ts`), `sessionOwner`/`sessionStatus` (`SessionsSheet.tsx`) and the `hadTerminal` handling in `ChannelDesk.tsx`. Use it from `AgentList`, `DmTitle`, `ChannelDesk` and `SessionsSheet`.
-2. Deliver agent work together with presence: include `agentWork` in the snapshot and in `agent`/`task` realtime events (or a single `agentView` event), and retire the separate `/api/ui/nav-status` polling in `use-nav-status.ts`.
-3. Split `LaunchSheet.tsx`: a `useLaunchForm` hook (reducer plus persistence, replacing the manual `remember()` patches) and components for the new-agent form, the resume list and the advanced options. Keep the `localStorage` format readable until Phase 2 moves it to the server.
+### Phase A2 — Launcher in Hivemind Server.app
 
-**Acceptance.** Existing UI tests pass unchanged or with mechanical updates (`web/terminal.unit.test.tsx`, `web/terminal-session-map.unit.test.tsx`, `web/nav-rows.unit.test.tsx`, `web/bots.test.tsx`). New unit tests cover `agentRuntime`. No change in rendered output.
+**Goal.** Launch, stop and hard-pause task-bound workers from a durable queue, with Human approval or automatically, without giving the Node server a way to run commands.
 
-### Phase 1 — Real presence and stall signalling
+**Design.**
 
-Related: #258.
+- Table `launch_requests` (migration): `id`, `project_id`, `brain_id`, `template_id`, `task_id`, `job_id`, `agent_id` (pending identity), `ticket_hash`, `state` (`awaiting_approval`, `approved`, `launching`, `launched`, `failed`, `rejected`, `cancelled`, `expired`), `reason`, `requested_at`, `decided_by`, `decided_at`, `session`, `error`. Table `launcher_commands` for `kill` (stop, hard pause, cancel, archive) with the same durability.
+- Launcher channel: `GET /api/launcher/next` (long poll) and `POST /api/launcher/:id/result`, outside Human and agent auth, authenticated by an HMAC over method, path, timestamp, nonce and body hash with the **instance secret** (±60 s window, nonce replay cache). Without an instance secret (a `hivemind serve` started by hand) the endpoints answer 404 and the UI says launches need Hivemind Server.app.
+- Server.app `LauncherService`: long-polls the queue, launches through its in-process broker with the template's command, cwd (project worktree), environment and Keychain secrets, reports the session name or the error; runs `kill` commands. Idempotent by request id (a session that already exists counts as launched). Survives restarts of either side.
+- Approvals: a request from a brain in Approval mode waits in `awaiting_approval`; Human sees a card in Hivemind.app and the iPhone/iPad app (plus a native notification) with **Approve**, **Change template** and **Reject**. Auto mode goes straight to `approved`. Per-template `max_concurrent` is enforced when approving (a request over the cap waits, visible as such).
 
-**Goal.** Show whether an agent is ready, working, stalled or offline, and warn Human when an agent is probably stuck. Never relaunch anything automatically.
+**Trust boundary (document it in [Terminal broker](terminal-broker.md) and [Local Human security](local-human-security.md)).** Server.app trusts the Node server it started and verified, as Hivemind.app already trusts its page. A brain never supplies a command: only a template id and a task. Any local process can pass for a brain (identities have no credentials), so in Auto mode such a process could start workers, but only from Human's templates, within their caps.
 
-**Steps.**
+**Acceptance.** Queue and HMAC channel tested (replay, clock skew, wrong secret, no secret); Swift launcher tested with fake broker and fake HTTP; a request is launched exactly once across restarts; caps enforced; approvals from Mac and iOS.
 
-1. Server-side activity state per brain/worker: `offline | ready | working | stalled | superseded`, with `since`.
-   - `ready`: a wait is in flight, or the last wait burst ended less than a grace period ago (bursts are 20 s).
-   - `working`: no wait for longer than the grace period, but the agent made requests recently (send, task_event, ack…), or a delivery was offered and acknowledged.
-   - `stalled`: no wait for longer than a threshold (for example 3 minutes) while mail is queued or a delivery awaits receipt. This covers #258.
-   - `offline`: no requests for `PRESENCE_IDLE_MS`, or `leave`. Consider a shorter "disconnected" detection when bursts stop and heartbeats stop.
-   - `superseded`: a newer session of the same name exists (transient).
-   Store what is needed (for example `last_wait_at`, `last_action_at`) in a migration; publish the state on the snapshot and on `agent` events. Keep `online` for compatibility.
-2. UI: show the state and "since" in the roster status line and the DM header, through `agentRuntime`.
-3. Stall hint in the apps (computed in the page, the server runs nothing): if the agent's tmux session is alive, the agent is `stalled` or has not waited for N minutes, and mail is queued, show "Probably waiting at a prompt in its terminal" with **Open terminal**, and a native notification (see [Targeted notifications](../NOTIFICATIONS.md) and `web/desktop-notifications.ts`).
-4. Offline with mail: when mail is queued for an offline agent whose session ended, show it in the roster and agent panel with **Resume** (Phase 2). No automatic launch.
+### Phase A3 — Brain tools and per-brain mode
 
-**Acceptance.** Unit tests for each state transition, including the #258 scenario (heartbeats continue, waits stop, mail queues → `stalled`). The roster shows the state. No command is ever run without a Human click.
+**Goal.** Brains request and release task-bound workers; Human sets each brain to Auto or Approval.
 
-**Risks.** Hosts differ in how long a turn takes; thresholds must be conservative and documented. The state is a hint, not authority (same wording as the rest of Hivemind).
+**Design.**
 
-### Phase 2 — Launch profiles, pre-assigned identity, per-agent resume and restart
+- `agents.launch_mode` (`approval` default, brains only), toggled by Human in the roster/agent panel; visible to the brain in `whoami`.
+- MCP tools (brain only, 400-character descriptions):
+  - `worker_templates`: the project's enabled templates with slug, label, description, seniority, cap and instances in use.
+  - `request_worker {requestId, template, contract, job?}`: atomically creates the task assigned to a new pending identity and the launch request; returns the task and the request state (`awaiting_approval` or `approved`). Also accepts an existing unassigned or cancelled task to revise onto a new worker.
+  - `release_worker {worker, reason}`: closes and archives a task-bound worker the brain owns (its task must be finished, cancelled or revised away).
+- The brain learns launch outcomes as task events (launched, failed, rejected, expired).
+- Brain standing orders: prefer an idle suitable worker; one task-bound worker per task; pick the template by its description; never ask for a template you do not need; release when the task ends. Workers' standing orders: a task-bound worker creates its worktree and branch first, works only on its task, and stops after its result is reviewed.
+- Enrich the brain roster (`agents`) with each worker's activity state, open tasks and origin (fixed or template).
 
-**Goal.** Launch, resume and restart any single agent the same way from the Mac or the iPhone, with a reliable agent ↔ session link.
+**Acceptance.** End-to-end in tests with a fake launcher: brain requests, Human approves, the worker claims, accepts, submits, the brain accepts, the worker is archived. Auto mode skips approval. Tool descriptions within budget; rules checklist updated.
 
-**Steps.**
+### Phase A4 — Jobs, task control, worker lifecycle and real presence
 
-1. Launch profile per agent on the server: software, model, effort, extra flags, focus, workspace path, non-secret environment variables (same rules as `src/shared/launch-environment.ts`). New table via migration; Human-only API (`/api/ui/...`). Never store `OPENCODE_API_KEY` or any secret. The Launch sheet reads and writes profiles instead of `localStorage` (migrate existing `localStorage` values on first open, per browser).
-2. Project-level defaults per role and seniority (for example a cheaper model for junior workers or reviewers), used when an agent has no profile yet.
-3. Pre-assigned identity: Human reserves the name before launching (a "pending" agent row: no session, not in the roster as online, not visible to agents). The broker session is created as `hm-<project>-<name>` from the start. The prompt joins by claiming that name (a new `join` field, or `resume` accepting a pending identity). A pending identity never joined within a time limit can be discarded. This removes `hm-<project>-new-<n>`, "Waiting to join" and the dependency on Codex `env_vars` for mapping. Human may choose the name at launch (validated like generated names, unique, case-insensitive).
-4. Per-agent actions in the apps: **Resume** (launch with `resume=Name` and the stored profile; reuses the running session if any), **Stop** (kill its tmux session after confirmation; the agent stays in the hive), **Restart** (ask the agent for a checkpoint on its active tasks, kill the session, resume with handoffs). Restart gives the CLI a genuinely fresh context, which `clear_context` cannot, and is the main context-rotation tool for long sessions.
-5. Keep the copy-command flow for the browser, built from the same profile.
+**Goal.** Group tasks into jobs, let Human pause, resume and cancel them, close task-bound workers automatically, and know whether each worker is alive.
 
-**Files.** `src/server/migrations/*`, `src/server/services/identity.ts`, `src/server/app.ts`, `src/shared/launch-prompt.ts`, `src/shared/api-contract.ts`, `web/LaunchSheet.tsx` (after Phase 0), `web/use-terminal.ts`, `web/native-bridge.ts`, docs [Identity lifecycle](identity-lifecycle.md), [Agent connection](agent-connection.md), [Terminal broker](terminal-broker.md), [macOS apps](macos.md), [iOS](ios.md).
+**Design.**
 
-**Acceptance.** Resuming an agent from the iPhone uses the same software/model/env as from the Mac. A newly launched agent's session is named after it before it joins. Restart produces a new session with handoffs and no lost mail. Secrets never reach the database (test it).
+- Table `jobs` (migration): `id`, `project_id`, `brain_id`, `origin_message_id` (the Human request), `title`, `state` (`active`, `paused`, `done`, `cancelled`), timestamps. Brains create one with `job_event {type:"open", title, originMessageId}` or implicitly with `request_worker {job:{title}}`; tasks get an optional `job_id`. A job is done when all its tasks are finished; Human can close it.
+- Task states added: `paused` with `pauseMode` (`soft`/`hard`). Human actions (UI API): **Pause soft** (control message: checkpoint, then stop and wait), **Pause hard** (control message asking for a checkpoint, then after a grace period a `kill` launcher command; for fixed workers only soft is offered unless their session is known), **Resume** (soft: control message; hard: a launch request for the same identity with `resume=Name` and its handoff, subject to the brain's mode), **Cancel** (task `cancelled` with Human as actor, then close and archive a task-bound worker; a fixed worker gets a control message). The brain is notified of each as a task event.
+- Worker lifecycle: when a task-bound worker's task becomes `accepted_complete` or `cancelled`, enqueue `kill` and archive the identity (`archived` label in history, like the removal tombstone but without cancelling anything).
+- Real presence (was Phase 1, #258): activity state `ready | working | stalled | offline | superseded` with `since`, from wait bursts, recent actions and queued mail; published on the snapshot and `agent` events. A launched worker that never claims its identity, or that stalls, is surfaced on its task and to its brain. No automatic relaunch.
 
-**Risks.** Pre-assigned identities add a new identity state: every query that lists agents must exclude pending ones where appropriate (roster, mentions, delivery, Jev capacity). The broker protocol is unchanged if the page passes the reserved name as `agent`.
+**Acceptance.** State machine and transitions tested, including #258 (heartbeats continue, waits stop, mail queues → `stalled`); pause/resume/cancel end-to-end with a fake launcher; automatic archive on completion.
 
-### Phase 3 — Agent panel and identity editing
+### Phase A5 — Task views and talking to the brain
 
-**Goal.** One place to see and act on an agent; Human can edit its identity.
+**Goal.** See every job and task with its progress, and act on them.
 
-**Steps.**
+**Design.**
 
-1. Agent panel: a side panel (like `ThreadAside`) or an **Overview** tab in the agent's DM. Contents: name, role, seniority, focus, project; software/model from the profile; tmux session and its state; activity state and since (Phase 1); current task with its latest checkpoint and next action; queue and receipts; bytes returned to it (Phase T); capability card; lifecycle log; actions (Open terminal, Resume, Restart, Stop, Clear context, Edit, Remove).
-2. Lifecycle log: an append-only table of joined, resumed, superseded, went offline, stalled, session ended, context cleared, identity edited, removed; bounded by the existing retention (`src/server/maintenance.ts`).
-3. Remove with an impact preview: a read-only endpoint returning the tasks that would be cancelled and the tasks that would lose their reviewer, shown in the confirm sheet, with an option to stop the agent's tmux session too.
-4. Identity editing (Human only):
-   - **Focus**: editable; the agent is told through a control message to reread `whoami` with `orders=true`.
-   - **Seniority**: editable for workers. Update `assertResumable` (a resume must accept the stored seniority, not an old one from a copied prompt), the standing orders line "Your identity is fixed", and launch prompts.
-   - **Name**: rename keeps the old name reserved as an alias for resume and history; mentions of the new name work immediately; the tmux session keeps its name until the next launch; the running agent gets a control message with its new name.
-   - **Capability card**: Human can edit any worker's card (today only the worker can, `RoutingStore.set`). Record who changed it.
-5. Allow Clear context for brains from the UI if Human wants it (today the roster offers it only for workers).
+- **Tasks** entry per project in the sidebar and an **All tasks** view across projects (project rail / top bar), also on iPhone.
+- Grouped by job: title, brain, state, counts. Each task: objective, worker and template, state chip, progress (latest checkpoint: completed steps, open questions, next action, age), bytes consumed (Phase T counter), terminal link, and actions **Pause soft / hard**, **Resume**, **Cancel**, **Open thread**, **Message brain**.
+- **Requests** section with pending launch approvals (same cards as A2).
+- Talking: **Open thread** posts in the task thread (the brain, as assigner, and the worker are woken as task participants); **Message brain** opens the brain's DM with the task referenced (`Task <id>` link).
+- Built on `agentRuntime` (Phase 0) and realtime task/job events.
 
-**Acceptance.** Every action has a confirm where destructive, and tests for authorization (only Human), for rename/resume aliasing and for the control messages. Standing orders and the rules checklist updated.
+**Acceptance.** UI tests for grouping, progress and every action's request; accessibility checks as in the existing UI suites; works in Hivemind.app and the iPhone/iPad app.
 
-**Risks.** Renaming touches mentions (`src/shared/mentions.ts`), DM channel names, Telegram topics and the tmux session label. List and test each.
+### Phase 3 — Agent panel and identity editing (reduced)
 
-### Phase 4 — Brain delegation
-
-**Goal.** Brains pick a free worker without guessing.
-
-**Steps.**
-
-1. Enrich `GET /api/agent/agents` (MCP `agents`) for brains with each worker's activity state (Phase 1), the number of unfinished tasks it holds and an approximate queue count, within the project. Workers keep the current minimal view.
-2. Mention in the brain standing orders that the roster shows availability, briefly.
-3. Show the capability card in the agent panel (Phase 3) and suggest filling it at launch (Phase 2 profile can pre-fill model/host).
-
-**Acceptance.** Tests for scoping (no cross-project data, workers do not see others' workload). Tool description stays within the 400-character budget.
+Agent panel for fixed and task-bound agents (identity, template, session, activity state, current task, queue, bytes, lifecycle log, actions), Remove with an impact preview, and Human identity editing (rename with the old name kept as a resume alias, focus, seniority, capability card) with control messages telling the agent to reread `whoami`. See #271.
 
 ### Phase T2 — Role-scoped MCP tool sets
 
-**Goal.** Workers do not see brain-only tools and their schemas.
+Workers should not receive brain-only tools (now including `worker_templates`, `request_worker`, `release_worker`, `job_event`). Register tools per role after `join` with `tools/list_changed`, or from a role passed at MCP start; fall back to every tool on hosts without support. See #273.
 
-**Steps.**
+### Superseded phases
 
-1. Check which hosts support `notifications/tools/list_changed` (Claude Code, Codex, Cursor, OpenCode). Record the versions tested.
-2. Option A: after `join`, register only the tools for the agent's role and send `tools/list_changed`. Option B: pass the role at MCP start (for example `HIVEMIND_ROLE`, set by the launch command, and listed in Codex `env_vars`) and register only that role's tools from the start. Keep a safe fallback: unknown role registers every tool, as today.
-3. Server authorization stays unchanged (it already rejects brain-only calls from workers).
-
-**Acceptance.** A worker's tool list excludes brain-only tools on hosts that support it; nothing breaks on hosts that do not.
+| Old phase | Now |
+| --- | --- |
+| 1 — Real presence and stall signalling (#269) | Part of A4 |
+| 2 — Launch profiles, pre-assigned identity, per-agent resume/restart (#270) | A1 (templates replace per-agent profiles; pending identities) and A2 (launcher); per-agent Resume/Stop for fixed agents moves to Phase 3 |
+| 4 — Brain delegation (#272) | Part of A3 |
 
 ## Protocol-change checklist
 
@@ -253,10 +262,13 @@ Tracking issue: #274. Each phase issue is self-contained and repeats its section
 
 | Phase | Issue |
 | --- | --- |
-| T — Token efficiency quick wins | #267 |
-| 0 — Foundations | #268 |
-| 1 — Real presence and stall signalling | #269 (related: #258) |
-| 2 — Launch profiles, pre-assigned identity, per-agent resume and restart | #270 |
+| T — Token efficiency quick wins | #267 (implemented in #275) |
+| A1 — Worker templates and task-bound identities | #276 |
+| A2 — Launcher in Hivemind Server.app | #277 |
+| A3 — Brain tools and per-brain mode | #278 |
+| A4 — Jobs, task control, worker lifecycle and real presence | #279 (includes #258) |
+| A5 — Task views and talking to the brain | #280 |
 | 3 — Agent panel and identity editing | #271 |
-| 4 — Brain delegation | #272 |
 | T2 — Role-scoped MCP tool sets | #273 |
+| 0 — Foundations (folded into A1/A4/A5) | #268 |
+| Superseded | #269, #270, #272 |
