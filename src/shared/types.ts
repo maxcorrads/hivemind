@@ -1,4 +1,5 @@
 import type { TaskEnvelope } from './tasks.ts';
+import type { AgentActivity } from './agent-activity.ts';
 
 export const PROTOCOL_VERSION = 3;
 export const DEFAULT_PORT = 7420;
@@ -93,7 +94,7 @@ export type Agent = {
   /** Brain roster projection; task counts come from structured task records. */
   origin?: { type: "fixed" } | { type: "template"; templateId: string };
   openTasks?: number;
-  activity?: { state: "ready" | "working" | "offline" };
+  activity?: AgentActivity;
   /**
    * The Hivemind tmux session (`hm-…`) the agent's MCP client reported on its latest join, when it runs in one.
    * A display label with no capability: the server never runs, opens or kills anything by it (docs/terminal-broker.md).

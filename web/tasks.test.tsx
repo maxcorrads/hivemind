@@ -251,6 +251,8 @@ test('task stepper walks sent → accepted → blocked/result → reviewed and n
   assert.equal(shape('accepted'), 'Sent:done Accepted:current Result:todo Reviewed:todo');
   assert.equal(shape('rejected'), 'Sent:done Rejected:fail Result:todo Reviewed:todo');
   assert.equal(shape('blocked'), 'Sent:done Accepted:done Blocked:warn Reviewed:todo');
+  assert.equal(shape('paused'), 'Paused:warn Accepted:todo Result:todo Reviewed:todo',
+    'a pause does not imply the worker accepted its contract');
   assert.equal(shape('result_submitted'), 'Sent:done Accepted:done Result:current Reviewed:todo');
   assert.equal(shape('changes_requested'), 'Sent:done Accepted:done Result:done Changes requested:warn');
   assert.equal(shape('accepted_complete'), 'Sent:done Accepted:done Result:done Reviewed:done');

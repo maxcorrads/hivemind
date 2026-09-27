@@ -17,6 +17,7 @@ import type { TaskStore } from "../tasks.ts";
 import type { TimelineStore } from "../timeline.ts";
 import { packWait } from "../wait-format.ts";
 import type { AgentDirectory, Core } from "./ports.ts";
+import type { AgentActivityService } from "./agent-activity.ts";
 import type { Waiter, Waiters } from "./waiters.ts";
 
 export type DeliveryServiceDeps = Core & {
@@ -28,6 +29,7 @@ export type DeliveryServiceDeps = Core & {
   readonly tasks: Pick<TaskStore, "recordReceipt" | "view">;
   readonly timeline: Pick<TimelineStore, "recordAcknowledgement" | "recordOffer">;
   readonly waiters: Waiters;
+  readonly activity: Pick<AgentActivityService, "waitStarted" | "waitEnded" | "sessionSuperseded" | "queueChanged">;
 };
 
 /**
@@ -41,7 +43,10 @@ export class DeliveryService {
     if (actor.role !== "brain" && actor.role !== "worker") throw new HiveError(403, "Only agents have inbox sessions");
     const previous = this.deps.inbox.currentSession(actor.id);
     const current = this.deps.inbox.openSession(actor.id, sessionId);
-    if (previous !== current) this.deps.waiters.supersede(actor.id);
+    if (previous !== current) {
+      if (previous !== undefined && previous !== null) this.deps.activity.sessionSuperseded(actor.id);
+      this.deps.waiters.supersede(actor.id);
+    }
     return current;
   }
 
@@ -87,10 +92,17 @@ export class DeliveryService {
     return out;
   }
 
+  /** One agent's current inbox estimate for the activity projection. */
+  queuedCount(agentId: string): number {
+    const agent = this.deps.identity.getAgent(agentId);
+    return agent.role === "brain" || agent.role === "worker" ? this.deps.inboxReader.estimate(agent).atLeast : 0;
+  }
+
   private emitQueued(agentId: string, estimate?: QueueEstimate) {
     const agent = this.deps.identity.getAgent(agentId);
     if (agent.role !== "brain" && agent.role !== "worker") return;
     const queued = estimate ?? this.deps.inboxReader.estimate(agent);
+    this.deps.activity.queueChanged(agentId, queued.atLeast);
     this.deps.bus.emit("queued", {
       agentId,
       n: queued.atLeast,
@@ -139,6 +151,7 @@ export class DeliveryService {
       this.openInboxSession(actor, crypto.randomUUID());
     this.deps.inbox.requireSession(actor.id, sessionId);
     this.deps.identity.touch(actor.id, true);
+    const activityToken = this.deps.activity.waitStarted(actor.id, sessionId);
 
     return new Promise((resolve, reject) => {
       let done = false;
@@ -164,23 +177,25 @@ export class DeliveryService {
         if (timer) clearTimeout(timer);
         if (routineTimer) clearTimeout(routineTimer);
       };
-      const deliver = (batch: WaitResult) => {
+      const deliver = (batch: WaitResult, reason: "mail" | "idle" | "aborted" = batch.idle ? "idle" : "mail") => {
         if (done) return;
         done = true;
         cleanup();
         this.deps.identity.touch(actor.id, true);
+        this.deps.activity.waitEnded(actor.id, activityToken, reason);
         resolve(batch);
       };
-      const fail = (error: HiveError) => {
+      const fail = (error: HiveError, reason: "superseded" | "shutdown" | "error") => {
         if (done) return;
         done = true;
         cleanup();
+        this.deps.activity.waitEnded(actor.id, activityToken, reason);
         reject(error);
       };
       const finish = (consume: boolean) => {
         if (done) return;
         if (!consume || signal?.aborted) {
-          deliver(empty());
+          deliver(empty(), "aborted");
           return;
         }
         try {
@@ -190,12 +205,13 @@ export class DeliveryService {
             routineTimer = setTimeout(() => finish(true), Math.min(batch.retryAfterMs, deadline - Date.now()));
           } else deliver(batch);
         }
-        catch (error) { done = true; cleanup(); reject(error); }
+        catch (error) { done = true; cleanup(); this.deps.activity.waitEnded(actor.id, activityToken, "error"); reject(error); }
       };
       waiter = {
         wake: () => finish(true),
-        supersede: () => fail(new HiveError(409, "superseded")),
-        interrupt: () => fail(new HiveError(503, "Server is shutting down")),
+        supersede: () => fail(new HiveError(409, "superseded"),
+          this.deps.inbox.currentSession(actor.id) === sessionId ? "error" : "superseded"),
+        interrupt: () => fail(new HiveError(503, "Server is shutting down"), "shutdown"),
       };
       const onAbort = () => finish(false);
       this.deps.waiters.install(actor.id, waiter);
@@ -210,7 +226,7 @@ export class DeliveryService {
         const first = take();
         if (!first.idle || first.page!.continuation || scannedRows === WAIT_SCAN_MAX) deliver(first);
         else if (first.retryAfterMs) routineTimer = setTimeout(() => finish(true), Math.min(first.retryAfterMs, ms));
-      } catch (error) { done = true; cleanup(); reject(error); }
+      } catch (error) { done = true; cleanup(); this.deps.activity.waitEnded(actor.id, activityToken, "error"); reject(error); }
     });
   }
 

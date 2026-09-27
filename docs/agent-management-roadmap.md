@@ -1,6 +1,6 @@
 # Agent orchestration and token efficiency roadmap
 
-Status: Phase T is in #275; A1 is in #281 → #282 → #283 → #285, with #284 integrated into #285. All remain unmerged. A2 is in #286 → #287 → #288. A3 implementation is in progress on top of that stack; A4–A5, Phase 3 and T2 remain planned. Updated 2026-09-27; the historical analysis below was written against `8f0e583` (#265).
+Status: Phase T is in #275; A1 is in #281 → #282 → #283 → #285, with #284 integrated into #285. All remain unmerged. A2 is in #286 → #287 → #288. A3 is in #289 → #290. A4 implementation is in progress, including Phase T #275; A5, Phase 3 and T2 remain planned. Updated 2026-09-27; the historical analysis below was written against `8f0e583` (#265).
 
 This document is the single source of truth for a multi-phase effort: brains launch task-bound workers from Human-defined templates (automatically or after Human approval), Human follows every job and task with its progress and can pause, cancel or discuss it, and agents spend fewer tokens on Hivemind traffic. It is written so that work can resume from here alone, without the conversation that produced it. Each phase has its own GitHub issue; the tracking issue, #274, lists them all (see [Issues](#issues)).
 
@@ -211,6 +211,11 @@ wait/action-based activity projection is also completed in A4. MCP clients must 
 - Real presence (was Phase 1, #258): activity state `ready | working | stalled | offline | superseded` with `since`, from wait bursts, recent actions and queued mail; published on the snapshot and `agent` events. A launched worker that never claims its identity, or that stalls, is surfaced on its task and to its brain. No automatic relaunch.
 
 **Acceptance.** State machine and transitions tested, including #258 (heartbeats continue, waits stop, mail queues → `stalled`); pause/resume/cancel end-to-end with a fake launcher; automatic archive on completion.
+
+**Implementation decisions (2026-09-27).** [Jobs and task control](task-orchestration.md) documents migration 36,
+private job ownership, the durable 30-second hard-pause grace, explicit same-identity resume and activity observations.
+Phase T #275 is merged into this feature branch so downstream views use its actual traffic counters. The new activity
+projection fixes the visibility gap in #258 without changing native host timeout behavior or automatically relaunching agents.
 
 ### Phase A5 — Task views and talking to the brain
 

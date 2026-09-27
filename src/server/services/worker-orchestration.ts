@@ -8,6 +8,7 @@ import type { Core } from "./ports.ts";
 import type { IdentityService } from "./identity.ts";
 import type { ChannelService } from "./channels.ts";
 import type { MessageService } from "./messages.ts";
+import type { JobStore } from "./jobs.ts";
 
 type Deps = Core & {
   readonly identity: IdentityService;
@@ -16,6 +17,7 @@ type Deps = Core & {
   readonly tasks: TaskStore;
   readonly channels: ChannelService;
   readonly messages: MessageService;
+  readonly jobs: Pick<JobStore, "resolve" | "attach">;
 };
 
 /** One transaction owns the reservation, task assignment and encrypted launch intent. */
@@ -38,7 +40,7 @@ export class WorkerOrchestration {
       if (agent.role !== "worker") return agent;
       const assigned = work[agent.id]?.assigned ?? 0;
       return { ...agent, origin: agent.templateId ? { type: "template", templateId: agent.templateId } : { type: "fixed" },
-        openTasks: assigned, activity: { state: agent.online ? assigned > 0 ? "working" : "ready" : "offline" } };
+        openTasks: assigned };
     });
   }
 
@@ -47,7 +49,6 @@ export class WorkerOrchestration {
     const parsed = requestWorkerSchema.safeParse(raw);
     if (!parsed.success) throw new HiveError(400, `Invalid request_worker: ${parsed.error.message}`);
     const input = parsed.data;
-    if (input.job) throw new HiveError(409, "job is unavailable until A4 jobs are implemented");
     const projectId = brain.projectId;
     const hash = createHash("sha256").update(JSON.stringify(input)).digest("hex");
     return this.deps.storage.transaction(() => {
@@ -59,6 +60,7 @@ export class WorkerOrchestration {
         return { task: this.deps.tasks.view(brain, previous.task_id), request: this.deps.launcherQueue.get(input.requestId),
           worker: this.deps.identity.getAgent(previous.agent_id) };
       }
+      const job = input.job ? this.deps.jobs.resolve(brain, input.job, input.requestId) : null;
       const template = this.deps.workerTemplates.list(projectId).find(t => t.id === input.template || t.slug === input.template);
       if (!template) throw new HiveError(404, "Worker template not found in this project");
       if (!template.spec.enabled) throw new HiveError(409, "Worker template is disabled");
@@ -81,9 +83,9 @@ export class WorkerOrchestration {
         ? this.deps.tasks.event(brain, input.taskId, { requestId: `${input.requestId}.task`, expectedRevision: input.expectedRevision,
           action: { type: "revise", reason: "Assign a new task-bound worker", worker: agent.name, contract: input.contract } })
         : this.deps.tasks.assign(brain, { requestId: input.requestId, worker: agent.name, channel: channelId, contract: input.contract });
-      const task = assignment.task;
+      const task = job ? this.deps.jobs.attach(brain, assignment.task.id, job.id) : assignment.task;
       const request = this.deps.launcherQueue.create({ requestId: input.requestId, brain, template, agent, ticket,
-        taskId: task.id, approval });
+        taskId: task.id, jobId: task.jobId, approval });
       this.db.prepare("UPDATE launch_requests SET request_hash=? WHERE id=?").run(hash, input.requestId);
       return { task, request, worker: agent };
     });
@@ -113,5 +115,34 @@ export class WorkerOrchestration {
       this.deps.launcherQueue.kill(row.id);
       return { worker: this.deps.identity.getAgent(worker.id), archived: true as const, request: this.deps.launcherQueue.get(row.id) };
     });
+  }
+
+  /** A terminal task closes its task-bound worker in the same transaction as the task event. */
+  archiveFinishedTask(taskId: string, workerId: string): void {
+    const row = this.db.prepare(`SELECT id FROM launch_requests WHERE task_id=? AND agent_id=?
+      ORDER BY requested_at DESC,rowid DESC LIMIT 1`).get(taskId, workerId) as { id: string } | undefined;
+    if (!row) return; // A fixed worker has no launcher request.
+    const agent = this.deps.identity.getAgent(workerId);
+    if (agent.archivedAt === undefined && agent.removedAt === undefined) this.deps.identity.archiveTaskWorker(workerId);
+    this.deps.launcherQueue.kill(row.id);
+  }
+
+  /** Grace expiry closes the native session but keeps the identity and task for explicit resume. */
+  stopForHardPause(taskId: string, workerId: string): void {
+    const row = this.db.prepare(`SELECT id FROM launch_requests WHERE task_id=? AND agent_id=?
+      ORDER BY requested_at DESC,rowid DESC LIMIT 1`).get(taskId, workerId) as { id: string } | undefined;
+    if (!row) throw new HiveError(409, "Hard pause requires a launched task-bound worker");
+    this.deps.launcherQueue.kill(row.id);
+  }
+
+  /** Human may retry a failed native close; a queued or dispatched close is never duplicated. */
+  retryHardStop(taskId: string, workerId: string): void {
+    const row = this.db.prepare(`SELECT id FROM launch_requests WHERE task_id=? AND agent_id=?
+      ORDER BY requested_at DESC,rowid DESC LIMIT 1`).get(taskId, workerId) as { id: string } | undefined;
+    if (!row) throw new HiveError(409, "Hard pause has no worker session to close");
+    const latest = this.db.prepare(`SELECT state FROM launcher_commands WHERE request_id=? AND kind='kill'
+      ORDER BY rowid DESC LIMIT 1`).get(row.id) as { state: string } | undefined;
+    if (latest?.state !== "failed") throw new HiveError(409, "Worker close is not failed; wait for its outcome");
+    this.deps.launcherQueue.kill(row.id);
   }
 }

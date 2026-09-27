@@ -89,6 +89,9 @@ The native approval transport is required; a browser shows the request but canno
 at approval. Launch outcomes appear in the task history. See [Terminal broker](terminal-broker.md) for the signed queue,
 crash recovery and notification limits.
 
+Task acceptance and Human cancellation automatically close and archive task-bound workers.
+See [Jobs and task control](task-orchestration.md) for grouping, pause and resume.
+
 `release_worker` closes and archives an owned task-bound worker after its task ends or is revised away. Its history
 remains, with an archived label, while it disappears from the roster. Its template slot remains occupied until the
 launcher acknowledges session cleanup; a failed kill requires an explicit retry. Fixed workers are unaffected.

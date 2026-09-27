@@ -10,13 +10,15 @@ import { LauncherQueueCipher } from "./launcher-queue-crypto.ts";
 type RequestState = "awaiting_approval" | "approved" | "launching" | "launched" | "failed" | "rejected" | "cancelled" | "expired";
 type RequestRow = { id: string; project_id: string; brain_id: string; template_id: string | null; template_snapshot: string; task_id: string | null;
   job_id: string | null; agent_id: string; ticket_hash: string; state: RequestState; reason: string | null;
-  requested_at: number; decided_by: string | null; decided_at: number | null; session: string | null; error: string | null };
+  requested_at: number; decided_by: string | null; decided_at: number | null; session: string | null; error: string | null;
+  launch_kind: "claim" | "resume" };
 type CommandRow = { id: string; request_id: string | null; kind: "launch" | "kill";
   state: "queued" | "dispatched" | "done" | "failed" | "cancelled"; payload: string;
   created_at: number; updated_at: number; error: string | null };
 
 export type LaunchRequestView = { id: string; projectId: string; brainId: string; templateId: string; templateLabel: string;
   taskId: string | null; jobId: string | null; agentId: string; state: RequestState; reason: string | null;
+  launchKind: "claim" | "resume";
   requestedAt: number; decidedBy: string | null; decidedAt: number | null; session: string | null;
   error: string | null; capBlocked: boolean };
 export type LauncherCommand = { id: string; kind: "launch"; requestId: string; templateId: string;
@@ -24,12 +26,16 @@ export type LauncherCommand = { id: string; kind: "launch"; requestId: string; t
   environment: Record<string, string> } | { id: string; kind: "kill"; session: string };
 
 export type LauncherQueueDeps = Core & { readonly home: string;
-  readonly identity: { getAgent(id: string): Agent; archiveTaskWorker(agentId: string): Agent; templateWorkerCount(templateId: string): number;
+  readonly identity: { getAgent(id: string): Agent; archiveTaskWorker(agentId: string): Agent; suspendSession(agentId: string): Agent;
+    templateWorkerCount(templateId: string): number;
     retargetReservation(actor: Agent, agentId: string, template: WorkerTemplate): Agent };
   readonly projects: { getProject(id: string): Project };
   readonly workerTemplates: { get(id: string): WorkerTemplate };
   readonly lifecycle: { expireReservation(agentId: string): void };
-  readonly tasks: { launchOutcome(taskId: string, requestId: string, workerId: string, state: "launched" | "failed" | "rejected" | "expired"): void } };
+  readonly tasks: { launchOutcome(taskId: string, requestId: string, workerId: string, state: "launched" | "failed" | "rejected" | "expired"): void;
+    resumeOutcome(taskId: string, requestId: string, workerId: string, state: "launched" | "failed" | "rejected" | "expired"): void;
+    hardStopCompleted(taskId: string, workerId: string): void;
+    canLaunchResume(taskId: string, workerId: string, requestId: string): boolean } };
 
 /** Matches HivemindKit SessionName(project:agent:) for the generated worker names. */
 function sessionComponent(value: string, limit: number, fallback: string): string {
@@ -75,6 +81,7 @@ export class LauncherQueue {
     return { id: row.id, projectId: row.project_id, brainId: row.brain_id, templateId: row.template_id ?? snapshot.id,
       templateLabel: snapshot.label,
       taskId: row.task_id, jobId: row.job_id, agentId: row.agent_id, state: row.state, reason: row.reason,
+      launchKind: row.launch_kind,
       requestedAt: row.requested_at, decidedBy: row.decided_by, decidedAt: row.decided_at, session: row.session,
       error: row.error, capBlocked };
   }
@@ -87,6 +94,15 @@ export class LauncherQueue {
   }
 
   get(id: string): LaunchRequestView { return this.view(this.row(id)); }
+
+  /** Public lifecycle timing for presence; never exposes command payloads or claim tickets. */
+  launchPresence(agentId: string): { state: string; since: number } | null {
+    const row = this.db.prepare(`SELECT r.state, COALESCE((SELECT c.updated_at FROM launcher_commands c
+      WHERE c.request_id=r.id AND c.kind='launch' ORDER BY c.created_at DESC,c.id DESC LIMIT 1),r.requested_at) AS since
+      FROM launch_requests r WHERE r.agent_id=? ORDER BY r.requested_at DESC,r.rowid DESC LIMIT 1`)
+      .get(agentId) as { state: string; since: number } | undefined;
+    return row ?? null;
+  }
 
   list(): LaunchRequestView[] {
     return (this.db.prepare("SELECT * FROM launch_requests ORDER BY requested_at DESC, id DESC LIMIT 200").all() as RequestRow[])
@@ -166,6 +182,47 @@ export class LauncherQueue {
     });
   }
 
+  /** Relaunches one hard-paused identity only after its prior native session is confirmed closed. */
+  createResume(input: { requestId: string; brain: Agent; taskId: string; agent: Agent; approval: boolean }): LaunchRequestView {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(input.requestId))
+      throw new HiveError(400, "requestId must be a UUID");
+    if (input.brain.role !== "brain" || input.brain.projectId !== input.agent.projectId ||
+      input.agent.role !== "worker" || !input.agent.templateId || input.agent.pending ||
+      input.agent.archivedAt !== undefined || input.agent.removedAt !== undefined)
+      throw new HiveError(409, "Resume requires the active task-bound identity in its brain's project");
+    const template = this.deps.workerTemplates.get(input.agent.templateId);
+    if (!template.spec.enabled) throw new HiveError(409, "Worker template is disabled");
+    if (!this.deps.projects.getProject(template.projectId).worktree) throw new HiveError(409, "Project needs a worktree before resume");
+    return this.deps.storage.transaction(() => {
+      const previous = this.db.prepare("SELECT * FROM launch_requests WHERE id=?").get(input.requestId) as RequestRow | undefined;
+      if (previous) {
+        if (previous.launch_kind !== "resume" || previous.agent_id !== input.agent.id || previous.task_id !== input.taskId ||
+          previous.brain_id !== input.brain.id) throw new HiveError(409, "requestId belongs to another launch");
+        return this.view(previous);
+      }
+      const unsafe = this.db.prepare(`SELECT 1 FROM launch_requests r WHERE r.agent_id=? AND r.session IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM launcher_commands k WHERE k.request_id=r.id AND k.kind='kill' AND k.state='done') LIMIT 1`)
+        .get(input.agent.id);
+      if (unsafe) throw new HiveError(409, "Previous worker session is not confirmed closed");
+      const state = input.approval ? "awaiting_approval" : "approved";
+      if (!input.approval && this.capacity(template.id).used >= template.spec.maxConcurrent)
+        throw new HiveError(409, "Worker template is at its concurrent instance cap");
+      const task = this.db.prepare("SELECT job_id FROM task_records WHERE id=? AND worker_id=?")
+        .get(input.taskId, input.agent.id) as { job_id: string | null } | undefined;
+      if (!task) throw new HiveError(409, "Resume requires the same assigned task");
+      const at = Date.now();
+      this.db.prepare(`INSERT INTO launch_requests (id,project_id,brain_id,template_id,template_snapshot,task_id,job_id,
+        agent_id,ticket_hash,state,reason,requested_at,launch_kind) VALUES (?,?,?,?,?,?,?,?,'',?,?,?,'resume')`).run(
+        input.requestId, template.projectId, input.brain.id, template.id,
+        JSON.stringify({ id: template.id, label: template.spec.label }), input.taskId, task.job_id, input.agent.id,
+        state, "Resume hard-paused task", at);
+      this.db.prepare("INSERT INTO launcher_commands (id,request_id,kind,state,payload,created_at,updated_at) VALUES (?,?,'launch','queued',?,?,?)")
+        .run(randomUUID(), input.requestId, this.cipher.seal({ resume: true }), at, at);
+      this.changed(input.requestId);
+      return this.get(input.requestId);
+    });
+  }
+
   approve(actor: Agent, id: string, templateId?: string): LaunchRequestView {
     if (actor.role !== "human") throw new HiveError(403, "Only Human approves launches");
     let expired = false;
@@ -173,13 +230,17 @@ export class LauncherQueue {
       const row = this.row(id);
       if (row.state !== "awaiting_approval") throw new HiveError(409, "Launch request is no longer awaiting approval");
       const agent = this.deps.identity.getAgent(row.agent_id);
-      if (!agent.pending || agent.removedAt !== undefined || agent.pending.until < Date.now()) {
+      if ((row.launch_kind === "claim" && (!agent.pending || agent.pending.until < Date.now())) ||
+        agent.removedAt !== undefined || agent.archivedAt !== undefined) {
         this.db.prepare("UPDATE launch_requests SET state = 'expired' WHERE id = ?").run(id);
         this.db.prepare("UPDATE launcher_commands SET state = 'cancelled', payload = '', updated_at = ? WHERE request_id = ? AND kind = 'launch'")
           .run(Date.now(), id);
         if (row.task_id) {
-          this.deps.tasks.launchOutcome(row.task_id, row.id, row.agent_id, "expired");
-          if (agent.archivedAt === undefined && agent.removedAt === undefined) this.deps.identity.archiveTaskWorker(row.agent_id);
+          if (row.launch_kind === "resume") this.deps.tasks.resumeOutcome(row.task_id, row.id, row.agent_id, "expired");
+          else {
+            this.deps.tasks.launchOutcome(row.task_id, row.id, row.agent_id, "expired");
+            if (agent.archivedAt === undefined && agent.removedAt === undefined) this.deps.identity.archiveTaskWorker(row.agent_id);
+          }
         } else if (agent.pending && agent.removedAt === undefined) this.deps.lifecycle.expireReservation(row.agent_id);
         this.changed(id);
         expired = true;
@@ -187,6 +248,8 @@ export class LauncherQueue {
       }
       const target = templateId ?? row.template_id;
       if (!target) throw new HiveError(409, "Worker template no longer exists");
+      if (row.launch_kind === "resume" && target !== row.template_id)
+        throw new HiveError(409, "Resume keeps the worker's template");
       const template = this.deps.workerTemplates.get(target);
       if (template.projectId !== row.project_id || !template.spec.enabled)
         throw new HiveError(409, "Template must be enabled in the same project");
@@ -213,8 +276,11 @@ export class LauncherQueue {
       this.db.prepare("UPDATE launcher_commands SET state = 'cancelled', payload = '', updated_at = ? WHERE request_id = ? AND kind = 'launch'")
         .run(Date.now(), id);
       if (row.task_id) {
-        this.deps.tasks.launchOutcome(row.task_id, row.id, row.agent_id, "rejected");
-        this.deps.identity.archiveTaskWorker(row.agent_id);
+        if (row.launch_kind === "resume") this.deps.tasks.resumeOutcome(row.task_id, row.id, row.agent_id, "rejected");
+        else {
+          this.deps.tasks.launchOutcome(row.task_id, row.id, row.agent_id, "rejected");
+          this.deps.identity.archiveTaskWorker(row.agent_id);
+        }
       } else this.deps.lifecycle.expireReservation(row.agent_id);
       this.changed(id);
       return this.get(id);
@@ -284,18 +350,28 @@ export class LauncherQueue {
         const agent = this.deps.identity.getAgent(row.agent_id), project = this.deps.projects.getProject(row.project_id);
         if (!row.template_id) throw new HiveError(409, "Worker template no longer exists");
         const template = this.deps.workerTemplates.get(row.template_id);
-        if (!agent.pending || agent.pending.until < Date.now() || agent.removedAt !== undefined || agent.archivedAt !== undefined || !template.spec.enabled) {
-          this.db.prepare("UPDATE launch_requests SET state = 'expired' WHERE id = ?").run(row.id);
+        const resuming = row.launch_kind === "resume";
+        const invalid = resuming
+          ? Boolean(agent.pending || !row.task_id || !this.deps.tasks.canLaunchResume(row.task_id, agent.id, row.id) ||
+            agent.removedAt !== undefined || agent.archivedAt !== undefined || !template.spec.enabled)
+          : Boolean(!agent.pending || agent.pending.until < Date.now() || agent.removedAt !== undefined ||
+            agent.archivedAt !== undefined || !template.spec.enabled);
+        if (invalid) {
+          this.db.prepare("UPDATE launch_requests SET state = ? WHERE id = ?").run(resuming ? "failed" : "expired", row.id);
           this.db.prepare("UPDATE launcher_commands SET state = 'cancelled', payload = '', updated_at = ? WHERE id = ?").run(Date.now(), command.id);
           this.changed(row.id);
           if (row.task_id) {
-            this.deps.tasks.launchOutcome(row.task_id, row.id, row.agent_id, "expired");
-            if (agent.archivedAt === undefined && agent.removedAt === undefined) this.deps.identity.archiveTaskWorker(row.agent_id);
+            if (resuming) this.deps.tasks.resumeOutcome(row.task_id, row.id, row.agent_id, "failed");
+            else {
+              this.deps.tasks.launchOutcome(row.task_id, row.id, row.agent_id, "expired");
+              if (agent.archivedAt === undefined && agent.removedAt === undefined) this.deps.identity.archiveTaskWorker(row.agent_id);
+            }
           } else if (agent.pending && agent.removedAt === undefined) this.deps.lifecycle.expireReservation(row.agent_id);
           return null;
         }
-        const ticket = this.cipher.open<{ ticket: string }>(command.payload).ticket;
-        if (createHash("sha256").update(ticket).digest("hex") !== row.ticket_hash) throw new HiveError(500, "Launch ticket integrity failed");
+        const ticket = resuming ? undefined : this.cipher.open<{ ticket: string }>(command.payload).ticket;
+        if (!resuming && createHash("sha256").update(ticket!).digest("hex") !== row.ticket_hash)
+          throw new HiveError(500, "Launch ticket integrity failed");
         const context = launchContext(this.deps.home, serverUrl, project);
         if (context.pluginError) throw new HiveError(503, "Project launch context is unavailable");
         const built = buildLaunchCommand({ software: template.spec.software, model: template.spec.model,
@@ -303,7 +379,8 @@ export class LauncherQueue {
           ...projectLaunchTools(context, project, "worker"), workspacePath: project.worktree,
           cdWorktree: Boolean(project.worktree), projectSlug: project.slug, hiveName: project.name,
           passProject: true, role: "worker", seniority: template.spec.seniority, focus: template.spec.focus || null,
-          adoptUntrusted: true, claim: ticket, claimName: agent.name });
+          adoptUntrusted: true, claim: ticket, claimName: agent.name,
+          resume: resuming, resumeName: resuming ? agent.name : undefined });
         if (!built.cwd) throw new HiveError(409, "Project needs a worktree before a worker can launch");
         const session = workerSession(project.slug, agent.name);
         payload = { id: command.id, kind: "launch", requestId: row.id, templateId: template.id,
@@ -338,7 +415,10 @@ export class LauncherQueue {
           .run(state === "launched" ? "done" : "failed", Date.now(), error, id);
         if (command.request_id) {
           const row = this.row(command.request_id);
-          if (row.task_id) this.deps.tasks.launchOutcome(row.task_id, row.id, row.agent_id, state);
+          if (row.task_id) {
+            if (row.launch_kind === "resume") this.deps.tasks.resumeOutcome(row.task_id, row.id, row.agent_id, state);
+            else this.deps.tasks.launchOutcome(row.task_id, row.id, row.agent_id, state);
+          }
           // Even a failed adapter may have started the deterministic session before reporting failure.
           if (state === "failed" && row.session) this.db.prepare("INSERT INTO launcher_commands (id, request_id, kind, state, payload, created_at, updated_at) VALUES (?, ?, 'kill', 'queued', ?, ?, ?)")
             .run(randomUUID(), row.id, this.cipher.seal({ session: row.session }), Date.now(), Date.now());
@@ -351,14 +431,18 @@ export class LauncherQueue {
           .run(input.status === "failed" ? "Session close failed in Hivemind Server.app" : null, command.request_id);
         if (input.status === "killed" && command.request_id) {
           const row = this.row(command.request_id), agent = this.deps.identity.getAgent(row.agent_id);
-          if (agent.pending && agent.removedAt === undefined && agent.archivedAt === undefined) this.deps.lifecycle.expireReservation(row.agent_id);
+          if (row.task_id && agent.archivedAt === undefined && agent.removedAt === undefined) {
+            this.deps.tasks.hardStopCompleted(row.task_id, row.agent_id);
+            this.deps.identity.suspendSession(row.agent_id);
+          } else if (agent.pending && agent.removedAt === undefined && agent.archivedAt === undefined)
+            this.deps.lifecycle.expireReservation(row.agent_id);
         }
       }
       if (command.request_id) this.changed(command.request_id);
       if (command.kind === "launch" && input.status === "failed" && command.request_id) {
         const row = this.row(command.request_id);
         const agent = this.deps.identity.getAgent(row.agent_id);
-        if (row.task_id) {
+        if (row.task_id && row.launch_kind === "claim") {
           if (agent.archivedAt === undefined && agent.removedAt === undefined) this.deps.identity.archiveTaskWorker(row.agent_id);
         } else if (agent.pending && agent.removedAt === undefined) this.deps.lifecycle.expireReservation(row.agent_id);
       }

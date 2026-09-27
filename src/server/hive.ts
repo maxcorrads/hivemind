@@ -4,6 +4,8 @@ import { DatabaseSync } from "node:sqlite";
 import { ROUTINE_BATCH_MS } from "../shared/notifications.ts";
 import { WorkerTemplateStore } from "./worker-templates.ts";
 import { LauncherQueue } from "./launcher-queue.ts";
+import { AgentActivityService } from './services/agent-activity.ts';
+import { JobStore } from './services/jobs.ts';
 import { WorkerOrchestration } from "./services/worker-orchestration.ts";
 import { AgentTraffic } from "./agent-traffic.ts";
 import { AdaptiveTopologyRuntime } from "./adaptive-topology.ts";
@@ -57,6 +59,8 @@ type ServiceRegistry = Core & {
   workerTemplates: WorkerTemplateStore;
   launcherQueue: LauncherQueue;
   workerOrchestration: WorkerOrchestration;
+  jobs: JobStore;
+  activity: AgentActivityService;
   telegramAdmin: TelegramAdminService;
   files: FileService;
   projects: ProjectService;
@@ -112,6 +116,8 @@ export class Hive {
   readonly workerTemplates!: WorkerTemplateStore;
   readonly launcherQueue!: LauncherQueue;
   readonly workerOrchestration!: WorkerOrchestration;
+  readonly jobs!: JobStore;
+  readonly activity!: AgentActivityService;
   readonly rooms!: RoomStore;
   readonly notifications!: NotificationStore;
   readonly timeline!: TimelineStore;
@@ -145,6 +151,7 @@ export class Hive {
       this.lifecycle = services.lifecycle = new AgentLifecycle(services);
       this.channels = services.channels = new ChannelService(services);
       this.messageQueries = services.messageQueries = new MessageQueries(services);
+      this.activity = services.activity = new AgentActivityService(services);
       this.delivery = services.delivery = new DeliveryService(services);
       this.messages = services.messages = new MessageService(services);
       this.reads = new ReadService(services);
@@ -156,6 +163,7 @@ export class Hive {
       // The coordination stores take the same registry, each typed down to its slice (services/ports.ts).
       this.tasks = services.tasks = new TaskStore(services);
       this.workerOrchestration = services.workerOrchestration = new WorkerOrchestration(services);
+      this.jobs = services.jobs = new JobStore(services);
       this.rooms = services.rooms = new RoomStore(services);
       this.notifications = services.notifications = new NotificationStore(services);
       this.routing = new RoutingStore(services);

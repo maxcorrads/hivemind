@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { taskControlSchema } from '../shared/task-control.ts';
 import { TaskCoordination } from './task-coordination.ts';
 import { claimActionSchema, claimPreviewSchema, isClaimAction } from '../shared/task-claims.ts';
 import { validated } from '../shared/api-contract.ts';
@@ -172,10 +173,12 @@ export class TaskStore {
     const target = ['assign', 'revise', 'review'].includes(envelope.action.type) ? task.workerId : task.assignerId;
     const now = Date.now();
     const recipients = JSON.stringify([...new Set([target, ...(envelope.previousWorkerId ? [envelope.previousWorkerId] : []),
-      ...(isClaimAction(envelope.action.type) || envelope.action.type === 'launch' ? [task.assignerId, task.workerId] : [])])]);
+      ...(isClaimAction(envelope.action.type) || ['launch', 'pause', 'resume', 'cancel', 'hard_stop_requested', 'hard_stopped']
+        .includes(envelope.action.type) ? [task.assignerId, task.workerId] : [])])]);
     const seq = this.deps.messages.insertCoordinationMessage({ id, channelId: task.channelId, threadId: initial ? null : task.id,
       authorId: actor.id, body,
-      eventType: envelope.action.type === 'launch' ? 'progress' :
+      eventType: ['launch', 'pause', 'resume', 'hard_stop_requested', 'hard_stopped'].includes(envelope.action.type) ? 'progress' :
+        envelope.action.type === 'cancel' ? 'decision' :
         envelope.action.type === 'block' || envelope.action.type === 'reject' ? 'blocker' :
         envelope.action.type === 'assign' || envelope.action.type === 'revise' ? 'assignment' :
           envelope.action.type === 'review' ? 'decision' :
@@ -193,6 +196,10 @@ export class TaskStore {
       .run(task.id, task.channelId, task.workerId, task.dispatchSeq, task.receivedAt, JSON.stringify(this.record(task)));
     this.db.prepare('INSERT INTO task_events(message_id, task_id, actor_id, request_id, request_hash, envelope) VALUES (?, ?, ?, ?, ?, ?)')
       .run(id, task.id, actor.id, requestId, hash, JSON.stringify(envelope));
+    if (task.jobId) {
+      if (!this.deps.jobs) throw new HiveError(500, 'Job store is unavailable');
+      this.deps.jobs.syncForTask(task.id);
+    }
     this.deps.messages.ensureThread(task.id, task.channelId);
     return id;
   }
@@ -255,6 +262,7 @@ export class TaskStore {
       if (action.type === 'accept' || action.type === 'result' || (action.type === 'review' && action.decision === 'accepted')) this.coordination.assertReady(task);
       if (isClaimAction(action.type)) this.coordination.apply(actor, task, claimActionSchema.parse(action));
       else if (action.type === 'revise') {
+        if (task.state === 'paused') throw new HiveError(409, 'Resume or cancel a paused task before revising it');
         const worker = this.worker(actor, action.worker, task.id), room = this.deps.rooms.peek(task.channelId);
         if (room && !room.participantIds.includes(worker.id)) throw new HiveError(403, 'Replacement worker must be a declared room participant');
         this.writable(actor, worker, this.deps.channels.getChannel(task.channelId));
@@ -279,7 +287,9 @@ export class TaskStore {
         if (!(action.type === 'accept' ? ['sent', 'delivered', 'blocked', 'changes_requested'] : ['sent', 'delivered']).includes(task.state)) throw new HiveError(409, 'Task cannot be accepted/rejected in its current state');
         task.state = action.type === 'accept' ? 'accepted' : 'rejected';
       } else {
-        if (!['accepted', 'blocked', 'changes_requested'].includes(task.state)) throw new HiveError(409, 'Accept the current contract before submitting work');
+        if (!['accepted', 'blocked', 'changes_requested'].includes(task.state) &&
+          !(task.state === 'paused' && action.type === 'checkpoint'))
+          throw new HiveError(409, 'Accept the current contract before submitting work');
         if (action.type === 'block') task.state = 'blocked';
         else if (action.type === 'checkpoint') {
           const references = [...action.checkpoint.evidenceSeqs, ...action.checkpoint.checks.flatMap(check => check.evidenceSeqs)];
@@ -302,8 +312,139 @@ export class TaskStore {
         ...(previousWorkerId !== task.workerId ? { previousWorkerId } : {}),
         ...(action.type === 'checkpoint' ? { checkpointVersion: task.checkpoint!.version } : {}),
         ...(task.claim ? { claimVersion: task.claim.version } : {}), action }, input.requestId, hash, false);
+      if (task.state === 'accepted_complete') this.deps.workerOrchestration.archiveFinishedTask(task.id, task.workerId);
     });
     return duplicate! ?? this.published(actor, taskId, messageId);
+  }
+  /** Human task control is a structured task event, fenced by revision and idempotency key. */
+  control(actor: Agent, taskId: string, raw: unknown) {
+    if (actor.role !== 'human') throw new HiveError(403, 'Only Human controls tasks');
+    const parsed = taskControlSchema.safeParse(raw);
+    if (!parsed.success) throw new HiveError(400, 'Invalid task control: ' + parsed.error.message);
+    const input = parsed.data, hash = this.hash({ taskId, control: input });
+    let messageId = '', duplicate: ReturnType<TaskStore['retry']>;
+    this.transaction(() => {
+      const task = this.get(actor, taskId);
+      duplicate = this.retry(actor, input.requestId, hash); if (duplicate) return;
+      if (input.expectedRevision !== task.revision) throw new HiveError(409, 'Task changed; reload its current revision');
+      const action = input.action;
+      if (action.type === 'pause') {
+        if (task.state === 'paused' && action.mode === 'hard' && task.pause?.mode === 'hard' &&
+          task.pause.stopRequestedAt && !task.pause.closedAt) {
+          this.deps.workerOrchestration.retryHardStop(task.id, task.workerId);
+        } else {
+          if (['accepted_complete', 'cancelled', 'rejected'].includes(task.state) || task.state === 'paused')
+            throw new HiveError(409, 'Task cannot be paused in its current state');
+          const worker = this.deps.identity.getAgent(task.workerId);
+          if (action.mode === 'hard' && (!worker.templateId || worker.pending || worker.archivedAt !== undefined))
+            throw new HiveError(409, 'Hard pause requires a joined task-bound worker');
+          const at = Date.now();
+          task.pause = { mode: action.mode, requestId: input.requestId, previousState: task.state,
+            requestedAt: at, graceUntil: action.mode === 'hard' ? at + 30_000 : null };
+          task.state = 'paused';
+        }
+      } else if (action.type === 'resume') {
+        if (task.state !== 'paused' || !task.pause) throw new HiveError(409, 'Task is not paused');
+        if (task.pause.mode === 'soft') {
+          task.state = task.pause.previousState;
+          delete task.pause;
+        } else {
+          if (!task.pause.closedAt) throw new HiveError(409, 'Worker session must close before hard resume');
+          if (task.pause.resumeRequestId) throw new HiveError(409, 'A resume is already pending');
+          const brain = this.deps.identity.getAgent(task.assignerId);
+          this.deps.launcherQueue.createResume({ requestId: input.requestId, brain, taskId: task.id,
+            agent: this.deps.identity.getAgent(task.workerId), approval: brain.launchMode !== 'auto' });
+          task.pause.resumeRequestId = input.requestId;
+        }
+      } else {
+        if (['accepted_complete', 'cancelled', 'rejected'].includes(task.state))
+          throw new HiveError(409, 'Task is already finished');
+        task.state = 'cancelled';
+        task.cancellation = { reason: action.reason, at: Date.now() };
+        if (task.claim?.state === 'held') task.claim = { ...task.claim, state: 'released',
+          version: task.claim.version + 1, updatedAt: Date.now() };
+        delete task.pause;
+      }
+      task.revision++;
+      messageId = this.write(actor, task, { taskId, channelId: task.channelId, revision: task.revision,
+        contractVersion: task.contractVersion, actorId: actor.id, actorRole: 'human', assignerId: task.assignerId,
+        workerId: task.workerId, action }, input.requestId, hash, false);
+      if (action.type === 'cancel') this.deps.workerOrchestration.archiveFinishedTask(task.id, task.workerId);
+    });
+    return duplicate! ?? this.published(actor, taskId, messageId);
+  }
+
+  /** Durable grace sweep: a restart reads the deadline from the task snapshot. */
+  sweepHardPauses(at = Date.now()): number {
+    const rows = this.db.prepare(`SELECT id FROM task_records WHERE json_extract(snapshot,'$.state')='paused'
+      AND json_extract(snapshot,'$.pause.mode')='hard'
+      AND CAST(json_extract(snapshot,'$.pause.graceUntil') AS INTEGER) <= ?
+      AND json_extract(snapshot,'$.pause.stopRequestedAt') IS NULL`).all(at) as { id: string }[];
+    for (const row of rows) this.transaction(() => {
+      const task = this.get(this.deps.identity.getAgent(HUMAN_ID), row.id);
+      if (task.state !== 'paused' || task.pause?.mode !== 'hard' || task.pause.stopRequestedAt ||
+        task.pause.graceUntil == null || task.pause.graceUntil > at) return;
+      this.deps.workerOrchestration.stopForHardPause(task.id, task.workerId);
+      task.pause.stopRequestedAt = at;
+      task.revision++;
+      const requestId = `${task.pause.requestId}.stop`;
+      const messageId = this.write(this.deps.identity.getAgent(HUMAN_ID), task, { taskId: task.id, channelId: task.channelId,
+        revision: task.revision, contractVersion: task.contractVersion, actorId: HUMAN_ID, actorRole: 'human',
+        assignerId: task.assignerId, workerId: task.workerId, action: { type: 'hard_stop_requested' } },
+      requestId, this.hash({ taskId: task.id, requestId }), false);
+      this.deps.storage.afterCommit(() => {
+        this.deps.messages.publishTaskMessage(this.deps.messageQueries.getMessageById(messageId));
+        this.deps.bus.emit('task', this.view(this.deps.identity.getAgent(HUMAN_ID), task.id));
+      });
+    });
+    return rows.length;
+  }
+
+  hardStopCompleted(taskId: string, workerId: string): void {
+    this.transaction(() => {
+      const task = this.get(this.deps.identity.getAgent(HUMAN_ID), taskId);
+      if (task.workerId !== workerId || task.state !== 'paused' || task.pause?.mode !== 'hard' || task.pause.closedAt) return;
+      task.pause.closedAt = Date.now();
+      task.revision++;
+      const requestId = `${task.pause.requestId}.closed`;
+      const messageId = this.write(this.deps.identity.getAgent(HUMAN_ID), task, { taskId, channelId: task.channelId,
+        revision: task.revision, contractVersion: task.contractVersion, actorId: HUMAN_ID, actorRole: 'human',
+        assignerId: task.assignerId, workerId, action: { type: 'hard_stopped' } },
+      requestId, this.hash({ taskId, requestId }), false);
+      this.deps.storage.afterCommit(() => {
+        this.deps.messages.publishTaskMessage(this.deps.messageQueries.getMessageById(messageId));
+        this.deps.bus.emit('task', this.view(this.deps.identity.getAgent(HUMAN_ID), taskId));
+      });
+    });
+  }
+
+  resumeOutcome(taskId: string, requestId: string, workerId: string,
+    state: 'launched' | 'failed' | 'rejected' | 'expired'): void {
+    this.transaction(() => {
+      const task = this.get(this.deps.identity.getAgent(HUMAN_ID), taskId);
+      if (task.workerId !== workerId || task.state !== 'paused' || task.pause?.resumeRequestId !== requestId) return;
+      if (state === 'launched') {
+        task.state = task.pause.previousState;
+        delete task.pause;
+      } else delete task.pause.resumeRequestId;
+      task.revision++;
+      const eventId = `${requestId}.resume.${state}`;
+      const messageId = this.write(this.deps.identity.getAgent(HUMAN_ID), task, { taskId, channelId: task.channelId,
+        revision: task.revision, contractVersion: task.contractVersion, actorId: HUMAN_ID, actorRole: 'human',
+        assignerId: task.assignerId, workerId, action: { type: 'launch', state, requestId } },
+      eventId, this.hash({ requestId, state }), false);
+      this.deps.storage.afterCommit(() => {
+        this.deps.messages.publishTaskMessage(this.deps.messageQueries.getMessageById(messageId));
+        this.deps.bus.emit('task', this.view(this.deps.identity.getAgent(HUMAN_ID), taskId));
+      });
+    });
+  }
+  canLaunchResume(taskId: string, workerId: string, requestId: string): boolean {
+    const row = this.db.prepare("SELECT snapshot FROM task_records WHERE id=?").get(taskId) as { snapshot: string } | undefined;
+    if (!row) return false;
+    const task = JSON.parse(row.snapshot) as TaskSnapshot;
+    return task.workerId === workerId && task.state === 'paused' && task.pause?.mode === 'hard' &&
+      task.pause.closedAt !== undefined && task.pause.resumeRequestId === requestId;
   }
   /** True when the actor already used `requestId` for a task event (or an aliased room assignment). */
   hasRequest(actorId: string, requestId: string): boolean {

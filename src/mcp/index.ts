@@ -1,3 +1,4 @@
+import { jobEventSchema } from '../shared/jobs.ts';
 import { setCapabilitiesSchema, suggestWorkersSchema, routingOutcomeSchema, routingOverrideSchema } from '../shared/routing.ts';
 import { attachmentIdsSchema, cursorSchema, limitSchema, memberNamesSchema, messageBodySchema, nameSchema, normalizeChannelReference, referenceSchema, senioritySchema, sequenceSchema } from "../shared/api-contract.ts";
 import type { HandoffList } from '../shared/handoffs.ts';
@@ -283,6 +284,8 @@ export async function startMcp() {
     assignTaskSchema.shape,
     async args => text(await agentRequest('POST', '/api/agent/tasks',
       { ...args, channel: args.channel ? normalizeChannelReference(args.channel) : undefined }, token())));
+  server.tool("job_event", TOOL_DESCRIPTIONS.job_event, jobEventSchema.shape,
+    async args => text(await agentRequest('POST', '/api/agent/jobs/events', args, token())));
   server.tool("worker_templates", TOOL_DESCRIPTIONS.worker_templates, {},
     async () => text(await agentRequest('GET', '/api/agent/worker-templates', undefined, token())));
   server.tool("request_worker", TOOL_DESCRIPTIONS.request_worker, requestWorkerSchema.shape,

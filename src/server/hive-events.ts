@@ -1,6 +1,7 @@
+import type { JobView } from '../shared/jobs.ts';
 import { EventEmitter } from "node:events";
 import type { Agent, Channel, InboxStatus, Message, QueueEstimate, Thread } from "../shared/types.ts";
-import type { TaskSnapshot } from "../shared/tasks.ts";
+import type { AgentWork, TaskSnapshot } from "../shared/tasks.ts";
 import type { AdaptiveExecutionState, AdaptiveRoutingEvent } from "../shared/adaptive-topology.ts";
 import type { JevCallSummary } from "../shared/jev-calls.ts";
 import type { EvidenceCollectorHealth } from "../shared/evidence-health.ts";
@@ -44,6 +45,8 @@ export type HiveEvents = {
   "telegram-outbox-wake": void;
   /** A task was assigned, changed state, or recorded a delivery receipt: its Human view. */
   task: TaskSnapshot;
+  job: JobView;
+  "agent-work": { agentWork: Record<string, AgentWork> };
   /**
    * A room's link or state changed; clients refetch the room for `channelId`.
    * `archived` is the room's archive state after the change (sidebar projection).

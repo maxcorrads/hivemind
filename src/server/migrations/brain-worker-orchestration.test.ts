@@ -17,5 +17,5 @@ test("brain worker migration defaults populated brains to approval and keeps exi
   assert.deepEqual(applyMigrations(db, { target: version }).map(step => step.name), ["brain_worker_orchestration"]);
   const after = db.prepare("SELECT * FROM agents ORDER BY id").all();
   assert.deepEqual(after.map(row => ({ ...row })), before.map(row => ({ ...row, launch_mode: "approval", archived_at: null, reserved_by_brain_id: null })));
-  assert.deepEqual(applyMigrations(db), []);
+  assert.deepEqual(applyMigrations(db, { target: version }), []);
 });

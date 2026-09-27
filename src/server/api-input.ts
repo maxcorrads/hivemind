@@ -1,4 +1,6 @@
 import { setCapabilitiesSchema, suggestWorkersSchema, routingOutcomeSchema, routingOverrideSchema } from '../shared/routing.ts';
+import { jobEventSchema, closeJobSchema } from '../shared/jobs.ts';
+import { taskControlSchema } from '../shared/task-control.ts';
 import { z } from "zod";
 import { readLimitedJson } from "./ingress.ts";
 import { API_JSON_BYTES, channelInputSchema, cursorSchema, integerArgument,
@@ -39,6 +41,9 @@ const launcherResult = z.object({ status: z.enum(["launched", "failed", "killed"
   session: z.string().max(82).optional(), error: z.string().max(500).optional() }).strict();
 
 function schemaFor(path: string, method: string): z.ZodType | undefined {
+  if (path === "/api/agent/jobs/events" && method === "POST") return jobEventSchema;
+  if (/^\/api\/ui\/jobs\/[^/]+\/close$/.test(path) && method === "POST") return closeJobSchema;
+  if (/^\/api\/ui\/tasks\/[^/]+\/control$/.test(path) && method === "POST") return taskControlSchema;
   if (path === "/api/agent/workers/request" && method === "POST") return requestWorkerSchema;
   if (path === "/api/agent/workers/release" && method === "POST") return releaseWorkerSchema;
   if (/^\/api\/ui\/agents\/[^/]+\/launch-mode$/.test(path) && method === "PATCH") return z.object({ mode: launchModeSchema }).strict();

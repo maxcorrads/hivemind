@@ -215,6 +215,23 @@ export class IdentityService implements AgentDirectory {
     });
   }
 
+  /** A confirmed native close fences the old MCP session while keeping the identity resumable. */
+  suspendSession(agentId: string): Agent {
+    return this.deps.storage.transaction(() => {
+      const agent = this.getAgent(agentId);
+      if (agent.archivedAt !== undefined || agent.removedAt !== undefined || !agent.templateId)
+        throw new HiveError(409, "Only an active task-bound worker session can be suspended");
+      this.db.prepare("UPDATE agents SET token_hash=?, online=0, terminal_session=NULL WHERE id=?")
+        .run(hashToken(newToken()), agentId);
+      const changed = this.getAgent(agentId);
+      this.deps.storage.afterCommit(() => {
+        this.deps.waiters.supersede(agentId);
+        this.deps.bus.emit("agent", changed);
+      });
+      return changed;
+    });
+  }
+
   /** Brains/workers of a project that are online or blocked in a wait. */
   busyAgents(projectId: string): Agent[] {
     const rows = this.db.prepare(
@@ -287,6 +304,20 @@ export class IdentityService implements AgentDirectory {
       }
       const agent = this.mapAgent(row);
       assertResumable(agent);
+      // A confirmed hard stop revokes the old token. Name-based resume must not
+      // bypass Human's explicit resume control while the task remains paused.
+      if (agent.templateId) {
+        const paused = this.db.prepare(`SELECT snapshot FROM task_records WHERE worker_id=?
+          AND json_extract(snapshot,'$.state')='paused'
+          AND json_extract(snapshot,'$.pause.mode')='hard' LIMIT 1`).get(agent.id) as { snapshot: string } | undefined;
+        if (paused) {
+          const task = JSON.parse(paused.snapshot) as { pause?: { resumeRequestId?: string } };
+          const request = task.pause?.resumeRequestId ? this.db.prepare(`SELECT 1 FROM launch_requests
+            WHERE id=? AND agent_id=? AND launch_kind='resume' AND state='launching' LIMIT 1`)
+            .get(task.pause.resumeRequestId, agent.id) : null;
+          if (!request) throw new HiveError(409, `${agent.name} is hard-paused until Human resumes its task`);
+        }
+      }
       return storage.transaction(() => {
         const token = this.replaceAgentSession(agent.id);
         this.touch(agent.id, true);
@@ -385,7 +416,8 @@ export class IdentityService implements AgentDirectory {
   /** Active reserved or joined workers; callers subtract requests still awaiting approval for capacity. */
   templateWorkerCount(templateId: string): number {
     return Number((this.db.prepare(`SELECT COUNT(*) AS n FROM agents a WHERE a.template_id = ? AND a.removed_at IS NULL
-      AND ((a.archived_at IS NULL AND NOT EXISTS (SELECT 1 FROM launch_requests p WHERE p.agent_id=a.id AND p.state='awaiting_approval'))
+      AND ((a.archived_at IS NULL AND (NOT EXISTS (SELECT 1 FROM launch_requests r WHERE r.agent_id=a.id)
+        OR EXISTS (SELECT 1 FROM launch_requests r WHERE r.agent_id=a.id AND r.state IN ('approved','launching','launched'))))
         OR EXISTS (SELECT 1 FROM launch_requests r WHERE r.agent_id=a.id AND r.session IS NOT NULL
           AND NOT EXISTS (SELECT 1 FROM launcher_commands k WHERE k.request_id=r.id AND k.kind='kill' AND k.state='done')))`)
       .get(templateId) as { n: number }).n);

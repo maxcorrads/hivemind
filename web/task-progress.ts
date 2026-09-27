@@ -12,6 +12,8 @@ const REACHED: Record<TaskState, [index: number, state: StepState, label?: strin
   accepted: [1, 'current'],
   rejected: [1, 'fail', 'Rejected'],
   blocked: [2, 'warn', 'Blocked'],
+  // A pause can happen before acceptance; do not imply a completed step from this state alone.
+  paused: [0, 'warn', 'Paused'],
   result_submitted: [2, 'current'],
   changes_requested: [3, 'warn', 'Changes requested'],
   accepted_complete: [3, 'done'],
@@ -32,7 +34,7 @@ export function taskSteps(state: TaskState): TaskStep[] {
 /** The chip tone of a task state: finished, needs attention, failed, or still moving. */
 export function taskTone(state: TaskState): 'done' | 'warn' | 'fail' | 'active' {
   if (state === 'accepted_complete') return 'done';
-  if (state === 'blocked' || state === 'changes_requested') return 'warn';
+  if (state === 'blocked' || state === 'changes_requested' || state === 'paused') return 'warn';
   if (state === 'rejected' || state === 'cancelled') return 'fail';
   return 'active';
 }

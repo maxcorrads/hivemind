@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { jobReferenceSchema } from "./jobs.ts";
 import { taskContractSchema } from "./tasks.ts";
 
 export const launchModeSchema = z.enum(["approval", "auto"]);
@@ -9,7 +10,7 @@ export const requestWorkerSchema = z.object({
   template: z.string().trim().min(1).max(100),
   contract: taskContractSchema,
   slug: z.string().trim().min(1).max(100).optional(),
-  job: z.object({ title: z.string().trim().min(1).max(240) }).strict().optional(),
+  job: jobReferenceSchema.optional(),
   taskId: z.string().uuid().optional(),
   expectedRevision: z.number().int().positive().safe().optional(),
 }).strict().refine(value => (value.taskId === undefined) === (value.expectedRevision === undefined),

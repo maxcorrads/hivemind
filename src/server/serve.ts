@@ -24,7 +24,7 @@ import { takeInstanceSecret } from "./instance-proof.ts";
 /** Hive events forwarded verbatim to every web UI socket; Telegram wake signals stay server-side. */
 const FORWARDED_EVENTS = [
   "message", "activity", "agent", "channel", "thread", "reaction", "queued", "project", "telegram-health",
-  "task", "room", "adaptive-routing", "jev-call", "evidence-health", "worker-templates", "launch-requests",
+  "task", "job", "agent-work", "room", "adaptive-routing", "jev-call", "evidence-health", "worker-templates", "launch-requests",
 ] as const satisfies ReadonlyArray<keyof HiveEvents>;
 type ForwardedEvent = (typeof FORWARDED_EVENTS)[number];
 
@@ -100,7 +100,11 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
     for (const ws of clients) sendRealtime(ws, data, bytes);
   };
   const forwarders = FORWARDED_EVENTS.map(type => [type, (payload: unknown) => {
-    emit(type, payload);
+    const outgoing = type === "agent" ? { ...(payload as import("../shared/types.ts").Agent),
+      activity: hive.activity.forAgent(payload as import("../shared/types.ts").Agent) } : payload;
+    emit(type, outgoing);
+    if (type === "task" || type === "room" || type === "project")
+      hive.bus.emit("agent-work", { agentWork: hive.tasks.workStatus() });
     // The Human's For you feed follows each committed message: `activity` goes out on the bus.
     if (type === "message") hive.reads.publishActivity(payload as Message);
   }] as const);
@@ -110,7 +114,7 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
   server.headersTimeout = REQUEST_HEADER_MS;
   server.maxHeadersCount = 100;
   server.timeout = 0;
-  const sweep = setInterval(() => { hive.identity.sweepPresence(); hive.launcherQueue.sweepExpired(); }, 15_000);
+  const sweep = setInterval(() => { hive.identity.sweepPresence(); hive.launcherQueue.sweepExpired(); hive.tasks.sweepHardPauses(); hive.activity.sweep(); }, 15_000);
   sweep.unref();
   const heartbeat = setInterval(() => heartbeatClients(clients, responsive), WS_HEARTBEAT_MS);
   heartbeat.unref();

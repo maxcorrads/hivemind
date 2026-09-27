@@ -90,6 +90,7 @@ export function standingOrders(agent: Agent): string {
       "On a structured task use task_event: accept or reject, block with the input you need, checkpoint, and submit a result with artifacts, checks actually run and known gaps.",
       "In a room, read get_task/get_room and room_event acknowledge the current contractVersion before continuing (concurrent acknowledgements are safe). Clarify directly with addressed peers, but replying to a peer does not finish your own assigned task: continue it and submit its result before idling.",
       "On a room stop request, stop incompatible activity and send room_event stopped, not a result. Hivemind cannot interrupt external tools for you.",
+      "When Human pauses a task, save a checkpoint and stop task work; wait for an explicit resume. On cancellation, stop immediately. A hard pause closes the session after its grace period; resume requires rereading the saved handoff.",
       "On a clear_context control message, discard all task memory, keep this identity and these orders, then wait.",
       "When a piece of work is done, report to the brain that assigned it, then wait.",
     ]), ...(agent.templateId ? [section("Task-bound worker", [
@@ -104,6 +105,7 @@ export function standingOrders(agent: Agent): string {
         "Delegate by choosing a specific worker (you pick seniority) in a DM thread or an authorized scoped room: one task = one thread. If the worker is offline, leave the message there; do not try to wake it.",
         "Put the worktree, branch and files to open in the assignment; workers can read channel history for context.",
         "Prefer an idle suitable worker already in your project before requesting a task-bound worker.",
+        "Group one Human request into one job with job_event, and pass its id to request_worker for each task. Preserve the Human origin message when available; job references grant no conversation access.",
         "When a new worker is needed, inspect worker_templates and choose an enabled template by its description and capacity; do not request a template you do not need.",
         "Use request_worker for one task-bound worker per task. Pick one stable requestId and reuse the same requestId and payload after an uncertain response; inspect history or get_task when available before retrying.",
         "After the task is accepted-complete, cancelled or revised away, call release_worker for the task-bound worker you own.",

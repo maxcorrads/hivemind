@@ -91,6 +91,12 @@
  },
  {
   "type": "index",
+  "name": "idx_jobs_project",
+  "tbl": "jobs",
+  "sql": "CREATE INDEX idx_jobs_project ON jobs(project_id,updated_at)"
+ },
+ {
+  "type": "index",
   "name": "idx_launch_requests_agent",
   "tbl": "launch_requests",
   "sql": "CREATE INDEX idx_launch_requests_agent ON launch_requests(agent_id, requested_at DESC)"
@@ -130,6 +136,12 @@
   "name": "idx_room_events_channel_revision",
   "tbl": "room_events",
   "sql": "CREATE INDEX idx_room_events_channel_revision ON room_events(channel_id, revision)"
+ },
+ {
+  "type": "index",
+  "name": "idx_tasks_job",
+  "tbl": "task_records",
+  "sql": "CREATE INDEX idx_tasks_job ON task_records(job_id)"
  },
  {
   "type": "index",
@@ -361,9 +373,21 @@
  },
  {
   "type": "table",
+  "name": "job_events",
+  "tbl": "job_events",
+  "sql": "CREATE TABLE job_events ( id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, actor_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, request_id TEXT NOT NULL, request_hash TEXT NOT NULL, created_at INTEGER NOT NULL, UNIQUE(actor_id,request_id) )"
+ },
+ {
+  "type": "table",
+  "name": "jobs",
+  "tbl": "jobs",
+  "sql": "CREATE TABLE jobs ( id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, brain_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, origin_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL, title TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('active','paused','done','cancelled')), revision INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, closed_at INTEGER )"
+ },
+ {
+  "type": "table",
   "name": "launch_requests",
   "tbl": "launch_requests",
-  "sql": "CREATE TABLE launch_requests ( id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, brain_id TEXT NOT NULL REFERENCES agents(id), template_id TEXT REFERENCES worker_templates(id) ON DELETE SET NULL, template_snapshot TEXT NOT NULL, task_id TEXT, job_id TEXT, agent_id TEXT NOT NULL REFERENCES agents(id), ticket_hash TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('awaiting_approval','approved','launching','launched','failed','rejected','cancelled','expired')), reason TEXT, requested_at INTEGER NOT NULL, decided_by TEXT, decided_at INTEGER, session TEXT, error TEXT , request_hash TEXT)"
+  "sql": "CREATE TABLE launch_requests ( id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, brain_id TEXT NOT NULL REFERENCES agents(id), template_id TEXT REFERENCES worker_templates(id) ON DELETE SET NULL, template_snapshot TEXT NOT NULL, task_id TEXT, job_id TEXT, agent_id TEXT NOT NULL REFERENCES agents(id), ticket_hash TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('awaiting_approval','approved','launching','launched','failed','rejected','cancelled','expired')), reason TEXT, requested_at INTEGER NOT NULL, decided_by TEXT, decided_at INTEGER, session TEXT, error TEXT , request_hash TEXT, launch_kind TEXT NOT NULL DEFAULT 'claim' CHECK(launch_kind IN ('claim','resume')))"
  },
  {
   "type": "table",
@@ -465,7 +489,7 @@
   "type": "table",
   "name": "task_records",
   "tbl": "task_records",
-  "sql": "CREATE TABLE task_records ( id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, worker_id TEXT NOT NULL, dispatch_seq INTEGER NOT NULL, received_at INTEGER, snapshot TEXT NOT NULL)"
+  "sql": "CREATE TABLE task_records ( id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, worker_id TEXT NOT NULL, dispatch_seq INTEGER NOT NULL, received_at INTEGER, snapshot TEXT NOT NULL, job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL)"
  },
  {
   "type": "table",

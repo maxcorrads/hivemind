@@ -9,6 +9,8 @@ import type { ChannelService } from "./channels.ts";
 import type { IdentityService } from "./identity.ts";
 import type { MessageQueries } from "./message-queries.ts";
 import type { MessageService } from "./messages.ts";
+import type { LauncherQueue } from "../launcher-queue.ts";
+import type { WorkerOrchestration } from "./worker-orchestration.ts";
 
 /**
  * Narrow interfaces the domain services (and the sub-stores) depend on instead of
@@ -110,6 +112,9 @@ type CoordinationWriter<K extends "insertCoordinationMessage" | "ensureThread"> 
 export type TaskStoreDeps = TaskCoordinationDeps & Agents & Messages<"getMessageById" | "getVisibleMessage"> &
   Poster<"publishTaskMessage"> & CoordinationWriter<"insertCoordinationMessage" | "ensureThread"> & {
     readonly messages: Pick<MessageService, "moveTaskThread">;
+    readonly launcherQueue: Pick<LauncherQueue, "createResume">;
+    readonly workerOrchestration: Pick<WorkerOrchestration, "archiveFinishedTask" | "stopForHardPause" | "retryHardStop">;
+    readonly jobs?: { syncForTask(taskId: string): void };
     readonly channels: { openDm(actor: Agent, otherName: string): Channel };
     readonly messageQueries: Pick<MessageQueries, "hasNewerInThread">;
     readonly rooms: RoomStore;

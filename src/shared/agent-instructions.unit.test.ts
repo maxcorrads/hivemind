@@ -152,6 +152,8 @@ const COVERAGE: Record<AgentRuleId, readonly Evidence[]> = {
     { where: "search", phrase: "workers search only rooms they can see" }],
   "worker.ask-brain": [{ where: "orders", phrase: "Blocked, unsure or need a product decision? Ask a brain, never Human or this prompt." }],
   "worker.review-rejection": [{ where: "orders", phrase: "If a local automatic review rejects a patch, send the exact reason to the brain and wait; do not retry the same apply." }],
+  "worker.human-task-control": [{ where: "orders", phrase: "When Human pauses a task, save a checkpoint and stop task work; wait for an explicit resume. On cancellation, stop immediately. A hard pause closes the session after its grace period; resume requires rereading the saved handoff." }],
+  "brain.jobs": [{ where: "orders", phrase: "Group one Human request into one job with job_event, and pass its id to request_worker for each task. Preserve the Human origin message when available; job references grant no conversation access." }],
   "worker.clear-context": [{ where: "orders", phrase: "On a clear_context control message, discard all task memory, keep this identity and these orders, then wait." }],
   "worker.report": [{ where: "orders", phrase: "When a piece of work is done, report to the brain that assigned it, then wait." },
     { where: "launch", phrase: "When a task is done, report to the brain that assigned it." }],

@@ -43,7 +43,6 @@ test("brain request is atomic, exact retries are stable, and pending workers are
   const rosterWorker = f.hive.workerOrchestration.roster(f.brain).find(a => a.id === first.worker.id)!;
   assert.deepEqual(rosterWorker.origin, { type: "template", templateId: f.template.id });
   assert.equal(rosterWorker.openTasks, 1);
-  assert.deepEqual(rosterWorker.activity, { state: "offline" });
   assert.equal(rosterWorker.terminalSession, undefined);
   assert.throws(() => f.hive.channels.openDm(f.other, first.worker.name), status(404));
   assert.equal(f.hive.workerOrchestration.templates(f.brain).templates[0]!.instancesInUse, 0,
@@ -51,8 +50,10 @@ test("brain request is atomic, exact retries are stable, and pending workers are
   const count = () => f.hive.identity.listAgents(f.brain).filter(a => a.pending).length;
   assert.throws(() => f.request(randomUUID(), { contract: { ...contract(), evidenceSeqs: [999999] } }), status(404));
   assert.equal(count(), 1, "failed assignment rolls back its reservation");
-  assert.throws(() => f.request(randomUUID(), { job: { title: "Unsupported yet" } }), status(409));
-  assert.equal(count(), 1, "unsupported jobs do not silently lose grouping");
+  const grouped = f.request(randomUUID(), { job: { title: "Settings initiative" } });
+  assert.ok(grouped.task.jobId);
+  assert.equal(grouped.request.jobId, grouped.task.jobId);
+  assert.equal(f.hive.jobs.get(f.brain, grouped.task.jobId!).counts.total, 1);
 });
 
 test("approval, native launch, task review and archive retain capacity until kill acknowledgement", t => {
@@ -147,7 +148,7 @@ test("a project with a settled archived worker can be deleted", t => {
 });
 
 test("rejected launch cancels task, archives identity, and a revision assigns a fresh worker", t => {
-  const f = fixture(t), first = f.request();
+  const f = fixture(t), first = f.request(randomUUID(), { job: { title: "Settings initiative" } });
   f.hive.launcherQueue.reject(f.human, first.request.id);
   const cancelled = f.hive.tasks.get(f.brain, first.task.id);
   assert.equal(cancelled.state, "cancelled");
@@ -158,5 +159,7 @@ test("rejected launch cancels task, archives identity, and a revision assigns a 
   assert.equal(next.task.workerId, next.worker.id);
   assert.equal(next.task.state, "sent");
   assert.equal(next.request.taskId, first.task.id);
+  assert.equal(next.task.jobId, first.task.jobId);
+  assert.equal(next.request.jobId, first.task.jobId);
   assert.throws(() => f.request(randomUUID(), { taskId: next.task.id, expectedRevision: next.task.revision }), status(409));
 });

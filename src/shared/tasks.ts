@@ -87,8 +87,11 @@ export type TaskContract = z.infer<typeof taskContractSchema>;
 export type TaskResult = z.infer<typeof taskResultSchema>;
 export type TaskAction = z.infer<typeof taskActionSchema>;
 export type TaskState = 'sent' | 'delivered' | 'accepted' | 'rejected' | 'blocked' | 'result_submitted' | 'changes_requested' | 'accepted_complete'
+  | 'paused'
   /** Closed by Hivemind because the assigned worker was removed (#215); a revise reassigns it. */
   | 'cancelled';
+export type TaskPause = { mode: 'soft' | 'hard'; requestId: string; previousState: TaskState;
+  requestedAt: number; graceUntil: number | null; stopRequestedAt?: number; closedAt?: number; resumeRequestId?: string };
 export type TaskEnvelope = {
   taskId: string; channelId: string; revision: number; contractVersion: number;
   actorId: string; actorRole: 'brain' | 'worker' | 'human'; assignerId: string; workerId: string;
@@ -96,7 +99,11 @@ export type TaskEnvelope = {
   checkpointVersion?: number;
   claimVersion?: number;
   action: TaskAction | { type: 'assign'; contract: TaskContract } |
-    { type: 'launch'; state: 'launched' | 'failed' | 'rejected' | 'expired'; requestId: string };
+    { type: 'launch'; state: 'launched' | 'failed' | 'rejected' | 'expired'; requestId: string } |
+    { type: 'pause'; mode: 'soft' | 'hard'; reason?: string } |
+    { type: 'resume'; reason?: string } |
+    { type: 'cancel'; reason: string } |
+    { type: 'hard_stop_requested' } | { type: 'hard_stopped' };
 };
 export type TaskSnapshot = {
   room?: RoomTask;
@@ -105,6 +112,8 @@ export type TaskSnapshot = {
   coordination?: TaskCoordinationView;
   /** Why the task was cancelled; cleared when it is revised. */
   cancellation?: { reason: string; at: number };
+  pause?: TaskPause;
+  jobId?: string | null;
   id: string; channelId: string; assignerId: string; assignerName: string; workerId: string; workerName: string;
   revision: number; contractVersion: number; state: TaskState; contract: TaskContract;
   dispatchSeq: number; receivedAt: number | null; lastEventSeq: number; updatedAt: number;
@@ -133,6 +142,11 @@ export function taskBody(envelope: TaskEnvelope): string {
   const a = envelope.action;
   const header = `Task ${a.type} · ${envelope.taskId} · revision ${envelope.revision} / contract ${envelope.contractVersion}`;
   if (a.type === 'launch') return `${header}\nWorker launch ${a.state}. Request ${a.requestId}.`;
+  if (a.type === 'pause') return `${header}\nHuman paused this task (${a.mode}). Save a checkpoint and stop work.${a.reason ? ` Reason: ${a.reason}` : ''}`;
+  if (a.type === 'resume') return `${header}\nHuman resumed this task. Re-read the current contract and saved handoff before continuing.${a.reason ? ` Reason: ${a.reason}` : ''}`;
+  if (a.type === 'cancel') return `${header}\nHuman cancelled this task. Stop work immediately. Reason: ${a.reason}`;
+  if (a.type === 'hard_stopped') return `${header}\nThe worker session was closed after the hard-pause grace period.`;
+  if (a.type === 'hard_stop_requested') return `${header}\nThe hard-pause grace period ended; the worker session is being closed.`;
   if (a.type === 'assign' || a.type === 'revise') {
     const c = a.contract;
     return [header, a.type === 'revise' ? `Reason: ${a.reason}` : '', `Objective: ${c.objective}`,
