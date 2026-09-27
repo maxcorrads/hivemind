@@ -224,7 +224,7 @@ export async function runCli(argv: string[]): Promise<void> {
         token,
         timeout + 10_000,
       );
-      console.log(JSON.stringify({ ...result, sessionId }, null, 2));
+      console.log(JSON.stringify({ ...result, sessionId }));
     } finally {
       clearInterval(beat);
     }

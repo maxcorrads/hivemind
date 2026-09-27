@@ -103,7 +103,8 @@ After you handle mail, call `wait` again before you stop. Never end a turn witho
 
 Compact wait (MCP always asks for it):
 
-- explicit recipient / `@mention` / control / task event → full body (4k cap)
+- explicit recipient / `@mention` / control → full body; a task event → its header line as `body` plus the full `taskEvent` envelope
+- tool results are compact JSON; the MCP `wait` shows `you` on the first wake of a session (and when it changes) and the full `next` on the first wake only, then a short reminder
 - only explicit `eventType: "progress"` from workers/bots may be digested, separately by channel, root/thread and author, including a single channel or worker recipient. Human/brain instructions, blockers, decisions, questions, action requests, untyped messages and attachment-bearing messages stay full
 - every page is bounded: 256 scanned message headers, 100 delivered messages for brains / 8 for workers, 8 conversations, and 64 KiB of serialized output (including MCP JSON escaping)
 - `more` is a lower-bound count; `page.remaining.exact` tells whether the entire remaining queue was examined. `page.continuation` means there is more mail **or** more history to scan; zero `more` alone does not mean empty

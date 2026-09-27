@@ -11,7 +11,7 @@ import { markInboxRead } from "./test-fixtures.ts";
 import { API_JSON_BYTES, messageBodySchema, sendInputSchema } from "../shared/api-contract.ts";
 import { botMessageSchema } from "../shared/bot-message.ts";
 import { BODY_MAX, WAIT_MAX_BYTES, type Message, type WaitResult } from "../shared/types.ts";
-import type { TaskAction } from "../shared/tasks.ts";
+import { taskBody, type TaskAction } from "../shared/tasks.ts";
 
 // Owner decision: real requests/specs exceed 4,000 characters; everyone gets 20,000.
 const ASCII = "a".repeat(BODY_MAX);
@@ -151,8 +151,10 @@ test("task events follow BODY_MAX: a large checkpoint is accepted and delivered 
     for (const compact of [true, false]) {
       const result = await f.hive.delivery.wait(f.brain.agent, 1, undefined, { sessionId, compact });
       const item = compact ? result.mail![0]! : [...result.messages, ...result.mentions][0]!;
-      assert.equal(item.body, saved.message.body, "task events are never digested or clipped");
-      assert.deepEqual(item.taskEvent, saved.message.taskEvent);
+      assert.deepEqual(item.taskEvent, saved.message.taskEvent, "task events are never digested or clipped");
+      // Compact mail carries the body's header line only: the envelope renders the whole body.
+      assert.equal(item.body, compact ? saved.message.body.split("\n", 1)[0] : saved.message.body);
+      assert.equal(taskBody(item.taskEvent!), saved.message.body);
       assert.equal(item.recovery, undefined);
       assert.ok(waitWireBytes(result) <= WAIT_MAX_BYTES);
       if (!compact) f.hive.delivery.acknowledgeInbox(f.brain.agent, sessionId, result.delivery!.id);

@@ -3,7 +3,7 @@ import type { EvidenceCollectorHealth } from '../src/shared/evidence-health.ts';
 import type { RoutingRequest, RoutingSuggestions } from '../src/shared/routing.ts';
 import type { TelegramHealth } from "./telegram-health.ts";
 import type { WorkerTemplate, WorkerTemplateSpec } from "../src/shared/worker-templates.ts";
-import type { Agent, BotCredentialView, AttachmentMeta, Channel, Message, Project, SearchHit, Thread, ThreadStatus, InboxStatus } from "../src/shared/types.ts";
+import type { Agent, AgentTrafficView, BotCredentialView, AttachmentMeta, Channel, Message, Project, SearchHit, Thread, ThreadStatus, InboxStatus } from "../src/shared/types.ts";
 import type { ActivityPage, ActivityReason, MentionPage, ReadSnapshot } from "../src/shared/read-state.ts";
 import { resolveUploadMime } from "../src/shared/mime.ts";
 import type { LaunchContext } from "../src/shared/launch-prompt.ts";
@@ -38,6 +38,8 @@ export type Snapshot = ReadSnapshot & {
   archivedChannelIds?: string[];
   queued: Record<string, number>;
   inbox?: Record<string, InboxStatus>;
+  /** Bytes the agent API returned per brain/worker since the server started. */
+  agentTraffic?: Record<string, AgentTrafficView>;
   telegram?: { running: boolean; configured: boolean } & TelegramHealth;
   /** Whether Jev adaptive routing is on; the Routing log is offered only then. */
   jev?: { enabled: boolean };

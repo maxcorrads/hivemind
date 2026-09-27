@@ -87,8 +87,9 @@ Each envelope is bounded to 16,000 UTF-8 bytes and its readable message to 20,00
 UTF-16 units (the shared message `BODY_MAX`); in practice the byte-bounded envelope
 and per-field caps are the binding limits. Contracts/results have bounded strings/lists;
 use evidence references for larger material. The largest envelope, even with 3-byte
-UTF-8 text, still fits one 64 KiB wait page together with its readable message. Structured messages carry `taskEvent` in history and wait, stay
-full in compact mail, and retain canonical task/root IDs. The existing aggregate
+UTF-8 text, still fits one 64 KiB wait page together with its readable message. Structured messages carry `taskEvent` in history and wait, are never
+digested, and retain canonical task/root IDs. In compact mail their `body` is only the
+header line, because the envelope already holds the whole action. The existing aggregate
 64 KiB wait budget still applies; an oversized legacy envelope has explicit history
 recovery instead of silent truncation. File references are not file contents.
 

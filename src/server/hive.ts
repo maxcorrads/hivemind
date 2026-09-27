@@ -5,6 +5,7 @@ import { ROUTINE_BATCH_MS } from "../shared/notifications.ts";
 import { WorkerTemplateStore } from "./worker-templates.ts";
 import { LauncherQueue } from "./launcher-queue.ts";
 import { WorkerOrchestration } from "./services/worker-orchestration.ts";
+import { AgentTraffic } from "./agent-traffic.ts";
 import { AdaptiveTopologyRuntime } from "./adaptive-topology.ts";
 import { HiveBus } from "./hive-events.ts";
 import { InboxDeliveryStore } from "./inbox-delivery.ts";
@@ -88,6 +89,8 @@ export class Hive {
   readonly storage: Storage;
   /** Post-commit change notifications; see HiveEvents for every event and payload. */
   readonly bus = new HiveBus();
+  /** Bytes the agent API returned per brain/worker since start (Human snapshot). */
+  readonly traffic = new AgentTraffic();
   readonly home: string;
 
   readonly telegramAdmin!: TelegramAdminService;

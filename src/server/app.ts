@@ -116,7 +116,9 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   ui.get("/snapshot", c => {
     const human = hive.identity.getAgent("human");
     const channels = hive.channels.listChannels(human);
-    return c.json({ you: human, projects: hive.projects.listProjects(), agents: hive.identity.listAgents(), channels,
+    const agents = hive.identity.listAgents();
+    return c.json({ you: human, projects: hive.projects.listProjects(), agents, channels,
+      agentTraffic: hive.traffic.snapshot(agents.map(item => item.id)),
       archivedChannelIds: hive.rooms.archivedChannelIds(channels),
       ...hive.reads.readSnapshot(human), ...hive.delivery.queueSnapshot(),
       telegram: { running: Boolean(hooks.telegramRunning?.()), configured: publicTelegramView(hive.home).configured, ...hive.telegramAdmin.health() },
@@ -356,8 +358,19 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   ui.get('/tasks/:id/timeline/export', c => c.json({ fixture: hive.timeline.exportTask(hive.identity.getAgent('human'), c.req.param('id')) }));
 
   const agent = new Hono();
+  const jsonBytes = async (res: Response) =>
+    res.headers.get('content-type')?.startsWith('application/json') ? (await res.clone().arrayBuffer()).byteLength : null;
   agent.use('*', async (c, next) => {
-    if (c.req.path === '/api/agent/join' && c.req.method === 'POST') { await validateRequest(c.req.raw); return next(); }
+    if (c.req.path === '/api/agent/join' && c.req.method === 'POST') {
+      await validateRequest(c.req.raw);
+      await next();
+      const bytes = await jsonBytes(c.res);
+      if (bytes !== null && c.res.ok) {
+        const id = ((await c.res.clone().json()) as { agent?: { id?: unknown } }).agent?.id;
+        if (typeof id === 'string') hive.traffic.record(id, c.req.routePath, bytes);
+      }
+      return;
+    }
     const token = (c.req.header('authorization') ?? '').replace(/^Bearer\s+/i, '').trim();
     if (!token) throw new HiveError(401, 'Missing token. Join first.');
     let me = hive.identity.agentByToken(token);
@@ -368,6 +381,8 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     me = hive.identity.agentByToken(token);
     hive.identity.touch(me.id, true); c.set('me', me); c.set('token', token);
     await next();
+    const bytes = await jsonBytes(c.res);
+    if (bytes !== null) hive.traffic.record(me.id, c.req.routePath, bytes);
   });
   agent.post('/join', async c => {
     const body = await requestJson(c.req.raw);

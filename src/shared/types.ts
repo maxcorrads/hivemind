@@ -107,6 +107,13 @@ export type Agent = {
 
 /** A reserved worker waits this long for its launch to claim it. */
 export const RESERVATION_MS = 30 * 60 * 1000;
+/** JSON bytes and calls the agent API returned to one brain/worker since `since` (server start), per route pattern. */
+export type AgentTrafficView = {
+  since: number;
+  bytes: number;
+  calls: number;
+  routes: Record<string, { bytes: number; calls: number }>;
+};
 
 /** How history names a removed agent. Removed names stay reserved, so the label is unambiguous. */
 export const REMOVED_SUFFIX = " (removed)";

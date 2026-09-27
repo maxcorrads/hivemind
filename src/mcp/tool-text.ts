@@ -62,4 +62,6 @@ export function joinNext(created: boolean, handoffs: boolean): string {
     "Then call wait once with no arguments and stay silent while it runs.",
   ].filter(Boolean).join(" ");
 }
+/** Replaces WAIT_NEXT on every wake after the first of an MCP session. */
+export const WAIT_NEXT_REPEAT = "Call ack_delivery with delivery.id before acting, reply with channelId and rootId, then call wait again and output no text.";
 export const SEARCH_NEXT = "More hits: repeat search with the same q and before set to the oldest seq in this page.";
