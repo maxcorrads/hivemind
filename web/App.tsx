@@ -16,6 +16,7 @@ import { MobileDms, MobileTabs, projectDms } from "./MobileNav.tsx";
 import { useNativeBridge } from "./native-bridge.ts";
 import { attentionTotal, documentTitle, loadSelectedProject, projectLanding, saveProjectView, saveSelectedProject, type SwitchItem } from "./nav-model.ts";
 import { ProjectPlugins } from "./ProjectPlugins.tsx";
+import { WorkerTemplatesSheet } from "./WorkerTemplates.tsx";
 import { ProjectRail } from "./ProjectRail.tsx";
 import { CreateProjectSheet, ProjectSettingsSheet } from "./ProjectSheets.tsx";
 import { QuickSwitcher } from "./QuickSwitcher.tsx";
@@ -136,6 +137,7 @@ export function App() {
   const [credentialBot, setCredentialBot] = useState<Agent | null>(null);
   const [credentialBusy, setCredentialBusy] = useState(false);
   const [pluginsProject, setPluginsProject] = useState<string | null>(null);
+  const [templatesProject, setTemplatesProject] = useState<string | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [adaptiveRoutingOpen, setAdaptiveRoutingOpen] = useState(false);
   const [launchOpen, setLaunchOpen] = useState(false);
@@ -380,7 +382,13 @@ export function App() {
 
       {projectSheets.editingProject && (
         <ProjectSettingsSheet form={projectSheets} project={projectSheets.editingProject} agents={snap?.agents ?? []}
-          onPlugins={() => setPluginsProject(projectSheets.editingProject)} refreshSnap={refreshSnap} setErr={setErr} />
+          onPlugins={() => setPluginsProject(projectSheets.editingProject)}
+          onWorkerTemplates={() => setTemplatesProject(projectSheets.editingProject)} refreshSnap={refreshSnap} setErr={setErr} />
+      )}
+
+      {templatesProject && projects.some((p) => p.slug === templatesProject) && (
+        <WorkerTemplatesSheet key={templatesProject} project={projects.find((p) => p.slug === templatesProject)!}
+          onClose={() => setTemplatesProject(null)} />
       )}
 
       {pluginsProject && projects.some((p) => p.slug === pluginsProject) && (

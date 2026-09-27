@@ -2,6 +2,7 @@ import type { JevCall, JevCallLogView } from '../src/shared/jev-calls.ts';
 import type { EvidenceCollectorHealth } from '../src/shared/evidence-health.ts';
 import type { RoutingRequest, RoutingSuggestions } from '../src/shared/routing.ts';
 import type { TelegramHealth } from "./telegram-health.ts";
+import type { WorkerTemplate, WorkerTemplateSpec } from "../src/shared/worker-templates.ts";
 import type { Agent, BotCredentialView, AttachmentMeta, Channel, Message, Project, SearchHit, Thread, ThreadStatus, InboxStatus } from "../src/shared/types.ts";
 import type { ActivityPage, ActivityReason, MentionPage, ReadSnapshot } from "../src/shared/read-state.ts";
 import { resolveUploadMime } from "../src/shared/mime.ts";
@@ -138,6 +139,14 @@ export const api = {
   saveProjectPlugin: (slug: string, id: string, body: { enabled: boolean; values: SettingsValues; expectedRevision: number }) =>
     req<{ plugin: ProjectPluginView }>(`/api/ui/projects/${encodeURIComponent(slug)}/plugins/${encodeURIComponent(id)}`,
       { method: "PUT", body: JSON.stringify(body) }),
+  workerTemplates: (project: string) =>
+    req<{ templates: WorkerTemplate[] }>(`/api/ui/projects/${encodeURIComponent(project)}/worker-templates`),
+  createWorkerTemplate: (project: string, body: { slug: string; spec: WorkerTemplateSpec }) =>
+    req<WorkerTemplate>(`/api/ui/projects/${encodeURIComponent(project)}/worker-templates`, { method: "POST", body: JSON.stringify(body) }),
+  updateWorkerTemplate: (id: string, body: { expectedRevision: number; slug?: string; spec: WorkerTemplateSpec }) =>
+    req<WorkerTemplate>(`/api/ui/worker-templates/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteWorkerTemplate: (id: string, revision: number) =>
+    req<{ ok: true }>(`/api/ui/worker-templates/${encodeURIComponent(id)}?revision=${revision}`, { method: "DELETE" }),
   createBot: (projectId: string, name: string) => req<{ bot: Agent; token: string }>(
     `/api/ui/projects/${encodeURIComponent(projectId)}/bots`, { method: "POST", body: JSON.stringify({ name }) },
   ),

@@ -3,7 +3,16 @@
 A worker template is a worker Human allows the brains of one project to launch: the agent CLI and how to run it, plus
 what a brain needs to pick it. Templates are the first step of brain-launched, task-bound workers; see the
 [roadmap](agent-management-roadmap.md) (Phase A1, #276). This page describes what exists today: templates can be
-created, listed, edited and deleted, but nothing launches from them yet.
+created, listed, edited, duplicated and deleted, but nothing launches from them yet.
+
+## Editor
+
+**Project settings → Worker templates…** lists the project's templates with Edit, Duplicate and Delete (after a
+confirmation). The editor has the Launch sheet's fields (software, model and effort, CLI flags, environment variables
+as `NAME=value` lines) plus the name, slug, "when to use it" description, seniority, focus, how many may run at once,
+secret names and whether brains may use it. A command preview shows what the template will run, built by the same
+code as the Launch sheet; Hivemind adds the prompt that joins the worker to its task at launch. Save is offered only
+when the preview builds and the environment variables are valid; the server's reason is shown if it refuses.
 
 ## A template
 

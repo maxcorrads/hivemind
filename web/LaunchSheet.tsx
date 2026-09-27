@@ -2,8 +2,8 @@ import { ChevronRight, Copy, Play, SquareTerminal, Terminal, X } from "lucide-re
 import { Modal } from "./Modal.tsx";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Agent, Project, Seniority } from "../src/shared/types.ts";
-import { modelChoiceGroups, parseChoiceId, selectedChoiceId } from "../src/shared/launch-models.ts";
 import { api } from "./api.ts";
+import { ModelSelect } from "./ModelSelect.tsx";
 import {
   inNativeApp, onMacDesktop, terminalSecretProblem, terminalSessionLaunchProblem, type TerminalLaunchSecrets, type TerminalSessionLaunch,
 } from "./native-bridge.ts";
@@ -17,7 +17,6 @@ import {
   buildLaunchCommand,
   buildRosterPaste,
   codexSessionTitle,
-  effectiveSoftware,
   resolveLaunchTune,
   launchBlockText,
   softwareFamily,
@@ -160,57 +159,6 @@ async function copyText(text: string) {
   const ok = document.execCommand("copy");
   el.remove();
   if (!ok) throw new Error("Could not copy");
-}
-
-function ModelSelect({
-  software,
-  model,
-  effort,
-  inherit,
-  onChange,
-}: {
-  software: string;
-  model: string;
-  effort: string;
-  inherit?: string;
-  onChange: (next: { model: string; effort: string }) => void;
-}) {
-  const alias = effectiveSoftware(software);
-  const groups = modelChoiceGroups(alias);
-  const value = selectedChoiceId(alias, model, effort);
-  const known = new Set(groups.flatMap((g) => g.choices.map((c) => c.id)));
-  const extraEffort = softwareFamily(alias) === "cursor" ? "" : effort;
-  return (
-    <label>
-      Model
-      <select
-        value={value}
-        onChange={(e) => {
-          const id = e.target.value;
-          if (!id) {
-            onChange({ model: "", effort: "" });
-            return;
-          }
-          const hit = groups.flatMap((g) => g.choices).find((c) => c.id === id);
-          onChange(hit ? { model: hit.model, effort: hit.effort } : parseChoiceId(id));
-        }}
-      >
-        <option value="">{inherit ? `same as above (${inherit})` : "default"}</option>
-        {value && !known.has(value) && (
-          <option value={value}>{extraEffort ? `${model} · ${extraEffort}` : model}</option>
-        )}
-        {groups.map((group) => (
-          <optgroup key={group.label} label={group.label}>
-            {group.choices.map((choice) => (
-              <option key={`${group.label}:${choice.id}`} value={choice.id}>
-                {choice.label}
-              </option>
-            ))}
-          </optgroup>
-        ))}
-      </select>
-    </label>
-  );
 }
 
 export function LaunchSheet({
