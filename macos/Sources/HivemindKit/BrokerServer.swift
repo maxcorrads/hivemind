@@ -57,6 +57,9 @@ public final class TerminalBroker {
   public let configPath: String
   /// Called after anything the menu shows changed.
   public var onChange: (@MainActor () -> Void)?
+  /// Server.app signs a Human's native approval after the verified page or
+  /// paired device sends it through this broker. Nil in tests/other hosts.
+  public var launcherDecision: (@MainActor (String, TemplateID?, Bool) async -> Result<Void, BrokerProtocolError>)?
 
   public private(set) var isRunning = false
   /// Where tmux was found last; looked up again on every hello.
@@ -409,7 +412,8 @@ public final class BrokerConnection {
         try Self.vaultCall { () throws(BrokerFiles.Failure) in try vault.delete(name: name, for: template) }
         broker?.deps.log("[broker] template \(template): deleted \(name.map { "secret \($0)" } ?? "every secret")")
       }
-    case .sessionsList, .sessionsSubscribe, .sessionsUnsubscribe, .launch, .attach, .kill:
+    case .sessionsList, .sessionsSubscribe, .sessionsUnsubscribe, .launch, .attach, .kill,
+         .launcherApprove, .launcherReject:
       enqueue(frame)
     }
   }
@@ -477,8 +481,24 @@ public final class BrokerConnection {
       await attach(session, size: size, id: id)
     case .kill(let session):
       await kill(session, id: id)
+    case .launcherApprove(let requestId, let templateId):
+      await decide(requestId: requestId, templateId: templateId, approve: true, id: id)
+    case .launcherReject(let requestId):
+      await decide(requestId: requestId, templateId: nil, approve: false, id: id)
     case .hello, .input, .resize, .detach, .secretsList, .secretsSet, .secretsDelete:
       break
+    }
+  }
+
+  private func decide(requestId: String, templateId: TemplateID?, approve: Bool, id: String?) async {
+    guard let decision = broker?.launcherDecision else {
+      return send(.error(BrokerProtocolError(.internal, "launcher approval is unavailable")), id: id)
+    }
+    switch await decision(requestId, templateId, approve) {
+    case .success:
+      send(.launcherDecided(requestId: requestId, action: approve ? "approve" : "reject"), id: id)
+    case .failure(let error):
+      send(.error(error), id: id)
     }
   }
 

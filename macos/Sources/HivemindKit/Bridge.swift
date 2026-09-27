@@ -61,6 +61,10 @@ public enum BridgeMessage: Equatable, Sendable {
   case templateSecretsSet(id: String?, template: TemplateID, name: String, value: TemplateSecretValue)
   /// `name` nil: every secret of the template.
   case templateSecretsDelete(id: String?, template: TemplateID, name: String?)
+  /// A Human decision travels through the verified native bridge and the
+  /// Server.app broker, which signs the HTTP request with its instance secret.
+  case launcherApprove(id: String?, requestId: String, templateId: TemplateID?)
+  case launcherReject(id: String?, requestId: String)
 
   static let maxText = 4096
   /// The most sessions one terminal-kill may name (web TERMINAL_BROKER_LIMITS.kills).
@@ -144,6 +148,22 @@ public enum BridgeMessage: Equatable, Sendable {
       case let name as String where TemplateSecrets.isValidName(name): self = .templateSecretsDelete(id: id, template: template, name: name)
       default: return nil
       }
+    case "launcher-approve":
+      guard let id = Self.requestID(object["id"]), let requestId = object["requestId"] as? String,
+            UUID(uuidString: requestId) != nil else { return nil }
+      let templateId: TemplateID?
+      switch object["templateId"] {
+      case nil, is NSNull: templateId = nil
+      case let value as String:
+        guard let parsed = TemplateID(value) else { return nil }
+        templateId = parsed
+      default: return nil
+      }
+      self = .launcherApprove(id: id, requestId: requestId, templateId: templateId)
+    case "launcher-reject":
+      guard let id = Self.requestID(object["id"]), let requestId = object["requestId"] as? String,
+            UUID(uuidString: requestId) != nil else { return nil }
+      self = .launcherReject(id: id, requestId: requestId)
     default:
       return nil
     }
@@ -364,6 +384,7 @@ public enum BridgeTerminalEvent: Equatable, Sendable {
   case killedMany(id: String?, sessions: [SessionName], errors: [BridgeKillFailure])
   /// A template's secret names, answering a template-secrets-* message.
   case templateSecrets(id: String?, template: TemplateID, names: [String])
+  case launcherDecided(id: String?, requestId: String, action: String)
   case error(id: String?, code: BrokerErrorCode, message: String, stream: BrokerStreamID?)
 
   public enum TmuxStatus: String, Sendable, Equatable {
@@ -393,6 +414,7 @@ public enum BridgeTerminalEvent: Equatable, Sendable {
     case .exit: "terminal-exit"
     case .killed, .killedMany: "terminal-killed"
     case .templateSecrets: "template-secrets"
+    case .launcherDecided: "launcher-decided"
     case .error: "terminal-error"
     }
   }
@@ -409,6 +431,7 @@ public enum BridgeTerminalEvent: Equatable, Sendable {
     case .exit(let stream, let status): self = .exit(stream: stream, status: status)
     case .killed(let session): self = .killed(id: id, session: session)
     case .secrets(let template, let names): self = .templateSecrets(id: id, template: template, names: names)
+    case .launcherDecided(let requestId, let action): self = .launcherDecided(id: id, requestId: requestId, action: action)
     case .error(let code, let message, let stream): self = .error(id: id, code: code, message: message, stream: stream)
     }
   }
@@ -452,6 +475,10 @@ public enum BridgeTerminalEvent: Equatable, Sendable {
       put("id", id)
       detail["template"] = template.rawValue
       detail["names"] = names
+    case .launcherDecided(let id, let requestId, let action):
+      put("id", id)
+      detail["requestId"] = requestId
+      detail["action"] = action
     case .error(let id, let code, let message, let stream):
       put("id", id)
       detail["code"] = code.rawValue

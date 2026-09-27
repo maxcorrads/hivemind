@@ -264,7 +264,14 @@ rm -rf "$STAGE" && mkdir -p "$STAGE"
 if [ "$build_ui" = 1 ]; then
   step "Hivemind.app"
   assemble "Hivemind" "$UI_BUNDLE_ID" Hivemind Hivemind "$UI_MIN_MACOS" \
-    '  <key>NSSupportsAutomaticTermination</key><false/>'
+    '  <key>NSSupportsAutomaticTermination</key><false/>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key><string>com.maxcorrads.hivemind</string>
+      <key>CFBundleURLSchemes</key><array><string>hivemind</string></array>
+    </dict>
+  </array>'
   sign "$APP"
   publish "$APP"
 fi

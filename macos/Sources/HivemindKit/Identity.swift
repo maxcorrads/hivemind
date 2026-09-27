@@ -7,6 +7,8 @@ public enum BundleID {
   public static let server = "com.maxcorrads.hivemind.server"
   /// The iOS/iPadOS app (ios/project.yml sets the same; ios/build.sh checks).
   public static let ios = "com.maxcorrads.hivemind.ios"
+  /// The UI app's narrow route for opening its approval inbox.
+  public static let uiURLScheme = "hivemind"
   /// The server app's URL scheme (CFBundleURLTypes, written by build.sh).
   public static let serverURLScheme = "hivemind-server"
 }

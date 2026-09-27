@@ -296,6 +296,8 @@ public enum BrokerRequest: Equatable, Sendable {
   case secretsSet(template: TemplateID, name: String, value: TemplateSecretValue)
   /// Delete one template secret, or all of them when `name` is nil; answered with `secrets`.
   case secretsDelete(template: TemplateID, name: String?)
+  case launcherApprove(requestId: String, templateId: TemplateID?)
+  case launcherReject(requestId: String)
 
   public var type: String {
     switch self {
@@ -312,6 +314,8 @@ public enum BrokerRequest: Equatable, Sendable {
     case .secretsList: "secrets.list"
     case .secretsSet: "secrets.set"
     case .secretsDelete: "secrets.delete"
+    case .launcherApprove: "launcher.approve"
+    case .launcherReject: "launcher.reject"
     }
   }
 }
@@ -346,7 +350,7 @@ extension BrokerRequestFrame: Codable {
   private enum Key: String, CodingKey {
     case type, id, version, token, client, launches, session, cols, rows, stream, data
     case project, agent, title, cwd, command, secrets, environment
-    case template, name, value
+    case template, name, value, requestId, templateId
   }
 
   public init(from decoder: any Decoder) throws {
@@ -423,6 +427,14 @@ extension BrokerRequestFrame: Codable {
     case "secrets.delete":
       let template = try BrokerCoding.template(c, .template)
       request = .secretsDelete(template: template, name: try BrokerCoding.optionalSecretName(c, .name))
+    case "launcher.approve", "launcher.reject":
+      let requestId = try BrokerCoding.string(c, .requestId)
+      guard UUID(uuidString: requestId) != nil else { throw BrokerProtocolError.invalid("requestId", "must be a UUID") }
+      if type == "launcher.approve" {
+        request = .launcherApprove(requestId: requestId, templateId: try BrokerCoding.optionalTemplate(c, .templateId, field: "templateId"))
+      } else {
+        request = .launcherReject(requestId: requestId)
+      }
     default:
       throw BrokerProtocolError(.unknownType, "unknown message type \(BrokerText.quoted(type))")
     }
@@ -478,6 +490,11 @@ extension BrokerRequestFrame: Codable {
     case .secretsDelete(let template, let name):
       try c.encode(template.rawValue, forKey: .template)
       try c.encodeIfPresent(name, forKey: .name)
+    case .launcherApprove(let requestId, let templateId):
+      try c.encode(requestId, forKey: .requestId)
+      try c.encodeIfPresent(templateId?.rawValue, forKey: .templateId)
+    case .launcherReject(let requestId):
+      try c.encode(requestId, forKey: .requestId)
     }
   }
 }
@@ -504,6 +521,7 @@ public enum BrokerEvent: Equatable, Sendable {
   case killed(session: SessionName)
   /// The template's secret names after a secrets.list, .set or .delete, sorted. Never a value.
   case secrets(template: TemplateID, names: [String])
+  case launcherDecided(requestId: String, action: String)
   /// `stream` is set when the error is about one stream.
   case error(code: BrokerErrorCode, message: String, stream: BrokerStreamID?)
 
@@ -517,6 +535,7 @@ public enum BrokerEvent: Equatable, Sendable {
     case .exit: "exit"
     case .killed: "killed"
     case .secrets: "secrets"
+    case .launcherDecided: "launcher.decided"
     case .error: "error"
     }
   }
@@ -552,7 +571,7 @@ public struct BrokerEventFrame: Equatable, Sendable {
 extension BrokerEventFrame: Codable {
   private enum Key: String, CodingKey {
     case type, id, version, tmuxPath, items, names, created, errors, stream, session, data, status, code, message
-    case template
+    case template, requestId, action
   }
 
   public init(from decoder: any Decoder) throws {
@@ -595,6 +614,13 @@ extension BrokerEventFrame: Codable {
         throw BrokerProtocolError.invalid("names", "must be up to \(TemplateSecrets.maxNames) secret names")
       }
       event = .secrets(template: template, names: names)
+    case "launcher.decided":
+      let requestId = try BrokerCoding.string(c, .requestId)
+      let action = try BrokerCoding.string(c, .action)
+      guard UUID(uuidString: requestId) != nil, action == "approve" || action == "reject" else {
+        throw BrokerProtocolError.invalid("launcher.decided", "invalid decision")
+      }
+      event = .launcherDecided(requestId: requestId, action: action)
     case "error":
       let code: BrokerErrorCode
       do { code = try c.decode(BrokerErrorCode.self, forKey: .code) } catch {
@@ -638,6 +664,9 @@ extension BrokerEventFrame: Codable {
     case .secrets(let template, let names):
       try c.encode(template.rawValue, forKey: .template)
       try c.encode(names, forKey: .names)
+    case .launcherDecided(let requestId, let action):
+      try c.encode(requestId, forKey: .requestId)
+      try c.encode(action, forKey: .action)
     case .error(let code, let message, let stream):
       try c.encode(code, forKey: .code)
       try c.encode(message, forKey: .message)

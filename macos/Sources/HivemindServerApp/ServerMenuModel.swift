@@ -12,6 +12,16 @@ final class ServerMenuModel: ObservableObject {
   /// Remote access for paired iPhones and iPads (off by default). It
   /// forwards to this app's server and terminal broker.
   let remote: RemoteAccessService
+  let approvalNotifier = ServerApprovalNotifier()
+  lazy var launcher = LauncherService(
+    server: { [weak self] in
+      guard let self, self.controller.state.pid != nil, case .running = self.controller.state,
+            let secret = self.controller.instanceSecret else { return nil }
+      return .init(endpoint: self.controller.endpoint, secret: secret)
+    },
+    broker: InProcessLauncherBroker(current: { [weak self] in self?.terminals.inProcessBroker }),
+    journal: FileLauncherJournal(folder: controller.paths.appSupport.appendingPathComponent("launcher-journal")),
+    notifier: approvalNotifier)
   private let loginItem: any LoginItemControlling
   private let installer: CommandLineInstaller
 
@@ -34,9 +44,16 @@ final class ServerMenuModel: ObservableObject {
       // gateway never forwards to whatever else might listen on the port.
       server: { controller.gatewayUpstream },
       brokerRunning: { terminals.isRunning })
+    terminals.launcherDecision = { [weak self] requestId, templateId, approve in
+      guard let self else { return .failure(.init(.internal, "launcher approval is unavailable")) }
+      return await self.launcher.decide(requestId: requestId, templateId: templateId, approve: approve)
+    }
     // The moment the supervisor sees the server exit or stop being ready,
     // the gateway stops forwarding to it (docs/remote-access.md#verified-server).
-    controller.onStateChange = { [weak self] _ in self?.remote.serverChanged() }
+    controller.onStateChange = { [weak self] _ in
+      self?.remote.serverChanged()
+      self?.launcher.serverChanged()
+    }
     controller.onChange = { [weak self] in self?.objectWillChange.send() }
     terminals.onChange = { [weak self] in self?.objectWillChange.send() }
     remote.onChange = { [weak self] in self?.objectWillChange.send() }

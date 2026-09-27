@@ -204,6 +204,12 @@ public final class TerminalBridgeRouter {
     case .templateSecretsDelete(let id, let template, let name):
       begin()
       relay(.secretsDelete(template: template, name: name), id: id)
+    case .launcherApprove(let id, let requestId, let templateId):
+      begin()
+      relay(.launcherApprove(requestId: requestId, templateId: templateId), id: id)
+    case .launcherReject(let id, let requestId):
+      begin()
+      relay(.launcherReject(requestId: requestId), id: id)
     default:
       break
     }
@@ -348,7 +354,7 @@ public final class TerminalBridgeRouter {
     case .error(_, _, let stream):
       // Errors about a stream of ours; the rest answered nothing of the page's.
       guard let stream, streams.contains(stream) else { return }
-    case .welcome, .launched, .attached, .killed, .secrets:
+    case .welcome, .launched, .attached, .killed, .secrets, .launcherDecided:
       return
     }
     deliver(BridgeTerminalEvent(BrokerEventFrame(event)))

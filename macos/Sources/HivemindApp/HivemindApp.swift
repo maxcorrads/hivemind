@@ -26,6 +26,8 @@ final class HivemindApp: NSObject, NSApplicationDelegate, NSMenuItemValidation {
   let downloads = Downloads()
   private(set) var windows: [BrowserWindowController] = []
   private var badge = BadgeAggregator<String>()
+  private var didFinishLaunching = false
+  private var pendingURLRoute: String?
   private lazy var terminalLauncher = TerminalLauncher(
     directory: TerminalLauncher.defaultDirectory(),
     home: FileManager.default.homeDirectoryForCurrentUser.path,
@@ -50,6 +52,9 @@ final class HivemindApp: NSObject, NSApplicationDelegate, NSMenuItemValidation {
   // MARK: Lifecycle
 
   func applicationWillFinishLaunching(_ notification: Notification) {
+    NSAppleEventManager.shared().setEventHandler(
+      self, andSelector: #selector(handleURLEvent(_:withReply:)),
+      forEventClass: AEEventClass(kInternetEventClass), andEventID: AEEventID(kAEGetURL))
     NSApp.mainMenu = MainMenu.build()
     // Before launch finishes: a click on a notification can be what launched us.
     notifier.onOpen = { [weak self] target, windowID in self?.openNotice(target: target, windowID: windowID) }
@@ -57,13 +62,23 @@ final class HivemindApp: NSObject, NSApplicationDelegate, NSMenuItemValidation {
   }
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    didFinishLaunching = true
     // Restored windows, if any, exist by now.
-    if windows.isEmpty { openWindow() }
+    if windows.isEmpty { openWindow(state: UIWindowState(hash: pendingURLRoute, zoom: pageZoom)) }
+    else if let pendingURLRoute { openNotice(target: pendingURLRoute, windowID: nil) }
+    pendingURLRoute = nil
     NotificationCenter.default.addObserver(
       forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
     ) { _ in
       MainActor.assumeIsolated { HivemindApp.shared.windows.forEach { $0.revalidate() } }
     }
+  }
+
+  @objc private func handleURLEvent(_ event: NSAppleEventDescriptor, withReply reply: NSAppleEventDescriptor) {
+    guard let string = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue,
+          let command = UIAppURLCommand(string) else { return }
+    if didFinishLaunching { openNotice(target: command.route, windowID: nil) }
+    else { pendingURLRoute = command.route }
   }
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
