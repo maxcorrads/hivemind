@@ -110,7 +110,7 @@ test("removing an agent drops its label", t => {
   assert.equal(tombstone.terminalSession, undefined);
 });
 
-test("the label carries no capability: only identity storage and the join/snapshot paths know it", () => {
+test("the reported label carries no capability; the launcher validates independently derived session names", () => {
   const src = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const sources = (dir: string): string[] => readdirSync(dir).flatMap(name => {
     const full = path.join(dir, name);
@@ -120,6 +120,8 @@ test("the label carries no capability: only identity storage and the join/snapsh
   const mentions = (pattern: RegExp) => sources(src).filter(file => pattern.test(readFileSync(path.join(src, file), "utf8"))).sort();
   assert.deepEqual(mentions(/\bterminal_session\b/),
     ["server/migrations/agent-terminal-session.ts", "server/services/identity.ts", "server/services/rows.ts"]);
-  assert.deepEqual(mentions(/terminalSession/), ["cli.ts", "mcp/index.ts", "server/app.ts", "server/services/identity.ts",
+  assert.deepEqual(mentions(/terminalSession/), ["cli.ts", "mcp/index.ts", "server/app.ts", "server/launcher-queue.ts", "server/services/identity.ts",
     "shared/api-contract.ts", "shared/terminal-session.ts", "shared/types.ts"]);
+  // The queue may reuse the name validator, but never turn an agent's self-reported label into kill authority.
+  assert.doesNotMatch(readFileSync(path.join(src, "server/launcher-queue.ts"), "utf8"), /\.terminalSession\b/);
 });
