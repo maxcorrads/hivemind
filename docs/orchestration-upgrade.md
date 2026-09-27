@@ -16,10 +16,9 @@ state, broker discovery and Keychain service names.
 | 6 | A4 | [#291](https://github.com/maxcorrads/hivemind/pull/291) → [#292](https://github.com/maxcorrads/hivemind/pull/292) |
 | 7 | A5 | [#293](https://github.com/maxcorrads/hivemind/pull/293) → [#294](https://github.com/maxcorrads/hivemind/pull/294) |
 | 8 | Phase 3 | [#295](https://github.com/maxcorrads/hivemind/pull/295) → [#296](https://github.com/maxcorrads/hivemind/pull/296) |
-| 9 | T2 tool discovery | [#297](https://github.com/maxcorrads/hivemind/pull/297) |
+| 9 | T2 | [#297](https://github.com/maxcorrads/hivemind/pull/297) → [#298](https://github.com/maxcorrads/hivemind/pull/298) |
 
-The final T2 launch/configuration slice is `feat/role-aware-launches`, based on #297. Every continuation PR names its
-immediate stack base. #284 is already integrated into #285; merge its pending-identity history before #285. Phase T is
+The final T2 launch/configuration slice is #298, based on #297. Every continuation PR names its immediate stack base. #284 is already integrated into #285; merge its pending-identity history before #285. Phase T is
 also merged into #291's branch, and the roadmap history is included in A2. None of these PRs was merged by development.
 Required Human review still applies to protected-main PRs even when all checks are green.
 
