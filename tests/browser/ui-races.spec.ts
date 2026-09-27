@@ -1285,6 +1285,16 @@ test("agent roster stays readable in a narrow sidebar and keeps actions scoped",
       await page.locator(".agents").screenshot({ path: testInfo.outputPath(`roster-${width}-${dark ? "dark" : "light"}.png`) });
     }
   }
+  await page.route("**/api/ui/agents/worker/overview", route => fulfillJson(route, {
+    agent: snap.agents.find(item => item.id === "worker"), identityRevision: 1, resumeAliases: [],
+    profile: { type: "fixed" }, work: null, currentTask: null, inbox: snap.inbox!.worker,
+    traffic: null, capability: null, lifecycle: [],
+  }));
+  await page.route("**/api/ui/agents/worker/remove-impact", route => fulfillJson(route, {
+    agentId: "worker", name: "LongWorkerNameForLayout", cancelled: { count: 0, taskIds: [] },
+    unreviewed: { count: 0, taskIds: [] }, terminalSession: null, launch: null,
+    pendingLaunch: false, pendingNativeCleanup: false, impactToken: "a".repeat(64),
+  }));
   const action = row.getByRole("button", { name: "Actions for LongWorkerNameForLayout", exact: true });
   await action.click();
   const menu = row.getByRole("menu");
@@ -1300,8 +1310,11 @@ test("agent roster stays readable in a narrow sidebar and keeps actions scoped",
   await expect(action).toBeFocused();
   await action.click();
   await menu.getByRole("menuitem", { name: "Remove", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Remove LongWorkerNameForLayout", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "LongWorkerNameForLayout", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Review removal impact…", exact: true }).click();
+  await expect(page.getByText("Removing LongWorkerNameForLayout will cancel 0 tasks and leave 0 tasks without a reviewer.", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.getByRole("button", { name: "Close dialog", exact: true }).click();
   await expect(row).toBeVisible();
 });
 
