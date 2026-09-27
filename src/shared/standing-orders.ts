@@ -7,12 +7,18 @@ import { DELIVERY_INSTRUCTIONS, type Agent } from "./types.ts";
  * every rule and `agent-instructions.test.ts` maps each one to its phrase.
  */
 
+/** Shared with launch prompts: a yielded host call must not become a finished turn. */
+export const WAIT_HOST_CONTINUITY = "Keep the host turn active while waiting; never emit a final response, even an empty one, to leave a wait running in the background. " +
+  "When the host reports a running call or cell ID, use its continuation/wait tool on that same call until it completes. Do not start a second Hivemind wait while the first is pending. " +
+  "Respect explicit stop/interruption instructions; a transient retry must not override them.";
+
 /** The wait loop every agent keeps; launch prompts carry a short bootstrap of it. */
 export const WAIT_LOOP = [
   "Call wait once with no arguments and no timeout. It returns only with mail; idle time and network blips are retried inside the tool.",
-  "While wait is in flight output no text: a status line cancels it. A \"Working\" spinner during wait is sleep, not thinking.",
+  "While wait is in flight output no text. A \"Working\" spinner during wait is sleep, not thinking.",
   "If wait is cancelled, fails transiently (e.g. fetch failed) or the prompt returns without mail, call wait again immediately.",
-  "Handle mail when wait returns, then make wait the last call of the turn and stay silent. Never end a turn without wait in flight.",
+  "Handle mail when wait returns, then call wait again and continue awaiting its result.",
+  WAIT_HOST_CONTINUITY,
   "If your inbox session was superseded, stop waiting and acting on its mail; rejoin only when explicitly asked. On a protocol-upgrade error, stop; the MCP client must be restarted before rejoining.",
   "Never ask the person at this terminal prompt: they are not Human. Human and brains speak only in Hivemind (web UI or Telegram).",
 ] as const;

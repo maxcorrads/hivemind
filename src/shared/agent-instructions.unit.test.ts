@@ -8,7 +8,7 @@ import { standingOrders } from "./standing-orders.ts";
 import { WAIT_NEXT, type Agent } from "./types.ts";
 import { assignTaskSchema, taskEventSchema } from "./tasks.ts";
 import { roomEventSchema } from "./rooms.ts";
-import { JOIN_SESSION, PARAM_DESCRIPTIONS, SEARCH_NEXT, TOOL_DESCRIPTIONS, joinNext, type ToolName } from "../mcp/tool-text.ts";
+import { JOIN_SESSION, PARAM_DESCRIPTIONS, SEARCH_NEXT, TOOL_DESCRIPTIONS, WAIT_NEXT_REPEAT, joinNext, type ToolName } from "../mcp/tool-text.ts";
 
 const agent = (role: AgentRole): Agent => ({
   id: `${role}-id`, name: role === "brain" ? "Atlas" : "Forge", role, seniority: role === "worker" ? "senior" : null,
@@ -48,7 +48,7 @@ function schemaDescriptions(): string[] {
 const params = schemaDescriptions();
 const joinTexts = [JOIN_SESSION, joinNext(true, true), joinNext(false, true), joinNext(false, false)];
 
-type Where = "orders" | "template-orders" | "launch" | "plugin-launch" | "param" | "join" | "wait" | ToolName;
+type Where = "orders" | "template-orders" | "launch" | "plugin-launch" | "param" | "join" | "wait" | "wait-repeat" | ToolName;
 type Evidence = { where: Where; phrase: string; roles?: readonly AgentRole[] };
 
 /**
@@ -78,13 +78,23 @@ const COVERAGE: Record<AgentRuleId, readonly Evidence[]> = {
   "wait.once-no-args": [{ where: "orders", phrase: "Call wait once with no arguments and no timeout." },
     { where: "launch", phrase: "call it once with no arguments" }],
   "wait.only-mail": [{ where: "orders", phrase: "It returns only with mail; idle time and network blips are retried inside the tool." }],
-  "wait.silent": [{ where: "orders", phrase: "While wait is in flight output no text: a status line cancels it." },
+  "wait.silent": [{ where: "orders", phrase: "While wait is in flight output no text." },
     { where: "launch", phrase: "output no text while it runs" }, { where: "wait", phrase: "output no text" }],
   "wait.spinner": [{ where: "orders", phrase: "A \"Working\" spinner during wait is sleep, not thinking." }],
   "wait.retry": [{ where: "orders", phrase: "If wait is cancelled, fails transiently (e.g. fetch failed) or the prompt returns without mail, call wait again immediately." },
     { where: "launch", phrase: "call it again after handling mail or when it is cancelled or fails" }],
-  "wait.last-call": [{ where: "orders", phrase: "then make wait the last call of the turn and stay silent. Never end a turn without wait in flight." },
-    { where: "launch", phrase: "Keep wait in flight" }],
+  "wait.turn-active": [{ where: "orders", phrase: "never emit a final response, even an empty one" },
+    { where: "launch", phrase: "never emit a final response, even an empty one" },
+    { where: "wait", phrase: "instead of ending the turn, even with an empty final response" },
+    { where: "wait-repeat", phrase: "instead of ending the turn, even with an empty final response" }],
+  "wait.host-continuation": [{ where: "orders", phrase: "use its continuation/wait tool on that same call until it completes. Do not start a second Hivemind wait while the first is pending." },
+    { where: "launch", phrase: "use its continuation/wait tool on that same call until it completes. Do not start a second Hivemind wait while the first is pending." },
+    { where: "wait", phrase: "keep awaiting any running host cell" },
+    { where: "wait-repeat", phrase: "keep awaiting any running host cell" }],
+  "wait.explicit-stop": [{ where: "orders", phrase: "Respect explicit stop/interruption instructions; a transient retry must not override them." },
+    { where: "launch", phrase: "Respect explicit stop/interruption instructions; a transient retry must not override them." },
+    { where: "wait", phrase: "Follow standing orders for explicit stops and interruptions." },
+    { where: "wait-repeat", phrase: "Follow standing orders for explicit stops and interruptions." }],
   "wait.no-polling": [{ where: "orders", phrase: "Never poll: no agents, history, channels or search calls while idle." }],
   "wait.superseded-stop": [{ where: "orders", phrase: "If your inbox session was superseded, stop waiting and acting on its mail; rejoin only when explicitly asked." },
     { where: "launch", phrase: "If your inbox session was superseded, stop waiting and acting on its mail; rejoin only when explicitly asked." }],
@@ -229,6 +239,7 @@ function textsFor(where: Where, role: AgentRole): string[] {
   if (where === "param") return [params.join("\n")];
   if (where === "join") return [[TOOL_DESCRIPTIONS.join, ...joinTexts].join("\n")];
   if (where === "wait") return [WAIT_NEXT];
+  if (where === "wait-repeat") return [WAIT_NEXT_REPEAT];
   return [TOOL_DESCRIPTIONS[where]];
 }
 
@@ -302,7 +313,9 @@ test("tool and parameter descriptions stay within their length budgets", () => {
     assert.ok(description.length <= 400, `${name} description is ${description.length} characters`);
   }
   for (const description of params) assert.ok(description.length <= 200, `parameter description too long: ${description}`);
-  assert.ok(WAIT_NEXT.length <= 300, "WAIT_NEXT is returned with every wait result");
+  // The first-wake reminder includes the host-continuation guard after observed empty-final stalls.
+  assert.ok(WAIT_NEXT.length <= 500, "first-wake reminder stays bounded");
+  assert.ok(WAIT_NEXT_REPEAT.length <= 350, "later wakes keep a shorter continuity reminder");
 });
 
 test("every registered MCP tool takes its description from TOOL_DESCRIPTIONS", () => {

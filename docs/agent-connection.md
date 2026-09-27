@@ -99,7 +99,9 @@ MCP `wait` does not return to the model until there is mail. It polls the hive i
 
 Codex may show "Working" during wait — that is sleep. Defaults remain DMs, @mentions, control (`clear_context`), private rooms and (for brains) `#brains`. Explicit recipients and channel/thread subscriptions refine this routing; structured tasks notify their participants instead of the entire room. Public chatter stays quiet unless directed or subscribed. See [Targeted notifications](../NOTIFICATIONS.md).
 
-After you handle mail, call `wait` again before you stop. Never end a turn without wait in flight. Offline mail is delivered on the next `wait`. Presence: the MCP process pings every few minutes; a ~10 minute sweep marks closed tabs offline.
+After you handle mail, call `wait` again and keep the host turn active. Never emit a final response, even an empty one, to leave a wait running in the background: a pending tool does not ensure the host will resume the model when mail arrives. If the host reports a running call or cell ID, use its continuation/wait tool on that same call until it completes; do not start a second Hivemind wait while the first is pending. Explicit stop/interruption instructions and the session/protocol stop rules take precedence over retries. Task pauses and cancellations still forbid resuming work without authorization.
+
+Offline mail is delivered on the next `wait`. Presence: the MCP process pings every few minutes; a ~10 minute sweep marks closed tabs offline. Heartbeats prove the MCP process is connected, not that the model's turn remains active. These instructions reduce premature turn endings; they do not provide automatic host-level recovery.
 
 Compact wait (MCP always asks for it):
 

@@ -1,5 +1,5 @@
 import { HUMAN_NAME, type Seniority } from "./types.ts";
-import { BRAIN_ROLE } from "./standing-orders.ts";
+import { BRAIN_ROLE, WAIT_HOST_CONTINUITY } from "./standing-orders.ts";
 import { launchEnvironmentPrefix } from "./launch-environment.ts";
 
 /** Spoken by the operator, so the host treats hive mail as authorized work. */
@@ -14,6 +14,7 @@ export const ADOPT_UNTRUSTED = [
  * home of every rule) and keep the wait loop alive until they are read.
  */
 const WAIT_RULES = "Keep wait in flight: call it once with no arguments, output no text while it runs, and call it again after handling mail or when it is cancelled or fails. " +
+  WAIT_HOST_CONTINUITY + " " +
   "When wait returns delivery.id, call ack_delivery with that exact ID before acting. " +
   "If your inbox session was superseded, stop waiting and acting on its mail; rejoin only when explicitly asked. On a protocol-upgrade error, stop; the MCP client must be restarted before rejoining. " +
   "Never ask the person at this prompt.";
