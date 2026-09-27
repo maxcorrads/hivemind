@@ -14,7 +14,9 @@ test("resuming by name needs no credential, supersedes the old session and redel
   const human = hive.identity.getAgent("human"), worker = hive.identity.join({ role: "worker", seniority: "mid" });
   assert.throws(() => hive.identity.join({ role: "worker", seniority: "mid", resumeName: "Nobody" }), /No brain or worker named Nobody/);
   assert.throws(() => hive.identity.join({ role: "brain", resumeName: worker.agent.name }), /role cannot change/);
-  assert.throws(() => hive.identity.join({ role: "worker", seniority: "senior", resumeName: worker.agent.name }), /seniority cannot change/);
+  const staleSeniority = hive.identity.join({ role: "worker", seniority: "senior", token: worker.token,
+    resumeName: worker.agent.name });
+  assert.equal(staleSeniority.agent.seniority, "mid", "stale join settings cannot overwrite stored seniority");
   assert.throws(() => hive.identity.join({ role: "worker", seniority: "mid", token: "stale" }), /no longer valid/);
 
   const repeated = hive.identity.join({ role: "worker", seniority: "mid", token: worker.token, resumeName: worker.agent.name });

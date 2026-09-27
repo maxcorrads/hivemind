@@ -36,6 +36,18 @@ test("real concurrent/repeated MCP joins reuse the active identity without expos
   await call("join",{role:"brain",resume:agent.name});
   assert.equal(hive.inbox.currentSession(agent.id),session);
   await call("ack_delivery",{deliveryId:mail.delivery!.id});
+  const renamed = hive.identity.editIdentity(human, agent.id,
+    { expectedRevision: agent.identityRevision!, name: 'RenamedBrain' });
+  const resumed = await call<{ name: string; created: boolean }>("join", { role: "brain", resume: renamed.name });
+  assert.equal(resumed.name, renamed.name, "the running MCP process accepts Human's current name");
+  assert.equal(resumed.created, false);
+  assert.equal(hive.inbox.currentSession(agent.id), session);
+  const me = await call<{ you: { name: string } }>("whoami");
+  assert.equal(me.you.name, renamed.name);
+  const oldAlias = await call<{ name: string }>("join", { role: "brain", resume: agent.name });
+  assert.equal(oldAlias.name, renamed.name, "an authenticated former name remains tied to this identity");
+  const wrongName = await client.callTool({ name: "join", arguments: { role: "brain", resume: "Human" } });
+  assert.equal(wrongName.isError, true, "a renamed process cannot switch identities");
   const bad = await client.callTool({name:"join",arguments:{role:"worker",seniority:"mid"}});
   assert.equal(bad.isError,true); assert.equal(hive.identity.listAgents().filter(a=>a.role!=="human").length,1);
 });

@@ -119,18 +119,24 @@ test("a populated current-main (user_version 2) hive upgrades with every row and
   // messages stay) and agent_terminal_session adds agents.terminal_session (empty); every other row and object is untouched.
   const dropped = ["adaptive_topology_locks", "adaptive_topology_tasks", "adaptive_topology_evaluated", "adaptive_topology_messages",
     "decision_requests", "decision_mutations"];
-  const rewritten = ["adaptive_topology_executions", "adaptive_topology_events", "agents", "task_records"];
+  const rewritten = ["adaptive_topology_executions", "adaptive_topology_events", "agents", "task_records", "worker_capabilities"];
   // #217 (performance_retention) adds the per-message receipt index, backfilled from the delivery ledger;
   // worker_templates (#276) adds an empty table.
-  const added = ["inbox_receipts", "worker_templates", "launch_requests", "launcher_commands", "jobs", "job_events"];
+  const added = ["inbox_receipts", "worker_templates", "launch_requests", "launcher_commands", "jobs", "job_events",
+    "agent_name_aliases", "agent_lifecycle_events"];
   type AgentRow = { id: string; token_hash: string; removed_at?: number | null; terminal_session?: string | null };
   const beforeAgents = before.rows.agents as AgentRow[], afterAgents = after.rows.agents as AgentRow[];
   // agent_reservations adds pending_until, claim_hash and template_id, all empty for agents that already joined.
   assert.deepEqual(afterAgents.map(({ token_hash: _t, ...row }) => row),
     beforeAgents.map(({ token_hash: _t, ...row }) => ({ ...row, removed_at: null, terminal_session: null, pending_until: null,
-      claim_hash: null, template_id: null, launch_mode: 'approval', archived_at: null, reserved_by_brain_id: null })),
+      claim_hash: null, template_id: null, launch_mode: 'approval', archived_at: null, reserved_by_brain_id: null,
+      identity_revision: 1, seniority_overridden: 0, focus_overridden: 0 })),
     "every agent is kept, none removed, reserved or labelled with a terminal session");
   assert.deepEqual(after.rows.task_records, before.rows.task_records!.map(row => ({ ...(row as object), job_id: null })));
+  assert.deepEqual(after.rows.worker_capabilities,
+    before.rows.worker_capabilities!.map(row => ({ ...(row as object), last_editor_id: null })));
+  assert.deepEqual(after.rows.agent_name_aliases, []);
+  assert.deepEqual(after.rows.agent_lifecycle_events, []);
   for (const [i, row] of afterAgents.entries()) {
     if (row.id === "human") assert.match(row.token_hash, /^[0-9a-f]{64}$/);
     if (row.id === "human") assert.notEqual(row.token_hash, beforeAgents[i]!.token_hash, "the constant Human hash is replaced");

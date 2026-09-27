@@ -21,6 +21,9 @@ export type AgentRow = {
   launch_mode: "approval" | "auto";
   archived_at: number | null;
   reserved_by_brain_id: string | null;
+  identity_revision: number;
+  seniority_overridden: number;
+  focus_overridden: number;
 };
 
 /** SQL for an author's display name (`alias` is the joined agents row): removed agents read "Name (removed)". */

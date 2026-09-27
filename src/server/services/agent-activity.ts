@@ -8,6 +8,7 @@ import {
   type AgentActivity,
 } from "../../shared/agent-activity.ts";
 import { PRESENCE_IDLE_MS, type Agent } from "../../shared/types.ts";
+import type { AgentLifecycleLog } from './agent-lifecycle-log.ts';
 
 export type WaitEndReason = "mail" | "idle" | "aborted" | "superseded" | "shutdown" | "error";
 
@@ -16,6 +17,7 @@ export type AgentActivityDeps = {
   readonly delivery: { queuedCount(agentId: string): number };
   readonly launcherQueue?: { launchPresence(agentId: string): { state: string; since: number } | null };
   readonly bus: { emit(type: "agent", agent: Agent): void };
+  readonly lifecycleLog?: Pick<AgentLifecycleLog, 'record'>;
 };
 
 type Observation = {
@@ -28,6 +30,7 @@ type Observation = {
   queueSince: number | null;
   queued: number;
   current: AgentActivity | null;
+  lastLoggedState: AgentActivity['state'] | null;
 };
 
 /**
@@ -46,7 +49,7 @@ export class AgentActivityService {
     if (!value) {
       value = { nextWaitToken: 0, activeWaitToken: null, superseded: false,
         lastIdleWaitAt: null, lastWorkAt: null, lastProgressAt: null,
-        queueSince: null, queued: 0, current: null };
+        queueSince: null, queued: 0, current: null, lastLoggedState: null };
       this.observations.set(id, value);
     }
     return value;
@@ -133,8 +136,19 @@ export class AgentActivityService {
   private refresh(id: string, at: number, queued?: number): void {
     const agent = this.deps.identity.getAgent(id);
     if (agent.role !== "brain" && agent.role !== "worker") return;
-    const before = this.observation(id).current;
-    const after = this.forAgent(agent, queued ?? this.observation(id).queued, at);
+    const entry = this.observation(id);
+    const before = entry.current;
+    const after = this.forAgent(agent, queued ?? entry.queued, at);
+    if (entry.lastLoggedState !== null && entry.lastLoggedState !== after.state) {
+      const kind = after.state;
+      if (kind === 'offline' || kind === 'stalled' || kind === 'superseded') {
+        const summary = kind === 'offline' ? 'Agent activity became offline' :
+          kind === 'stalled' ? 'Agent activity stalled' : 'Inbox session superseded';
+        this.deps.lifecycleLog?.record({ agentId: agent.id, projectId: agent.projectId,
+          actorId: null, kind, summary, at, source: 'server' });
+      }
+    }
+    entry.lastLoggedState = after.state;
     if (before?.state !== after.state || before?.hint !== after.hint) this.deps.bus.emit("agent", agent);
   }
 

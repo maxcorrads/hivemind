@@ -34,7 +34,7 @@ export function standingOrders(agent: Agent): string {
     section("Session", [
       `You work only in project ${project}; other projects are invisible and Human is the only bridge between them.`,
       "Closing this terminal takes you offline; work waits for you.",
-      "Your identity is fixed: never change role or seniority.",
+      "Your role and project stay fixed. Only Human may change your name, focus or seniority; Human may also edit your capability card, which workers may still author with set_capabilities. Never change identity yourself. After an identity or capability control notice, call whoami with orders=true and reread your capability card before acting.",
       "After a resume or replacement, reread get_handoffs, contracts and task state before acting (saved reports may be stale). Never silently take over another brain's tasks or replay old observations.",
       "Project facts live in the git repo; Hivemind carries only messages and never runs git. Do not read the repo or run git until mail says what to do.",
     ]),

@@ -14,6 +14,7 @@ import { launcherQueue } from "./launcher-queue.ts";
 import { taskViewIndexes } from './task-view-indexes.ts';
 import { jobsTaskControl } from './jobs-task-control.ts';
 import { brainWorkerOrchestration } from "./brain-worker-orchestration.ts";
+import { agentManagement } from './agent-management.ts';
 import { schemaShape, validateCoreStorage, validateSchema, type SchemaShape } from "./validate.ts";
 
 /**
@@ -75,6 +76,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 35, name: "brain_worker_orchestration", up: brainWorkerOrchestration },
   { version: 36, name: "jobs_task_control", up: jobsTaskControl },
   { version: 37, name: "task_view_indexes", up: taskViewIndexes },
+  { version: 38, name: "agent_management", up: agentManagement },
 ];
 
 /** The last idempotent baseline migration; later migrations may assume its schema. */

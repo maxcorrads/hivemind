@@ -4,7 +4,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { ACTIVITY_STALL_MS, ACTIVITY_WAIT_GRACE_MS } from "../../shared/agent-activity.ts";
+import { ACTIVITY_ACTION_GRACE_MS, ACTIVITY_STALL_MS, ACTIVITY_WAIT_GRACE_MS } from "../../shared/agent-activity.ts";
+import type { RecordAgentLifecycleEvent } from './agent-lifecycle-log.ts';
 import type { Agent } from "../../shared/types.ts";
 import { AgentActivityService } from "./agent-activity.ts";
 import { Hive } from "../hive.ts";
@@ -17,19 +18,48 @@ function fixture() {
   let queued = 0;
   let launch: { state: string; since: number } | null = null;
   const published: Agent[] = [];
+  const logged: RecordAgentLifecycleEvent[] = [];
   const make = () => new AgentActivityService({
     identity: { getAgent: () => agent, listAgents: () => [agent] },
     delivery: { queuedCount: () => queued },
     launcherQueue: { launchPresence: () => launch },
     bus: { emit: (_type, value) => { published.push(value); } },
+    lifecycleLog: { record: input => { logged.push(input); return { ...input, at: input.at ?? START, seq: logged.length }; } },
   });
   const activity = make();
-  return { agent, activity, published, make,
+  return { agent, activity, published, logged, make,
     queue(value: number, at: number) { queued = value; activity.queueChanged(agent.id, value, at); },
     launch(value: { state: string; since: number } | null) { launch = value; },
     heartbeat(at: number) { agent.lastSeenAt = at; },
   };
 }
+
+test('lifecycle activity logs only real stalled, offline and superseded transitions', () => {
+  const f = fixture();
+  assert.equal(f.activity.forAgent(f.agent, 0, START).state, 'offline');
+  assert.equal(f.logged.length, 0, 'initial conservative projection is not a lifecycle transition');
+  const wait = f.activity.waitStarted(f.agent.id, 'session-1', START);
+  f.activity.sessionSuperseded(f.agent.id, START + 1);
+  f.activity.waitEnded(f.agent.id, wait, 'superseded', START + 1);
+  f.activity.sessionSuperseded(f.agent.id, START + 1);
+  assert.deepEqual(f.logged.map(event => event.kind), ['superseded']);
+  f.activity.action(f.agent.id, START + 2);
+  f.queue(1, START + 3);
+  const stalledAt = START + 3 + ACTIVITY_STALL_MS;
+  f.heartbeat(stalledAt);
+  f.activity.sweep(stalledAt);
+  f.activity.sweep(stalledAt);
+  assert.deepEqual(f.logged.map(event => event.kind), ['superseded', 'stalled']);
+  f.activity.action(f.agent.id, stalledAt + 1);
+  f.queue(0, stalledAt + 1);
+  const offlineAt = stalledAt + 1 + ACTIVITY_ACTION_GRACE_MS + 1;
+  f.heartbeat(offlineAt);
+  f.activity.sweep(offlineAt);
+  assert.deepEqual(f.logged.map(event => event.kind), ['superseded', 'stalled', 'offline']);
+  assert.ok(f.logged.every(event => event.source === 'server' && event.agentId === f.agent.id &&
+    event.actorId === null && event.projectId === f.agent.projectId));
+  assert.ok(f.logged.every(event => event.summary.length <= 400));
+});
 
 test("#258: continuing heartbeats cannot mask a stopped wait with queued mail", () => {
   const f = fixture();

@@ -71,6 +71,7 @@ export async function startMcp() {
     const next = joins.catch(() => undefined).then(work); joins = next; return next;
   };
   let joinedName: string | undefined;
+  const joinedNames = new Set<string>();
   let inboxId = randomUUID();
   let inboxReady: Promise<{ sessionId: string }> | undefined;
   let waitView = createWaitView();
@@ -98,8 +99,18 @@ export async function startMcp() {
       claim: z.string().optional().describe(PARAM_DESCRIPTIONS.claim),
     },
     async ({ role, seniority, focus, resume, project, claim }) => joinSerial(async () => {
-      if (joinedName && (claim || (resume && resume.toLowerCase() !== joinedName.toLowerCase())))
+      if (joinedName && claim)
         throw new Error("This process already has an identity; start a new MCP process to replace it");
+      if (joinedName && resume && !joinedNames.has(resume.toLowerCase())) {
+        // Human may have renamed this identity while its MCP process kept running.
+        // Verify the current token before accepting a new name: a stale token must
+        // not turn this process into another identity through name-based resume.
+        const me = await agentRequest<{ you: { name: string } }>("GET", "/api/agent/me", undefined, token());
+        if (me.you.name.toLowerCase() !== resume.toLowerCase())
+          throw new Error("This process already has an identity; start a new MCP process to replace it");
+        joinedName = me.you.name;
+        joinedNames.add(joinedName.toLowerCase());
+      }
       // The session key lives only in this process; resuming by name needs nothing stored.
       const auth = sessionToken;
       const result = await agentRequest<{
@@ -127,6 +138,7 @@ export async function startMcp() {
       if (sessionToken !== result.token) { inboxId = randomUUID(); inboxReady = undefined; waitView = createWaitView(); }
       sessionToken = result.token;
       joinedName = result.agent.name;
+      joinedNames.add(joinedName.toLowerCase());
       ensureHeartbeat();
       return text({
         name: result.agent.name,
@@ -142,7 +154,10 @@ export async function startMcp() {
   );
 
   server.tool("whoami", TOOL_DESCRIPTIONS.whoami, { orders: z.boolean().optional() }, async ({ orders }) => {
-    return text(await agentRequest("GET", `/api/agent/me${orders ? "?orders=1" : ""}`, undefined, token()));
+    const me = await agentRequest<{ you: { name: string } }>("GET", `/api/agent/me${orders ? "?orders=1" : ""}`, undefined, token());
+    joinedName = me.you.name;
+    joinedNames.add(joinedName.toLowerCase());
+    return text(me);
   });
 
   server.tool("agents", TOOL_DESCRIPTIONS.agents, async () => {

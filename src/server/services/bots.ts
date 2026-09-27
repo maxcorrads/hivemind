@@ -10,7 +10,7 @@ import { now } from "./rows.ts";
 
 export type BotServiceDeps = Core & {
   readonly projects: Pick<ProjectDirectory, "requireActorProject">;
-  readonly identity: AgentDirectory & { findAgentByName(name: string): Agent | null };
+  readonly identity: AgentDirectory & { isNameReserved(name: string): boolean };
   readonly channels: ChannelAccess;
   readonly messageQueries: Pick<MessageReader, "getMessageById">;
   readonly files: Pick<FileService, "validateAttachments" | "bindAttachments">;
@@ -32,7 +32,7 @@ export class BotService {
     const parsed = createBotSchema.safeParse(raw);
     if (!parsed.success) throw new HiveError(400, "Bot name must be 1–40 letters, digits, underscores or dashes, starting with a letter");
     const { name } = parsed.data;
-    if (this.deps.identity.findAgentByName(name)) throw new HiveError(409, "This identity name is already in use");
+    if (this.deps.identity.isNameReserved(name)) throw new HiveError(409, "This identity name is already in use");
     const id = crypto.randomUUID();
     const token = newToken();
     const t = now();

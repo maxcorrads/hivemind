@@ -194,6 +194,19 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const agent = hive.identity.removeAgent(human, decodeURIComponent(c.req.param("name")));
     return c.json({ ok: true, name: agent.name });
   });
+  ui.get('/agents/:id/overview', c => c.json(hive.management.overview(hive.identity.getAgent('human'), c.req.param('id'))));
+  ui.patch('/agents/:id/identity', async c => c.json(hive.management.editIdentity(hive.identity.getAgent('human'),
+    c.req.param('id'), await requestJson(c.req.raw))));
+  ui.put('/agents/:id/capability', async c => c.json({ capability: hive.routing.setForHuman(hive.identity.getAgent('human'),
+    c.req.param('id'), await requestJson(c.req.raw)) }));
+  ui.get('/agents/:id/remove-impact', c => c.json(hive.management.removeImpact(hive.identity.getAgent('human'), c.req.param('id'))));
+  ui.post('/agents/:id/remove', async c => c.json({ agent: hive.management.remove(hive.identity.getAgent('human'),
+    c.req.param('id'), await requestJson(c.req.raw)) }));
+  ui.get('/agents/:id/lifecycle', c => c.json(hive.management.lifecycle(hive.identity.getAgent('human'),
+    c.req.param('id'), c.req.query('before') ? Number(c.req.query('before')) : undefined,
+    c.req.query('limit') ? Number(c.req.query('limit')) : undefined)));
+  ui.post('/agents/:id/runtime-event', async c => c.json({ event: hive.management.runtimeEvent(hive.identity.getAgent('human'),
+    c.req.param('id'), await requestJson(c.req.raw)) }));
   ui.get('/tasks', c => c.json(hive.taskViews.list(hive.identity.getAgent('human'), {
     projectId: c.req.query('project') ? projectRef(c.req.query('project')!).id : undefined,
     cursor: c.req.query('cursor'), limit: c.req.query('limit') ? Number(c.req.query('limit')) : undefined,

@@ -127,8 +127,11 @@ export type NotificationDeps = Core & Channels<"getChannel" | "canSeeChannel"> &
 };
 export type RoutingDeps = Core & Channels & ChannelScopes<"channelIdsIn" | "memberChannelIds"> & Agents<"getAgent"> &
   Poster<"postMessage"> & {
+    readonly channels: Pick<ChannelService, 'openDm'>;
     readonly identity: Pick<IdentityService, "projectWorkerIds">;
     readonly tasks: Pick<TaskStore, "get">;
+    readonly lifecycleLog?: { record(input: { agentId: string; projectId: string | null; actorId: string | null;
+      kind: 'capability_edited'; summary: string; source: 'server' }): unknown };
   };
 export type TimelineDeps = Core & Channels<"getChannel" | "canSeeChannel"> & Messages<"getMessageById"> & {
   readonly messageQueries: Pick<MessageQueries, "messageRef" | "wakeHeader" | "traceMessages" | "postedByBot" | "seqsOf">;

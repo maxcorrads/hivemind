@@ -5,6 +5,8 @@ import { ROUTINE_BATCH_MS } from "../shared/notifications.ts";
 import { WorkerTemplateStore } from "./worker-templates.ts";
 import { LauncherQueue } from "./launcher-queue.ts";
 import { AgentActivityService } from './services/agent-activity.ts';
+import { AgentLifecycleLog } from './services/agent-lifecycle-log.ts';
+import { AgentManagement } from './services/agent-management.ts';
 import { TaskViews } from './services/task-views.ts';
 import { JobStore } from './services/jobs.ts';
 import { WorkerOrchestration } from "./services/worker-orchestration.ts";
@@ -64,6 +66,9 @@ type ServiceRegistry = Core & {
   jobs: JobStore;
   taskViews: TaskViews;
   activity: AgentActivityService;
+  lifecycleLog: AgentLifecycleLog;
+  management: AgentManagement;
+  routing: RoutingStore;
   telegramAdmin: TelegramAdminService;
   files: FileService;
   projects: ProjectService;
@@ -122,6 +127,8 @@ export class Hive {
   readonly jobs!: JobStore;
   readonly taskViews!: TaskViews;
   readonly activity!: AgentActivityService;
+  readonly lifecycleLog!: AgentLifecycleLog;
+  readonly management!: AgentManagement;
   readonly rooms!: RoomStore;
   readonly notifications!: NotificationStore;
   readonly timeline!: TimelineStore;
@@ -149,6 +156,7 @@ export class Hive {
       this.telegramAdmin = services.telegramAdmin = new TelegramAdminService(services);
       this.files = services.files = new FileService(services);
       this.workerTemplates = services.workerTemplates = new WorkerTemplateStore(services);
+      this.lifecycleLog = services.lifecycleLog = new AgentLifecycleLog(services);
       this.launcherQueue = services.launcherQueue = new LauncherQueue(services);
       this.projects = services.projects = new ProjectService(services);
       this.identity = services.identity = new IdentityService(services);
@@ -171,11 +179,12 @@ export class Hive {
       this.taskViews = services.taskViews = new TaskViews(services);
       this.rooms = services.rooms = new RoomStore(services);
       this.notifications = services.notifications = new NotificationStore(services);
-      this.routing = new RoutingStore(services);
+      this.routing = services.routing = new RoutingStore(services);
       this.timeline = services.timeline = new TimelineStore(services);
       this.adaptiveTopology = services.adaptiveTopology = new AdaptiveTopologyRuntime(services);
       this.inbox = services.inbox = new InboxDeliveryStore(this.db);
       services.inboxReader = new InboxReader(this.db, this.inbox, this.notifications, options.routineBatchMs ?? ROUTINE_BATCH_MS);
+      this.management = services.management = new AgentManagement(services);
     } catch (error) {
       try { this.db.close(); } catch { /* preserve the initialization failure */ }
       throw error;

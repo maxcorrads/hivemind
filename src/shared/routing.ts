@@ -26,7 +26,8 @@ export const routingOverrideSchema = z.object({ expectedRevision: z.number().int
   requestId: z.string().min(1).max(100).regex(/^[A-Za-z0-9._-]+$/), workerId: z.string().uuid(),
   reason: z.string().trim().min(1).max(700) }).strict();
 export type CapabilityCard = z.infer<typeof capabilityCardSchema>;
-export type CapabilityView = { workerId: string; revision: number; updatedAt: number; card: CapabilityCard };
+export type CapabilityView = { workerId: string; revision: number; updatedAt: number; card: CapabilityCard;
+  lastEditorId: string | null };
 export type RoutingRequest = z.infer<typeof suggestWorkersSchema>;
 export type WorkerSuggestion = {
   workerId: string; name: string; capabilityRevision: number; card: CapabilityCard;

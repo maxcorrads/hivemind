@@ -43,7 +43,8 @@ Unknown versions and inconsistent keys/partial schemas are rejected without repa
 
 1. **Prunes operational logs older than the retention window.** Only append-only logs are pruned:
    - acknowledged inbox delivery batches, and superseded ones (the pending batch of each agent is never touched);
-   - Jev call logs (the per-project cap of 1,000 calls still applies within the window).
+   - Jev call logs (the per-project cap of 1,000 calls still applies within the window);
+   - agent lifecycle events, in bounded write batches (identity aliases and tombstones remain).
 
    Per-message delivery receipts (`inbox_receipts`) and the acknowledgement totals are kept, so per-message receipt stages ("offered", "acknowledged") and inbox status do not change when a batch is pruned. After pruning, acknowledging a pruned batch id returns 404, like any unknown delivery.
 2. **Collects abandoned uploads**, as `hivemind gc` does. It removes uploads never attached to a message after 24 hours, then blobs no attachment references.

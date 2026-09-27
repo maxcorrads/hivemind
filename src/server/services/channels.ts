@@ -301,6 +301,20 @@ export class ChannelService implements ChannelAccess {
     return row ? this.mapChannel(row) : null;
   }
 
+  /** DM ids/memberships stay stable across Human renames; refresh only their visible labels. */
+  updateDmLabelsForAgent(agentId: string): void {
+    const rows = this.db.prepare(`SELECT c.id FROM channels c JOIN channel_members m ON m.channel_id=c.id
+      WHERE c.type='dm' AND m.agent_id=?`).all(agentId) as { id: string }[];
+    for (const { id } of rows) {
+      const members = this.db.prepare('SELECT agent_id FROM channel_members WHERE channel_id=?')
+        .all(id) as { agent_id: string }[];
+      if (members.length !== 2) continue;
+      const [a, b] = members.map(member => this.deps.identity.getAgent(member.agent_id));
+      this.db.prepare('UPDATE channels SET name=? WHERE id=?').run(dmLabel(a!, b!), id);
+      this.deps.storage.afterCommit(() => this.deps.bus.emit('channel', this.getChannel(id)));
+    }
+  }
+
   invite(actor: Agent, channelRef: string, memberNames: string[]): Channel {
     if (actor.role === "worker" || actor.role === "bot") throw new HiveError(403, "Workers and bots cannot invite");
     if (memberNames.length === 0) throw new HiveError(400, "No members to invite");

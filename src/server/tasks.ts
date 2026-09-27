@@ -56,7 +56,7 @@ export class TaskStore {
   }
   private label(agentId: string, name: string) {
     const agent = this.deps.identity.findAgent(agentId);
-    return agent ? agentLabel({ name, removedAt: agent.removedAt, archivedAt: agent.archivedAt }) : name;
+    return agent ? agentLabel({ name: agent.name, removedAt: agent.removedAt, archivedAt: agent.archivedAt }) : name;
   }
   /** The newest 100 tasks of one channel, most recently updated first (Human UI Tasks tab). */
   listForChannel(actor: Agent, channelRef: string): ChannelTaskPage {
@@ -545,9 +545,11 @@ export class TaskStore {
     for (const row of assigned) {
       const task = JSON.parse(row.snapshot) as TaskSnapshot;
       task.state = 'cancelled'; task.cancellation = { reason: `${agent.name} was removed from the hive`, at };
+      delete task.pause;
       if (task.claim?.state === 'held') task.claim = { ...task.claim, state: 'released', version: task.claim.version + 1, updatedAt: at };
       task.revision++; task.updatedAt = at;
       this.db.prepare('UPDATE task_records SET snapshot=? WHERE id=?').run(JSON.stringify(task), row.id);
+      if (task.jobId) this.deps.jobs?.syncForTask(task.id);
     }
     const unreviewed = Number((this.db.prepare(`SELECT COUNT(*) AS n FROM task_records
       WHERE json_extract(snapshot,'$.assignerId')=? AND worker_id!=? AND ${open}`).get(agent.id, agent.id) as { n: number }).n);

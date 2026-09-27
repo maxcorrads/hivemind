@@ -85,6 +85,8 @@ export type Agent = {
   createdAt: number;
   projectId: string | null;
   project: string | null;
+  /** Human identity edit revision; present on persisted agents. */
+  identityRevision?: number;
   /** Set once Human removed the agent: a tombstone that keeps its history but can no longer act (#215). */
   removedAt?: number;
   /** Task-bound worker history remains after its session is closed. */

@@ -14,6 +14,9 @@ export type AgentLifecycleDeps = Core & {
   readonly waiters: { evict(agentId: string): void };
   readonly tasks: { closeForRemovedAgent(agent: Agent): { cancelled: number; unreviewed: number } };
   readonly adaptiveTopology: { closeBrainExecutions(brain: Agent): void };
+  readonly launcherQueue: { kill(requestId: string): void };
+  readonly lifecycleLog?: { record(input: { agentId: string; projectId: string | null; actorId: string | null;
+    kind: 'removed'; summary: string; source: 'server' }): unknown };
 };
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -35,14 +38,14 @@ export class AgentLifecycle {
 
   removeAgent(actor: Agent, name: string): Agent {
     if (actor.role !== "human") throw new HiveError(403, "Only Human can remove agents");
-    const removed = this.deps.storage.transaction(() => {
+    return this.deps.storage.transaction(() => {
       const target = this.deps.identity.getAgentByName(name);
       if (!target) throw new HiveError(404, `No agent named ${name}`);
       if (target.id === HUMAN_ID || target.role === "human") throw new HiveError(403, "Cannot remove Human");
-      return this.retire(target, `${actor.name} removed ${target.name} from the hive.`);
+      const removed = this.retire(target, `${actor.name} removed ${target.name} from the hive.`, actor.id);
+      this.deps.storage.afterCommit(() => this.sweepBlobs());
+      return removed;
     });
-    this.sweepBlobs();
-    return removed;
   }
 
   /** A reserved worker whose launch never joined in time: withdrawn like a removal, with a note saying why. */
@@ -51,16 +54,24 @@ export class AgentLifecycle {
       const target = this.deps.identity.getAgent(agentId);
       if (target.removedAt !== undefined || target.archivedAt !== undefined || !target.pending) return;
       this.retire(target, `${target.name} was withdrawn: its launch did not join within 30 minutes.`);
+      this.deps.storage.afterCommit(() => this.sweepBlobs());
     });
-    this.sweepBlobs();
   }
 
   /** Inside a transaction: tombstones the agent, closes its work and posts `note` (plus what happened to its tasks). */
-  private retire(target: Agent, note: string): Agent {
+  private retire(target: Agent, note: string, actorId: string | null = null): Agent {
     const { identity, tasks, adaptiveTopology, channels, messages, bus, storage } = this.deps;
     this.detach(target.id);
     // Tombstone first, so the task views published below already label the agent as removed.
     identity.markRemoved(target.id, now());
+    if (target.templateId) {
+      const row = this.db.prepare(`SELECT id FROM launch_requests WHERE agent_id=?
+        ORDER BY requested_at DESC,rowid DESC LIMIT 1`).get(target.id) as { id: string } | undefined;
+      if (row) this.deps.launcherQueue.kill(row.id);
+    }
+    this.deps.lifecycleLog?.record({ agentId: target.id, projectId: target.projectId, actorId,
+      kind: 'removed', summary: target.pending ? 'Pending agent reservation was withdrawn.' :
+        'Agent was removed from the hive.', source: 'server' });
     const work = tasks.closeForRemovedAgent(target);
     if (target.role === "brain") adaptiveTopology.closeBrainExecutions(target);
     const general = target.projectId ? channels.generalChannelId(target.projectId) : null;

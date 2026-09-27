@@ -1,6 +1,6 @@
 # Agent orchestration and token efficiency roadmap
 
-Status: Phase T is in #275; A1 is in #281 → #282 → #283 → #285, with #284 integrated into #285. All remain unmerged. A2 is in #286 → #287 → #288. A3 is in #289 → #290. A4 is in #291 → #292, including Phase T #275. A5 adds the task history API (#293) and task dashboard (`feat/task-dashboard`). Phase 3 and T2 remain planned. Updated 2026-09-27; the historical analysis below was written against `8f0e583` (#265).
+Status: Phase T is in #275; A1 is in #281 → #282 → #283 → #285, with #284 integrated into #285. All remain unmerged. A2 is in #286 → #287 → #288. A3 is in #289 → #290. A4 is in #291 → #292, including Phase T #275. A5 is in #293 → #294. Phase 3 is in progress; T2 remains planned. Updated 2026-09-27; the historical analysis below was written against `8f0e583` (#265).
 
 This document is the single source of truth for a multi-phase effort: brains launch task-bound workers from Human-defined templates (automatically or after Human approval), Human follows every job and task with its progress and can pause, cancel or discuss it, and agents spend fewer tokens on Hivemind traffic. It is written so that work can resume from here alone, without the conversation that produced it. Each phase has its own GitHub issue; the tracking issue, #274, lists them all (see [Issues](#issues)).
 
@@ -241,6 +241,14 @@ recovery gates come from the server. Realtime changes refresh the first page; ol
 ### Phase 3 — Agent panel and identity editing (reduced)
 
 Agent panel for fixed and task-bound agents (identity, template, session, activity state, current task, queue, bytes, lifecycle log, actions), Remove with an impact preview, and Human identity editing (rename with the old name kept as a resume alias, focus, seniority, capability card) with control messages telling the agent to reread `whoami`. See #271.
+
+**Implementation choices.** Identity edits use revisions and reserve former names as resume-only aliases. Stored Human
+focus/seniority overrides survive stale resume arguments and template retargeting. The Human overview exposes aliases
+for matching an already-running native session after rename, without treating an arbitrary reported label as authority.
+DM ids and memberships remain stable; historical messages and existing native/Telegram labels keep their old text.
+Current template settings are labelled as configuration, not verified running-process software/model. Fixed-agent
+Resume asks Human to select launch settings; Stop requires native broker evidence. Remove rechecks the preview against
+task revisions and native launch state. Lifecycle history is retained as an operational log (migration 38).
 
 ### Phase T2 — Role-scoped MCP tool sets
 

@@ -25,6 +25,7 @@ export type MaintenanceResult = {
   cutoff: number | null;
   inboxDeliveries: number;
   jevCalls: number;
+  agentLifecycle: number;
   uploads: { attachments: number; blobs: number };
 };
 
@@ -39,9 +40,10 @@ export function runMaintenance(hive: Hive, options: { retentionDays: number; now
   const cutoff = options.retentionDays > 0 ? now - options.retentionDays * DAY_MS : null;
   const inboxDeliveries = cutoff === null ? 0 : hive.inbox.prune(cutoff);
   const jevCalls = cutoff === null ? 0 : hive.adaptiveTopology.observations.jevCalls.prune(cutoff);
+  const agentLifecycle = cutoff === null ? 0 : hive.lifecycleLog.prune(cutoff);
   const uploads = hive.files.gcFiles();
   hive.storage.optimize();
-  return { cutoff, inboxDeliveries, jevCalls, uploads };
+  return { cutoff, inboxDeliveries, jevCalls, agentLifecycle, uploads };
 }
 
 /** Schedules maintenance inside `serve`; the returned function stops it (call it before closing the hive). */

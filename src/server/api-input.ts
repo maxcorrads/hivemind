@@ -1,6 +1,7 @@
 import { setCapabilitiesSchema, suggestWorkersSchema, routingOutcomeSchema, routingOverrideSchema } from '../shared/routing.ts';
 import { jobEventSchema, closeJobSchema } from '../shared/jobs.ts';
 import { taskControlSchema } from '../shared/task-control.ts';
+import { agentIdentityEditSchema, agentRemoveSchema, agentRuntimeEventSchema } from '../shared/agent-management.ts';
 import { z } from "zod";
 import { readLimitedJson } from "./ingress.ts";
 import { API_JSON_BYTES, channelInputSchema, cursorSchema, integerArgument,
@@ -41,6 +42,10 @@ const launcherResult = z.object({ status: z.enum(["launched", "failed", "killed"
   session: z.string().max(82).optional(), error: z.string().max(500).optional() }).strict();
 
 function schemaFor(path: string, method: string): z.ZodType | undefined {
+  if (/^\/api\/ui\/agents\/[^/]+\/identity$/.test(path) && method === 'PATCH') return agentIdentityEditSchema;
+  if (/^\/api\/ui\/agents\/[^/]+\/capability$/.test(path) && method === 'PUT') return setCapabilitiesSchema;
+  if (/^\/api\/ui\/agents\/[^/]+\/remove$/.test(path) && method === 'POST') return agentRemoveSchema;
+  if (/^\/api\/ui\/agents\/[^/]+\/runtime-event$/.test(path) && method === 'POST') return agentRuntimeEventSchema;
   if (path === "/api/agent/jobs/events" && method === "POST") return jobEventSchema;
   if (/^\/api\/ui\/jobs\/[^/]+\/close$/.test(path) && method === "POST") return closeJobSchema;
   if (/^\/api\/ui\/tasks\/[^/]+\/control$/.test(path) && method === "POST") return taskControlSchema;

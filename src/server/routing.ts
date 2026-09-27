@@ -25,24 +25,43 @@ export class RoutingStore {
   }
   get(actor: Agent, id: string): CapabilityView | null {
     this.worker(actor, id);
-    const row = this.db.prepare('SELECT revision, updated_at, card FROM worker_capabilities WHERE worker_id = ?')
-      .get(id) as { revision: number; updated_at: number; card: string } | undefined;
-    return row ? { workerId: id, revision: row.revision, updatedAt: row.updated_at, card: JSON.parse(row.card) as CapabilityCard } : null;
+    const row = this.db.prepare('SELECT revision, updated_at, card, last_editor_id FROM worker_capabilities WHERE worker_id = ?')
+      .get(id) as { revision: number; updated_at: number; card: string; last_editor_id: string | null } | undefined;
+    return row ? { workerId: id, revision: row.revision, updatedAt: row.updated_at,
+      card: JSON.parse(row.card) as CapabilityCard, lastEditorId: row.last_editor_id } : null;
   }
   set(actor: Agent, raw: unknown): CapabilityView {
     if (actor.role !== 'worker' || !actor.projectId) throw new HiveError(403, 'Only a worker can opt in with its own capability card');
+    return this.save(actor, actor.id, raw);
+  }
+  setForHuman(actor: Agent, workerId: string, raw: unknown): CapabilityView {
+    if (actor.role !== 'human') throw new HiveError(403, 'Only Human edits another worker capability card');
+    return this.save(actor, workerId, raw);
+  }
+  private save(actor: Agent, workerId: string, raw: unknown): CapabilityView {
     const input = validated(setCapabilitiesSchema, raw);
     return this.deps.storage.transaction(() => {
-      const previous = this.get(actor, actor.id);
+      const worker = this.worker(actor, workerId);
+      if (worker.removedAt !== undefined || worker.archivedAt !== undefined) throw new HiveError(409, 'Worker is no longer active');
+      const previous = this.get(actor, workerId);
       if ((previous?.revision ?? 0) !== input.expectedRevision) throw new HiveError(409, 'Capability changed; read its revision before saving');
-      const count = Number(this.db.prepare('SELECT COUNT(*) AS n FROM worker_capabilities WHERE project_id = ?').get(actor.projectId)!.n);
+      const count = Number(this.db.prepare('SELECT COUNT(*) AS n FROM worker_capabilities WHERE project_id = ?').get(worker.projectId)!.n);
       if (!previous && count >= ROUTING_LIMITS.cards) throw new HiveError(429, 'Project capability-card budget reached');
       const revision = (previous?.revision ?? 0) + 1, at = Date.now();
-      this.db.prepare(`INSERT INTO worker_capabilities VALUES (?, ?, ?, ?, ?, ?)
+      this.db.prepare(`INSERT INTO worker_capabilities(worker_id,project_id,revision,updated_at,configuration,card,last_editor_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(worker_id) DO UPDATE SET revision=excluded.revision, updated_at=excluded.updated_at,
-          configuration=excluded.configuration, card=excluded.card`)
-        .run(actor.id, actor.projectId, revision, at, this.configuration(input.card), JSON.stringify(input.card));
-      return { workerId: actor.id, revision, updatedAt: at, card: input.card };
+          configuration=excluded.configuration, card=excluded.card,last_editor_id=excluded.last_editor_id`)
+        .run(workerId, worker.projectId, revision, at, this.configuration(input.card), JSON.stringify(input.card), actor.id);
+      this.deps.lifecycleLog?.record({ agentId: workerId, projectId: worker.projectId, actorId: actor.id,
+        kind: 'capability_edited', summary: 'Worker capability card updated.', source: 'server' });
+      if (actor.role === 'human') {
+        const dm = this.deps.channels.openDm(actor, worker.name);
+        this.deps.messages.postMessage(actor, { channel: dm.id, kind: 'control',
+          body: `CONTROL capability_changed: Human edited your capability card. Call whoami with orders=true, then get_worker_capabilities with workerId=${worker.id} before using the card.` });
+        this.deps.storage.afterCommit(() => this.deps.bus.emit('agent', this.deps.identity.getAgent(workerId)));
+      }
+      return { workerId, revision, updatedAt: at, card: input.card, lastEditorId: actor.id };
     });
   }
   private task(actor: Agent, id: string) {
