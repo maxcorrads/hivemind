@@ -5,6 +5,7 @@ import { ROUTINE_BATCH_MS } from "../shared/notifications.ts";
 import { WorkerTemplateStore } from "./worker-templates.ts";
 import { LauncherQueue } from "./launcher-queue.ts";
 import { AgentActivityService } from './services/agent-activity.ts';
+import { TaskViews } from './services/task-views.ts';
 import { JobStore } from './services/jobs.ts';
 import { WorkerOrchestration } from "./services/worker-orchestration.ts";
 import { AgentTraffic } from "./agent-traffic.ts";
@@ -60,6 +61,7 @@ type ServiceRegistry = Core & {
   launcherQueue: LauncherQueue;
   workerOrchestration: WorkerOrchestration;
   jobs: JobStore;
+  taskViews: TaskViews;
   activity: AgentActivityService;
   telegramAdmin: TelegramAdminService;
   files: FileService;
@@ -117,6 +119,7 @@ export class Hive {
   readonly launcherQueue!: LauncherQueue;
   readonly workerOrchestration!: WorkerOrchestration;
   readonly jobs!: JobStore;
+  readonly taskViews!: TaskViews;
   readonly activity!: AgentActivityService;
   readonly rooms!: RoomStore;
   readonly notifications!: NotificationStore;
@@ -164,6 +167,7 @@ export class Hive {
       this.tasks = services.tasks = new TaskStore(services);
       this.workerOrchestration = services.workerOrchestration = new WorkerOrchestration(services);
       this.jobs = services.jobs = new JobStore(services);
+      this.taskViews = services.taskViews = new TaskViews(services);
       this.rooms = services.rooms = new RoomStore(services);
       this.notifications = services.notifications = new NotificationStore(services);
       this.routing = new RoutingStore(services);

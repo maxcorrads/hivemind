@@ -194,6 +194,11 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const agent = hive.identity.removeAgent(human, decodeURIComponent(c.req.param("name")));
     return c.json({ ok: true, name: agent.name });
   });
+  ui.get('/tasks', c => c.json(hive.taskViews.list(hive.identity.getAgent('human'), {
+    projectId: c.req.query('project') ? projectRef(c.req.query('project')!).id : undefined,
+    cursor: c.req.query('cursor'), limit: c.req.query('limit') ? Number(c.req.query('limit')) : undefined,
+  })));
+  ui.get('/tasks/:id', c => c.json({ item: hive.taskViews.get(hive.identity.getAgent('human'), c.req.param('id')) }));
   ui.get('/jobs', c => c.json({ jobs: hive.jobs.list(hive.identity.getAgent('human'),
     c.req.query('project') ? projectRef(c.req.query('project')!).id : undefined) }));
   ui.post('/jobs/:id/close', async c => {

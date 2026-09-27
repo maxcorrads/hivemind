@@ -54,3 +54,14 @@ remain display metadata and never give the Node server permission to execute a c
 Resume preserves Hivemind's existing name-based identity model. The server rejects an ordinary resume while hard-paused
 unless its matching launch is dispatched; this is state fencing, not authentication against another local process that
 can impersonate an agent. The signed native launcher authenticates execution authority, not the model process identity.
+
+## Human task history API
+
+`GET /api/ui/tasks` returns `{items,jobs,hasMore,nextCursor}` from one read transaction, with 50 tasks by default
+and at most 100. Optional `project` is a project slug; `cursor` is bound to that project filter. Filtering happens
+before the limit. `GET /api/ui/tasks/:id` returns `{item}`. Both are Human UI endpoints and reject agent credentials.
+Each item contains the full task, its actual project, worker and brain identities, and the saved template label when
+available. Archived or removed participants remain readable by id. The job list includes page-linked jobs and all
+active empty jobs in scope, so a new Human request is visible before its first task exists.
+
+Migration 37 adds indexes for the descending task cursor and saved launch-template lookup. It changes no task data.

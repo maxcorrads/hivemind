@@ -109,6 +109,12 @@
  },
  {
   "type": "index",
+  "name": "idx_launch_task_worker",
+  "tbl": "launch_requests",
+  "sql": "CREATE INDEX idx_launch_task_worker ON launch_requests(task_id,agent_id,requested_at DESC)"
+ },
+ {
+  "type": "index",
   "name": "idx_launcher_commands_queue",
   "tbl": "launcher_commands",
   "sql": "CREATE INDEX idx_launcher_commands_queue ON launcher_commands(state, created_at)"
@@ -136,6 +142,12 @@
   "name": "idx_room_events_channel_revision",
   "tbl": "room_events",
   "sql": "CREATE INDEX idx_room_events_channel_revision ON room_events(channel_id, revision)"
+ },
+ {
+  "type": "index",
+  "name": "idx_task_updated_page",
+  "tbl": "task_records",
+  "sql": "CREATE INDEX idx_task_updated_page ON task_records (COALESCE(CAST(json_extract(snapshot,'$.updatedAt') AS INTEGER),0) DESC,id DESC)"
  },
  {
   "type": "index",
