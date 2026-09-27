@@ -23,7 +23,7 @@ export type LaunchRequestView = { id: string; projectId: string; brainId: string
   error: string | null; capBlocked: boolean };
 export type LauncherCommand = { id: string; kind: "launch"; requestId: string; templateId: string;
   project: string; agent: string; title: string; session: string; command: string; cwd: string | null;
-  environment: Record<string, string> } | { id: string; kind: "kill"; session: string };
+  environment?: Record<string, string> } | { id: string; kind: "kill"; session: string };
 
 export type LauncherQueueDeps = Core & { readonly home: string;
   readonly identity: { getAgent(id: string): Agent; archiveTaskWorker(agentId: string): Agent; suspendSession(agentId: string): Agent;
@@ -400,7 +400,8 @@ export class LauncherQueue {
         const session = workerSession(project.slug, agent.name);
         payload = { id: command.id, kind: "launch", requestId: row.id, templateId: template.id,
           project: project.slug, agent: agent.name, title: template.spec.label,
-          session, command: built.command, cwd: built.cwd, environment: template.spec.environment };
+          session, command: built.command, cwd: built.cwd,
+          ...(Object.keys(template.spec.environment).length ? { environment: template.spec.environment } : {}) };
         this.db.prepare("UPDATE launch_requests SET state = 'launching', session = ? WHERE id = ?").run(session, row.id);
         this.changed(row.id);
       }

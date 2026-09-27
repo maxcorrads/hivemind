@@ -24,8 +24,10 @@ private func launchCommand() -> LauncherCommand {
   var listed: [BrokerSession] = []
   var launches: [BrokerLaunch] = []
   var kills: [SessionName] = []
+  var beforeLaunch: (@MainActor () -> Void)?
   func sessions() async throws -> [BrokerSession] { listed }
   func launch(_ launch: BrokerLaunch) async throws -> SessionName {
+    beforeLaunch?()
     launches.append(launch)
     let name = SessionName(project: launch.project, agent: launch.agent!)
     listed.append(BrokerSession(name: name, project: launch.project, agent: launch.agent,
@@ -112,6 +114,34 @@ private actor HTTPFake: LauncherHTTP {
     #expect(broker.launches.first?.template?.rawValue == templateID)
     #expect(journal.writes.count == 2)
     #expect(journal.writes.first?.result == nil)
+  }
+
+  @Test func omittedEnvironmentLaunchesAfterDurableIntentAndReplaysResult() async throws {
+    let broker = BrokerFake(), journal = JournalFake()
+    // Node omits the field for an empty template environment. Decode its wire shape,
+    // rather than passing a native-only nil directly to execute.
+    let command = LauncherCommand(id: commandID, kind: .launch, requestId: requestID, templateId: templateID,
+                                  project: "acme", agent: "forge-task", title: "Forge task",
+                                  session: workerSession.rawValue, cwd: "/tmp/acme", command: "codex task\n")
+    let wire = try JSONEncoder().encode(command)
+    #expect(!String(decoding: wire, as: UTF8.self).contains("\"environment\""))
+    let decoded = try JSONDecoder().decode(LauncherCommand.self, from: wire)
+    broker.beforeLaunch = {
+      #expect(journal.values[commandID]?.kind == .launch)
+      #expect(journal.values[commandID]?.result == nil, "intent must be durable before the broker effect")
+    }
+
+    let sut = service(broker, journal)
+    let first = try await sut.execute(decoded)
+    #expect(first == .launched(workerSession))
+    #expect(broker.launches.count == 1)
+    #expect(broker.launches[0].environment == nil)
+    #expect(journal.writes.count == 2)
+    #expect(journal.writes[0].result == nil)
+    #expect(journal.writes[1].result == first)
+    #expect(try await sut.execute(decoded) == first)
+    #expect(broker.launches.count == 1, "saved result must not launch again")
+    #expect(journal.writes.count == 2)
   }
 
   @Test func reconcilesIntentOnlyWithOwnedSessionAndNeverRelaunches() async throws {

@@ -131,6 +131,61 @@ test("approval queues once, encrypted claim survives restart, result scrubs payl
   assert.equal(f.hive.launcherQueue.get(id).state, "launched");
 });
 
+test("signed launch wire omits an empty template environment and keeps nonempty variables", async t => {
+  const f = fixture(t), withVariables = f.request(false);
+  const target = "/api/launcher/next?timeoutMs=0";
+  const first = await f.signed("GET", target);
+  assert.equal(first.status, 200);
+  const withEnvironment = (await first.json() as { command: Record<string, unknown> }).command;
+  assert.equal(withEnvironment.kind, "launch");
+  assert.deepEqual(withEnvironment.environment, { TASK_ENV: "safe" });
+  assert.equal((await f.signed("POST", `/api/launcher/${withEnvironment.id}/result`,
+    { status: "launched", session: withEnvironment.session })).status, 200);
+  assert.equal(f.hive.launcherQueue.get(withVariables.id).state, "launched");
+
+  const template = f.hive.workerTemplates.create(f.human, f.project.id,
+    { slug: "no-variables", spec: { ...spec(), environment: {} } });
+  const { agent, ticket } = f.hive.identity.reserve(f.human, template, "task", false);
+  f.hive.launcherQueue.create({ requestId: randomUUID(), brain: f.brain, template, agent, ticket, approval: false });
+  const second = await f.signed("GET", target);
+  assert.equal(second.status, 200);
+  const withoutEnvironment = (await second.json() as { command: Record<string, unknown> }).command;
+  assert.equal(withoutEnvironment.kind, "launch");
+  assert.equal("environment" in withoutEnvironment, false);
+});
+
+test("signed resume wire also omits an empty template environment", async t => {
+  const f = fixture(t), target = "/api/launcher/next?timeoutMs=0";
+  const template = f.hive.workerTemplates.create(f.human, f.project.id,
+    { slug: "no-variables", spec: { ...spec(), environment: {} } });
+  f.hive.identity.setLaunchMode(f.human, f.brain.name, "auto");
+  const brain = f.hive.identity.getAgent(f.brain.id);
+  const requested = f.hive.workerOrchestration.request(brain, { requestId: randomUUID(), template: template.slug,
+    contract: { objective: "Build a view", scope: [], nonGoals: [], acceptanceCriteria: ["View works"],
+      dependencies: [], evidenceSeqs: [] } });
+  const claim = (await (await f.signed("GET", target)).json() as { command: Record<string, unknown> }).command;
+  assert.equal(claim.kind, "launch");
+  assert.equal("environment" in claim, false);
+  const ticket = /hmc_[0-9a-f]{48}/.exec(String(claim.command))?.[0];
+  assert.ok(ticket);
+  assert.equal((await f.signed("POST", `/api/launcher/${claim.id}/result`,
+    { status: "launched", session: claim.session })).status, 200);
+  f.hive.identity.join({ role: "worker", claim: ticket });
+
+  const task = () => f.hive.tasks.get(f.human, requested.task.id);
+  const pause = f.hive.tasks.control(f.human, requested.task.id,
+    { requestId: randomUUID(), expectedRevision: task().revision, action: { type: "pause", mode: "hard" } });
+  f.hive.tasks.sweepHardPauses(pause.task.pause!.graceUntil!);
+  const kill = (await (await f.signed("GET", target)).json() as { command: Record<string, unknown> }).command;
+  assert.equal(kill.kind, "kill");
+  assert.equal((await f.signed("POST", `/api/launcher/${kill.id}/result`, { status: "killed" })).status, 200);
+  f.hive.tasks.control(f.human, requested.task.id,
+    { requestId: randomUUID(), expectedRevision: task().revision, action: { type: "resume" } });
+  const resume = (await (await f.signed("GET", target)).json() as { command: Record<string, unknown> }).command;
+  assert.equal(resume.kind, "launch");
+  assert.equal("environment" in resume, false);
+});
+
 test("missing, corrupt and non-private escrow keys fail closed while a command is pending", async t => {
   const f = fixture(t), { id } = f.request(false);
   const key = path.join(f.dir, "launcher-queue.key"), original = readFileSync(key);
