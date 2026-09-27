@@ -37,12 +37,6 @@
  },
  {
   "type": "index",
-  "name": "idx_agents_archived",
-  "tbl": "agents",
-  "sql": "CREATE INDEX idx_agents_archived ON agents(archived_at, project_id)"
- },
- {
-  "type": "index",
   "name": "idx_agents_claim",
   "tbl": "agents",
   "sql": "CREATE UNIQUE INDEX idx_agents_claim ON agents(claim_hash) WHERE claim_hash IS NOT NULL"
