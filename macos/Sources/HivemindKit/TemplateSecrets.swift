@@ -62,4 +62,6 @@ public protocol TemplateSecretVault: AnyObject {
   func set(_ value: TemplateSecretValue, name: String, for template: TemplateID) throws(BrokerFiles.Failure)
   /// Deletes one secret, or every secret of the template when `name` is nil. Deleting what is not there is not an error.
   func delete(name: String?, for template: TemplateID) throws(BrokerFiles.Failure)
+  /// Every secret of the template, for a launch's private file only: never answered over the broker.
+  func values(for template: TemplateID) throws(BrokerFiles.Failure) -> [String: String]
 }

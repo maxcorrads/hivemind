@@ -293,6 +293,8 @@ export type TerminalSessionLaunch = {
    * same private file as `secrets`, never argv. Ignored when the launch reuses a running session. Absent when none.
    */
   environment?: Record<string, string>;
+  /** The worker template launched: Hivemind Server adds the template's secrets from its Keychain (docs/terminal-broker.md#template-secrets). */
+  template?: string;
 };
 
 /** Page → app. `id` is the page's own request id (1–64 chars), echoed on the answer. */
@@ -541,6 +543,7 @@ export function terminalSessionLaunchProblem(launches: readonly TerminalSessionL
       const problem = launchEnvironmentProblem(launch.environment);
       if (problem) return problem;
     }
+    if (launch.template !== undefined && !TEMPLATE_ID.test(launch.template)) return "Not a worker template";
     const cwd = launch.cwd;
     if (cwd && (!(cwd.startsWith("/") || cwd === "~" || cwd.startsWith("~/")) || cwd.includes("\0") ||
         utf8Length(cwd) > limits.pathBytes)) {
@@ -557,7 +560,7 @@ export function terminalSessionLaunchProblem(launches: readonly TerminalSessionL
 
 /** The launches as a terminal-launch message carries them: absent fields left out. */
 export function terminalLaunchItems(launches: readonly TerminalSessionLaunch[]) {
-  return launches.map(({ project, agent, title, cwd, command, session, secrets, environment }) =>
+  return launches.map(({ project, agent, title, cwd, command, session, secrets, environment, template }) =>
     ({ project, agent, title, ...(cwd ? { cwd } : {}), command, ...(session ? { session } : {}), ...(secrets ? { secrets } : {}),
-      ...(environment ? { environment } : {}) }));
+      ...(environment ? { environment } : {}), ...(template ? { template } : {}) }));
 }

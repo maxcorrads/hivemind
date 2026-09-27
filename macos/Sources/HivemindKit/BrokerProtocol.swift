@@ -145,18 +145,21 @@ public struct BrokerLaunch: Equatable, Sendable {
   /// file (docs/terminal-broker.md#launch-environment), and ignored the same
   /// way by a launch that reuses a running session.
   public let environment: LaunchEnvironment?
+  /// The worker template this launch starts: the broker adds the template's
+  /// secrets from its vault to the launch file (docs/terminal-broker.md#template-secrets).
+  public let template: TemplateID?
 
   public init(
     project: String, agent: String?, title: String, cwd: String, command: String, session: SessionName? = nil,
-    secrets: LaunchSecrets? = nil, environment: LaunchEnvironment? = nil
+    secrets: LaunchSecrets? = nil, environment: LaunchEnvironment? = nil, template: TemplateID? = nil
   ) throws(BrokerProtocolError) {
     try self.init(project: project, agent: agent, title: title, cwd: cwd, command: command, session: session, secrets: secrets,
-                  environment: environment, field: "launch")
+                  environment: environment, template: template, field: "launch")
   }
 
   init(
     project: String, agent: String?, title: String, cwd: String, command: String, session: SessionName?,
-    secrets: LaunchSecrets? = nil, environment: LaunchEnvironment? = nil, field: String
+    secrets: LaunchSecrets? = nil, environment: LaunchEnvironment? = nil, template: TemplateID? = nil, field: String
   ) throws(BrokerProtocolError) {
     guard Self.isProjectSlug(project) else {
       throw .invalid("\(field).project", "must be a project slug (lowercase letters, digits and dashes, at most 32)")
@@ -187,10 +190,11 @@ public struct BrokerLaunch: Equatable, Sendable {
     self.session = session
     self.secrets = secrets
     self.environment = environment
+    self.template = template
   }
 
-  /// Whether the session gets a launch file: any secret or variable.
-  public var handsVariables: Bool { secrets != nil || environment != nil }
+  /// Whether the session gets a launch file: any secret or variable, or a template whose secrets may be kept.
+  public var handsVariables: Bool { secrets != nil || environment != nil || template != nil }
 
   public static func isProjectSlug(_ value: String) -> Bool {
     let bytes = Array(value.utf8)
@@ -389,6 +393,7 @@ extension BrokerRequestFrame: Codable {
           session: BrokerCoding.optionalSession(item, .session, field: "\(field).session"),
           secrets: BrokerCoding.optionalSecrets(item, .secrets, field: "\(field).secrets"),
           environment: BrokerCoding.optionalEnvironment(item, .environment, field: "\(field).environment"),
+          template: BrokerCoding.optionalTemplate(item, .template, field: "\(field).template"),
           field: field))
       }
       request = .launch(launches)
@@ -447,6 +452,7 @@ extension BrokerRequestFrame: Codable {
         try item.encodeIfPresent(launch.session, forKey: .session)
         try item.encodeIfPresent(launch.secrets?.dictionary, forKey: .secrets)
         try item.encodeIfPresent(launch.environment?.dictionary, forKey: .environment)
+        try item.encodeIfPresent(launch.template?.rawValue, forKey: .template)
       }
     case .attach(let session, let size):
       try c.encode(session, forKey: .session)
@@ -791,6 +797,13 @@ enum BrokerCoding {
 
   static func template<K: CodingKey>(_ c: KeyedDecodingContainer<K>, _ key: K) throws(BrokerProtocolError) -> TemplateID {
     guard let template = TemplateID(try string(c, key)) else { throw .invalid(key.stringValue, "must be a template id (a lowercase UUID)") }
+    return template
+  }
+
+  /// Missing or null: nil. Anything else must be a template id.
+  static func optionalTemplate<K: CodingKey>(_ c: KeyedDecodingContainer<K>, _ key: K, field: String) throws(BrokerProtocolError) -> TemplateID? {
+    guard let value = try optionalString(c, key, field: field) else { return nil }
+    guard let template = TemplateID(value) else { throw .invalid(field, "must be a template id (a lowercase UUID)") }
     return template
   }
 

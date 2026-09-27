@@ -61,6 +61,25 @@ final class KeychainTemplateSecretVault: TemplateSecretVault {
     }
   }
 
+  func values(for template: TemplateID) throws(BrokerFiles.Failure) -> [String: String] {
+    var values: [String: String] = [:]
+    for name in try names(for: template) {
+      var result: CFTypeRef?
+      let status = SecItemCopyMatching([
+        kSecClass: kSecClassGenericPassword,
+        kSecAttrService: Self.service,
+        kSecAttrAccount: Self.account(template, name),
+        kSecReturnData: true,
+        kSecMatchLimit: kSecMatchLimitOne,
+      ] as CFDictionary, &result)
+      if status == errSecItemNotFound { continue }
+      guard status == errSecSuccess, let data = result as? Data else { throw Self.failure("read \(name)", status) }
+      // A value that no longer meets the rule (edited outside Hivemind) is left out rather than handed on.
+      if let value = String(data: data, encoding: .utf8), TemplateSecrets.isValidValue(value) { values[name] = value }
+    }
+    return values
+  }
+
   private static func failure(_ action: String, _ status: OSStatus) -> BrokerFiles.Failure {
     let reason = SecCopyErrorMessageString(status, nil) as String? ?? "OSStatus \(status)"
     return BrokerFiles.Failure("Cannot \(action) in the Keychain: \(reason)")

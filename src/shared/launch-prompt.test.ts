@@ -391,3 +391,18 @@ test("workspace paths cannot hide extra lines; resume drops a bad focus", () => 
   assert.match(text, /resume=Forge/);
   assert.equal(text.includes("focus="), false);
 });
+
+test("a reserved worker's launch joins with its ticket, not with a role it already has", () => {
+  const ticket = `hmc_${"a".repeat(48)}`;
+  const input = { software: "codex2", workspacePath: "/w/acme", cdWorktree: true, projectSlug: "acme", hiveName: "Acme",
+    passProject: true, role: "worker" as const, seniority: "senior" as const, focus: "backend", adoptUntrusted: false,
+    claim: ticket, claimName: "Forge-api" };
+  const prompt = buildLaunchPrompt(input);
+  assert.match(prompt, new RegExp(`join with role=worker, claim=${ticket}, project=acme\\.`));
+  assert.doesNotMatch(prompt, /seniority=|focus=|resume=/, "the reserved worker already has them");
+  assert.match(prompt, /You are the Hivemind worker Forge-api, reserved for one task\./);
+  assert.match(prompt, /\/rename Acme - Forge-api\./);
+  assert.match(prompt, /first create your own git worktree and branch for it/);
+  assert.throws(() => buildLaunchPrompt({ ...input, claim: "hmc_short" }), /launch ticket/);
+  assert.throws(() => buildLaunchPrompt({ ...input, role: "brain" }), /launch ticket/);
+});

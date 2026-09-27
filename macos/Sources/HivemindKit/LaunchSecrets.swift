@@ -105,24 +105,28 @@ public struct LaunchSecretStore: Sendable {
   }
 
   /// What the file holds: one `NAME=value` line per variable, each ended by a
-  /// newline, the environment's first and then the secrets, each sorted by
-  /// name. No value holds a newline (both types refuse one), so every line
-  /// is one variable; the value is the rest of the line, byte for byte.
-  public static func contents(environment: LaunchEnvironment?, secrets: LaunchSecrets?) -> [UInt8] {
+  /// newline: the environment's, then the template's secrets, then the
+  /// launch's own secrets (so a later line wins), each sorted by name. No
+  /// value holds a newline (every type refuses one), so every line is one
+  /// variable; the value is the rest of the line, byte for byte.
+  public static func contents(environment: LaunchEnvironment?, secrets: LaunchSecrets?, templateSecrets: [String: String] = [:]) -> [UInt8] {
     var lines: [String] = []
     if let environment { lines += environment.names.map { "\($0)=\(environment.value($0)!)\n" } }
+    lines += templateSecrets.keys.sorted().map { "\($0)=\(templateSecrets[$0]!)\n" }
     if let secrets { lines += secrets.names.map { "\($0)=\(secrets.value($0)!)\n" } }
     return Array(lines.joined().utf8)
   }
 
   /// Writes the launch's variables to `file`. On failure nothing is left
   /// behind and the error (which names a path, never a value) is thrown.
-  public func write(environment: LaunchEnvironment?, secrets: LaunchSecrets?, to file: LaunchEnvironmentFile) throws(BrokerFiles.Failure) {
+  public func write(
+    environment: LaunchEnvironment?, secrets: LaunchSecrets?, templateSecrets: [String: String] = [:], to file: LaunchEnvironmentFile
+  ) throws(BrokerFiles.Failure) {
     guard (file.path as NSString).deletingLastPathComponent == folder.path else {
       throw BrokerFiles.Failure("Cannot write a launch file outside \(folder.path)")
     }
     try prepareFolder()
-    try Self.create(file.path, contents: Self.contents(environment: environment, secrets: secrets))
+    try Self.create(file.path, contents: Self.contents(environment: environment, secrets: secrets, templateSecrets: templateSecrets))
   }
 
   /// Deletes the file if it exists: for a launch whose shell never ran.

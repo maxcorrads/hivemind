@@ -8,6 +8,7 @@ import {
   inNativeApp, onMacDesktop, terminalSecretProblem, terminalSessionLaunchProblem, type TerminalLaunchSecrets, type TerminalSessionLaunch,
 } from "./native-bridge.ts";
 import { SessionsSheet } from "./SessionsSheet.tsx";
+import { TemplateLaunchSheet } from "./TemplateLaunch.tsx";
 import { TerminalNotice } from "./TerminalNotice.tsx";
 import { agentTerminalSession, terminalBlocker, terminalHub, useTerminalState, type TerminalLaunched } from "./use-terminal.ts";
 import { projectLaunchTools, type LaunchContext } from "../src/shared/launch-prompt.ts";
@@ -209,6 +210,7 @@ export function LaunchSheet({
   const terminalApp = native && onMacDesktop(terminals.platform);
   // Off the Mac, after a launch: the sheet gives way to the sessions, opened on the one it started.
   const [started, setStarted] = useState<{ session: string | null } | null>(null);
+  const [fromTemplate, setFromTemplate] = useState(false);
   const [launching, setLaunching] = useState(false);
   const [launchNote, setLaunchNote] = useState<{ error: boolean; text: string } | null>(null);
   const copiedTimer = useRef<number | null>(null);
@@ -500,6 +502,10 @@ export function LaunchSheet({
   if (started) {
     return <SessionsSheet agents={agents} projects={projects} onClose={close} initialSession={started.session} />;
   }
+  if (fromTemplate) {
+    return <TemplateLaunchSheet projects={projects} agents={agents} defaultProject={project?.slug ?? projectSlug}
+      onBack={() => setFromTemplate(false)} onClose={close} />;
+  }
 
   return (
     <Modal onClose={close}>
@@ -516,6 +522,7 @@ export function LaunchSheet({
                 : "Choose an agent, then paste its launch command into a new terminal. One terminal = one employee."}
             </p>
           </div>
+          <button type="button" className="btn" onClick={() => setFromTemplate(true)}>From a template…</button>
           <button type="button" className="icon-btn" aria-label="Close dialog" title="Close" onClick={close}>
             <X size={16} aria-hidden="true" />
           </button>

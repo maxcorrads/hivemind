@@ -539,7 +539,8 @@ public final class BrokerConnection {
         guard let store = broker.deps.secrets else {
           results.append(nil)
           let message = launch.secrets != nil ? "launches[\(index)].secrets: this broker cannot pass secrets"
-            : "launches[\(index)].environment: this broker cannot pass environment variables"
+            : launch.environment != nil ? "launches[\(index)].environment: this broker cannot pass environment variables"
+            : "launches[\(index)].template: this broker cannot pass template secrets"
           errors.append(BrokerLaunchFailure(index: index, code: .internal, message: message))
           continue
         }
@@ -557,11 +558,22 @@ public final class BrokerConnection {
         errors.append(BrokerLaunchFailure(index: index, code: .cwdMissing, message: "launches[\(index)].cwd: not a folder"))
         continue
       }
+      // The template's secrets come from the vault here, never from the client.
+      var templateSecrets: [String: String] = [:]
+      if let template = launch.template, let vault = broker.deps.templateSecrets {
+        do { templateSecrets = try vault.values(for: template) } catch {
+          broker.deps.log("[broker] \(name): cannot read template \(template)'s secrets: \(error.message)")
+          results.append(nil)
+          errors.append(BrokerLaunchFailure(index: index, code: .internal, message: "launches[\(index)].template: \(error.message)"))
+          continue
+        }
+        if !templateSecrets.isEmpty { broker.deps.log("[broker] \(name): template secrets \(templateSecrets.keys.sorted())") }
+      }
       if let file = environmentFile, let store = broker.deps.secrets {
-        do { try store.write(environment: launch.environment, secrets: launch.secrets, to: file) } catch {
+        do { try store.write(environment: launch.environment, secrets: launch.secrets, templateSecrets: templateSecrets, to: file) } catch {
           broker.deps.log("[broker] \(name): cannot write its launch file: \(error.message)")
           results.append(nil)
-          let field = launch.secrets != nil ? "secrets" : "environment"
+          let field = launch.secrets != nil ? "secrets" : launch.environment != nil ? "environment" : "template"
           errors.append(BrokerLaunchFailure(index: index, code: .internal, message: "launches[\(index)].\(field): \(error.message)"))
           continue
         }

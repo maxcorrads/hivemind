@@ -34,6 +34,17 @@ A template is checked with the same launch builder the Launch sheet uses, so any
 Every edit bumps its `revision`; edits and deletions must name the revision they started from. A project has at most
 32 templates. Deleting a project deletes its templates.
 
+## Launching from a template
+
+**Launch agent → From a template…** starts a worker for one task (roadmap Phase A1; brains get the same in Phase A3):
+choose the project, an enabled template, a short **Task** name and the workspace path. The preview shows the command
+with a stand-in for the ticket. **Start** (the apps) reserves the worker ([Reserved workers](identity-lifecycle.md#reserved-workers)),
+named after the task, and starts it in its own tmux session with the template's environment variables and its id, so
+Hivemind Server adds the template's secrets from its Keychain to the launch file. **Reserve and copy** reserves it and
+copies the command for a terminal; secrets are then not passed. The launch prompt joins with `claim=<ticket>` and tells
+the worker to create its own git worktree and branch when its task arrives. A template at its `maxConcurrent` limit
+cannot be launched; a reserved worker whose launch fails gives up after 30 minutes.
+
 ## Secrets
 
 The server stores only secret **names**. Their values are entered in the template editor, in Hivemind.app on the Mac or

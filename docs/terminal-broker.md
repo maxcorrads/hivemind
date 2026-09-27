@@ -508,10 +508,17 @@ the Node server. `secrets.set`, `secrets.delete` and `secrets.list` are answered
   the login Keychain, service `<Hivemind Server bundle id>.template-secrets`, account `<template id>/<NAME>`. A broker
   without a vault answers `internal` ("this broker cannot keep template secrets"); a Keychain failure is `internal`
   with its reason. Tests use a fake; nothing in `swift test` touches the Keychain.
+- **Launches.** A launch may carry `template` (a template id; the page's `terminal-launch` item too). For a session it
+  is about to create, the broker reads that template's secrets from the vault and writes them to the launch's private
+  file after its environment variables and before its own `secrets` (so a secret typed for the launch wins). A
+  template with no kept secret still gets the (empty) file; a vault failure fails that launch with `internal`
+  (`launches[i].template: …`). A reused session starts nothing and reads nothing. The broker logs the names only.
 - **Older brokers** answer these types with `unknown-type`; the page then says to update Hivemind Server.
 - **Trust.** Any process that holds `broker.token` can list names, replace or delete a template's secrets, but not read
-  them. The values leave the app only in a launch's private file, when brains launch workers from templates (roadmap
-  Phase A2).
+  them over the broker. The values leave the app only in a launch's private file. A launch names a template and a
+  command separately, so whoever may launch (anything holding the token, or a page the app trusts; see
+  [Security notes](#security-notes)) can start any command with a template's secrets in its environment: the same
+  trust the broker already gives such a client over every terminal.
 
 ## Clients
 

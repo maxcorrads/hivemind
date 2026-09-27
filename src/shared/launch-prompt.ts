@@ -54,8 +54,14 @@ export type LaunchInput = {
   focus?: string | null;
   resume?: boolean;
   resumeName?: string;
+  /** A reserved worker's single-use launch ticket: the worker joins with it (docs/identity-lifecycle.md#reserved-workers). */
+  claim?: string;
+  /** The reserved worker's name, for the prompt and Codex's /rename. */
+  claimName?: string;
   adoptUntrusted: boolean;
 };
+
+const CLAIM_TICKET = /^hmc_[0-9a-f]{48}$/;
 
 export function shSingleQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
@@ -191,6 +197,13 @@ function joinList(parts: string[]): string {
 }
 
 function joinArgs(input: LaunchInput): string {
+  if (input.claim !== undefined) {
+    // The reserved worker already has its role, seniority, focus and project; the ticket names it.
+    if (input.role !== "worker" || !CLAIM_TICKET.test(input.claim)) throw new Error("A launch ticket joins a reserved worker");
+    const parts = ["role=worker", `claim=${input.claim}`];
+    if (input.passProject) parts.push(`project=${sanitizeProjectSlug(input.projectSlug)}`);
+    return joinList(parts);
+  }
   const parts = [`role=${input.role}`];
   if (input.role === "worker") {
     const seniority = input.seniority;
@@ -256,8 +269,8 @@ export function codexSessionTitle(hiveName: string | null | undefined, agentName
 function codexRenameInstruction(input: LaunchInput): string {
   if (softwareFamily(input.software) !== "codex") return "";
   const hive = sanitizeHiveName(input.hiveName ?? "");
-  if (input.resume) {
-    const title = codexSessionTitle(hive, input.resumeName);
+  if (input.resume || input.claim !== undefined) {
+    const title = codexSessionTitle(hive, input.resume ? input.resumeName : input.claimName);
     return title ? `After join, run the Codex slash command /rename ${title}.` : "";
   }
   if (hive) {
@@ -284,7 +297,11 @@ export function buildLaunchPrompt(input: LaunchInput): string {
     .filter(Boolean)
     .join(" ");
   const rename = codexRenameInstruction(input);
-  const intro = input.resume
+  const claimed = input.claim !== undefined ? sanitizeRenamePart(input.claimName ?? "") : "";
+  const intro = input.claim !== undefined
+    ? `You are ${claimed ? `the Hivemind worker ${claimed}` : "a Hivemind worker"}, reserved for one task. ${call} ${isolation} ${rename} ` +
+      "When your task arrives, first create your own git worktree and branch for it."
+    : input.resume
     ? `You are already a Hivemind ${input.role}. ${call} ${isolation} ${rename}`
     : `You are a Hivemind ${input.role}. ${call} ${isolation} ${rename}`;
   const orders = "Then read your standing orders (a first join returns them; otherwise call whoami with orders=true) and follow them. Do not explore the repo until mail says what to do.";

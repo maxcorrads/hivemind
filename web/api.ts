@@ -145,6 +145,10 @@ export const api = {
     req<WorkerTemplate>(`/api/ui/projects/${encodeURIComponent(project)}/worker-templates`, { method: "POST", body: JSON.stringify(body) }),
   updateWorkerTemplate: (id: string, body: { expectedRevision: number; slug?: string; spec: WorkerTemplateSpec }) =>
     req<WorkerTemplate>(`/api/ui/worker-templates/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(body) }),
+  /** A reserved worker and its single-use launch ticket (docs/identity-lifecycle.md#reserved-workers). */
+  reserveWorker: (id: string, label: string | null) =>
+    req<{ agent: Agent; ticket: string }>(`/api/ui/worker-templates/${encodeURIComponent(id)}/reserve`,
+      { method: "POST", body: JSON.stringify({ label }) }),
   deleteWorkerTemplate: (id: string, revision: number) =>
     req<{ ok: true }>(`/api/ui/worker-templates/${encodeURIComponent(id)}?revision=${revision}`, { method: "DELETE" }),
   createBot: (projectId: string, name: string) => req<{ bot: Agent; token: string }>(

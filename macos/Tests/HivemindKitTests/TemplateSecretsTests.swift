@@ -24,6 +24,11 @@ final class FakeTemplateSecretVault: TemplateSecretVault {
     if let failure { throw BrokerFiles.Failure(failure) }
     if let name { values[template.rawValue]?[name] = nil } else { values[template.rawValue] = nil }
   }
+
+  func values(for template: TemplateID) throws(BrokerFiles.Failure) -> [String: String] {
+    if let failure { throw BrokerFiles.Failure(failure) }
+    return values[template.rawValue] ?? [:]
+  }
 }
 
 private let template = TemplateID("0f8fad5b-d9cb-469f-a165-70867728950e")!
@@ -202,5 +207,78 @@ struct TemplateSecretBridgeTests {
     router.pageDidChange()
     client.answer(.secrets(template: template, names: []))
     #expect(recorder.delivered.count == 1, "an answer for a page that is gone is dropped")
+  }
+}
+
+@MainActor
+struct TemplateLaunchTests {
+  func harness() throws -> (BrokerHarness, LaunchSecretStore, FakeTemplateSecretVault) {
+    let h = BrokerHarness()
+    let store = LaunchSecretStore(folder: HivemindPaths(home: try temporaryHome()).launchSecrets)
+    let vault = FakeTemplateSecretVault()
+    h.secretStore = store
+    h.templateSecrets = vault
+    return (h, store, vault)
+  }
+
+  func files(_ store: LaunchSecretStore) -> [String] {
+    ((try? FileManager.default.contentsOfDirectory(atPath: store.folder.path)) ?? []).map { store.folder.appendingPathComponent($0).path }
+  }
+
+  func launch(_ agent: String = "Forge-api", environment: LaunchEnvironment? = nil, secrets: LaunchSecrets? = nil) throws -> BrokerLaunch {
+    try BrokerLaunch(project: "acme", agent: agent, title: "Acme - \(agent)", cwd: "/Users/me/acme", command: "opencode-hm",
+                     secrets: secrets, environment: environment, template: template)
+  }
+
+  @Test func theBrokerAddsTheTemplateSecretsFromItsVaultNeverFromTheClient() async throws {
+    let (h, store, vault) = try harness()
+    vault.values[template.rawValue] = ["OPENCODE_API_KEY": secret, "OTHER_KEY": "k-2"]
+    await h.start()
+    let (transport, connection) = await h.client()
+    await h.send(connection, .launch([try launch(environment: try LaunchEnvironment(["A": "1"]))]), id: "go")
+    let session = SessionName("hm-acme-forge-api")!
+    #expect(transport.take().first == BrokerEventFrame(id: "go", .launched(names: [session], created: [session], errors: [])))
+    let written = files(store)
+    #expect(written.count == 1)
+    #expect(try Data(contentsOf: URL(fileURLWithPath: written[0])) == Data("A=1\nOPENCODE_API_KEY=\(secret)\nOTHER_KEY=k-2\n".utf8))
+    #expect(!h.tmux.calls.joined().contains { $0.contains(secret) })
+    #expect(!h.logs.joined().contains(secret))
+    #expect(h.logs.contains { $0.contains("template secrets [\"OPENCODE_API_KEY\", \"OTHER_KEY\"]") })
+    #expect(!String(decoding: transport.sent, as: UTF8.self).contains(secret))
+  }
+
+  @Test func theLaunchsOwnSecretWinsOverTheTemplates() {
+    let bytes = LaunchSecretStore.contents(environment: nil, secrets: try? LaunchSecrets(["OPENCODE_API_KEY": "typed"]),
+                                           templateSecrets: ["OPENCODE_API_KEY": "kept"])
+    #expect(String(decoding: bytes, as: UTF8.self) == "OPENCODE_API_KEY=kept\nOPENCODE_API_KEY=typed\n", "the later line is exported last")
+  }
+
+  @Test func aTemplateWithoutKeptSecretsStillLaunchesAndAVaultFailureDoesNot() async throws {
+    let (h, store, vault) = try harness()
+    await h.start()
+    let (transport, connection) = await h.client()
+    await h.send(connection, .launch([try launch()]))
+    if case .launched(let names, _, let errors) = transport.events().first { #expect(names.first != nil && errors.isEmpty) }
+    #expect(files(store).count == 1, "an empty launch file; the script reads and deletes it")
+
+    vault.failure = "Cannot read OPENCODE_API_KEY in the Keychain: locked"
+    await h.send(connection, .launch([try launch("Forge-web")]))
+    guard case .launched(let names, _, let errors) = transport.events().first else {
+      Issue.record("no answer")
+      return
+    }
+    #expect(names == [nil])
+    #expect(errors == [BrokerLaunchFailure(index: 0, code: .internal, message: "launches[0].template: Cannot read OPENCODE_API_KEY in the Keychain: locked")])
+  }
+
+  @Test func theTemplateTravelsOnTheWireAndThroughTheBridge() throws {
+    let frame = BrokerRequestFrame(id: "l", .launch([try launch()]))
+    #expect(try BrokerRequestFrame.decode(try frame.line().dropLast()) == frame)
+    let body: [String: Any] = ["project": "acme", "agent": "Forge-api", "title": "Acme - Forge-api", "cwd": "~/acme", "command": "opencode-hm",
+                               "template": template.rawValue]
+    #expect(TerminalSessionLaunch(body: body)?.brokerLaunch(home: "/Users/me")?.template == template)
+    var bad = body
+    bad["template"] = "nope"
+    #expect(TerminalSessionLaunch(body: bad) == nil)
   }
 }
