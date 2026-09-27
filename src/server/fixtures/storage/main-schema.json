@@ -528,6 +528,12 @@
   "sql": "CREATE TABLE worker_capabilities ( worker_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, revision INTEGER NOT NULL, updated_at INTEGER NOT NULL, configuration TEXT NOT NULL, card TEXT NOT NULL)"
  },
  {
+  "type": "table",
+  "name": "worker_templates",
+  "tbl": "worker_templates",
+  "sql": "CREATE TABLE worker_templates ( id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, slug TEXT NOT NULL, revision INTEGER NOT NULL, spec TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE (project_id, slug) )"
+ },
+ {
   "type": "trigger",
   "name": "adaptive_channel_deleted",
   "tbl": "channels",

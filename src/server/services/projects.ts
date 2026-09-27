@@ -6,6 +6,7 @@ import { now, type ProjectRow } from "./rows.ts";
 export type ProjectServiceDeps = Core & {
   readonly telegramAdmin: { purgeProject(projectId: string, channelIds: string[], extraChatId?: number | null): void };
   readonly lifecycle: { purgeProjectAgents(agentIds: string[]): void; sweepBlobs(): void };
+  readonly workerTemplates: { purgeProject(projectId: string): void };
   readonly channels: { ensureBuiltinChannels(project: Project): void; addHumanToAllChannels(): void };
   /** Brains/workers of the project that are online or blocked in a wait. */
   readonly identity: { busyAgents(projectId: string): Agent[] };
@@ -173,6 +174,7 @@ export class ProjectService {
       }
 
       lifecycle.purgeProjectAgents(goneAgents.map((agent) => agent.id));
+      this.deps.workerTemplates.purgeProject(project.id);
       this.db.prepare("DELETE FROM projects WHERE id = ?").run(project.id);
       storage.afterCommit(() => this.deps.bus.emit("project", { deleted: project.slug }));
     });

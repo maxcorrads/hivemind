@@ -32,6 +32,9 @@ const telegram = z.object({ botToken: z.string().max(512).optional(),
   allowUserIds: z.union([z.array(telegramId).max(128), z.string().max(4096)]).optional(),
 }).strict();
 
+const workerTemplateEnvelope = z.object({ slug: z.unknown().optional(), expectedRevision: z.unknown().optional(),
+  spec: z.record(z.string(), z.unknown()) }).strict();
+
 function schemaFor(path: string, method: string): z.ZodType | undefined {
   if (path.endsWith('/api/agent/join')) return join;
   if (/\/channels\/[^/]+\/messages$/.test(path)) {
@@ -64,6 +67,8 @@ function schemaFor(path: string, method: string): z.ZodType | undefined {
   if (/\/channels\/[^/]+\/room$/.test(path)) return roomEventSchema;
   if (/\/channels\/[^/]+\/links$/.test(path)) return sourceLinkSchema;
   if (/\/channels\/[^/]+\/links\/[^/]+\/status$/.test(path)) return sourceReportSchema;
+  // Only the envelope here: WorkerTemplateStore validates the spec itself, reporting each field's reason.
+  if (/^\/api\/ui\/projects\/[^/]+\/worker-templates$/.test(path) || /^\/api\/ui\/worker-templates\/[^/]+$/.test(path)) return workerTemplateEnvelope;
   if (/\/(?:ping|leave)$/.test(path) || /\/(?:retry|discard)$/.test(path)) return empty;
   // Bot/plugin/recovery schemas have their own narrower ingress readers.
   return undefined;

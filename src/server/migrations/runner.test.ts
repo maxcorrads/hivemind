@@ -120,8 +120,9 @@ test("a populated current-main (user_version 2) hive upgrades with every row and
   const dropped = ["adaptive_topology_locks", "adaptive_topology_tasks", "adaptive_topology_evaluated", "adaptive_topology_messages",
     "decision_requests", "decision_mutations"];
   const rewritten = ["adaptive_topology_executions", "adaptive_topology_events", "agents"];
-  // #217 (performance_retention) adds the per-message receipt index, backfilled from the delivery ledger.
-  const added = ["inbox_receipts"];
+  // #217 (performance_retention) adds the per-message receipt index, backfilled from the delivery ledger;
+  // worker_templates (#276) adds an empty table.
+  const added = ["inbox_receipts", "worker_templates"];
   type AgentRow = { id: string; token_hash: string; removed_at?: number | null; terminal_session?: string | null };
   const beforeAgents = before.rows.agents as AgentRow[], afterAgents = after.rows.agents as AgentRow[];
   assert.deepEqual(afterAgents.map(({ token_hash: _t, removed_at, terminal_session, ...row }) => ({ ...row, removed_at, terminal_session })),

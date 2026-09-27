@@ -8,6 +8,7 @@ import { agentTombstones } from "./agent-tombstones.ts";
 import { dropDecisionRequests } from "./drop-decision-requests.ts";
 import { jevAdvisory } from "./jev-advisory.ts";
 import { performanceRetention } from "./performance-retention.ts";
+import { workerTemplates } from "./worker-templates.ts";
 import { schemaShape, validateCoreStorage, validateSchema, type SchemaShape } from "./validate.ts";
 
 /**
@@ -63,6 +64,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 29, name: "agent_tombstones", up: agentTombstones },
   { version: 30, name: "drop_decision_requests", up: dropDecisionRequests },
   { version: 31, name: "agent_terminal_session", up: agentTerminalSession },
+  { version: 32, name: "worker_templates", up: workerTemplates },
 ];
 
 /** The last idempotent baseline migration; later migrations may assume its schema. */

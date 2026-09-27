@@ -54,6 +54,8 @@ export type HiveEvents = {
   "jev-call": JevCallSummary;
   /** Evidence-collector health changed (write failure, marker persisted); Human-only, no raw errors. */
   "evidence-health": EvidenceCollectorHealth;
+  /** A project's worker templates were created, edited or deleted; clients refetch them. */
+  "worker-templates": { projectId: string };
 };
 
 /**

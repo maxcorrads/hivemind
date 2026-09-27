@@ -1,7 +1,7 @@
 import { Readable } from "node:stream";
 import { Hono } from "hono";
 import { requestJson, validateRequest } from "./api-input.ts";
-import { threadResponseSchema, uploadLength } from "../shared/api-contract.ts";
+import { integerArgument, threadResponseSchema, uploadLength } from "../shared/api-contract.ts";
 import { DEFAULT_WAIT_MS, HiveError, type Agent } from "../shared/types.ts";
 import { resolveUploadMime } from "../shared/mime.ts";
 import { standingOrders } from "../shared/standing-orders.ts";
@@ -257,6 +257,14 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   ui.get('/channels/:id/room', c => c.json(hive.rooms.view(hive.identity.getAgent('human'), c.req.param('id'))));
   ui.get('/channels/:id/room/history', c => c.json({ history: hive.rooms.history(hive.identity.getAgent('human'), c.req.param('id'), Number(c.req.query('before') ?? Number.MAX_SAFE_INTEGER)) }));
   ui.post('/channels/:id/room', async c => c.json(hive.rooms.event(hive.identity.getAgent('human'), c.req.param('id'), await requestJson(c.req.raw))));
+  ui.get('/projects/:id/worker-templates', c => c.json({ templates: hive.workerTemplates.list(projectRef(c.req.param('id')).id) }));
+  ui.post('/projects/:id/worker-templates', async c => c.json(hive.workerTemplates.create(hive.identity.getAgent('human'),
+    projectRef(c.req.param('id')).id, await requestJson(c.req.raw)), 201));
+  ui.put('/worker-templates/:id', async c => c.json(hive.workerTemplates.update(hive.identity.getAgent('human'), c.req.param('id'), await requestJson(c.req.raw))));
+  ui.delete('/worker-templates/:id', c => {
+    hive.workerTemplates.delete(hive.identity.getAgent('human'), c.req.param('id'), integerArgument(c.req.query('revision') ?? '', 1));
+    return c.json({ ok: true });
+  });
   ui.post('/projects/:id/bots', async c => {
     c.header('Cache-Control', 'no-store');
     return c.json(hive.bots.createBot(hive.identity.getAgent('human'), c.req.param('id'), await readLimitedJson(c.req.raw, CREDENTIAL_JSON_BYTES)), 201);
