@@ -136,6 +136,7 @@ async function installSnapshot(page: Page, current: () => Snapshot) {
   await page.route("**/api/ui/snapshot", async route => fulfillJson(route, reads()));
   await page.route("**/api/ui/read-state", async route => fulfillJson(route, reads()));
   await page.route("**/api/ui/nav-status", async route => fulfillJson(route, { agentWork: {} }));
+  await page.route("**/api/ui/launch-requests", route => fulfillJson(route, { requests: [] }));
   await page.route("**/api/ui/read", async route => {
     const receipt = route.request().postDataJSON() as { messageSeqs: number[] };
     harness.receipts.push(receipt.messageSeqs);

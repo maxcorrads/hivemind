@@ -44,6 +44,7 @@ test("the stream groups, dividers, cards and system rows, and Mark unread moves 
   await page.route("**/api/ui/session", route => json(route, { ok: true }));
   await page.route("**/api/ui/snapshot", route => json(route, snap));
   await page.route("**/api/ui/read-state", route => json(route, reads));
+  await page.route("**/api/ui/launch-requests", route => json(route, { requests: [] }));
   await page.route("**/api/ui/read", route => json(route, reads));
   await page.route("**/api/ui/unread", route => { unread.push(route.request().postDataJSON()); return json(route, { ...reads, readRevision: 1 }); });
   await page.route("**/api/ui/mentions?*", route => json(route, { ...reads, messages: [], hasMore: false }));

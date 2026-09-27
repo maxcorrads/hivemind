@@ -47,6 +47,7 @@ async function installHive(page: Page) {
   await page.route("**/api/ui/activity?*", route => json(route, {
     readInstance: "mobile-fixture", readRevision: 0, readSeq: 3, items: [], hasMore: false }));
   await page.route("**/api/ui/nav-status", route => json(route, { agentWork: {} }));
+  await page.route("**/api/ui/launch-requests", route => json(route, { requests: [] }));
   await page.route("**/api/ui/channels/*/room", route => json(route, { room: null, tasks: [], activeTaskCount: 0,
     tasksHasMore: false, nextTaskCursor: null, links: [], unmanagedBots: [] }));
   await page.route("**/api/ui/channels/*/tasks", route => json(route, { items: [], hasMore: false }));

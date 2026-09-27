@@ -43,6 +43,7 @@ async function install(page: Page, fixture: Partial<Fixture> = {}): Promise<Fixt
   await page.route("**/api/ui/snapshot", route => json(route, snapshot()));
   await page.route("**/api/ui/read-state", route => json(route, snapshot()));
   await page.route("**/api/ui/nav-status", route => json(route, { agentWork: {} }));
+  await page.route("**/api/ui/launch-requests", route => json(route, { requests: [] }));
   await page.route("**/api/ui/read", route => json(route, snapshot()));
   await page.route("**/api/ui/activity?*", async route => {
     if (state.holdMentions) await state.holdMentions;
