@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { AtSign, CheckCheck, ListChecks, MessageSquare, MessagesSquare } from "lucide-react";
 import type { ActivityItem, ActivityReason } from "../src/shared/read-state.ts";
 import type { Agent, Channel } from "../src/shared/types.ts";
@@ -17,7 +17,7 @@ function when(at: number) {
 }
 
 export function Inbox({ box, items, unread, filter, loading = false, failed = false, hasMore, channels, agents, onBox, onFilter, onOpen,
-  onOlder, onMarkSeen, onMarkMessage }: {
+  onOlder, onMarkSeen, onMarkMessage, requests }: {
   box: InboxBox;
   /** The first page of this view has not arrived yet. */
   loading?: boolean;
@@ -36,6 +36,7 @@ export function Inbox({ box, items, unread, filter, loading = false, failed = fa
   onOlder: () => void;
   onMarkSeen: () => void;
   onMarkMessage: (item: ActivityItem) => Promise<void>;
+  requests?: ReactNode;
 }) {
   const [expanded, setExpanded] = useState<string[]>([]);
   const [marking, setMarking] = useState<string[]>([]);
@@ -66,6 +67,7 @@ export function Inbox({ box, items, unread, filter, loading = false, failed = fa
         </div>
       </div>
     </header>
+    {requests}
     <div className="stream inbox-stream">
       {error && <p className="inbox-error" role="alert">{error}</p>}
       {loading ? <div className="loading" role="status">{box === "all" ? "Loading activity…" : "Loading unread messages…"}</div>

@@ -91,6 +91,9 @@ export type NativeMessage =
    * the device session). The app renews it with its device token and installs the new cookie; the page just retries.
    */
   | { type: "device-session-expired" }
+  /** Native app forwards approval decisions over its verified broker and signed launcher channel. */
+  | { type: "launcher-approve"; id: string; requestId: string; templateId?: string }
+  | { type: "launcher-reject"; id: string; requestId: string }
   | TerminalMessage;
 
 /** Posts to the app; false in a browser or when WebKit refuses the message. */
@@ -367,6 +370,8 @@ export type TerminalEvent =
   | { type: "terminal-killed"; id: string | null; sessions: string[]; errors: TerminalKillFailure[] }
   /** A template's secret names, answering a template-secrets-* message. */
   | { type: "template-secrets"; id: string | null; template: string; names: string[] }
+  /** The broker relayed a signed Human decision to the launcher channel. */
+  | { type: "launcher-decided"; id: string; requestId: string; action: "approve" | "reject" }
   /** `code` is a BrokerErrorCode (bad-message, no-such-session, tmux-missing, …). */
   | { type: "terminal-error"; id: string | null; code: string; message: string; stream: number | null };
 
@@ -453,6 +458,10 @@ export function parseTerminalEvent(detail: unknown): TerminalEvent | null {
       if (!Array.isArray(names) || !names.every(name => typeof name === "string" && templateSecretNameProblem(name) === null)) return null;
       return { type: "template-secrets", id, template, names: names as string[] };
     }
+    case "launcher-decided":
+      return id !== null && typeof detail.requestId === "string" && detail.requestId.length > 0 &&
+        (detail.action === "approve" || detail.action === "reject")
+        ? { type: "launcher-decided", id, requestId: detail.requestId, action: detail.action } : null;
     case "terminal-error": {
       const stream = nullableStream(detail.stream);
       return typeof detail.code === "string" && typeof detail.message === "string" && stream !== undefined

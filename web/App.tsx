@@ -11,6 +11,7 @@ import { Inbox } from "./Inbox.tsx";
 import { JevLog } from "./JevLog.tsx";
 import { channelTitle } from "./labels.ts";
 import { LaunchSheet } from "./LaunchSheet.tsx";
+import { LaunchRequests, useLaunchRequests } from "./LaunchRequests.tsx";
 import { channelBack, mobileScreen, mobileTab, tabTarget, useMobile } from "./mobile-nav.ts";
 import { MobileDms, MobileTabs, projectDms } from "./MobileNav.tsx";
 import { useNativeBridge } from "./native-bridge.ts";
@@ -93,10 +94,11 @@ export function App() {
   };
   const navStatus = useNavStatus();
   const notifications = useDesktopNotifications(channels, navigate);
+  const launchRequests = useLaunchRequests(projects, snap?.agents ?? []);
   const { live, roomTick, jevTick, subscribeJev } = useRealtime({
     selection, hive, channel: channelPane, thread: threadState, inboxLoad: inbox.inboxLoad, changeSelection,
     reopenDm: dms.reopenDm, onActivity: inbox.receive, refreshRoutingView, onRoutingEvent, setErr,
-    onLiveEvent: event => { navStatus.onLiveEvent(event); notifications.onLiveEvent(event); },
+    onLiveEvent: event => { navStatus.onLiveEvent(event); notifications.onLiveEvent(event); launchRequests.onLiveEvent(event); },
   });
   useSelectionRepair(snap, sel, changeSelection);
   // Phones show one screen at a time with bottom tabs (#223); the hash stays the single source of navigation.
@@ -308,6 +310,9 @@ export function App() {
             }
             onOlder={inbox.loadOlder}
             onMarkSeen={inbox.markAllSeen}
+            requests={<LaunchRequests requests={launchRequests.requests} projects={projects} agents={snap.agents}
+              launcherAvailable={Boolean(snap.launcherAvailable)} error={launchRequests.error} loading={launchRequests.loading}
+              onRetry={() => void launchRequests.refresh()} onDecide={launchRequests.decide} />}
           />
         ) : sel.kind === "dms" ? (
           <MobileDms snap={snap} project={sel.project} onOpen={id => go({ kind: "channel", id })} onUnread={openUnread} />

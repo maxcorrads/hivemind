@@ -41,6 +41,28 @@ export type Snapshot = ReadSnapshot & {
   telegram?: { running: boolean; configured: boolean } & TelegramHealth;
   /** Whether Jev adaptive routing is on; the Routing log is offered only then. */
   jev?: { enabled: boolean };
+  /** A verified Hivemind Server.app can receive launcher commands. */
+  launcherAvailable?: boolean;
+};
+
+export type LaunchRequestView = {
+  id: string;
+  projectId: string;
+  brainId: string;
+  templateId: string;
+  /** Saved with the request so historical cards keep their label after the template is deleted. */
+  templateLabel: string;
+  taskId: string | null;
+  jobId: string | null;
+  agentId: string;
+  state: "awaiting_approval" | "approved" | "launching" | "launched" | "failed" | "rejected" | "cancelled" | "expired";
+  reason: string | null;
+  requestedAt: number;
+  decidedBy: string | null;
+  decidedAt: number | null;
+  session: string | null;
+  error: string | null;
+  capBlocked: boolean;
 };
 
 /** Roster status lines. */
@@ -141,6 +163,7 @@ export const api = {
       { method: "PUT", body: JSON.stringify(body) }),
   workerTemplates: (project: string) =>
     req<{ templates: WorkerTemplate[] }>(`/api/ui/projects/${encodeURIComponent(project)}/worker-templates`),
+  launchRequests: () => req<{ requests: LaunchRequestView[] }>("/api/ui/launch-requests"),
   createWorkerTemplate: (project: string, body: { slug: string; spec: WorkerTemplateSpec }) =>
     req<WorkerTemplate>(`/api/ui/projects/${encodeURIComponent(project)}/worker-templates`, { method: "POST", body: JSON.stringify(body) }),
   updateWorkerTemplate: (id: string, body: { expectedRevision: number; slug?: string; spec: WorkerTemplateSpec }) =>

@@ -287,6 +287,8 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
           else { win.clearTimeout(request.timer); request.reject(error); }
           return;
         }
+        // Approval has its own request listener and inline error on its card.
+        if (detail.id?.startsWith("approval-")) return;
         // A stream the broker no longer knows is over; other stream errors (a refused input) are not.
         const entry = detail.stream !== null ? streams.get(detail.stream) : undefined;
         if (entry && detail.code === "no-such-stream") loseStream(entry);
