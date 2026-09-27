@@ -185,6 +185,8 @@ final class BrokerHarness {
   nonisolated static let config = "/Users/me/Library/Application Support/Hivemind/tmux.conf"
   /// Set before the broker is first used.
   var configPath = BrokerHarness.config
+  /// Where launch secrets go (a temporary folder in the tests that use it).
+  var secretStore: LaunchSecretStore?
   nonisolated static let environment = ["PATH": "/usr/bin:/bin", "HOME": "/Users/me", "TMUX": "/private/tmp/tmux-501/default,1,0", "LANG": "it_IT.UTF-8"]
 
   lazy var broker: TerminalBroker = {
@@ -195,6 +197,7 @@ final class BrokerHarness {
         locateTmux: { [unowned self] in self.tmuxPath },
         isDirectory: { [unowned self] in self.folders.contains($0) },
         environment: Self.environment,
+        secrets: secretStore,
         log: { [unowned self] in self.logs.append($0) }))
     broker.onChange = { [unowned self] in self.changes += 1 }
     return broker

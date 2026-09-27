@@ -215,6 +215,19 @@ running, and with **Install tmux: `brew install tmux`** when tmux is missing.
 There is no launch outside tmux. **Copy** and **Copy all** work as before: the
 pasted text opens plain Terminal windows, not tmux.
 
+When the software is OpenCode (`opencode`, or any name containing it), the sheet
+has an **OpenCode Go API key (optional)** field, a masked input. A key pasted
+there reaches the agents of this launch as `OPENCODE_API_KEY`, which OpenCode's
+`opencode-go` and Zen providers read; left empty, OpenCode uses the key saved
+with `/connect`. It is **not saved** anywhere: not in the sheet's remembered
+settings, not in the copied command (**Copy** never includes it), and it is
+cleared once the launch started and when the sheet closes. The broker hands it
+to the new session through a private file that the session deletes on reading
+it, never on a command line ([Launch secrets](terminal-broker.md#launch-secrets)).
+An employee whose session is still running is reused as it is, so it keeps the
+key it started with; terminate its session to relaunch it with a new one. A
+browser has no such field, since it cannot launch.
+
 Each session is named `hm-<project>-<agent>`, or `hm-<project>-new-<n>` for a
 new agent whose name is not known yet. It starts in the workspace folder and
 runs the same command **Copy** would copy, in a login `zsh`, then stays open in
@@ -276,6 +289,9 @@ trusted as the UI itself is. What limits this:
   bytes, a title of at most 200 characters and an absolute folder (`/…` or
   `~/…`). The broker checks everything again, and refuses a launch whose tmux
   command would pass 15 KiB (tmux itself stops at about 16 KiB).
+- A launch may carry only one secret, `OPENCODE_API_KEY`, of at most 512
+  printable ASCII characters without spaces; any other name drops the message.
+  It never reaches a command line or a log.
 - The app takes at most one `terminal-launch`, one `terminal-open` and one
   `terminal-kill` per second per window, each counted on its own, and answers a
   refused one with an error.

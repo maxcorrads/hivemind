@@ -56,6 +56,7 @@ final class TerminalBrokerService {
           return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
         },
         environment: ProcessInfo.processInfo.environment,
+        secrets: LaunchSecretStore(folder: paths.launchSecrets),
         log: { log.append($0) }))
     broker.onChange = { [weak self] in self?.onChange?() }
     self.broker = broker

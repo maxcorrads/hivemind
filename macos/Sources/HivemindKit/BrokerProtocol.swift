@@ -137,12 +137,23 @@ public struct BrokerLaunch: Equatable, Sendable {
   /// keeps that session on "Resume same employees". Only a hint: the broker
   /// never creates a session under a name the client picked.
   public let session: SessionName?
+  /// Environment variables for the agent, passed through a private file and
+  /// never argv (LaunchSecretStore; docs/terminal-broker.md#launch-secrets).
+  /// A launch that reuses a running session starts nothing, so they are ignored.
+  public let secrets: LaunchSecrets?
 
-  public init(project: String, agent: String?, title: String, cwd: String, command: String, session: SessionName? = nil) throws(BrokerProtocolError) {
-    try self.init(project: project, agent: agent, title: title, cwd: cwd, command: command, session: session, field: "launch")
+  public init(
+    project: String, agent: String?, title: String, cwd: String, command: String, session: SessionName? = nil,
+    secrets: LaunchSecrets? = nil
+  ) throws(BrokerProtocolError) {
+    try self.init(project: project, agent: agent, title: title, cwd: cwd, command: command, session: session, secrets: secrets,
+                  field: "launch")
   }
 
-  init(project: String, agent: String?, title: String, cwd: String, command: String, session: SessionName?, field: String) throws(BrokerProtocolError) {
+  init(
+    project: String, agent: String?, title: String, cwd: String, command: String, session: SessionName?,
+    secrets: LaunchSecrets? = nil, field: String
+  ) throws(BrokerProtocolError) {
     guard Self.isProjectSlug(project) else {
       throw .invalid("\(field).project", "must be a project slug (lowercase letters, digits and dashes, at most 32)")
     }
@@ -170,6 +181,7 @@ public struct BrokerLaunch: Equatable, Sendable {
     self.cwd = cwd
     self.command = command
     self.session = session
+    self.secrets = secrets
   }
 
   public static func isProjectSlug(_ value: String) -> Bool {
@@ -312,7 +324,7 @@ public struct BrokerRequestFrame: Equatable, Sendable {
 extension BrokerRequestFrame: Codable {
   private enum Key: String, CodingKey {
     case type, id, version, token, client, launches, session, cols, rows, stream, data
-    case project, agent, title, cwd, command
+    case project, agent, title, cwd, command, secrets
   }
 
   public init(from decoder: any Decoder) throws {
@@ -357,6 +369,7 @@ extension BrokerRequestFrame: Codable {
           cwd: BrokerCoding.string(item, .cwd, field: "\(field).cwd"),
           command: BrokerCoding.string(item, .command, field: "\(field).command"),
           session: BrokerCoding.optionalSession(item, .session, field: "\(field).session"),
+          secrets: BrokerCoding.optionalSecrets(item, .secrets, field: "\(field).secrets"),
           field: field))
       }
       request = .launch(launches)
@@ -401,6 +414,7 @@ extension BrokerRequestFrame: Codable {
         try item.encode(launch.cwd, forKey: .cwd)
         try item.encode(launch.command, forKey: .command)
         try item.encodeIfPresent(launch.session, forKey: .session)
+        try item.encodeIfPresent(launch.secrets?.dictionary, forKey: .secrets)
       }
     case .attach(let session, let size):
       try c.encode(session, forKey: .session)
@@ -696,6 +710,17 @@ enum BrokerCoding {
     guard let value = try optionalString(c, key, field: field) else { return nil }
     guard let name = SessionName(value) else { throw .invalid(field, "must match \(SessionName.pattern)") }
     return name
+  }
+
+  /// Missing or null: nil. Anything else must be an object of allowlisted
+  /// names to valid values (LaunchSecrets); no error ever quotes a value.
+  static func optionalSecrets<K: CodingKey>(_ c: KeyedDecodingContainer<K>, _ key: K, field: String) throws(BrokerProtocolError) -> LaunchSecrets? {
+    let values: [String: String]?
+    do { values = try c.decodeIfPresent([String: String].self, forKey: key) } catch {
+      throw .invalid(field, "must be an object of strings")
+    }
+    guard let values else { return nil }
+    return try LaunchSecrets(values, field: field)
   }
 
   static func stream<K: CodingKey>(_ c: KeyedDecodingContainer<K>, _ key: K) throws(BrokerProtocolError) -> BrokerStreamID {

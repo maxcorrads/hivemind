@@ -324,8 +324,8 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
       const id = newId();
       return request<TerminalLaunched>("launch", {
         type: "terminal-launch", id, openInTerminal: openInTerminal && onMacDesktop(state.platform),
-        launches: launches.map(({ project, agent, title, cwd, command, session }) =>
-          ({ project, agent, title, ...(cwd ? { cwd } : {}), command, ...(session ? { session } : {}) })),
+        launches: launches.map(({ project, agent, title, cwd, command, session, secrets }) =>
+          ({ project, agent, title, ...(cwd ? { cwd } : {}), command, ...(session ? { session } : {}), ...(secrets ? { secrets } : {}) })),
       });
     },
     /** Opens Terminal.app attached to a running session; false when the page could not ask, or off the Mac. */

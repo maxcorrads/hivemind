@@ -4,7 +4,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Agent, Project, Seniority } from "../src/shared/types.ts";
 import { modelChoiceGroups, parseChoiceId, selectedChoiceId } from "../src/shared/launch-models.ts";
 import { api } from "./api.ts";
-import { inNativeApp, onMacDesktop, terminalSessionLaunchProblem, type TerminalSessionLaunch } from "./native-bridge.ts";
+import {
+  inNativeApp, onMacDesktop, terminalSecretProblem, terminalSessionLaunchProblem, type TerminalLaunchSecrets, type TerminalSessionLaunch,
+} from "./native-bridge.ts";
 import { SessionsSheet } from "./SessionsSheet.tsx";
 import { TerminalNotice } from "./TerminalNotice.tsx";
 import { agentTerminalSession, terminalBlocker, terminalHub, useTerminalState, type TerminalLaunched } from "./use-terminal.ts";
@@ -222,6 +224,9 @@ export function LaunchSheet({
   const [allHives, setAllHives] = useState(initial.allHives);
   const [tunes, setTunes] = useState<Record<string, { model: string; effort: string }>>(initial.tunes);
   const [copied, setCopied] = useState<string | null>(null);
+  // Pasted per launch and sent only to the app with the launch (docs/terminal-broker.md#launch-secrets): never saved,
+  // never in the copied text, cleared after a launch that started and when the sheet closes.
+  const [opencodeKey, setOpencodeKey] = useState("");
   const terminals = useTerminalState();
   // Terminal.app is the Mac's. The iPhone/iPad app starts sessions on the Mac and shows them in the page instead.
   const terminalApp = native && onMacDesktop(terminals.platform);
@@ -407,6 +412,16 @@ export function LaunchSheet({
   );
 
   const canCopyOne = built.ok && projects.length > 0;
+  // Only where the page can launch (the apps) and only for OpenCode, whose opencode-go and Zen providers read it.
+  const showOpencodeKey = native && softwareFamily(software) === "opencode";
+  useEffect(() => { if (!showOpencodeKey) setOpencodeKey(""); }, [showOpencodeKey]);
+  const opencodeKeyValue = showOpencodeKey ? opencodeKey.trim() : "";
+  const opencodeKeyProblem = opencodeKeyValue ? terminalSecretProblem(opencodeKeyValue) : null;
+  const secrets: { secrets?: TerminalLaunchSecrets } = opencodeKeyValue ? { secrets: { OPENCODE_API_KEY: opencodeKeyValue } } : {};
+  const close = () => {
+    setOpencodeKey("");
+    onClose();
+  };
   const canCopyAll = resume && resumeBlocks.length > 0 && resumeBlocks.every((b) => b.ok);
 
   // Hivemind.app only: the same launches as the copied text, each in its own tmux session (reused when that
@@ -417,8 +432,10 @@ export function LaunchSheet({
         title: seatTitle(b.hive?.name ?? "", b.agent.name), ...b.launch,
         // The session this employee already runs in, even one named hm-<project>-new-<n>, is reused.
         session: agentTerminalSession(b.agent),
+        ...secrets,
       }] : []) : [])
-    : (canCopyOne && built.ok ? [{ project: project?.slug ?? projectSlug, agent: null, title: seatTitle(hiveName, `new ${role}`), ...built.launch }] : []);
+    : (canCopyOne && built.ok
+      ? [{ project: project?.slug ?? projectSlug, agent: null, title: seatTitle(hiveName, `new ${role}`), ...built.launch, ...secrets }] : []);
   const terminalBlock = native ? terminalBlocker(terminals) : null;
   const terminalProblem = terminalBlock?.message ?? (terminalLaunches.length ? terminalSessionLaunchProblem(terminalLaunches) : null);
   const canLaunchTerminal = native && terminalLaunches.length > 0 && !terminalProblem && !launching;
@@ -450,6 +467,7 @@ export function LaunchSheet({
         const note = describeLaunch(launches, result);
         setLaunchNote(note);
         if (note?.error) return;
+        setOpencodeKey("");
         if (!terminalApp) {
           // One session opens in its terminal; several open the list, each a tap away.
           const names = result.names.filter((name): name is string => name !== null);
@@ -482,11 +500,11 @@ export function LaunchSheet({
   ].filter(Boolean).join(" · ") || "defaults off";
 
   if (started) {
-    return <SessionsSheet agents={agents} projects={projects} onClose={onClose} initialSession={started.session} />;
+    return <SessionsSheet agents={agents} projects={projects} onClose={close} initialSession={started.session} />;
   }
 
   return (
-    <Modal onClose={onClose}>
+    <Modal onClose={close}>
       <div className="sheet sheet-wide launch-sheet" role="dialog" aria-modal="true" aria-label="Launch agent" onClick={(e) => e.stopPropagation()}>
         <header className="sheet-head">
           <span className="sheet-icon" aria-hidden="true"><Terminal size={18} /></span>
@@ -500,7 +518,7 @@ export function LaunchSheet({
                 : "Choose an agent, then paste its launch command into a new terminal. One terminal = one employee."}
             </p>
           </div>
-          <button type="button" className="icon-btn" aria-label="Close dialog" title="Close" onClick={onClose}>
+          <button type="button" className="icon-btn" aria-label="Close dialog" title="Close" onClick={close}>
             <X size={16} aria-hidden="true" />
           </button>
         </header>
@@ -564,6 +582,33 @@ export function LaunchSheet({
               remember({ model: next.model, effort: next.effort });
             }}
           />
+          {showOpencodeKey && (
+            <>
+              <label className="launch-secret">
+                OpenCode Go API key (optional)
+                <input
+                  className="mono"
+                  type="password"
+                  name="hivemind-launch-opencode-key"
+                  value={opencodeKey}
+                  onChange={(e) => setOpencodeKey(e.target.value)}
+                  autoComplete="off"
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  data-1p-ignore="true"
+                  data-lpignore="true"
+                  aria-describedby="launch-opencode-key-help"
+                  aria-invalid={opencodeKeyProblem ? true : undefined}
+                />
+              </label>
+              <p id="launch-opencode-key-help" className="help-p">
+                Passed to OpenCode as <code>OPENCODE_API_KEY</code>. Not saved — if empty, OpenCode uses the key from <code>/connect</code>.
+                {resume && " An employee whose session is still running keeps it as it is."}
+              </p>
+              {opencodeKeyProblem && <p className="err" role="alert">{opencodeKeyProblem}</p>}
+            </>
+          )}
           {!resume && (
             <>
               {role === "worker" && (
@@ -804,7 +849,7 @@ export function LaunchSheet({
               all hives
             </label>
           )}
-          <button type="button" className="launch-close" onClick={onClose}>
+          <button type="button" className="launch-close" onClick={close}>
             Close
           </button>
           {resume ? (

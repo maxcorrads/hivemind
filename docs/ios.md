@@ -123,6 +123,10 @@ The page is the same as in Hivemind.app, with these differences:
   `terminal-open`, whatever the page asks.
 - A launch without a folder, or with `~`, uses the Mac user's home folder,
   which the Mac sends with each device session.
+- The **OpenCode Go API key** field is there too, for OpenCode launches. The
+  key goes with the launch through the gateway's TLS connection to the Mac's
+  broker and is not saved on the device or the Mac
+  ([Launch secrets](terminal-broker.md#launch-secrets)).
 - The notices say what the Mac is missing ("Terminals need Hivemind Server
   running on your Mac", "Install tmux on your Mac: `brew install tmux`"). The
   app cannot start Hivemind Server on the Mac.

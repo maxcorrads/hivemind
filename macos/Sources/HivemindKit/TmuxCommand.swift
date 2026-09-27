@@ -14,14 +14,18 @@ public struct TmuxNewSession: Equatable, Sendable {
   public let title: String
   public let project: String
   public let agent: String?
+  /// Files the script reads the launch's secrets from (LaunchSecretStore).
+  /// Only their paths are in argv; the values never are.
+  public let secretFiles: [LaunchSecretFile]
 
-  public init(name: SessionName, launch: BrokerLaunch) {
+  public init(name: SessionName, launch: BrokerLaunch, secretFiles: [LaunchSecretFile] = []) {
     self.name = name
     self.cwd = launch.cwd
     self.command = launch.command
     self.title = launch.title
     self.project = launch.project
     self.agent = launch.agent
+    self.secretFiles = secretFiles
   }
 }
 
@@ -82,7 +86,7 @@ public struct TmuxCommand: Equatable, Sendable {
       "-n", Self.argument(Self.windowName(spec.title)),
       "-e", "\(SessionName.environmentVariable)=\(spec.name.rawValue)",
       "--",
-      Self.shell, "-lic", Self.argument(Self.script(cwd: spec.cwd, command: spec.command)),
+      Self.shell, "-lic", Self.argument(Self.script(cwd: spec.cwd, command: spec.command, secretFiles: spec.secretFiles)),
     ]
     // ";" as its own argument chains tmux commands in one call. set-option
     // takes a pane target, which needs "=name:" (SessionName.windowTarget).
@@ -125,14 +129,30 @@ public struct TmuxCommand: Equatable, Sendable {
     "exec " + ([executable] + attach(name)).map(TerminalScript.shellQuoted).joined(separator: " ")
   }
 
-  /// The script zsh -lic runs: cd to the folder (single-quoted), the command
-  /// as the sheet built it, then an interactive login shell so the session
-  /// outlives the agent. Joined by a blank line, not "; ", so a trailing
-  /// comment or backslash in the command cannot swallow the exec.
-  public static func script(cwd: String, command: String) -> String {
+  /// The script zsh -lic runs: first each secret read from its file into
+  /// its exported variable and the file deleted (`secretLine`), then cd to
+  /// the folder (single-quoted), the command as the sheet built it, then an
+  /// interactive login shell so the session outlives the agent. Joined by a
+  /// blank line, not "; ", so a trailing comment or backslash in the command
+  /// cannot swallow the exec.
+  public static func script(cwd: String, command: String, secretFiles: [LaunchSecretFile] = []) -> String {
     var command = command
     while command.hasSuffix("\n") || command.hasSuffix("\r") { command.removeLast() }
-    return "cd -- \(TerminalScript.shellQuoted(cwd)) || exit 1\n" + command + "\n\nexec \(shell) -l"
+    return secretFiles.filter { LaunchSecrets.allowedNames.contains($0.name) }.map(secretLine).joined()
+      + "cd -- \(TerminalScript.shellQuoted(cwd)) || exit 1\n" + command + "\n\nexec \(shell) -l"
+  }
+
+  /// One secret, from its file into the shell's environment, before anything
+  /// else runs: the value itself is never in the script, only the file's
+  /// single-quoted path. A file that cannot be read (or is empty) leaves the
+  /// variable unset. /bin/cat and /bin/rm, because ~/.zshrc aliases apply in
+  /// this interactive shell. The variable lives in the shell and what it
+  /// starts, never in tmux's global or session environment.
+  static func secretLine(_ file: LaunchSecretFile) -> String {
+    let path = TerminalScript.shellQuoted(file.path)
+    let name = file.name
+    return "if \(name)=\"$(/bin/cat -- \(path) 2>/dev/null)\" && [ -n \"$\(name)\" ]; then export \(name); else unset \(name); fi; "
+      + "/bin/rm -f -- \(path)\n"
   }
 
   /// A tmux window name: one line without control characters or "#" (a

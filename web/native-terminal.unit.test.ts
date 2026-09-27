@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  decodeTerminalData, encodeTerminalInput, parseTerminalEvent, terminalDataLength, terminalSessionLaunchProblem, terminalSize,
-  TERMINAL_BROKER_LIMITS, TERMINAL_EVENT, type TerminalMessage, type TerminalSessionLaunch,
+  decodeTerminalData, encodeTerminalInput, parseTerminalEvent, terminalDataLength, terminalSecretProblem, terminalSessionLaunchProblem,
+  terminalSize, OPENCODE_API_KEY_PROBLEM, TERMINAL_BROKER_LIMITS, TERMINAL_SECRET_MAX_BYTES, TERMINAL_SECRET_NAMES, TERMINAL_EVENT,
+  type TerminalMessage, type TerminalSessionLaunch,
 } from "./native-bridge.ts";
 
 // The page side of the terminal bridge contract (HivemindKit BridgeTerminalEvent
@@ -113,5 +114,26 @@ test("session launches are checked as the broker checks them", () => {
   ];
   for (const launches of refused) {
     assert.notEqual(terminalSessionLaunchProblem(launches), null, JSON.stringify(launches).slice(0, 80));
+  }
+});
+
+test("a launch passes only an OpenCode key, checked as the app and the broker check it, and no problem quotes it", () => {
+  const key = "sk-go-TEST_s3cr3t_VALUE";
+  const good: TerminalSessionLaunch = { project: "acme", agent: "Atlas", title: "Acme - Atlas", cwd: "~/acme", command: "opencode" };
+  assert.deepEqual(TERMINAL_SECRET_NAMES, ["OPENCODE_API_KEY"]);
+  assert.equal(terminalSessionLaunchProblem([{ ...good, secrets: { OPENCODE_API_KEY: key } }]), null);
+  assert.equal(terminalSessionLaunchProblem([{ ...good, secrets: { OPENCODE_API_KEY: "k".repeat(TERMINAL_SECRET_MAX_BYTES) } }]), null);
+  assert.equal(terminalSecretProblem("!~#$%&'()*+,-./:;<=>?@[\\]^_`{|}\""), null, "every printable ASCII character but space");
+  const values = ["", "k".repeat(TERMINAL_SECRET_MAX_BYTES + 1), `${key} x`, `${key}\n`, `${key}\t`, `${key}\0`, `${key}è`, `${key}\x7f`];
+  for (const value of values) {
+    assert.equal(terminalSecretProblem(value), OPENCODE_API_KEY_PROBLEM, JSON.stringify(value).slice(0, 40));
+    const problem = terminalSessionLaunchProblem([{ ...good, secrets: { OPENCODE_API_KEY: value } }]);
+    assert.equal(problem, OPENCODE_API_KEY_PROBLEM);
+  }
+  const shapes: unknown[] = [{}, { OPENCODE_API_KEY: key, OTHER: key }, { PATH: key }, { OPENCODE_API_KEY: 1 }, [key], key, null];
+  for (const secrets of shapes) {
+    const problem = terminalSessionLaunchProblem([{ ...good, secrets: secrets as TerminalSessionLaunch["secrets"] }]);
+    assert.notEqual(problem, null, JSON.stringify(secrets));
+    assert.ok(!problem!.includes(key));
   }
 });

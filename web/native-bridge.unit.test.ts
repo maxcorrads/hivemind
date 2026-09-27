@@ -10,7 +10,7 @@ import {
   appLinks, badgeSync, inNativeApp, nativeBridge, notifyNative, postNative, reportedNativePlatform, resetNativePlatform, runNativeCommand,
   startHivemindServer, useNativeBridge,
   BROKER_UNAVAILABLE_HINT, NATIVE_EVENT, REMOTE_BROKER_UNAVAILABLE_HINT, REMOTE_TMUX_INSTALL_HINT, SERVER_UNVERIFIED_HINT, TERMINAL_EVENT,
-  TMUX_INSTALL_HINT, type NativeCommandHandlers, type NativeMessage,
+  OPENCODE_API_KEY_PROBLEM, TMUX_INSTALL_HINT, type NativeCommandHandlers, type NativeMessage,
   type TerminalSessionLaunch,
 } from "./native-bridge.ts";
 import type { Sel } from "./selection.ts";
@@ -493,3 +493,120 @@ test("a workspace path the app cannot cd into disables the launch buttons but no
   assert.equal(sheet.button(/^Copy command$/)!.disabled, false);
 });
 
+
+// The OpenCode Go API key (docs/terminal-broker.md#launch-secrets): pasted per launch, sent only with it.
+const OPENCODE_KEY = "sk-go-TEST_s3cr3t_VALUE";
+const keyInput = (host: ParentNode) => host.querySelector(".launch-secret input") as unknown as HTMLInputElement | null;
+async function typeInto(input: HTMLInputElement, value: string) {
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input), "value")!.set!;
+    setter.call(input, value);
+    input.dispatchEvent(new window.Event("input", { bubbles: true }) as unknown as Event);
+  });
+}
+const everywhereButTheLaunch = (host: ParentNode) => {
+  const stored = Array.from({ length: localStorage.length }, (_, i) => localStorage.getItem(localStorage.key(i)!) ?? "");
+  return [host.textContent ?? "", ...stored, window.location.href, JSON.stringify(posted.filter(m => m.type !== "terminal-launch"))];
+};
+
+test("the OpenCode Go API key field shows only for OpenCode, and only where the page can launch", async () => {
+  localStorage.setItem("hivemind-launch", JSON.stringify({ software: "opencode" }));
+  const browser = await mountLaunchSheet();
+  assert.equal(keyInput(browser.view.host), null, "not in a browser, which cannot launch");
+  for (const unmount of unmounts.splice(0).reverse()) unmount();
+
+  installBridge();
+  localStorage.setItem("hivemind-launch", JSON.stringify({ software: "codex" }));
+  const codex = await mountLaunchSheet();
+  assert.equal(keyInput(codex.view.host), null, "not for Codex");
+  for (const unmount of unmounts.splice(0).reverse()) unmount();
+
+  for (const software of ["opencode", "/opt/homebrew/bin/opencode"]) {
+    localStorage.setItem("hivemind-launch", JSON.stringify({ software }));
+    const sheet = await mountLaunchSheet();
+    const input = keyInput(sheet.view.host)!;
+    assert.ok(input, software);
+    assert.equal(input.type, "password");
+    assert.equal(input.getAttribute("autocomplete"), "off");
+    assert.equal(input.getAttribute("spellcheck"), "false");
+    assert.match(input.closest("label")?.textContent ?? "", /^OpenCode Go API key \(optional\)/);
+    assert.match(sheet.view.host.querySelector("#launch-opencode-key-help")?.textContent ?? "",
+      /^Passed to OpenCode as OPENCODE_API_KEY\. Not saved — if empty, OpenCode uses the key from \/connect\./);
+    // Switching the software away hides it and forgets what was typed.
+    await typeInto(input, OPENCODE_KEY);
+    const software_ = sheet.view.host.querySelector("input[list='launch-software']") as unknown as HTMLInputElement;
+    await typeInto(software_, "claude");
+    assert.equal(keyInput(sheet.view.host), null);
+    await typeInto(software_, "opencode");
+    assert.equal(keyInput(sheet.view.host)!.value, "");
+    for (const unmount of unmounts.splice(0).reverse()) unmount();
+  }
+
+  // The iPhone/iPad app launches on the Mac: the field is there too.
+  resetTerminalHub();
+  localStorage.setItem("hivemind-launch", JSON.stringify({ software: "opencode" }));
+  const ios = await mountLaunchSheet();
+  await readyOnIos();
+  assert.ok(keyInput(ios.view.host));
+});
+
+test("the key goes with the launch only: never copied, stored or shown, and cleared once the launch started", async () => {
+  localStorage.setItem("hivemind-launch", JSON.stringify({ software: "opencode" }));
+  installBridge();
+  const copies: string[] = [];
+  Object.defineProperty(globalThis.navigator, "clipboard", { configurable: true, value: { writeText: async (text: string) => { copies.push(text); } } });
+  const sheet = await mountLaunchSheet();
+  await ready();
+  await typeInto(keyInput(sheet.view.host)!, `  ${OPENCODE_KEY}  `);
+  await act(async () => { sheet.button(/^Copy command$/)!.click(); });
+  assert.equal(copies.length, 1);
+  assert.ok(!copies[0]!.includes(OPENCODE_KEY), "not in the copied command");
+  assert.ok(sheet.blocks().every(block => !block.includes(OPENCODE_KEY)), "nor in the preview");
+
+  await act(async () => { sheet.button(/^Start in background$/)!.click(); });
+  const [message] = launchesPosted();
+  assert.deepEqual(message.launches[0]!.secrets, { OPENCODE_API_KEY: OPENCODE_KEY }, "trimmed, and sent with the launch");
+  assert.ok(!message.launches[0]!.command.includes(OPENCODE_KEY), "never part of the command");
+  for (const text of everywhereButTheLaunch(sheet.view.host)) assert.ok(!text.includes(OPENCODE_KEY));
+  // A launch that failed keeps it for another try.
+  await fromApp({ type: "terminal-launched", id: message.id, names: [null], created: [],
+    errors: [{ index: 0, code: "cwd-missing", message: "No such folder" }] });
+  assert.equal(keyInput(sheet.view.host)!.value, `  ${OPENCODE_KEY}  `);
+
+  posted = [];
+  await act(async () => { sheet.button(/^Start in background$/)!.click(); });
+  const [second] = launchesPosted();
+  await fromApp({ type: "terminal-launched", id: second.id, names: ["hm-acme-new-1"], created: ["hm-acme-new-1"], errors: [] });
+  assert.equal(keyInput(sheet.view.host)!.value, "", "cleared once the launch started");
+  posted = [];
+  await act(async () => { sheet.button(/^Started$/)!.click(); });
+  assert.equal(launchesPosted()[0]!.launches[0]!.secrets, undefined, "the next launch goes without it");
+  for (const text of everywhereButTheLaunch(sheet.view.host)) assert.ok(!text.includes(OPENCODE_KEY));
+  delete (globalThis.navigator as { clipboard?: unknown }).clipboard;
+});
+
+test("an empty key sends nothing, a malformed one blocks the launch without quoting it, and Resume passes it to every employee", async () => {
+  localStorage.setItem("hivemind-launch", JSON.stringify({ software: "opencode", resume: true }));
+  installBridge();
+  const sheet = await mountLaunchSheet([seat("a1", "Atlas", "brain"), seat("a2", "Bea", "worker")]);
+  await ready();
+  assert.match(sheet.view.host.querySelector("#launch-opencode-key-help")?.textContent ?? "", /still running keeps it/);
+  const start = () => sheet.button(/^(Start 2 in background|Started)$/)!;
+
+  await typeInto(keyInput(sheet.view.host)!, `${OPENCODE_KEY} extra`);
+  assert.equal(start().disabled, true);
+  assert.equal(start().title, OPENCODE_API_KEY_PROBLEM);
+  assert.equal(sheet.view.host.querySelector(".launch-secret ~ [role=alert]")?.textContent, OPENCODE_API_KEY_PROBLEM);
+  assert.ok(!(sheet.view.host.textContent ?? "").includes(OPENCODE_KEY));
+  assert.equal(sheet.button(/^Copy all$/)!.disabled, false, "Copy never needs the key");
+
+  await typeInto(keyInput(sheet.view.host)!, "");
+  await act(async () => { start().click(); });
+  assert.ok(launchesPosted()[0]!.launches.every(l => !("secrets" in l)), "no key, no secrets");
+  await fromApp({ type: "terminal-launched", id: launchesPosted()[0]!.id, names: ["hm-acme-atlas", "hm-acme-bea"], created: [], errors: [] });
+
+  posted = [];
+  await typeInto(keyInput(sheet.view.host)!, OPENCODE_KEY);
+  await act(async () => { start().click(); });
+  assert.deepEqual(launchesPosted()[0]!.launches.map(l => l.secrets), [{ OPENCODE_API_KEY: OPENCODE_KEY }, { OPENCODE_API_KEY: OPENCODE_KEY }]);
+});

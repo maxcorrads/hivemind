@@ -22,12 +22,17 @@ public final class TerminalBroker {
     /// How often the session list is polled while nobody subscribes (for the
     /// menu's count); `BrokerLimits.sessionsPollInterval` while somebody does.
     public var idlePollInterval: TimeInterval
+    /// Where launch secrets go on their way to a session's shell; nil: a
+    /// launch that carries any fails, rather than start without them.
+    public var secrets: LaunchSecretStore?
+    /// Never given a secret: the broker logs names, counts and paths only.
     public var log: (String) -> Void
 
     public init(
       tmux: any TmuxRunning, terminals: any BrokerTerminalSpawning, scheduler: any Scheduling,
       locateTmux: @escaping () -> String?, isDirectory: @escaping (String) -> Bool,
-      environment: [String: String], idlePollInterval: TimeInterval = 15, log: @escaping (String) -> Void = { _ in }
+      environment: [String: String], idlePollInterval: TimeInterval = 15, secrets: LaunchSecretStore? = nil,
+      log: @escaping (String) -> Void = { _ in }
     ) {
       self.tmux = tmux
       self.terminals = terminals
@@ -36,6 +41,7 @@ public final class TerminalBroker {
       self.isDirectory = isDirectory
       self.environment = environment
       self.idlePollInterval = idlePollInterval
+      self.secrets = secrets
       self.log = log
     }
   }
@@ -79,6 +85,7 @@ public final class TerminalBroker {
     isRunning = true
     _ = relocateTmux()
     deps.log("[broker] started; tmux: \(tmuxPath ?? "not found")")
+    sweepSecrets()
     refreshSoon()
     onChange?()
   }
@@ -167,6 +174,13 @@ public final class TerminalBroker {
     lastLaunch = task
     await task.value
     if lastLaunch == task { lastLaunch = nil }
+  }
+
+  /// Deletes launch secret files no session read within LaunchSecretStore.maxAge.
+  func sweepSecrets() {
+    guard let store = deps.secrets else { return }
+    let removed = store.sweep()
+    if removed > 0 { deps.log("[broker] removed \(removed) unread launch secret file(s)") }
   }
 
   func removed(_ connection: BrokerConnection) {
@@ -465,6 +479,7 @@ public final class BrokerConnection {
     case .success(let list): running = list
     case .failure(let error): return send(.error(error), id: id)
     }
+    broker.sweepSecrets()
     var existing = Set(running.map(\.name))
     let names = BrokerLaunch.sessionNames(for: launches, existing: running)
     var results: [SessionName?] = []
@@ -472,10 +487,20 @@ public final class BrokerConnection {
     var errors: [BrokerLaunchFailure] = []
     for (index, (launch, name)) in zip(launches, names).enumerated() {
       if existing.contains(name) {
+        // Reused: nothing runs, so its secrets (if any) are never written.
         results.append(name)
         continue
       }
-      let arguments = tmux.newSession(TmuxNewSession(name: name, launch: launch))
+      var secretFiles: [LaunchSecretFile] = []
+      if let secrets = launch.secrets {
+        guard let store = broker.deps.secrets else {
+          results.append(nil)
+          errors.append(BrokerLaunchFailure(index: index, code: .internal, message: "launches[\(index)].secrets: this broker cannot pass secrets"))
+          continue
+        }
+        secretFiles = store.files(for: secrets)
+      }
+      let arguments = tmux.newSession(TmuxNewSession(name: name, launch: launch, secretFiles: secretFiles))
       let bytes = TmuxCommand.commandLineBytes(arguments)
       guard bytes <= TmuxCommand.maxCommandLineBytes else {
         results.append(nil)
@@ -487,8 +512,20 @@ public final class BrokerConnection {
         errors.append(BrokerLaunchFailure(index: index, code: .cwdMissing, message: "launches[\(index)].cwd: not a folder"))
         continue
       }
+      if let secrets = launch.secrets, let store = broker.deps.secrets {
+        do { try store.write(secrets, to: secretFiles) } catch {
+          broker.deps.log("[broker] \(name): cannot write its launch secrets: \(error.message)")
+          results.append(nil)
+          errors.append(BrokerLaunchFailure(index: index, code: .internal, message: "launches[\(index)].secrets: \(error.message)"))
+          continue
+        }
+      }
       let result = await broker.run(tmux, arguments)
       let started = result.succeeded ? true : await broker.run(tmux, tmux.hasSession(name)).succeeded
+      // Our shell never ran (tmux failed, or the name was another launch's
+      // session): nobody will read the secret files, so they go now. When it
+      // did run, it deletes them itself; sweepSecrets catches any it missed.
+      if !started || result.stderr.contains("duplicate session") { broker.deps.secrets?.remove(secretFiles) }
       if started {
         // A failure after the session started (setting its options) still
         // leaves a session to use; "duplicate session" is another launch's.

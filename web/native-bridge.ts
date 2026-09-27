@@ -240,6 +240,28 @@ export const TERMINAL_BROKER_LIMITS = {
   inputBytes: 64 * 1024, streams: 16, cols: { min: 2, max: 1000 }, rows: { min: 1, max: 500 },
 } as const;
 
+/**
+ * Environment variables a launch hands its agent without argv (HivemindKit LaunchSecrets): today only OpenCode's
+ * OPENCODE_API_KEY, read by its opencode-go and opencode (Zen) providers. Pasted per launch and never saved; see
+ * docs/terminal-broker.md#launch-secrets.
+ */
+export type TerminalLaunchSecrets = { OPENCODE_API_KEY: string };
+
+/** The only secret names the app and the broker take; any other drops the whole message. */
+export const TERMINAL_SECRET_NAMES: readonly (keyof TerminalLaunchSecrets)[] = ["OPENCODE_API_KEY"];
+/** Bytes of one secret value, at most (HivemindKit LaunchSecrets.maxValueBytes). */
+export const TERMINAL_SECRET_MAX_BYTES = 512;
+/** 1–512 printable ASCII characters: no space, tab, newline, NUL or anything outside ASCII. */
+const SECRET_VALUE = /^[\x21-\x7e]{1,512}$/;
+
+export const OPENCODE_API_KEY_PROBLEM =
+  `The OpenCode Go API key must be at most ${TERMINAL_SECRET_MAX_BYTES} printable characters, without spaces or line breaks`;
+
+/** Why the app would refuse this secret value, or null. Never quotes the value. */
+export function terminalSecretProblem(value: string): string | null {
+  return SECRET_VALUE.test(value) ? null : OPENCODE_API_KEY_PROBLEM;
+}
+
 /** One agent session to start, or reuse when it already runs (the same project + agent). */
 export type TerminalSessionLaunch = {
   /** Project slug. */
@@ -257,6 +279,11 @@ export type TerminalSessionLaunch = {
    * first launched as hm-<project>-new-<n> keeps it on Resume. A hint only; the broker never creates a session by it.
    */
   session?: string | null;
+  /**
+   * Handed to the agent's shell through a private file, never argv, and never saved. Ignored when the launch reuses a
+   * running session (nothing is started). Never part of the copied command.
+   */
+  secrets?: TerminalLaunchSecrets;
 };
 
 /** Page → app. `id` is the page's own request id (1–64 chars), echoed on the answer. */
@@ -445,6 +472,18 @@ export function terminalSessionLaunchProblem(launches: readonly TerminalSessionL
     if (!launch.command.trim() || launch.command.includes("\0")) return "The command is empty";
     if (utf8Length(launch.command) > limits.commandBytes) return "The command is too long to launch; copy it instead";
     if (launch.session != null && !terminalSessionName(launch.session)) return "Not a Hivemind session";
+    if (launch.secrets !== undefined) {
+      const secrets = launch.secrets as unknown;
+      if (!isRecord(secrets)) return "Launch secrets must be an object";
+      const names = Object.keys(secrets);
+      if (names.length === 0 || names.some(name => !(TERMINAL_SECRET_NAMES as readonly string[]).includes(name))) {
+        return "Only an OpenCode Go API key can be passed to a launch";
+      }
+      for (const name of names) {
+        const value = secrets[name];
+        if (typeof value !== "string" || terminalSecretProblem(value)) return OPENCODE_API_KEY_PROBLEM;
+      }
+    }
     const cwd = launch.cwd;
     if (cwd && (!(cwd.startsWith("/") || cwd === "~" || cwd.startsWith("~/")) || cwd.includes("\0") ||
         utf8Length(cwd) > limits.pathBytes)) {

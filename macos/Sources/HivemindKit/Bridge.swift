@@ -164,10 +164,17 @@ public struct TerminalSessionLaunch: Equatable, Sendable {
   public let command: String
   /// The agent's last reported session, reused when it still runs (BrokerLaunch.session).
   public let session: SessionName?
+  /// OPENCODE_API_KEY, typed into the sheet for this launch only
+  /// (BrokerLaunch.secrets). Never logged: LaunchSecrets redacts itself.
+  public let secrets: LaunchSecrets?
 
-  public init?(project: String, agent: String?, title: String, cwd: String?, command: String, session: SessionName? = nil) {
+  public init?(
+    project: String, agent: String?, title: String, cwd: String?, command: String, session: SessionName? = nil,
+    secrets: LaunchSecrets? = nil
+  ) {
     // Validate with the home folder standing in for "~" and a missing folder.
-    guard Self.launch(project: project, agent: agent, title: title, cwd: cwd, command: command, session: session, home: "/") != nil else { return nil }
+    guard Self.launch(project: project, agent: agent, title: title, cwd: cwd, command: command, session: session, secrets: secrets,
+                      home: "/") != nil else { return nil }
     if let cwd {
       guard cwd.hasPrefix("/") || cwd == "~" || cwd.hasPrefix("~/"), cwd.utf8.count <= BrokerLimits.maxCwdBytes else { return nil }
     }
@@ -177,6 +184,7 @@ public struct TerminalSessionLaunch: Equatable, Sendable {
     self.cwd = cwd
     self.command = command
     self.session = session
+    self.secrets = secrets
   }
 
   init?(body: Any) {
@@ -204,7 +212,21 @@ public struct TerminalSessionLaunch: Equatable, Sendable {
       session = valid
     default: return nil
     }
-    self.init(project: project, agent: agent, title: title, cwd: cwd, command: command, session: session)
+    // Only allowlisted names with valid values; anything else drops the message.
+    let secrets: LaunchSecrets?
+    switch object["secrets"] {
+    case nil, is NSNull: secrets = nil
+    case let entries as [String: Any]:
+      var values: [String: String] = [:]
+      for (name, value) in entries {
+        guard let text = value as? String else { return nil }
+        values[name] = text
+      }
+      guard let valid = try? LaunchSecrets(values) else { return nil }
+      secrets = valid
+    default: return nil
+    }
+    self.init(project: project, agent: agent, title: title, cwd: cwd, command: command, session: session, secrets: secrets)
   }
 
   /// All launches of a message, or nil when the list or any one is invalid.
@@ -221,11 +243,12 @@ public struct TerminalSessionLaunch: Equatable, Sendable {
   /// The broker's launch: "~" expanded against `home`, no folder meaning
   /// `home`. Nil only when the expanded folder breaks the broker's limits.
   public func brokerLaunch(home: String) -> BrokerLaunch? {
-    Self.launch(project: project, agent: agent, title: title, cwd: cwd, command: command, session: session, home: home)
+    Self.launch(project: project, agent: agent, title: title, cwd: cwd, command: command, session: session, secrets: secrets, home: home)
   }
 
   private static func launch(
-    project: String, agent: String?, title: String, cwd: String?, command: String, session: SessionName?, home: String
+    project: String, agent: String?, title: String, cwd: String?, command: String, session: SessionName?, secrets: LaunchSecrets?,
+    home: String
   ) -> BrokerLaunch? {
     let base = home.hasSuffix("/") && home.count > 1 ? String(home.dropLast()) : home
     let folder: String
@@ -234,7 +257,7 @@ public struct TerminalSessionLaunch: Equatable, Sendable {
     case let path? where path.hasPrefix("~/"): folder = (base == "/" ? "" : base) + path.dropFirst()
     case let path?: folder = path
     }
-    return try? BrokerLaunch(project: project, agent: agent, title: title, cwd: folder, command: command, session: session)
+    return try? BrokerLaunch(project: project, agent: agent, title: title, cwd: folder, command: command, session: session, secrets: secrets)
   }
 }
 

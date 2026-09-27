@@ -24,6 +24,7 @@ The contract lives in `macos/Sources/HivemindKit`:
 | `TmuxCommand.swift` | Every tmux argv, the `list-sessions` parser and the tmux config text |
 | `TmuxLocator.swift` | Finding tmux |
 | `BrokerPaths.swift` | The socket, token and config paths, and `BrokerToken` |
+| `LaunchSecrets.swift` | A launch's secrets (`LaunchSecrets`, the OpenCode Go API key) and the private files that hand them to a session (`LaunchSecretStore`); see [Launch secrets](#launch-secrets) |
 | `Bridge.swift` | The page ↔ app terminal messages (`BridgeMessage`, `BridgeTerminalEvent`) |
 | `BrokerServer.swift`, `BrokerIO.swift`, `BrokerOutput.swift`, `BrokerFiles.swift`, `BrokerStatus.swift` | The broker itself (`TerminalBroker`, `BrokerConnection`) behind injectable tmux, PTY and transport seams, output batching and backpressure, its files, and the menu's status line |
 | `ClientBroker.swift`, `ClientTransport.swift`, `ClientTerminalRouter.swift` | The client (`BrokerClient`), the Unix-socket transport, and the per-window relay to the page (`TerminalBridgeRouter`) |
@@ -123,7 +124,8 @@ running, in which case it is reused and its command is not run again:
 
 ```text
 tmux … new-session -d -s <name> -n <window name> -e HIVEMIND_TMUX_SESSION=<name> \
-  -- /bin/zsh -lic "cd -- '<cwd>' || exit 1
+  -- /bin/zsh -lic "[<one line per launch secret>]
+cd -- '<cwd>' || exit 1
 <command>
 
 exec /bin/zsh -l" \
@@ -152,6 +154,9 @@ exec /bin/zsh -l" \
   server stores it and returns it as `agent.terminalSession` (see
   [The session label](#the-session-label)).
 - The two user options record the project and the agent for `sessions`.
+- A launch with [secrets](#launch-secrets) starts its script with one line per
+  secret, which reads the value from a private file and deletes the file. Only
+  the file's path is in the script; the value never is.
 
 The other calls:
 
@@ -235,7 +240,7 @@ speaks. The broker answers with `min(client, broker)`, or with
 | `sessions.list` | none | `sessions` |
 | `sessions.subscribe` | none | `sessions` now, and again after each change |
 | `sessions.unsubscribe` | none | none |
-| `launch` | `launches`: 1–24 of `{project, agent, title, cwd, command, session?}` | `launched` |
+| `launch` | `launches`: 1–24 of `{project, agent, title, cwd, command, session?, secrets?}` | `launched` |
 | `attach` | `session` name, `cols` 2–1000, `rows` 1–500 | `attached`, then `output`… until `exit` |
 | `input` | `stream` int ≥1, `data` base64 (1 B–64 KiB decoded) | none |
 | `resize` | `stream`, `cols`, `rows` | none |
@@ -252,6 +257,7 @@ A launch is:
 | `cwd` | absolute (`/…`), at most 1024 bytes, no NUL. The broker refuses a folder that is not a directory with `cwd-missing`. |
 | `command` | not blank, at most 8 KiB (8192 bytes), no NUL |
 | `session` | optional session name: the session this agent last reported (`agent.terminalSession`). When it is running and was launched for the same project and for no agent or this one, the launch reuses it, so an agent first launched as `hm-<project>-new-<n>` keeps that session on resume. Otherwise it is ignored: the broker never creates a session under a name the client picked. |
+| `secrets` | optional object of environment variables for the agent: `{"OPENCODE_API_KEY": "<key>"}`, the only name allowed. The value is 1–512 bytes of printable ASCII (`0x21`–`0x7E`: no space, tab, newline or NUL). Any other name, an empty object, a value that is not a string or breaks the rule refuses the whole frame with `bad-message`, and the error names the field, never the value. See [Launch secrets](#launch-secrets). |
 
 ### Broker → client
 
@@ -312,6 +318,78 @@ Quitting Hivemind Server.app hangs up every PTY and closes every connection. It
 never runs `kill-session`: the tmux server, its sessions and the agents in them
 keep running, and the next broker finds them. The broker logs to
 `~/Library/Logs/Hivemind/broker.log`, never with the token.
+
+## Launch secrets
+
+The Launch agent sheet has an **OpenCode Go API key** field (see
+[Launch agent sheet](macos.md#terminals)). OpenCode's `opencode-go` and
+`opencode` (Zen) providers read their key from `OPENCODE_API_KEY`, so a key
+typed there reaches the agent as that variable, in that agent's session only.
+Hivemind never saves it: not in the page's storage, not in the Node server, not
+in the apps, not in tmux's environment, not in a log.
+
+On its way:
+
+1. **Page.** The key lives in the open sheet's state only, and is cleared once
+   a launch started and when the sheet closes. It goes into the launch as
+   `secrets: {OPENCODE_API_KEY: <key>}` (surrounding spaces trimmed) and never
+   into the copied command, a URL or a message. The page checks the value as
+   the broker does (`terminalSecretProblem`, `terminalSessionLaunchProblem` in
+   `web/native-bridge.ts`) and says what is wrong without quoting it.
+2. **App.** `terminal-launch` parses `secrets` strictly (`TerminalSessionLaunch`,
+   `LaunchSecrets`): only `OPENCODE_API_KEY`, a string of 1–512 printable ASCII
+   bytes without whitespace. Anything else drops the whole message. The app
+   passes it on in the broker's `launch`. On iOS the frame goes through the
+   remote gateway unchanged ([Remote access](remote-access.md#terminal-broker)),
+   inside its TLS connection; the gateway reads only the first frame, `hello`.
+3. **Broker.** The frame is checked again. `LaunchSecrets` prints as
+   `LaunchSecrets(OPENCODE_API_KEY: <redacted>)` in every description, debug
+   description and `dump`, so a launch that reaches a log shows no value; the
+   broker logs names, counts and paths only.
+4. **File.** For a session it is about to create, the broker writes the value
+   (exactly, no newline) to a new file named `<random UUID>.secret` in
+   `~/Library/Application Support/Hivemind/launch-secrets/`
+   (`HivemindPaths.launchSecrets`, `LaunchSecretStore`). The folder is created
+   at `0700`, checked with `lstat` (a real folder, never a symlink, owned by the
+   user) and tightened to `0700` if needed. The file is opened with
+   `O_CREAT | O_EXCL | O_NOFOLLOW` and `fchmod`ed to `0600`, so it never
+   replaces or follows anything already there.
+5. **Script.** The session's `zsh -lic` script starts with, for each secret:
+
+   ```sh
+   if OPENCODE_API_KEY="$(/bin/cat -- '<file>' 2>/dev/null)" && [ -n "$OPENCODE_API_KEY" ]; then export OPENCODE_API_KEY; else unset OPENCODE_API_KEY; fi; /bin/rm -f -- '<file>'
+   ```
+
+   before the `cd` and the command (`TmuxCommand.secretLine`). The path is
+   single-quoted. `/bin/cat` and `/bin/rm`, because the shell is interactive
+   and `~/.zshrc` aliases apply. A file that cannot be read, or is empty,
+   leaves the variable unset and the launch goes on: OpenCode then uses the key
+   saved with `/connect`. The variable is exported in the session's shell, so
+   the agent and the login shell the session stays in afterwards have it. It is
+   never in tmux's global or session environment (`tmux show-environment`
+   does not list it): the only `-e` is `HIVEMIND_TMUX_SESSION`.
+
+**Why not argv.** A command line is readable with `ps` by other processes:
+the tmux client's for the moment it runs, and the pane's `zsh -lic <script>`
+for as long as the agent runs under it. tmux also keeps a session's `-e`
+values in its session environment for as long as the session lives, where
+`show-environment` and every new window get them. A file only the
+user can read, deleted as soon as it is read, is visible for well under a
+second and only to what could read the user's files anyway.
+
+**Cleanup.** A file is deleted by the script that reads it. When the session's
+shell never runs (tmux fails, the folder is missing, another launch took the
+name meanwhile), the broker deletes it at once. Any file left in the folder for
+more than 10 minutes (`LaunchSecretStore.maxAge`), for example because a
+`~/.zshrc` exited early, is deleted when the broker starts and before every
+launch (`sweep`). A broker without a store (none in the app) refuses a launch
+with secrets (`internal`) rather than start it without them.
+
+**Reused sessions.** A launch that reuses a running session (the same agent's,
+or the `session` hint on **Resume same employees**) starts nothing, so its
+secrets are ignored and no file is written: that session keeps whatever key it
+started with. To give a running agent a new key, terminate its session and
+launch it again.
 
 ## Clients
 
@@ -390,7 +468,7 @@ Page → app (`window.webkit.messageHandlers.hivemind.postMessage`):
 
 | type | fields | notes |
 | --- | --- | --- |
-| `terminal-launch` | `id`?, `launches`: `[{project, agent, title, cwd?, command, session?}]`, `openInTerminal` boolean | `agent` is null for a new agent; `session` is the agent's `terminalSession` on resume. `cwd` may be `~` or `~/…`, or absent for home; the app expands it. With `openInTerminal`, the app then opens a Terminal.app window attached to each session the broker returned, even if the page has moved on. At most 1 per second per window. |
+| `terminal-launch` | `id`?, `launches`: `[{project, agent, title, cwd?, command, session?, secrets?}]`, `openInTerminal` boolean | `agent` is null for a new agent; `session` is the agent's `terminalSession` on resume. `secrets` is `{OPENCODE_API_KEY}` only ([Launch secrets](#launch-secrets)). `cwd` may be `~` or `~/…`, or absent for home; the app expands it. With `openInTerminal`, the app then opens a Terminal.app window attached to each session the broker returned, even if the page has moved on. At most 1 per second per window. |
 | `terminal-open` | `session` | Opens Terminal.app attached to a running session (the app checks with `sessions.list` first). No answer on success. At most 1 per second per window. |
 | `terminal-attach` | `id`?, `session`, `cols`, `rows` | Until `terminal-attached`, the page holds the viewer's resizes (the latest size) and keys (in order, at most 64 KiB, the oldest dropped beyond), and sends them once attached; held keys are discarded if the attach fails or the viewer leaves first |
 | `terminal-input` | `stream`, `data` base64 ≤64 KiB | `encodeTerminalInput` splits a paste into chunks |
@@ -557,7 +635,13 @@ that terminals are off in this window and offers no button.
   neither the token nor the folder.
 - **No shell built from strings.** Every tmux call is an argv array. The only
   shell text is the launch command itself, which is the agent's command by
-  design, with the folder single-quoted before it. tmux format expansion and
+  design, with the folder single-quoted before it, and before that the lines
+  that read a launch's secrets from their single-quoted files.
+- **No secret in argv or a log.** An OpenCode Go API key travels in the launch
+  message and a `0600` file that the session deletes on reading it, never in
+  tmux's arguments, the script text or tmux's environment, and nothing prints
+  its value ([Launch secrets](#launch-secrets)). Whoever controls the page can
+  of course read what the user types into it, as with any field. tmux format expansion and
   its `;` command separator are handled as described in
   [What tmux runs](#what-tmux-runs).
 - **The user's tmux is never touched.** Everything goes to `-L hivemind` with
