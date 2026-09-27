@@ -143,18 +143,16 @@ export function taskBody(envelope: TaskEnvelope): string {
     return [header, `Advisory claim version ${envelope.claimVersion}`,
       'reason' in a ? `Reason: ${a.reason}` : '',
       'paths' in a ? `Declared intent: ${a.paths.join('; ') || 'no paths declared'}` : '',
-      'leaseSeconds' in a ? `Lease requested: ${a.leaseSeconds} seconds` : '',
-      'Advisory coordination only: no filesystem lock, code execution, reassignment or change of task authority. Expiry requires explicit reconciliation.'].filter(Boolean).join('\n');
+      'leaseSeconds' in a ? `Lease requested: ${a.leaseSeconds} seconds` : ''].filter(Boolean).join('\n');
   }
   if (a.type === 'checkpoint') {
     const c = a.checkpoint;
-    return [header, `Checkpoint version ${envelope.checkpointVersion}; later checkpoints supersede this report.`,
+    return [header, `Checkpoint version ${envelope.checkpointVersion} (a report, not completion)`,
       `Completed: ${c.completedSteps.join('; ') || 'none reported'}`,
       `Open questions: ${c.unresolvedQuestions.join('; ') || 'none reported'}`,
       `Next action: ${c.nextAction}`, `Artifacts: ${c.artifacts.join('; ') || 'none'}`,
-      `Reported checks (not independently verified): ${c.checks.map(check => `${check.name}: ${check.outcome} [${check.evidenceSeqs.join(', ')}]`).join('; ') || 'none run/reported'}`,
-      `Evidence seqs: ${c.evidenceSeqs.join(', ') || 'none'}`,
-      'Checkpoint only: not completion or a host context reset. Later unsaved work may exist.'].join('\n');
+      `Reported checks: ${c.checks.map(check => `${check.name}: ${check.outcome} [${check.evidenceSeqs.join(', ')}]`).join('; ') || 'none run/reported'}`,
+      `Evidence seqs: ${c.evidenceSeqs.join(', ') || 'none'}`].join('\n');
   }
   if (a.type === 'accept') return `${header}\nWorker explicitly accepted the current contract.`;
   if (a.type === 'reject') return `${header}\nReason: ${a.reason}`;
@@ -163,7 +161,6 @@ export function taskBody(envelope: TaskEnvelope): string {
   if (a.type !== 'result') throw new Error('Unknown task action');
   const r = a.result;
   return [header, r.summary, `Artifacts: ${r.artifacts.join('; ') || 'none'}`,
-    `Reported checks (not independently verified): ${r.checks.map(c => `${c.name}: ${c.outcome} [seqs ${c.evidenceSeqs.join(', ')}]`).join('; ') || 'none run/reported'}`,
-    `Known gaps: ${r.gaps.join('; ') || 'none reported'}`, `Evidence seqs: ${r.evidenceSeqs.join(', ') || 'none'}`,
-    'Result submitted; not accepted-complete until the assigning brain reviews it.'].join('\n');
+    `Reported checks: ${r.checks.map(c => `${c.name}: ${c.outcome} [seqs ${c.evidenceSeqs.join(', ')}]`).join('; ') || 'none run/reported'}`,
+    `Known gaps: ${r.gaps.join('; ') || 'none reported'}`, `Evidence seqs: ${r.evidenceSeqs.join(', ') || 'none'}`].join('\n');
 }

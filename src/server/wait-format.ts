@@ -65,7 +65,8 @@ export function packWait(
     recipientIds: m.recipientIds,
     source: m.source,
     botEvent: m.botEvent,
-    body: m.body.length > BODY_MAX ? m.body.slice(0, BODY_MAX) : m.body,
+    // A task message's body is taskBody(taskEvent): its header line is enough beside the envelope.
+    body: m.taskEvent ? m.body.split("\n", 1)[0]! : m.body.length > BODY_MAX ? m.body.slice(0, BODY_MAX) : m.body,
     threadId: m.threadId,
     attachments: m.attachments,
     attachmentCount: m.attachments?.length ?? 0,
@@ -132,10 +133,11 @@ export function packWait(
   };
 }
 
-/** Includes JSON escaping/pretty printing used by MCP and the CLI, not only HTTP JSON. */
+/**
+ * The largest form a wait result takes on any wire: HTTP JSON, the CLI's line (with its session id) and the MCP
+ * envelope, whose text is the result JSON escaped once more. The MCP text never exceeds the whole result.
+ */
 export function waitWireBytes(result: WaitResult): number {
-  const mcpText = JSON.stringify({ instruction: result.next, ...result }, null, 2);
-  return Math.max(Buffer.byteLength(JSON.stringify(result)),
-    Buffer.byteLength(JSON.stringify({ ...result, sessionId: "0".repeat(36) }, null, 2)),
-    Buffer.byteLength(JSON.stringify({ content: [{ type: "text", text: mcpText }] })));
+  return Math.max(Buffer.byteLength(JSON.stringify({ ...result, sessionId: "0".repeat(36) })),
+    Buffer.byteLength(JSON.stringify({ content: [{ type: "text", text: JSON.stringify(result) }] })));
 }

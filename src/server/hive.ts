@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { ROUTINE_BATCH_MS } from "../shared/notifications.ts";
+import { AgentTraffic } from "./agent-traffic.ts";
 import { AdaptiveTopologyRuntime } from "./adaptive-topology.ts";
 import { HiveBus } from "./hive-events.ts";
 import { InboxDeliveryStore } from "./inbox-delivery.ts";
@@ -82,6 +83,8 @@ export class Hive {
   readonly storage: Storage;
   /** Post-commit change notifications; see HiveEvents for every event and payload. */
   readonly bus = new HiveBus();
+  /** Bytes the agent API returned per brain/worker since start (Human snapshot). */
+  readonly traffic = new AgentTraffic();
   readonly home: string;
 
   readonly telegramAdmin!: TelegramAdminService;

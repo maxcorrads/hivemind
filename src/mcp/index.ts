@@ -13,6 +13,7 @@ import { agentDownloadToFile, agentRequest } from "../client/http.ts";
 import { imagePreview } from "../server/files.ts";
 import { guessMime } from "../shared/mime.ts";
 import { waitUntilMail } from "./wait-loop.ts";
+import { createWaitView } from "./wait-view.ts";
 import { digestExpansionSchema } from "../shared/digest.ts";
 import { claimPreviewSchema } from '../shared/task-claims.ts';
 import { assignTaskSchema, taskEventSchema } from '../shared/tasks.ts';
@@ -23,10 +24,10 @@ import { attachablePath } from "./attach-guard.ts";
 import { MESSAGE_EVENT_TYPES } from "../shared/types.ts";
 import { terminalSessionFields } from "../shared/terminal-session.ts";
 import { JOIN_SESSION, PARAM_DESCRIPTIONS, SEARCH_NEXT, TOOL_DESCRIPTIONS, joinNext } from "./tool-text.ts";
-import { MCP_HEARTBEAT_MS, MCP_WAIT_POLL_MS, WAIT_NEXT, type Agent, type Channel, type WaitResult } from "../shared/types.ts";
+import { MCP_HEARTBEAT_MS, MCP_WAIT_POLL_MS, type Agent, type Channel, type WaitResult } from "../shared/types.ts";
 
 function text(data: unknown) {
-  return { content: [{ type: "text" as const, text: typeof data === "string" ? data : JSON.stringify(data, null, 2) }] };
+  return { content: [{ type: "text" as const, text: typeof data === "string" ? data : JSON.stringify(data) }] };
 }
 
 export { normalizeChannelReference };
@@ -70,6 +71,7 @@ export async function startMcp() {
   let joinedName: string | undefined;
   let inboxId = randomUUID();
   let inboxReady: Promise<{ sessionId: string }> | undefined;
+  let waitView = createWaitView();
   const inboxSession = (signal?: AbortSignal) => {
     if (!inboxReady) {
       inboxReady = agentRequest<{ sessionId: string }>(
@@ -118,7 +120,7 @@ export async function startMcp() {
         },
         auth ?? null,
       );
-      if (sessionToken !== result.token) { inboxId = randomUUID(); inboxReady = undefined; }
+      if (sessionToken !== result.token) { inboxId = randomUUID(); inboxReady = undefined; waitView = createWaitView(); }
       sessionToken = result.token;
       joinedName = result.agent.name;
       ensureHeartbeat();
@@ -340,10 +342,7 @@ export async function startMcp() {
           ),
         { signal: extra.signal },
       );
-      return text({
-        instruction: WAIT_NEXT,
-        ...result,
-      });
+      return text(waitView(result));
     },
   );
 

@@ -47,9 +47,17 @@ Four independent limits apply to both compact and raw wait responses:
   even if only unaddressed rows were found. The next request gets a fresh budget.
 - **Messages:** at most 100 for a brain and 8 for a worker.
 - **Conversations:** at most 8 distinct channels/DMs, including mention/control mail.
-- **Bytes:** at most 65,536 serialized bytes, measured for HTTP JSON, CLI pretty JSON
-  and the MCP tool result with its escaped inner JSON. Both raw and compact forms
-  must fit, so changing clients on retry does not expand the receipt beyond its cap.
+- **Bytes:** at most 65,536 serialized bytes, measured for HTTP JSON, the CLI's
+  one-line JSON (with its session id) and the MCP tool result with its escaped inner
+  JSON. Both raw and compact forms must fit, so changing clients on retry does not
+  expand the receipt beyond its cap.
+
+In compact mail a task message's `body` is only its header line (task id, action,
+revision, contract version): its `taskEvent` envelope carries the whole contract or
+action, and the full readable body stays in history. The MCP `wait` tool also shows
+the model less than the HTTP result: `you` only on the first wake of a session and
+whenever it changes, the full `next` on the first wake and a short reminder of the
+loop after that, and no empty legacy `control`/`mentions`/`messages` arrays.
 
 Bodies and attachment metadata are hydrated incrementally, after message/channel
 checks; at most the message cap plus three candidates are hydrated. Wait does not
