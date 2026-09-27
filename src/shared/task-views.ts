@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { Agent } from './types.ts';
+import type { Agent, AgentTrafficView } from './types.ts';
 import type { JobView } from './jobs.ts';
 import type { TaskSnapshot } from './tasks.ts';
 
@@ -12,6 +12,8 @@ export type TaskOverview = {
   worker: Agent;
   brain: Agent;
   template: { id: string; label: string } | null;
+  /** Worker API traffic since this server started, including an archived worker; not task-specific. */
+  traffic: AgentTrafficView | null;
   /** Current native-close gates for Human controls; task control rechecks these atomically. */
   controls: { retryClose: boolean; resume: boolean };
 };

@@ -2,11 +2,12 @@ import { z } from 'zod';
 import { HiveError, type Agent } from '../../shared/types.ts';
 import { taskViewsListSchema, type TaskOverview, type TaskViewsListInput, type TaskViewsPage } from '../../shared/task-views.ts';
 import type { JobStore } from './jobs.ts';
+import type { AgentTraffic } from '../agent-traffic.ts';
 import type { TaskStore } from '../tasks.ts';
 import type { AgentDirectory, Core } from './ports.ts';
 
 type Deps = Core & { identity: Pick<AgentDirectory, 'getAgent'>; tasks: Pick<TaskStore, 'view'>;
-  jobs: Pick<JobStore, 'get'> };
+  jobs: Pick<JobStore, 'get'>; traffic: Pick<AgentTraffic, 'snapshot'> };
 type TaskRow = { id: string; updated_at: number; project_id: string; project_slug: string };
 type Cursor = { v: 1; updatedAt: number; id: string; projectId: string | null };
 const cursorSchema = z.object({ v: z.literal(1), updatedAt: z.number().int().nonnegative().safe(),
@@ -86,6 +87,7 @@ export class TaskViews {
     const task = this.deps.tasks.view(actor, row.id);
     const worker = this.deps.identity.getAgent(task.workerId);
     const brain = this.deps.identity.getAgent(task.assignerId);
+    const traffic = this.deps.traffic.snapshot([worker.id])[worker.id] ?? null;
     const saved = this.db.prepare(`SELECT r.template_snapshot,
       (SELECT k.state FROM launcher_commands k WHERE k.request_id=r.id AND k.kind='kill'
         ORDER BY k.rowid DESC LIMIT 1) AS kill_state
@@ -119,7 +121,7 @@ export class TaskViews {
         LIMIT 1`).get(task.workerId);
       resume = !unsafe;
     }
-    return { task, projectId: row.project_id, project: row.project_slug, worker, brain, template,
+    return { task, projectId: row.project_id, project: row.project_slug, worker, brain, template, traffic,
       controls: { retryClose, resume } };
   }
 }

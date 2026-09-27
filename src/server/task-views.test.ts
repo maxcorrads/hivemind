@@ -57,6 +57,7 @@ test('Human cross-channel tasks paginate by updatedAt and id after project filte
   assert.deepEqual(f.hive.taskViews.list(f.human, { limit: 10 }).items.map(item => item.task.id)[0], b1.id);
   assert.equal(f.hive.taskViews.get(f.human, b1.id).brain.id, f.brainB.id);
   assert.equal(f.hive.taskViews.get(f.human, a1.id).worker.id, f.workerA.id);
+  assert.equal(f.hive.taskViews.get(f.human, a1.id).traffic, null);
   assert.throws(() => f.hive.taskViews.list(f.brainA), status(403));
   assert.throws(() => f.hive.taskViews.get(f.workerA, a1.id), status(403));
   assert.throws(() => f.hive.taskViews.list(f.human, { projectId: f.beta.id, cursor: first.nextCursor! }), status(400));
@@ -100,6 +101,7 @@ test('archived task-bound participants and deleted template retain launch snapsh
   const ticket = /hmc_[0-9a-f]{48}/.exec(launch.command)?.[0];
   assert.ok(ticket);
   const joined = f.hive.identity.join({ role: 'worker', claim: ticket });
+  f.hive.traffic.record(joined.agent.id, '/api/agent/wait', 321, 123456);
   const event = (actor: typeof f.brainA, action: unknown) => f.hive.tasks.event(actor, requested.task.id,
     { requestId: randomUUID(), expectedRevision: f.hive.tasks.get(f.human, requested.task.id).revision, action });
   event(joined.agent, { type: 'accept' });
@@ -117,6 +119,9 @@ test('archived task-bound participants and deleted template retain launch snapsh
   assert.equal(overview.brain.id, f.brainA.id);
   assert.ok(overview.brain.removedAt);
   assert.deepEqual(overview.template, { id: template.id, label: spec.label });
+  assert.deepEqual(overview.traffic, { since: 123456, bytes: 321, calls: 1,
+    routes: { '/api/agent/wait': { bytes: 321, calls: 1 } } });
+  assert.deepEqual(f.hive.taskViews.list(f.human, { projectId: f.alpha.id }).items[0]?.traffic, overview.traffic);
   assert.equal(f.hive.taskViews.list(f.human, { projectId: f.alpha.id }).items[0]?.template?.label, spec.label);
 });
 
