@@ -26,6 +26,9 @@ public final class TerminalBroker {
     /// session's shell; nil: a launch that carries any fails, rather than
     /// start without them.
     public var secrets: LaunchSecretStore?
+    /// Where worker template secrets are kept (the Keychain in the app); nil:
+    /// secrets.* requests are answered with an error.
+    public var templateSecrets: (any TemplateSecretVault)?
     /// Never given a secret or a variable's value: the broker logs names,
     /// counts and paths only.
     public var log: (String) -> Void
@@ -34,7 +37,7 @@ public final class TerminalBroker {
       tmux: any TmuxRunning, terminals: any BrokerTerminalSpawning, scheduler: any Scheduling,
       locateTmux: @escaping () -> String?, isDirectory: @escaping (String) -> Bool,
       environment: [String: String], idlePollInterval: TimeInterval = 15, secrets: LaunchSecretStore? = nil,
-      log: @escaping (String) -> Void = { _ in }
+      templateSecrets: (any TemplateSecretVault)? = nil, log: @escaping (String) -> Void = { _ in }
     ) {
       self.tmux = tmux
       self.terminals = terminals
@@ -44,6 +47,7 @@ public final class TerminalBroker {
       self.environment = environment
       self.idlePollInterval = idlePollInterval
       self.secrets = secrets
+      self.templateSecrets = templateSecrets
       self.log = log
     }
   }
@@ -389,9 +393,46 @@ public final class BrokerConnection {
       entry.terminal.resize(size)
     case .detach(let stream):
       detach(stream, id: id)
+    case .secretsList(let template):
+      templateSecrets(template, id: id) { _ in }
+    case .secretsSet(let template, let name, let value):
+      templateSecrets(template, id: id) { vault throws(BrokerProtocolError) in
+        let names = try Self.vaultCall { () throws(BrokerFiles.Failure) in try vault.names(for: template) }
+        guard names.contains(name) || names.count < TemplateSecrets.maxNames else {
+          throw BrokerProtocolError.invalid("name", "a template holds at most \(TemplateSecrets.maxNames) secrets")
+        }
+        try Self.vaultCall { () throws(BrokerFiles.Failure) in try vault.set(value, name: name, for: template) }
+        broker?.deps.log("[broker] template \(template): set secret \(name)")
+      }
+    case .secretsDelete(let template, let name):
+      templateSecrets(template, id: id) { vault throws(BrokerProtocolError) in
+        try Self.vaultCall { () throws(BrokerFiles.Failure) in try vault.delete(name: name, for: template) }
+        broker?.deps.log("[broker] template \(template): deleted \(name.map { "secret \($0)" } ?? "every secret")")
+      }
     case .sessionsList, .sessionsSubscribe, .sessionsUnsubscribe, .launch, .attach, .kill:
       enqueue(frame)
     }
+  }
+
+  /// Runs `change` on the vault, then answers with the template's names (or the error, which never holds a value).
+  private func templateSecrets(
+    _ template: TemplateID, id: String?, _ change: (any TemplateSecretVault) throws(BrokerProtocolError) -> Void
+  ) {
+    guard let vault = broker?.deps.templateSecrets else {
+      return send(.error(BrokerProtocolError(.internal, "this broker cannot keep template secrets")), id: id)
+    }
+    do {
+      try change(vault)
+      let names = try Self.vaultCall { () throws(BrokerFiles.Failure) in try vault.names(for: template) }
+      send(.secrets(template: template, names: names), id: id)
+    } catch {
+      if error.code == .internal { broker?.deps.log("[broker] template \(template): \(error.message)") }
+      send(.error(error), id: id)
+    }
+  }
+
+  private static func vaultCall<T>(_ work: () throws(BrokerFiles.Failure) -> T) throws(BrokerProtocolError) -> T {
+    do { return try work() } catch { throw BrokerProtocolError(.internal, error.message) }
   }
 
   private func enqueue(_ frame: BrokerRequestFrame) {
@@ -436,7 +477,7 @@ public final class BrokerConnection {
       await attach(session, size: size, id: id)
     case .kill(let session):
       await kill(session, id: id)
-    case .hello, .input, .resize, .detach:
+    case .hello, .input, .resize, .detach, .secretsList, .secretsSet, .secretsDelete:
       break
     }
   }

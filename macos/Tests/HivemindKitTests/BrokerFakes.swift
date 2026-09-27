@@ -187,6 +187,8 @@ final class BrokerHarness {
   var configPath = BrokerHarness.config
   /// Where launch secrets go (a temporary folder in the tests that use it).
   var secretStore: LaunchSecretStore?
+  /// Where template secrets go (FakeTemplateSecretVault in the tests that use it).
+  var templateSecrets: (any TemplateSecretVault)?
   nonisolated static let environment = ["PATH": "/usr/bin:/bin", "HOME": "/Users/me", "TMUX": "/private/tmp/tmux-501/default,1,0", "LANG": "it_IT.UTF-8"]
 
   lazy var broker: TerminalBroker = {
@@ -198,6 +200,7 @@ final class BrokerHarness {
         isDirectory: { [unowned self] in self.folders.contains($0) },
         environment: Self.environment,
         secrets: secretStore,
+        templateSecrets: templateSecrets,
         log: { [unowned self] in self.logs.append($0) }))
     broker.onChange = { [unowned self] in self.changes += 1 }
     return broker

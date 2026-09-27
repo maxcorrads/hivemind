@@ -4,7 +4,8 @@ import { terminalSessionName } from "../src/shared/terminal-session.ts";
 import {
   TERMINAL_EVENT, brokerUnavailableHint, decodeTerminalData, encodeTerminalInput, inNativeApp, onMacDesktop, onNativePlatform,
   parseTerminalEvent, postNative, reportedNativePlatform, serverUnverifiedHint, terminalDataLength, terminalLaunchItems,
-  terminalSessionLaunchProblem, terminalSize, tmuxInstallHint, TERMINAL_BROKER_LIMITS, type NativePlatform, type TerminalEvent,
+  templateSecretNameProblem, templateSecretValueProblem, terminalSessionLaunchProblem, terminalSize, tmuxInstallHint,
+  TERMINAL_BROKER_LIMITS, type NativePlatform, type TerminalEvent,
   type TerminalKillFailure, type TerminalMessage, type TerminalSessionInfo, type TerminalSessionLaunch,
 } from "./native-bridge.ts";
 
@@ -84,6 +85,7 @@ type Pending =
   | { kind: "launch"; resolve: (event: TerminalLaunched) => void; reject: (error: TerminalRequestError) => void; timer: number }
   | { kind: "kill"; resolve: () => void; reject: (error: TerminalRequestError) => void; timer: number }
   | { kind: "kill-many"; resolve: (result: TerminalKilledMany) => void; reject: (error: TerminalRequestError) => void; timer: number }
+  | { kind: "secrets"; resolve: (names: string[]) => void; reject: (error: TerminalRequestError) => void; timer: number }
   | { kind: "attach"; stream: StreamEntry };
 type StreamEntry = {
   handlers: TerminalStreamHandlers;
@@ -225,6 +227,14 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
         else if (request.kind === "kill") request.resolve();
         return;
       }
+      case "template-secrets": {
+        const request = detail.id ? pending.get(detail.id) : undefined;
+        if (request?.kind !== "secrets") return;
+        pending.delete(detail.id!);
+        win.clearTimeout(request.timer);
+        request.resolve(detail.names);
+        return;
+      }
       case "terminal-attached": {
         const request = detail.id ? pending.get(detail.id) : undefined;
         if (request?.kind !== "attach") return;
@@ -300,7 +310,7 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
     }, linger);
   };
 
-  function request<T>(kind: "launch" | "kill" | "kill-many", message: TerminalMessage & { id?: string }, timeout = requestTimeout) {
+  function request<T>(kind: "launch" | "kill" | "kill-many" | "secrets", message: TerminalMessage & { id?: string }, timeout = requestTimeout) {
     return new Promise<T>((resolve, reject) => {
       const id = message.id!;
       if (!post(message)) { reject(new TerminalRequestError("not-sent", "Terminals are available only in Hivemind.app")); return; }
@@ -365,6 +375,20 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
         result.errors.push(...answer.errors);
       }
       return result;
+    },
+    /** A worker template's secret names kept by Hivemind Server.app. An older app answers unknown-type. */
+    templateSecrets(template: string): Promise<string[]> {
+      return request<string[]>("secrets", { type: "template-secrets-list", id: newId(), template });
+    },
+    /** Adds or replaces one secret; resolves with the template's names. The value is checked here as the app checks it. */
+    setTemplateSecret(template: string, name: string, value: string): Promise<string[]> {
+      const problem = templateSecretNameProblem(name) ?? templateSecretValueProblem(value);
+      if (problem) return Promise.reject(new TerminalRequestError("bad-message", problem));
+      return request<string[]>("secrets", { type: "template-secrets-set", id: newId(), template, name, value });
+    },
+    /** Deletes one secret, or every secret of the template when `name` is null; resolves with the names left. */
+    deleteTemplateSecrets(template: string, name: string | null): Promise<string[]> {
+      return request<string[]>("secrets", { type: "template-secrets-delete", id: newId(), template, name });
     },
     attach(session: string, cols: number, rows: number, handlers: TerminalStreamHandlers): TerminalAttachment {
       const entry: StreamEntry = {

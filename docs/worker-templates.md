@@ -36,10 +36,15 @@ Every edit bumps its `revision`; edits and deletions must name the revision they
 
 ## Secrets
 
-The server stores only secret **names**. Their values will be entered in the template editor and sent only to
-Hivemind Server.app, which keeps them in the macOS Keychain and hands them to the session through the existing private
-launch file ([Launch secrets](terminal-broker.md#launch-secrets)). A validation error names the field and the reason,
-never a value.
+The server stores only secret **names**. Their values are entered in the template editor, in Hivemind.app on the Mac or
+in the iPhone/iPad app, once the template is saved: each declared name shows whether a value is kept, with a
+write-only field to set or replace it and **Remove**. The value goes from the page to the app and on to Hivemind
+Server.app's terminal broker (`secrets.set`, see [Template secrets](terminal-broker.md#template-secrets)), which keeps it
+in the login Keychain as a generic password: service `<Hivemind Server bundle id>.template-secrets`, account
+`<template id>/<NAME>`. Nothing ever reads a value back: the broker answers with names only, and a value will leave
+the app only in a launch's private file ([Launch secrets](terminal-broker.md#launch-secrets)) when brains launch
+workers (Phase A2). A browser has no bridge, so it says to use the apps. Deleting a template in the apps also deletes
+its secrets from the Keychain. A validation error names the field and the reason, never a value.
 
 ## HTTP (Human only)
 

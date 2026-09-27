@@ -248,6 +248,9 @@ speaks. The broker answers with `min(client, broker)`, or with
 | `resize` | `stream`, `cols`, `rows` | none |
 | `detach` | `stream` | `exit` |
 | `kill` | `session` name | `killed` |
+| `secrets.list` | `template` id | `secrets` |
+| `secrets.set` | `template` id, `name`, `value` | `secrets` |
+| `secrets.delete` | `template` id, `name`? (absent or null: every secret of the template) | `secrets` |
 
 A launch is:
 
@@ -273,6 +276,7 @@ A launch is:
 | `output` | `stream`, `data` base64 (1 B–64 KiB decoded) |
 | `exit` | `stream`, `status` int or null. The stream is over: detached, the session ended, or its tmux client exited. |
 | `killed` | `session` |
+| `secrets` | `template`, `names`: the template's secret names after the request, sorted; never a value |
 | `error` | `code`, `message`, `stream`? |
 
 Error codes (`BrokerErrorCode`):
@@ -489,6 +493,26 @@ line; the largest valid launch, with every field and variable at its limit,
 stays under `TmuxCommand.maxCommandLineBytes` (checked in
 `LaunchEnvironmentTests`).
 
+## Template secrets
+
+Worker templates ([Worker templates](worker-templates.md)) may declare secret names; their values are kept here, not in
+the Node server. `secrets.set`, `secrets.delete` and `secrets.list` are answered at once (they run no tmux) with
+`secrets`: the template's secret **names**. No request returns a value.
+
+- **Rules** (`TemplateSecrets.swift`): `template` is a lowercase UUID (the server's template id); a `name` is an
+  environment variable name a launch may set ([Launch environment](#launch-environment) rules) or `OPENCODE_API_KEY`;
+  a `value` follows the [Launch secrets](#launch-secrets) rule (1–512 printable ASCII characters, no whitespace). A
+  template keeps at most 8 secrets; a ninth name is refused with `bad-message`, replacing a value is not. Errors name
+  the field, never the value; `TemplateSecretValue` prints as `<redacted>`; the broker logs the template and the name.
+- **Vault** (`TemplateSecretVault`): the app passes `KeychainTemplateSecretVault`, one generic password per secret in
+  the login Keychain, service `<Hivemind Server bundle id>.template-secrets`, account `<template id>/<NAME>`. A broker
+  without a vault answers `internal` ("this broker cannot keep template secrets"); a Keychain failure is `internal`
+  with its reason. Tests use a fake; nothing in `swift test` touches the Keychain.
+- **Older brokers** answer these types with `unknown-type`; the page then says to update Hivemind Server.
+- **Trust.** Any process that holds `broker.token` can list names, replace or delete a template's secrets, but not read
+  them. The values leave the app only in a launch's private file, when brains launch workers from templates (roadmap
+  Phase A2).
+
 ## Clients
 
 `BrokerClient` (HivemindKit, `ClientBroker.swift`) is the client Hivemind.app
@@ -581,6 +605,7 @@ Page → app (`window.webkit.messageHandlers.hivemind.postMessage`):
 | `terminal-kill` | `id`?, `session` | The page confirms with a modal first. At most 1 per second per window. |
 | `terminal-kill` (batch) | `id`?, `sessions`: 1–24 names | **Terminate all**, after its confirm modal. Instead of `session`, never with it; every name must be a Hivemind session name or the message is dropped, and repeats are dropped. The app sends the broker one `kill` after another (a failure does not stop the rest) and answers once. The batch counts as one request against the kill throttle; the page sends more than 24 in batches a second apart (`TerminalHub.killAll`). |
 | `sessions-subscribe` / `sessions-unsubscribe` | none | Subscribing also sends `terminal-status` |
+| `template-secrets-list` / `-set` / `-delete` | `id`?, `template`, and `name`, `value` / `name`? as the broker's `secrets.*` | [Template secrets](#template-secrets); answered with `template-secrets`. A page of an unverified server is answered `unauthorized`. |
 
 App → page: `window.dispatchEvent(new CustomEvent("hivemind:terminal", {detail}))`
 (`TERMINAL_EVENT`; `parseTerminalEvent` reads the detail):
@@ -594,6 +619,7 @@ App → page: `window.dispatchEvent(new CustomEvent("hivemind:terminal", {detail
 | `terminal-output` | `stream`, `data` base64 |
 | `terminal-exit` | `stream`, `status` |
 | `terminal-killed` | `id`, `session`; or, answering a batch `terminal-kill`, `id`, `sessions` (the names that ended, in order) and `errors`: `[{session, code, message}]` (`no-such-session` for one that had already ended) |
+| `template-secrets` | `id`, `template`, `names` |
 | `terminal-error` | `id`, `code`, `message`, `stream` |
 
 `terminal-status` is sent on every `sessions-subscribe`, and then on every

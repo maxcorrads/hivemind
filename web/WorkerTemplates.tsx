@@ -7,6 +7,8 @@ import type { WorkerTemplate, WorkerTemplateSpec } from "../src/shared/worker-te
 import { api } from "./api.ts";
 import { Modal } from "./Modal.tsx";
 import { ModelSelect } from "./ModelSelect.tsx";
+import { templateSecretValueProblem } from "./native-bridge.ts";
+import { TerminalRequestError, terminalHub, useTerminalState } from "./use-terminal.ts";
 
 export function emptyTemplateSpec(): WorkerTemplateSpec {
   return { label: "", description: "", software: "codex", model: "", effort: "", extraFlags: "", environment: {},
@@ -75,6 +77,11 @@ export function WorkerTemplatesSheet({ project, onClose }: { project: Project; o
       await api.deleteWorkerTemplate(deleting.id, deleting.revision);
       setDeleting(null);
       setReload(value => value + 1);
+      const hub = terminalHub();
+      if (hub && deleting.spec.secretNames.length > 0) {
+        await hub.deleteTemplateSecrets(deleting.id, null).catch(failure =>
+          setError(`The template is deleted, but its secret values are still in the Keychain: ${secretsErrorText(failure)}`));
+      }
     } catch (failure) {
       setError(String((failure as Error).message || failure));
       setDeleting(null);
@@ -161,6 +168,95 @@ export function WorkerTemplatesSheet({ project, onClose }: { project: Project; o
         </Modal>
       )}
     </Modal>
+  );
+}
+
+/** What the page says when the app cannot keep template secrets, from the hub's error. */
+export function secretsErrorText(error: unknown): string {
+  if (error instanceof TerminalRequestError && error.code === "unknown-type") return "Update Hivemind Server to keep template secrets.";
+  return String((error as Error)?.message || error);
+}
+
+/**
+ * The saved template's secret values, kept by Hivemind Server.app in the macOS Keychain: whether each declared name has
+ * one, and a write-only field to set or replace it. Values never come back to the page.
+ */
+function SecretValues({ template }: { template: WorkerTemplate }) {
+  const terminals = useTerminalState();
+  const hub = terminalHub();
+  const declared = template.spec.secretNames;
+  const [stored, setStored] = useState<string[] | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const connected = terminals.native && terminals.broker === "connected";
+  useEffect(() => {
+    if (!hub || !connected) return;
+    let active = true;
+    hub.templateSecrets(template.id)
+      .then(names => { if (active) setStored(names); })
+      .catch(failure => { if (active) setError(secretsErrorText(failure)); });
+    return () => { active = false; };
+  }, [hub, connected, template.id]);
+
+  if (declared.length === 0) return null;
+  if (!terminals.native) {
+    return <p className="help-p">Secret values are entered in Hivemind.app on the Mac or in the iPhone/iPad app, and kept in Hivemind
+      Server's Keychain. Hivemind never stores them.</p>;
+  }
+  const run = async (work: () => Promise<string[]>) => {
+    setBusy(true);
+    setError("");
+    try { setStored(await work()); } catch (failure) { setError(secretsErrorText(failure)); } finally { setBusy(false); }
+  };
+  const unused = (stored ?? []).filter(name => !declared.includes(name));
+  return (
+    <fieldset className="template-secrets">
+      <legend>Secret values</legend>
+      <p className="help-p">Kept by Hivemind Server in the macOS Keychain and handed only to the workers it launches. They are never
+        shown again.</p>
+      {!connected && <p className="help-p" role="status">Connecting to Hivemind Server…</p>}
+      {error && <p className="err" role="alert">{error}</p>}
+      {declared.map(name => {
+        const saved = stored?.includes(name) ?? false;
+        const draft = drafts[name] ?? "";
+        const problem = draft ? templateSecretValueProblem(draft) : null;
+        return (
+          <div key={name} className="template-secret">
+            <label>
+              {name} <small>{stored === null ? "" : saved ? "saved" : "not set"}</small>
+              <input className="mono" type="password" value={draft} autoComplete="off" autoCapitalize="off" autoCorrect="off"
+                spellCheck={false} data-1p-ignore="true" data-lpignore="true" aria-label={`Value of ${name}`}
+                aria-invalid={problem ? true : undefined}
+                placeholder={saved ? "enter a new value to replace it" : "value"}
+                onChange={event => setDrafts(old => ({ ...old, [name]: event.target.value }))} />
+            </label>
+            {problem && <p className="err">{problem}</p>}
+            <button type="button" className="btn" disabled={busy || !connected || !draft || Boolean(problem)} aria-label={`Save ${name}`}
+              onClick={() => void run(async () => {
+                const names = await hub!.setTemplateSecret(template.id, name, draft);
+                setDrafts(old => ({ ...old, [name]: "" }));
+                return names;
+              })}>Save</button>
+            {saved && (
+              <button type="button" className="btn btn-danger" disabled={busy || !connected} aria-label={`Remove ${name}`}
+                onClick={() => void run(() => hub!.deleteTemplateSecrets(template.id, name))}>Remove</button>
+            )}
+          </div>
+        );
+      })}
+      {unused.length > 0 && (
+        <p className="help-p">
+          Also kept for names this template no longer declares: {unused.join(", ")}.{" "}
+          <button type="button" className="text-btn" disabled={busy || !connected}
+            onClick={() => void run(async () => {
+              let names = stored ?? [];
+              for (const name of unused) names = await hub!.deleteTemplateSecrets(template.id, name);
+              return names;
+            })}>Remove them</button>
+        </p>
+      )}
+    </fieldset>
   );
 }
 
@@ -261,10 +357,9 @@ function TemplateEditor({ project, editing, busy, onBusy, onCancel, onSaved }: {
         <textarea className="mono" rows={2} value={secretsText} onChange={event => setSecretsText(event.target.value)}
           placeholder={"optional — one per line, e.g. OPENCODE_API_KEY"} autoComplete="off" spellCheck={false} />
       </label>
-      <p className="help-p">
-        Only the names are saved here. Their values will be entered for Hivemind Server.app, which keeps them in the macOS
-        Keychain; Hivemind never stores them.
-      </p>
+      {editing.template
+        ? <SecretValues template={editing.template} />
+        : <p className="help-p">Only the names are saved with the template. Save it, then enter their values here.</p>}
       <label className="check">
         <input type="checkbox" checked={spec.enabled} onChange={event => set({ enabled: event.target.checked })} />
         Brains may use this template

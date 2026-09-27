@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { terminalSessionName } from "../src/shared/terminal-session.ts";
 import { launchEnvironmentProblem } from "../src/shared/launch-environment.ts";
+import { workerSecretNameProblem } from "../src/shared/worker-templates.ts";
 import { hashFor, parseHash, type Sel } from "./selection.ts";
 
 // Hivemind.app on the Mac (macos/) and the iPhone/iPad app (ios/) load this UI
@@ -321,7 +322,15 @@ export type TerminalMessage =
   | { type: "terminal-kill"; id?: string; sessions: string[] }
   /** terminal-status and sessions now, then sessions on every change. */
   | { type: "sessions-subscribe" }
-  | { type: "sessions-unsubscribe" };
+  | { type: "sessions-unsubscribe" }
+  /**
+   * Worker template secrets, kept by Hivemind Server.app in the Keychain (docs/worker-templates.md#secrets). Each is
+   * answered with template-secrets (the template's secret names, never a value) or terminal-error.
+   */
+  | { type: "template-secrets-list"; id: string; template: string }
+  | { type: "template-secrets-set"; id: string; template: string; name: string; value: string }
+  /** `name` null: every secret of the template. */
+  | { type: "template-secrets-delete"; id: string; template: string; name: string | null };
 
 export type TerminalSessionInfo = {
   name: string;
@@ -354,6 +363,8 @@ export type TerminalEvent =
   | { type: "terminal-killed"; id: string | null; session: string }
   /** The answer to a batch terminal-kill: the sessions that ended, in order, and why the others did not. */
   | { type: "terminal-killed"; id: string | null; sessions: string[]; errors: TerminalKillFailure[] }
+  /** A template's secret names, answering a template-secrets-* message. */
+  | { type: "template-secrets"; id: string | null; template: string; names: string[] }
   /** `code` is a BrokerErrorCode (bad-message, no-such-session, tmux-missing, …). */
   | { type: "terminal-error"; id: string | null; code: string; message: string; stream: number | null };
 
@@ -371,6 +382,17 @@ function sessionInfo(value: unknown): TerminalSessionInfo | null {
       !Number.isInteger(value.attached) || (value.attached as number) < 0 || typeof value.createdAt !== "number" ||
       !Number.isFinite(value.createdAt)) return null;
   return { name, project, agent, alive: value.alive, attached: value.attached as number, createdAt: value.createdAt };
+}
+
+/** A worker template's id as the server issues it (crypto.randomUUID). */
+const TEMPLATE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** Why a template secret's name would be refused (the app's TemplateSecrets.isValidName), or null. */
+export const templateSecretNameProblem = workerSecretNameProblem;
+
+/** Why the app would refuse a template secret's value (the OpenCode Go API key's rule), or null. Never quotes it. */
+export function templateSecretValueProblem(value: string): string | null {
+  return SECRET_VALUE.test(value) ? null : "A secret is 1–512 printable ASCII characters, without spaces.";
 }
 
 /** A terminal event the page can act on, or null for anything unknown or malformed. */
@@ -422,6 +444,12 @@ export function parseTerminalEvent(detail: unknown): TerminalEvent | null {
       }
       const session = terminalSessionName(detail.session);
       return session ? { type: "terminal-killed", id, session } : null;
+    }
+    case "template-secrets": {
+      const { template, names } = detail;
+      if (typeof template !== "string" || !TEMPLATE_ID.test(template)) return null;
+      if (!Array.isArray(names) || !names.every(name => typeof name === "string" && templateSecretNameProblem(name) === null)) return null;
+      return { type: "template-secrets", id, template, names: names as string[] };
     }
     case "terminal-error": {
       const stream = nullableStream(detail.stream);

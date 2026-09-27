@@ -97,6 +97,8 @@ test("Human creates, edits, duplicates and deletes a template from the sheet", a
   assert.match(f.host.textContent!, /Secrets: OPENCODE_API_KEY/);
 
   await f.click("Edit Codex senior");
+  assert.match(f.host.textContent!, /Secret values are entered in Hivemind\.app on the Mac or in the iPhone\/iPad app/,
+    "a browser has no bridge to Hivemind Server's Keychain");
   await f.type("At most at once", "4");
   await f.submit();
   assert.equal(f.hive.workerTemplates.get(saved.id).spec.maxConcurrent, 4);

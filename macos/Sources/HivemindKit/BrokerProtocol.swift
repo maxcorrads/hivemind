@@ -286,6 +286,12 @@ public enum BrokerRequest: Equatable, Sendable {
   case detach(stream: BrokerStreamID)
   /// Kill a session and everything in it; answered with `killed`.
   case kill(session: SessionName)
+  /// A worker template's secret names; answered with `secrets`. Values are never sent back.
+  case secretsList(template: TemplateID)
+  /// Add or replace a template secret in the app's vault; answered with `secrets`.
+  case secretsSet(template: TemplateID, name: String, value: TemplateSecretValue)
+  /// Delete one template secret, or all of them when `name` is nil; answered with `secrets`.
+  case secretsDelete(template: TemplateID, name: String?)
 
   public var type: String {
     switch self {
@@ -299,6 +305,9 @@ public enum BrokerRequest: Equatable, Sendable {
     case .resize: "resize"
     case .detach: "detach"
     case .kill: "kill"
+    case .secretsList: "secrets.list"
+    case .secretsSet: "secrets.set"
+    case .secretsDelete: "secrets.delete"
     }
   }
 }
@@ -333,6 +342,7 @@ extension BrokerRequestFrame: Codable {
   private enum Key: String, CodingKey {
     case type, id, version, token, client, launches, session, cols, rows, stream, data
     case project, agent, title, cwd, command, secrets, environment
+    case template, name, value
   }
 
   public init(from decoder: any Decoder) throws {
@@ -396,6 +406,18 @@ extension BrokerRequestFrame: Codable {
       request = .detach(stream: try BrokerCoding.stream(c, .stream))
     case "kill":
       request = .kill(session: try BrokerCoding.session(c, .session))
+    case "secrets.list":
+      request = .secretsList(template: try BrokerCoding.template(c, .template))
+    case "secrets.set":
+      let template = try BrokerCoding.template(c, .template)
+      let name = try BrokerCoding.secretName(c, .name)
+      guard let value = TemplateSecretValue(try BrokerCoding.string(c, .value)) else {
+        throw BrokerProtocolError.invalid("value", TemplateSecrets.valueRule)
+      }
+      request = .secretsSet(template: template, name: name, value: value)
+    case "secrets.delete":
+      let template = try BrokerCoding.template(c, .template)
+      request = .secretsDelete(template: template, name: try BrokerCoding.optionalSecretName(c, .name))
     default:
       throw BrokerProtocolError(.unknownType, "unknown message type \(BrokerText.quoted(type))")
     }
@@ -441,6 +463,15 @@ extension BrokerRequestFrame: Codable {
       try c.encode(stream, forKey: .stream)
     case .kill(let session):
       try c.encode(session, forKey: .session)
+    case .secretsList(let template):
+      try c.encode(template.rawValue, forKey: .template)
+    case .secretsSet(let template, let name, let value):
+      try c.encode(template.rawValue, forKey: .template)
+      try c.encode(name, forKey: .name)
+      try c.encode(value.value, forKey: .value)
+    case .secretsDelete(let template, let name):
+      try c.encode(template.rawValue, forKey: .template)
+      try c.encodeIfPresent(name, forKey: .name)
     }
   }
 }
@@ -465,6 +496,8 @@ public enum BrokerEvent: Equatable, Sendable {
   /// exited. `status` is the attach process's exit status when there was one.
   case exit(stream: BrokerStreamID, status: Int?)
   case killed(session: SessionName)
+  /// The template's secret names after a secrets.list, .set or .delete, sorted. Never a value.
+  case secrets(template: TemplateID, names: [String])
   /// `stream` is set when the error is about one stream.
   case error(code: BrokerErrorCode, message: String, stream: BrokerStreamID?)
 
@@ -477,6 +510,7 @@ public enum BrokerEvent: Equatable, Sendable {
     case .output: "output"
     case .exit: "exit"
     case .killed: "killed"
+    case .secrets: "secrets"
     case .error: "error"
     }
   }
@@ -512,6 +546,7 @@ public struct BrokerEventFrame: Equatable, Sendable {
 extension BrokerEventFrame: Codable {
   private enum Key: String, CodingKey {
     case type, id, version, tmuxPath, items, names, created, errors, stream, session, data, status, code, message
+    case template
   }
 
   public init(from decoder: any Decoder) throws {
@@ -547,6 +582,13 @@ extension BrokerEventFrame: Codable {
       event = .exit(stream: try BrokerCoding.stream(c, .stream), status: try BrokerCoding.optionalInt(c, .status))
     case "killed":
       event = .killed(session: try BrokerCoding.session(c, .session))
+    case "secrets":
+      let template = try BrokerCoding.template(c, .template)
+      guard let names = try? c.decode([String].self, forKey: .names), names.count <= TemplateSecrets.maxNames,
+            names.allSatisfy(TemplateSecrets.isValidName) else {
+        throw BrokerProtocolError.invalid("names", "must be up to \(TemplateSecrets.maxNames) secret names")
+      }
+      event = .secrets(template: template, names: names)
     case "error":
       let code: BrokerErrorCode
       do { code = try c.decode(BrokerErrorCode.self, forKey: .code) } catch {
@@ -587,6 +629,9 @@ extension BrokerEventFrame: Codable {
       try c.encode(status, forKey: .status)
     case .killed(let session):
       try c.encode(session, forKey: .session)
+    case .secrets(let template, let names):
+      try c.encode(template.rawValue, forKey: .template)
+      try c.encode(names, forKey: .names)
     case .error(let code, let message, let stream):
       try c.encode(code, forKey: .code)
       try c.encode(message, forKey: .message)
@@ -742,6 +787,24 @@ enum BrokerCoding {
     }
     guard let values else { return nil }
     return try LaunchEnvironment(values, field: field)
+  }
+
+  static func template<K: CodingKey>(_ c: KeyedDecodingContainer<K>, _ key: K) throws(BrokerProtocolError) -> TemplateID {
+    guard let template = TemplateID(try string(c, key)) else { throw .invalid(key.stringValue, "must be a template id (a lowercase UUID)") }
+    return template
+  }
+
+  static func secretName<K: CodingKey>(_ c: KeyedDecodingContainer<K>, _ key: K) throws(BrokerProtocolError) -> String {
+    let name = try string(c, key)
+    guard TemplateSecrets.isValidName(name) else { throw .invalid(key.stringValue, TemplateSecrets.nameRule) }
+    return name
+  }
+
+  /// Missing or null: nil. Anything else must be a secret name.
+  static func optionalSecretName<K: CodingKey>(_ c: KeyedDecodingContainer<K>, _ key: K) throws(BrokerProtocolError) -> String? {
+    guard let name = try optionalString(c, key) else { return nil }
+    guard TemplateSecrets.isValidName(name) else { throw .invalid(key.stringValue, TemplateSecrets.nameRule) }
+    return name
   }
 
   static func stream<K: CodingKey>(_ c: KeyedDecodingContainer<K>, _ key: K) throws(BrokerProtocolError) -> BrokerStreamID {

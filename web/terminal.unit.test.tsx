@@ -1098,3 +1098,39 @@ test("on iOS the touch row always shows, and a key tap keeps the focus in the te
     assert.equal(event.defaultPrevented, true, `${type} must not move focus off xterm`);
   }
 });
+
+// ---- Worker template secrets ---------------------------------------------------------------------------------------
+
+const TEMPLATE = "0f8fad5b-d9cb-469f-a165-70867728950e";
+
+test("template secrets go to the app and come back as names, matched by id", async () => {
+  const h = hub();
+  const set = h.setTemplateSecret(TEMPLATE, "OPENCODE_API_KEY", "sk-live-1");
+  const [message] = sent("template-secrets-set");
+  assert.deepEqual(message, { type: "template-secrets-set", id: message!.id, template: TEMPLATE, name: "OPENCODE_API_KEY", value: "sk-live-1" });
+  await fromApp({ type: "template-secrets", id: "someone-else", template: TEMPLATE, names: ["WRONG_ANSWER"] });
+  await fromApp({ type: "template-secrets", id: message!.id, template: TEMPLATE, names: ["OPENCODE_API_KEY"] });
+  assert.deepEqual(await set, ["OPENCODE_API_KEY"]);
+
+  const listed = h.templateSecrets(TEMPLATE);
+  await fromApp({ type: "template-secrets", id: sent("template-secrets-list")[0]!.id, template: TEMPLATE, names: [] });
+  assert.deepEqual(await listed, []);
+
+  const removed = assert.rejects(h.deleteTemplateSecrets(TEMPLATE, null),
+    (error: unknown) => error instanceof TerminalRequestError && error.code === "unknown-type");
+  const [deletion] = sent("template-secrets-delete");
+  assert.equal(deletion!.name, null);
+  await fromApp({ type: "terminal-error", id: deletion!.id, code: "unknown-type", message: "unknown message type \"secrets.delete\"", stream: null });
+  await removed;
+});
+
+test("a template secret the app would refuse is not sent, and malformed answers are ignored", async () => {
+  const h = hub();
+  await assert.rejects(h.setTemplateSecret(TEMPLATE, "OPENCODE_API_KEY", "has a space"), /printable ASCII/);
+  await assert.rejects(h.setTemplateSecret(TEMPLATE, "PATH", "x"), /PATH/);
+  assert.deepEqual(sent("template-secrets-set"), []);
+  assert.equal(parseTerminalEvent({ type: "template-secrets", id: "p1", template: "NOT-A-UUID", names: [] }), null);
+  assert.equal(parseTerminalEvent({ type: "template-secrets", id: "p1", template: TEMPLATE, names: ["PATH"] }), null);
+  assert.deepEqual(parseTerminalEvent({ type: "template-secrets", id: "p1", template: TEMPLATE, names: ["OPENCODE_API_KEY"] }),
+    { type: "template-secrets", id: "p1", template: TEMPLATE, names: ["OPENCODE_API_KEY"] });
+});

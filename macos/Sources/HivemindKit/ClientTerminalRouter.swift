@@ -195,8 +195,26 @@ public final class TerminalBridgeRouter {
       guard subscribed else { return }
       subscribed = false
       client.setSessionsSubscribed(false)
+    case .templateSecretsList(let id, let template):
+      begin()
+      relay(.secretsList(template: template), id: id)
+    case .templateSecretsSet(let id, let template, let name, let value):
+      begin()
+      relay(.secretsSet(template: template, name: name, value: value), id: id)
+    case .templateSecretsDelete(let id, let template, let name):
+      begin()
+      relay(.secretsDelete(template: template, name: name), id: id)
     default:
       break
+    }
+  }
+
+  /// A request whose answer goes to the page as is, unless the page changed meanwhile.
+  private func relay(_ request: BrokerRequest, id: String?) {
+    let page = page
+    client.send(request) { [weak self] event in
+      guard let self, self.page == page else { return }
+      self.deliver(BridgeTerminalEvent(BrokerEventFrame(event), id: id))
     }
   }
 
@@ -330,7 +348,7 @@ public final class TerminalBridgeRouter {
     case .error(_, _, let stream):
       // Errors about a stream of ours; the rest answered nothing of the page's.
       guard let stream, streams.contains(stream) else { return }
-    case .welcome, .launched, .attached, .killed:
+    case .welcome, .launched, .attached, .killed, .secrets:
       return
     }
     deliver(BridgeTerminalEvent(BrokerEventFrame(event)))

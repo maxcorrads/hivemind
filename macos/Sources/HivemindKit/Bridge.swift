@@ -55,6 +55,12 @@ public enum BridgeMessage: Equatable, Sendable {
   /// terminal-status and sessions now, then sessions on every change.
   case sessionsSubscribe
   case sessionsUnsubscribe
+  // Worker template secrets (docs/worker-templates.md#secrets): kept by
+  // Hivemind Server.app, answered with template-secrets (names only).
+  case templateSecretsList(id: String?, template: TemplateID)
+  case templateSecretsSet(id: String?, template: TemplateID, name: String, value: TemplateSecretValue)
+  /// `name` nil: every secret of the template.
+  case templateSecretsDelete(id: String?, template: TemplateID, name: String?)
 
   static let maxText = 4096
   /// The most sessions one terminal-kill may name (web TERMINAL_BROKER_LIMITS.kills).
@@ -123,9 +129,28 @@ public enum BridgeMessage: Equatable, Sendable {
       self = .sessionsSubscribe
     case "sessions-unsubscribe":
       self = .sessionsUnsubscribe
+    case "template-secrets-list":
+      guard let id = Self.requestID(object["id"]), let template = Self.template(object["template"]) else { return nil }
+      self = .templateSecretsList(id: id, template: template)
+    case "template-secrets-set":
+      guard let id = Self.requestID(object["id"]), let template = Self.template(object["template"]),
+            let name = object["name"] as? String, TemplateSecrets.isValidName(name),
+            let value = (object["value"] as? String).flatMap(TemplateSecretValue.init) else { return nil }
+      self = .templateSecretsSet(id: id, template: template, name: name, value: value)
+    case "template-secrets-delete":
+      guard let id = Self.requestID(object["id"]), let template = Self.template(object["template"]) else { return nil }
+      switch object["name"] {
+      case nil, is NSNull: self = .templateSecretsDelete(id: id, template: template, name: nil)
+      case let name as String where TemplateSecrets.isValidName(name): self = .templateSecretsDelete(id: id, template: template, name: name)
+      default: return nil
+      }
     default:
       return nil
     }
+  }
+
+  private static func template(_ value: Any?) -> TemplateID? {
+    (value as? String).flatMap(TemplateID.init)
   }
 
   private static func text(_ value: Any?) -> String? {
@@ -326,6 +351,8 @@ public enum BridgeTerminalEvent: Equatable, Sendable {
   /// The answer to a terminal-kill with `sessions`: the ones that ended, in
   /// order, and why each other one did not.
   case killedMany(id: String?, sessions: [SessionName], errors: [BridgeKillFailure])
+  /// A template's secret names, answering a template-secrets-* message.
+  case templateSecrets(id: String?, template: TemplateID, names: [String])
   case error(id: String?, code: BrokerErrorCode, message: String, stream: BrokerStreamID?)
 
   public enum TmuxStatus: String, Sendable, Equatable {
@@ -354,6 +381,7 @@ public enum BridgeTerminalEvent: Equatable, Sendable {
     case .output: "terminal-output"
     case .exit: "terminal-exit"
     case .killed, .killedMany: "terminal-killed"
+    case .templateSecrets: "template-secrets"
     case .error: "terminal-error"
     }
   }
@@ -369,6 +397,7 @@ public enum BridgeTerminalEvent: Equatable, Sendable {
     case .output(let stream, let data): self = .output(stream: stream, data: data)
     case .exit(let stream, let status): self = .exit(stream: stream, status: status)
     case .killed(let session): self = .killed(id: id, session: session)
+    case .secrets(let template, let names): self = .templateSecrets(id: id, template: template, names: names)
     case .error(let code, let message, let stream): self = .error(id: id, code: code, message: message, stream: stream)
     }
   }
@@ -408,6 +437,10 @@ public enum BridgeTerminalEvent: Equatable, Sendable {
       put("id", id)
       detail["sessions"] = sessions.map(\.rawValue)
       detail["errors"] = errors.map { ["session": $0.session.rawValue, "code": $0.code.rawValue, "message": $0.message] as [String: Any] }
+    case .templateSecrets(let id, let template, let names):
+      put("id", id)
+      detail["template"] = template.rawValue
+      detail["names"] = names
     case .error(let id, let code, let message, let stream):
       put("id", id)
       detail["code"] = code.rawValue

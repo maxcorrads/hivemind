@@ -83,7 +83,8 @@ public struct TerminalTrustGate: Equatable, Sendable {
     switch message {
     case .sessionsSubscribe: return .answer(.status(tmux: .unknown, broker: .unverified))
     case .terminalLaunch(let id, _, _), .terminalAttach(let id, _, _), .terminalKill(let id, _),
-         .terminalKillMany(let id, _): return error(id)
+         .terminalKillMany(let id, _), .templateSecretsList(let id, _), .templateSecretsSet(let id, _, _, _),
+         .templateSecretsDelete(let id, _, _): return error(id)
     case .terminalOpen: return error(nil)
     default: return .drop
     }
