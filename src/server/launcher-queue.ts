@@ -32,7 +32,7 @@ export type LauncherQueueDeps = Core & { readonly home: string;
   readonly projects: { getProject(id: string): Project };
   readonly workerTemplates: { get(id: string): WorkerTemplate };
   readonly lifecycle: { expireReservation(agentId: string): void };
-  readonly tasks: { get(actor: Agent, taskId: string): { workerId: string; jobId?: string };
+  readonly tasks: { get(actor: Agent, taskId: string): { workerId: string; jobId?: string | null };
     launchOutcome(taskId: string, requestId: string, workerId: string, state: "launched" | "failed" | "rejected" | "expired"): void;
     resumeOutcome(taskId: string, requestId: string, workerId: string, state: "launched" | "failed" | "rejected" | "expired"): void;
     hardStopCompleted(taskId: string, workerId: string): void;
