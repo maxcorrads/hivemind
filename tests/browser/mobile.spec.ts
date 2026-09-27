@@ -139,7 +139,7 @@ test("a phone starts on Home and opens a channel and a thread full screen, with 
 test("the bottom bar has no Decisions tab, and an old Decisions link opens Activity", async ({ page }) => {
   const hive = await installHive(page);
   await page.goto("/#/decisions/alpha");
-  await expect(tabs(page).getByRole("button")).toHaveText([/^Home/, /^DMs/, /^Activity/]);
+  await expect(tabs(page).getByRole("button")).toHaveText([/^Home/, /^DMs/, /^Activity/, /^Tasks/]);
   await expect(tabs(page).getByRole("button", { name: "Activity" })).toHaveAttribute("aria-current", "page");
   expect(hive.unexpected).toEqual([]);
 });
