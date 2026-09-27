@@ -423,10 +423,10 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   });
   agent.get('/me', c => {
     const me = c.get('me');
-    if (c.req.query('orders') === '1') return c.json({ you: me, standingOrders: standingOrders(me) });
-    return c.json({ you: { name: me.name, role: me.role, seniority: me.seniority, focus: me.focus, online: me.online, project: me.project,
-      ...(me.role === 'brain' ? { launchMode: me.launchMode } : {}) },
-      ordersRef: 'unchanged' });
+    const you = { name: me.name, role: me.role, seniority: me.seniority, focus: me.focus, online: me.online,
+      project: me.project, ...(me.role === 'brain' ? { launchMode: me.launchMode } : {}) };
+    if (c.req.query('orders') === '1') return c.json({ you, standingOrders: standingOrders(me) });
+    return c.json({ you, ordersRef: 'unchanged' });
   });
   // terminalSession is a Human UI label; agents' roster stays as it was.
   agent.get('/agents', c => c.json({ agents: hive.workerOrchestration.roster(c.get('me')).map(agent => { const { createdAt: _c, terminalSession: _t, ...a } = agent; return { ...a, activity: hive.activity.forAgent(agent) }; }) }));

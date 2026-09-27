@@ -4,6 +4,8 @@ import { childEnv } from "../test-support/child-process.ts";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { parseChoiceId, selectedChoiceId } from "./launch-models.ts";
+import { launchEnvironmentNameProblem } from './launch-environment.ts';
+import { workerTemplateSpecSchema } from './worker-templates.ts';
 import {
   ADOPT_UNTRUSTED,
   buildLaunchBlock,
@@ -130,14 +132,14 @@ test("Codex rename falls back to the assigned name when the hive title is blank"
 
 test("one block cds then runs the alias with a literal prompt", () => {
   const block = buildLaunchBlock({ ...base, software: "codex-tw" });
-  assert.equal(block, "cd -- '/tmp/hive-work' && codex-tw " +
+  assert.equal(block, "cd -- '/tmp/hive-work' && HIVEMIND_ROLE='brain' codex-tw " +
     shSingleQuote(buildLaunchPrompt({ ...base, software: "codex-tw" })) + "\n");
   assert.ok(block.includes(ADOPT_UNTRUSTED));
 });
 
 test("cd toggle off skips the worktree", () => {
   const block = buildLaunchBlock({ ...base, cdWorktree: false, software: "claude" });
-  assert.ok(block.startsWith("claude '"));
+  assert.ok(block.startsWith("HIVEMIND_ROLE='brain' claude '"));
   assert.equal(block.includes("cd "), false);
 });
 
@@ -145,7 +147,7 @@ test("Claude launch requests eager loading only for Hivemind without changing pe
   const binding = {
     command: "/fixture/node",
     args: ["/fixture/it's hive/cli.ts", "mcp"],
-    env: { HIVEMIND_URL: "http://127.0.0.1:7420", HIVEMIND_TOKEN: "" },
+    env: { HIVEMIND_URL: "http://127.0.0.1:7420", HIVEMIND_TOKEN: "", HIVEMIND_ROLE: "spoofed" },
   };
   const original = structuredClone(binding);
   for (const software of ["claude", "claude-company"]) {
@@ -161,7 +163,7 @@ test("Claude launch requests eager loading only for Hivemind without changing pe
         assert.equal(result.status, 0, result.stderr);
         const argv = JSON.parse(result.stdout) as string[];
         assert.deepEqual(argv.slice(0, 3), ["--mcp-config", JSON.stringify({
-          mcpServers: { hivemind: { ...binding, alwaysLoad: true } },
+          mcpServers: { hivemind: { ...binding, env: { ...binding.env, HIVEMIND_ROLE: role }, alwaysLoad: true } },
         }), "--"]);
         assert.equal(argv[3], buildLaunchPrompt(input));
         assert.equal(argv.length, 4);
@@ -175,6 +177,30 @@ test("Claude launch requests eager loading only for Hivemind without changing pe
   }
 });
 
+test("generated commands carry their known role for new, resume and claimed workers without running a host", () => {
+  const shell = process.platform === 'darwin' ? 'zsh' : '/bin/bash';
+  for (const input of [
+    { ...base, role: 'brain' as const },
+    { ...base, role: 'worker' as const, resume: true, resumeName: 'Forge' },
+    { ...base, role: 'worker' as const, claim: `hmc_${'a'.repeat(48)}`, claimName: 'Forge' },
+  ]) {
+    for (const software of ['codex', 'claude', 'opencode']) {
+      const block = buildLaunchBlock({ ...input, software, cdWorktree: false });
+      const capture = `function ${software}() { ${shSingleQuote(process.execPath)} -e 'console.log(JSON.stringify({role:process.env.HIVEMIND_ROLE,argv:process.argv.slice(1)}))' -- "$@"; }\n`;
+      const result = spawnSync(shell, ['-f'], { input: capture + block, encoding: 'utf8', env: childEnv() });
+      assert.equal(result.status, 0, result.stderr);
+      const output = JSON.parse(result.stdout) as { role: string; argv: string[] };
+      assert.equal(output.role, input.role);
+      assert.ok(output.argv.at(-1)?.includes(`role=${input.role}`));
+    }
+  }
+  assert.ok(launchEnvironmentNameProblem('HIVEMIND_ROLE'), 'templates and UI environment cannot override the role');
+  assert.equal(workerTemplateSpecSchema.safeParse({ label: 'Worker', description: 'Tasks', software: 'codex', model: '',
+    effort: '', extraFlags: '', environment: { HIVEMIND_ROLE: 'brain' }, secretNames: [], seniority: 'mid',
+    focus: 'api', maxConcurrent: 1, enabled: true }).success, false);
+  assert.throws(() => buildLaunchBlock({ ...base, role: 'human' as never }), /Launch role must be brain or worker/);
+});
+
 test("launch prompt requires a real join result and stops if tools are unavailable", () => {
   for (const resume of [false, true]) {
     const prompt = buildLaunchPrompt({ ...base, resume, resumeName: "Fixture" });
@@ -186,7 +212,7 @@ test("launch prompt requires a real join result and stops if tools are unavailab
 
 test("missing worktree skips cd even when the toggle is on", () => {
   const block = buildLaunchBlock({ ...base, workspacePath: null, software: "codex2" });
-  assert.ok(block.startsWith("codex2 "));
+  assert.ok(block.startsWith("HIVEMIND_ROLE='brain' codex2 "));
   assert.equal(block.includes("cd "), false);
 });
 
@@ -215,7 +241,7 @@ test("model and effort become software-aware flags", () => {
     effort: "high",
     cdWorktree: false,
   });
-  assert.match(codex, /^codex2 -m gpt-5\.4 -c model_reasoning_effort=high /);
+  assert.match(codex, /^HIVEMIND_ROLE='brain' codex2 -m gpt-5\.4 -c model_reasoning_effort=high /);
   const claude = buildLaunchBlock({
     ...base,
     software: "claude-tw",
@@ -223,7 +249,7 @@ test("model and effort become software-aware flags", () => {
     effort: "max",
     cdWorktree: false,
   });
-  assert.match(claude, /^claude-tw --model claude-opus-4-6 --effort max /);
+  assert.match(claude, /^HIVEMIND_ROLE='brain' claude-tw --model claude-opus-4-6 --effort max /);
 });
 
 test("workers without seniority cannot launch", () => {
@@ -255,7 +281,7 @@ test("OpenCode TUI takes --prompt and does not pass --variant", () => {
     effort: "xhigh",
     cdWorktree: false,
   });
-  assert.match(block, /^opencode -m opencode\/muse-spark-1\.3-contributor-free --prompt /);
+  assert.match(block, /^HIVEMIND_ROLE='brain' opencode -m opencode\/muse-spark-1\.3-contributor-free --prompt /);
   assert.equal(block.includes("--variant"), false);
   assert.equal(softwareFamily("opencode"), "opencode");
   assert.equal(sanitizeModel("opencode/muse-spark-1.3-contributor-free"), "opencode/muse-spark-1.3-contributor-free");
@@ -270,7 +296,7 @@ test("cursor family skips effort flags", () => {
     effort: "high",
     cdWorktree: false,
   });
-  assert.match(block, /^agent --model gpt-5\.3-codex-high /);
+  assert.match(block, /^HIVEMIND_ROLE='brain' agent --model gpt-5\.3-codex-high /);
   assert.equal(block.includes("--effort"), false);
   assert.equal(block.includes("model_reasoning_effort"), false);
 });
@@ -286,7 +312,7 @@ test("Grok 4.7 dropdown selection launches a senior frontend worker with the ori
   for (const model of ["grok-4.7-xhigh", "grok-4.7-xhigh-fast"]) {
     const selection = parseChoiceId(selectedChoiceId(input.software, model, ""));
     const block = buildLaunchBlock({ ...input, ...selection });
-    assert.equal(block, `cd -- '/tmp/hive-work' && agent --model ${model} ${shSingleQuote(buildLaunchPrompt(input))}\n`);
+    assert.equal(block, `cd -- '/tmp/hive-work' && HIVEMIND_ROLE='worker' agent --model ${model} ${shSingleQuote(buildLaunchPrompt(input))}\n`);
     assert.match(block, /join with role=worker, seniority=senior, focus=frontend, project=alpha/);
     assert.doesNotMatch(block, /--effort|model_reasoning_effort|cursor-grok-4\.7/);
   }

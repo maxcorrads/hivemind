@@ -89,6 +89,8 @@ test("mcp-config prints a tsx launcher for this checkout", async (t) => {
   assert.deepEqual(config.mcpServers.hivemind.args.slice(0, 1), ["tsx"]);
   assert.ok(config.mcpServers.hivemind.args[1].endsWith(path.join("src", "cli.ts")));
   assert.equal(config.mcpServers.hivemind.env.HIVEMIND_URL, "http://127.0.0.1:7999");
+  assert.equal(config.mcpServers.hivemind.env.HIVEMIND_ROLE, undefined,
+    'manual MCP hosts without a generated launch role retain their normal tool list');
   assert.match(err.join("\n"), /Server must be running at http:\/\/127\.0\.0\.1:7999/);
 });
 
@@ -98,7 +100,7 @@ test("mcp-config points Codex users at --codex", async (t) => {
   assert.match(err.join("\n"), /For Codex, run hivemind mcp-config --codex/);
 });
 
-test("mcp-config --codex prints a Codex TOML block that passes HIVEMIND_TMUX_SESSION through", async (t) => {
+test("mcp-config --codex prints a Codex TOML block that passes the session and generated role through", async (t) => {
   const { calls, out, err } = harness(t);
   await runCli(["mcp-config", "--codex"]);
   assert.equal(calls.length, 0);
@@ -110,11 +112,13 @@ test("mcp-config --codex prints a Codex TOML block that passes HIVEMIND_TMUX_SES
   assert.deepEqual(args, mcpLauncher().args, "the same launcher as the JSON output");
   assert.equal(args.at(-1), "mcp");
   assert.ok(lines.includes(`tool_timeout_sec = ${MCP_TOOL_TIMEOUT_SEC}`));
-  assert.ok(lines.includes('env_vars = ["HIVEMIND_TMUX_SESSION"]'));
+  assert.ok(lines.includes('env_vars = ["HIVEMIND_TMUX_SESSION", "HIVEMIND_ROLE"]'));
   assert.ok(lines.includes("[mcp_servers.hivemind.env]"));
   assert.ok(lines.includes('HIVEMIND_URL = "http://127.0.0.1:7999"'));
   // env_vars belongs to the server table, before the env sub-table starts.
-  assert.ok(lines.indexOf('env_vars = ["HIVEMIND_TMUX_SESSION"]') < lines.indexOf("[mcp_servers.hivemind.env]"));
+  assert.ok(lines.indexOf('env_vars = ["HIVEMIND_TMUX_SESSION", "HIVEMIND_ROLE"]') < lines.indexOf("[mcp_servers.hivemind.env]"));
+  assert.equal(lines.some(line => line.startsWith('HIVEMIND_ROLE = ')), false,
+    'manual hosts without a generated role must retain the unrestricted tool list');
   assert.match(err.join("\n"), /~\/\.codex\/config\.toml/);
   assert.match(err.join("\n"), /Server must be running at http:\/\/127\.0\.0\.1:7999/);
 });
@@ -125,7 +129,7 @@ test("the Codex block uses the compiled launcher without cwd for an installed pa
   assert.ok(installed.includes(`args = [${JSON.stringify(path.resolve("/pkg", "dist/node/cli.js"))}, "mcp"]`));
   assert.ok(!installed.some(line => line.startsWith("cwd = ")));
   assert.ok(installed.includes(`tool_timeout_sec = ${MCP_TOOL_TIMEOUT_SEC}`));
-  assert.ok(installed.includes('env_vars = ["HIVEMIND_TMUX_SESSION"]'));
+  assert.ok(installed.includes('env_vars = ["HIVEMIND_TMUX_SESSION", "HIVEMIND_ROLE"]'));
   const checkout = codexMcpConfig("http://127.0.0.1:7420", false, '/Users/me/my "hive"').split("\n");
   assert.ok(checkout.includes(`cwd = ${JSON.stringify(path.resolve('/Users/me/my "hive"'))}`));
   assert.ok(checkout.some(line => line.startsWith("args = ") && line.includes('\\"hive\\"')), "quotes escaped TOML-style");

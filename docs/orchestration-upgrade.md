@@ -6,9 +6,22 @@ state, broker discovery and Keychain service names.
 
 ## Merge order
 
-Merge the roadmap #266 and token-efficiency #275, then A1: #281 → #282 → #283, with #284's pending-identity branch
-integrated before #285. The A2–A5 continuation is #286 → #287 → #288 → #289 → #290 → #291 → #292 → #293 → #294. Each continuation PR names its immediate stack base. Phase T is also merged into #291's branch.
-The Phase 3 and T2 PR links will be added when their exact commits are qualified.
+| Order | Phase | Pull requests |
+| --- | --- | --- |
+| 1 | Roadmap | [#266](https://github.com/maxcorrads/hivemind/pull/266) |
+| 2 | Phase T | [#275](https://github.com/maxcorrads/hivemind/pull/275) |
+| 3 | A1 | [#281](https://github.com/maxcorrads/hivemind/pull/281) → [#282](https://github.com/maxcorrads/hivemind/pull/282) → [#283](https://github.com/maxcorrads/hivemind/pull/283) → [#284](https://github.com/maxcorrads/hivemind/pull/284) → [#285](https://github.com/maxcorrads/hivemind/pull/285) |
+| 4 | A2 | [#286](https://github.com/maxcorrads/hivemind/pull/286) → [#287](https://github.com/maxcorrads/hivemind/pull/287) → [#288](https://github.com/maxcorrads/hivemind/pull/288) |
+| 5 | A3 | [#289](https://github.com/maxcorrads/hivemind/pull/289) → [#290](https://github.com/maxcorrads/hivemind/pull/290) |
+| 6 | A4 | [#291](https://github.com/maxcorrads/hivemind/pull/291) → [#292](https://github.com/maxcorrads/hivemind/pull/292) |
+| 7 | A5 | [#293](https://github.com/maxcorrads/hivemind/pull/293) → [#294](https://github.com/maxcorrads/hivemind/pull/294) |
+| 8 | Phase 3 | [#295](https://github.com/maxcorrads/hivemind/pull/295) → [#296](https://github.com/maxcorrads/hivemind/pull/296) |
+| 9 | T2 tool discovery | [#297](https://github.com/maxcorrads/hivemind/pull/297) |
+
+The final T2 launch/configuration slice is `feat/role-aware-launches`, based on #297. Every continuation PR names its
+immediate stack base. #284 is already integrated into #285; merge its pending-identity history before #285. Phase T is
+also merged into #291's branch, and the roadmap history is included in A2. None of these PRs was merged by development.
+Required Human review still applies to protected-main PRs even when all checks are green.
 
 ## Storage changes
 
@@ -66,3 +79,15 @@ These checks require the installed native apps and real hosts; unit/browser fixt
 - Resume a fixed agent with explicit host settings; Stop only a broker-verified session. Review Remove's task impact,
   including jobs losing a reviewer, and test optional Stop failure separately from removal. Native labels and existing
   Telegram topic titles may retain a former name until recreated.
+
+- Update each Codex profile's MCP `env_vars` to include `HIVEMIND_ROLE` alongside `HIVEMIND_TMUX_SESSION` (the generated
+  `mcp-config --codex` block shows both). Generated launches set the role; a manual configuration may omit it and retain
+  every tool. Do not hardcode one role into a config used for both brains and workers. Verify initial MCP tool discovery
+  in each installed host after restarting its client; actual host versions were not exercised during development.
+
+## Validation boundaries
+
+Each continuation PR records its exact tested commit and full local check counts. Hosted CI runs Node22/24, coverage,
+Chromium fixtures and macOS/iOS builds; CodeQL runs separately. Native Swift unit tests use fakes. Local browser tests
+use mocked APIs with no production proxy. These checks do not prove installed-app notifications, Keychain/broker
+integration, actual model-host behavior or production migration execution; use the manual list above after upgrading.

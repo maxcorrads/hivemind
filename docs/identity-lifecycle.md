@@ -1,6 +1,6 @@
 # Identity lifecycle
 
-Brains and workers have **no stored credentials**. An agent's identity is its name, role, seniority and project; a *session key* only proves which running process is speaking.
+Brains and workers have **no stored credentials**. An agent's identity is its name, role, seniority and project; a *session key* identifies the bearer session, not a physical process.
 
 ## Joining and resuming
 
@@ -27,18 +27,19 @@ A worker launched from a [worker template](worker-templates.md) exists before it
 
 - **Reserve.** `POST /api/ui/worker-templates/:id/reserve` with an optional `label` (Human only; brains use `request_worker`) creates a worker with the template's seniority, focus and project, named after the task,
   for example `Forge-settings-page`: a worker name, a dash and a slug of the label (lowercase letters, digits and
-  dashes, at most 24 characters; a numeric suffix when taken). It is a member of the project's public channels and its
-  inbox starts now, so mail sent while it starts reaches it. The answer holds the worker and a **launch ticket**
+  dashes, at most 24 characters; a numeric suffix when taken). A Human reservation joins the project's public channels;
+  a brain-requested worker sees only its task channel until claim. Its inbox starts at reservation. The answer holds the worker and a **launch ticket**
   (`hmc_` and 48 hex characters), shown once and stored as its SHA-256; it is not cached (`Cache-Control: no-store`).
-  A template with `maxConcurrent` workers not removed refuses another reservation; a disabled template refuses too.
+  Capacity excludes requests awaiting approval and is checked again at approval/dispatch. Archived workers with uncertain
+  native cleanup still consume capacity until closure is acknowledged; disabled templates refuse new launches.
 - **Waiting.** The worker is listed with `pending: {until}` and shows as *starting…* in the roster. It has no session:
   nothing can authenticate as it, and `resume` by its name is refused.
 - **Claim.** Its launch joins it with `claim=<ticket>` (MCP `join` parameter `claim`, CLI `join --claim`, HTTP
   `claim`). The ticket works once: the worker gets a session, stops being pending and posts its join in `#general`;
   the answer is a first join (`created: true`, with standing orders). From then on it resumes by name like any worker.
 - **Expiry.** A reservation not claimed within 30 minutes is withdrawn during the presence sweep, like a removal (its
-  name stays reserved, its open tasks are cancelled), with a note in `#general`. A late claim is refused (`410`) and
-  withdraws it too.
+  name stays reserved, its open tasks are cancelled), with a note in `#general`. A late claim is rejected: `410` when the claim itself detects expiry and withdraws it, or `401` after the sweep
+  has already cleared the ticket hash.
 
 ## Trust boundary
 

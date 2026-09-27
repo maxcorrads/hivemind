@@ -77,7 +77,7 @@ test("in a browser, Reserve and copy reserves a worker named after the task and 
   const [worker] = f.hive.identity.listAgents().filter(agent => agent.templateId === f.template.id);
   assert.ok(worker?.pending);
   assert.match(worker.name, /-settings-page$/);
-  assert.match(f.copied(), /^cd -- '\/Users\/me\/acme' && OPENCODE_DISABLE_FFF='1' opencode-hm --auto --prompt '/);
+  assert.match(f.copied(), /^cd -- '\/Users\/me\/acme' && OPENCODE_DISABLE_FFF='1' HIVEMIND_ROLE='worker' opencode-hm --auto --prompt '/);
   assert.match(f.copied(), new RegExp(`the Hivemind worker ${worker.name}, reserved for one task`));
   assert.match(f.copied(), /claim=hmc_[0-9a-f]{48}/);
   assert.doesNotMatch(f.copied(), /claim=hmc_0{48}/);

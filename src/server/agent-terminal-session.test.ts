@@ -43,6 +43,11 @@ test("join stores the reported session; the UI snapshot shows it and the agents'
   assert.ok((roster.json.agents as Agent[]).every(agent => !("terminalSession" in agent)));
   const me = await call("GET", "/api/agent/me", undefined, joined.json.token);
   assert.equal("terminalSession" in me.json.you, false);
+  const withOrders = await call("GET", "/api/agent/me?orders=1", undefined, joined.json.token);
+  assert.equal(withOrders.status, 200);
+  assert.deepEqual(withOrders.json.you, me.json.you, "orders reuse the same agent-visible projection");
+  assert.equal("terminalSession" in withOrders.json.you, false);
+  assert.match(withOrders.json.standingOrders, /wait/);
 
   const plain = await call("POST", "/api/agent/join", { role: "brain" });
   assert.equal("terminalSession" in (await snapshotAgent(plain.json.agent.id)), false, "no session, no field");

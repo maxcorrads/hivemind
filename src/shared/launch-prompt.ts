@@ -319,6 +319,7 @@ export function buildLaunchPrompt(input: LaunchInput): string {
  * block and the macOS app's "Open in Terminal" are both built from this.
  */
 export function buildLaunchCommand(input: LaunchInput): { cwd: string | null; command: string } {
+  if (input.role !== "brain" && input.role !== "worker") throw new Error("Launch role must be brain or worker");
   const software = sanitizeSoftware(input.software);
   const flags = [
     buildModelFlags(software, input.model, input.effort),
@@ -328,7 +329,8 @@ export function buildLaunchCommand(input: LaunchInput): { cwd: string | null; co
       // and the other servers' loading policy. Keep host tool discovery available
       // too: some interactive clients still start while MCP is connecting.
       ? "--mcp-config " + shSingleQuote(JSON.stringify({
-        mcpServers: { hivemind: { ...input.hivemindMcp, alwaysLoad: true } },
+        mcpServers: { hivemind: { ...input.hivemindMcp,
+          env: { ...input.hivemindMcp.env, HIVEMIND_ROLE: input.role }, alwaysLoad: true } },
       }))
       : "",
   ]
@@ -344,7 +346,9 @@ export function buildLaunchCommand(input: LaunchInput): { cwd: string | null; co
   const family = softwareFamily(software);
   const promptArg = family === "opencode" ? `--prompt ${quoted}`
     : family === "claude" && input.hivemindMcp ? `-- ${quoted}` : quoted;
-  const invoke = [software, flags, promptArg].filter(Boolean).join(" ");
+  // This is fixed from the authenticated launch role, never from a template or user environment.
+  // Codex passes it to the MCP subprocess through env_vars; Claude receives it in its per-launch binding above.
+  const invoke = `HIVEMIND_ROLE=${shSingleQuote(input.role)} ` + [software, flags, promptArg].filter(Boolean).join(" ");
   const tree = sanitizeWorkspacePath(input.workspacePath);
   return { cwd: input.cdWorktree && tree ? tree : null, command: invoke };
 }

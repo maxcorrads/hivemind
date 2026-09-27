@@ -1,6 +1,6 @@
 # Agent orchestration and token efficiency roadmap
 
-Status: Phase T is in #275; A1 is in #281 → #282 → #283 → #285, with #284 integrated into #285. All remain unmerged. A2 is in #286 → #287 → #288. A3 is in #289 → #290. A4 is in #291 → #292, including Phase T #275. A5 is in #293 → #294. Phase 3 is in progress; T2 remains planned. Updated 2026-09-27; the historical analysis below was written against `8f0e583` (#265).
+Status: Phase T is in #275; A1 is in #281 → #282 → #283 → #285, with #284 integrated into #285. All remain unmerged. A2 is in #286 → #287 → #288. A3 is in #289 → #290. A4 is in #291 → #292, including Phase T #275. A5 is in #293 → #294. Phase 3 is in #295 → #296. T2 tool discovery is in #297; launch/config propagation is prepared in `feat/role-aware-launches`. Updated 2026-09-27; the historical analysis below was written against `8f0e583` (#265).
 
 This document is the single source of truth for a multi-phase effort: brains launch task-bound workers from Human-defined templates (automatically or after Human approval), Human follows every job and task with its progress and can pause, cancel or discuss it, and agents spend fewer tokens on Hivemind traffic. It is written so that work can resume from here alone, without the conversation that produced it. Each phase has its own GitHub issue; the tracking issue, #274, lists them all (see [Issues](#issues)).
 
@@ -253,6 +253,14 @@ task revisions and native launch state. Lifecycle history is retained as an oper
 ### Phase T2 — Role-scoped MCP tool sets
 
 Workers should not receive brain-only tools (now including `worker_templates`, `request_worker`, `release_worker`, `job_event`). Register tools per role after `join` with `tools/list_changed`, or from a role passed at MCP start; fall back to every tool on hosts without support. See #273.
+
+**Implementation.** Option B uses a static `HIVEMIND_ROLE` startup hint; twelve brain-only tools are omitted for
+workers and capability authoring is omitted for brains. Shared task/room tools remain. Missing/invalid roles and
+preloaded tokens retain all tools; server authorization remains authoritative. Generated commands and Claude bindings
+set the role, while Codex forwards it with `env_vars`. MCP clients must restart after upgrade. Official host documents
+and explicit NOT RUN real-host versions are recorded in [Agent connection](agent-connection.md#host-discovery-and-role-visibility);
+SDK 1.30.0 protocol fixtures prove discovery/fallback without depending on dynamic notifications. The orders variant
+of `whoami` now uses the same agent-visible identity projection as the ordinary response.
 
 ### Superseded phases
 

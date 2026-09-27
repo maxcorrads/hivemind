@@ -137,7 +137,7 @@ export async function runCli(argv: string[]): Promise<void> {
     if (argv.includes("--codex")) {
       console.log(codexMcpConfig());
       console.error("Paste the TOML above into ~/.codex/config.toml (or config.toml in each CODEX_HOME), then restart Codex.");
-      console.error("env_vars passes HIVEMIND_TMUX_SESSION through, so the apps can show which tmux session each agent runs in.");
+      console.error("env_vars passes HIVEMIND_TMUX_SESSION and the generated HIVEMIND_ROLE through to the MCP server.");
       console.error(`Then in the agent: join as worker or brain. Server must be running at ${hiveUrl()}`);
       return;
     }
@@ -509,7 +509,7 @@ export const MCP_TOOL_TIMEOUT_SEC = 28800;
 
 /**
  * `mcp-config --codex`: the `[mcp_servers.hivemind]` block for Codex's config.toml. Codex hands a stdio MCP server
- * only a fixed set of variables, so `env_vars` must list HIVEMIND_TMUX_SESSION for the terminal session label.
+ * only a fixed set of variables, so `env_vars` must list the session label and generated launch role.
  */
 export function codexMcpConfig(url = hiveUrl(), compiled = runningCompiled, root = packageRoot()): string {
   const { command, args } = mcpLauncher(compiled, root);
@@ -522,8 +522,8 @@ export function codexMcpConfig(url = hiveUrl(), compiled = runningCompiled, root
     // A checkout runs tsx from its own devDependencies.
     ...(compiled ? [] : [`cwd = ${str(resolve(root))}`]),
     `tool_timeout_sec = ${MCP_TOOL_TIMEOUT_SEC}`,
-    "# Lets the apps tell which tmux session this agent runs in (docs/agent-connection.md#terminal-session-label).",
-    `env_vars = ["HIVEMIND_TMUX_SESSION"]`,
+    "# Passes the generated agent role and native session label to the MCP process when present.",
+    `env_vars = ["HIVEMIND_TMUX_SESSION", "HIVEMIND_ROLE"]`,
     "",
     "[mcp_servers.hivemind.env]",
     `HIVEMIND_URL = ${str(url)}`,

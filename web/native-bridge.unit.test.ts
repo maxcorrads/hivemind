@@ -333,7 +333,7 @@ test("the Launch agent sheet starts the command it would copy in a tmux session,
   const [launch] = message.launches;
   assert.deepEqual({ project: launch.project, agent: launch.agent, title: launch.title, cwd: launch.cwd },
     { project: "acme", agent: null, title: "Acme - new brain", cwd: "/Users/me/My Acme" });
-  assert.match(launch.command, /^codex /);
+  assert.match(launch.command, /^HIVEMIND_ROLE='brain' codex /);
   // One source of truth: the copied block is this launch with its cd.
   assert.equal(launchBlockText({ cwd: launch.cwd ?? null, command: launch.command }), sheet.blocks()[0]);
   assert.ok(sheet.button(/^Launching…$/)?.disabled);
@@ -561,8 +561,8 @@ test("the Codex env_vars hint shows under Software for Codex, and only where the
   for (const software of ["codex", "", "/opt/homebrew/bin/codex"]) {
     localStorage.setItem("hivemind-launch", JSON.stringify({ software }));
     const sheet = await mountLaunchSheet();
-    assert.equal(hint(sheet.view.host), "Codex passes HIVEMIND_TMUX_SESSION to MCP servers only if its config lists it. Add "
-      + 'env_vars = ["HIVEMIND_TMUX_SESSION"] under [mcp_servers.hivemind] in each CODEX_HOME’s config.toml — '
+    assert.equal(hint(sheet.view.host), "Codex passes the session label and generated role to MCP servers only if its config lists them. Add "
+      + 'env_vars = ["HIVEMIND_TMUX_SESSION", "HIVEMIND_ROLE"] under [mcp_servers.hivemind] in each CODEX_HOME’s config.toml — '
       + "hivemind mcp-config --codex prints the block.", JSON.stringify(software));
     const field = sheet.view.host.querySelector("input[list='launch-software']")!.closest("label")!;
     assert.equal(field.nextElementSibling?.nextElementSibling?.className, "help-p launch-codex-env", "right under the Software field");
@@ -689,7 +689,7 @@ test("storage that throws never breaks the environment field", async () => {
     const sheet = await mountLaunchSheet();
     await typeInto(envInput(sheet.view.host), "A=1");
     assert.equal(envInput(sheet.view.host).value, "A=1");
-    assert.match(sheet.blocks()[0]!, /&& A='1' codex /);
+    assert.match(sheet.blocks()[0]!, /&& A='1' HIVEMIND_ROLE='brain' codex /);
   } finally {
     proto.getItem = getItem;
     proto.setItem = setItem;
@@ -704,7 +704,7 @@ test("in a browser the preview and Copy command start the command with the varia
     const sheet = await mountLaunchSheet();
     const [block] = sheet.blocks();
     assert.ok(block!.startsWith(`cd -- '/Users/me/My Acme' && OPENCODE_DISABLE_FFF='1' ` +
-      `OPENCODE_CONFIG_CONTENT='{"snapshot":false,"x":"${ENV_MARKER}"}' QUOTE='it'\\''s $HOME \`id\` 😀' opencode `), block);
+      `OPENCODE_CONFIG_CONTENT='{"snapshot":false,"x":"${ENV_MARKER}"}' QUOTE='it'\\''s $HOME \`id\` 😀' HIVEMIND_ROLE='brain' opencode `), block);
     await act(async () => { sheet.button(/^Copy command$/)!.click(); });
     assert.deepEqual(copies, [block]);
   } finally {
@@ -730,7 +730,7 @@ test("a refused line blocks Copy and launching and says why without quoting it; 
   await typeInto(envInput(host), "A=1\nA=2");
   assert.equal(host.querySelector(".launch-env-errors"), null);
   assert.equal(sheet.button(/^Copy command$/)!.disabled, false);
-  assert.match(sheet.blocks()[0]!, /&& A='2' codex /, "the last one wins");
+  assert.match(sheet.blocks()[0]!, /&& A='2' HIVEMIND_ROLE='brain' codex /, "the last one wins");
 });
 
 test("the apps send the variables beside the command, never in it, and Resume gives every employee the same", async () => {
@@ -758,7 +758,8 @@ test("the apps send the variables beside the command, never in it, and Resume gi
   assert.deepEqual(resume.launches.map(l => l.environment), [ENV, ENV]);
   assert.ok(resume.launches.every(l => !l.command.includes(ENV_MARKER)));
   assert.equal(resumed.blocks().length, 2);
-  assert.ok(resumed.blocks().every(block => block.includes("&& OPENCODE_DISABLE_FFF='1' ") && block.includes("😀' opencode ")),
+  assert.ok(resumed.blocks().every(block => block.includes("&& OPENCODE_DISABLE_FFF='1' ") &&
+    (block.includes("😀' HIVEMIND_ROLE='brain' opencode ") || block.includes("😀' HIVEMIND_ROLE='worker' opencode "))),
     "each card's Copy (and so Copy all) has them too");
 
   // No variables, no key.

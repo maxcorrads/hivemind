@@ -33,8 +33,8 @@ command = "npx"
 args = ["tsx", "/absolute/path/to/hivemind/src/cli.ts", "mcp"]
 cwd = "/absolute/path/to/hivemind"
 tool_timeout_sec = 28800
-# Lets the apps tell which tmux session this agent runs in (docs/agent-connection.md#terminal-session-label).
-env_vars = ["HIVEMIND_TMUX_SESSION"]
+# Passes the generated agent role and native session label to the MCP process when present.
+env_vars = ["HIVEMIND_TMUX_SESSION", "HIVEMIND_ROLE"]
 
 [mcp_servers.hivemind.env]
 HIVEMIND_URL = "http://127.0.0.1:7420"
@@ -55,7 +55,7 @@ The server stores the name on the agent. Only the Human UI sees it, as `terminal
 - Removing an agent clears its label.
 - The label outlives the session. The Mac app shows a terminal only for a session its broker lists as running.
 
-The agent CLI has to pass `HIVEMIND_TMUX_SESSION` on to the MCP process. Claude Code passes its environment on. Codex starts stdio MCP servers with a fixed environment (`HOME`, `PATH`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `TERM`, `TMPDIR` and a few more) and drops everything else, so its `[mcp_servers.hivemind]` block **requires** `env_vars = ["HIVEMIND_TMUX_SESSION"]` for the label (verified with codex-cli 0.157.1: `codex mcp get hivemind` then lists it). `hivemind mcp-config --codex` prints it, and the Launch sheet in the apps reminds you when the software is Codex. Add it to the config of every `CODEX_HOME` you launch with. Without it the agent works as before; the apps then fall back to the session the broker recorded at launch for that agent's name in its project, when exactly one such session runs, and otherwise show no terminal for it.
+The agent CLI has to pass `HIVEMIND_TMUX_SESSION` on to the MCP process. Claude Code passes its environment on. Codex starts stdio MCP servers with a fixed environment (`HOME`, `PATH`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `TERM`, `TMPDIR` and a few more) and drops everything else, so its `[mcp_servers.hivemind]` block **requires** forwarding `HIVEMIND_TMUX_SESSION` for the label (historically verified with codex-cli 0.157.1). The generated config now also forwards `HIVEMIND_ROLE`; the new role behavior has protocol-fixture coverage, not a new real-host version qualification. `hivemind mcp-config --codex` prints it, and the Launch sheet in the apps reminds you when the software is Codex. Add it to the config of every `CODEX_HOME` you launch with. Without it the agent works as before; the apps then fall back to the session the broker recorded at launch for that agent's name in its project, when exactly one such session runs, and otherwise show no terminal for it.
 
 ### Tool set changes (#218)
 
@@ -165,3 +165,28 @@ npx tsx src/cli.ts doctor
 `clear_context` cannot reset the Codex/Claude/Cursor runtime. It tells the worker to drop task memory and `wait`. Never send it automatically at `done`.
 
 Run `npx tsx src/cli.ts help` for the full command list (tasks, rooms, subscriptions, search, plugins).
+
+## Host discovery and role visibility
+
+Hivemind chooses a static tool set when the MCP process starts, using `HIVEMIND_ROLE=brain|worker`. It does not depend
+on a host refreshing `tools/list_changed` after join. An absent or unknown role retains the full tool list. A preloaded nonempty `HIVEMIND_TOKEN` also retains all tools because its role has not been authenticated at startup. This is
+context reduction only: the server still authorizes every operation using the joined identity and its actual role.
+Changing role requires a new MCP process; a process with a known startup role rejects an incompatible join.
+
+Generated launches supply the role. Codex must forward it in its MCP `env_vars`; Claude's generated per-launch MCP
+binding includes it explicitly. For a manually configured host that drops the variable, the complete list is the safe
+fallback. Do not hardcode `worker` in a shared configuration used by both brains and workers.
+
+Official documentation checked on 2026-09-27:
+
+| Host | Dynamic tool-update evidence | Runtime versions tested for this change |
+| --- | --- | --- |
+| Claude Code | [Official MCP docs](https://code.claude.com/docs/en/mcp#dynamic-tool-updates) document automatic refresh on `list_changed`; v2.1.214 changed failed refreshes to retain the previous list. | NOT RUN; documentation evidence only. |
+| Codex | [Official MCP docs](https://developers.openai.com/codex/mcp) document `env_vars` forwarding; the reviewed page does not establish dynamic list-change behavior. | NOT RUN. |
+| Cursor | [Official MCP docs](https://cursor.com/docs/mcp) do not establish dynamic list-change behavior in the reviewed page. | NOT RUN. |
+| OpenCode | [Official MCP docs](https://opencode.ai/docs/mcp-servers/) do not establish dynamic list-change behavior in the reviewed page. | NOT RUN. |
+
+No real host or installed native app was launched, restarted or reconfigured during this work, because the active
+production setup must stay untouched. Protocol fixtures use MCP SDK 1.30.0 and check initial tool discovery, the
+unconfigured fallback and role mismatch. These tests are not real-host version qualification. Human can verify each
+installed host's initial tool list after the later upgrade without relying on dynamic notifications.

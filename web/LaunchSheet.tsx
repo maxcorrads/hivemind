@@ -593,8 +593,8 @@ export function LaunchSheet({
           </datalist>
           {showCodexEnvHint && (
             <p className="help-p launch-codex-env">
-              Codex passes <code>HIVEMIND_TMUX_SESSION</code> to MCP servers only if its config lists it. Add{" "}
-              <code>env_vars = ["HIVEMIND_TMUX_SESSION"]</code> under <code>[mcp_servers.hivemind]</code> in each{" "}
+              Codex passes the session label and generated role to MCP servers only if its config lists them. Add{" "}
+              <code>env_vars = ["HIVEMIND_TMUX_SESSION", "HIVEMIND_ROLE"]</code> under <code>[mcp_servers.hivemind]</code> in each{" "}
               <code>CODEX_HOME</code>’s <code>config.toml</code> — <code>hivemind mcp-config --codex</code> prints the block.
             </p>
           )}

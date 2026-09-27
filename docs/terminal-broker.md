@@ -158,8 +158,11 @@ the one being typed in wins.
 A session name always matches `^hm-[a-z0-9][a-z0-9-]{0,78}$` (at most 82
 characters):
 
-- `hm-<project>-<agent>` for a named agent. It is always the same session, so
-  relaunching the agent reuses it (for example with **Resume same employees**).
+- `hm-<project>-<agent>` for a named agent. With an unchanged project/name, a
+  relaunch resolves to the same generated session (for example with **Resume same employees**).
+  Human renames keep the existing native label; a subsequent launch may generate a different name.
+  The fixed-agent panel uses reserved identity aliases to detect its verified live session and asks Human
+  to stop it before resuming. A rename alone does not rename or restart a native process.
   A launch that names the agent's running session (`session`, from
   `agent.terminalSession`) reuses that one instead, whatever its name, but
   only when the broker launched that session for the same project and for no
