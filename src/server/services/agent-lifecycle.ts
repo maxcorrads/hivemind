@@ -14,7 +14,7 @@ export type AgentLifecycleDeps = Core & {
   readonly waiters: { evict(agentId: string): void };
   readonly tasks: { closeForRemovedAgent(agent: Agent): { cancelled: number; unreviewed: number } };
   readonly adaptiveTopology: { closeBrainExecutions(brain: Agent): void };
-  readonly launcherQueue: { kill(requestId: string): void };
+  readonly launcherQueue: { kill(requestId: string): void; expireReservationRequest(requestId: string): void };
   readonly lifecycleLog?: { record(input: { agentId: string; projectId: string | null; actorId: string | null;
     kind: 'removed'; summary: string; source: 'server' }): unknown };
 };
@@ -53,13 +53,13 @@ export class AgentLifecycle {
     this.deps.storage.transaction(() => {
       const target = this.deps.identity.getAgent(agentId);
       if (target.removedAt !== undefined || target.archivedAt !== undefined || !target.pending) return;
-      this.retire(target, `${target.name} was withdrawn: its launch did not join within 30 minutes.`);
+      this.retire(target, `${target.name} was withdrawn: its launch did not join within 30 minutes.`, null, true);
       this.deps.storage.afterCommit(() => this.sweepBlobs());
     });
   }
 
   /** Inside a transaction: tombstones the agent, closes its work and posts `note` (plus what happened to its tasks). */
-  private retire(target: Agent, note: string, actorId: string | null = null): Agent {
+  private retire(target: Agent, note: string, actorId: string | null = null, expired = false): Agent {
     const { identity, tasks, adaptiveTopology, channels, messages, bus, storage } = this.deps;
     this.detach(target.id);
     // Tombstone first, so the task views published below already label the agent as removed.
@@ -67,7 +67,10 @@ export class AgentLifecycle {
     if (target.templateId) {
       const row = this.db.prepare(`SELECT id FROM launch_requests WHERE agent_id=?
         ORDER BY requested_at DESC,rowid DESC LIMIT 1`).get(target.id) as { id: string } | undefined;
-      if (row) this.deps.launcherQueue.kill(row.id);
+      if (row) {
+        if (expired) this.deps.launcherQueue.expireReservationRequest(row.id);
+        else this.deps.launcherQueue.kill(row.id);
+      }
     }
     this.deps.lifecycleLog?.record({ agentId: target.id, projectId: target.projectId, actorId,
       kind: 'removed', summary: target.pending ? 'Pending agent reservation was withdrawn.' :

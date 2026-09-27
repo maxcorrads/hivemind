@@ -45,7 +45,7 @@ export class AgentLifecycleLog {
 
   /** Age-based retention in bounded write transactions. */
   prune(cutoff: number, batch = 1000): number {
-    if (!Number.isSafeInteger(cutoff) || cutoff < 0 || !Number.isSafeInteger(batch) || batch < 1 || batch > 1000)
+    if (!Number.isSafeInteger(cutoff) || !Number.isSafeInteger(batch) || batch < 1 || batch > 1000)
       throw new HiveError(400, 'Invalid agent lifecycle retention bound');
     let removed = 0;
     for (;;) {
