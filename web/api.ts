@@ -15,6 +15,8 @@ import type { TaskOverview, TaskViewsPage } from '../src/shared/task-views.ts';
 import type { RoomView, Room } from '../src/shared/rooms.ts';
 import type { TimelineExport, TimelineView } from '../src/shared/timeline.ts';
 import type { AdaptiveRoutingView } from '../src/shared/adaptive-topology.ts';
+import type { AgentOverview, AgentRemoveImpact, AgentLifecycleEvent } from '../src/shared/agent-management.ts';
+import type { CapabilityCard, CapabilityView } from '../src/shared/routing.ts';
 
 export class ApiError extends Error {
   /** `body` is the parsed error response, for errors that carry more than a message (e.g. a thread's real channel). */
@@ -227,6 +229,25 @@ export const api = {
     req<{ ok: true }>(`/api/ui/projects/${encodeURIComponent(slug)}`, { method: "DELETE" }),
   removeAgent: (name: string) =>
     req<{ ok: true; name: string }>(`/api/ui/agents/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  agentOverview: (id: string, signal?: AbortSignal) =>
+    req<AgentOverview>(`/api/ui/agents/${encodeURIComponent(id)}/overview`, { signal }),
+  editAgentIdentity: (id: string, body: { expectedRevision: number; name?: string; focus?: string | null;
+    seniority?: 'junior' | 'mid' | 'senior' }) =>
+    req<{ agent: Agent; identityRevision: number }>(`/api/ui/agents/${encodeURIComponent(id)}/identity`,
+      { method: 'PATCH', body: JSON.stringify(body) }),
+  editAgentCapability: (id: string, body: { expectedRevision: number; card: CapabilityCard }) =>
+    req<{ capability: CapabilityView & { lastEditorId: string | null } }>(
+      `/api/ui/agents/${encodeURIComponent(id)}/capability`, { method: 'PUT', body: JSON.stringify(body) }),
+  agentRemoveImpact: (id: string) => req<AgentRemoveImpact>(
+    `/api/ui/agents/${encodeURIComponent(id)}/remove-impact`),
+  removeAgentWithImpact: (id: string, impactToken: string) =>
+    req<{ agent: Agent }>(`/api/ui/agents/${encodeURIComponent(id)}/remove`,
+      { method: 'POST', body: JSON.stringify({ impactToken }) }),
+  agentLifecycle: (id: string, before?: number) => req<{ items: AgentLifecycleEvent[]; hasMore: boolean; nextBefore: number | null }>(
+    `/api/ui/agents/${encodeURIComponent(id)}/lifecycle${before === undefined ? '' : `?before=${before}`}`),
+  agentRuntimeEvent: (id: string, kind: 'stop_requested' | 'stop_observed', session: string) =>
+    req<{ event: AgentLifecycleEvent }>(`/api/ui/agents/${encodeURIComponent(id)}/runtime-event`,
+      { method: 'POST', body: JSON.stringify({ kind, session }) }),
   setAgentLaunchMode: (name: string, mode: "approval" | "auto") =>
     req<{ agent: Agent }>(`/api/ui/agents/${encodeURIComponent(name)}/launch-mode`, {
       method: "PATCH", body: JSON.stringify({ mode }),

@@ -8,6 +8,7 @@ import { ChannelDesk } from "./ChannelDesk.tsx";
 import { CreateChannelSheet, InviteSheet } from "./ChannelSheets.tsx";
 import { useDesktopNotifications } from "./desktop-notifications.ts";
 import { AgentConfirmSheet, BotSheet, CredentialSheet, HelpSheet } from "./HiveSheets.tsx";
+import { AgentPanel } from './AgentPanel.tsx';
 import { Inbox } from "./Inbox.tsx";
 import { JevLog } from "./JevLog.tsx";
 import { channelTitle } from "./labels.ts";
@@ -154,10 +155,13 @@ export function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [adaptiveRoutingOpen, setAdaptiveRoutingOpen] = useState(false);
   const [launchOpen, setLaunchOpen] = useState(false);
+  const [agentPanelId, setAgentPanelId] = useState<string | null>(null);
+  const [resumeAgentId, setResumeAgentId] = useState<string | null>(null);
+  const [resumeAliases, setResumeAliases] = useState<string[]>([]);
   /** Project preselected in the Launch sheet when it is opened from a project's roster. */
   const [launchProject, setLaunchProject] = useState<string | null>(null);
   const [taskDraft, setTaskDraft] = useState<{ channelId: string; token: string; text: string } | null>(null);
-  const openLaunch = (project: string | null = null) => { setLaunchProject(project); setLaunchOpen(true); };
+  const openLaunch = (project: string | null = null) => { setResumeAgentId(null); setResumeAliases([]); setLaunchProject(project); setLaunchOpen(true); };
 
   const roomAgents = (snap?.agents ?? []).filter((a) => a.role === "human" || !a.project || a.project === selectedProject);
   const { inboxBox, inboxItems, inboxPage, inboxBusy } = inbox;
@@ -287,8 +291,10 @@ export function App() {
         }}
         dms={dms}
         agentActions={{
-          onAgent, onCreateBot: setBotProject, onManageBot: setCredentialBot,
-          onAskAgent: (name, kind) => agentConfirm.setAgentConfirm({ name, kind }),
+          onAgent, onOpenPanel: agent => setAgentPanelId(agent.id), onCreateBot: setBotProject, onManageBot: setCredentialBot,
+          onAskAgent: (name, kind) => kind === 'remove'
+            ? setAgentPanelId(snap.agents.find(agent => agent.name === name)?.id ?? null)
+            : agentConfirm.setAgentConfirm({ name, kind }),
           onSetLaunchMode: setAgentLaunchMode,
         }} />
 
@@ -327,6 +333,7 @@ export function App() {
             onBack={() => navigate({ kind: 'home', project: sel.project ?? selectedProject })}
             onAll={() => navigate({ kind: 'tasks', project: null })}
             onOpenThread={item => navigate({ kind: 'channel', id: item.task.channelId, thread: item.task.id })}
+            onOpenWorker={item => setAgentPanelId(item.worker.id)}
             onMessageBrain={item => void messageTaskBrain(item)}
             requests={<LaunchRequests requests={sel.project
               ? launchRequests.requests.filter(request => projects.find(project => project.id === request.projectId)?.slug === sel.project)
@@ -478,12 +485,24 @@ export function App() {
 
       {launchOpen && (
         <LaunchSheet
+          key={resumeAgentId ?? 'new'}
           projects={projects}
           agents={snap.agents}
           defaultProject={launchProject ?? selectedProject}
-          onClose={() => { setLaunchOpen(false); setLaunchProject(null); }}
+          resumeAgentId={resumeAgentId ?? undefined}
+          resumeAliases={resumeAliases}
+          onClose={() => { setLaunchOpen(false); setLaunchProject(null); setResumeAgentId(null); setResumeAliases([]); }}
         />
       )}
+
+      {agentPanelId && <AgentPanel key={agentPanelId} agentId={agentPanelId} agents={snap.agents} projects={projects} tick={taskTick}
+        onClose={() => setAgentPanelId(current => current === agentPanelId ? null : current)} onChanged={refreshSnap}
+        onMessage={agent => { setAgentPanelId(null); void onAgent(agent); }}
+        onClear={agent => { setAgentPanelId(null); agentConfirm.setAgentConfirm({ name: agent.name, kind: 'clear' }); }}
+        onResume={(agent, aliases) => { setAgentPanelId(null); setResumeAgentId(agent.id); setResumeAliases(aliases);
+          setLaunchProject(agent.project); setLaunchOpen(true); }}
+        onOpenTask={item => { setAgentPanelId(null); navigate({ kind: 'tasks', project: item.project }); }}
+        onOpenThread={item => { setAgentPanelId(null); navigate({ kind: 'channel', id: item.task.channelId, thread: item.task.id }); }} />}
 
       {agentConfirm.agentConfirm && (
         <AgentConfirmSheet target={agentConfirm.agentConfirm} busy={agentConfirm.agentBusy}

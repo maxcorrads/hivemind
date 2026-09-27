@@ -3,6 +3,7 @@ import { Modal } from "./Modal.tsx";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Agent, Project, Seniority } from "../src/shared/types.ts";
 import { api } from "./api.ts";
+import { agentRuntime, verifiedStopSession } from './agent-runtime.ts';
 import { ModelSelect } from "./ModelSelect.tsx";
 import {
   inNativeApp, onMacDesktop, terminalSecretProblem, terminalSessionLaunchProblem, type TerminalLaunchSecrets, type TerminalSessionLaunch,
@@ -167,20 +168,25 @@ export function LaunchSheet({
   agents,
   defaultProject,
   onClose,
+  resumeAgentId,
+  resumeAliases = [],
 }: {
   projects: Project[];
   agents: Agent[];
   defaultProject: string;
   onClose: () => void;
+  /** A fixed-agent panel resumes exactly this agent, with launch settings chosen afresh. */
+  resumeAgentId?: string;
+  resumeAliases?: string[];
 }) {
   const [initial] = useState(loadSaved);
   // Hivemind.app registers the bridge before the page loads, so this never changes.
   const [native] = useState(() => inNativeApp());
-  const [software, setSoftware] = useState(initial.software);
+  const [software, setSoftware] = useState(resumeAgentId ? '' : initial.software);
   const [extraFlags, setExtraFlags] = useState(initial.extraFlags);
   const [softwareUsed, setSoftwareUsed] = useState(initial.softwareUsed);
-  const [model, setModel] = useState(initial.model);
-  const [effort, setEffort] = useState(initial.effort);
+  const [model, setModel] = useState(resumeAgentId ? '' : initial.model);
+  const [effort, setEffort] = useState(resumeAgentId ? '' : initial.effort);
   const [projectSlug, setProjectSlug] = useState(defaultProject);
   const [workspacePath, setWorkspacePath] = useState("");
   const [pathDirty, setPathDirty] = useState(false);
@@ -190,9 +196,9 @@ export function LaunchSheet({
   const [role, setRole] = useState<LaunchRole>(initial.role);
   const [seniority, setSeniority] = useState<Seniority>(initial.seniority);
   const [focus, setFocus] = useState(initial.focus);
-  const [resume, setResume] = useState(initial.resume);
+  const [resume, setResume] = useState(Boolean(resumeAgentId) || initial.resume);
   const [allHives, setAllHives] = useState(initial.allHives);
-  const [tunes, setTunes] = useState<Record<string, { model: string; effort: string }>>(initial.tunes);
+  const [tunes, setTunes] = useState<Record<string, { model: string; effort: string }>>(resumeAgentId ? {} : initial.tunes);
   // Kept per software in this browser (never sent anywhere but with a launch); restored when that software is chosen.
   const [environments, setEnvironments] = useState<Record<string, string>>(initial.environments);
   const envKey = environmentKey(software);
@@ -251,13 +257,14 @@ export function LaunchSheet({
     const slug = project?.slug ?? projectSlug;
     return agents
       .filter((a) => a.role === "brain" || a.role === "worker")
+      .filter((a) => !resumeAgentId || a.id === resumeAgentId)
       .filter((a) => allHives || a.project === slug)
       .slice()
       .sort((a, b) => {
         if (a.role !== b.role) return a.role === "brain" ? -1 : 1;
         return a.name.localeCompare(b.name);
       });
-  }, [agents, allHives, project, projectSlug]);
+  }, [agents, allHives, project, projectSlug, resumeAgentId]);
 
   const shared = {
     software,
@@ -418,7 +425,12 @@ export function LaunchSheet({
     setOpencodeKey("");
     onClose();
   };
-  const canCopyAll = resume && resumeBlocks.length > 0 && resumeBlocks.every((b) => b.ok);
+  const targetSession = resumeAgentId && roster[0]
+    ? verifiedStopSession(roster[0], agents, terminals, resumeAliases) ? 'running'
+      : agentRuntime(roster[0], { agents }, terminals).sessionState : null;
+  const canCopyAll = resume && resumeBlocks.length > 0 && resumeBlocks.every((b) => b.ok) &&
+    (!resumeAgentId || Boolean(software.trim()) && targetSession !== 'running');
+  const canCopyResumeCard = !resumeAgentId || Boolean(software.trim()) && targetSession !== 'running';
 
   // Hivemind.app only: the same launches as the copied text, each in its own tmux session (reused when that
   // employee's is still running), optionally with a Terminal window attached.
@@ -522,7 +534,7 @@ export function LaunchSheet({
                 : "Choose an agent, then paste its launch command into a new terminal. One terminal = one employee."}
             </p>
           </div>
-          <button type="button" className="btn" onClick={() => setFromTemplate(true)}>From a template…</button>
+          {!resumeAgentId && <button type="button" className="btn" onClick={() => setFromTemplate(true)}>From a template…</button>}
           <button type="button" className="icon-btn" aria-label="Close dialog" title="Close" onClick={close}>
             <X size={16} aria-hidden="true" />
           </button>
@@ -530,7 +542,7 @@ export function LaunchSheet({
         <div className="sheet-body">
           <label>
             Project
-            <select
+            <select disabled={Boolean(resumeAgentId)}
               value={project?.slug ?? projectSlug}
               onChange={(e) => {
                 setProjectSlug(e.target.value);
@@ -572,6 +584,8 @@ export function LaunchSheet({
               autoFocus
             />
           </label>
+          {resumeAgentId && <p className="help-p">Choose the CLI and model for this launch. The fixed agent has no saved model or software in its identity.</p>}
+          {resumeAgentId && targetSession === 'running' && <p className="err" role="alert">This agent already has a running session. Close it before resuming.</p>}
           <datalist id="launch-software">
             {softwareUsed.map((name) => (
               <option key={name} value={name} />
@@ -806,7 +820,7 @@ export function LaunchSheet({
             ) : (
               <>
                 <p className="help-p">
-                  The model at the top (with effort in the name) applies to everyone. Override it on a card if that employee should differ.
+                  {resumeAgentId ? `Resume ${roster[0]?.name} only. Choose software above; this agent's last CLI and model are not known.` : 'The model at the top (with effort in the name) applies to everyone. Override it on a card if that employee should differ.'}
                   Copy all pastes a zsh script that opens one macOS Terminal window per employee (title Hive - Name). macOS may ask to control Terminal the first time.
                   {native && " Open terminals starts each employee in its own tmux session instead (an employee whose session still runs keeps it) and opens a Terminal window on each."}
                 </p>
@@ -823,7 +837,7 @@ export function LaunchSheet({
                       <button
                         type="button"
                         className="btn btn-ghost"
-                        disabled={!block.ok}
+                        disabled={!block.ok || !canCopyResumeCard}
                         onClick={() => void onCopy(block.text, block.agent.id)}
                       >
                         <Copy size={13} aria-hidden="true" />
@@ -843,7 +857,8 @@ export function LaunchSheet({
                       }
                       onChange={(next) => setTune(block.agent.name, next)}
                     />
-                    {block.ok ? <pre className="launch-pre">{block.text}</pre> : <p className="help-p">{block.error}</p>}
+                    {resumeAgentId && !software.trim() ? <p className="help-p">Choose software to build this launch command.</p> :
+                      block.ok ? <pre className="launch-pre">{block.text}</pre> : <p className="help-p">{block.error}</p>}
                   </article>
                 ))}
               </>
@@ -868,7 +883,7 @@ export function LaunchSheet({
           )}
         </div>
         <div className="row sheet-footer launch-footer">
-          <label className="check">
+          {!resumeAgentId && <label className="check">
             <input
               type="checkbox"
               checked={resume}
@@ -878,8 +893,8 @@ export function LaunchSheet({
               }}
             />
             Resume same employees
-          </label>
-          {resume && (
+          </label>}
+          {resume && !resumeAgentId && (
             <label className="check">
               <input
                 type="checkbox"

@@ -24,10 +24,11 @@ type Props = {
   onAll: () => void;
   onOpenThread: (item: TaskOverview) => void;
   onMessageBrain: (item: TaskOverview) => void;
+  onOpenWorker?: (item: TaskOverview) => void;
 };
 
 /** Cross-channel task list. Every card is server-projected, including historical agent/template labels. */
-export function TaskViews({ project, projects, agents, traffic, tick, requests, onProject, onBack, onAll, onOpenThread, onMessageBrain }: Props) {
+export function TaskViews({ project, projects, agents, traffic, tick, requests, onProject, onBack, onAll, onOpenThread, onMessageBrain, onOpenWorker }: Props) {
   const [page, setPage] = useState<TaskViewsPage | null>(null);
   const [pageScope, setPageScope] = useState<string | null>(project);
   const [loading, setLoading] = useState(true);
@@ -156,6 +157,7 @@ export function TaskViews({ project, projects, agents, traffic, tick, requests, 
           onCheck={() => void checkUnknown(item.task.id, pending[item.task.id]!)}
           onRetry={() => void submit(item.task.id, pending[item.task.id]!.body)}
           onOpenThread={() => onOpenThread(item)} onMessageBrain={() => onMessageBrain(item)}
+          onOpenWorker={onOpenWorker ? () => onOpenWorker(item) : undefined}
           onTerminal={name => setTerminalSession(name)} />)}
       </section>)}
       {visiblePage?.hasMore && <button type="button" className="btn task-more" disabled={olderLoading || !visiblePage.nextCursor}
@@ -167,12 +169,13 @@ export function TaskViews({ project, projects, agents, traffic, tick, requests, 
 }
 
 function TaskOverviewCard({ item, project, traffic, runtime, pending, actionDisabled, onAct, onCheck, onRetry, onOpenThread,
-  onMessageBrain, onTerminal }: {
+  onMessageBrain, onOpenWorker, onTerminal }: {
   item: TaskOverview; project: string | null; traffic: AgentTrafficView | undefined;
   runtime: ReturnType<typeof agentRuntime>; pending?: Pending;
   actionDisabled: boolean;
   onAct: (action: TaskControlInput['action']) => void; onCheck: () => void; onRetry: () => void;
   onOpenThread: () => void; onMessageBrain: () => void; onTerminal: (name: string) => void;
+  onOpenWorker?: () => void;
 }) {
   const { task, brain, template } = item;
   const controls = taskControls(item);
@@ -205,6 +208,7 @@ function TaskOverviewCard({ item, project, traffic, runtime, pending, actionDisa
     </p>}
     <div className="task-view-actions">
       <button type="button" className="btn" onClick={onOpenThread}>Open thread</button>
+      {onOpenWorker && <button type="button" className="btn" onClick={onOpenWorker}>View worker</button>}
       <button type="button" className="btn" disabled={brain.removedAt !== undefined || brain.archivedAt !== undefined}
         title={brain.removedAt !== undefined || brain.archivedAt !== undefined ? 'This brain is no longer available for direct messages' : undefined}
         onClick={onMessageBrain}>Message brain</button>

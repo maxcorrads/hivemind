@@ -68,6 +68,21 @@
 .sheet .danger-block { margin-top: 4px; padding-top: 14px; display: flex; flex-direction: column; gap: 10px; }
 .sheet > .text-btn { align-self: flex-start; }
 
+/* Agent management uses the same sheet and form primitives as the rest of the hive. */
+.agent-panel { width: min(44rem, 100%); padding: 0; gap: 0; }
+.agent-panel > .sheet-head { padding: 18px 20px 14px; border-bottom: 1px solid var(--line); }
+.agent-panel > .sheet-body { padding: 16px 20px 20px; gap: 16px; }
+.agent-panel-section { display: flex; flex-direction: column; gap: 10px; padding-top: 14px; border-top: 1px solid var(--line); }
+.agent-panel-section:first-child { padding-top: 0; border-top: 0; }
+.agent-panel-section > p, .agent-panel-task p, .agent-panel-confirm p { margin: 0; font-size: 13px; line-height: 1.5; color: var(--ink2); }
+.agent-panel-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.agent-panel-task, .agent-panel-confirm { display: flex; flex-direction: column; align-items: flex-start; gap: 9px;
+  padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); }
+.agent-panel-task strong { font-size: 13px; }
+.agent-panel-log { display: flex; flex-direction: column; gap: 9px; margin: 0; padding-left: 20px; }
+.agent-panel-log li { font-size: 13px; line-height: 1.4; }
+.agent-panel-log small { color: var(--mute); }
+
 /* ---- Launch agent -------------------------------------------------------------------------------------------------
    Two-column fields, segmented Role and Seniority, a terminal-dark command preview in both themes; the footer holds
    the resume toggle. */

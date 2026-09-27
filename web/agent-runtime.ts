@@ -30,6 +30,22 @@ export function recordedAgentSession(agent: AgentIdentity, roster: Roster,
   return matches.length === 1 ? matches[0]! : null;
 }
 
+/** Native Stop requires a connected broker and one live session owned by the current name or a server-owned alias. */
+export function verifiedStopSession(agent: Agent, agents: readonly Agent[], terminals: TerminalState,
+  resumeAliases: readonly string[] = []): string | null {
+  if (!terminals.native || terminals.broker !== 'connected' || !terminals.sessions || !agent.project ||
+      agent.removedAt !== undefined || agent.archivedAt !== undefined) return null;
+  const names = new Set([agent.name, ...resumeAliases].map(name => name.toLowerCase()));
+  const label = agentSessionLabel(agent);
+  const matches = terminals.sessions.filter(session => session.alive && session.project === agent.project &&
+    session.agent && names.has(session.agent.toLowerCase()) && (!label || session.name === label));
+  if (matches.length !== 1) return null;
+  const session = matches[0]!;
+  if (agents.some(other => other.id !== agent.id && other.project === agent.project &&
+      other.terminalSession === session.name && other.removedAt === undefined && other.archivedAt === undefined)) return null;
+  return session.name;
+}
+
 function statusLine(agent: Agent, work?: AgentWork): string | null {
   if (agent.role === "human" || agent.role === "bot") return null;
   if (agent.pending) return "starting…";

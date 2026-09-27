@@ -15,6 +15,7 @@ import type { ProjectSheets } from "./use-sheets.ts";
 
 type AgentActions = {
   onAgent: (agent: Agent) => void;
+  onOpenPanel: (agent: Agent) => void;
   onCreateBot: (projectId: string) => void;
   onManageBot: (agent: Agent) => void;
   onAskAgent: (name: string, kind: "clear" | "remove") => void;
@@ -415,6 +416,7 @@ function ProjectSection({ project, snap, sel, go, unified, tools, find, onProjec
           work={agentWork}
           botChannels={botChannels}
           onOpen={agentActions.onAgent}
+          onPanel={agentActions.onOpenPanel}
           onAskClear={(name) => agentActions.onAskAgent(name, "clear")}
           onAskRemove={(name) => agentActions.onAskAgent(name, "remove")}
           onSetLaunchMode={agentActions.onSetLaunchMode}

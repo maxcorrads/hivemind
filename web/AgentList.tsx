@@ -18,6 +18,7 @@ export function AgentList({
   work = {},
   botChannels = {},
   onOpen,
+  onPanel,
   onAskClear,
   onAskRemove,
   onSetLaunchMode,
@@ -35,6 +36,7 @@ export function AgentList({
   /** Where each bot posts, by agent id, e.g. "#general". */
   botChannels?: Record<string, string>;
   onOpen: (a: Agent) => void;
+  onPanel?: (a: Agent) => void;
   onAskClear: (name: string) => void;
   onAskRemove: (name: string) => void;
   /** Human sets whether this brain's worker requests wait for approval. */
@@ -60,6 +62,7 @@ export function AgentList({
       status={runtime.statusLine}
       terminalSession={runtime.sessionState === "running" ? runtime.sessionName : null}
       onOpen={() => onOpen(a)}
+      onPanel={onPanel ? () => { setMenu(null); onPanel(a); } : undefined}
       menuOpen={menu === a.name}
       onMenu={() => setMenu(menu === a.name ? null : a.name)}
       onCloseMenu={() => setMenu(null)}
@@ -118,6 +121,7 @@ function PersonRow({
   status,
   terminalSession,
   onOpen,
+  onPanel,
   self,
   menuOpen,
   onMenu,
@@ -135,6 +139,7 @@ function PersonRow({
   /** The live tmux session the agent runs in (Hivemind.app only). */
   terminalSession?: string | null;
   onOpen: () => void;
+  onPanel?: () => void;
   self?: boolean;
   menuOpen?: boolean;
   onMenu?: () => void;
@@ -228,6 +233,7 @@ function PersonRow({
       {menuOpen && (
         <div className="person-menu" role="menu" aria-label={`Actions for ${agent.name}`}
           onKeyDown={(event) => menuKeyDown(event, actionRef, () => onCloseMenu?.())}>
+          {onPanel && <button type="button" role="menuitem" onClick={onPanel}>Agent details</button>}
           {onManageCredential && (
             <button type="button" role="menuitem" aria-label={`Manage credentials for ${agent.name}`}
               onClick={() => { onCloseMenu?.(); onManageCredential(); }}>
