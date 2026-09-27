@@ -15,6 +15,7 @@ const agent = (role: AgentRole): Agent => ({
   focus: null, online: true, lastSeenAt: 1, createdAt: 1, projectId: "project-id", project: "acme",
 });
 const orders = { brain: standingOrders(agent("brain")), worker: standingOrders(agent("worker")) };
+const templateWorkerOrders = standingOrders({ ...agent("worker"), templateId: "00000000-0000-4000-8000-000000000001" });
 
 const launchBase = { software: "codex", workspacePath: null, cdWorktree: false, projectSlug: "acme", hiveName: "Acme",
   passProject: true, adoptUntrusted: true, seniority: "senior", resumeName: "Forge" } as const;
@@ -47,7 +48,7 @@ function schemaDescriptions(): string[] {
 const params = schemaDescriptions();
 const joinTexts = [JOIN_SESSION, joinNext(true, true), joinNext(false, true), joinNext(false, false)];
 
-type Where = "orders" | "launch" | "plugin-launch" | "param" | "join" | "wait" | ToolName;
+type Where = "orders" | "template-orders" | "launch" | "plugin-launch" | "param" | "join" | "wait" | ToolName;
 type Evidence = { where: Where; phrase: string; roles?: readonly AgentRole[] };
 
 /**
@@ -158,12 +159,20 @@ const COVERAGE: Record<AgentRuleId, readonly Evidence[]> = {
   "worker.room-ack": [{ where: "orders", phrase: "In a room, read get_task/get_room and room_event acknowledge the current contractVersion before continuing (concurrent acknowledgements are safe)." }],
   "worker.peer-clarify": [{ where: "orders", phrase: "Clarify directly with addressed peers, but replying to a peer does not finish your own assigned task: continue it and submit its result before idling." }],
   "worker.stop-request": [{ where: "orders", phrase: "On a room stop request, stop incompatible activity and send room_event stopped, not a result. Hivemind cannot interrupt external tools for you." }],
+  "worker.task-bound-worktree": [{ where: "template-orders", phrase: "On receiving your task assignment, create a separate git worktree and branch for that task as your first work action." }],
+  "worker.task-bound-scope": [{ where: "template-orders", phrase: "Work only on your assigned task; do not take another task or start unrelated work in this identity." }],
+  "worker.task-bound-review": [{ where: "template-orders", phrase: "After submitting a result, wait for the assigning brain's review. If changes are requested, continue that task; once the result is accepted, stop acting and wait for release." }],
   "brain.coordinate": [{ where: "orders", phrase: "Coordinate and delegate to workers, or do the work yourself when that serves the request better: you decide." },
     { where: "launch", phrase: "Coordinate and delegate to workers, or do the work yourself when that serves the request better: you decide." }],
   "brain.talk": [{ where: "orders", phrase: "Talk with Human, brains (#brains) and workers; post progress publicly when the hive should see it." }],
   "brain.assign": [{ where: "orders", phrase: "Delegate by choosing a specific worker (you pick seniority) in a DM thread or an authorized scoped room: one task = one thread." }],
   "brain.offline-worker": [{ where: "orders", phrase: "If the worker is offline, leave the message there; do not try to wake it." }],
   "brain.prepare": [{ where: "orders", phrase: "Put the worktree, branch and files to open in the assignment; workers can read channel history for context." }],
+  "brain.reuse-idle-worker": [{ where: "orders", phrase: "Prefer an idle suitable worker already in your project before requesting a task-bound worker." }],
+  "brain.template-choice": [{ where: "orders", phrase: "When a new worker is needed, inspect worker_templates and choose an enabled template by its description and capacity; do not request a template you do not need." }],
+  "brain.one-task-bound-worker": [{ where: "orders", phrase: "Use request_worker for one task-bound worker per task. Pick one stable requestId and reuse the same requestId and payload after an uncertain response; inspect history or get_task when available before retrying." }],
+  "brain.release-task-bound": [{ where: "orders", phrase: "After the task is accepted-complete, cancelled or revised away, call release_worker for the task-bound worker you own." }],
+  "brain.no-mail-relaunch": [{ where: "orders", phrase: "Incoming mail alone never creates or relaunches a worker session; request_worker is an explicit brain action subject to Human's launch mode." }],
   "brain.task-owner": [{ where: "orders", phrase: "Only the assigning brain revises a task or reviews its result as accepted or changes_requested." },
     { where: "task_event", phrase: "Assigning brain: revise, review." }],
   "brain.ask-human": [{ where: "orders", phrase: "When a cycle of work is done, or you are unsure, ask @Human what is next." }],
@@ -211,6 +220,7 @@ const COVERAGE: Record<AgentRuleId, readonly Evidence[]> = {
 
 function textsFor(where: Where, role: AgentRole): string[] {
   if (where === "orders") return [orders[role]];
+  if (where === "template-orders") return role === "worker" ? [templateWorkerOrders] : [];
   if (where === "launch") return launch[role];
   if (where === "plugin-launch") return role === "brain" ? pluginLaunch : [];
   if (where === "param") return [params.join("\n")];
@@ -242,8 +252,13 @@ test("role-specific rules stay out of the other role's orders", () => {
     if (rule.roles.length !== 1) continue;
     const other: AgentRole = rule.roles[0] === "brain" ? "worker" : "brain";
     for (const { where, phrase } of COVERAGE[rule.id]) {
-      if (where !== "orders") continue;
+      if (where !== "orders" && where !== "template-orders") continue;
       assert.equal(orders[other].includes(phrase), false, `${rule.id} leaked into ${other} orders`);
+    }
+  }
+  for (const rule of AGENT_RULES.filter(rule => rule.id.startsWith("worker.task-bound-"))) {
+    for (const { phrase } of COVERAGE[rule.id]) {
+      assert.equal(orders.worker.includes(phrase), false, `${rule.id} leaked into fixed worker orders`);
     }
   }
 });
@@ -260,10 +275,10 @@ test("no sentence is duplicated between standing orders and MCP text, or within 
   }
   const repeatedInTools = [...toolSentences].filter(([, count]) => count > 1).map(([sentence]) => sentence);
   assert.deepEqual(repeatedInTools, [], "each MCP sentence has one home");
-  for (const role of ["brain", "worker"] as const) {
-    const own = sentences(orders[role]);
-    assert.deepEqual(own.filter((sentence, index) => own.indexOf(sentence) !== index), [], `${role} orders repeat a sentence`);
-    assert.deepEqual(own.filter(sentence => toolSentences.has(sentence)), [], `${role} orders repeat MCP text`);
+  for (const [name, order] of Object.entries({ ...orders, templateWorker: templateWorkerOrders })) {
+    const own = sentences(order);
+    assert.deepEqual(own.filter((sentence, index) => own.indexOf(sentence) !== index), [], `${name} orders repeat a sentence`);
+    assert.deepEqual(own.filter(sentence => toolSentences.has(sentence)), [], `${name} orders repeat MCP text`);
   }
 });
 

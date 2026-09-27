@@ -107,7 +107,11 @@ test("reserving respects the template: enabled, and at most maxConcurrent at onc
   const disabled = hive.workerTemplates.create(human, project.id, { slug: "off", spec: spec({ enabled: false }) });
   assert.throws(() => hive.identity.reserve(human, disabled), status(409, /disabled/));
   const brain = hive.identity.join({ role: "brain" }).agent;
-  assert.throws(() => hive.identity.reserve(brain, template), status(403));
+  const wide = hive.workerTemplates.create(human, project.id, { slug: "wide", spec: spec({ maxConcurrent: 3 }) });
+  assert.equal(hive.identity.reserve(brain, wide).agent.pending?.brainId, brain.id);
+  const other = hive.projects.createProject(human, { name: "Other", slug: "other", worktree: null });
+  const foreign = hive.workerTemplates.create(human, other.id, { slug: "foreign", spec: spec() });
+  assert.throws(() => hive.identity.reserve(brain, foreign), status(403));
 });
 
 test("names get a numeric suffix when the reserved one is taken", t => {

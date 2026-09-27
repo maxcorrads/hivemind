@@ -2,8 +2,8 @@
 
 A worker template is a worker Human allows the brains of one project to launch: the agent CLI and how to run it, plus
 what a brain needs to pick it. Templates are the first step of brain-launched, task-bound workers; see the
-[roadmap](agent-management-roadmap.md) (Phase A1, #276). This page describes what exists today: templates can be
-created, listed, edited, duplicated and deleted, but nothing launches from them yet.
+[roadmap](agent-management-roadmap.md). Human edits templates; brains request task-bound workers through the durable
+launcher queue. Hivemind Server.app executes approved launches with the template secrets.
 
 ## Editor
 
@@ -71,3 +71,27 @@ its secrets from the Keychain. A validation error names the field and the reason
 
 `:project` is the project's slug or id. A stale revision answers `409`, a taken slug `409`, the 33rd template `429`.
 Each committed change publishes a `worker-templates` realtime event with the `projectId`.
+
+## Brain requests and launch mode
+
+A brain starts in **Approval** mode. Human changes it to **Auto** or back to **Approval** in the brain's roster menu;
+`whoami` reports the saved mode. Changing mode affects subsequent requests, not requests already awaiting approval.
+
+`worker_templates` returns enabled templates in the brain's project, with their per-template capacity.
+`request_worker` takes a UUID `requestId`, a template slug or id, a task contract and an optional task `slug`. It atomically
+reserves an identity, assigns the task and creates a launch request. Retrying the same id and payload returns the same
+result; reusing it with another payload fails. Without a slug the name derives from the objective. The task-bound worker
+creates its own worktree and branch before working. For an existing cancelled task, or one whose previous worker is no
+longer available, pass `taskId` and `expectedRevision` together. Only its assigning brain can replace the worker.
+
+Human reviews pending requests in For you in the Mac or iOS app, where the template can be changed before approval.
+The native approval transport is required; a browser shows the request but cannot approve it. Capacity is checked again
+at approval. Launch outcomes appear in the task history. See [Terminal broker](terminal-broker.md) for the signed queue,
+crash recovery and notification limits.
+
+`release_worker` closes and archives an owned task-bound worker after its task ends or is revised away. Its history
+remains, with an archived label, while it disappears from the roster. Its template slot remains occupied until the
+launcher acknowledges session cleanup; a failed kill requires an explicit retry. Fixed workers are unaffected.
+
+Migration 35 adds the per-brain mode, archive timestamp and request retry fingerprint. Back up the entire state home
+with every server stopped before Human upgrades; no migration is applied to production by preparing these PRs.

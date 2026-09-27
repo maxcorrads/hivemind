@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { ROUTINE_BATCH_MS } from "../shared/notifications.ts";
 import { WorkerTemplateStore } from "./worker-templates.ts";
 import { LauncherQueue } from "./launcher-queue.ts";
+import { WorkerOrchestration } from "./services/worker-orchestration.ts";
 import { AdaptiveTopologyRuntime } from "./adaptive-topology.ts";
 import { HiveBus } from "./hive-events.ts";
 import { InboxDeliveryStore } from "./inbox-delivery.ts";
@@ -54,6 +55,7 @@ type ServiceRegistry = Core & {
   uploads: UploadBudget;
   workerTemplates: WorkerTemplateStore;
   launcherQueue: LauncherQueue;
+  workerOrchestration: WorkerOrchestration;
   telegramAdmin: TelegramAdminService;
   files: FileService;
   projects: ProjectService;
@@ -106,6 +108,7 @@ export class Hive {
   readonly routing!: RoutingStore;
   readonly workerTemplates!: WorkerTemplateStore;
   readonly launcherQueue!: LauncherQueue;
+  readonly workerOrchestration!: WorkerOrchestration;
   readonly rooms!: RoomStore;
   readonly notifications!: NotificationStore;
   readonly timeline!: TimelineStore;
@@ -149,6 +152,7 @@ export class Hive {
       services.sendRequests = new SendRequests(this.db);
       // The coordination stores take the same registry, each typed down to its slice (services/ports.ts).
       this.tasks = services.tasks = new TaskStore(services);
+      this.workerOrchestration = services.workerOrchestration = new WorkerOrchestration(services);
       this.rooms = services.rooms = new RoomStore(services);
       this.notifications = services.notifications = new NotificationStore(services);
       this.routing = new RoutingStore(services);

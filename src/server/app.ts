@@ -191,6 +191,10 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const agent = hive.identity.removeAgent(human, decodeURIComponent(c.req.param("name")));
     return c.json({ ok: true, name: agent.name });
   });
+  ui.patch("/agents/:name/launch-mode", async c => {
+    const body = await requestJson(c.req.raw);
+    return c.json({ agent: hive.identity.setLaunchMode(hive.identity.getAgent("human"), decodeURIComponent(c.req.param("name")), body.mode) });
+  });
   ui.delete("/projects/:slug", async c => {
     const human = hive.identity.getAgent('human'), slug = parseProjectSlug(c.req.param('slug'));
     const chatId = readTelegramFile(hive.home)?.projects[slug];
@@ -377,11 +381,15 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   agent.get('/me', c => {
     const me = c.get('me');
     if (c.req.query('orders') === '1') return c.json({ you: me, standingOrders: standingOrders(me) });
-    return c.json({ you: { name: me.name, role: me.role, seniority: me.seniority, focus: me.focus, online: me.online, project: me.project },
+    return c.json({ you: { name: me.name, role: me.role, seniority: me.seniority, focus: me.focus, online: me.online, project: me.project,
+      ...(me.role === 'brain' ? { launchMode: me.launchMode } : {}) },
       ordersRef: 'unchanged' });
   });
   // terminalSession is a Human UI label; agents' roster stays as it was.
-  agent.get('/agents', c => c.json({ agents: hive.identity.listAgents(c.get('me')).map(({ createdAt: _c, terminalSession: _t, ...a }) => a) }));
+  agent.get('/agents', c => c.json({ agents: hive.workerOrchestration.roster(c.get('me')).map(({ createdAt: _c, terminalSession: _t, ...a }) => a) }));
+  agent.get('/worker-templates', c => c.json(hive.workerOrchestration.templates(c.get('me'))));
+  agent.post('/workers/request', async c => c.json(hive.workerOrchestration.request(c.get('me'), await requestJson(c.req.raw))));
+  agent.post('/workers/release', async c => c.json(hive.workerOrchestration.release(c.get('me'), await requestJson(c.req.raw))));
   agent.get('/search', c => {
     const me = c.get('me');
     return c.json(hive.messageQueries.searchMessages(me, { q: String(c.req.query('q') ?? ''), project: c.req.query('project') || me.project,

@@ -1,4 +1,4 @@
-import { REMOVED_SUFFIX, type ChannelType, type ControlAction, type Message, type Role, type Seniority } from "../../shared/types.ts";
+import { ARCHIVED_SUFFIX, REMOVED_SUFFIX, type ChannelType, type ControlAction, type Message, type Role, type Seniority } from "../../shared/types.ts";
 
 /** Raw SQLite row shapes shared by the domain services. */
 export type AgentRow = {
@@ -18,11 +18,15 @@ export type AgentRow = {
   pending_until: number | null;
   claim_hash: string | null;
   template_id: string | null;
+  launch_mode: "approval" | "auto";
+  archived_at: number | null;
+  reserved_by_brain_id: string | null;
 };
 
 /** SQL for an author's display name (`alias` is the joined agents row): removed agents read "Name (removed)". */
 export function agentLabelSql(alias: string): string {
-  return `CASE WHEN ${alias}.removed_at IS NULL THEN ${alias}.name ELSE ${alias}.name || '${REMOVED_SUFFIX}' END`;
+  return `CASE WHEN ${alias}.removed_at IS NOT NULL THEN ${alias}.name || '${REMOVED_SUFFIX}'
+    WHEN ${alias}.archived_at IS NOT NULL THEN ${alias}.name || '${ARCHIVED_SUFFIX}' ELSE ${alias}.name END`;
 }
 
 export type ChannelRow = {

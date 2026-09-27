@@ -7,6 +7,7 @@ import { API_JSON_BYTES, channelInputSchema, cursorSchema, integerArgument,
 import { subscriptionSchema, subscriptionScopeSchema } from "../shared/notifications.ts";
 import { claimPreviewSchema } from '../shared/task-claims.ts';
 import { assignTaskSchema, taskEventSchema } from "../shared/tasks.ts";
+import { launchModeSchema, requestWorkerSchema, releaseWorkerSchema } from "../shared/worker-orchestration.ts";
 import { roomEventSchema, sourceLinkSchema, sourceReportSchema } from "../shared/rooms.ts";
 import { HiveError } from "../shared/types.ts";
 
@@ -38,6 +39,9 @@ const launcherResult = z.object({ status: z.enum(["launched", "failed", "killed"
   session: z.string().max(82).optional(), error: z.string().max(500).optional() }).strict();
 
 function schemaFor(path: string, method: string): z.ZodType | undefined {
+  if (path === "/api/agent/workers/request" && method === "POST") return requestWorkerSchema;
+  if (path === "/api/agent/workers/release" && method === "POST") return releaseWorkerSchema;
+  if (/^\/api\/ui\/agents\/[^/]+\/launch-mode$/.test(path) && method === "PATCH") return z.object({ mode: launchModeSchema }).strict();
   if (/^\/api\/launcher\/[^/]+\/result$/.test(path) && method === "POST") return launcherResult;
   if (/^\/api\/launcher\/requests\/[^/]+\/approve$/.test(path) && method === "POST")
     return z.object({ templateId: z.string().uuid().optional() }).strict();

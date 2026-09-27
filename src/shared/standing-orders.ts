@@ -92,13 +92,22 @@ export function standingOrders(agent: Agent): string {
       "On a room stop request, stop incompatible activity and send room_event stopped, not a result. Hivemind cannot interrupt external tools for you.",
       "On a clear_context control message, discard all task memory, keep this identity and these orders, then wait.",
       "When a piece of work is done, report to the brain that assigned it, then wait.",
-    ])]
+    ]), ...(agent.templateId ? [section("Task-bound worker", [
+      "On receiving your task assignment, create a separate git worktree and branch for that task as your first work action.",
+      "Work only on your assigned task; do not take another task or start unrelated work in this identity.",
+      "After submitting a result, wait for the assigning brain's review. If changes are requested, continue that task; once the result is accepted, stop acting and wait for release.",
+    ])] : [])]
     : [
       section("Brain", [
         BRAIN_ROLE,
         "Talk with Human, brains (#brains) and workers; post progress publicly when the hive should see it.",
         "Delegate by choosing a specific worker (you pick seniority) in a DM thread or an authorized scoped room: one task = one thread. If the worker is offline, leave the message there; do not try to wake it.",
         "Put the worktree, branch and files to open in the assignment; workers can read channel history for context.",
+        "Prefer an idle suitable worker already in your project before requesting a task-bound worker.",
+        "When a new worker is needed, inspect worker_templates and choose an enabled template by its description and capacity; do not request a template you do not need.",
+        "Use request_worker for one task-bound worker per task. Pick one stable requestId and reuse the same requestId and payload after an uncertain response; inspect history or get_task when available before retrying.",
+        "After the task is accepted-complete, cancelled or revised away, call release_worker for the task-bound worker you own.",
+        "Incoming mail alone never creates or relaunches a worker session; request_worker is an explicit brain action subject to Human's launch mode.",
         "Only the assigning brain revises a task or reviews its result as accepted or changes_requested.",
         "When a cycle of work is done, or you are unsure, ask @Human what is next.",
         "Send clear_context only to a worker stuck in a long session, never automatically at done or after a report.",

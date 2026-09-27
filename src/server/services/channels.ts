@@ -252,6 +252,8 @@ export class ChannelService implements ChannelAccess {
   openDm(actor: Agent, otherName: string): Channel {
     const other = this.deps.identity.getAgentByName(otherName);
     if (!other) throw new HiveError(404, `No agent named ${otherName}`);
+    if (other.pending?.brainId && actor.role !== "human" && actor.id !== other.pending.brainId)
+      throw new HiveError(404, `No agent named ${otherName}`);
     if (actor.role === "bot" || other.role === "bot") throw new HiveError(403, "Bots publish observations to explicitly linked channels, not DMs");
     if (other.id === actor.id) throw new HiveError(400, "Cannot DM yourself");
     if (actor.role !== "human" && other.role !== "human" && actor.projectId !== other.projectId) {
@@ -284,6 +286,7 @@ export class ChannelService implements ChannelAccess {
     // Nests as a savepoint inside a caller's transaction (e.g. TaskStore.assign); the event waits for its commit.
     return this.deps.storage.transaction(create);
   }
+
 
   /** True while the channel still exists (e.g. it was not deleted with its project). */
   exists(channelId: string): boolean {

@@ -22,6 +22,23 @@ export class TaskStore {
     if (!row) throw new HiveError(404, 'Task not found');
     return row;
   }
+  /** Revisions of existing tasks use a fresh private channel, preserving unrelated old DM history. */
+  rehomeForReplacement(actor: Agent, taskId: string, channelId: string): void {
+    this.transaction(() => {
+      const task = this.get(actor, taskId);
+      if (task.assignerId !== actor.id || actor.role !== 'brain') throw new HiveError(403, 'Only the assigning brain can move this task');
+      const target = this.deps.channels.getChannel(channelId);
+      if (target.type !== 'private' || !this.deps.channels.canSeeChannel(actor, target))
+        throw new HiveError(403, 'Replacement task channel must be private to this project');
+      if (this.db.prepare('SELECT 1 FROM room_tasks WHERE task_id=?').get(taskId))
+        throw new HiveError(409, 'Room task cannot move to another channel');
+      this.deps.messages.moveTaskThread(taskId, task.channelId, channelId);
+      this.db.prepare("UPDATE task_records SET channel_id=?, snapshot=json_set(snapshot,'$.channelId',?) WHERE id=?")
+        .run(channelId, channelId, taskId);
+      this.db.prepare("UPDATE task_events SET envelope=json_set(envelope,'$.channelId',?) WHERE task_id=?")
+        .run(channelId, taskId);
+    });
+  }
   has(id: string) { return Boolean(this.db.prepare('SELECT 1 FROM task_records WHERE id = ?').get(id)); }
   get(actor: Agent, id: string): TaskSnapshot {
     const row = this.row(id);
@@ -38,7 +55,7 @@ export class TaskStore {
   }
   private label(agentId: string, name: string) {
     const agent = this.deps.identity.findAgent(agentId);
-    return agent ? agentLabel({ name, removedAt: agent.removedAt }) : name;
+    return agent ? agentLabel({ name, removedAt: agent.removedAt, archivedAt: agent.archivedAt }) : name;
   }
   /** The newest 100 tasks of one channel, most recently updated first (Human UI Tasks tab). */
   listForChannel(actor: Agent, channelRef: string): ChannelTaskPage {
@@ -97,11 +114,19 @@ export class TaskStore {
     return { items, hasMore: rows.length > 5, nextCursor: rows.length > 5 ? page.at(-1)!.id : null,
       next: 'Read get_handoffs with taskId for the current task before acting. An identity resume does not restore model memory or verify saved work.' };
   }
-  private worker(actor: Agent, name: string) {
+  private worker(actor: Agent, name: string, exceptTaskId?: string) {
     const worker = this.deps.identity.getAgentByName(name);
     if (!worker || worker.role !== 'worker' || worker.projectId !== actor.projectId)
       throw new HiveError(400, 'Choose a worker in your project');
+    if (worker.pending?.brainId && worker.pending.brainId !== actor.id)
+      throw new HiveError(403, 'Reserved worker belongs to another brain');
+    if (worker.templateId && this.taskBoundAssignmentCount(worker.id, exceptTaskId) > 0)
+      throw new HiveError(409, 'A task-bound worker can work on only one task');
     return worker;
+  }
+  private taskBoundAssignmentCount(workerId: string, exceptTaskId?: string): number {
+    return Number((this.db.prepare("SELECT COUNT(*) AS n FROM task_records WHERE worker_id=? AND id IS NOT ?")
+      .get(workerId, exceptTaskId ?? null) as { n: number }).n);
   }
   private evidence(actor: Agent, sequences: number[]) {
     for (const seq of sequences) this.deps.messageQueries.getVisibleMessage(actor, seq);
@@ -147,10 +172,11 @@ export class TaskStore {
     const target = ['assign', 'revise', 'review'].includes(envelope.action.type) ? task.workerId : task.assignerId;
     const now = Date.now();
     const recipients = JSON.stringify([...new Set([target, ...(envelope.previousWorkerId ? [envelope.previousWorkerId] : []),
-      ...(isClaimAction(envelope.action.type) ? [task.assignerId, task.workerId] : [])])]);
+      ...(isClaimAction(envelope.action.type) || envelope.action.type === 'launch' ? [task.assignerId, task.workerId] : [])])]);
     const seq = this.deps.messages.insertCoordinationMessage({ id, channelId: task.channelId, threadId: initial ? null : task.id,
       authorId: actor.id, body,
-      eventType: envelope.action.type === 'block' || envelope.action.type === 'reject' ? 'blocker' :
+      eventType: envelope.action.type === 'launch' ? 'progress' :
+        envelope.action.type === 'block' || envelope.action.type === 'reject' ? 'blocker' :
         envelope.action.type === 'assign' || envelope.action.type === 'revise' ? 'assignment' :
           envelope.action.type === 'review' ? 'decision' :
             envelope.action.type === 'accept' ? 'acknowledgement' :
@@ -176,7 +202,7 @@ export class TaskStore {
   }
   private published(actor: Agent, taskId: string, messageId: string) {
     const task = this.view(actor, taskId), message = this.deps.messageQueries.getMessageById(messageId);
-    this.deps.messages.publishTaskMessage(message); this.deps.bus.emit('task', task);
+    this.deps.storage.afterCommit(() => { this.deps.messages.publishTaskMessage(message); this.deps.bus.emit('task', task); });
     return { task, message, duplicate: false };
   }
   assign(actor: Agent, raw: unknown) {
@@ -229,7 +255,7 @@ export class TaskStore {
       if (action.type === 'accept' || action.type === 'result' || (action.type === 'review' && action.decision === 'accepted')) this.coordination.assertReady(task);
       if (isClaimAction(action.type)) this.coordination.apply(actor, task, claimActionSchema.parse(action));
       else if (action.type === 'revise') {
-        const worker = this.worker(actor, action.worker), room = this.deps.rooms.peek(task.channelId);
+        const worker = this.worker(actor, action.worker, task.id), room = this.deps.rooms.peek(task.channelId);
         if (room && !room.participantIds.includes(worker.id)) throw new HiveError(403, 'Replacement worker must be a declared room participant');
         this.writable(actor, worker, this.deps.channels.getChannel(task.channelId));
         this.contract(actor, action.contract, task.id); this.workerEvidence(worker, action.contract.evidenceSeqs);
@@ -283,6 +309,27 @@ export class TaskStore {
   hasRequest(actorId: string, requestId: string): boolean {
     return Boolean(this.db.prepare('SELECT 1 FROM task_events WHERE actor_id=? AND request_id=?').get(actorId, requestId) ||
       this.db.prepare('SELECT 1 FROM task_request_aliases WHERE actor_id=? AND request_id=?').get(actorId, requestId));
+  }
+  /** Native launcher outcomes enter the task thread as durable, server-authored task events. */
+  launchOutcome(taskId: string, requestId: string, workerId: string, state: 'launched' | 'failed' | 'rejected' | 'expired'): void {
+    this.transaction(() => {
+      const row = this.row(taskId), task = JSON.parse(row.snapshot) as TaskSnapshot;
+      const eventId = `${requestId}.${state}`;
+      if (this.db.prepare('SELECT 1 FROM task_events WHERE actor_id=? AND request_id=?').get(HUMAN_ID, eventId)) return;
+      if (state !== 'launched' && task.workerId === workerId && !['accepted_complete', 'cancelled'].includes(task.state)) {
+        task.state = 'cancelled';
+        task.cancellation = { reason: `Worker launch ${state}`, at: Date.now() };
+      }
+      task.revision++;
+      const id = this.write(this.deps.identity.getAgent(HUMAN_ID), task, { taskId, channelId: task.channelId,
+        revision: task.revision, contractVersion: task.contractVersion, actorId: HUMAN_ID, actorRole: 'human',
+        assignerId: task.assignerId, workerId: task.workerId, action: { type: 'launch', state, requestId } },
+      eventId, this.hash({ requestId, state }), false);
+      this.deps.storage.afterCommit(() => {
+        this.deps.messages.publishTaskMessage(this.deps.messageQueries.getMessageById(id));
+        this.deps.bus.emit('task', this.view(this.deps.identity.getAgent(HUMAN_ID), taskId));
+      });
+    });
   }
   /** True when the task is assigned to the worker and not finished (accepted-complete, rejected or cancelled). */
   isOpenFor(taskId: string, workerId: string): boolean {

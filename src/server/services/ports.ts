@@ -109,6 +109,7 @@ type CoordinationWriter<K extends "insertCoordinationMessage" | "ensureThread"> 
 
 export type TaskStoreDeps = TaskCoordinationDeps & Agents & Messages<"getMessageById" | "getVisibleMessage"> &
   Poster<"publishTaskMessage"> & CoordinationWriter<"insertCoordinationMessage" | "ensureThread"> & {
+    readonly messages: Pick<MessageService, "moveTaskThread">;
     readonly channels: { openDm(actor: Agent, otherName: string): Channel };
     readonly messageQueries: Pick<MessageQueries, "hasNewerInThread">;
     readonly rooms: RoomStore;

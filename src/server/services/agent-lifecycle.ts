@@ -49,7 +49,7 @@ export class AgentLifecycle {
   expireReservation(agentId: string): void {
     this.deps.storage.transaction(() => {
       const target = this.deps.identity.getAgent(agentId);
-      if (target.removedAt !== undefined || !target.pending) return;
+      if (target.removedAt !== undefined || target.archivedAt !== undefined || !target.pending) return;
       this.retire(target, `${target.name} was withdrawn: its launch did not join within 30 minutes.`);
     });
     this.sweepBlobs();

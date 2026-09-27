@@ -16,6 +16,7 @@ import { waitUntilMail } from "./wait-loop.ts";
 import { digestExpansionSchema } from "../shared/digest.ts";
 import { claimPreviewSchema } from '../shared/task-claims.ts';
 import { assignTaskSchema, taskEventSchema } from '../shared/tasks.ts';
+import { requestWorkerSchema, releaseWorkerSchema } from '../shared/worker-orchestration.ts';
 import { roomEventSchema } from '../shared/rooms.ts';
 import { subscriptionSchema } from '../shared/notifications.ts';
 import { packageVersion } from "../shared/package-root.ts";
@@ -280,6 +281,12 @@ export async function startMcp() {
     assignTaskSchema.shape,
     async args => text(await agentRequest('POST', '/api/agent/tasks',
       { ...args, channel: args.channel ? normalizeChannelReference(args.channel) : undefined }, token())));
+  server.tool("worker_templates", TOOL_DESCRIPTIONS.worker_templates, {},
+    async () => text(await agentRequest('GET', '/api/agent/worker-templates', undefined, token())));
+  server.tool("request_worker", TOOL_DESCRIPTIONS.request_worker, requestWorkerSchema.shape,
+    async args => text(await agentRequest('POST', '/api/agent/workers/request', requestWorkerSchema.parse(args), token())));
+  server.tool("release_worker", TOOL_DESCRIPTIONS.release_worker, releaseWorkerSchema.shape,
+    async args => text(await agentRequest('POST', '/api/agent/workers/release', args, token())));
   server.tool("get_worker_capabilities", TOOL_DESCRIPTIONS.get_worker_capabilities,
     { workerId: z.string().trim().min(1).max(100).describe(PARAM_DESCRIPTIONS.workerId) },
     async ({ workerId }) => {

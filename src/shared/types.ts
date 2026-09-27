@@ -86,13 +86,21 @@ export type Agent = {
   project: string | null;
   /** Set once Human removed the agent: a tombstone that keeps its history but can no longer act (#215). */
   removedAt?: number;
+  /** Task-bound worker history remains after its session is closed. */
+  archivedAt?: number;
+  /** Human-controlled launch policy for brains; new brains begin in approval mode. */
+  launchMode?: "approval" | "auto";
+  /** Brain roster projection; task counts come from structured task records. */
+  origin?: { type: "fixed" } | { type: "template"; templateId: string };
+  openTasks?: number;
+  activity?: { state: "ready" | "working" | "offline" };
   /**
    * The Hivemind tmux session (`hm-…`) the agent's MCP client reported on its latest join, when it runs in one.
    * A display label with no capability: the server never runs, opens or kills anything by it (docs/terminal-broker.md).
    */
   terminalSession?: string;
   /** A reserved worker whose launch has not joined yet; it gives up at `until` (Unix ms). */
-  pending?: { until: number };
+  pending?: { until: number; brainId?: string };
   /** The worker template it was launched from. */
   templateId?: string;
 };
@@ -102,9 +110,11 @@ export const RESERVATION_MS = 30 * 60 * 1000;
 
 /** How history names a removed agent. Removed names stay reserved, so the label is unambiguous. */
 export const REMOVED_SUFFIX = " (removed)";
+export const ARCHIVED_SUFFIX = " (archived)";
 
-export function agentLabel(agent: { name: string; removedAt?: number | null }): string {
-  return agent.removedAt != null ? agent.name + REMOVED_SUFFIX : agent.name;
+export function agentLabel(agent: { name: string; removedAt?: number | null; archivedAt?: number | null }): string {
+  return agent.removedAt != null ? agent.name + REMOVED_SUFFIX :
+    agent.archivedAt != null ? agent.name + ARCHIVED_SUFFIX : agent.name;
 }
 
 export type BotCredentialView = {

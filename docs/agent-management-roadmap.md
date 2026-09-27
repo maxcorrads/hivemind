@@ -1,6 +1,6 @@
 # Agent orchestration and token efficiency roadmap
 
-Status: Phase T is in #275; A1 is in #281 → #282 → #283 → #285, with #284 integrated into #285. All remain unmerged. A2 implementation is in progress from `feat/template-launch` (`64a1666`) in the development checkout. A3–A5, Phase 3 and T2 remain planned. Updated 2026-09-27; the historical analysis below was written against `8f0e583` (#265).
+Status: Phase T is in #275; A1 is in #281 → #282 → #283 → #285, with #284 integrated into #285. All remain unmerged. A2 is in #286 → #287 → #288. A3 implementation is in progress on top of that stack; A4–A5, Phase 3 and T2 remain planned. Updated 2026-09-27; the historical analysis below was written against `8f0e583` (#265).
 
 This document is the single source of truth for a multi-phase effort: brains launch task-bound workers from Human-defined templates (automatically or after Human approval), Human follows every job and task with its progress and can pause, cancel or discuss it, and agents spend fewer tokens on Hivemind traffic. It is written so that work can resume from here alone, without the conversation that produced it. Each phase has its own GitHub issue; the tracking issue, #274, lists them all (see [Issues](#issues)).
 
@@ -171,7 +171,7 @@ Implemented in #275: compact JSON for MCP tool results and the CLI `wait`; the M
 
 **Acceptance.** Queue and HMAC channel tested (replay, clock skew, wrong secret, no secret); Swift launcher tested with fake broker and fake HTTP; a request is launched exactly once across restarts; caps enforced; approvals from Mac and iOS.
 
-**Implementation decisions (2026-09-27).** A2 is being split into the durable Node queue/channel, the Swift launcher/native approval transport, and approval cards. Approval mutations travel through the verified native bridge and broker to the signed launcher channel; the ordinary Human cookie deliberately cannot approve a launch. Signing a request does not authenticate its response, so the launcher also verifies the server's instance proof. The launcher journals intent before a side effect and the result afterwards: after an uncertain crash it reconciles an existing session, but never launches again solely because a session disappeared. An uncertain launch is reported as a failure requiring an explicit new request. This provides at-most-once execution rather than promising an impossible atomic transaction across SQLite and tmux. Server.app posts Mac approval notifications even when Hivemind.app has no open window; iOS reuses its existing native notification bridge. A suspended or closed iOS app has no background push transport, and sees pending requests when reopened.
+**Implementation decisions (2026-09-27).** A2 is split into the durable Node queue/channel (#286), the Swift launcher/native approval transport (#287), and approval cards (#288). Local checks passed at each exact commit; the approval UI additionally passed all 99 browser contracts and the launcher passed 664 Swift tests with fakes. Approval mutations travel through the verified native bridge and broker to the signed launcher channel; the ordinary Human cookie deliberately cannot approve a launch. Signing a request does not authenticate its response, so the launcher also verifies the server's instance proof. The launcher journals intent before a side effect and the result afterwards: after an uncertain crash it reconciles an existing session, but never launches again solely because a session disappeared. An uncertain launch is reported as a failure requiring an explicit new request. This provides at-most-once execution rather than promising an impossible atomic transaction across SQLite and tmux. Server.app posts Mac approval notifications even when Hivemind.app has no open window; iOS reuses its existing native notification bridge. A suspended or closed iOS app has no background push transport, and sees pending requests when reopened.
 
 ### Phase A3 — Brain tools and per-brain mode
 
@@ -189,6 +189,15 @@ Implemented in #275: compact JSON for MCP tool results and the CLI `wait`; the M
 - Enrich the brain roster (`agents`) with each worker's activity state, open tasks and origin (fixed or template).
 
 **Acceptance.** End-to-end in tests with a fake launcher: brain requests, Human approves, the worker claims, accepts, submits, the brain accepts, the worker is archived. Auto mode skips approval. Tool descriptions within budget; rules checklist updated.
+
+**Implementation decisions (2026-09-27).** Migration 35 adds the brain launch mode, distinct archive timestamp,
+reservation ownership and retry fingerprint. A worker request and its dedicated private task thread commit together;
+exact retries reuse the request. Replacing an existing task moves only its task thread into a new private channel,
+without granting access to unrelated DM history. Room tasks retain their room contract and cannot be moved by this API.
+Archived workers cannot resume or authenticate. Template capacity excludes requests awaiting approval but includes
+uncertain sessions until a kill acknowledgement. Explicit release keeps its reason in the task thread. The optional
+job field is rejected explicitly in this intermediate phase; A4 introduces its real persistence and grouping. The full
+wait/action-based activity projection is also completed in A4. MCP clients must restart to discover the added tools.
 
 ### Phase A4 — Jobs, task control, worker lifecycle and real presence
 

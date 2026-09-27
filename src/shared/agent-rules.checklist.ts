@@ -88,6 +88,9 @@ export const AGENT_RULES = [
   { id: "worker.room-ack", roles: worker, rule: "In a room read get_task/get_room and acknowledge the current contractVersion before continuing; concurrent ACKs are safe." },
   { id: "worker.peer-clarify", roles: worker, rule: "Clarify directly with addressed room peers; replying to a peer does not finish your task; continue and submit its result before idling." },
   { id: "worker.stop-request", roles: worker, rule: "On a stop request stop incompatible activity and send room_event stopped, not a result; Hivemind cannot interrupt external tools." },
+  { id: "worker.task-bound-worktree", roles: worker, rule: "Task-bound workers create a separate worktree and branch as their first work action after assignment." },
+  { id: "worker.task-bound-scope", roles: worker, rule: "A task-bound identity works on one assigned task only; no other or unrelated work." },
+  { id: "worker.task-bound-review", roles: worker, rule: "Task-bound workers wait for review after result, continue changes_requested, and stop acting after acceptance until released." },
 
   // Brain
   { id: "brain.coordinate", roles: brain, rule: "Brains coordinate and delegate, or do the work themselves when that serves the request better; they decide." },
@@ -95,6 +98,11 @@ export const AGENT_RULES = [
   { id: "brain.assign", roles: brain, rule: "Delegate to a specific worker (choose seniority) in a DM thread or authorized scoped room; one task = one thread." },
   { id: "brain.offline-worker", roles: brain, rule: "Leave work for an offline worker; do not try to wake it." },
   { id: "brain.prepare", roles: brain, rule: "Put worktree, branch and files to open in the assignment; workers can read history." },
+  { id: "brain.reuse-idle-worker", roles: brain, rule: "Prefer an idle suitable worker before requesting a new task-bound worker." },
+  { id: "brain.template-choice", roles: brain, rule: "Inspect enabled templates; choose by description and capacity only when a new worker is needed." },
+  { id: "brain.one-task-bound-worker", roles: brain, rule: "Use request_worker for one task-bound worker per task with stable requestId; recover uncertain outcomes before retry." },
+  { id: "brain.release-task-bound", roles: brain, rule: "Release an owned task-bound worker after its task is accepted-complete, cancelled or revised away." },
+  { id: "brain.no-mail-relaunch", roles: brain, rule: "Mail alone never creates or relaunches a worker; a brain request is subject to Human launch mode." },
   { id: "brain.task-owner", roles: brain, rule: "Only the assigning brain revises a task or reviews its result (accepted/changes_requested)." },
   { id: "brain.ask-human", roles: brain, rule: "Ask @Human what is next when a cycle is done or when unsure." },
   { id: "brain.housekeeping", roles: brain, rule: "May search the project, create channels and set optional thread status." },

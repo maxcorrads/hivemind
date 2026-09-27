@@ -91,11 +91,12 @@ export type TaskState = 'sent' | 'delivered' | 'accepted' | 'rejected' | 'blocke
   | 'cancelled';
 export type TaskEnvelope = {
   taskId: string; channelId: string; revision: number; contractVersion: number;
-  actorId: string; actorRole: 'brain' | 'worker'; assignerId: string; workerId: string;
+  actorId: string; actorRole: 'brain' | 'worker' | 'human'; assignerId: string; workerId: string;
   previousWorkerId?: string;
   checkpointVersion?: number;
   claimVersion?: number;
-  action: TaskAction | { type: 'assign'; contract: TaskContract };
+  action: TaskAction | { type: 'assign'; contract: TaskContract } |
+    { type: 'launch'; state: 'launched' | 'failed' | 'rejected' | 'expired'; requestId: string };
 };
 export type TaskSnapshot = {
   room?: RoomTask;
@@ -131,6 +132,7 @@ export type ChannelTaskPage = { items: TaskSummary[]; hasMore: boolean };
 export function taskBody(envelope: TaskEnvelope): string {
   const a = envelope.action;
   const header = `Task ${a.type} · ${envelope.taskId} · revision ${envelope.revision} / contract ${envelope.contractVersion}`;
+  if (a.type === 'launch') return `${header}\nWorker launch ${a.state}. Request ${a.requestId}.`;
   if (a.type === 'assign' || a.type === 'revise') {
     const c = a.contract;
     return [header, a.type === 'revise' ? `Reason: ${a.reason}` : '', `Objective: ${c.objective}`,

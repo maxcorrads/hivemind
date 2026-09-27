@@ -183,6 +183,14 @@ export class MessageService implements MessagePoster {
     this.db.prepare("INSERT OR IGNORE INTO threads(id, channel_id, status) VALUES (?, ?, NULL)").run(threadId, channelId);
   }
 
+  /** Move only a task root and its thread, leaving unrelated messages in the old channel. */
+  moveTaskThread(taskId: string, fromChannelId: string, toChannelId: string): void {
+    this.db.prepare("UPDATE messages SET channel_id=? WHERE channel_id=? AND (id=? OR thread_id=?)")
+      .run(toChannelId, fromChannelId, taskId, taskId);
+    this.db.prepare("UPDATE threads SET channel_id=? WHERE id=? AND channel_id=?")
+      .run(toChannelId, taskId, fromChannelId);
+  }
+
   postSystem(channelId: string, body: string) {
     const human = this.deps.identity.getAgent(HUMAN_ID);
     try {
