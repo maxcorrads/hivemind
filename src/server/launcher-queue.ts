@@ -32,7 +32,8 @@ export type LauncherQueueDeps = Core & { readonly home: string;
   readonly projects: { getProject(id: string): Project };
   readonly workerTemplates: { get(id: string): WorkerTemplate };
   readonly lifecycle: { expireReservation(agentId: string): void };
-  readonly tasks: { launchOutcome(taskId: string, requestId: string, workerId: string, state: "launched" | "failed" | "rejected" | "expired"): void;
+  readonly tasks: { get(actor: Agent, taskId: string): { workerId: string; jobId?: string | null };
+    launchOutcome(taskId: string, requestId: string, workerId: string, state: "launched" | "failed" | "rejected" | "expired"): void;
     resumeOutcome(taskId: string, requestId: string, workerId: string, state: "launched" | "failed" | "rejected" | "expired"): void;
     hardStopCompleted(taskId: string, workerId: string): void;
     canLaunchResume(taskId: string, workerId: string, requestId: string): boolean } };
@@ -207,14 +208,13 @@ export class LauncherQueue {
       const state = input.approval ? "awaiting_approval" : "approved";
       if (!input.approval && this.capacity(template.id).used >= template.spec.maxConcurrent)
         throw new HiveError(409, "Worker template is at its concurrent instance cap");
-      const task = this.db.prepare("SELECT job_id FROM task_records WHERE id=? AND worker_id=?")
-        .get(input.taskId, input.agent.id) as { job_id: string | null } | undefined;
-      if (!task) throw new HiveError(409, "Resume requires the same assigned task");
+      const task = this.deps.tasks.get(input.brain, input.taskId);
+      if (task.workerId !== input.agent.id) throw new HiveError(409, "Resume requires the same assigned task");
       const at = Date.now();
       this.db.prepare(`INSERT INTO launch_requests (id,project_id,brain_id,template_id,template_snapshot,task_id,job_id,
         agent_id,ticket_hash,state,reason,requested_at,launch_kind) VALUES (?,?,?,?,?,?,?,?,'',?,?,?,'resume')`).run(
         input.requestId, template.projectId, input.brain.id, template.id,
-        JSON.stringify({ id: template.id, label: template.spec.label }), input.taskId, task.job_id, input.agent.id,
+        JSON.stringify({ id: template.id, label: template.spec.label }), input.taskId, task.jobId ?? null, input.agent.id,
         state, "Resume hard-paused task", at);
       this.db.prepare("INSERT INTO launcher_commands (id,request_id,kind,state,payload,created_at,updated_at) VALUES (?,?,'launch','queued',?,?,?)")
         .run(randomUUID(), input.requestId, this.cipher.seal({ resume: true }), at, at);
