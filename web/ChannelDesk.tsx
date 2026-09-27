@@ -24,7 +24,7 @@ import { TaskChip } from "./TaskCard.tsx";
 import { TerminalPanel } from "./TerminalView.tsx";
 import type { ChannelPane } from "./use-channel-pane.ts";
 import { useChannelWork } from "./use-channel-work.ts";
-import { agentTerminalSession, liveSession, useTerminalState } from "./use-terminal.ts";
+import { agentTerminalSession, liveSession, recordedSession, useTerminalState } from "./use-terminal.ts";
 import type { useSend } from "./use-send.ts";
 import type { ThreadOpenAnchor } from "./use-thread-scroll-anchor.ts";
 
@@ -104,16 +104,21 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
   // then keeps the terminal, which attaches again by itself).
   const terminals = useTerminalState();
   const dmPeer = dm && activeChannel ? dmPeerOf(activeChannel, agents) : undefined;
-  const peerSession = terminals.native ? agentTerminalSession(dmPeer) : null;
-  const peerLive = peerSession !== null && liveSession(terminals, peerSession) !== null;
+  // With no reported session, the one the broker recorded at launch for the peer (kept while the list is unknown).
   const listUnknown = terminals.sessions === null && terminals.broker !== "unverified";
-  const [hadTerminal, setHadTerminal] = useState<string | null>(null);
+  const [hadTerminal, setHadTerminal] = useState<{ peer: string; session: string } | null>(null);
+  const peerId = dmPeer?.id ?? null;
+  const hadPeerTerminal = peerId !== null && hadTerminal?.peer === peerId ? hadTerminal.session : null;
+  const peerLabel = terminals.native ? agentTerminalSession(dmPeer) : null;
+  const peerSession = peerLabel ?? (terminals.native
+    ? recordedSession(terminals, dmPeer, agents)?.name ?? (listUnknown ? hadPeerTerminal : null) : null);
+  const peerLive = peerSession !== null && liveSession(terminals, peerSession) !== null;
   useEffect(() => {
-    if (peerLive) setHadTerminal(peerSession);
+    if (peerLive && peerId !== null && peerSession) setHadTerminal({ peer: peerId, session: peerSession });
     else if (!listUnknown) setHadTerminal(null);
-  }, [peerLive, listUnknown, peerSession]);
+  }, [peerLive, listUnknown, peerSession, peerId]);
   const terminalSession = peerSession && (peerLive || terminals.broker === "unavailable"
-    || (listUnknown && hadTerminal === peerSession)) ? peerSession : null;
+    || (listUnknown && hadPeerTerminal === peerSession)) ? peerSession : null;
   const tab = (requested === "contract" && !room) || (requested === "terminal" && !terminalSession) ? "messages" : requested;
   const work = useChannelWork(activeChannel, roomTick);
   // The hidden stream loses its scroll position; coming back to a live pane lands on its newest message.

@@ -446,7 +446,7 @@ export function useTerminalState(): TerminalState {
 }
 
 /** The session an agent reported on join, when it is a Hivemind session name. */
-export function agentTerminalSession(agent: Agent | undefined | null): string | null {
+export function agentTerminalSession(agent: Pick<Agent, "terminalSession"> | undefined | null): string | null {
   return terminalSessionName((agent as { terminalSession?: unknown } | null | undefined)?.terminalSession);
 }
 
@@ -454,6 +454,30 @@ export function agentTerminalSession(agent: Agent | undefined | null): string | 
 export function liveSession(state: TerminalState, name: string | null): TerminalSessionInfo | null {
   if (!name || !state.sessions) return null;
   return state.sessions.find(item => item.name === name && item.alive) ?? null;
+}
+
+type SessionAgent = Pick<Agent, "name" | "project" | "removedAt" | "terminalSession">;
+
+/**
+ * The fallback for an agent that reported no session (a Codex config without env_vars, docs/agent-connection.md):
+ * the one live session the broker recorded at launch for its project and name (case-insensitive). None when several
+ * match, and none that another agent's label claims (that agent joined from it since).
+ */
+export function recordedSession(state: TerminalState, agent: SessionAgent | undefined | null,
+  agents: readonly SessionAgent[] = []): TerminalSessionInfo | null {
+  if (!agent?.project || agent.removedAt != null || !state.sessions) return null;
+  const name = agent.name.toLowerCase();
+  const claimed = new Set(agents.map(agentTerminalSession).filter(Boolean));
+  const matches = state.sessions.filter(item => item.alive && item.project === agent.project && item.agent?.toLowerCase() === name
+    && !claimed.has(item.name));
+  return matches.length === 1 ? matches[0]! : null;
+}
+
+/** The live session an agent runs in: the one it reported on join when it has that label, else recordedSession. */
+export function agentLiveSession(state: TerminalState, agent: SessionAgent | undefined | null,
+  agents: readonly SessionAgent[] = []): TerminalSessionInfo | null {
+  const label = agentTerminalSession(agent);
+  return label ? liveSession(state, label) : recordedSession(state, agent, agents);
 }
 
 export type TerminalBlocker = {

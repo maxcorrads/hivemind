@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, beforeEach, test, type TestContext } from "node:test";
-import { arg, argRest, isCliEntrypoint, mcpLauncher, runCli, stopOnSignals } from "./cli.ts";
+import { arg, argRest, codexMcpConfig, isCliEntrypoint, MCP_TOOL_TIMEOUT_SEC, mcpLauncher, runCli, stopOnSignals } from "./cli.ts";
 import { BODY_MAX } from "./shared/types.ts";
 
 // Every command runs in-process against a mocked fetch; HIVEMIND_HOME is a
@@ -90,6 +90,45 @@ test("mcp-config prints a tsx launcher for this checkout", async (t) => {
   assert.ok(config.mcpServers.hivemind.args[1].endsWith(path.join("src", "cli.ts")));
   assert.equal(config.mcpServers.hivemind.env.HIVEMIND_URL, "http://127.0.0.1:7999");
   assert.match(err.join("\n"), /Server must be running at http:\/\/127\.0\.0\.1:7999/);
+});
+
+test("mcp-config points Codex users at --codex", async (t) => {
+  const { err } = harness(t);
+  await runCli(["mcp-config"]);
+  assert.match(err.join("\n"), /For Codex, run hivemind mcp-config --codex/);
+});
+
+test("mcp-config --codex prints a Codex TOML block that passes HIVEMIND_TMUX_SESSION through", async (t) => {
+  const { calls, out, err } = harness(t);
+  await runCli(["mcp-config", "--codex"]);
+  assert.equal(calls.length, 0);
+  const toml = out[0]!;
+  const lines = toml.split("\n");
+  assert.equal(lines[0], "[mcp_servers.hivemind]");
+  assert.ok(lines.includes('command = "npx"'));
+  const args = JSON.parse(lines.find(line => line.startsWith("args = "))!.slice("args = ".length)) as string[];
+  assert.deepEqual(args, mcpLauncher().args, "the same launcher as the JSON output");
+  assert.equal(args.at(-1), "mcp");
+  assert.ok(lines.includes(`tool_timeout_sec = ${MCP_TOOL_TIMEOUT_SEC}`));
+  assert.ok(lines.includes('env_vars = ["HIVEMIND_TMUX_SESSION"]'));
+  assert.ok(lines.includes("[mcp_servers.hivemind.env]"));
+  assert.ok(lines.includes('HIVEMIND_URL = "http://127.0.0.1:7999"'));
+  // env_vars belongs to the server table, before the env sub-table starts.
+  assert.ok(lines.indexOf('env_vars = ["HIVEMIND_TMUX_SESSION"]') < lines.indexOf("[mcp_servers.hivemind.env]"));
+  assert.match(err.join("\n"), /~\/\.codex\/config\.toml/);
+  assert.match(err.join("\n"), /Server must be running at http:\/\/127\.0\.0\.1:7999/);
+});
+
+test("the Codex block uses the compiled launcher without cwd for an installed package, and quotes paths", () => {
+  const installed = codexMcpConfig("http://127.0.0.1:7420", true, "/pkg").split("\n");
+  assert.ok(installed.includes('command = "node"'));
+  assert.ok(installed.includes(`args = [${JSON.stringify(path.resolve("/pkg", "dist/node/cli.js"))}, "mcp"]`));
+  assert.ok(!installed.some(line => line.startsWith("cwd = ")));
+  assert.ok(installed.includes(`tool_timeout_sec = ${MCP_TOOL_TIMEOUT_SEC}`));
+  assert.ok(installed.includes('env_vars = ["HIVEMIND_TMUX_SESSION"]'));
+  const checkout = codexMcpConfig("http://127.0.0.1:7420", false, '/Users/me/my "hive"').split("\n");
+  assert.ok(checkout.includes(`cwd = ${JSON.stringify(path.resolve('/Users/me/my "hive"'))}`));
+  assert.ok(checkout.some(line => line.startsWith("args = ") && line.includes('\\"hive\\"')), "quotes escaped TOML-style");
 });
 
 test("mcp-config launcher uses plain node and the compiled CLI for an installed package", () => {

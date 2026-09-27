@@ -59,7 +59,7 @@ function help() {
   hivemind doctor
   hivemind leave
   hivemind mcp
-  hivemind mcp-config
+  hivemind mcp-config [--codex]
   hivemind plugins add /absolute/hivemind-plugin.json [--home /hive]
   hivemind plugins list | remove ID [--home /hive]
   hivemind plugins bind ID --project SLUG --config-home /existing/profile [--home /hive]
@@ -134,6 +134,13 @@ export async function runCli(argv: string[]): Promise<void> {
   }
 
   if (cmd === "mcp-config") {
+    if (argv.includes("--codex")) {
+      console.log(codexMcpConfig());
+      console.error("Paste the TOML above into ~/.codex/config.toml (or config.toml in each CODEX_HOME), then restart Codex.");
+      console.error("env_vars passes HIVEMIND_TMUX_SESSION through, so the apps can show which tmux session each agent runs in.");
+      console.error(`Then in the agent: join as worker or brain. Server must be running at ${hiveUrl()}`);
+      return;
+    }
     const config = {
       mcpServers: {
         hivemind: {
@@ -141,14 +148,15 @@ export async function runCli(argv: string[]): Promise<void> {
           env: {
             HIVEMIND_URL: hiveUrl(),
           },
-          tool_timeout_sec: 28800,
+          tool_timeout_sec: MCP_TOOL_TIMEOUT_SEC,
         },
       },
     };
     console.log(JSON.stringify(config, null, 2));
     console.error(runningCompiled
       ? "Paste the JSON above into your agent's MCP configuration."
-      : "This repo already has .cursor/mcp.json and .mcp.json. For Codex, paste the JSON above.");
+      : "This repo already has .cursor/mcp.json and .mcp.json.");
+    console.error("For Codex, run hivemind mcp-config --codex: it prints the TOML block for ~/.codex/config.toml.");
     console.error(`Then in the agent: join as worker or brain. Server must be running at ${hiveUrl()}`);
     return;
   }
@@ -493,6 +501,32 @@ export function mcpLauncher(compiled = runningCompiled, root = packageRoot()): {
   return compiled
     ? { command: "node", args: [resolve(root, COMPILED_CLI), "mcp"] }
     : { command: "npx", args: ["tsx", resolve(root, "src/cli.ts"), "mcp"] };
+}
+
+/** Tool timeout for the Hivemind MCP server: high enough that a sleeping `wait` is not killed (docs/agent-connection.md). */
+export const MCP_TOOL_TIMEOUT_SEC = 28800;
+
+/**
+ * `mcp-config --codex`: the `[mcp_servers.hivemind]` block for Codex's config.toml. Codex hands a stdio MCP server
+ * only a fixed set of variables, so `env_vars` must list HIVEMIND_TMUX_SESSION for the terminal session label.
+ */
+export function codexMcpConfig(url = hiveUrl(), compiled = runningCompiled, root = packageRoot()): string {
+  const { command, args } = mcpLauncher(compiled, root);
+  // TOML basic strings take JSON's escapes.
+  const str = (value: string) => JSON.stringify(value);
+  return [
+    "[mcp_servers.hivemind]",
+    `command = ${str(command)}`,
+    `args = [${args.map(str).join(", ")}]`,
+    // A checkout runs tsx from its own devDependencies.
+    ...(compiled ? [] : [`cwd = ${str(resolve(root))}`]),
+    `tool_timeout_sec = ${MCP_TOOL_TIMEOUT_SEC}`,
+    "# Lets the apps tell which tmux session this agent runs in (docs/agent-connection.md#terminal-session-label).",
+    `env_vars = ["HIVEMIND_TMUX_SESSION"]`,
+    "",
+    "[mcp_servers.hivemind.env]",
+    `HIVEMIND_URL = ${str(url)}`,
+  ].join("\n");
 }
 
 /** True only when this module is the process entrypoint (`node dist/node/cli.js …` or `tsx src/cli.ts …`), not when imported. */

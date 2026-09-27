@@ -443,9 +443,14 @@ reported on join, stored as `agent.terminalSession` (migration 31,
 - The agent CLI must pass `HIVEMIND_TMUX_SESSION` on to its MCP server. Claude
   Code passes its environment on. Codex passes only a fixed set of variables
   unless the server's config lists more: add
-  `env_vars = ["HIVEMIND_TMUX_SESSION"]` to `[mcp_servers.hivemind]` (see
+  `env_vars = ["HIVEMIND_TMUX_SESSION"]` to `[mcp_servers.hivemind]` (verified
+  with codex-cli 0.157.1; `hivemind mcp-config --codex` prints the block, see
   [Agent connection](agent-connection.md)). Without it the agent still works,
-  but the UI cannot tell which session it runs in.
+  but reports no label.
+- An agent with no label is mapped to a live session whose recorded project
+  and agent name (`@hivemind_project`, `@hivemind_agent`) match its own, the
+  name compared case-insensitively, but only when exactly one session matches.
+  The recorded names are labels too, so this grants nothing either.
 
 ## Bridge (Hivemind.app ↔ page)
 

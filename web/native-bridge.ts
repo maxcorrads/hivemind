@@ -317,7 +317,7 @@ export type TerminalMessage =
 
 export type TerminalSessionInfo = {
   name: string;
-  /** Project slug and agent name recorded at launch; labels only. Map agents by agent.terminalSession. */
+  /** Project slug and agent name recorded at launch; labels only. Map agents by agent.terminalSession, else these (recordedSession). */
   project: string | null;
   agent: string | null;
   alive: boolean;

@@ -550,6 +550,30 @@ test("the OpenCode Go API key field shows only for OpenCode, and only where the 
   assert.ok(keyInput(ios.view.host));
 });
 
+test("the Codex env_vars hint shows under Software for Codex, and only where the page can launch", async () => {
+  const hint = (host: ParentNode) => host.querySelector(".launch-codex-env")?.textContent ?? null;
+  localStorage.setItem("hivemind-launch", JSON.stringify({ software: "codex" }));
+  const browser = await mountLaunchSheet();
+  assert.equal(hint(browser.view.host), null, "not in a browser, which launches nothing in tmux");
+  for (const unmount of unmounts.splice(0).reverse()) unmount();
+
+  installBridge();
+  for (const software of ["codex", "", "/opt/homebrew/bin/codex"]) {
+    localStorage.setItem("hivemind-launch", JSON.stringify({ software }));
+    const sheet = await mountLaunchSheet();
+    assert.equal(hint(sheet.view.host), "Codex passes HIVEMIND_TMUX_SESSION to MCP servers only if its config lists it. Add "
+      + 'env_vars = ["HIVEMIND_TMUX_SESSION"] under [mcp_servers.hivemind] in each CODEX_HOME’s config.toml — '
+      + "hivemind mcp-config --codex prints the block.", JSON.stringify(software));
+    const field = sheet.view.host.querySelector("input[list='launch-software']")!.closest("label")!;
+    assert.equal(field.nextElementSibling?.nextElementSibling?.className, "help-p launch-codex-env", "right under the Software field");
+    for (const other of ["claude", "opencode", "agent"]) {
+      await typeInto(sheet.view.host.querySelector("input[list='launch-software']") as unknown as HTMLInputElement, other);
+      assert.equal(hint(sheet.view.host), null, other);
+    }
+    for (const unmount of unmounts.splice(0).reverse()) unmount();
+  }
+});
+
 test("the key goes with the launch only: never copied, stored or shown, and cleared once the launch started", async () => {
   localStorage.setItem("hivemind-launch", JSON.stringify({ software: "opencode" }));
   installBridge();

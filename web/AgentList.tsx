@@ -5,7 +5,7 @@ import type { Agent, InboxStatus } from "../src/shared/types.ts";
 import { InboxReceipt, QueueBadge } from "./InboxReceipt.tsx";
 import { focusFirstMenuItem, menuKeyDown } from "./menu-keys.ts";
 import { agentStatusLine } from "./nav-model.ts";
-import { agentTerminalSession, liveSession, useTerminalState } from "./use-terminal.ts";
+import { agentLiveSession, useTerminalState } from "./use-terminal.ts";
 
 export function AgentList({
   agents,
@@ -38,9 +38,9 @@ export function AgentList({
   onAskRemove: (name: string) => void;
 }) {
   const [menu, setMenu] = useState<string | null>(null);
-  // Hivemind.app only: which agents run in a live tmux session.
+  // Hivemind.app only: which agents run in a live tmux session (reported on join, else recorded at launch).
   const terminals = useTerminalState();
-  const sessionOf = (a: Agent) => terminals.native ? liveSession(terminals, agentTerminalSession(a))?.name ?? null : null;
+  const sessionOf = (a: Agent) => terminals.native ? agentLiveSession(terminals, a, agents)?.name ?? null : null;
   const human = agents.find((a) => a.role === "human");
   const brains = agents.filter((a) => a.role === "brain");
   const workers = agents.filter((a) => a.role === "worker");

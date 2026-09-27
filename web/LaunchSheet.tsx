@@ -414,6 +414,8 @@ export function LaunchSheet({
   const canCopyOne = built.ok && projects.length > 0;
   // Only where the page can launch (the apps) and only for OpenCode, whose opencode-go and Zen providers read it.
   const showOpencodeKey = native && softwareFamily(software) === "opencode";
+  // Only where launches run in tmux (the apps): without env_vars a Codex agent never reports its session.
+  const showCodexEnvHint = native && softwareFamily(software) === "codex";
   useEffect(() => { if (!showOpencodeKey) setOpencodeKey(""); }, [showOpencodeKey]);
   const opencodeKeyValue = showOpencodeKey ? opencodeKey.trim() : "";
   const opencodeKeyProblem = opencodeKeyValue ? terminalSecretProblem(opencodeKeyValue) : null;
@@ -572,6 +574,13 @@ export function LaunchSheet({
               <option key={name} value={name} />
             ))}
           </datalist>
+          {showCodexEnvHint && (
+            <p className="help-p launch-codex-env">
+              Codex passes <code>HIVEMIND_TMUX_SESSION</code> to MCP servers only if its config lists it. Add{" "}
+              <code>env_vars = ["HIVEMIND_TMUX_SESSION"]</code> under <code>[mcp_servers.hivemind]</code> in each{" "}
+              <code>CODEX_HOME</code>’s <code>config.toml</code> — <code>hivemind mcp-config --codex</code> prints the block.
+            </p>
+          )}
           <ModelSelect
             software={software}
             model={model}

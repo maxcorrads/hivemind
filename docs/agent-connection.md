@@ -17,15 +17,15 @@ The launcher does not approve tools, change permission mode, or change how other
 MCP servers load. The agent must discover missing tools and report an unavailable
 or failed join rather than invent success. See [Claude's eager-loading documentation](https://code.claude.com/docs/en/mcp#exempt-a-server-from-deferral).
 
-Codex does **not** read those JSON files. Print a snippet and put it in Codex config (`~/.codex/config.toml`, or whatever `CODEX_HOME` that install uses):
+Codex does **not** read those JSON files. Print its TOML block and put it in Codex config (`~/.codex/config.toml`, or `config.toml` in every `CODEX_HOME` you launch with):
 
 ```bash
-npx tsx src/cli.ts mcp-config
+npx tsx src/cli.ts mcp-config --codex
 ```
 
-From an installed package run `hivemind mcp-config` instead; it prints the compiled `dist/node/cli.js` launcher (`command = "node"`, `args = ["/absolute/path/to/hivemind/dist/node/cli.js", "mcp"]`).
+From an installed package run `hivemind mcp-config --codex` instead; it prints the compiled `dist/node/cli.js` launcher (`command = "node"`, `args = ["/absolute/path/to/hivemind/dist/node/cli.js", "mcp"]`, no `cwd`). Without `--codex`, `mcp-config` prints the JSON form for other MCP clients.
 
-Example Codex block for a checkout (use the absolute `src/cli.ts` path `mcp-config` prints, and keep `tool_timeout_sec` high so a sleeping `wait` is not killed):
+The block `--codex` prints for a checkout looks like this (absolute paths filled in; `tool_timeout_sec` stays high so a sleeping `wait` is not killed):
 
 ```toml
 [mcp_servers.hivemind]
@@ -33,7 +33,7 @@ command = "npx"
 args = ["tsx", "/absolute/path/to/hivemind/src/cli.ts", "mcp"]
 cwd = "/absolute/path/to/hivemind"
 tool_timeout_sec = 28800
-# Lets the Mac app tell which tmux session this agent runs in (see Terminal session label).
+# Lets the apps tell which tmux session this agent runs in (docs/agent-connection.md#terminal-session-label).
 env_vars = ["HIVEMIND_TMUX_SESSION"]
 
 [mcp_servers.hivemind.env]
@@ -55,7 +55,7 @@ The server stores the name on the agent. Only the Human UI sees it, as `terminal
 - Removing an agent clears its label.
 - The label outlives the session. The Mac app shows a terminal only for a session its broker lists as running.
 
-The agent CLI has to pass `HIVEMIND_TMUX_SESSION` on to the MCP process. Claude Code passes its environment on. Codex passes only a fixed set of variables to MCP servers, so its `[mcp_servers.hivemind]` block needs `env_vars = ["HIVEMIND_TMUX_SESSION"]`, as in the example above. Without it the agent works as before, but the UI shows no terminal for it.
+The agent CLI has to pass `HIVEMIND_TMUX_SESSION` on to the MCP process. Claude Code passes its environment on. Codex starts stdio MCP servers with a fixed environment (`HOME`, `PATH`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `TERM`, `TMPDIR` and a few more) and drops everything else, so its `[mcp_servers.hivemind]` block **requires** `env_vars = ["HIVEMIND_TMUX_SESSION"]` for the label (verified with codex-cli 0.157.1: `codex mcp get hivemind` then lists it). `hivemind mcp-config --codex` prints it, and the Launch sheet in the apps reminds you when the software is Codex. Add it to the config of every `CODEX_HOME` you launch with. Without it the agent works as before; the apps then fall back to the session the broker recorded at launch for that agent's name in its project, when exactly one such session runs, and otherwise show no terminal for it.
 
 ### Tool set changes (#218)
 
