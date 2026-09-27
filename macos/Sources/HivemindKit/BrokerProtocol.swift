@@ -137,22 +137,26 @@ public struct BrokerLaunch: Equatable, Sendable {
   /// keeps that session on "Resume same employees". Only a hint: the broker
   /// never creates a session under a name the client picked.
   public let session: SessionName?
-  /// Environment variables for the agent, passed through a private file and
-  /// never argv (LaunchSecretStore; docs/terminal-broker.md#launch-secrets).
+  /// Secret environment variables for the agent, passed through a private
+  /// file and never argv (LaunchSecretStore; docs/terminal-broker.md#launch-secrets).
   /// A launch that reuses a running session starts nothing, so they are ignored.
   public let secrets: LaunchSecrets?
+  /// The sheet's Environment variables, passed like `secrets` in the same
+  /// file (docs/terminal-broker.md#launch-environment), and ignored the same
+  /// way by a launch that reuses a running session.
+  public let environment: LaunchEnvironment?
 
   public init(
     project: String, agent: String?, title: String, cwd: String, command: String, session: SessionName? = nil,
-    secrets: LaunchSecrets? = nil
+    secrets: LaunchSecrets? = nil, environment: LaunchEnvironment? = nil
   ) throws(BrokerProtocolError) {
     try self.init(project: project, agent: agent, title: title, cwd: cwd, command: command, session: session, secrets: secrets,
-                  field: "launch")
+                  environment: environment, field: "launch")
   }
 
   init(
     project: String, agent: String?, title: String, cwd: String, command: String, session: SessionName?,
-    secrets: LaunchSecrets? = nil, field: String
+    secrets: LaunchSecrets? = nil, environment: LaunchEnvironment? = nil, field: String
   ) throws(BrokerProtocolError) {
     guard Self.isProjectSlug(project) else {
       throw .invalid("\(field).project", "must be a project slug (lowercase letters, digits and dashes, at most 32)")
@@ -182,7 +186,11 @@ public struct BrokerLaunch: Equatable, Sendable {
     self.command = command
     self.session = session
     self.secrets = secrets
+    self.environment = environment
   }
+
+  /// Whether the session gets a launch file: any secret or variable.
+  public var handsVariables: Bool { secrets != nil || environment != nil }
 
   public static func isProjectSlug(_ value: String) -> Bool {
     let bytes = Array(value.utf8)
@@ -324,7 +332,7 @@ public struct BrokerRequestFrame: Equatable, Sendable {
 extension BrokerRequestFrame: Codable {
   private enum Key: String, CodingKey {
     case type, id, version, token, client, launches, session, cols, rows, stream, data
-    case project, agent, title, cwd, command, secrets
+    case project, agent, title, cwd, command, secrets, environment
   }
 
   public init(from decoder: any Decoder) throws {
@@ -370,6 +378,7 @@ extension BrokerRequestFrame: Codable {
           command: BrokerCoding.string(item, .command, field: "\(field).command"),
           session: BrokerCoding.optionalSession(item, .session, field: "\(field).session"),
           secrets: BrokerCoding.optionalSecrets(item, .secrets, field: "\(field).secrets"),
+          environment: BrokerCoding.optionalEnvironment(item, .environment, field: "\(field).environment"),
           field: field))
       }
       request = .launch(launches)
@@ -415,6 +424,7 @@ extension BrokerRequestFrame: Codable {
         try item.encode(launch.command, forKey: .command)
         try item.encodeIfPresent(launch.session, forKey: .session)
         try item.encodeIfPresent(launch.secrets?.dictionary, forKey: .secrets)
+        try item.encodeIfPresent(launch.environment?.dictionary, forKey: .environment)
       }
     case .attach(let session, let size):
       try c.encode(session, forKey: .session)
@@ -721,6 +731,17 @@ enum BrokerCoding {
     }
     guard let values else { return nil }
     return try LaunchSecrets(values, field: field)
+  }
+
+  /// Missing or null: nil. Anything else must be an object of strings that
+  /// LaunchEnvironment takes; no error ever quotes a value.
+  static func optionalEnvironment<K: CodingKey>(_ c: KeyedDecodingContainer<K>, _ key: K, field: String) throws(BrokerProtocolError) -> LaunchEnvironment? {
+    let values: [String: String]?
+    do { values = try c.decodeIfPresent([String: String].self, forKey: key) } catch {
+      throw .invalid(field, "must be an object of strings")
+    }
+    guard let values else { return nil }
+    return try LaunchEnvironment(values, field: field)
   }
 
   static func stream<K: CodingKey>(_ c: KeyedDecodingContainer<K>, _ key: K) throws(BrokerProtocolError) -> BrokerStreamID {

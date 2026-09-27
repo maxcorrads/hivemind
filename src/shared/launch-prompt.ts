@@ -1,5 +1,6 @@
 import { HUMAN_NAME, type Seniority } from "./types.ts";
 import { BRAIN_ROLE } from "./standing-orders.ts";
+import { launchEnvironmentPrefix } from "./launch-environment.ts";
 
 /** Spoken by the operator, so the host treats hive mail as authorized work. */
 export const ADOPT_UNTRUSTED = [
@@ -331,9 +332,14 @@ export function buildLaunchCommand(input: LaunchInput): { cwd: string | null; co
   return { cwd: input.cdWorktree && tree ? tree : null, command: invoke };
 }
 
-/** The copyable block: `cd -- <path> && <command>` (or just the command), newline-terminated. */
-export function launchBlockText(launch: { cwd: string | null; command: string }): string {
-  const command = launch.cwd ? `cd -- ${shSingleQuote(launch.cwd)} && ${launch.command}` : launch.command;
+/**
+ * The copyable block: `cd -- <path> && <command>` (or just the command), newline-terminated. `environment` (the
+ * sheet's Environment variables) prefixes the command as `NAME='value' …`, for a person to paste; the apps pass
+ * them beside the command instead, never in it.
+ */
+export function launchBlockText(launch: { cwd: string | null; command: string }, environment?: Record<string, string> | null): string {
+  const run = launchEnvironmentPrefix(environment) + launch.command;
+  const command = launch.cwd ? `cd -- ${shSingleQuote(launch.cwd)} && ${run}` : run;
   return command.endsWith("\n") ? command : `${command}\n`;
 }
 

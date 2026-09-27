@@ -1,0 +1,9 @@
+{
+  "comment": "Launch environment rules both sides check: src/shared/launch-environment.test.ts and macos/Tests/HivemindKitTests/LaunchEnvironmentTests.swift read this file. Keep src/shared/launch-environment.ts and HivemindKit's LaunchEnvironment in step with it.",
+  "validNames": ["A", "_", "_x", "OPENCODE_DISABLE_FFF", "OPENCODE_CONFIG_CONTENT", "lower_case1", "HTTP_PROXY", "OPENCODE_API", "MY_HIVEMIND", "XLD_A", "TERMINFO", "PATHS", "HOMEBREW_NO_AUTO_UPDATE", "SHELLCHECK_OPTS", "ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKL"],
+  "invalidNames": ["", "1A", "A-B", "A B", "A=B", "é", "A.B", "$A", "-A", " A", "A ", "ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLM"],
+  "deniedNames": ["PATH", "path", "Path", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "PWD", "OLDPWD", "IFS", "ENV", "BASH_ENV", "ZDOTDIR", "CDPATH", "cdpath", "FPATH", "fpath", "PS1", "PS2", "PS3", "PS4", "ps1", "PROMPT_COMMAND", "TERM", "TMUX", "TMUX_PANE", "LD_PRELOAD", "LD_LIBRARY_PATH", "ld_preload", "LD_", "DYLD_INSERT_LIBRARIES", "DYLD_", "dyld_x", "HIVEMIND_TMUX_SESSION", "HIVEMIND_", "hivemind_env_line", "OPENCODE_API_KEY", "opencode_api_key"],
+  "validValues": ["", "1", "{\"snapshot\":false}", "it's", "a b  ", "  lead", "$HOME $(id) `id` ${x}", "\\n\\t", "tab\there", "héllo 😀 日本", "=a=b=", "'", "\"", "#not a comment", "a b"],
+  "invalidValues": ["a\nb", "a\rb", "a\u0000b", "\u001b[31m", "a\u0007", "del\u007f", "c1\u0085", "c1\u009f"],
+  "limits": { "variables": 32, "nameChars": 64, "valueBytes": 8192, "totalBytes": 32768 }
+}

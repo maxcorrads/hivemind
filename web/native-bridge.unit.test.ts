@@ -497,7 +497,7 @@ test("a workspace path the app cannot cd into disables the launch buttons but no
 // The OpenCode Go API key (docs/terminal-broker.md#launch-secrets): pasted per launch, sent only with it.
 const OPENCODE_KEY = "sk-go-TEST_s3cr3t_VALUE";
 const keyInput = (host: ParentNode) => host.querySelector(".launch-secret input") as unknown as HTMLInputElement | null;
-async function typeInto(input: HTMLInputElement, value: string) {
+async function typeInto(input: HTMLInputElement | HTMLTextAreaElement, value: string) {
   await act(async () => {
     const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input), "value")!.set!;
     setter.call(input, value);
@@ -633,4 +633,141 @@ test("an empty key sends nothing, a malformed one blocks the launch without quot
   await typeInto(keyInput(sheet.view.host)!, OPENCODE_KEY);
   await act(async () => { start().click(); });
   assert.deepEqual(launchesPosted()[0]!.launches.map(l => l.secrets), [{ OPENCODE_API_KEY: OPENCODE_KEY }, { OPENCODE_API_KEY: OPENCODE_KEY }]);
+});
+
+// Environment variables (docs/terminal-broker.md#launch-environment): remembered per software, prefixed to the copied
+// command, and beside the command (never in it) in the apps.
+const envInput = (host: ParentNode) => host.querySelector(".launch-env textarea") as unknown as HTMLTextAreaElement;
+const softwareInput = (host: ParentNode) => host.querySelector("input[list='launch-software']") as unknown as HTMLInputElement;
+const savedEnvironments = () => JSON.parse(localStorage.getItem("hivemind-launch") ?? "{}").environments as Record<string, string> | undefined;
+const ENV_MARKER = "V4LUE_MARKER";
+const ENV_TEXT = [
+  "# OpenCode",
+  "OPENCODE_DISABLE_FFF=1",
+  `OPENCODE_CONFIG_CONTENT={"snapshot":false,"x":"${ENV_MARKER}"}`,
+  "QUOTE=it's $HOME `id` 😀",
+].join("\n");
+const ENV = { OPENCODE_DISABLE_FFF: "1", OPENCODE_CONFIG_CONTENT: `{"snapshot":false,"x":"${ENV_MARKER}"}`, QUOTE: "it's $HOME `id` 😀" };
+
+test("environment variables are remembered per software in this browser and come back with that software", async () => {
+  const sheet = await mountLaunchSheet();
+  const host = sheet.view.host;
+  assert.equal(envInput(host).value, "");
+  assert.match(host.querySelector("#launch-env-help")?.textContent ?? "",
+    /Remembered for codex in this browser\. Don't put secrets here — use the API key field\./);
+  await typeInto(envInput(host), "CODEX_ONLY=1");
+  assert.deepEqual(savedEnvironments(), { codex: "CODEX_ONLY=1" });
+
+  await typeInto(softwareInput(host), "  opencode ");
+  assert.equal(envInput(host).value, "", "another software starts empty");
+  assert.match(host.querySelector("#launch-env-help")?.textContent ?? "", /Remembered for opencode in this browser/);
+  await typeInto(envInput(host), ENV_TEXT);
+  assert.deepEqual(savedEnvironments(), { opencode: ENV_TEXT, codex: "CODEX_ONLY=1" }, "keyed by the trimmed software");
+  await typeInto(softwareInput(host), "codex");
+  assert.equal(envInput(host).value, "CODEX_ONLY=1");
+  assert.match(host.querySelector(".settings-disclosure summary small")?.textContent ?? "", /1 env variable/);
+  // Emptying the field forgets it for that software only.
+  await typeInto(envInput(host), "");
+  assert.deepEqual(savedEnvironments(), { opencode: ENV_TEXT });
+  for (const unmount of unmounts.splice(0).reverse()) unmount();
+
+  localStorage.setItem("hivemind-launch", JSON.stringify({ software: "opencode", environments: {
+    opencode: ENV_TEXT, constructor: "X=1", junk: 7, "": "Y=1", __proto__: "Z=1" } }));
+  const again = await mountLaunchSheet();
+  assert.equal(envInput(again.view.host).value, ENV_TEXT, "restored on the next visit");
+  assert.match(again.view.host.querySelector(".settings-disclosure summary small")?.textContent ?? "", /3 env variables/);
+  await typeInto(softwareInput(again.view.host), "hasOwnProperty");
+  assert.equal(envInput(again.view.host).value, "", "an inherited name is no saved field");
+});
+
+test("storage that throws never breaks the environment field", async () => {
+  const proto = Object.getPrototypeOf(localStorage) as Storage;
+  const { getItem, setItem } = proto;
+  proto.getItem = () => { throw new Error("denied"); };
+  proto.setItem = () => { throw new Error("quota"); };
+  try {
+    const sheet = await mountLaunchSheet();
+    await typeInto(envInput(sheet.view.host), "A=1");
+    assert.equal(envInput(sheet.view.host).value, "A=1");
+    assert.match(sheet.blocks()[0]!, /&& A='1' codex /);
+  } finally {
+    proto.getItem = getItem;
+    proto.setItem = setItem;
+  }
+});
+
+test("in a browser the preview and Copy command start the command with the variables, single-quoted", async () => {
+  localStorage.setItem("hivemind-launch", JSON.stringify({ software: "opencode", environments: { opencode: ENV_TEXT } }));
+  const copies: string[] = [];
+  Object.defineProperty(globalThis.navigator, "clipboard", { configurable: true, value: { writeText: async (text: string) => { copies.push(text); } } });
+  try {
+    const sheet = await mountLaunchSheet();
+    const [block] = sheet.blocks();
+    assert.ok(block!.startsWith(`cd -- '/Users/me/My Acme' && OPENCODE_DISABLE_FFF='1' ` +
+      `OPENCODE_CONFIG_CONTENT='{"snapshot":false,"x":"${ENV_MARKER}"}' QUOTE='it'\\''s $HOME \`id\` 😀' opencode `), block);
+    await act(async () => { sheet.button(/^Copy command$/)!.click(); });
+    assert.deepEqual(copies, [block]);
+  } finally {
+    delete (globalThis.navigator as { clipboard?: unknown }).clipboard;
+  }
+});
+
+test("a refused line blocks Copy and launching and says why without quoting it; a repeated name warns", async () => {
+  installBridge();
+  const sheet = await mountLaunchSheet();
+  await ready();
+  const host = sheet.view.host;
+  await typeInto(envInput(host), `A=1\nPATH=/tmp/${ENV_MARKER}\nA=2`);
+  assert.equal(host.querySelector(".launch-env-errors")?.getAttribute("role"), "alert");
+  assert.match(host.querySelector(".launch-env-errors")?.textContent ?? "", /Line 2: PATH belongs to the shell/);
+  assert.equal(envInput(host).getAttribute("aria-invalid"), "true");
+  assert.equal(sheet.button(/^Copy command$/)!.disabled, true);
+  assert.equal(sheet.button(/^Open in Terminal$/)!.disabled, true);
+  assert.match(host.textContent ?? "", /Fix the environment variables first/);
+  assert.match(host.querySelector(".launch-env-warnings")?.textContent ?? "", /A is set on lines 1, 3; line 3 wins/);
+  assert.ok(!(host.querySelector(".launch-env-errors")?.textContent ?? "").includes(ENV_MARKER));
+
+  await typeInto(envInput(host), "A=1\nA=2");
+  assert.equal(host.querySelector(".launch-env-errors"), null);
+  assert.equal(sheet.button(/^Copy command$/)!.disabled, false);
+  assert.match(sheet.blocks()[0]!, /&& A='2' codex /, "the last one wins");
+});
+
+test("the apps send the variables beside the command, never in it, and Resume gives every employee the same", async () => {
+  localStorage.setItem("hivemind-launch", JSON.stringify({ software: "opencode", environments: { opencode: ENV_TEXT } }));
+  installBridge();
+  const sheet = await mountLaunchSheet();
+  await ready();
+  await act(async () => { sheet.button(/^Start in background$/)!.click(); });
+  const [message] = launchesPosted();
+  assert.deepEqual(message.launches[0]!.environment, ENV);
+  assert.ok(!message.launches[0]!.command.includes(ENV_MARKER), "never part of the command");
+  assert.ok(!message.launches[0]!.command.includes("OPENCODE_DISABLE_FFF"));
+  // The copied text keeps them, for a person to paste.
+  assert.equal(launchBlockText({ cwd: message.launches[0]!.cwd ?? null, command: message.launches[0]!.command }, ENV), sheet.blocks()[0]);
+  for (const unmount of unmounts.splice(0).reverse()) unmount();
+
+  posted = [];
+  resetTerminalHub();
+  localStorage.setItem("hivemind-launch", JSON.stringify({ software: "opencode", resume: true, environments: { opencode: ENV_TEXT } }));
+  const resumed = await mountLaunchSheet([seat("a1", "Atlas", "brain"), seat("a2", "Bea", "worker")]);
+  await ready();
+  assert.match(resumed.view.host.querySelector("#launch-env-help")?.textContent ?? "", /still running keeps the variables it started with/);
+  await act(async () => { resumed.button(/^Start 2 in background$/)!.click(); });
+  const [resume] = launchesPosted();
+  assert.deepEqual(resume.launches.map(l => l.environment), [ENV, ENV]);
+  assert.ok(resume.launches.every(l => !l.command.includes(ENV_MARKER)));
+  assert.equal(resumed.blocks().length, 2);
+  assert.ok(resumed.blocks().every(block => block.includes("&& OPENCODE_DISABLE_FFF='1' ") && block.includes("😀' opencode ")),
+    "each card's Copy (and so Copy all) has them too");
+
+  // No variables, no key.
+  for (const unmount of unmounts.splice(0).reverse()) unmount();
+  posted = [];
+  resetTerminalHub();
+  localStorage.setItem("hivemind-launch", JSON.stringify({ software: "opencode" }));
+  const plain = await mountLaunchSheet();
+  await ready();
+  await act(async () => { plain.button(/^Start in background$/)!.click(); });
+  assert.ok(!("environment" in launchesPosted()[0]!.launches[0]!));
 });

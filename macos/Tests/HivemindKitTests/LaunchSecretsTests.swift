@@ -140,28 +140,32 @@ struct LaunchSecretsWireTests {
 
 struct LaunchSecretsScriptTests {
   let tmux = TmuxCommand(executable: "/opt/homebrew/bin/tmux", configPath: "/Users/me/Library/Application Support/Hivemind/tmux.conf")
-  let file = LaunchSecretFile(name: "OPENCODE_API_KEY", path: "/Users/me/Library/Application Support/Hivemind/launch-secrets/A.secret")
+  let file = LaunchEnvironmentFile(path: "/Users/me/Library/Application Support/Hivemind/launch-secrets/A.env")
 
-  @Test func theScriptReadsTheFileIntoTheVariableAndDeletesItBeforeAnythingElse() {
-    let script = TmuxCommand.script(cwd: "/Users/me/acme", command: "opencode\n", secretFiles: [file])
-    let quoted = "'/Users/me/Library/Application Support/Hivemind/launch-secrets/A.secret'"
+  @Test func theScriptLoadsTheFileAndDeletesItBeforeAnythingElse() {
+    let script = TmuxCommand.script(cwd: "/Users/me/acme", command: "opencode\n", environmentFile: file)
+    let quoted = "'/Users/me/Library/Application Support/Hivemind/launch-secrets/A.env'"
     #expect(script == """
-      if OPENCODE_API_KEY="$(/bin/cat -- \(quoted) 2>/dev/null)" && [ -n "$OPENCODE_API_KEY" ]; then export OPENCODE_API_KEY; \
-      else unset OPENCODE_API_KEY; fi; /bin/rm -f -- \(quoted)
+      if builtin test -r \(quoted); then while IFS= builtin read -r hivemind_env_line; do \
+      hivemind_env_name=${hivemind_env_line%%=*}; case ${(tP)hivemind_env_name-}:$hivemind_env_name in \
+      *readonly*:*|array*:*|association*:*|*:UID|*:EUID|*:GID|*:EGID) \
+      builtin print -ru2 -- "Hivemind: $hivemind_env_name is a zsh parameter of its own; not set" ;; \
+      *) builtin export -- "$hivemind_env_line" ;; esac; done < \(quoted); fi; \
+      builtin unset hivemind_env_line hivemind_env_name; /bin/rm -f -- \(quoted)
       cd -- '/Users/me/acme' || exit 1
       opencode
 
       exec /bin/zsh -l
       """)
-    // Without secrets the script is what it always was.
+    // Without a file the script is what it always was.
     #expect(TmuxCommand.script(cwd: "/Users/me/acme", command: "opencode") == "cd -- '/Users/me/acme' || exit 1\nopencode\n\nexec /bin/zsh -l")
-    // A name off the allowlist never reaches the script.
-    #expect(!TmuxCommand.script(cwd: "/x", command: "c", secretFiles: [LaunchSecretFile(name: "X;id", path: "/p")]).contains("X;id"))
+    // The helper variables are names no launch may set.
+    #expect(LaunchEnvironment.isDenied("hivemind_env_line") && LaunchEnvironment.isDenied("hivemind_env_name"))
   }
 
   @Test func argvHoldsThePathNeverTheValue() throws {
     let launch = try BrokerLaunch(project: "acme", agent: "Atlas", title: "t", cwd: "/Users/me/acme", command: "opencode", secrets: secrets())
-    let arguments = tmux.newSession(TmuxNewSession(name: atlas, launch: launch, secretFiles: [file]))
+    let arguments = tmux.newSession(TmuxNewSession(name: atlas, launch: launch, environmentFile: file))
     #expect(!arguments.contains { $0.contains(key) })
     #expect(arguments.contains { $0.contains(file.path) })
     // Not in tmux's session environment either: the only -e is the session name.
@@ -180,31 +184,33 @@ struct LaunchSecretsScriptTests {
     let longest = TmuxCommand(executable: "/opt/homebrew/bin/tmux", configPath: "/" + String(repeating: "c", count: BrokerPaths.maxSocketPathBytes))
     // The folder sits next to the socket, whose path the broker keeps within 103 bytes.
     let folder = "/" + String(repeating: "s", count: BrokerPaths.maxSocketPathBytes) + "/launch-secrets"
-    let files = LaunchSecretStore(folder: URL(fileURLWithPath: folder)).files(for: launch.secrets!)
+    let file = LaunchSecretStore(folder: URL(fileURLWithPath: folder)).file()
     let name = BrokerLaunch.sessionNames(for: [launch], existing: []).first!
-    let bytes = TmuxCommand.commandLineBytes(longest.newSession(TmuxNewSession(name: name, launch: launch, secretFiles: files)))
+    let bytes = TmuxCommand.commandLineBytes(longest.newSession(TmuxNewSession(name: name, launch: launch, environmentFile: file)))
     #expect(bytes <= TmuxCommand.maxCommandLineBytes, "\(bytes)")
   }
 }
 
 struct LaunchSecretStoreTests {
-  @Test func writesEachSecretToAFresh0600FileInA0700Folder() throws {
+  @Test func writesTheSecretToAFresh0600FileInA0700Folder() throws {
     let paths = HivemindPaths(home: try temporaryHome())
     let store = LaunchSecretStore(folder: paths.launchSecrets)
     #expect(paths.launchSecrets.path.hasSuffix("Library/Application Support/Hivemind/launch-secrets"))
-    let files = store.files(for: secrets())
-    #expect(files.count == 1)
-    #expect(files[0].name == "OPENCODE_API_KEY")
-    #expect(files[0].path.hasPrefix(paths.launchSecrets.path + "/"))
-    #expect(!files[0].path.contains(key))
-    #expect(!FileManager.default.fileExists(atPath: files[0].path), "nothing is written before write")
-    try store.write(secrets(), to: files)
+    let file = store.file()
+    #expect(file.path.hasPrefix(paths.launchSecrets.path + "/"))
+    #expect(file.path.hasSuffix(".env"))
+    #expect(!file.path.contains(key))
+    #expect(!FileManager.default.fileExists(atPath: file.path), "nothing is written before write")
+    try store.write(environment: nil, secrets: secrets(), to: file)
     #expect(mode(paths.launchSecrets.path) == 0o700)
-    #expect(mode(files[0].path) == 0o600)
-    #expect(try Data(contentsOf: URL(fileURLWithPath: files[0].path)) == Data(key.utf8), "exactly the value, no newline")
-    #expect(store.files(for: secrets()) != files, "every launch gets a new name")
-    store.remove(files)
-    #expect(!FileManager.default.fileExists(atPath: files[0].path))
+    #expect(mode(file.path) == 0o600)
+    #expect(try Data(contentsOf: URL(fileURLWithPath: file.path)) == Data("OPENCODE_API_KEY=\(key)\n".utf8), "one NAME=value line")
+    #expect(store.file() != file, "every launch gets a new name")
+    store.remove(file)
+    #expect(!FileManager.default.fileExists(atPath: file.path))
+    #expect(throws: BrokerFiles.Failure.self, "never outside the folder") {
+      try store.write(environment: nil, secrets: secrets(), to: LaunchEnvironmentFile(path: paths.appSupport.appendingPathComponent("x.env").path))
+    }
   }
 
   @Test func neverWritesThroughAnExistingFileOrLink() throws {
@@ -213,9 +219,9 @@ struct LaunchSecretStoreTests {
     try store.prepareFolder()
     let target = paths.appSupport.appendingPathComponent("elsewhere")
     try Data("keep".utf8).write(to: target)
-    let files = store.files(for: secrets())
-    try FileManager.default.createSymbolicLink(atPath: files[0].path, withDestinationPath: target.path)
-    #expect(throws: BrokerFiles.Failure.self) { try store.write(secrets(), to: files) }
+    let file = store.file()
+    try FileManager.default.createSymbolicLink(atPath: file.path, withDestinationPath: target.path)
+    #expect(throws: BrokerFiles.Failure.self) { try store.write(environment: nil, secrets: secrets(), to: file) }
     #expect(try String(contentsOf: target, encoding: .utf8) == "keep")
   }
 
@@ -226,7 +232,7 @@ struct LaunchSecretStoreTests {
     let other = paths.appSupport.appendingPathComponent("other", isDirectory: true)
     try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
     try FileManager.default.createSymbolicLink(atPath: paths.launchSecrets.path, withDestinationPath: other.path)
-    #expect(throws: BrokerFiles.Failure.self) { try store.write(secrets(), to: store.files(for: secrets())) }
+    #expect(throws: BrokerFiles.Failure.self) { try store.write(environment: nil, secrets: secrets(), to: store.file()) }
     #expect(try FileManager.default.contentsOfDirectory(atPath: other.path).isEmpty)
     // Nor does a sweep follow it.
     let old = other.appendingPathComponent("old.secret")
@@ -246,16 +252,16 @@ struct LaunchSecretStoreTests {
     let paths = HivemindPaths(home: try temporaryHome())
     let store = LaunchSecretStore(folder: paths.launchSecrets)
     #expect(store.sweep() == 0, "no folder yet")
-    let stale = store.files(for: secrets())
-    let fresh = store.files(for: secrets())
-    try store.write(secrets(), to: stale)
-    try store.write(secrets(), to: fresh)
+    let stale = store.file()
+    let fresh = store.file()
+    try store.write(environment: nil, secrets: secrets(), to: stale)
+    try store.write(environment: nil, secrets: secrets(), to: fresh)
     try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -(LaunchSecretStore.maxAge + 5))],
-                                          ofItemAtPath: stale[0].path)
+                                          ofItemAtPath: stale.path)
     #expect(LaunchSecretStore.maxAge == 600)
     #expect(store.sweep() == 1)
-    #expect(!FileManager.default.fileExists(atPath: stale[0].path))
-    #expect(FileManager.default.fileExists(atPath: fresh[0].path))
+    #expect(!FileManager.default.fileExists(atPath: stale.path))
+    #expect(FileManager.default.fileExists(atPath: fresh.path))
     #expect(store.sweep(now: Date(timeIntervalSinceNow: LaunchSecretStore.maxAge + 5)) == 1)
     #expect(try FileManager.default.contentsOfDirectory(atPath: paths.launchSecrets.path).isEmpty)
   }
@@ -291,10 +297,10 @@ struct BrokerLaunchSecretTests {
     let written = files(store)
     #expect(written.count == 1, "one file, for the launch that has a secret")
     #expect(mode(written[0]) == 0o600)
-    #expect(try Data(contentsOf: URL(fileURLWithPath: written[0])) == Data(key.utf8))
+    #expect(try Data(contentsOf: URL(fileURLWithPath: written[0])) == Data("OPENCODE_API_KEY=\(key)\n".utf8))
     let created = h.tmux.calls("new-session")
     #expect(!h.tmux.calls.joined().contains { $0.contains(key) }, "no tmux argument holds the value")
-    #expect(created[0].contains { $0.hasPrefix("if OPENCODE_API_KEY=\"$(/bin/cat -- '\(written[0])'") })
+    #expect(created[0].contains { $0.hasPrefix("if builtin test -r '\(written[0])'; then") })
     #expect(!created[1].contains { $0.contains("OPENCODE_API_KEY") })
     #expect(!h.tmux.environments.contains { $0.values.contains { $0.contains(key) } }, "nor tmux's environment")
     #expect(!h.logs.joined().contains(key))
@@ -355,17 +361,17 @@ struct BrokerLaunchSecretTests {
 
   @Test func startAndEveryLaunchSweepLeftoverFiles() async throws {
     let (h, store) = try harness()
-    let stale = store.files(for: secrets())
-    try store.write(secrets(), to: stale)
+    let stale = store.file()
+    try store.write(environment: nil, secrets: secrets(), to: stale)
     let old = Date(timeIntervalSinceNow: -(LaunchSecretStore.maxAge + 60))
-    try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: stale[0].path)
+    try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: stale.path)
     await h.start()
     #expect(files(store).isEmpty, "the start swept it")
     #expect(h.logs.contains("[broker] removed 1 unread launch secret file(s)"))
 
-    let again = store.files(for: secrets())
-    try store.write(secrets(), to: again)
-    try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: again[0].path)
+    let again = store.file()
+    try store.write(environment: nil, secrets: secrets(), to: again)
+    try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: again.path)
     let (_, connection) = await h.client()
     await h.send(connection, .launch([brokerLaunch("Bea")]))
     #expect(files(store).isEmpty, "a launch swept it")

@@ -228,6 +228,28 @@ An employee whose session is still running is reused as it is, so it keeps the
 key it started with; terminate its session to relaunch it with a new one. A
 browser has no such field, since it cannot launch.
 
+**Advanced launch options** have an **Environment variables** field for any
+software: one `NAME=value` per line (for example `OPENCODE_DISABLE_FFF=1` or
+`OPENCODE_CONFIG_CONTENT={"snapshot":false}`), blank lines and `#` comments
+skipped, the value taken literally after the first `=` (one pair of matching
+quotes around it is dropped). A name set twice keeps its last value, with a
+warning under the field. Names the shell, the terminal or Hivemind own (`PATH`,
+`HOME`, `TERM`, `TMUX`, `LD_*`, `DYLD_*`, `HIVEMIND_*` and the rest of the
+[denylist](terminal-broker.md#launch-environment)) and `OPENCODE_API_KEY` (use
+the key field) are refused, as are more than 32 variables, a value over 8 KiB
+or 32 KiB in all; the sheet names the line and the variable, never the value,
+and offers neither Copy nor a launch until it is fixed. The text is remembered
+per software in this browser (the sheet says so under the field, with a
+reminder not to put secrets there) and comes back when that software is chosen
+again. **Copy** puts the variables before the command, each single-quoted
+(`cd -- '<path>' && NAME='value' opencode …`); a launch sends them beside the
+command instead, and the broker hands them to the new session through the same
+private file as the key, loaded before the `cd`, never on a command line or in
+tmux's environment
+([Launch environment](terminal-broker.md#launch-environment)). **Resume same
+employees** gives every employee the same variables; one whose session is still
+running keeps the environment it started with.
+
 Each session is named `hm-<project>-<agent>`, or `hm-<project>-new-<n>` for a
 new agent whose name is not known yet. It starts in the workspace folder and
 runs the same command **Copy** would copy, in a login `zsh`, then stays open in
@@ -303,6 +325,11 @@ trusted as the UI itself is. What limits this:
 - A launch may carry only one secret, `OPENCODE_API_KEY`, of at most 512
   printable ASCII characters without spaces; any other name drops the message.
   It never reaches a command line or a log.
+- A launch's environment variables follow the
+  [same rules as the sheet](terminal-broker.md#launch-environment) (at most 32,
+  shell names off the denylist, values of at most 8 KiB without control
+  characters, 32 KiB in all); anything else drops the message. No value
+  reaches a command line or a log.
 - The app takes at most one `terminal-launch`, one `terminal-open` and one
   `terminal-kill` per second per window, each counted on its own, and answers a
   refused one with an error. **Terminate all** is one `terminal-kill` naming up

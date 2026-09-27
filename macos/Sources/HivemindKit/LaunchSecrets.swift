@@ -4,9 +4,10 @@ import Foundation
 // OPENCODE_API_KEY (the Launch agent sheet's "OpenCode Go API key" field).
 // docs/terminal-broker.md#launch-secrets has the design. In short: a secret
 // is never saved by Hivemind, never logged, and never reaches argv (not
-// tmux's, not the shell's). The broker writes it to a fresh 0600 file in a
-// private 0700 folder, and the session's script reads that file into the
-// variable and deletes it before it does anything else.
+// tmux's, not the shell's). The broker writes it, with the launch's other
+// environment variables (LaunchEnvironment), to a fresh 0600 file in a
+// private 0700 folder, and the session's script loads that file into its
+// environment and deletes it before it does anything else.
 
 /// A launch's secrets: allowlisted names, each with a short printable-ASCII
 /// value. Its description, debug description and mirror never show a value.
@@ -64,27 +65,27 @@ extension LaunchSecrets: CustomStringConvertible, CustomDebugStringConvertible, 
   }
 }
 
-/// One secret on its way to a session: the variable and the file holding it.
-public struct LaunchSecretFile: Equatable, Sendable {
-  public let name: String
+/// A launch's private file on its way to a session: every variable the
+/// launch hands it (environment and secrets), one `NAME=value` per line.
+public struct LaunchEnvironmentFile: Equatable, Sendable {
   public let path: String
 
-  public init(name: String, path: String) {
-    self.name = name
+  public init(path: String) {
     self.path = path
   }
 }
 
 extension HivemindPaths {
-  /// Where the broker hands launch secrets to their sessions (LaunchSecretStore).
+  /// Where the broker hands launch secrets and environment variables to their sessions (LaunchSecretStore).
   public var launchSecrets: URL { appSupport.appendingPathComponent("launch-secrets", isDirectory: true) }
 }
 
-/// The broker's folder of launch secret files: 0700, this user's, a real
-/// folder (lstat, never a symlink). Each file is created exclusively
-/// (O_EXCL | O_NOFOLLOW) at 0600 under a random name, holds exactly the value
-/// (no newline), and is deleted by the session's script as soon as it has
-/// read it. One the script never read is deleted by `sweep` after 10 minutes.
+/// The broker's folder of launch files: 0700, this user's, a real folder
+/// (lstat, never a symlink). Each launch that hands its session variables
+/// gets one file, created exclusively (O_EXCL | O_NOFOLLOW) at 0600 under a
+/// random name, holding one `NAME=value` line per variable (`contents`), and
+/// deleted by the session's script as soon as it has read it. One the script
+/// never read is deleted by `sweep` after 10 minutes.
 public struct LaunchSecretStore: Sendable {
   public let folder: URL
 
@@ -92,42 +93,41 @@ public struct LaunchSecretStore: Sendable {
   public static let fileMode: mode_t = 0o600
   /// A file older than this is a leftover (its session never read it).
   public static let maxAge: TimeInterval = 10 * 60
-  static let fileExtension = "secret"
+  static let fileExtension = "env"
 
   public init(folder: URL) {
     self.folder = folder
   }
 
-  /// A fresh, unused path for each secret. Nothing is written yet.
-  public func files(for secrets: LaunchSecrets) -> [LaunchSecretFile] {
-    secrets.names.map { name in
-      LaunchSecretFile(name: name, path: folder.appendingPathComponent("\(UUID().uuidString).\(Self.fileExtension)").path)
-    }
+  /// A fresh, unused path for one launch's file. Nothing is written yet.
+  public func file() -> LaunchEnvironmentFile {
+    LaunchEnvironmentFile(path: folder.appendingPathComponent("\(UUID().uuidString).\(Self.fileExtension)").path)
   }
 
-  /// Writes each secret to its file. On any failure the files written so far
-  /// are removed and the error (which names a path, never a value) is thrown.
-  public func write(_ secrets: LaunchSecrets, to files: [LaunchSecretFile]) throws(BrokerFiles.Failure) {
+  /// What the file holds: one `NAME=value` line per variable, each ended by a
+  /// newline, the environment's first and then the secrets, each sorted by
+  /// name. No value holds a newline (both types refuse one), so every line
+  /// is one variable; the value is the rest of the line, byte for byte.
+  public static func contents(environment: LaunchEnvironment?, secrets: LaunchSecrets?) -> [UInt8] {
+    var lines: [String] = []
+    if let environment { lines += environment.names.map { "\($0)=\(environment.value($0)!)\n" } }
+    if let secrets { lines += secrets.names.map { "\($0)=\(secrets.value($0)!)\n" } }
+    return Array(lines.joined().utf8)
+  }
+
+  /// Writes the launch's variables to `file`. On failure nothing is left
+  /// behind and the error (which names a path, never a value) is thrown.
+  public func write(environment: LaunchEnvironment?, secrets: LaunchSecrets?, to file: LaunchEnvironmentFile) throws(BrokerFiles.Failure) {
+    guard (file.path as NSString).deletingLastPathComponent == folder.path else {
+      throw BrokerFiles.Failure("Cannot write a launch file outside \(folder.path)")
+    }
     try prepareFolder()
-    var written: [LaunchSecretFile] = []
-    for file in files {
-      guard let value = secrets.value(file.name), (file.path as NSString).deletingLastPathComponent == folder.path else {
-        remove(written)
-        throw BrokerFiles.Failure("Cannot write a launch secret: \(file.name) is not this launch's")
-      }
-      do {
-        try Self.create(file.path, contents: Array(value.utf8))
-      } catch {
-        remove(written)
-        throw error
-      }
-      written.append(file)
-    }
+    try Self.create(file.path, contents: Self.contents(environment: environment, secrets: secrets))
   }
 
-  /// Deletes the files (those that exist): for a launch whose shell never ran.
-  public func remove(_ files: [LaunchSecretFile]) {
-    for file in files { unlink(file.path) }
+  /// Deletes the file if it exists: for a launch whose shell never ran.
+  public func remove(_ file: LaunchEnvironmentFile?) {
+    if let file { unlink(file.path) }
   }
 
   /// Deletes every file in the folder last modified more than `maxAge` ago.

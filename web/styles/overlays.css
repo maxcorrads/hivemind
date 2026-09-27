@@ -29,10 +29,11 @@
   background-image: linear-gradient(45deg, transparent 50%, var(--mute) 50%), linear-gradient(135deg, var(--mute) 50%, transparent 50%);
   background-position: calc(100% - 15px) 50%, calc(100% - 11px) 50%; background-size: 4px 4px; background-repeat: no-repeat; }
 .sheet textarea { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font-size: 13.5px; }
-.sheet input.mono { font-family: var(--mono); font-size: 13px; }
+.sheet input.mono, .sheet textarea.mono { font-family: var(--mono); font-size: 13px; }
+.sheet textarea.mono { resize: vertical; min-height: 64px; line-height: 1.45; }
 .sheet input::placeholder, .sheet textarea::placeholder { color: var(--mute); }
 .sheet input[type="checkbox"], .sheet input[type="radio"] { accent-color: var(--accent); }
-.sheet input[aria-invalid="true"] { border-color: var(--bad); }
+.sheet input[aria-invalid="true"], .sheet textarea[aria-invalid="true"] { border-color: var(--bad); }
 .sheet label.check { gap: 8px; font-size: 13px; font-weight: 400; color: var(--ink2); }
 .sheet label.check input[type="checkbox"] { width: 16px; height: 16px; margin: 0; flex: none; }
 .sheet .checks { margin: 0; padding: 8px 12px 10px; border: 1px solid var(--line); border-radius: 8px; gap: 6px; }

@@ -24,7 +24,8 @@ The contract lives in `macos/Sources/HivemindKit`:
 | `TmuxCommand.swift` | Every tmux argv, the `list-sessions` parser and the tmux config text |
 | `TmuxLocator.swift` | Finding tmux |
 | `BrokerPaths.swift` | The socket, token and config paths, and `BrokerToken` |
-| `LaunchSecrets.swift` | A launch's secrets (`LaunchSecrets`, the OpenCode Go API key) and the private files that hand them to a session (`LaunchSecretStore`); see [Launch secrets](#launch-secrets) |
+| `LaunchSecrets.swift` | A launch's secrets (`LaunchSecrets`, the OpenCode Go API key) and the private file that hands them, with its environment variables, to a session (`LaunchSecretStore`, `LaunchEnvironmentFile`); see [Launch secrets](#launch-secrets) |
+| `LaunchEnvironment.swift` | A launch's environment variables (`LaunchEnvironment`: the rules, the denylist and the limits); see [Launch environment](#launch-environment) |
 | `Bridge.swift` | The page ↔ app terminal messages (`BridgeMessage`, `BridgeTerminalEvent`) |
 | `BrokerServer.swift`, `BrokerIO.swift`, `BrokerOutput.swift`, `BrokerFiles.swift`, `BrokerStatus.swift` | The broker itself (`TerminalBroker`, `BrokerConnection`) behind injectable tmux, PTY and transport seams, output batching and backpressure, its files, and the menu's status line |
 | `ClientBroker.swift`, `ClientTransport.swift`, `ClientTerminalRouter.swift` | The client (`BrokerClient`), the Unix-socket transport, and the per-window relay to the page (`TerminalBridgeRouter`) |
@@ -124,7 +125,7 @@ running, in which case it is reused and its command is not run again:
 
 ```text
 tmux … new-session -d -s <name> -n <window name> -e HIVEMIND_TMUX_SESSION=<name> \
-  -- /bin/zsh -lic "[<one line per launch secret>]
+  -- /bin/zsh -lic "[<one line loading the launch file>]
 cd -- '<cwd>' || exit 1
 <command>
 
@@ -154,9 +155,10 @@ exec /bin/zsh -l" \
   server stores it and returns it as `agent.terminalSession` (see
   [The session label](#the-session-label)).
 - The two user options record the project and the agent for `sessions`.
-- A launch with [secrets](#launch-secrets) starts its script with one line per
-  secret, which reads the value from a private file and deletes the file. Only
-  the file's path is in the script; the value never is.
+- A launch with [secrets](#launch-secrets) or
+  [environment variables](#launch-environment) starts its script with one line
+  that loads them from a private file and deletes the file. Only the file's
+  path is in the script; no value ever is.
 
 The other calls:
 
@@ -240,7 +242,7 @@ speaks. The broker answers with `min(client, broker)`, or with
 | `sessions.list` | none | `sessions` |
 | `sessions.subscribe` | none | `sessions` now, and again after each change |
 | `sessions.unsubscribe` | none | none |
-| `launch` | `launches`: 1–24 of `{project, agent, title, cwd, command, session?, secrets?}` | `launched` |
+| `launch` | `launches`: 1–24 of `{project, agent, title, cwd, command, session?, secrets?, environment?}` | `launched` |
 | `attach` | `session` name, `cols` 2–1000, `rows` 1–500 | `attached`, then `output`… until `exit` |
 | `input` | `stream` int ≥1, `data` base64 (1 B–64 KiB decoded) | none |
 | `resize` | `stream`, `cols`, `rows` | none |
@@ -258,6 +260,7 @@ A launch is:
 | `command` | not blank, at most 8 KiB (8192 bytes), no NUL |
 | `session` | optional session name: the session this agent last reported (`agent.terminalSession`). When it is running and was launched for the same project and for no agent or this one, the launch reuses it, so an agent first launched as `hm-<project>-new-<n>` keeps that session on resume. Otherwise it is ignored: the broker never creates a session under a name the client picked. |
 | `secrets` | optional object of environment variables for the agent: `{"OPENCODE_API_KEY": "<key>"}`, the only name allowed. The value is 1–512 bytes of printable ASCII (`0x21`–`0x7E`: no space, tab, newline or NUL). Any other name, an empty object, a value that is not a string or breaks the rule refuses the whole frame with `bad-message`, and the error names the field, never the value. See [Launch secrets](#launch-secrets). |
+| `environment` | optional object of 1–32 environment variables for the agent, `{"NAME": "value", …}`: the Launch agent sheet's **Environment variables**. Each name matches `^[A-Za-z_][A-Za-z0-9_]{0,63}$` and is not on the [denylist](#launch-environment); each value is at most 8 KiB with no control character but tab (so no NUL, CR or LF), 32 KiB of `NAME=value` in all. Anything else refuses the whole frame with `bad-message`; the error names the field and, for a denied name, the variable, never a value. See [Launch environment](#launch-environment). |
 
 ### Broker → client
 
@@ -346,28 +349,45 @@ On its way:
    `LaunchSecrets(OPENCODE_API_KEY: <redacted>)` in every description, debug
    description and `dump`, so a launch that reaches a log shows no value; the
    broker logs names, counts and paths only.
-4. **File.** For a session it is about to create, the broker writes the value
-   (exactly, no newline) to a new file named `<random UUID>.secret` in
+4. **File.** For a session it is about to create, the broker writes one
+   `NAME=value` line per variable, the launch's
+   [environment variables](#launch-environment) first and then its secrets, to
+   a new file named `<random UUID>.env` in
    `~/Library/Application Support/Hivemind/launch-secrets/`
-   (`HivemindPaths.launchSecrets`, `LaunchSecretStore`). The folder is created
+   (`HivemindPaths.launchSecrets`, `LaunchSecretStore`). One launch, one file. The folder is created
    at `0700`, checked with `lstat` (a real folder, never a symlink, owned by the
    user) and tightened to `0700` if needed. The file is opened with
    `O_CREAT | O_EXCL | O_NOFOLLOW` and `fchmod`ed to `0600`, so it never
    replaces or follows anything already there.
-5. **Script.** The session's `zsh -lic` script starts with, for each secret:
+5. **Script.** The session's `zsh -lic` script starts with one line (shown
+   here folded) that loads the file:
 
    ```sh
-   if OPENCODE_API_KEY="$(/bin/cat -- '<file>' 2>/dev/null)" && [ -n "$OPENCODE_API_KEY" ]; then export OPENCODE_API_KEY; else unset OPENCODE_API_KEY; fi; /bin/rm -f -- '<file>'
+   if builtin test -r '<file>'; then while IFS= builtin read -r hivemind_env_line; do
+     hivemind_env_name=${hivemind_env_line%%=*};
+     case ${(tP)hivemind_env_name-}:$hivemind_env_name in
+       *readonly*:*|array*:*|association*:*|*:UID|*:EUID|*:GID|*:EGID)
+         builtin print -ru2 -- "Hivemind: $hivemind_env_name is a zsh parameter of its own; not set" ;;
+       *) builtin export -- "$hivemind_env_line" ;; esac;
+   done < '<file>'; fi; builtin unset hivemind_env_line hivemind_env_name; /bin/rm -f -- '<file>'
    ```
 
-   before the `cd` and the command (`TmuxCommand.secretLine`). The path is
-   single-quoted. `/bin/cat` and `/bin/rm`, because the shell is interactive
-   and `~/.zshrc` aliases apply. A file that cannot be read, or is empty,
-   leaves the variable unset and the launch goes on: OpenCode then uses the key
-   saved with `/connect`. The variable is exported in the session's shell, so
-   the agent and the login shell the session stays in afterwards have it. It is
-   never in tmux's global or session environment (`tmux show-environment`
-   does not list it): the only `-e` is `HIVEMIND_TMUX_SESSION`.
+   before the `cd` and the command (`TmuxCommand.environmentLine`). The path is
+   single-quoted. Each line is read raw (`read -r` with an empty `IFS`: no
+   backslash, quote, `$` or space is interpreted, leading and trailing spaces
+   stay) and exported as one quoted word, so nothing in a value is expanded or
+   run. zsh parameters that an assignment would abort the whole script on
+   (read-only ones like `status`, arrays and associations like `argv` or
+   `options`, and the user and group ids) are skipped with a line in the
+   terminal naming them. `builtin` and `/bin/rm`, because the shell is
+   interactive and `~/.zshrc` aliases and functions apply. The two helper
+   variables are `hivemind_*`, which no launch may set, and are unset after. A
+   file that cannot be read sets nothing and the launch goes on: OpenCode then
+   uses the key saved with `/connect`. The variables are exported in the
+   session's shell, so the agent and the login shell the session stays in
+   afterwards have them. They are never in tmux's global or session environment
+   (`tmux show-environment` does not list them): the only `-e` is
+   `HIVEMIND_TMUX_SESSION`.
 
 **Why not argv.** A command line is readable with `ps` by other processes:
 the tmux client's for the moment it runs, and the pane's `zsh -lic <script>`
@@ -383,13 +403,91 @@ name meanwhile), the broker deletes it at once. Any file left in the folder for
 more than 10 minutes (`LaunchSecretStore.maxAge`), for example because a
 `~/.zshrc` exited early, is deleted when the broker starts and before every
 launch (`sweep`). A broker without a store (none in the app) refuses a launch
-with secrets (`internal`) rather than start it without them.
+with secrets or environment variables (`internal`) rather than start it
+without them.
 
 **Reused sessions.** A launch that reuses a running session (the same agent's,
 or the `session` hint on **Resume same employees**) starts nothing, so its
 secrets are ignored and no file is written: that session keeps whatever key it
 started with. To give a running agent a new key, terminate its session and
 launch it again.
+
+## Launch environment
+
+The Launch agent sheet's **Advanced launch options** have an **Environment
+variables** field (see [Launch agent sheet](macos.md#terminals)): one
+`NAME=value` per line, for example
+
+```text
+OPENCODE_DISABLE_FFF=1
+OPENCODE_CONFIG_CONTENT={"snapshot":false}
+```
+
+Blank lines and lines starting with `#` are skipped, and leading spaces
+before a name are ignored. The value is the whole rest of the line after the
+first `=`, taken literally: no escapes, no expansion, no quotes needed. A value
+wrapped in one pair of matching single or double quotes loses that pair. A
+name set twice keeps its last value, and the sheet says so under the field.
+
+**Rules** (`src/shared/launch-environment.ts` on the page, `LaunchEnvironment`
+in the app and the broker; both read the cases in
+`src/shared/launch-environment.vectors.json` in their tests):
+
+| Rule | Value |
+| --- | --- |
+| Name | `^[A-Za-z_][A-Za-z0-9_]{0,63}$` |
+| Value | Any UTF-8 without control characters but tab: no NUL, CR, LF, other C0 characters, DEL or C1. Empty is allowed. |
+| Variables | At most 32 |
+| One value | At most 8 KiB (UTF-8 bytes) |
+| In all | At most 32 KiB of `NAME=value` |
+| Denied | `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `PWD`, `OLDPWD`, `IFS`, `ENV`, `BASH_ENV`, `ZDOTDIR`, `CDPATH`, `FPATH`, `PS1`–`PS4`, `PROMPT_COMMAND`, `TERM`, `TMUX`, `TMUX_PANE`, `LD_*`, `DYLD_*`, `HIVEMIND_*` (Hivemind's own) and `OPENCODE_API_KEY` (the masked [OpenCode Go API key](#launch-secrets) field, which is never saved). Names are compared without case: zsh ties lowercase `path`, `cdpath` and `fpath` to the uppercase ones. |
+
+The sheet names the line and the variable that broke a rule and never quotes a
+value; it offers neither Copy nor a launch until the field is fixed.
+
+**Where it is kept.** The field's text is remembered per software (the
+Software field, trimmed) in this browser's `localStorage`, under
+`hivemind-launch`, and comes back when that software is chosen again. It is
+never sent to the Node server. Because it is stored, the sheet says under the
+field not to put secrets there: the OpenCode Go API key has its own field.
+
+**In a browser** (no app), the copied command and its preview put the
+variables before the command, each value single-quoted:
+
+```sh
+cd -- '<path>' && OPENCODE_DISABLE_FFF='1' OPENCODE_CONFIG_CONTENT='{"snapshot":false}' opencode …
+```
+
+That text is for a person to paste; nothing runs it. The apps copy the same
+text.
+
+**In the apps**, a launch carries the variables as `environment`, beside its
+`command` and never in it. The app checks them again (`TerminalSessionLaunch`,
+`LaunchEnvironment`) and drops the whole `terminal-launch` if any is off; the
+broker checks the frame again and refuses it with `bad-message`.
+`LaunchEnvironment` prints as `LaunchEnvironment(NAME: <redacted>, …)` in every
+description, debug description and `dump`, and the broker logs names, counts
+and paths only. For a session it is about to create, the broker writes them,
+with any [secret](#launch-secrets), to the launch's private `0600` file, which
+the script loads before the `cd` and deletes (steps 4 and 5 above). They are
+never in argv (tmux's or the shell's), never in `tmux -e` or tmux's
+environment, and never in the script text.
+
+**Resume same employees** applies the same variables to every employee it
+launches. The whole `terminal-launch` has to fit in one broker line (1 MiB), so
+the sheet refuses to send one that would not (24 employees with the largest
+variables full of characters JSON escapes), and asks to launch fewer at once.
+
+**Reused sessions.** A launch that reuses a running session starts nothing, so
+its variables are ignored and no file is written: the session keeps the
+environment it started with. To change it, terminate the session and launch
+again.
+
+**The tmux command stays bounded.** Only the file's path reaches tmux, so the
+variables add nothing to a launch's `new-session` arguments beyond the loader
+line; the largest valid launch, with every field and variable at its limit,
+stays under `TmuxCommand.maxCommandLineBytes` (checked in
+`LaunchEnvironmentTests`).
 
 ## Clients
 
@@ -473,7 +571,7 @@ Page → app (`window.webkit.messageHandlers.hivemind.postMessage`):
 
 | type | fields | notes |
 | --- | --- | --- |
-| `terminal-launch` | `id`?, `launches`: `[{project, agent, title, cwd?, command, session?, secrets?}]`, `openInTerminal` boolean | `agent` is null for a new agent; `session` is the agent's `terminalSession` on resume. `secrets` is `{OPENCODE_API_KEY}` only ([Launch secrets](#launch-secrets)). `cwd` may be `~` or `~/…`, or absent for home; the app expands it. With `openInTerminal`, the app then opens a Terminal.app window attached to each session the broker returned, even if the page has moved on. At most 1 per second per window. |
+| `terminal-launch` | `id`?, `launches`: `[{project, agent, title, cwd?, command, session?, secrets?, environment?}]`, `openInTerminal` boolean | `agent` is null for a new agent; `session` is the agent's `terminalSession` on resume. `secrets` is `{OPENCODE_API_KEY}` only ([Launch secrets](#launch-secrets)); `environment` follows the broker's rules ([Launch environment](#launch-environment)), and a message with anything off in either is dropped whole. `cwd` may be `~` or `~/…`, or absent for home; the app expands it. With `openInTerminal`, the app then opens a Terminal.app window attached to each session the broker returned, even if the page has moved on. At most 1 per second per window. |
 | `terminal-open` | `session` | Opens Terminal.app attached to a running session (the app checks with `sessions.list` first). No answer on success. At most 1 per second per window. |
 | `terminal-attach` | `id`?, `session`, `cols`, `rows` | Until `terminal-attached`, the page holds the viewer's resizes (the latest size) and keys (in order, at most 64 KiB, the oldest dropped beyond), and sends them once attached; held keys are discarded if the attach fails or the viewer leaves first |
 | `terminal-input` | `stream`, `data` base64 ≤64 KiB | `encodeTerminalInput` splits a paste into chunks |
@@ -642,12 +740,14 @@ that terminals are off in this window and offers no button.
   neither the token nor the folder.
 - **No shell built from strings.** Every tmux call is an argv array. The only
   shell text is the launch command itself, which is the agent's command by
-  design, with the folder single-quoted before it, and before that the lines
-  that read a launch's secrets from their single-quoted files.
-- **No secret in argv or a log.** An OpenCode Go API key travels in the launch
-  message and a `0600` file that the session deletes on reading it, never in
-  tmux's arguments, the script text or tmux's environment, and nothing prints
-  its value ([Launch secrets](#launch-secrets)). Whoever controls the page can
+  design, with the folder single-quoted before it, and before that the line
+  that loads a launch's secrets and environment variables from its
+  single-quoted file.
+- **No secret in argv or a log.** An OpenCode Go API key, and the sheet's
+  environment variables, travel in the launch message and a `0600` file that
+  the session deletes on reading it, never in tmux's arguments, the script text
+  or tmux's environment, and nothing prints a value
+  ([Launch secrets](#launch-secrets), [Launch environment](#launch-environment)). Whoever controls the page can
   of course read what the user types into it, as with any field. tmux format expansion and
   its `;` command separator are handled as described in
   [What tmux runs](#what-tmux-runs).

@@ -129,6 +129,10 @@ The page is the same as in Hivemind.app, with these differences:
   key goes with the launch through the gateway's TLS connection to the Mac's
   broker and is not saved on the device or the Mac
   ([Launch secrets](terminal-broker.md#launch-secrets)).
+- So is **Environment variables** in Advanced launch options. The text is
+  remembered per software in the app's web view, and the variables travel with
+  the launch the same way, beside the command and never in it
+  ([Launch environment](terminal-broker.md#launch-environment)).
 - The notices say what the Mac is missing ("Terminals need Hivemind Server
   running on your Mac", "Install tmux on your Mac: `brew install tmux`"). The
   app cannot start Hivemind Server on the Mac.

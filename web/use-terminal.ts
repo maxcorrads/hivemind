@@ -3,9 +3,9 @@ import type { Agent } from "../src/shared/types.ts";
 import { terminalSessionName } from "../src/shared/terminal-session.ts";
 import {
   TERMINAL_EVENT, brokerUnavailableHint, decodeTerminalData, encodeTerminalInput, inNativeApp, onMacDesktop, onNativePlatform,
-  parseTerminalEvent, postNative, reportedNativePlatform, serverUnverifiedHint, terminalDataLength, terminalSessionLaunchProblem, terminalSize,
-  tmuxInstallHint, TERMINAL_BROKER_LIMITS, type NativePlatform, type TerminalEvent, type TerminalKillFailure, type TerminalMessage,
-  type TerminalSessionInfo, type TerminalSessionLaunch,
+  parseTerminalEvent, postNative, reportedNativePlatform, serverUnverifiedHint, terminalDataLength, terminalLaunchItems,
+  terminalSessionLaunchProblem, terminalSize, tmuxInstallHint, TERMINAL_BROKER_LIMITS, type NativePlatform, type TerminalEvent,
+  type TerminalKillFailure, type TerminalMessage, type TerminalSessionInfo, type TerminalSessionLaunch,
 } from "./native-bridge.ts";
 
 // The page side of the apps' terminals (docs/terminal-broker.md#bridge):
@@ -333,8 +333,7 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
       const id = newId();
       return request<TerminalLaunched>("launch", {
         type: "terminal-launch", id, openInTerminal: openInTerminal && onMacDesktop(state.platform),
-        launches: launches.map(({ project, agent, title, cwd, command, session, secrets }) =>
-          ({ project, agent, title, ...(cwd ? { cwd } : {}), command, ...(session ? { session } : {}), ...(secrets ? { secrets } : {}) })),
+        launches: terminalLaunchItems(launches),
       });
     },
     /** Opens Terminal.app attached to a running session; false when the page could not ask, or off the Mac. */

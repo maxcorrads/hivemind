@@ -22,10 +22,12 @@ public final class TerminalBroker {
     /// How often the session list is polled while nobody subscribes (for the
     /// menu's count); `BrokerLimits.sessionsPollInterval` while somebody does.
     public var idlePollInterval: TimeInterval
-    /// Where launch secrets go on their way to a session's shell; nil: a
-    /// launch that carries any fails, rather than start without them.
+    /// Where launch secrets and environment variables go on their way to a
+    /// session's shell; nil: a launch that carries any fails, rather than
+    /// start without them.
     public var secrets: LaunchSecretStore?
-    /// Never given a secret: the broker logs names, counts and paths only.
+    /// Never given a secret or a variable's value: the broker logs names,
+    /// counts and paths only.
     public var log: (String) -> Void
 
     public init(
@@ -487,20 +489,22 @@ public final class BrokerConnection {
     var errors: [BrokerLaunchFailure] = []
     for (index, (launch, name)) in zip(launches, names).enumerated() {
       if existing.contains(name) {
-        // Reused: nothing runs, so its secrets (if any) are never written.
+        // Reused: nothing runs, so its secrets and variables (if any) are never written.
         results.append(name)
         continue
       }
-      var secretFiles: [LaunchSecretFile] = []
-      if let secrets = launch.secrets {
+      var environmentFile: LaunchEnvironmentFile?
+      if launch.handsVariables {
         guard let store = broker.deps.secrets else {
           results.append(nil)
-          errors.append(BrokerLaunchFailure(index: index, code: .internal, message: "launches[\(index)].secrets: this broker cannot pass secrets"))
+          let message = launch.secrets != nil ? "launches[\(index)].secrets: this broker cannot pass secrets"
+            : "launches[\(index)].environment: this broker cannot pass environment variables"
+          errors.append(BrokerLaunchFailure(index: index, code: .internal, message: message))
           continue
         }
-        secretFiles = store.files(for: secrets)
+        environmentFile = store.file()
       }
-      let arguments = tmux.newSession(TmuxNewSession(name: name, launch: launch, secretFiles: secretFiles))
+      let arguments = tmux.newSession(TmuxNewSession(name: name, launch: launch, environmentFile: environmentFile))
       let bytes = TmuxCommand.commandLineBytes(arguments)
       guard bytes <= TmuxCommand.maxCommandLineBytes else {
         results.append(nil)
@@ -512,20 +516,21 @@ public final class BrokerConnection {
         errors.append(BrokerLaunchFailure(index: index, code: .cwdMissing, message: "launches[\(index)].cwd: not a folder"))
         continue
       }
-      if let secrets = launch.secrets, let store = broker.deps.secrets {
-        do { try store.write(secrets, to: secretFiles) } catch {
-          broker.deps.log("[broker] \(name): cannot write its launch secrets: \(error.message)")
+      if let file = environmentFile, let store = broker.deps.secrets {
+        do { try store.write(environment: launch.environment, secrets: launch.secrets, to: file) } catch {
+          broker.deps.log("[broker] \(name): cannot write its launch file: \(error.message)")
           results.append(nil)
-          errors.append(BrokerLaunchFailure(index: index, code: .internal, message: "launches[\(index)].secrets: \(error.message)"))
+          let field = launch.secrets != nil ? "secrets" : "environment"
+          errors.append(BrokerLaunchFailure(index: index, code: .internal, message: "launches[\(index)].\(field): \(error.message)"))
           continue
         }
       }
       let result = await broker.run(tmux, arguments)
       let started = result.succeeded ? true : await broker.run(tmux, tmux.hasSession(name)).succeeded
       // Our shell never ran (tmux failed, or the name was another launch's
-      // session): nobody will read the secret files, so they go now. When it
-      // did run, it deletes them itself; sweepSecrets catches any it missed.
-      if !started || result.stderr.contains("duplicate session") { broker.deps.secrets?.remove(secretFiles) }
+      // session): nobody will read the launch file, so it goes now. When it
+      // did run, it deletes it itself; sweepSecrets catches any it missed.
+      if !started || result.stderr.contains("duplicate session") { broker.deps.secrets?.remove(environmentFile) }
       if started {
         // A failure after the session started (setting its options) still
         // leaves a session to use; "duplicate session" is another launch's.

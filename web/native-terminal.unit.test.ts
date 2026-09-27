@@ -146,3 +146,25 @@ test("a launch passes only an OpenCode key, checked as the app and the broker ch
     assert.ok(!problem!.includes(key));
   }
 });
+
+test("a launch's environment variables are checked as the app checks them, never quoted, and must fit in one broker line", () => {
+  const marker = "V4LUE_MARKER";
+  const good: TerminalSessionLaunch = { project: "acme", agent: "Atlas", title: "Acme - Atlas", cwd: "~/acme", command: "opencode" };
+  const environment = { OPENCODE_DISABLE_FFF: "1", OPENCODE_CONFIG_CONTENT: `{"snapshot":false,"x":"${marker}"}` };
+  assert.equal(terminalSessionLaunchProblem([{ ...good, environment }]), null);
+  assert.equal(terminalSessionLaunchProblem([{ ...good, environment, secrets: { OPENCODE_API_KEY: "sk-go" } }]), null);
+  const shapes: unknown[] = [{}, { PATH: marker }, { HIVEMIND_X: marker }, { OPENCODE_API_KEY: marker }, { A: `${marker}\n` }, { A: 1 },
+    { "1A": marker }, { A: "x".repeat(8193) }, [marker], marker, null];
+  for (const shape of shapes) {
+    const problem = terminalSessionLaunchProblem([{ ...good, environment: shape as Record<string, string> }]);
+    assert.notEqual(problem, null, JSON.stringify(shape)?.slice(0, 40));
+    assert.ok(!problem!.includes(marker), problem!);
+  }
+  // Resume gives each employee the same variables. 24 of the largest fit in the broker's 1 MiB line, but not once
+  // JSON escapes double them.
+  const full = (char: string) => Object.fromEntries(Array.from({ length: 4 }, (_, i) => [`V${i}`, char.repeat(8188)]));
+  const many = (count: number, char = "x") => Array.from({ length: count }, (_, i) => ({ ...good, agent: `A${i}`, environment: full(char) }));
+  assert.equal(terminalSessionLaunchProblem(many(TERMINAL_BROKER_LIMITS.launches)), null);
+  assert.equal(terminalSessionLaunchProblem(many(12, '"')), null);
+  assert.match(terminalSessionLaunchProblem(many(TERMINAL_BROKER_LIMITS.launches, '"'))!, /Too much to launch at once/);
+});

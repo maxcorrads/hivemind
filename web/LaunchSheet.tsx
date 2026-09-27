@@ -11,6 +11,7 @@ import { SessionsSheet } from "./SessionsSheet.tsx";
 import { TerminalNotice } from "./TerminalNotice.tsx";
 import { agentTerminalSession, terminalBlocker, terminalHub, useTerminalState, type TerminalLaunched } from "./use-terminal.ts";
 import { projectLaunchTools, type LaunchContext } from "../src/shared/launch-prompt.ts";
+import { parseLaunchEnvironment } from "../src/shared/launch-environment.ts";
 import {
   EFFORTS,
   buildLaunchCommand,
@@ -41,6 +42,8 @@ type Saved = {
   resumeName: string;
   allHives: boolean;
   tunes: Record<string, { model: string; effort: string }>;
+  /** The Environment variables field's text per software (the Software field, trimmed). */
+  environments: Record<string, string>;
 };
 
 const defaults: Saved = {
@@ -59,7 +62,15 @@ const defaults: Saved = {
   resumeName: "",
   allHives: false,
   tunes: {},
+  environments: {},
 };
+
+/** Software names whose Environment variables are kept, and the characters of one field's text. */
+const MAX_ENVIRONMENTS = 24;
+const MAX_ENVIRONMENT_TEXT = 64 * 1024;
+
+/** The software an Environment variables text belongs to: the Software field as the launch uses it. */
+const environmentKey = (software: string) => software.trim() || "codex";
 
 function loadSaved(): Saved {
   try {
@@ -92,6 +103,15 @@ function loadSaved(): Saved {
         tunes[name] = { model, effort: seatEffort };
       }
     }
+    const environments: Record<string, string> = {};
+    if (parsed.environments && typeof parsed.environments === "object" && !Array.isArray(parsed.environments)) {
+      for (const [name, text] of Object.entries(parsed.environments).slice(0, MAX_ENVIRONMENTS)) {
+        const key = name.trim();
+        if (key && key !== "__proto__" && typeof text === "string" && text.trim() && text.length <= MAX_ENVIRONMENT_TEXT) {
+          environments[key] = text;
+        }
+      }
+    }
     return {
       ...defaults,
       software: typeof parsed.software === "string" && parsed.software.trim() ? parsed.software.trim() : "codex",
@@ -109,6 +129,7 @@ function loadSaved(): Saved {
       resumeName: typeof parsed.resumeName === "string" ? parsed.resumeName : "",
       allHives: parsed.allHives === true,
       tunes,
+      environments,
     };
   } catch {
     return defaults;
@@ -223,6 +244,14 @@ export function LaunchSheet({
   const [resume, setResume] = useState(initial.resume);
   const [allHives, setAllHives] = useState(initial.allHives);
   const [tunes, setTunes] = useState<Record<string, { model: string; effort: string }>>(initial.tunes);
+  // Kept per software in this browser (never sent anywhere but with a launch); restored when that software is chosen.
+  const [environments, setEnvironments] = useState<Record<string, string>>(initial.environments);
+  const envKey = environmentKey(software);
+  const envText = Object.hasOwn(environments, envKey) ? environments[envKey]! : "";
+  const parsedEnv = useMemo(() => parseLaunchEnvironment(envText), [envText]);
+  const envCount = Object.keys(parsedEnv.environment).length;
+  const envError = parsedEnv.errors.length ? "Fix the environment variables first" : null;
+  const environment = !envError && envCount ? parsedEnv.environment : null;
   const [copied, setCopied] = useState<string | null>(null);
   // Pasted per launch and sent only to the app with the launch (docs/terminal-broker.md#launch-secrets): never saved,
   // never in the copied text, cleared after a launch that started and when the sheet closes.
@@ -304,11 +333,12 @@ export function LaunchSheet({
         focus,
         resume: false,
       });
-      return { ok: true as const, launch, text: launchBlockText(launch) };
+      if (envError) throw new Error(envError);
+      return { ok: true as const, launch, text: launchBlockText(launch, environment) };
     } catch (e) {
       return { ok: false as const, error: String((e as Error).message || e) };
     }
-  }, [software, extraFlags, model, effort, workspacePath, cdWorktree, project, projects, projectSlug, hiveName, passProject, role, seniority, focus, adoptUntrusted, launchContext, contextError]);
+  }, [software, extraFlags, model, effort, workspacePath, cdWorktree, project, projects, projectSlug, hiveName, passProject, role, seniority, focus, adoptUntrusted, launchContext, contextError, environment, envError]);
 
   const resumeBlocks = useMemo(() => {
     return roster.map((agent) => {
@@ -338,12 +368,13 @@ export function LaunchSheet({
           resume: true,
           resumeName: agent.name,
         });
-        return { agent, hive, ok: true as const, launch, text: launchBlockText(launch) };
+        if (envError) throw new Error(envError);
+        return { agent, hive, ok: true as const, launch, text: launchBlockText(launch, environment) };
       } catch (e) {
         return { agent, hive, ok: false as const, error: String((e as Error).message || e), text: "" };
       }
     });
-  }, [roster, projects, project, projectSlug, pathDirty, workspacePath, software, extraFlags, model, effort, tunes, cdWorktree, passProject, adoptUntrusted, contexts, contextErrors]);
+  }, [roster, projects, project, projectSlug, pathDirty, workspacePath, software, extraFlags, model, effort, tunes, cdWorktree, passProject, adoptUntrusted, contexts, contextErrors, environment, envError]);
 
   const remember = (patch: Partial<Saved> = {}) => {
     const next: Saved = {
@@ -362,8 +393,19 @@ export function LaunchSheet({
       resumeName: "",
       allHives: patch.allHives ?? allHives,
       tunes: patch.tunes ?? tunes,
+      environments: patch.environments ?? environments,
     };
     persist(next);
+  };
+
+  const setEnvText = (text: string) => {
+    const next = { ...environments };
+    delete next[envKey];
+    // The software just edited comes first, so the oldest are the ones forgotten past the cap.
+    const kept = text.trim() ? { [envKey]: text, ...next } : next;
+    const trimmed = Object.fromEntries(Object.entries(kept).slice(0, MAX_ENVIRONMENTS));
+    setEnvironments(trimmed);
+    remember({ environments: trimmed });
   };
 
   const setTune = (name: string, patch: Partial<{ model: string; effort: string }>) => {
@@ -420,6 +462,8 @@ export function LaunchSheet({
   const opencodeKeyValue = showOpencodeKey ? opencodeKey.trim() : "";
   const opencodeKeyProblem = opencodeKeyValue ? terminalSecretProblem(opencodeKeyValue) : null;
   const secrets: { secrets?: TerminalLaunchSecrets } = opencodeKeyValue ? { secrets: { OPENCODE_API_KEY: opencodeKeyValue } } : {};
+  // Beside the command, never in it: the app hands them to the session through its private launch file.
+  const launchEnv: { environment?: Record<string, string> } = environment ? { environment } : {};
   const close = () => {
     setOpencodeKey("");
     onClose();
@@ -435,9 +479,11 @@ export function LaunchSheet({
         // The session this employee already runs in, even one named hm-<project>-new-<n>, is reused.
         session: agentTerminalSession(b.agent),
         ...secrets,
+        ...launchEnv,
       }] : []) : [])
     : (canCopyOne && built.ok
-      ? [{ project: project?.slug ?? projectSlug, agent: null, title: seatTitle(hiveName, `new ${role}`), ...built.launch, ...secrets }] : []);
+      ? [{ project: project?.slug ?? projectSlug, agent: null, title: seatTitle(hiveName, `new ${role}`), ...built.launch, ...secrets,
+          ...launchEnv }] : []);
   const terminalBlock = native ? terminalBlocker(terminals) : null;
   const terminalProblem = terminalBlock?.message ?? (terminalLaunches.length ? terminalSessionLaunchProblem(terminalLaunches) : null);
   const canLaunchTerminal = native && terminalLaunches.length > 0 && !terminalProblem && !launching;
@@ -499,6 +545,8 @@ export function LaunchSheet({
     passProject && "pass project",
     adoptUntrusted && "trust hive mail",
     extraFlags.trim() && "extra flags",
+    envCount > 0 && (envCount === 1 ? "1 env variable" : `${envCount} env variables`),
+    parsedEnv.errors.length > 0 && "env variables to fix",
   ].filter(Boolean).join(" · ") || "defaults off";
 
   if (started) {
@@ -679,6 +727,37 @@ export function LaunchSheet({
               autoComplete="off"
             />
           </label>
+          <label className="launch-env">
+            Environment variables
+            <textarea
+              className="mono"
+              rows={3}
+              value={envText}
+              onChange={(e) => setEnvText(e.target.value)}
+              placeholder={"optional — one NAME=value per line, e.g.\nOPENCODE_DISABLE_FFF=1"}
+              autoComplete="off"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              aria-describedby="launch-env-help"
+              aria-invalid={parsedEnv.errors.length ? true : undefined}
+            />
+          </label>
+          <p id="launch-env-help" className="help-p">
+            One <code>NAME=value</code> per line, taken literally; <code>#</code> starts a comment.{" "}
+            Remembered for {envKey} in this browser. Don't put secrets here — use the API key field.
+            {resume && native && " An employee whose session is still running keeps the variables it started with."}
+          </p>
+          {parsedEnv.errors.length > 0 && (
+            <p className="err launch-env-errors" role="alert">
+              {parsedEnv.errors.map((error, i) => <span key={i}>{i > 0 && <br />}{error}</span>)}
+            </p>
+          )}
+          {parsedEnv.warnings.length > 0 && (
+            <p className="help-p launch-env-warnings" role="status">
+              {parsedEnv.warnings.map((warning, i) => <span key={i}>{i > 0 && <br />}{warning}</span>)}
+            </p>
+          )}
           <fieldset className="checks">
             <legend>Launch</legend>
             <label className="check">

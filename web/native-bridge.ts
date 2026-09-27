@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { terminalSessionName } from "../src/shared/terminal-session.ts";
+import { launchEnvironmentProblem } from "../src/shared/launch-environment.ts";
 import { hashFor, parseHash, type Sel } from "./selection.ts";
 
 // Hivemind.app on the Mac (macos/) and the iPhone/iPad app (ios/) load this UI
@@ -238,6 +239,8 @@ export const serverUnverifiedHint = (platform: NativePlatform | null) =>
 export const TERMINAL_BROKER_LIMITS = {
   launches: 24, kills: 24, commandBytes: 8 * 1024, titleChars: 200, pathBytes: 1024, agentChars: 64, requestIdChars: 64,
   inputBytes: 64 * 1024, streams: 16, cols: { min: 2, max: 1000 }, rows: { min: 1, max: 500 },
+  /** One client → broker line (BrokerLimits.maxRequestBytes): the whole launch message has to fit. */
+  requestBytes: 1024 * 1024,
 } as const;
 
 /**
@@ -284,6 +287,11 @@ export type TerminalSessionLaunch = {
    * running session (nothing is started). Never part of the copied command.
    */
   secrets?: TerminalLaunchSecrets;
+  /**
+   * The sheet's Environment variables (src/shared/launch-environment.ts), handed to the agent's shell through the
+   * same private file as `secrets`, never argv. Ignored when the launch reuses a running session. Absent when none.
+   */
+  environment?: Record<string, string>;
 };
 
 /** Page → app. `id` is the page's own request id (1–64 chars), echoed on the answer. */
@@ -501,11 +509,27 @@ export function terminalSessionLaunchProblem(launches: readonly TerminalSessionL
         if (typeof value !== "string" || terminalSecretProblem(value)) return OPENCODE_API_KEY_PROBLEM;
       }
     }
+    if (launch.environment !== undefined) {
+      const problem = launchEnvironmentProblem(launch.environment);
+      if (problem) return problem;
+    }
     const cwd = launch.cwd;
     if (cwd && (!(cwd.startsWith("/") || cwd === "~" || cwd.startsWith("~/")) || cwd.includes("\0") ||
         utf8Length(cwd) > limits.pathBytes)) {
       return "Launching needs an absolute workspace path (/… or ~/…)";
     }
   }
+  // The app sends the launches to the broker in one line; each launch's variables count once per employee. The
+  // margin covers what the app adds (a home folder for "~", the frame's own keys).
+  if (utf8Length(JSON.stringify(terminalLaunchItems(launches))) + 64 * 1024 > limits.requestBytes) {
+    return "Too much to launch at once: start fewer employees or shorten the environment variables";
+  }
   return null;
+}
+
+/** The launches as a terminal-launch message carries them: absent fields left out. */
+export function terminalLaunchItems(launches: readonly TerminalSessionLaunch[]) {
+  return launches.map(({ project, agent, title, cwd, command, session, secrets, environment }) =>
+    ({ project, agent, title, ...(cwd ? { cwd } : {}), command, ...(session ? { session } : {}), ...(secrets ? { secrets } : {}),
+      ...(environment ? { environment } : {}) }));
 }
