@@ -81,7 +81,7 @@ export function projectInitials(name: string) {
 
 const STATE_LABEL: Record<TaskState, string> = {
   sent: "assigned", delivered: "assigned", accepted: "working", blocked: "blocked",
-  result_submitted: "in review", changes_requested: "changes requested", rejected: "rejected", accepted_complete: "done", cancelled: "cancelled",
+  result_submitted: "in review", changes_requested: "changes requested", rejected: "rejected", accepted_complete: "done", cancelled: "cancelled", paused: "paused",
 };
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
