@@ -261,6 +261,12 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   ui.post('/projects/:id/worker-templates', async c => c.json(hive.workerTemplates.create(hive.identity.getAgent('human'),
     projectRef(c.req.param('id')).id, await requestJson(c.req.raw)), 201));
   ui.put('/worker-templates/:id', async c => c.json(hive.workerTemplates.update(hive.identity.getAgent('human'), c.req.param('id'), await requestJson(c.req.raw))));
+  // A reserved worker and its single-use launch ticket (docs/identity-lifecycle.md#reserved-workers).
+  ui.post('/worker-templates/:id/reserve', async c => {
+    c.header('Cache-Control', 'no-store');
+    const body = await requestJson(c.req.raw);
+    return c.json(hive.identity.reserve(hive.identity.getAgent('human'), hive.workerTemplates.get(c.req.param('id')), body.label ?? null), 201);
+  });
   ui.delete('/worker-templates/:id', c => {
     hive.workerTemplates.delete(hive.identity.getAgent('human'), c.req.param('id'), integerArgument(c.req.query('revision') ?? '', 1));
     return c.json({ ok: true });
@@ -360,7 +366,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const bearer = (c.req.header('authorization') ?? '').replace(/^Bearer\s+/i, '').trim();
     const result = hive.identity.join({ role: body.role, seniority: body.seniority ?? null, focus: body.focus ?? null,
       token: bearer || body.token || null, resumeName: body.resume || body.resumeName || null, project: body.project ?? null, cwd: body.cwd ?? null,
-      terminalSession: body.terminalSession ?? null });
+      terminalSession: body.terminalSession ?? null, claim: body.claim ?? null });
     return c.json({ ...result, describe: describeAgent(result.agent), standingOrders: result.created ? standingOrders(result.agent) : undefined,
       ordersRef: result.created ? undefined : 'unchanged', handoffs: hive.tasks.handoffs(result.agent) });
   });

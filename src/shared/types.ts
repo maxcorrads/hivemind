@@ -91,7 +91,14 @@ export type Agent = {
    * A display label with no capability: the server never runs, opens or kills anything by it (docs/terminal-broker.md).
    */
   terminalSession?: string;
+  /** A reserved worker whose launch has not joined yet; it gives up at `until` (Unix ms). */
+  pending?: { until: number };
+  /** The worker template it was launched from. */
+  templateId?: string;
 };
+
+/** A reserved worker waits this long for its launch to claim it. */
+export const RESERVATION_MS = 30 * 60 * 1000;
 
 /** How history names a removed agent. Removed names stay reserved, so the label is unambiguous. */
 export const REMOVED_SUFFIX = " (removed)";

@@ -182,8 +182,9 @@ export async function runCli(argv: string[]): Promise<void> {
       resume,
       project: parsed.project,
       cwd: process.cwd(),
+      ...(parsed.claim ? { claim: parsed.claim } : {}),
       ...terminalSessionFields(process.env),
-    }, token ?? null);
+    }, parsed.claim ? null : token ?? null);
     console.log(`${result.created ? "Joined" : "Back"} as ${result.agent.name} · ${result.describe}`);
     console.log(`export HIVEMIND_TOKEN=${result.token}`);
     if (result.standingOrders) {

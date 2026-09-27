@@ -91,9 +91,10 @@ export async function startMcp() {
       focus: z.string().max(4000).optional(),
       resume: z.string().optional(),
       project: z.string().optional(),
+      claim: z.string().optional().describe(PARAM_DESCRIPTIONS.claim),
     },
-    async ({ role, seniority, focus, resume, project }) => joinSerial(async () => {
-      if (joinedName && resume && resume.toLowerCase() !== joinedName.toLowerCase())
+    async ({ role, seniority, focus, resume, project, claim }) => joinSerial(async () => {
+      if (joinedName && (claim || (resume && resume.toLowerCase() !== joinedName.toLowerCase())))
         throw new Error("This process already has an identity; start a new MCP process to replace it");
       // The session key lives only in this process; resuming by name needs nothing stored.
       const auth = sessionToken;
@@ -114,9 +115,10 @@ export async function startMcp() {
           resume: resume ?? null,
           project: project ?? null,
           cwd: process.cwd(),
+          ...(claim ? { claim } : {}),
           ...terminalSessionFields(process.env),
         },
-        auth ?? null,
+        claim ? null : auth ?? null,
       );
       if (sessionToken !== result.token) { inboxId = randomUUID(); inboxReady = undefined; }
       sessionToken = result.token;
