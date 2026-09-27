@@ -35,29 +35,44 @@ export class AgentLifecycle {
 
   removeAgent(actor: Agent, name: string): Agent {
     if (actor.role !== "human") throw new HiveError(403, "Only Human can remove agents");
-    const { storage, identity, tasks, adaptiveTopology, channels, messages, bus } = this.deps;
-    const removed = storage.transaction(() => {
-      const target = identity.getAgentByName(name);
+    const removed = this.deps.storage.transaction(() => {
+      const target = this.deps.identity.getAgentByName(name);
       if (!target) throw new HiveError(404, `No agent named ${name}`);
       if (target.id === HUMAN_ID || target.role === "human") throw new HiveError(403, "Cannot remove Human");
-      this.detach(target.id);
-      // Tombstone first, so the task views published below already label the agent as removed.
-      identity.markRemoved(target.id, now());
-      const work = tasks.closeForRemovedAgent(target);
-      if (target.role === "brain") adaptiveTopology.closeBrainExecutions(target);
-      const general = target.projectId ? channels.generalChannelId(target.projectId) : null;
-      if (general) {
-        const notes = [
-          work.cancelled ? `${plural(work.cancelled, "unfinished task", "unfinished tasks")} assigned to ${target.name} cancelled` : "",
-          work.unreviewed ? `${plural(work.unreviewed, "task", "tasks")} ${target.name} assigned stay open: their workers can still report and submit, but ${target.name} will not review` : "",
-        ].filter(Boolean);
-        messages.postSystem(general, `${actor.name} removed ${target.name} from the hive.${notes.length ? ` ${notes.join("; ")}.` : ""}`);
-      }
-      storage.afterCommit(() => bus.emit("project", { removed: target.name }));
-      return identity.getAgent(target.id);
+      return this.retire(target, `${actor.name} removed ${target.name} from the hive.`);
     });
     this.sweepBlobs();
     return removed;
+  }
+
+  /** A reserved worker whose launch never joined in time: withdrawn like a removal, with a note saying why. */
+  expireReservation(agentId: string): void {
+    this.deps.storage.transaction(() => {
+      const target = this.deps.identity.getAgent(agentId);
+      if (target.removedAt !== undefined || !target.pending) return;
+      this.retire(target, `${target.name} was withdrawn: its launch did not join within 30 minutes.`);
+    });
+    this.sweepBlobs();
+  }
+
+  /** Inside a transaction: tombstones the agent, closes its work and posts `note` (plus what happened to its tasks). */
+  private retire(target: Agent, note: string): Agent {
+    const { identity, tasks, adaptiveTopology, channels, messages, bus, storage } = this.deps;
+    this.detach(target.id);
+    // Tombstone first, so the task views published below already label the agent as removed.
+    identity.markRemoved(target.id, now());
+    const work = tasks.closeForRemovedAgent(target);
+    if (target.role === "brain") adaptiveTopology.closeBrainExecutions(target);
+    const general = target.projectId ? channels.generalChannelId(target.projectId) : null;
+    if (general) {
+      const notes = [
+        work.cancelled ? `${plural(work.cancelled, "unfinished task", "unfinished tasks")} assigned to ${target.name} cancelled` : "",
+        work.unreviewed ? `${plural(work.unreviewed, "task", "tasks")} ${target.name} assigned stay open: their workers can still report and submit, but ${target.name} will not review` : "",
+      ].filter(Boolean);
+      messages.postSystem(general, `${note}${notes.length ? ` ${notes.join("; ")}.` : ""}`);
+    }
+    storage.afterCommit(() => bus.emit("project", { removed: target.name }));
+    return identity.getAgent(target.id);
   }
 
   /** Inside the project-deletion transaction: deletes the project's agents with their memberships and state. */

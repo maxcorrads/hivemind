@@ -125,9 +125,11 @@ test("a populated current-main (user_version 2) hive upgrades with every row and
   const added = ["inbox_receipts", "worker_templates"];
   type AgentRow = { id: string; token_hash: string; removed_at?: number | null; terminal_session?: string | null };
   const beforeAgents = before.rows.agents as AgentRow[], afterAgents = after.rows.agents as AgentRow[];
-  assert.deepEqual(afterAgents.map(({ token_hash: _t, removed_at, terminal_session, ...row }) => ({ ...row, removed_at, terminal_session })),
-    beforeAgents.map(({ token_hash: _t, ...row }) => ({ ...row, removed_at: null, terminal_session: null })),
-    "every agent is kept, none removed, none labelled with a terminal session");
+  // agent_reservations adds pending_until, claim_hash and template_id, all empty for agents that already joined.
+  assert.deepEqual(afterAgents.map(({ token_hash: _t, ...row }) => row),
+    beforeAgents.map(({ token_hash: _t, ...row }) => ({ ...row, removed_at: null, terminal_session: null, pending_until: null,
+      claim_hash: null, template_id: null })),
+    "every agent is kept, none removed, reserved or labelled with a terminal session");
   for (const [i, row] of afterAgents.entries()) {
     if (row.id === "human") assert.match(row.token_hash, /^[0-9a-f]{64}$/);
     if (row.id === "human") assert.notEqual(row.token_hash, beforeAgents[i]!.token_hash, "the constant Human hash is replaced");

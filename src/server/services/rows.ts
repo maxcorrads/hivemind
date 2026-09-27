@@ -15,6 +15,9 @@ export type AgentRow = {
   project_id: string | null;
   removed_at: number | null;
   terminal_session: string | null;
+  pending_until: number | null;
+  claim_hash: string | null;
+  template_id: string | null;
 };
 
 /** SQL for an author's display name (`alias` is the joined agents row): removed agents read "Name (removed)". */

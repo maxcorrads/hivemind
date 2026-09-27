@@ -35,6 +35,8 @@ export const joinInputSchema = z.object({
   cwd: z.string().min(1).max(4096).nullish(),
   // The Hivemind tmux session the client runs in: a label only (src/shared/terminal-session.ts).
   terminalSession: z.string().regex(TERMINAL_SESSION_PATTERN).nullish(),
+  // A reserved worker's single-use launch ticket (src/server/services/identity.ts, reserve).
+  claim: z.string().regex(/^hmc_[0-9a-f]{48}$/).nullish(),
 }).strict();
 export const sendInputSchema = z.object({
   body: messageBodySchema.optional(), requestId: requestIdSchema.optional(),

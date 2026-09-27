@@ -89,6 +89,7 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 /** One line under an agent's name: its current task and state, what it waits on, or idle/offline. */
 export function agentStatusLine(agent: Agent, work?: AgentWork): string | null {
   if (agent.role === "human" || agent.role === "bot") return null;
+  if (agent.pending) return "starting…";
   if (work?.task) {
     const { state, needed, objective } = work.task;
     const more = work.assigned > 1 ? ` (+${work.assigned - 1} more)` : "";

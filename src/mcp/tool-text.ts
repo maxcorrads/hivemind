@@ -47,6 +47,7 @@ export const PARAM_DESCRIPTIONS = {
   traceId: "Optional observability trace UUID; task messages already use their task ID.",
   causeMessageId: "Optional message in this project that this one explicitly answers; timelines label it explicit.",
   workerId: "Worker UUID or exact visible worker name.",
+  claim: "Launch ticket (hmc_…) from your launch prompt: joins the worker reserved for you. Use it once, exactly as given.",
 } as const;
 
 /** Texts returned by join and search results. */

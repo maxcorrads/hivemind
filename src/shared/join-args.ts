@@ -9,9 +9,12 @@ export function parseJoinArgs(argv: string[]): {
   resume: string | null;
   token: string | null;
   project: string | null;
+  claim: string | null;
 } {
+  const claim = flag(argv, "--claim");
   const asIdx = argv.indexOf("--as");
-  let as = asIdx >= 0 ? argv[asIdx + 1] : undefined;
+  // A launch ticket joins the reserved worker it was made for: its role and seniority are already known.
+  let as = asIdx >= 0 ? argv[asIdx + 1] : claim ? "worker" : undefined;
   let seniority = flag(argv, "--seniority");
   if (as && SENIORITY.has(as as Seniority)) {
     seniority = as;
@@ -27,16 +30,17 @@ export function parseJoinArgs(argv: string[]): {
     throw new Error("join --as worker|brain  or  --as worker junior|mid|senior");
   }
   if (seniority !== null && !SENIORITY.has(seniority as Seniority)) throw new Error("Invalid seniority");
-  if (as === "worker" && (!seniority || !SENIORITY.has(seniority as Seniority))) {
+  if (as === "worker" && !claim && (!seniority || !SENIORITY.has(seniority as Seniority))) {
     throw new Error("Workers need seniority junior|mid|senior");
   }
   return {
     role: as,
-    seniority: as === "worker" ? (seniority as Seniority) : null,
+    seniority: as === "worker" && seniority ? (seniority as Seniority) : null,
     focus: flag(argv, "--focus"),
     resume: flag(argv, "--resume"),
     token: flag(argv, "--token"),
     project: flag(argv, "--project"),
+    claim,
   };
 }
 

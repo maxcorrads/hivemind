@@ -55,5 +55,8 @@ its secrets from the Keychain. A validation error names the field and the reason
 | `PUT /api/ui/worker-templates/:id` | `{expectedRevision, slug?, spec}` | the template |
 | `DELETE /api/ui/worker-templates/:id?revision=N` | | `{ok: true}` |
 
+`POST /api/ui/worker-templates/:id/reserve` with `{label?}` reserves a worker from the template and returns
+`{agent, ticket}` (`201`); see [Reserved workers](identity-lifecycle.md#reserved-workers).
+
 `:project` is the project's slug or id. A stale revision answers `409`, a taken slug `409`, the 33rd template `429`.
 Each committed change publishes a `worker-templates` realtime event with the `projectId`.

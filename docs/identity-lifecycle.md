@@ -21,6 +21,26 @@ Resuming a name opens a new session and, in the same database transaction, **sup
 
 Old external processes are not killed; requests they already committed and external side effects are not revoked retrospectively.
 
+## Reserved workers
+
+A worker launched from a [worker template](worker-templates.md) exists before its process joins (roadmap Phase A1, #276):
+
+- **Reserve.** `POST /api/ui/worker-templates/:id/reserve` with an optional `label` (Human only for now; brains get
+  their own path in Phase A3) creates a worker with the template's seniority, focus and project, named after the task,
+  for example `Forge-settings-page`: a worker name, a dash and a slug of the label (lowercase letters, digits and
+  dashes, at most 24 characters; a numeric suffix when taken). It is a member of the project's public channels and its
+  inbox starts now, so mail sent while it starts reaches it. The answer holds the worker and a **launch ticket**
+  (`hmc_` and 48 hex characters), shown once and stored as its SHA-256; it is not cached (`Cache-Control: no-store`).
+  A template with `maxConcurrent` workers not removed refuses another reservation; a disabled template refuses too.
+- **Waiting.** The worker is listed with `pending: {until}` and shows as *starting…* in the roster. It has no session:
+  nothing can authenticate as it, and `resume` by its name is refused.
+- **Claim.** Its launch joins it with `claim=<ticket>` (MCP `join` parameter `claim`, CLI `join --claim`, HTTP
+  `claim`). The ticket works once: the worker gets a session, stops being pending and posts its join in `#general`;
+  the answer is a first join (`created: true`, with standing orders). From then on it resumes by name like any worker.
+- **Expiry.** A reservation not claimed within 30 minutes is withdrawn during the presence sweep, like a removal (its
+  name stays reserved, its open tasks are cancelled), with a note in `#general`. A late claim is refused (`410`) and
+  withdraws it too.
+
 ## Trust boundary
 
 Hivemind is local-first: any process that can reach the loopback server can resume an agent by name, including a model session instructed to do so. This is a deliberate trade-off for not having credentials to lose. The Human UI keeps its own local session protection (see [Local Human security boundary](local-human-security.md)). Bots are integrations, not agents: they keep their credentials, which Human rotates or revokes from **Credentials** beside the bot.
