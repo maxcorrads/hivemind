@@ -35,7 +35,6 @@ import { useDmNav } from "./use-dm-nav.ts";
 import { useHiveSnapshot } from "./use-hive-snapshot.ts";
 import { useInbox } from "./use-inbox.ts";
 import { useLayout } from "./use-layout.ts";
-import { useNavStatus } from "./use-nav-status.ts";
 import { useRealtime } from "./use-realtime.ts";
 import { useSearch } from "./use-search.ts";
 import { useChangeSelection, useSelection, useSelectionRepair } from "./use-selection.ts";
@@ -92,13 +91,12 @@ export function App() {
     if (search.query) search.setQuery("");
     go(next);
   };
-  const navStatus = useNavStatus();
   const notifications = useDesktopNotifications(channels, navigate);
   const launchRequests = useLaunchRequests(projects, snap?.agents ?? []);
   const { live, roomTick, jevTick, subscribeJev } = useRealtime({
     selection, hive, channel: channelPane, thread: threadState, inboxLoad: inbox.inboxLoad, changeSelection,
     reopenDm: dms.reopenDm, onActivity: inbox.receive, refreshRoutingView, onRoutingEvent, setErr,
-    onLiveEvent: event => { navStatus.onLiveEvent(event); notifications.onLiveEvent(event); launchRequests.onLiveEvent(event); },
+    onLiveEvent: event => { notifications.onLiveEvent(event); launchRequests.onLiveEvent(event); },
   });
   useSelectionRepair(snap, sel, changeSelection);
   // Phones show one screen at a time with bottom tabs (#223); the hash stays the single source of navigation.
@@ -254,7 +252,7 @@ export function App() {
       <Sidebar snap={snap} sel={sel} go={navigate} live={live} unified={unified} onUnread={openUnread}
         query={search.query} setQuery={search.setQuery} onSearchNow={search.searchNow} onLaunch={openLaunch}
         selectedProject={selectedProject} onSwitcher={() => setSwitcher("all")} onProjectSwitcher={() => setSwitcher("projects")}
-        agentWork={navStatus.agentWork}
+        agentWork={snap.agentWork ?? {}}
         inboxBox={inboxBox} projectSheets={projectSheets}
         onNewChannel={(project) => {
           channelSheets.setCreateIn(project);

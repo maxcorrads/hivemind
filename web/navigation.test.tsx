@@ -56,7 +56,12 @@ async function mount(t: TestContext, hive: Hive, hash: string, onFetch?: (url: s
   globalThis.WebSocket = BrowserSocket as unknown as typeof WebSocket;
   const events = ['message', 'agent', 'channel', 'task', 'queued', 'room'] as const;
   const listeners = events.map(type => {
-    const listener = (payload: unknown) => BrowserSocket.current?.event(type, payload);
+    const listener = (payload: unknown) => {
+      BrowserSocket.current?.event(type, payload);
+      // serve.ts sends a complete work map after each committed task or room event.
+      if (type === 'task' || type === 'room')
+        BrowserSocket.current?.event('agent-work', { agentWork: hive.tasks.workStatus() });
+    };
     hive.bus.on(type, listener); return listener;
   });
   const host = document.createElement('div'); document.body.append(host);
@@ -210,17 +215,18 @@ test('the roster says what each agent is doing, and the sidebar has no Decisions
   assert.equal(view.navButton(/^Decisions/), undefined, 'the Human decision queue was removed');
   const status = (agent: Agent) => [...view.sidebar().querySelectorAll('.person')]
     .find(row => row.querySelector('.pn')?.textContent === agent.name)?.querySelector('.person-status')?.textContent;
-  assert.equal(status(worker), 'idle');
+  assert.equal(status(worker), 'offline', 'joining alone does not prove the agent is waiting or working');
 
   let n = 0;
-  const task = hive.tasks.assign(brain, { requestId: 'task', worker: worker.name, contract: { objective: 'Draft the API',
-    scope: [], nonGoals: [], acceptanceCriteria: ['Reviewed'], dependencies: [], evidenceSeqs: [] } }).task;
+  let task!: ReturnType<typeof hive.tasks.assign>['task'];
+  await act(async () => { task = hive.tasks.assign(brain, { requestId: 'task', worker: worker.name, contract: { objective: 'Draft the API',
+    scope: [], nonGoals: [], acceptanceCriteria: ['Reviewed'], dependencies: [], evidenceSeqs: [] } }).task; });
   const event = (actor: Agent, action: TaskAction) =>
     hive.tasks.event(actor, task.id, { requestId: `e-${++n}`, expectedRevision: hive.tasks.get(actor, task.id).revision, action });
   await act(async () => { event(worker, { type: 'accept' }); event(worker, { type: 'block', needed: 'API contract' }); });
   await settle();
-  assert.equal(status(worker), 'blocked: API contract');
-  assert.equal(status(brain), 'coordinating 1 task');
+  assert.equal(status(worker), 'offline · blocked: API contract');
+  assert.equal(status(brain), 'offline · coordinating 1 task');
 });
 
 test('the page title counts what is waiting for the Human', async t => {

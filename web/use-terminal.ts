@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import type { Agent } from "../src/shared/types.ts";
 import { terminalSessionName } from "../src/shared/terminal-session.ts";
+import { agentSessionLabel, recordedAgentSession } from "./agent-runtime.ts";
 import {
   TERMINAL_EVENT, brokerUnavailableHint, decodeTerminalData, encodeTerminalInput, inNativeApp, onMacDesktop, onNativePlatform,
   parseTerminalEvent, postNative, reportedNativePlatform, serverUnverifiedHint, terminalDataLength, terminalLaunchItems,
@@ -32,6 +33,8 @@ export type TerminalState = {
   broker: Status["broker"] | null;
   /** Every Hivemind session, sorted by name; null while unknown (no broker). */
   sessions: TerminalSessionInfo[] | null;
+  /** Last complete broker list, retained only to label a reconnecting session. Never proves it is running. */
+  lastKnownSessions?: TerminalSessionInfo[] | null;
   /** The latest error that answered no request of this page, e.g. Open in Terminal on a session that just ended. */
   lastError: { code: string; message: string } | null;
 };
@@ -102,7 +105,8 @@ type StreamEntry = {
 /** How much input typed before the stream is attached is kept for it (64 KiB); older keys beyond are dropped. */
 export const HELD_INPUT_BYTES = 64 * 1024;
 
-const BROWSER_STATE: TerminalState = { native: false, platform: null, tmux: null, broker: null, sessions: null, lastError: null };
+const BROWSER_STATE: TerminalState = { native: false, platform: null, tmux: null, broker: null, sessions: null,
+  lastKnownSessions: null, lastError: null };
 const NO_ANSWER = "Hivemind did not answer. Is Hivemind Server running?";
 
 export type TerminalHub = ReturnType<typeof createTerminalHub>;
@@ -120,7 +124,8 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
   const attachTimeout = timeouts.attach ?? 10_000;
   const linger = timeouts.linger ?? 1_000;
   let state: TerminalState = {
-    native: true, platform: reportedNativePlatform() ?? "macos", tmux: null, broker: null, sessions: null, lastError: null,
+    native: true, platform: reportedNativePlatform() ?? "macos", tmux: null, broker: null, sessions: null,
+    lastKnownSessions: null, lastError: null,
   };
   const listeners = new Set<() => void>();
   const pending = new Map<string, Pending>();
@@ -199,12 +204,13 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
       case "terminal-status": {
         const lost = state.broker === "connected" && detail.broker !== "connected";
         setState({ platform: detail.platform, tmux: detail.tmux, broker: detail.broker,
-          ...(detail.broker === "connected" ? {} : { sessions: null }) });
+          ...(detail.broker === "connected" ? {} : { sessions: null }),
+          ...(detail.broker === "unverified" ? { lastKnownSessions: null } : {}) });
         if (lost) brokerLost();
         return;
       }
       case "sessions":
-        setState({ sessions: detail.items });
+        setState({ sessions: detail.items, lastKnownSessions: detail.items });
         return;
       case "terminal-launched": {
         const request = detail.id ? pending.get(detail.id) : undefined;
@@ -217,7 +223,8 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
       case "terminal-killed": {
         const ended = "sessions" in detail ? detail.sessions : [detail.session];
         if (state.sessions?.some(item => ended.includes(item.name))) {
-          setState({ sessions: state.sessions.filter(item => !ended.includes(item.name)) });
+          const remaining = state.sessions.filter(item => !ended.includes(item.name));
+          setState({ sessions: remaining, lastKnownSessions: remaining });
         }
         const request = detail.id ? pending.get(detail.id) : undefined;
         if (!request || request.kind !== ("sessions" in detail ? "kill-many" : "kill")) return;
@@ -472,7 +479,7 @@ export function useTerminalState(): TerminalState {
 
 /** The session an agent reported on join, when it is a Hivemind session name. */
 export function agentTerminalSession(agent: Pick<Agent, "terminalSession"> | undefined | null): string | null {
-  return terminalSessionName((agent as { terminalSession?: unknown } | null | undefined)?.terminalSession);
+  return agentSessionLabel(agent);
 }
 
 /** The running session of that name, if the broker lists it. */
@@ -490,12 +497,7 @@ type SessionAgent = Pick<Agent, "name" | "project" | "removedAt" | "terminalSess
  */
 export function recordedSession(state: TerminalState, agent: SessionAgent | undefined | null,
   agents: readonly SessionAgent[] = []): TerminalSessionInfo | null {
-  if (!agent?.project || agent.removedAt != null || !state.sessions) return null;
-  const name = agent.name.toLowerCase();
-  const claimed = new Set(agents.map(agentTerminalSession).filter(Boolean));
-  const matches = state.sessions.filter(item => item.alive && item.project === agent.project && item.agent?.toLowerCase() === name
-    && !claimed.has(item.name));
-  return matches.length === 1 ? matches[0]! : null;
+  return agent && state.sessions ? recordedAgentSession(agent, { agents }, state.sessions) : null;
 }
 
 /** The live session an agent runs in: the one it reported on join when it has that label, else recordedSession. */

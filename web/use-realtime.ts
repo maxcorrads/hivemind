@@ -4,7 +4,7 @@ import type { EvidenceCollectorHealth } from "../src/shared/evidence-health.ts";
 import type { JevCallSummary } from "../src/shared/jev-calls.ts";
 import type { createRequestGate } from "../src/shared/read-client.ts";
 import type { ActivityItem } from "../src/shared/read-state.ts";
-import type { TaskSnapshot } from '../src/shared/tasks.ts';
+import type { AgentWork, TaskSnapshot } from '../src/shared/tasks.ts';
 import type { Agent, Channel, InboxStatus, Message, Thread } from "../src/shared/types.ts";
 import { connectWs, type Snapshot } from "./api.ts";
 import { applyChannelMessage, recordChannelMessage, recordChannelThread } from "./channel-state.ts";
@@ -52,7 +52,7 @@ export function useRealtime({ selection, hive, channel, thread, inboxLoad, chang
 }) {
   const { selRef, threadIdRef, viewingThread } = selection;
   const { setSnap, latestTelegramHealth, readFence, readRefresh, channelReads, threadReads, snapshotLoad, archivedLoad,
-    setReconnectTick, refreshSnap, refreshArchivedChannels, setArchivedChannel } = hive;
+    setReconnectTick, refreshSnap, refreshArchivedChannels, setArchivedChannel, receiveAgentWork } = hive;
   const { setPane, channelStream, channelLoad, channelJournal, loadChannel } = channel;
   const { setThreadView, setThreadPane, threadLoad, loadThread, onThreadMessage } = thread;
   const [live, setLive] = useState(false);
@@ -140,6 +140,11 @@ export function useRealtime({ selection, hive, channel, thread, inboxLoad, chang
       if (ev.type === "agent") {
         const agent = ev.payload as Agent;
         snapUpdates.push((s) => (s ? { ...s, agents: upsertById(s.agents, agent) } : s));
+        return;
+      }
+      if (ev.type === "agent-work") {
+        const payload = ev.payload as { agentWork: Record<string, AgentWork> };
+        receiveAgentWork(payload.agentWork);
         return;
       }
       if (ev.type === "channel") {

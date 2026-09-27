@@ -1,9 +1,10 @@
 import { Hash, Lock, Sparkles, UserPlus } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import type { AdaptiveRoutingView } from "../src/shared/adaptive-topology.ts";
 import type { ChannelTaskPage } from "../src/shared/tasks.ts";
 import type { Agent, Channel, Message, ThreadStatus } from "../src/shared/types.ts";
 import { adviceSummary } from "./AdaptiveRoutingPanel.tsx";
+import { agentRuntime } from "./agent-runtime.ts";
 import { adviceStrip } from "./adaptive-routing-view.ts";
 import { api, type UnreadTarget } from "./api.ts";
 import { Avatar } from "./Avatar.tsx";
@@ -24,7 +25,7 @@ import { TaskChip } from "./TaskCard.tsx";
 import { TerminalPanel } from "./TerminalView.tsx";
 import type { ChannelPane } from "./use-channel-pane.ts";
 import { useChannelWork } from "./use-channel-work.ts";
-import { agentTerminalSession, liveSession, recordedSession, useTerminalState } from "./use-terminal.ts";
+import { useTerminalState } from "./use-terminal.ts";
 import type { useSend } from "./use-send.ts";
 import type { ThreadOpenAnchor } from "./use-thread-scroll-anchor.ts";
 
@@ -99,26 +100,12 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
   const dm = activeChannel?.type === "dm";
   const newUnreadJump = unreadTarget?.channelId === channelId && unreadTarget !== picked.unreadTarget;
   const requested = picked.channelId === channelId && !newUnreadJump ? picked.tab : "messages";
-  // The apps only: a DM with an agent whose tmux session runs (or whose server is down, to say so) has a Terminal tab.
-  // Once it had one, the tab stays while the broker reconnects and the session list is not known yet (TerminalPanel
-  // then keeps the terminal, which attaches again by itself).
+  // The selector retains the broker's last complete list while reconnecting; no missing list is treated as an ended session.
   const terminals = useTerminalState();
   const dmPeer = dm && activeChannel ? dmPeerOf(activeChannel, agents) : undefined;
-  // With no reported session, the one the broker recorded at launch for the peer (kept while the list is unknown).
-  const listUnknown = terminals.sessions === null && terminals.broker !== "unverified";
-  const [hadTerminal, setHadTerminal] = useState<{ peer: string; session: string } | null>(null);
-  const peerId = dmPeer?.id ?? null;
-  const hadPeerTerminal = peerId !== null && hadTerminal?.peer === peerId ? hadTerminal.session : null;
-  const peerLabel = terminals.native ? agentTerminalSession(dmPeer) : null;
-  const peerSession = peerLabel ?? (terminals.native
-    ? recordedSession(terminals, dmPeer, agents)?.name ?? (listUnknown ? hadPeerTerminal : null) : null);
-  const peerLive = peerSession !== null && liveSession(terminals, peerSession) !== null;
-  useEffect(() => {
-    if (peerLive && peerId !== null && peerSession) setHadTerminal({ peer: peerId, session: peerSession });
-    else if (!listUnknown) setHadTerminal(null);
-  }, [peerLive, listUnknown, peerSession, peerId]);
-  const terminalSession = peerSession && (peerLive || terminals.broker === "unavailable"
-    || (listUnknown && hadPeerTerminal === peerSession)) ? peerSession : null;
+  const peerRuntime = agentRuntime(dmPeer, { agents }, terminals);
+  const terminalSession = peerRuntime.sessionState === "running" || peerRuntime.sessionState === "reconnecting"
+    ? peerRuntime.sessionName : null;
   const tab = (requested === "contract" && !room) || (requested === "terminal" && !terminalSession) ? "messages" : requested;
   const work = useChannelWork(activeChannel, roomTick);
   // The hidden stream loses its scroll position; coming back to a live pane lands on its newest message.

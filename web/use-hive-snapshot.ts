@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReadSnapshot } from "../src/shared/read-state.ts";
+import type { AgentWork } from "../src/shared/tasks.ts";
 import { createReadFence, createReadRefresh, createReceiptQueue, createRequestGate, readFields } from "../src/shared/read-client.ts";
 import { api, type Snapshot } from "./api.ts";
 import { newerTelegramHealth, type TelegramHealth } from "./telegram-health.ts";
@@ -13,6 +14,7 @@ export function useHiveSnapshot(setErr: (error: string) => void) {
   const latestTelegramHealth = useRef<TelegramHealth | null>(null);
   const readFence = useRef(createReadFence());
   const snapshotLoad = useRef(createRequestGate());
+  const workEvent = useRef<{ version: number; value: Record<string, AgentWork> | null }>({ version: 0, value: null });
   // Full and room-only loads share ordering for this projection, not for the
   // roster/read state. A late room response must never replace the whole hive.
   const archivedLoad = useRef(createRequestGate());
@@ -95,13 +97,22 @@ export function useHiveSnapshot(setErr: (error: string) => void) {
     return true;
   }, []);
 
+  /** Full replacement also clears an old worker's work after a task is revised onto a new one. */
+  const receiveAgentWork = useCallback((agentWork: Record<string, AgentWork>) => {
+    workEvent.current = { version: workEvent.current.version + 1, value: agentWork };
+    setSnap(previous => previous ? { ...previous, agentWork } : previous);
+  }, []);
+
   const refreshSnap = useCallback(async () => {
     const load = snapshotLoad.current.begin();
+    const workVersion = workEvent.current.version;
     const request = ++archivedRequest.current;
     const ticket = readFence.current.ticket();
     const raw = await api.snapshot(load.signal);
     latestTelegramHealth.current = newerTelegramHealth(latestTelegramHealth.current, raw.telegram);
-    const next = { ...raw, telegram: { running: false, configured: false, ...raw.telegram, ...latestTelegramHealth.current } };
+    const next = { ...raw, agentWork: workEvent.current.version > workVersion
+      ? workEvent.current.value ?? {} : raw.agentWork ?? {},
+      telegram: { running: false, configured: false, ...raw.telegram, ...latestTelegramHealth.current } };
     if (!load.valid() || !readFence.current.current(ticket)) return next;
     // A pending/failed room request cannot invalidate usable archive metadata.
     // Only a newer successfully accepted result supersedes this response.
@@ -122,7 +133,7 @@ export function useHiveSnapshot(setErr: (error: string) => void) {
   return {
     snap, setSnap, latestTelegramHealth, readFence, snapshotLoad, archivedLoad, readRefresh, channelReads, threadReads,
     readTick, reconnectTick, setReconnectTick, acceptRead, refreshSnap, refreshArchivedChannels,
-    setArchivedChannel,
+    setArchivedChannel, receiveAgentWork,
   };
 }
 

@@ -38,6 +38,8 @@ export type Snapshot = ReadSnapshot & {
   archivedChannelIds?: string[];
   queued: Record<string, number>;
   inbox?: Record<string, InboxStatus>;
+  /** Complete current work per agent. Optional while old fixtures and servers are upgraded. */
+  agentWork?: Record<string, AgentWork>;
   /** Bytes the agent API returned per brain/worker since the server started. */
   agentTraffic?: Record<string, AgentTrafficView>;
   telegram?: { running: boolean; configured: boolean } & TelegramHealth;

@@ -17,6 +17,22 @@ function snapshot(archivedChannelIds?: string[]): Snapshot {
     readInstance: 'fixture', readRevision: 1, readSeq: 1, unread: {}, mentions: [], mentionsHasMore: false, mentionCounts: {} };
 }
 
+test('agent-work replaces the complete map and a stale snapshot cannot restore a revised worker', async t => {
+  const f = await fixture(t);
+  const old = { task: { id: 't', channelId: 'c', state: 'accepted' as const, objective: 'Draft API', needed: null },
+    assigned: 1, delegated: 0, toReview: 0 };
+  const next = { ...old, task: { ...old.task, objective: 'Finish API' } };
+  await f.load('refreshSnap').finish({ ...snapshot(), agentWork: { old }, agentTraffic: { old: { since: 1, bytes: 5, calls: 1, routes: {} } } });
+  assert.deepEqual(f.hive.snap?.agentWork, { old });
+  const delayed = f.load('refreshSnap');
+  await act(async () => f.hive.receiveAgentWork({ next }));
+  await delayed.finish({ ...snapshot(), agentWork: { old }, agentTraffic: { old: { since: 1, bytes: 6, calls: 2, routes: {} } } });
+  assert.deepEqual(f.hive.snap?.agentWork, { next }, 'a revised assignment clears the previous worker');
+  assert.deepEqual(f.hive.snap?.agentTraffic, { old: { since: 1, bytes: 6, calls: 2, routes: {} } }, 'unrelated Phase T fields survive');
+  await act(async () => f.hive.receiveAgentWork({}));
+  assert.deepEqual(f.hive.snap?.agentWork, {}, 'an empty full map clears completed work');
+});
+
 async function fixture(t: TestContext) {
   type Request = { signal?: AbortSignal; resolve: (value: Snapshot) => void; reject: (error: Error) => void };
   const requests: Request[] = [];

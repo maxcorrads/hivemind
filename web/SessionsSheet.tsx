@@ -1,6 +1,7 @@
 import { ArrowLeft, ChevronDown, Ellipsis, Monitor, Plus, SquareTerminal, Trash2, X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import type { Agent, Project } from "../src/shared/types.ts";
+import { agentRuntime } from "./agent-runtime.ts";
 import { Avatar } from "./Avatar.tsx";
 import { focusFirstMenuItem, menuKeyDown } from "./menu-keys.ts";
 import { Modal } from "./Modal.tsx";
@@ -8,11 +9,12 @@ import { onMacDesktop, type TerminalSessionInfo } from "./native-bridge.ts";
 import { RelativeTime } from "./RelativeTime.tsx";
 import { TerminalNotice } from "./TerminalNotice.tsx";
 import { TerminalPanel, type ScreenFactory } from "./TerminalView.tsx";
-import { agentTerminalSession, terminalBlocker, terminalHub, useTerminalState } from "./use-terminal.ts";
+import { agentTerminalSession, terminalBlocker, terminalHub, useTerminalState, type TerminalState } from "./use-terminal.ts";
 
 /** Who a session belongs to: the agent that reported it on join, else what the launch recorded. */
-export function sessionOwner(session: TerminalSessionInfo, agents: Agent[], projects: Project[]) {
-  const agent = agents.find(item => agentTerminalSession(item) === session.name);
+export function sessionOwner(session: TerminalSessionInfo, agents: Agent[], projects: Project[], terminals?: TerminalState) {
+  const agent = agents.find(item => agentTerminalSession(item) === session.name) ??
+    (terminals ? agents.find(item => agentRuntime(item, { agents }, terminals).sessionName === session.name) : undefined);
   const slug = agent?.project ?? session.project;
   const project = projects.find(item => item.slug === slug)?.name ?? slug ?? null;
   if (agent) return { agent, label: agent.name, detail: [agent.role === "worker" ? agent.seniority ?? "worker" : agent.role, project] };
@@ -94,15 +96,12 @@ export function SessionsSheet({ agents, projects, onClose, loadScreen, initialSe
     seenError.current = state.lastError;
   }, [state.lastError]);
 
-  // While the broker is away the hub knows no sessions; the last list stays, each row Reconnecting, until it is back.
-  const lastKnown = useRef<TerminalSessionInfo[] | null>(null);
-  if (state.sessions) lastKnown.current = state.sessions;
-  else if (!state.native || state.broker === "unverified") lastKnown.current = null;
-  const reconnecting = !state.sessions && lastKnown.current !== null;
-  const sessions = state.sessions ?? lastKnown.current ?? [];
+  // The hub keeps the last complete list for every consumer; it remains a hint until the broker reconnects.
+  const reconnecting = state.sessions === null && state.lastKnownSessions != null && state.broker !== "unverified";
+  const sessions = state.sessions ?? (reconnecting ? state.lastKnownSessions : null) ?? [];
   const known = state.sessions !== null || reconnecting;
 
-  const ownerOf = (session: TerminalSessionInfo) => sessionOwner(session, agents, projects);
+  const ownerOf = (session: TerminalSessionInfo) => sessionOwner(session, agents, projects, state);
   const projectOf = (session: TerminalSessionInfo) => sessionProject(session, agents);
   const projectName = (slug: string | null) => slug === null ? "Unknown project" : projects.find(item => item.slug === slug)?.name ?? slug;
 
@@ -178,9 +177,10 @@ export function SessionsSheet({ agents, projects, onClose, loadScreen, initialSe
 
   const row = (session: TerminalSessionInfo) => {
     const owner = ownerOf(session);
+    const runtime = owner.agent ? agentRuntime(owner.agent, { agents }, state) : null;
     return (
       <SessionRow key={session.name} session={session} agent={owner.agent} label={owner.label}
-        status={sessionStatus(session, owner.agent !== null, reconnecting)} current={session.name === current}
+        status={sessionStatus(session, runtime?.sessionName === session.name, reconnecting)} current={session.name === current}
         terminalApp={terminalApp} onOpen={() => openHere(session.name)} onTerminal={() => openInTerminal(session.name)}
         onCopy={() => copyAttach(session.name)} onTerminate={() => { setError(null); setConfirm(session.name); }} />
     );

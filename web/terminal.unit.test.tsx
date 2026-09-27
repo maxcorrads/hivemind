@@ -137,7 +137,8 @@ test("the session list is subscribed while anyone watches it, and follows the ap
   assert.deepEqual(posted.slice(1), [{ type: "sessions-unsubscribe" }]);
 
   const state = () => h.state;
-  assert.deepEqual(state(), { native: true, platform: "macos", tmux: null, broker: null, sessions: null, lastError: null });
+  assert.deepEqual(state(), { native: true, platform: "macos", tmux: null, broker: null, sessions: null,
+    lastKnownSessions: null, lastError: null });
   await fromApp(connected);
   await fromApp({ type: "sessions", items: [session("hm-acme-atlas")] });
   assert.equal(state().sessions?.[0]?.name, "hm-acme-atlas");
@@ -145,6 +146,7 @@ test("the session list is subscribed while anyone watches it, and follows the ap
   assert.equal(state().sessions?.length, 1, "a malformed event is dropped");
   await fromApp({ type: "terminal-status", tmux: "unknown", broker: "unavailable" });
   assert.equal(state().sessions, null, "no broker, no known sessions");
+  assert.equal(state().lastKnownSessions?.[0]?.name, "hm-acme-atlas", "the last list is only a reconnect hint");
 });
 
 test("a launch is answered by its own id; refusals, errors and silence reject it", async () => {
@@ -362,6 +364,10 @@ test("helpers: blockers, session mapping, keys and colors", () => {
   const [atlas, owner] = [agent("a", "Atlas", { terminalSession: "hm-acme-atlas" }), sessionOwner];
   assert.deepEqual(owner(session("hm-acme-atlas"), [atlas], [project]).label, "Atlas");
   assert.deepEqual(owner(session("hm-acme-new-1"), [atlas], [project]), { agent: null, label: "New agent", detail: ["not joined", "Acme"] });
+  const bea = agent("b", "Bea");
+  const recorded = session("hm-acme-bea", { agent: "Bea" });
+  assert.equal(owner(recorded, [atlas, bea], [project], state({ broker: "connected", sessions: [recorded] })).agent?.id, bea.id,
+    "the session sheet uses the same unique recorded fallback as the roster");
 });
 
 // ---- The terminal ------------------------------------------------------------------------------------------------

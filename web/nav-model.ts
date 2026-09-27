@@ -1,6 +1,7 @@
-import type { AgentWork, TaskState } from "../src/shared/tasks.ts";
+import type { AgentWork } from "../src/shared/tasks.ts";
 import type { Agent, Channel, Project } from "../src/shared/types.ts";
 import type { Snapshot } from "./api.ts";
+import { agentRuntime } from "./agent-runtime.ts";
 import { hashFor, parseHash, type Sel } from "./selection.ts";
 
 // Project rail, quick switcher, roster status and page title: pure helpers
@@ -79,25 +80,10 @@ export function projectInitials(name: string) {
   return letters.toUpperCase();
 }
 
-const STATE_LABEL: Record<TaskState, string> = {
-  sent: "assigned", delivered: "assigned", accepted: "working", blocked: "blocked",
-  result_submitted: "in review", changes_requested: "changes requested", rejected: "rejected", accepted_complete: "done", cancelled: "cancelled",
-};
-
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
-
 /** One line under an agent's name: its current task and state, what it waits on, or idle/offline. */
 export function agentStatusLine(agent: Agent, work?: AgentWork): string | null {
-  if (agent.role === "human" || agent.role === "bot") return null;
-  if (agent.pending) return "starting…";
-  if (work?.task) {
-    const { state, needed, objective } = work.task;
-    const more = work.assigned > 1 ? ` (+${work.assigned - 1} more)` : "";
-    return `${STATE_LABEL[state]}: ${state === "blocked" && needed ? needed : objective}${more}`;
-  }
-  if (work?.toReview) return `reviewing ${plural(work.toReview, "result")}`;
-  if (work?.delegated) return `coordinating ${plural(work.delegated, "task")}`;
-  return agent.online ? "idle" : "offline";
+  return agentRuntime(agent, null, { native: false, platform: null, tmux: null, broker: null, sessions: null,
+    lastError: null }, work).statusLine;
 }
 
 /** The quick switcher's shortcut as this platform writes it. */
