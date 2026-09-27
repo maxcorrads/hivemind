@@ -9,11 +9,77 @@ terminal) through the WebKit bridge. The iPhone/iPad app is the second: it
 speaks the same protocol through Hivemind Server.app's
 [remote gateway](remote-access.md#terminal-broker), over TLS.
 
-The Node server has no part in this. It has no API that runs a command or
-touches a terminal. It only stores the session name an agent reports on join,
-as a label (`agent.terminalSession`). It does serve the page that drives the
-terminals, though, so it is trusted as the UI is; see
-[Security notes](#security-notes).
+The Node server never runs a command or touches a terminal. It stores the
+session name an agent reports on join as a label (`agent.terminalSession`),
+and queues template-based launch requests for Hivemind Server.app. It also
+serves the page that drives the terminals, so it is trusted as the UI is; see
+[Security notes](#security-notes) and [Launcher channel](#launcher-channel).
+
+## Launcher channel
+
+Hivemind Server.app's `LauncherService` consumes the Node server's durable
+`launch_requests` and `launcher_commands` queue. The Node server builds each
+command from a Human-defined project template, the reserved worker identity,
+and its one-time claim ticket. A brain supplies no executable command. The
+Swift service executes through its in-process broker, including the template
+identifier so the Keychain vault adds template secrets through the private
+launch file. Template secret values never enter the Node queue or database.
+
+The channel uses the per-start instance secret, independently of Human
+cookies and agent bearer tokens:
+
+- `GET /api/launcher/next?timeoutMs=25000` long-polls one command.
+- `GET /api/launcher/approvals` reads pending approval cards for Server.app's
+  native notifications, including while Hivemind.app has no open window.
+- `POST /api/launcher/:id/result` reports `launched`, `killed`, or `failed`.
+- `POST /api/launcher/requests/:id/approve` and `/reject` decide a request.
+  Approval may include a replacement `templateId` in the same project.
+
+Each request carries `X-Hivemind-Timestamp` (Unix seconds), a 32-byte lowercase
+hex `X-Hivemind-Nonce`, and `X-Hivemind-Signature`. The signature is the hex
+HMAC-SHA256 of the following UTF-8 text, with no final newline:
+
+```text
+hivemind-launcher-v1\nMETHOD\n/path?query\nTIMESTAMP\nNONCE\nSHA256_HEX_OF_RAW_BODY
+```
+
+The verifier accepts a clock difference of at most 60 seconds and retains
+used nonces for the entire acceptance window, including future-dated
+timestamps. A server without an instance secret returns 404. Signing a
+request does not authenticate the server's answer: the Swift service also
+checks the existing instance-proof challenge before accepting commands.
+Ordinary browser pages can read pending requests with their Human session,
+but approval mutations travel through the verified native bridge and broker
+to this signed channel. The iOS gateway carries the same broker messages;
+an unverified page cannot send a sensitive approval operation.
+
+Server.app deduplicates Mac notifications by request ID. Activating one opens
+Hivemind.app's inbox through the narrowly validated `hivemind://inbox` URL.
+The iOS app uses its existing native notification bridge while active; there
+is no background push transport for a suspended iOS app.
+
+Commands keep a stable ID across polling and Node restarts. Server.app writes
+a private journal entry before a broker side effect and records its result
+afterwards. Redelivery returns the saved result. An incomplete journal entry
+is reconciled with the existing session and its ownership; if a launch may
+have happened but its session is gone, the launcher reports an uncertain
+failure and requires a new explicit request. It never launches again merely
+because a previous command's session disappeared. This is at-most-once
+execution with an explicit uncertain outcome, rather than an atomic
+transaction spanning SQLite and tmux.
+
+The queue needs to recover a pending claim ticket after a Node restart.
+Its private payload is encrypted using a durable per-home key, separate
+from the rotating instance secret; the identity and public request record
+retain only a ticket hash. Settled payloads are cleared. Human/agent API
+responses and errors never contain a claim-bearing command. Back up the
+whole Hivemind home, including its queue key, while every server is stopped.
+
+This extends the existing trust boundary: Server.app trusts the Node server
+it started and verified. Any local process can impersonate a brain under
+Hivemind's existing identity model. With Auto enabled, that process could
+request workers from Human's enabled templates, subject to their individual
+concurrency caps. It cannot supply a command or retrieve Keychain values.
 
 The contract lives in `macos/Sources/HivemindKit`:
 

@@ -2,7 +2,15 @@
 
 ## Where data lives
 
-All runtime state is under `~/.hivemind/` (or `HIVEMIND_HOME`): `hive.db` (plus its `hive.db-wal` / `hive.db-shm` sidecars while running), `files/` (attachment blobs), `pending-sends/` (the local send retry journal) and optional configuration such as `telegram.json`, `adaptive-routing.json` and plugin registrations. Agent downloads go to `<cwd>/.hivemind-inbox/`. Nothing in those paths belongs in git.
+Node server runtime state is under `~/.hivemind/` (or `HIVEMIND_HOME`): `hive.db` (plus its `hive.db-wal` / `hive.db-shm` sidecars while running), `files/` (attachment blobs), `pending-sends/` (the local send retry journal) and optional configuration such as `telegram.json`, `adaptive-routing.json` and plugin registrations. Agent downloads go to `<cwd>/.hivemind-inbox/`. Nothing in those paths belongs in git.
+
+The launcher queue also keeps a private `launcher-queue.key` in that home.
+It encrypts queued claim-bearing commands and must stay with the matching
+database across a restore; the per-start instance secret cannot replace it.
+Hivemind Server.app keeps its separate at-most-once execution journal in
+`~/Library/Application Support/Hivemind/launcher-journal/`. Preserve that
+directory alongside a stopped-home backup when recovering pending launches
+on another installation. Neither the queue key nor journal belongs in git.
 
 Only one `hivemind serve` may run per home. A running server holds `server.lock` (its pid); a second server on the same home exits at once with an error naming that pid. The lock is removed on shutdown, and a lock left by a crashed server (its pid no longer running) is reclaimed automatically on the next start. To run several servers, give each its own `HIVEMIND_HOME`.
 

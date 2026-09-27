@@ -34,8 +34,14 @@ const telegram = z.object({ botToken: z.string().max(512).optional(),
 
 const workerTemplateEnvelope = z.object({ slug: z.unknown().optional(), expectedRevision: z.unknown().optional(),
   spec: z.record(z.string(), z.unknown()) }).strict();
+const launcherResult = z.object({ status: z.enum(["launched", "failed", "killed"]),
+  session: z.string().max(82).optional(), error: z.string().max(500).optional() }).strict();
 
 function schemaFor(path: string, method: string): z.ZodType | undefined {
+  if (/^\/api\/launcher\/[^/]+\/result$/.test(path) && method === "POST") return launcherResult;
+  if (/^\/api\/launcher\/requests\/[^/]+\/approve$/.test(path) && method === "POST")
+    return z.object({ templateId: z.string().uuid().optional() }).strict();
+  if (/^\/api\/launcher\/requests\/[^/]+\/reject$/.test(path) && method === "POST") return empty;
   if (path.endsWith('/api/agent/join')) return join;
   if (/\/channels\/[^/]+\/messages$/.test(path)) {
     return path.startsWith('/api/bot/') ? undefined : sendInputSchema;

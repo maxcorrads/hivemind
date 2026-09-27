@@ -6,6 +6,7 @@ import type { JevCallSummary } from "../shared/jev-calls.ts";
 import type { EvidenceCollectorHealth } from "../shared/evidence-health.ts";
 import type { ActivityItem } from "../shared/read-state.ts";
 import type { TelegramAdminService } from "./services/telegram-admin.ts";
+import type { LaunchRequestView } from "./launcher-queue.ts";
 import { runEffect, type Storage } from "./storage.ts";
 
 /** Telegram delivery and polling health as published to the UI. */
@@ -56,6 +57,8 @@ export type HiveEvents = {
   "evidence-health": EvidenceCollectorHealth;
   /** A project's worker templates were created, edited or deleted; clients refetch them. */
   "worker-templates": { projectId: string };
+  "launch-requests": { request: LaunchRequestView };
+  "launcher-queue": void;
 };
 
 /**

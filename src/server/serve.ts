@@ -24,7 +24,7 @@ import { takeInstanceSecret } from "./instance-proof.ts";
 /** Hive events forwarded verbatim to every web UI socket; Telegram wake signals stay server-side. */
 const FORWARDED_EVENTS = [
   "message", "activity", "agent", "channel", "thread", "reaction", "queued", "project", "telegram-health",
-  "task", "room", "adaptive-routing", "jev-call", "evidence-health", "worker-templates",
+  "task", "room", "adaptive-routing", "jev-call", "evidence-health", "worker-templates", "launch-requests",
 ] as const satisfies ReadonlyArray<keyof HiveEvents>;
 type ForwardedEvent = (typeof FORWARDED_EVENTS)[number];
 
@@ -110,7 +110,7 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
   server.headersTimeout = REQUEST_HEADER_MS;
   server.maxHeadersCount = 100;
   server.timeout = 0;
-  const sweep = setInterval(() => hive.identity.sweepPresence(), 15_000);
+  const sweep = setInterval(() => { hive.identity.sweepPresence(); hive.launcherQueue.sweepExpired(); }, 15_000);
   sweep.unref();
   const heartbeat = setInterval(() => heartbeatClients(clients, responsive), WS_HEARTBEAT_MS);
   heartbeat.unref();
@@ -167,4 +167,3 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
   };
   return { server, hive, port, shutdown, ready };
 }
-

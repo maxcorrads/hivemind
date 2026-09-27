@@ -91,6 +91,18 @@
  },
  {
   "type": "index",
+  "name": "idx_launch_requests_state",
+  "tbl": "launch_requests",
+  "sql": "CREATE INDEX idx_launch_requests_state ON launch_requests(state, requested_at)"
+ },
+ {
+  "type": "index",
+  "name": "idx_launcher_commands_queue",
+  "tbl": "launcher_commands",
+  "sql": "CREATE INDEX idx_launcher_commands_queue ON launcher_commands(state, created_at)"
+ },
+ {
+  "type": "index",
   "name": "idx_messages_channel_seq",
   "tbl": "messages",
   "sql": "CREATE INDEX idx_messages_channel_seq ON messages(channel_id, seq)"
@@ -340,6 +352,18 @@
   "name": "jev_calls",
   "tbl": "jev_calls",
   "sql": "CREATE TABLE jev_calls ( id TEXT PRIMARY KEY, route_id TEXT NOT NULL UNIQUE, project_id TEXT NOT NULL, channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE, execution_id TEXT NOT NULL, created_at INTEGER NOT NULL, summary TEXT NOT NULL, sent TEXT, received TEXT, outcome TEXT)"
+ },
+ {
+  "type": "table",
+  "name": "launch_requests",
+  "tbl": "launch_requests",
+  "sql": "CREATE TABLE launch_requests ( id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, brain_id TEXT NOT NULL REFERENCES agents(id), template_id TEXT REFERENCES worker_templates(id) ON DELETE SET NULL, template_snapshot TEXT NOT NULL, task_id TEXT, job_id TEXT, agent_id TEXT NOT NULL REFERENCES agents(id), ticket_hash TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('awaiting_approval','approved','launching','launched','failed','rejected','cancelled','expired')), reason TEXT, requested_at INTEGER NOT NULL, decided_by TEXT, decided_at INTEGER, session TEXT, error TEXT )"
+ },
+ {
+  "type": "table",
+  "name": "launcher_commands",
+  "tbl": "launcher_commands",
+  "sql": "CREATE TABLE launcher_commands ( id TEXT PRIMARY KEY, request_id TEXT REFERENCES launch_requests(id) ON DELETE CASCADE, kind TEXT NOT NULL CHECK(kind IN ('launch','kill')), state TEXT NOT NULL CHECK(state IN ('queued','dispatched','done','failed','cancelled')), payload TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, error TEXT )"
  },
  {
   "type": "table",

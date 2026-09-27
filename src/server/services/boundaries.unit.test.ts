@@ -56,7 +56,7 @@ const OWNERSHIP: Record<string, { modules: string[]; tables: string[] }> = {
   },
   timeline: { modules: ["timeline.ts"], tables: ["message_provenance", "timeline_deliveries"] },
   // Brain-launched, task-bound workers (docs/agent-management-roadmap.md).
-  orchestration: { modules: ["worker-templates.ts"], tables: ["worker_templates"] },
+  orchestration: { modules: ["worker-templates.ts", "launcher-queue.ts"], tables: ["worker_templates", "launch_requests", "launcher_commands"] },
   notifications: { modules: ["notifications.ts"], tables: ["notification_subscriptions"] },
   adaptive: {
     modules: ["adaptive-topology-store.ts", "adaptive-evidence.ts", "jev-call-log.ts"],

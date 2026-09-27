@@ -10,6 +10,7 @@ import { jevAdvisory } from "./jev-advisory.ts";
 import { performanceRetention } from "./performance-retention.ts";
 import { workerTemplates } from "./worker-templates.ts";
 import { agentReservations } from "./agent-reservations.ts";
+import { launcherQueue } from "./launcher-queue.ts";
 import { schemaShape, validateCoreStorage, validateSchema, type SchemaShape } from "./validate.ts";
 
 /**
@@ -67,6 +68,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 31, name: "agent_terminal_session", up: agentTerminalSession },
   { version: 32, name: "worker_templates", up: workerTemplates },
   { version: 33, name: "agent_reservations", up: agentReservations },
+  { version: 34, name: "launcher_queue", up: launcherQueue },
 ];
 
 /** The last idempotent baseline migration; later migrations may assume its schema. */

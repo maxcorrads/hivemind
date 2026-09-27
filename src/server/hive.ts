@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { ROUTINE_BATCH_MS } from "../shared/notifications.ts";
 import { WorkerTemplateStore } from "./worker-templates.ts";
+import { LauncherQueue } from "./launcher-queue.ts";
 import { AdaptiveTopologyRuntime } from "./adaptive-topology.ts";
 import { HiveBus } from "./hive-events.ts";
 import { InboxDeliveryStore } from "./inbox-delivery.ts";
@@ -52,6 +53,7 @@ type ServiceRegistry = Core & {
   waiters: Waiters;
   uploads: UploadBudget;
   workerTemplates: WorkerTemplateStore;
+  launcherQueue: LauncherQueue;
   telegramAdmin: TelegramAdminService;
   files: FileService;
   projects: ProjectService;
@@ -103,6 +105,7 @@ export class Hive {
   readonly tasks!: TaskStore;
   readonly routing!: RoutingStore;
   readonly workerTemplates!: WorkerTemplateStore;
+  readonly launcherQueue!: LauncherQueue;
   readonly rooms!: RoomStore;
   readonly notifications!: NotificationStore;
   readonly timeline!: TimelineStore;
@@ -130,6 +133,7 @@ export class Hive {
       this.telegramAdmin = services.telegramAdmin = new TelegramAdminService(services);
       this.files = services.files = new FileService(services);
       this.workerTemplates = services.workerTemplates = new WorkerTemplateStore(services);
+      this.launcherQueue = services.launcherQueue = new LauncherQueue(services);
       this.projects = services.projects = new ProjectService(services);
       this.identity = services.identity = new IdentityService(services);
       this.lifecycle = services.lifecycle = new AgentLifecycle(services);

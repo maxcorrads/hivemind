@@ -16,6 +16,7 @@ import { decodeJevCallCursor } from "../shared/jev-calls.ts";
 import { ACTIVITY_REASONS, type ActivityReason } from "../shared/read-state.ts";
 import { installJevDiagnostics } from './adaptive-routing-diagnostics.ts';
 import { installInstanceProof } from "./instance-proof.ts";
+import { installLauncherChannel } from "./launcher-channel.ts";
 import { adviseAfterWait, assignAdaptiveTask, mutateAdaptiveTask, mutateAdaptiveRoom, sendAdaptiveAgentMessage, setAdaptiveThreadStatus } from './adaptive-topology-actions.ts';
 
 export type AppHooks = {
@@ -50,6 +51,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   });
   app.get("/api/health", c => c.json({ ok: true, name: "hivemind" }));
   installInstanceProof(app, hooks.instanceSecret ?? null);
+  installLauncherChannel(app, hive, hooks.instanceSecret ?? null);
   /** The channel and root of a thread id (a message or task id); null when the id is unknown. */
   const threadOwner = (id: string): { channelId: string; threadId: string } | null => {
     const ref = hive.messageQueries.messageRef(id);
@@ -118,8 +120,10 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
       archivedChannelIds: hive.rooms.archivedChannelIds(channels),
       ...hive.reads.readSnapshot(human), ...hive.delivery.queueSnapshot(),
       telegram: { running: Boolean(hooks.telegramRunning?.()), configured: publicTelegramView(hive.home).configured, ...hive.telegramAdmin.health() },
-      jev: { enabled: adaptiveRoutingPublic(hive.home).enabled } });
+      jev: { enabled: adaptiveRoutingPublic(hive.home).enabled }, launcherAvailable: Boolean(hooks.instanceSecret) });
   });
+  // Public Human-session projection; launch commands and claim tickets stay in the signed native channel.
+  ui.get("/launch-requests", c => c.json({ requests: hive.launcherQueue.listPending() }));
   // Roster status lines, refreshed on task events.
   ui.get("/nav-status", c => c.json({ agentWork: hive.tasks.workStatus() }));
   ui.get("/read-state", c => c.json(hive.reads.readSnapshot(hive.identity.getAgent("human"))));

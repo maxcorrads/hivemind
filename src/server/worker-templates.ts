@@ -9,7 +9,10 @@ import type { Core } from "./services/ports.ts";
 
 type Row = { id: string; project_id: string; slug: string; revision: number; spec: string; created_at: number; updated_at: number };
 
-export type WorkerTemplateDeps = Core;
+export type WorkerTemplateDeps = Core & {
+  readonly identity: { templateWorkerCount(templateId: string): number };
+  readonly launcherQueue: { hasActiveTemplateRequests(templateId: string): boolean };
+};
 
 /** Field paths and reasons, never values: a template's environment may hold anything Human typed. */
 function parse<T>(schema: z.ZodType<T>, raw: unknown): T {
@@ -104,6 +107,8 @@ export class WorkerTemplateStore {
     this.deps.storage.transaction(() => {
       const row = this.row(id);
       if (row.revision !== expectedRevision) throw new HiveError(409, "The worker template changed; reload it before deleting");
+      if (this.deps.identity.templateWorkerCount(id) > 0 || this.deps.launcherQueue.hasActiveTemplateRequests(id))
+        throw new HiveError(409, "Worker template has active workers or pending launches");
       this.db.prepare("DELETE FROM worker_templates WHERE id = ?").run(id);
       this.changed(row.project_id);
     });

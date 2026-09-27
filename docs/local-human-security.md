@@ -44,6 +44,7 @@ not implicitly authorized.
 | Human reads/writes/files | Current Human capability plus a trusted browser context. |
 | Browser agent requests, including join/name resume | Host/Origin/Fetch Metadata checked before handler execution; JSON for JSON mutations. |
 | Native agent requests without Origin/Fetch Metadata | Existing agent bearer authentication; join/resume behavior unchanged. |
+| `/api/launcher/*` | Separate instance-secret HMAC authentication over method, path/query, timestamp, nonce and raw-body hash; no Human cookie or agent token can authorize it. Returns 404 without an instance secret. |
 | `GET /api/health` and `GET /api/health/instance?nonce=<64 hex>` | No Human capability needed; local Host/browser-origin policy still applies. The instance challenge answers `{proof}` (`no-store`) only when the server was started with a per-start secret by Hivemind Server.app, 404 otherwise, 400 for a malformed nonce ([Verifying the server](macos.md#verifying-the-server)). |
 | `/ws` upgrade | Exact path, trusted Origin and current Human capability; no query authentication. |
 
@@ -55,6 +56,25 @@ the non-simple `X-Hivemind-UI: 1` request header used by the web client. A nativ
 Human client can explicitly supply its current capability in `X-Hivemind-Human`.
 Agent bearer tokens are never accepted as Human sessions. Browsers lacking Fetch
 Metadata can use normal web API calls, but not context-free inline file requests.
+
+### Native launch approval
+
+The Human capability authorizes reading the launch-request list, including
+from a browser. It does not authorize approving or rejecting a worker launch.
+Those actions travel through the app's verified native bridge, the broker,
+and the separately authenticated launcher channel. The Mac and paired iOS
+apps use the same broker operation; a plain page cannot sign it. HMAC
+requests have a ±60-second clock window and a nonce replay cache that covers
+the complete window. The launcher verifies the Node instance proof before
+trusting a returned command. See the precise [launcher protocol](terminal-broker.md#launcher-channel).
+
+Hivemind Server.app remains the only command executor. Node constructs
+commands from Human-defined templates and reserved identities; a brain
+selects a template and task without providing a command. Existing local
+process impersonation remains outside the identity boundary: in a brain's
+Auto mode it can request enabled template workers within that template's
+cap. Per-template Keychain secrets remain confined to the native broker and
+its private launch file, never the Node database or HTTP responses.
 
 POST/PUT/PATCH JSON media types must match `application/json` (parameters allowed),
 not a prefix such as `application/jsonp`. Only the exact POST file-upload routes

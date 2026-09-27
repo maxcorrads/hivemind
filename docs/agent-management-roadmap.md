@@ -1,6 +1,6 @@
 # Agent orchestration and token efficiency roadmap
 
-Status: Phase T implemented in #275 (not merged yet). Plan revised on 2026-09-27 around brain-launched, task-bound workers; phases A1–A5 not started. Written against `8f0e583` (#265).
+Status: Phase T is in #275; A1 is in #281 → #282 → #283 → #285, with #284 integrated into #285. All remain unmerged. A2 implementation is in progress from `feat/template-launch` (`64a1666`) in the development checkout. A3–A5, Phase 3 and T2 remain planned. Updated 2026-09-27; the historical analysis below was written against `8f0e583` (#265).
 
 This document is the single source of truth for a multi-phase effort: brains launch task-bound workers from Human-defined templates (automatically or after Human approval), Human follows every job and task with its progress and can pause, cancel or discuss it, and agents spend fewer tokens on Hivemind traffic. It is written so that work can resume from here alone, without the conversation that produced it. Each phase has its own GitHub issue; the tracking issue, #274, lists them all (see [Issues](#issues)).
 
@@ -170,6 +170,8 @@ Implemented in #275: compact JSON for MCP tool results and the CLI `wait`; the M
 **Trust boundary (document it in [Terminal broker](terminal-broker.md) and [Local Human security](local-human-security.md)).** Server.app trusts the Node server it started and verified, as Hivemind.app already trusts its page. A brain never supplies a command: only a template id and a task. Any local process can pass for a brain (identities have no credentials), so in Auto mode such a process could start workers, but only from Human's templates, within their caps.
 
 **Acceptance.** Queue and HMAC channel tested (replay, clock skew, wrong secret, no secret); Swift launcher tested with fake broker and fake HTTP; a request is launched exactly once across restarts; caps enforced; approvals from Mac and iOS.
+
+**Implementation decisions (2026-09-27).** A2 is being split into the durable Node queue/channel, the Swift launcher/native approval transport, and approval cards. Approval mutations travel through the verified native bridge and broker to the signed launcher channel; the ordinary Human cookie deliberately cannot approve a launch. Signing a request does not authenticate its response, so the launcher also verifies the server's instance proof. The launcher journals intent before a side effect and the result afterwards: after an uncertain crash it reconciles an existing session, but never launches again solely because a session disappeared. An uncertain launch is reported as a failure requiring an explicit new request. This provides at-most-once execution rather than promising an impossible atomic transaction across SQLite and tmux. Server.app posts Mac approval notifications even when Hivemind.app has no open window; iOS reuses its existing native notification bridge. A suspended or closed iOS app has no background push transport, and sees pending requests when reopened.
 
 ### Phase A3 — Brain tools and per-brain mode
 

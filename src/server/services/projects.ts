@@ -7,6 +7,7 @@ export type ProjectServiceDeps = Core & {
   readonly telegramAdmin: { purgeProject(projectId: string, channelIds: string[], extraChatId?: number | null): void };
   readonly lifecycle: { purgeProjectAgents(agentIds: string[]): void; sweepBlobs(): void };
   readonly workerTemplates: { purgeProject(projectId: string): void };
+  readonly launcherQueue: { purgeProject(projectId: string): void };
   readonly channels: { ensureBuiltinChannels(project: Project): void; addHumanToAllChannels(): void };
   /** Brains/workers of the project that are online or blocked in a wait. */
   readonly identity: { busyAgents(projectId: string): Agent[] };
@@ -173,6 +174,7 @@ export class ProjectService {
         this.db.prepare(`DELETE FROM channels WHERE id IN (${ph})`).run(...channelIds);
       }
 
+      this.deps.launcherQueue.purgeProject(project.id);
       lifecycle.purgeProjectAgents(goneAgents.map((agent) => agent.id));
       this.deps.workerTemplates.purgeProject(project.id);
       this.db.prepare("DELETE FROM projects WHERE id = ?").run(project.id);

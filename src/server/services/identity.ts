@@ -314,14 +314,14 @@ export class IdentityService implements AgentDirectory {
    * the project's public channels and with its inbox starting now, so mail sent while it starts reaches it. It has no
    * session until its launch joins with the returned single-use ticket, within RESERVATION_MS.
    */
-  reserve(actor: Agent, template: ReservationTemplate, label?: string | null): { agent: Agent; ticket: string } {
+  reserve(actor: Agent, template: ReservationTemplate, label?: string | null, deferCap = false): { agent: Agent; ticket: string } {
     if (actor.role !== "human") throw new HiveError(403, "Only Human reserves a worker for now");
     if (!template.spec.enabled) throw new HiveError(409, `Worker template ${template.slug} is disabled`);
     const { storage, channels, bus } = this.deps;
     return storage.transaction(() => {
       const running = Number((this.db.prepare("SELECT COUNT(*) AS n FROM agents WHERE template_id = ? AND removed_at IS NULL")
         .get(template.id) as { n: number }).n);
-      if (running >= template.spec.maxConcurrent) {
+      if (!deferCap && running >= template.spec.maxConcurrent) {
         throw new HiveError(409, `Worker template ${template.slug} already has ${running} of at most ${template.spec.maxConcurrent} workers`);
       }
       const taken = new Set((this.db.prepare("SELECT lower(name) AS n FROM agents").all() as { n: string }[]).map((r) => r.n));
@@ -340,6 +340,27 @@ export class IdentityService implements AgentDirectory {
       for (const ch of channels.channelsOfProject(template.projectId)) if (ch.type === "public") channels.addMember(ch.id, id);
       storage.afterCommit(() => bus.emit("agent", this.getAgent(id)));
       return { agent: this.getAgent(id), ticket };
+    });
+  }
+
+  /** Active reserved or joined workers; callers subtract requests still awaiting approval for capacity. */
+  templateWorkerCount(templateId: string): number {
+    return Number((this.db.prepare("SELECT COUNT(*) AS n FROM agents WHERE template_id = ? AND removed_at IS NULL")
+      .get(templateId) as { n: number }).n);
+  }
+
+  /** Human changes a pending worker's template before approving its launch. */
+  retargetReservation(actor: Agent, agentId: string, template: ReservationTemplate): Agent {
+    if (actor.role !== "human") throw new HiveError(403, "Only Human changes a reserved worker's template");
+    return this.deps.storage.transaction(() => {
+      const agent = this.getAgent(agentId);
+      if (!agent.pending || agent.removedAt !== undefined) throw new HiveError(409, "Worker is no longer pending");
+      if (agent.projectId !== template.projectId || !template.spec.enabled) throw new HiveError(409, "Template must be enabled in the same project");
+      this.db.prepare("UPDATE agents SET template_id = ?, seniority = ?, focus = ? WHERE id = ?")
+        .run(template.id, template.spec.seniority, template.spec.focus || null, agentId);
+      const changed = this.getAgent(agentId);
+      this.deps.storage.afterCommit(() => this.deps.bus.emit("agent", changed));
+      return changed;
     });
   }
 
