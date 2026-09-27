@@ -30,7 +30,7 @@ test('lifecycle history is durable, isolated by agent, keyset-paged, and pruned 
   assert.equal(first.hasMore, true);
   assert.equal(first.nextBefore, middle.seq);
   assert.deepEqual(first.items[0], newest);
-  const seen = [...first.items.map(item => item.seq)];
+  const seen = first.items.map(item => item.seq);
   let next: number | null = first.nextBefore;
   while (next !== null) {
     const page = log.list(worker.id, next, 2);
