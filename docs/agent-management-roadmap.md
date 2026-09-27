@@ -2,7 +2,7 @@
 
 Status: planned, not started. Written on 2026-09-27 against `8f0e583` (#265).
 
-This document is the single source of truth for a multi-phase effort to improve how Hivemind manages brains and workers, in the UI and in the server/MCP logic, and to reduce the tokens agents spend. It is written so that work can resume from here alone, without the conversation that produced it. Each phase has its own GitHub issue; the tracking issue lists them all (see [Issues](#issues)).
+This document is the single source of truth for a multi-phase effort to improve how Hivemind manages brains and workers, in the UI and in the server/MCP logic, and to reduce the tokens agents spend. It is written so that work can resume from here alone, without the conversation that produced it. Each phase has its own GitHub issue; the tracking issue, #274, lists them all (see [Issues](#issues)).
 
 ## How to resume work
 
@@ -249,4 +249,14 @@ Phase T adds a server-side per-agent byte counter, which replaces this for live 
 
 ## Issues
 
-Tracking issue and one issue per phase: filled in below once created.
+Tracking issue: #274. Each phase issue is self-contained and repeats its section of this document.
+
+| Phase | Issue |
+| --- | --- |
+| T — Token efficiency quick wins | #267 |
+| 0 — Foundations | #268 |
+| 1 — Real presence and stall signalling | #269 (related: #258) |
+| 2 — Launch profiles, pre-assigned identity, per-agent resume and restart | #270 |
+| 3 — Agent panel and identity editing | #271 |
+| 4 — Brain delegation | #272 |
+| T2 — Role-scoped MCP tool sets | #273 |
