@@ -12,6 +12,8 @@ export type TaskOverview = {
   worker: Agent;
   brain: Agent;
   template: { id: string; label: string } | null;
+  /** Current native-close gates for Human controls; task control rechecks these atomically. */
+  controls: { retryClose: boolean; resume: boolean };
 };
 
 export type TaskViewsPage = {

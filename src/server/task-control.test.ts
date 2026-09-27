@@ -118,7 +118,7 @@ test('Human explicitly retries a failed hard-stop command while the task stays p
   assert.equal(f.control({ type: 'resume' }).task.state, 'paused');
 });
 
-test('failed hard resume remains paused and cannot retry until uncertain native session is killed', t => {
+test('failed hard resume stays paused through failed cleanup and explicit Human close retry', t => {
   const f = fixture(t);
   const pause = f.control({ type: 'pause', mode: 'hard' });
   f.hive.tasks.sweepHardPauses(pause.task.pause!.graceUntil!);
@@ -135,8 +135,20 @@ test('failed hard resume remains paused and cannot retry until uncertain native 
   assert.throws(() => f.control({ type: 'resume' }), status(409));
   const secondKill = f.hive.launcherQueue.next('http://127.0.0.1:7520');
   assert.ok(secondKill && secondKill.kind === 'kill');
-  f.hive.launcherQueue.result(secondKill.id, { status: 'killed' });
-  assert.equal(f.control({ type: 'resume' }).task.state, 'paused');
+  f.hive.launcherQueue.result(secondKill.id, { status: 'failed' });
+  assert.equal(f.current().state, 'paused');
+  assert.equal(f.hive.workerOrchestration.templates(f.activeBrain).templates[0]!.instancesInUse, 1);
+  assert.throws(() => f.control({ type: 'resume' }), status(409));
+  const retry = f.control({ type: 'pause', mode: 'hard', reason: 'Retry failed cleanup' });
+  assert.equal(retry.task.state, 'paused');
+  const retryKill = f.hive.launcherQueue.next('http://127.0.0.1:7520');
+  assert.ok(retryKill && retryKill.kind === 'kill');
+  assert.notEqual(retryKill.id, secondKill.id);
+  f.hive.launcherQueue.result(retryKill.id, { status: 'killed' });
+  assert.equal(f.hive.workerOrchestration.templates(f.activeBrain).templates[0]!.instancesInUse, 0);
+  const resumed = f.control({ type: 'resume' });
+  assert.equal(resumed.task.state, 'paused');
+  assert.equal(f.hive.launcherQueue.get(resumed.task.pause!.resumeRequestId!).agentId, f.joined.agent.id);
 });
 
 test('accepted review archives the task-bound worker automatically; Human cancel leaves fixed worker intact', t => {

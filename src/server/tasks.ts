@@ -330,7 +330,7 @@ export class TaskStore {
       const action = input.action;
       if (action.type === 'pause') {
         if (task.state === 'paused' && action.mode === 'hard' && task.pause?.mode === 'hard' &&
-          task.pause.stopRequestedAt && !task.pause.closedAt) {
+          task.pause.stopRequestedAt) {
           this.deps.workerOrchestration.retryHardStop(task.id, task.workerId);
         } else {
           if (['accepted_complete', 'cancelled', 'rejected'].includes(task.state) || task.state === 'paused')

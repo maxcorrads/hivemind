@@ -86,8 +86,12 @@ export class TaskViews {
     const task = this.deps.tasks.view(actor, row.id);
     const worker = this.deps.identity.getAgent(task.workerId);
     const brain = this.deps.identity.getAgent(task.assignerId);
-    const saved = this.db.prepare(`SELECT template_snapshot FROM launch_requests WHERE task_id=? AND agent_id=?
-      ORDER BY requested_at DESC,rowid DESC LIMIT 1`).get(task.id, task.workerId) as { template_snapshot: string } | undefined;
+    const saved = this.db.prepare(`SELECT r.template_snapshot,
+      (SELECT k.state FROM launcher_commands k WHERE k.request_id=r.id AND k.kind='kill'
+        ORDER BY k.rowid DESC LIMIT 1) AS kill_state
+      FROM launch_requests r WHERE r.task_id=? AND r.agent_id=?
+      ORDER BY r.requested_at DESC,r.rowid DESC LIMIT 1`).get(task.id, task.workerId) as
+      { template_snapshot: string; kill_state: string | null } | undefined;
     let template: TaskOverview['template'] = null;
     if (saved) {
       try {
@@ -105,6 +109,17 @@ export class TaskViews {
         } catch { /* Historical task remains readable after template corruption or deletion. */ }
       }
     }
-    return { task, projectId: row.project_id, project: row.project_slug, worker, brain, template };
+    const hardPause = task.state === 'paused' && task.pause?.mode === 'hard';
+    const retryClose = Boolean(hardPause && task.pause?.stopRequestedAt &&
+      saved?.kill_state === 'failed');
+    let resume = task.state === 'paused' && task.pause?.mode === 'soft';
+    if (hardPause && task.pause?.closedAt && !task.pause.resumeRequestId) {
+      const unsafe = this.db.prepare(`SELECT 1 FROM launch_requests r WHERE r.agent_id=? AND r.session IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM launcher_commands k WHERE k.request_id=r.id AND k.kind='kill' AND k.state='done')
+        LIMIT 1`).get(task.workerId);
+      resume = !unsafe;
+    }
+    return { task, projectId: row.project_id, project: row.project_slug, worker, brain, template,
+      controls: { retryClose, resume } };
   }
 }

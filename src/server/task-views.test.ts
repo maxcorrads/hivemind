@@ -133,6 +133,62 @@ test('live template is fallback when a legacy launch snapshot lacks a label', t 
     { id: template.id, label: spec.label });
 });
 
+test('Human control availability follows confirmed native close and uncertain resume cleanup', t => {
+  const f = fixture(t);
+  const spec: WorkerTemplateSpec = { label: 'Controlled worker', description: 'Build', software: 'codex2', model: '',
+    effort: '', extraFlags: '', environment: {}, secretNames: [], seniority: 'mid', focus: 'build',
+    maxConcurrent: 1, enabled: true };
+  f.hive.workerTemplates.create(f.human, f.alpha.id, { slug: 'controlled', spec });
+  const requested = f.hive.workerOrchestration.request(f.brainA,
+    { requestId: randomUUID(), template: 'controlled', contract: contract('Controlled task') });
+  f.hive.launcherQueue.approve(f.human, requested.request.id);
+  const launch = f.hive.launcherQueue.next('http://127.0.0.1:7520');
+  assert.ok(launch && launch.kind === 'launch');
+  f.hive.launcherQueue.result(launch.id, { status: 'launched', session: launch.session });
+  const ticket = /hmc_[0-9a-f]{48}/.exec(launch.command)?.[0];
+  assert.ok(ticket);
+  f.hive.identity.join({ role: 'worker', claim: ticket });
+  const control = (action: { type: 'pause'; mode: 'soft' | 'hard' } | { type: 'resume' }) =>
+    f.hive.tasks.control(f.human, requested.task.id, { requestId: randomUUID(),
+      expectedRevision: f.hive.tasks.get(f.human, requested.task.id).revision, action }).task;
+  const availability = () => f.hive.taskViews.get(f.human, requested.task.id).controls;
+  const soft = control({ type: 'pause', mode: 'soft' });
+  assert.equal(soft.state, 'paused');
+  assert.deepEqual(availability(), { retryClose: false, resume: true });
+  control({ type: 'resume' });
+  const hard = control({ type: 'pause', mode: 'hard' });
+  assert.deepEqual(availability(), { retryClose: false, resume: false });
+  f.hive.tasks.sweepHardPauses(hard.pause!.graceUntil!);
+  const firstKill = f.hive.launcherQueue.next('http://127.0.0.1:7520');
+  assert.ok(firstKill && firstKill.kind === 'kill');
+  assert.deepEqual(availability(), { retryClose: false, resume: false });
+  f.hive.launcherQueue.result(firstKill.id, { status: 'failed' });
+  assert.deepEqual(availability(), { retryClose: true, resume: false });
+  control({ type: 'pause', mode: 'hard' });
+  assert.deepEqual(availability(), { retryClose: false, resume: false });
+  const retryKill = f.hive.launcherQueue.next('http://127.0.0.1:7520');
+  assert.ok(retryKill && retryKill.kind === 'kill');
+  f.hive.launcherQueue.result(retryKill.id, { status: 'killed' });
+  assert.deepEqual(availability(), { retryClose: false, resume: true });
+  const resuming = control({ type: 'resume' });
+  assert.deepEqual(availability(), { retryClose: false, resume: false });
+  f.hive.launcherQueue.approve(f.human, resuming.pause!.resumeRequestId!);
+  const relaunched = f.hive.launcherQueue.next('http://127.0.0.1:7520');
+  assert.ok(relaunched && relaunched.kind === 'launch');
+  f.hive.launcherQueue.result(relaunched.id, { status: 'failed' });
+  assert.deepEqual(availability(), { retryClose: false, resume: false });
+  const cleanup = f.hive.launcherQueue.next('http://127.0.0.1:7520');
+  assert.ok(cleanup && cleanup.kind === 'kill');
+  f.hive.launcherQueue.result(cleanup.id, { status: 'failed' });
+  assert.deepEqual(availability(), { retryClose: true, resume: false });
+  control({ type: 'pause', mode: 'hard' });
+  assert.deepEqual(availability(), { retryClose: false, resume: false });
+  const cleanupRetry = f.hive.launcherQueue.next('http://127.0.0.1:7520');
+  assert.ok(cleanupRetry && cleanupRetry.kind === 'kill');
+  f.hive.launcherQueue.result(cleanupRetry.id, { status: 'killed' });
+  assert.deepEqual(availability(), { retryClose: false, resume: true });
+});
+
 test('Human HTTP task list and detail reject agent credentials', async t => {
   const f = fixture(t), app = createApp(f.hive);
   const task = f.assign('alpha', 'HTTP task');
