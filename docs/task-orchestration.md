@@ -65,3 +65,18 @@ available. Archived or removed participants remain readable by id. The job list 
 active empty jobs in scope, so a new Human request is visible before its first task exists.
 
 Migration 37 adds indexes for the descending task cursor and saved launch-template lookup. It changes no task data.
+
+## Task dashboard
+
+Use **Tasks** in the project sidebar or mobile navigation, or **All tasks** in the project rail/top bar. Jobs group the
+cards; active jobs remain visible before any task is assigned. Each card includes the latest saved checkpoint, template,
+worker and brain, native terminal access when available, and the actions allowed by its current state. Requests reuse
+the native launch-approval cards. A realtime change reloads the first page; use Load older tasks to browse further.
+
+**Open thread** opens the task conversation. **Message brain** opens its DM and inserts a task link into the draft;
+it does not send a message. Removed brains remain visible in task history but cannot receive new DMs.
+
+Traffic is the worker's API response-byte counter since this server started, including archived workers. It is neither
+per-task usage nor model token consumption and is unavailable after a restart until new traffic is measured. Unknown
+control outcomes retain their request ID; check status before retrying. A failed native closure offers an explicit retry
+and never silently launches another worker.

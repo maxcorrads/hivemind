@@ -9,6 +9,7 @@ import "./styles/channel.css";
 import "./styles/thread.css";
 import "./styles/overlays.css";
 import "./styles/terminal.css";
+import "./styles/task-views.css";
 
 // Modals follow the on-screen keyboard (iOS shrinks only the visual viewport).
 trackVisualViewport();

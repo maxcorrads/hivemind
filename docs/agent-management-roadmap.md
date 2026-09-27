@@ -1,6 +1,6 @@
 # Agent orchestration and token efficiency roadmap
 
-Status: Phase T is in #275; A1 is in #281 → #282 → #283 → #285, with #284 integrated into #285. All remain unmerged. A2 is in #286 → #287 → #288. A3 is in #289 → #290. A4 is in #291 → #292, including Phase T #275. A5 is in progress; Phase 3 and T2 remain planned. Updated 2026-09-27; the historical analysis below was written against `8f0e583` (#265).
+Status: Phase T is in #275; A1 is in #281 → #282 → #283 → #285, with #284 integrated into #285. All remain unmerged. A2 is in #286 → #287 → #288. A3 is in #289 → #290. A4 is in #291 → #292, including Phase T #275. A5 adds the task history API (#293) and task dashboard (`feat/task-dashboard`). Phase 3 and T2 remain planned. Updated 2026-09-27; the historical analysis below was written against `8f0e583` (#265).
 
 This document is the single source of truth for a multi-phase effort: brains launch task-bound workers from Human-defined templates (automatically or after Human approval), Human follows every job and task with its progress and can pause, cancel or discuss it, and agents spend fewer tokens on Hivemind traffic. It is written so that work can resume from here alone, without the conversation that produced it. Each phase has its own GitHub issue; the tracking issue, #274, lists them all (see [Issues](#issues)).
 
@@ -54,7 +54,7 @@ Human runs a production Hivemind while this work happens. Nothing done for this 
 - **Never bind 7420 or 7421.** Do not run `npm run dev`, `npm start`, `browser:server` or the coordination benchmarks' live executor (it uses port 7420) from the development checkout while the production server runs. The unit and integration suites start their own servers on ephemeral ports and are safe.
 - **Never touch `~/.hivemind`.** Any manual server run uses a throwaway home and a free port, for example `HIVEMIND_HOME=$(mktemp -d) npx tsx src/cli.ts serve --port 7520` (`HIVEMIND_PORT` also works). The instance lock is per home, so a separate home never conflicts with the production server.
 - **Never touch the production tmux server** (`tmux -L hivemind`), the production broker socket or `~/Library/Application Support/Hivemind/`. Never run a development build of Hivemind Server.app while the production one runs: they share the broker socket, the discovery file and the Keychain service name. Swift work is tested with `swift test` in `macos/` (fakes only) until Human decides how to run a development app side by side.
-- **Migrations.** Phases A1–A4 add SQLite migrations. They apply to `~/.hivemind` the first time Human runs the new code in production. Call this out in each PR, and remind Human to back up `~/.hivemind` with every server stopped before upgrading (see [Storage, backup and restore](storage-and-backup.md)).
+- **Migrations.** Phases A1–A5 and Phase 3 add SQLite migrations. They apply to `~/.hivemind` the first time Human runs the new code in production. Call this out in each PR, and remind Human to back up `~/.hivemind` with every server stopped before upgrading (see [Storage, backup and restore](storage-and-backup.md)).
 - **Agent protocol changes need MCP restarts.** After upgrading, every running agent's MCP client must be restarted (see the [protocol-change checklist](#protocol-change-checklist)).
 
 ## Current state
@@ -230,6 +230,13 @@ projection fixes the visibility gap in #258 without changing native host timeout
 - Built on `agentRuntime` (Phase 0) and realtime task/job events.
 
 **Acceptance.** UI tests for grouping, progress and every action's request; accessibility checks as in the existing UI suites; works in Hivemind.app and the iPhone/iPad app.
+
+**Implementation.** Human-only task pages use project-bound keyset cursors and retain archived identities, saved
+template labels and worker traffic. Migration 37 adds pagination/lookup indexes. Desktop and mobile navigation expose
+project Tasks and All tasks; cards show checkpoints, task controls, thread links and a one-shot DM draft for the brain.
+Requests reuse the native approval cards. Traffic measures worker-wide API response bytes since server start, not task
+or model token usage. Unknown control outcomes require a status check before retrying the same request ID; native-close
+recovery gates come from the server. Realtime changes refresh the first page; older pages can be loaded again.
 
 ### Phase 3 — Agent panel and identity editing (reduced)
 

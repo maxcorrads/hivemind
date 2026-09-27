@@ -1,4 +1,4 @@
-import { CircleHelp, Plus } from "lucide-react";
+import { CircleHelp, ListTodo, Plus } from "lucide-react";
 import type { Snapshot } from "./api.ts";
 import { projectAttention, projectInitials } from "./nav-model.ts";
 import { SettingsMenu, type SettingsMenuProps } from "./SettingsMenu.tsx";
@@ -7,10 +7,12 @@ import { SettingsMenu, type SettingsMenuProps } from "./SettingsMenu.tsx";
  * The narrow column of project tiles, with unread and mention marks, then Help, Settings and who you are at
  * the bottom. Those tools render only when `settings` is passed; without it the sidebar header keeps them.
  */
-export function ProjectRail({ snap, selectedProject, onSelect, onNewProject, settings, live }: {
+export function ProjectRail({ snap, selectedProject, onSelect, onAllTasks, allTasksActive, onNewProject, settings, live }: {
   snap: Snapshot;
   selectedProject: string;
   onSelect: (slug: string) => void;
+  onAllTasks?: () => void;
+  allTasksActive?: boolean;
   onNewProject: () => void;
   settings?: SettingsMenuProps;
   live?: boolean;
@@ -20,6 +22,10 @@ export function ProjectRail({ snap, selectedProject, onSelect, onNewProject, set
       <img className="rail-mark" src="/icon.svg" alt="Hivemind" />
       {/* Only the tiles scroll: an overflow container would clip the Settings popover below. */}
       <div className="rail-projects">
+        {onAllTasks && <button type="button" className={`rail-project ${allTasksActive ? "active" : ""}`}
+          title="All tasks" aria-label="All tasks" aria-current={allTasksActive ? "page" : undefined} onClick={onAllTasks}>
+          <ListTodo size={17} aria-hidden="true" />
+        </button>}
         {snap.projects.map(project => {
           const { alerts, unread } = projectAttention(snap, project.slug);
           const active = project.slug === selectedProject;

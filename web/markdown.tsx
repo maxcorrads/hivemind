@@ -71,8 +71,13 @@ md.inline.ruler.before("emphasis", "mention", (state, silent) => {
 md.renderer.rules.mention = (tokens, index) => `<span class="mention">@${md.utils.escapeHtml(tokens[index]!.content)}</span>`;
 const defaultLinkOpen = md.renderer.rules.link_open ?? ((tokens, index, options, _env, self) => self.renderToken(tokens, index, options));
 md.renderer.rules.link_open = (tokens, index, options, env, self) => {
-  tokens[index]!.attrSet("target", "_blank");
-  tokens[index]!.attrSet("rel", "noreferrer noopener");
+  const href = tokens[index]!.attrGet('href') ?? '';
+  // Task references should return to the same Hivemind window, including in the native apps.
+  if (/^#\/c\/[^/]+\/t\/[^/]+$/.test(href)) tokens[index]!.attrSet('target', '_self');
+  else {
+    tokens[index]!.attrSet("target", "_blank");
+    tokens[index]!.attrSet("rel", "noreferrer noopener");
+  }
   return defaultLinkOpen(tokens, index, options, env, self);
 };
 

@@ -1,10 +1,11 @@
-import { ArrowLeft, Bell, ChevronRight, House, MessagesSquare, type LucideIcon } from "lucide-react";
+import { ArrowLeft, Bell, ChevronRight, House, ListTodo, MessagesSquare, type LucideIcon } from "lucide-react";
 import type { Channel } from "../src/shared/types.ts";
 import type { Snapshot } from "./api.ts";
 import { ChannelItem } from "./ChannelNav.tsx";
 import type { MobileTab } from "./mobile-nav.ts";
 
-const TABS: [MobileTab, string, LucideIcon][] = [["home", "Home", House], ["dms", "DMs", MessagesSquare], ["activity", "Activity", Bell]];
+const TABS: [MobileTab, string, LucideIcon][] = [["home", "Home", House], ["dms", "DMs", MessagesSquare],
+  ["activity", "Activity", Bell], ["tasks", "Tasks", ListTodo]];
 
 /** The phone's bottom tab bar (#223). Hidden on wide screens and while a channel or thread is open. */
 export function MobileTabs({ active, badges, onTab }: {

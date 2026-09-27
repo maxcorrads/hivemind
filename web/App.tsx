@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Agent } from "../src/shared/types.ts";
+import type { TaskOverview } from "../src/shared/task-views.ts";
 import { AdaptiveRoutingPanel } from "./AdaptiveRoutingPanel.tsx";
 import { AdaptiveRoutingSettings } from "./AdaptiveRoutingSettings.tsx";
 import { api } from "./api.ts";
@@ -26,6 +27,7 @@ import { hashFor, type Sel } from "./selection.ts";
 import { Sidebar } from "./Sidebar.tsx";
 import { newerTelegramHealth } from "./telegram-health.ts";
 import { TelegramSheet } from "./TelegramSheet.tsx";
+import { TaskViews } from "./TaskViews.tsx";
 import { ThreadAside } from "./ThreadAside.tsx";
 import { TopBar } from "./TopBar.tsx";
 import { useAdaptiveRouting } from "./use-adaptive-routing.ts";
@@ -74,7 +76,7 @@ export function App() {
   ));
   const brainNames = Object.fromEntries((snap?.agents ?? []).filter(agent => agent.role === "brain").map(agent => [agent.id, agent.name]));
   const storedProject = loadSelectedProject();
-  const selectedProject = sel.kind !== "channel" ? sel.project
+  const selectedProject = sel.kind !== "channel" ? sel.project ?? projects.find(p => p.slug === storedProject)?.slug ?? projects[0]?.slug ?? ""
     : (activeChannel?.project ?? projects.find(p => p.slug === storedProject)?.slug ?? projects[0]?.slug ?? "");
 
   const search = useSearch({ selectedProject, projects, setErr });
@@ -93,10 +95,21 @@ export function App() {
   };
   const notifications = useDesktopNotifications(channels, navigate);
   const launchRequests = useLaunchRequests(projects, snap?.agents ?? []);
+  const [taskTick, setTaskTick] = useState(0);
+  const taskRefreshTimer = useRef<number | null>(null);
+  const requestTaskRefresh = () => {
+    if (taskRefreshTimer.current !== null) return;
+    taskRefreshTimer.current = window.setTimeout(() => { taskRefreshTimer.current = null; setTaskTick(value => value + 1); }, 80);
+  };
+  useEffect(() => () => { if (taskRefreshTimer.current !== null) window.clearTimeout(taskRefreshTimer.current); }, []);
   const { live, roomTick, jevTick, subscribeJev } = useRealtime({
     selection, hive, channel: channelPane, thread: threadState, inboxLoad: inbox.inboxLoad, changeSelection,
     reopenDm: dms.reopenDm, onActivity: inbox.receive, refreshRoutingView, onRoutingEvent, setErr,
-    onLiveEvent: event => { notifications.onLiveEvent(event); launchRequests.onLiveEvent(event); },
+    onLiveEvent: event => {
+      notifications.onLiveEvent(event); launchRequests.onLiveEvent(event);
+      if (event.type === 'task' || event.type === 'job' || event.type === 'launch-requests' ||
+        event.type === 'agent' || event.type === 'hello') requestTaskRefresh();
+    },
   });
   useSelectionRepair(snap, sel, changeSelection);
   // Phones show one screen at a time with bottom tabs (#223); the hash stays the single source of navigation.
@@ -143,6 +156,7 @@ export function App() {
   const [launchOpen, setLaunchOpen] = useState(false);
   /** Project preselected in the Launch sheet when it is opened from a project's roster. */
   const [launchProject, setLaunchProject] = useState<string | null>(null);
+  const [taskDraft, setTaskDraft] = useState<{ channelId: string; token: string; text: string } | null>(null);
   const openLaunch = (project: string | null = null) => { setLaunchProject(project); setLaunchOpen(true); };
 
   const roomAgents = (snap?.agents ?? []).filter((a) => a.role === "human" || !a.project || a.project === selectedProject);
@@ -158,6 +172,16 @@ export function App() {
     } catch (error) {
       setErr(String((error as Error)?.message || error));
     }
+  };
+  const messageTaskBrain = async (item: TaskOverview) => {
+    try {
+      const { channel } = await api.openDm(item.brain.name);
+      dms.reopenDm(channel.id);
+      await refreshSnap();
+      const thread = `#/c/${encodeURIComponent(item.task.channelId)}/t/${encodeURIComponent(item.task.id)}`;
+      setTaskDraft({ channelId: channel.id, token: crypto.randomUUID(), text: `[Task ${item.task.id}](${thread})` });
+      navigate({ kind: 'channel', id: channel.id });
+    } catch (error) { setErr(String((error as Error)?.message || error)); }
   };
   const setAgentLaunchMode = async (agent: Agent, mode: "approval" | "auto") => {
     const { agent: saved } = await api.setAgentLaunchMode(agent.name, mode);
@@ -197,7 +221,8 @@ export function App() {
   useEffect(() => {
     if (!knownProject) return;
     saveSelectedProject(selectedProject);
-    saveProjectView(selectedProject, sel.kind === "channel" ? { kind: "channel", id: sel.id } : sel);
+    if (sel.kind !== 'tasks' || sel.project !== null)
+      saveProjectView(selectedProject, sel.kind === "channel" ? { kind: "channel", id: sel.id } : sel);
   }, [knownProject, selectedProject, sel]);
   const attention = snap ? attentionTotal(snap) : 0;
   useEffect(() => { document.title = documentTitle(attention); }, [attention]);
@@ -243,9 +268,11 @@ export function App() {
     <div className="shell" data-m={screen}>
       {unified ? (
         <TopBar live={live} projectName={projects.find(p => p.slug === railProject)?.name} onSwitcher={() => setSwitcher("all")}
+          onAllTasks={() => navigate({ kind: 'tasks', project: null })} allTasksActive={sel.kind === 'tasks' && sel.project === null}
           settings={settings} />
       ) : (
-        <ProjectRail snap={snap} selectedProject={railProject} onSelect={selectProject}
+        <ProjectRail snap={snap} selectedProject={sel.kind === 'tasks' && sel.project === null ? '' : railProject} onSelect={selectProject}
+          onAllTasks={() => navigate({ kind: 'tasks', project: null })} allTasksActive={sel.kind === 'tasks' && sel.project === null}
           onNewProject={() => projectSheets.setCreatingProject(true)} settings={settings} live={live} />
       )}
       {/* Settings lives at the foot of the rail or in the top bar, never in the sidebar. */}
@@ -294,6 +321,18 @@ export function App() {
             channelLabel={id => { const channel = channels.find(item => item.id === id); return channel ? channelTitle(channel) : "Deleted channel"; }}
             agentName={id => snap.agents.find(agent => agent.id === id)?.name ?? "Removed brain"}
             onOpenChannel={id => go({ kind: "channel", id })} />
+        ) : sel.kind === "tasks" ? (
+          <TaskViews project={sel.project} projects={projects} agents={snap.agents} traffic={snap.agentTraffic ?? {}}
+            tick={taskTick} onProject={slug => navigate({ kind: 'tasks', project: slug })}
+            onBack={() => navigate({ kind: 'home', project: sel.project ?? selectedProject })}
+            onAll={() => navigate({ kind: 'tasks', project: null })}
+            onOpenThread={item => navigate({ kind: 'channel', id: item.task.channelId, thread: item.task.id })}
+            onMessageBrain={item => void messageTaskBrain(item)}
+            requests={<LaunchRequests requests={sel.project
+              ? launchRequests.requests.filter(request => projects.find(project => project.id === request.projectId)?.slug === sel.project)
+              : launchRequests.requests} projects={projects} agents={snap.agents}
+              launcherAvailable={Boolean(snap.launcherAvailable)} error={launchRequests.error} loading={launchRequests.loading}
+              onRetry={() => void launchRequests.refresh()} onDecide={launchRequests.decide} />} />
         ) : sel.kind === "inbox" ? (
           <Inbox
             key={`${sel.project}:${inboxBox}`}
@@ -327,7 +366,9 @@ export function App() {
             threadOpenAnchor={threadOpenAnchor} go={go} roomTick={roomTick} routingView={routingView}
             activeBrainChannel={activeBrainChannel} brainNames={brainNames}
             onOpenRouting={() => setRoutingPanelOpen(true)} onInvite={() => channelSheets.setInviteOpen(true)}
-            compose={compose} setErr={setErr} onMarkUnread={async (channelId, seq) => {
+            compose={compose} draftInsert={taskDraft?.channelId === sel.id ? taskDraft : null}
+            onDraftInserted={token => setTaskDraft(current => current?.token === token ? null : current)}
+            setErr={setErr} onMarkUnread={async (channelId, seq) => {
               const ticket = hive.readFence.current.ticket();
               const next = await api.markUnread(channelId, seq);
               if (!hive.acceptRead(next, ticket)) hive.readRefresh.current?.request();

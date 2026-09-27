@@ -10,6 +10,8 @@ import type { LaunchContext } from "../src/shared/launch-prompt.ts";
 import type { ProjectPluginView, SettingsValues } from "../src/shared/plugin-settings.ts";
 import { humanSession, connectHumanWs } from "./human-session.ts";
 import type { AgentWork, ChannelTaskPage, TaskSnapshot } from '../src/shared/tasks.ts';
+import type { TaskControlInput } from '../src/shared/task-control.ts';
+import type { TaskOverview, TaskViewsPage } from '../src/shared/task-views.ts';
 import type { RoomView, Room } from '../src/shared/rooms.ts';
 import type { TimelineExport, TimelineView } from '../src/shared/timeline.ts';
 import type { AdaptiveRoutingView } from '../src/shared/adaptive-topology.ts';
@@ -154,6 +156,15 @@ export const api = {
       { method: 'POST', body: JSON.stringify({ action, expectedRevision }) }),
   channelTasks: (channel: string, signal?: AbortSignal) =>
     req<ChannelTaskPage>(`/api/ui/channels/${encodeURIComponent(channel)}/tasks`, { signal }),
+  tasks: (project: string | null, cursor?: string | null, signal?: AbortSignal) => {
+    const query = new URLSearchParams();
+    if (project) query.set('project', project);
+    if (cursor) query.set('cursor', cursor);
+    return req<TaskViewsPage>(`/api/ui/tasks${query.size ? `?${query}` : ''}`, { signal });
+  },
+  task: (id: string, signal?: AbortSignal) => req<{ item: TaskOverview }>(`/api/ui/tasks/${encodeURIComponent(id)}`, { signal }),
+  controlTask: (id: string, body: TaskControlInput) =>
+    req<{ task: TaskSnapshot }>(`/api/ui/tasks/${encodeURIComponent(id)}/control`, { method: 'POST', body: JSON.stringify(body) }),
   room: (channel: string) => req<RoomView>(`/api/ui/channels/${encodeURIComponent(channel)}/room`),
   roomHistory: (channel: string, before?: number) => req<{ history: Room[] }>(`/api/ui/channels/${encodeURIComponent(channel)}/room/history?before=${before ?? Number.MAX_SAFE_INTEGER}`),
   roomEvent: (channel: string, body: unknown) => req<RoomView>(`/api/ui/channels/${encodeURIComponent(channel)}/room`, { method: 'POST', body: JSON.stringify(body) }),

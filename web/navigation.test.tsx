@@ -121,7 +121,8 @@ test('the project rail shows one project at a time and remembers the selection i
   localStorage.clear();
   const view = await mount(t, hive, `#/inbox/${home.slug}`);
   const rail = view.host.querySelector('nav.project-rail')!;
-  assert.equal(rail.querySelectorAll('.rail-project').length, 2, 'one icon per project');
+  assert.equal(rail.querySelectorAll('.rail-project').length, 3, 'one icon per project plus All tasks');
+  assert.ok(rail.querySelector('button[aria-label="All tasks"]'));
   assert.equal(view.railButton(new RegExp(home.name))?.getAttribute('aria-current'), 'page');
   assert.equal(view.sidebar().querySelector('.project-head h2')?.textContent, home.name, 'the sidebar shows only the selected project');
   assert.equal(view.navButton(/# other-room/), undefined);
@@ -227,6 +228,24 @@ test('the roster says what each agent is doing, and the sidebar has no Decisions
   await settle();
   assert.equal(status(worker), 'offline · blocked: API contract');
   assert.equal(status(brain), 'offline · coordinating 1 task');
+});
+
+test('project Tasks and rail All tasks open the scoped task views', async t => {
+  const { hive, home } = fixture(t);
+  const brain = hive.identity.join({ role: 'brain', project: home.slug }).agent;
+  const worker = hive.identity.join({ role: 'worker', project: home.slug, seniority: 'mid' }).agent;
+  hive.tasks.assign(brain, { requestId: 'tasks-nav', worker: worker.name, contract: { objective: 'Review the task navigation',
+    scope: [], nonGoals: [], acceptanceCriteria: ['Visible'], dependencies: [], evidenceSeqs: [] } });
+  const view = await mount(t, hive, `#/inbox/${home.slug}`);
+  await act(async () => view.navButton(/^Tasks$/)!.click());
+  await settle();
+  assert.equal(window.location.hash, `#/tasks/${home.slug}`);
+  assert.match(view.host.querySelector('main.desk')!.textContent!, /Review the task navigation/);
+  await act(async () => view.railButton(/^All tasks$/)!.click());
+  await settle();
+  assert.equal(window.location.hash, '#/tasks');
+  assert.equal(view.host.querySelector('main.desk h1')?.textContent, 'All tasks');
+  assert.match(view.host.querySelector('main.desk')!.textContent!, /Review the task navigation/);
 });
 
 test('the page title counts what is waiting for the Human', async t => {

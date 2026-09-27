@@ -16,11 +16,16 @@ export function Composer({
   agents,
   onSend,
   placeholder,
+  draftInsert,
+  onDraftInserted,
   compact = false,
 }: {
   agents: Agent[];
   onSend: (body: string, files: File[]) => Promise<boolean>;
   placeholder: string;
+  /** Explicit navigation may insert a task reference without sending the message. */
+  draftInsert?: { token: string; text: string } | null;
+  onDraftInserted?: (token: string) => void;
   compact?: boolean;
 }) {
   const [value, setValue] = useState("");
@@ -38,6 +43,16 @@ export function Composer({
   // Where the caret goes once a programmatic edit (a picked mention, @, an emoji) has rendered.
   const caretAfter = useRef<number | null>(null);
   const listId = useId();
+  const inserted = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!draftInsert || inserted.current === draftInsert.token) return;
+    inserted.current = draftInsert.token;
+    setValue(current => current.includes(draftInsert.text) ? current :
+      `${current.trimEnd()}${current.trim() ? '\n' : ''}${draftInsert.text}`);
+    input.current?.focus();
+    onDraftInserted?.(draftInsert.token);
+  }, [draftInsert, onDraftInserted]);
 
   useLayoutEffect(() => {
     const at = caretAfter.current;

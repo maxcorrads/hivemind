@@ -1,4 +1,4 @@
-import { CircleHelp, Search } from "lucide-react";
+import { CircleHelp, ListTodo, Search } from "lucide-react";
 import { SWITCHER_SHORTCUT } from "./nav-model.ts";
 import { SettingsMenu, type SettingsMenuProps } from "./SettingsMenu.tsx";
 
@@ -6,10 +6,12 @@ import { SettingsMenu, type SettingsMenuProps } from "./SettingsMenu.tsx";
  * The single-sidebar layout's top bar: brand, the quick switcher (Cmd/Ctrl+K), connection state, help,
  * the Settings menu and who you are. It replaces the project rail and the sidebar's brand row.
  */
-export function TopBar({ live, projectName, onSwitcher, settings }: {
+export function TopBar({ live, projectName, onSwitcher, onAllTasks, allTasksActive, settings }: {
   live: boolean;
   projectName: string | undefined;
   onSwitcher: () => void;
+  onAllTasks?: () => void;
+  allTasksActive?: boolean;
   settings: SettingsMenuProps;
 }) {
   return (
@@ -24,6 +26,8 @@ export function TopBar({ live, projectName, onSwitcher, settings }: {
         <kbd className="kbd">{SWITCHER_SHORTCUT}</kbd>
       </button>
       <div className="topbar-tools">
+        {onAllTasks && <button type="button" className="icon-btn" title="All tasks" aria-label="All tasks"
+          aria-current={allTasksActive ? "page" : undefined} onClick={onAllTasks}><ListTodo size={16} aria-hidden="true" /></button>}
         <span className="topbar-live">
           <span className={`pulse ${live ? "on" : ""}`} title={live ? "live" : "waiting"} role="img"
             aria-label={live ? "Connected" : "Not connected"} />

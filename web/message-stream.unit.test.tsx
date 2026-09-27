@@ -86,6 +86,7 @@ test("markdown renders lists, quotes, emphasis, links and mentions, and never ra
   assert.match(hostile, /&lt;script&gt;/);
   assert.match(renderMarkdown("```\n<b>code</b>\n```"), /<pre><code>&lt;b&gt;code&lt;\/b&gt;/);
   assert.match(renderMarkdown("line 1\nline 2"), /line 1<br>\s*line 2/);
+  assert.match(renderMarkdown('[Task abc](#/c/channel-1/t/abc)'), /href="#\/c\/channel-1\/t\/abc" target="_self"/);
 });
 
 test("system messages render as a centered line without the Human's name or avatar", () => {

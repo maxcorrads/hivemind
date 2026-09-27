@@ -4,6 +4,8 @@ export type InboxBox = "unread" | "all";
 
 export type Sel =
   | { kind: "inbox"; project: string; box?: InboxBox }
+  /** Project tasks or all projects when `project` is null. */
+  | { kind: "tasks"; project: string | null }
   /** Routing log: every Jev exchange of a project. Hash `#/routing-log/<project>`; `#/jev/<project>` is an alias. */
   | { kind: "jev"; project: string }
   /** Mobile list screens (#223): a project's channels (`#/home/<project>`) and its direct messages (`#/dms/<project>`). */
@@ -21,6 +23,7 @@ export function parseHash(hash: string = location.hash): Sel {
       box: parts[2] === "all" ? "all" : "unread",
     };
   }
+  if (parts[0] === "tasks") return { kind: "tasks", project: parts[1] ? decodeURIComponent(parts[1]) : null };
   // The Decisions view was removed: its old links open the project's For you.
   if (parts[0] === "decisions") return { kind: "inbox", project: parts[1] ? decodeURIComponent(parts[1]) : "", box: "unread" };
   if (parts[0] === "home" || parts[0] === "dms") return { kind: parts[0], project: parts[1] ? decodeURIComponent(parts[1]) : "" };
@@ -36,6 +39,7 @@ export function parseHash(hash: string = location.hash): Sel {
 export function hashFor(sel: Sel): string {
   return sel.kind === "inbox"
     ? `${sel.project ? `/inbox/${encodeURIComponent(sel.project)}` : "/inbox"}${sel.box === "all" ? "/all" : ""}`
+    : sel.kind === "tasks" ? `/tasks${sel.project ? `/${encodeURIComponent(sel.project)}` : ""}`
     : sel.kind !== "channel"
       ? `/${sel.kind === "jev" ? "routing-log" : sel.kind}${sel.project ? `/${encodeURIComponent(sel.project)}` : ""}`
       : `/c/${encodeURIComponent(sel.id)}${sel.thread ? `/t/${encodeURIComponent(sel.thread)}` : ""}`;
@@ -56,6 +60,7 @@ export function repairSel(sel: Sel, snap: Pick<Snapshot, "projects" | "channels"
     const project = snap.projects.find((p) => p.slug === sel.project) ?? fallback;
     return { kind: "inbox", project: project?.slug ?? "" };
   }
+  if (sel.kind === "tasks" && sel.project === null) return null;
   if (sel.kind !== "channel") {
     if (!sel.project) return fallback ? { ...sel, project: fallback.slug } : null;
     if (snap.projects.some((p) => p.slug === sel.project)) return null;

@@ -5,7 +5,7 @@ import type { InboxBox, Sel } from "./selection.ts";
 /** Keep in sync with the `@media (max-width: 960px)` block in styles.css. */
 export const MOBILE_QUERY = "(max-width: 960px)";
 
-export type MobileTab = "home" | "dms" | "activity";
+export type MobileTab = "home" | "dms" | "activity" | "tasks";
 
 /**
  * What a phone shows for a selection (#223): one screen at a time. `channel`
@@ -31,6 +31,7 @@ export function mobileTab(screen: MobileScreen): MobileTab | null {
  */
 export function tabTarget(tab: MobileTab, project: string, inboxBox: InboxBox): Sel {
   if (tab === "activity") return { kind: "inbox", project, box: inboxBox };
+  if (tab === "tasks") return { kind: "tasks", project };
   return { kind: tab, project };
 }
 

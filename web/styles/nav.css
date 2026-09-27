@@ -236,7 +236,7 @@
   .shell[data-m="search"] .side-find > .switcher-open { display: none; }
   .m-back { display: grid; place-items: center; flex: none; margin-left: -0.35rem; font-size: 1.3rem; width: 40px; height: 40px; border-radius: 8px; color: var(--ink2); }
   .m-back:active { background: var(--active); }
-  .m-tabs { display: grid; flex: none; border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); grid-template-columns: repeat(3, minmax(0, 1fr)); background: var(--surface); }
+  .m-tabs { display: grid; flex: none; border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); grid-template-columns: repeat(4, minmax(0, 1fr)); background: var(--surface); }
   .m-tabs button { position: relative; display: flex; justify-content: center; align-items: center; flex-direction: column; gap: 2px; min-height: 56px; font-size: 11.5px; font-weight: 500; color: var(--mute); }
   .m-tabs button.on { color: var(--ink); font-weight: 600; box-shadow: inset 0 2px 0 var(--accent); }
   .m-tabs em { font-style: normal; background: var(--badge); color: var(--badge-ink); position: absolute; top: 6px; left: calc(50% + 6px); display: grid; place-items: center; min-width: 17px; height: 17px; padding: 0 4px;

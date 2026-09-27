@@ -6,11 +6,13 @@ test("each selection maps to one phone screen and its bottom tab", () => {
   assert.equal(mobileScreen({ kind: "home", project: "alpha" }, false), "home");
   assert.equal(mobileScreen({ kind: "dms", project: "alpha" }, false), "dms");
   assert.equal(mobileScreen({ kind: "inbox", project: "alpha" }, false), "activity");
+  assert.equal(mobileScreen({ kind: "tasks", project: null }, false), "tasks");
   assert.equal(mobileScreen({ kind: "jev", project: "alpha" }, false), "jev");
   assert.equal(mobileScreen({ kind: "channel", id: "a", thread: "root" }, false), "channel");
   assert.equal(mobileScreen({ kind: "channel", id: "a" }, true), "search");
 
   assert.equal(mobileTab("activity"), "activity");
+  assert.equal(mobileTab("tasks"), "tasks");
   assert.equal(mobileTab("jev"), "home");
   assert.equal(mobileTab("search"), "home");
   assert.equal(mobileTab("channel"), null);
@@ -20,6 +22,7 @@ test("tabs lead to the project's lists, Activity to its For you view", () => {
   assert.deepEqual(tabTarget("home", "alpha", "unread"), { kind: "home", project: "alpha" });
   assert.deepEqual(tabTarget("dms", "alpha", "unread"), { kind: "dms", project: "alpha" });
   assert.deepEqual(tabTarget("activity", "alpha", "all"), { kind: "inbox", project: "alpha", box: "all" });
+  assert.deepEqual(tabTarget("tasks", "alpha", "all"), { kind: "tasks", project: "alpha" });
 });
 
 test("a channel's back arrow returns to the list it came from, else to the list that holds it", () => {

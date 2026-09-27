@@ -38,7 +38,7 @@ export type ChannelTab = "messages" | "tasks" | "contract" | "terminal";
  * Messages, the message stream, Jev advice strip and composer.
  */
 export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, channel, threadPaneId, stickBottom, threadOpenAnchor, unreadTarget,
-  go, roomTick, routingView, activeBrainChannel, brainNames, onOpenRouting, onInvite, compose, onMarkUnread, setErr, onBack }: {
+  go, roomTick, routingView, activeBrainChannel, brainNames, onOpenRouting, onInvite, compose, draftInsert, onDraftInserted, onMarkUnread, setErr, onBack }: {
   channelId: string;
   /** A new explicit badge navigation reveals Messages without remounting its draft. */
   unreadTarget?: UnreadTarget | null;
@@ -57,6 +57,8 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
   onOpenRouting: () => void;
   onInvite: () => void;
   compose: ReturnType<typeof useSend>;
+  draftInsert?: { token: string; text: string } | null;
+  onDraftInserted?: (token: string) => void;
   /** Marks root messages from `seq` on unread for the Human and refreshes the read state. */
   onMarkUnread: (channelId: string, seq: number) => Promise<void>;
   setErr: (error: string) => void;
@@ -226,6 +228,8 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
       )}
       <Composer
         agents={roomAgents}
+        draftInsert={draftInsert}
+        onDraftInserted={onDraftInserted}
         placeholder={
           activeChannel
             ? `Message ${channelTitle(activeChannel)}`
