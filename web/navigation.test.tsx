@@ -44,10 +44,11 @@ function fixture(t: TestContext) {
   return { hive, human, home, other };
 }
 
-async function mount(t: TestContext, hive: Hive, hash: string) {
+async function mount(t: TestContext, hive: Hive, hash: string, onFetch?: (url: string, init?: RequestInit) => void) {
   const app = createApp(hive);
   window.happyDOM.setURL(`http://localhost/${hash}`);
   t.mock.method(globalThis, 'fetch', async (url: string, init?: RequestInit) => {
+    onFetch?.(url, init);
     if (url === '/api/ui/session') return Response.json({ ok: true });
     return app.request(url, init);
   });
@@ -73,6 +74,31 @@ async function mount(t: TestContext, hive: Hive, hash: string) {
   const navButton = (text: RegExp) => [...sidebar().querySelectorAll<HTMLButtonElement>('button')].find(button => text.test(button.textContent ?? ''));
   return { host, sidebar, railButton, navButton };
 }
+
+test('Human changes only a brain launch mode through the saved PATCH route', async t => {
+  const { hive, home } = fixture(t);
+  const brain = hive.identity.join({ role: 'brain', project: home.slug }).agent;
+  const worker = hive.identity.join({ role: 'worker', project: home.slug, seniority: 'mid' }).agent;
+  const calls: Array<{ method: string; body: unknown }> = [];
+  const view = await mount(t, hive, `#/inbox/${home.slug}`, (url, init) => {
+    if (url === `/api/ui/agents/${brain.name}/launch-mode`)
+      calls.push({ method: init?.method ?? 'GET', body: JSON.parse(String(init?.body ?? 'null')) });
+  });
+  const row = (name: string) => [...view.host.querySelectorAll<HTMLElement>('.person')]
+    .find(item => item.querySelector('.pn')?.textContent === name)!;
+  assert.equal(hive.identity.getAgent(brain.id).launchMode, 'approval');
+  assert.match(row(brain.name).textContent!, /Approval/);
+  await act(async () => row(brain.name).querySelector<HTMLButtonElement>('.kebab')!.click());
+  const toggle = row(brain.name).querySelector<HTMLButtonElement>('[role="menuitemcheckbox"]')!;
+  assert.equal(toggle.getAttribute('aria-checked'), 'false');
+  await act(async () => toggle.click());
+  await settle();
+  assert.deepEqual(calls, [{ method: 'PATCH', body: { mode: 'auto' } }]);
+  assert.equal(hive.identity.getAgent(brain.id).launchMode, 'auto');
+  assert.match(row(brain.name).textContent!, /Auto/);
+  await act(async () => row(worker.name).querySelector<HTMLButtonElement>('.kebab')!.click());
+  assert.equal(row(worker.name).querySelector('[role="menuitemcheckbox"]'), null);
+});
 
 // happy-dom's event classes are not the DOM lib's; dispatch them untyped.
 const fire = (target: EventTarget, event: unknown) => target.dispatchEvent(event as Event);

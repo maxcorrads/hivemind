@@ -18,6 +18,7 @@ type AgentActions = {
   onCreateBot: (projectId: string) => void;
   onManageBot: (agent: Agent) => void;
   onAskAgent: (name: string, kind: "clear" | "remove") => void;
+  onSetLaunchMode?: (agent: Agent, mode: "approval" | "auto") => Promise<void>;
 };
 
 /**
@@ -411,6 +412,7 @@ function ProjectSection({ project, snap, sel, go, unified, tools, find, onProjec
           onOpen={agentActions.onAgent}
           onAskClear={(name) => agentActions.onAskAgent(name, "clear")}
           onAskRemove={(name) => agentActions.onAskAgent(name, "remove")}
+          onSetLaunchMode={agentActions.onSetLaunchMode}
         />
       </div>
     </div>

@@ -168,6 +168,8 @@
 .person-meta .focus { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--mute); }
 .person-meta .queue-badge { flex: none; margin: 0; padding: 0 5px; border-radius: 8px; font-size: 10.5px; line-height: 15px; }
 .person-details .inbox-receipt { font-size: 10.5px; line-height: 15px; color: var(--mute); opacity: 1; }
+.person-launch-mode { align-self: flex-start; font-size: 10.5px; line-height: 15px; color: var(--mute); }
+.person-mode-error { font-size: 11px; line-height: 1.35; color: var(--bad-ink); overflow-wrap: anywhere; }
 .person > .kebab { align-self: flex-start; margin: 3px 3px 0 0; opacity: 0; }
 .person:hover > .kebab, .person:focus-within > .kebab, .person > .kebab.on { opacity: 1; }
 @media (hover: none) { .person > .kebab { opacity: 1; } }

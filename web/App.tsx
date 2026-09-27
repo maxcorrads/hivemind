@@ -161,6 +161,11 @@ export function App() {
       setErr(String((error as Error)?.message || error));
     }
   };
+  const setAgentLaunchMode = async (agent: Agent, mode: "approval" | "auto") => {
+    const { agent: saved } = await api.setAgentLaunchMode(agent.name, mode);
+    setSnap(current => current ? { ...current,
+      agents: current.agents.map(item => item.id === saved.id ? saved : item) } : current);
+  };
   /** Error banner retry: reload the snapshot and whatever conversation or inbox is on screen. */
   const retry = () => {
     setErr(null);
@@ -259,6 +264,7 @@ export function App() {
         agentActions={{
           onAgent, onCreateBot: setBotProject, onManageBot: setCredentialBot,
           onAskAgent: (name, kind) => agentConfirm.setAgentConfirm({ name, kind }),
+          onSetLaunchMode: setAgentLaunchMode,
         }} />
 
       <main className="desk">

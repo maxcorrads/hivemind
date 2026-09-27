@@ -212,6 +212,10 @@ export const api = {
     req<{ ok: true }>(`/api/ui/projects/${encodeURIComponent(slug)}`, { method: "DELETE" }),
   removeAgent: (name: string) =>
     req<{ ok: true; name: string }>(`/api/ui/agents/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  setAgentLaunchMode: (name: string, mode: "approval" | "auto") =>
+    req<{ agent: Agent }>(`/api/ui/agents/${encodeURIComponent(name)}/launch-mode`, {
+      method: "PATCH", body: JSON.stringify({ mode }),
+    }),
   telegram: () => req<TelegramSettings>("/api/ui/telegram"),
   saveTelegram: (body: {
     botToken?: string;
