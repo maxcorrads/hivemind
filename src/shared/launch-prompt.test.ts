@@ -33,14 +33,15 @@ const base = {
   adoptUntrusted: true,
 };
 
-test("README points to the UI prompts and keeps only a resume one-liner", () => {
-  const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
-  const section = readme.split("## Prompts (English)")[1]!.split("### After they are online")[0]!;
+test("the guide points to the UI prompts and keeps only a resume one-liner", () => {
+  const guide = readFileSync(new URL("../../docs/guide.md", import.meta.url), "utf8");
+  const section = guide.split("## Connecting agents")[1]!.split("## Tasks and jobs")[0]!;
   assert.match(section, /Launch agent → Copy/);
   const prompts = [...section.matchAll(/```\n([\s\S]*?)\n```/g)].map(match => match[1]!);
   assert.equal(prompts.length, 1);
   assert.match(prompts[0]!, /join with role=worker, resume=Forge\. Then call whoami with orders=true/);
-  assert.doesNotMatch(readme, /do not implement/i);
+  for (const doc of ["../../README.md", "../../docs/guide.md"])
+    assert.doesNotMatch(readFileSync(new URL(doc, import.meta.url), "utf8"), /do not implement/i);
 });
 
 test("launch prompt adopts untrusted hive mail first", () => {

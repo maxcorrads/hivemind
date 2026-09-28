@@ -90,6 +90,8 @@
     "CONTRIBUTING.md",
     "TESTING.md",
     "docs",
+    "!docs/images/*.png",
+    "!docs/images/*.gif",
     "LICENSE",
     "NOTICE"
   ],

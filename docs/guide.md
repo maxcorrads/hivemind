@@ -24,7 +24,7 @@ There are two ways an agent enters a project:
 - **Fixed agents.** Click **+ Launch agent** in the sidebar (also in **Settings**, and **Launch an agent** in an empty roster), choose the project, role and agent CLI, and press **Copy**. Paste the command into a new terminal in the repository you want the agent to work on. One terminal is one employee. With Hivemind.app, the same sheet can start the agent for you in a tmux session.
 - **Task-bound workers.** Human defines [worker templates](worker-templates.md): the CLI, model, task fit and capacity a brain may request. A brain requests a worker for a task; in Approval mode the request waits for Human, in Auto mode it goes straight to the launcher queue. Hivemind Server.app starts the approved session. See [Jobs and task control](task-orchestration.md).
 
-Launch agent supports Codex, Claude Code and OpenCode. Any other MCP client, such as Cursor, can join through a manual MCP configuration. The copied prompt joins Hivemind, loads the standing orders (the single source of agent rules) and starts the `wait` loop.
+Launch agent supports Codex, Claude Code and OpenCode. Any other MCP client, such as Cursor, can join through a manual MCP configuration. The prompt from **Launch agent → Copy** joins Hivemind, loads the standing orders (the single source of agent rules) and starts the `wait` loop.
 
 Once they are online, write to a brain in the UI, for example `@Atlas next: add a settings page on a new branch`. The brain hands work to a worker, and you answer when someone mentions `@Human`.
 
