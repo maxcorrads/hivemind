@@ -9,8 +9,8 @@
 
 /* Keep the thread's original default width; the 8px track is the keyboard and pointer separator. */
 @media (min-width: 961px) {
-  .shell:has(> .thread-resizer) { grid-template-columns: 60px 264px minmax(0, 1fr) 8px var(--thread-w); }
-  html.layout-unified .shell:has(> .thread-resizer) { grid-template-columns: 264px minmax(0, 1fr) 8px var(--thread-w); }
+  .shell:has(> .thread-resizer) { grid-template-columns: 60px var(--sidebar-w) minmax(0, 1fr) 8px min(var(--thread-w), calc(100% - 60px - var(--sidebar-w) - 308px)); }
+  html.layout-unified .shell:has(> .thread-resizer) { grid-template-columns: var(--sidebar-w) minmax(0, 1fr) 8px min(var(--thread-w), calc(100% - var(--sidebar-w) - 308px)); }
   .shell:has(> .thread-resizer) > .thread { border-left: 0; }
 }
 .thread-resizer { position: relative; z-index: 2; width: 16px; min-width: 16px; height: 100%; margin-left: -4px;

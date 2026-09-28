@@ -173,6 +173,88 @@ test("thread panes resize with pointer and keyboard, persist width and keep live
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
 });
 
+for (const layout of ["rail", "unified"] as const) {
+  test(`sidebar width is adjustable and preserved alongside a thread (${layout})`, async ({ page }) => {
+    await page.clock.install();
+    await page.addInitScript(value => localStorage.setItem("hivemind-layout", value), layout);
+    await page.setViewportSize({ width: 1600, height: 900 });
+    const alpha = project("alpha", "Alpha Hive"), a = channel("a", "Alpha", alpha);
+    const roots = Array.from({ length: 35 }, (_, i) => message(`root-${i}`, i + 1, a.id,
+      `Conversation ${i}: ${"Text that wraps as navigation expands. ".repeat(8)}`));
+    const root = roots.at(-1)!;
+    const replies = Array.from({ length: 35 }, (_, i) => message(`reply-${i}`, i + 40, a.id,
+      `Reply ${i}: ${"Reply content that reflows with the sidebar. ".repeat(8)}`, root.id));
+    await installSnapshot(page, () => snapshot([alpha], [a]));
+    await installMessages(page, async (route, _id, threadId) => fulfillJson(route,
+      { ...payload(a, threadId ? [root, ...replies] : roots), threadId, replyCounts: { [root.id]: replies.length } }));
+    const sockets = await installSocketHarness(page);
+    await page.goto("/#/c/a");
+    const sidebar = page.locator("aside.rail");
+    const divider = page.getByRole("separator", { name: "Resize sidebar", exact: true });
+    const width = () => sidebar.evaluate(el => el.getBoundingClientRect().width);
+    await expect(divider).toBeVisible();
+    await expect.poll(width).toBe(264);
+    await page.clock.runFor(2_100);
+    const box = (await divider.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + 200);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 100, box.y + 200, { steps: 8 });
+    await page.mouse.up();
+    await expect.poll(width).toBe(364);
+    await expect.poll(() => page.locator("main .stream").evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(3);
+    await expect(page.locator("main").getByRole("button", { name: /jump to recent/i })).toHaveCount(0);
+    await divider.press("ArrowLeft");
+    await expect.poll(width).toBe(348);
+    const saved = await page.evaluate(() => localStorage.getItem("hivemind-sidebar-width"));
+    const cancelBox = (await divider.boundingBox())!;
+    await page.mouse.move(cancelBox.x + cancelBox.width / 2, cancelBox.y + 200);
+    await page.mouse.down();
+    await page.mouse.move(cancelBox.x + 80, cancelBox.y + 200, { steps: 4 });
+    await page.keyboard.press("Escape");
+    await page.mouse.up();
+    await expect.poll(width).toBe(348);
+    expect(await page.evaluate(() => localStorage.getItem("hivemind-sidebar-width"))).toBe(saved);
+    await page.reload();
+    await expect.poll(width).toBe(348);
+    const scrollEdge = await sidebar.locator(".side-scroll").evaluate(el => el.getBoundingClientRect().right);
+    expect(scrollEdge).toBeLessThanOrEqual((await divider.boundingBox())!.x + 1);
+    await page.locator("main.desk").getByRole("button", { name: "35 replies", exact: true }).click();
+    const thread = page.locator("aside.thread"), stream = thread.locator(".stream");
+    await expect(thread).toBeVisible();
+    const threadDivider = page.getByRole("separator", { name: "Resize thread", exact: true });
+    await threadDivider.press("Home");
+    await divider.press("ArrowRight");
+    await expect.poll(width).toBe(364);
+    await expect.poll(() => page.locator("main.desk").evaluate(el => el.getBoundingClientRect().width)).toBeGreaterThanOrEqual(299);
+    await expect.poll(() => thread.evaluate(el => el.getBoundingClientRect().width)).toBeGreaterThanOrEqual(280);
+    await expect.poll(async () => Number(await threadDivider.getAttribute("aria-valuenow")) -
+      await thread.evaluate(el => el.getBoundingClientRect().width)).toBe(0);
+    const threadWidth = await thread.evaluate(el => el.getBoundingClientRect().width);
+    await threadDivider.press("ArrowRight");
+    await expect.poll(() => thread.evaluate(el => el.getBoundingClientRect().width)).toBe(threadWidth - 16);
+    const live = message("sidebar-live", 100, a.id, "Live reply after resizing navigation", root.id);
+    replies.push(live);
+    sockets.at(-1)!.send(JSON.stringify({ type: "message", payload: live }));
+    await expect(stream.getByText(live.body, { exact: true })).toBeInViewport();
+    await expect(thread.getByRole("button", { name: /refresh thread/i })).toHaveCount(0);
+    await page.screenshot({ path: test.info().outputPath(`sidebar-${layout}.png`) });
+    await page.setViewportSize({ width: 1000, height: 800 });
+    await divider.press("End");
+    await expect.poll(() => page.locator("main.desk").evaluate(el => el.getBoundingClientRect().width)).toBeGreaterThanOrEqual(299);
+    await expect.poll(() => thread.evaluate(el => el.getBoundingClientRect().width)).toBeGreaterThanOrEqual(280);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(1000);
+    await thread.getByRole("button", { name: "Close thread", exact: true }).click();
+    await divider.press("End");
+    await expect.poll(width).toBe(520);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(divider).toBeHidden();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
+    await page.setViewportSize({ width: 1600, height: 900 });
+    await expect(divider).toBeVisible();
+    await expect.poll(width).toBe(520);
+  });
+}
+
 const harnesses = new WeakMap<Page, Harness>();
 
 test.beforeEach(async ({ page }) => {

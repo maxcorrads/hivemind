@@ -285,6 +285,7 @@ export function App() {
       )}
       {/* Settings lives at the foot of the rail or in the top bar, never in the sidebar. */}
       <Sidebar snap={snap} sel={sel} go={navigate} live={live} unified={unified} onUnread={openUnread}
+        resizable={!mobile} threadOpen={threadVisible}
         query={search.query} setQuery={search.setQuery} onSearchNow={search.searchNow} onLaunch={openLaunch}
         selectedProject={selectedProject} onSwitcher={() => setSwitcher("all")} onProjectSwitcher={() => setSwitcher("projects")}
         agentWork={snap.agentWork ?? {}}

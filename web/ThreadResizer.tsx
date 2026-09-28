@@ -32,6 +32,8 @@ export function ThreadResizer({ shellRef }: { shellRef: RefObject<HTMLDivElement
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
     observer?.observe(shell);
     observer?.observe(desk); // The navigation layout can move the desk without resizing the shell.
+    const sidebar = shell.querySelector<HTMLElement>(".rail");
+    if (sidebar) observer?.observe(sidebar); // CSS may shrink the thread while keeping desk width fixed.
     window.addEventListener("resize", measure);
     return () => { observer?.disconnect(); window.removeEventListener("resize", measure); };
   }, [shellRef]);

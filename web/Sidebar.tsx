@@ -8,6 +8,7 @@ import type { Snapshot } from "./api.ts";
 import { ChannelItem, DmRow } from "./ChannelNav.tsx";
 import { projectAttention, projectInitials, SWITCHER_SHORTCUT } from "./nav-model.ts";
 import { SessionsSheet } from "./SessionsSheet.tsx";
+import { SidebarResizer } from "./SidebarResizer.tsx";
 import type { InboxBox, Sel } from "./selection.ts";
 import type { DmNav } from "./use-dm-nav.ts";
 import { useTerminalState } from "./use-terminal.ts";
@@ -29,7 +30,8 @@ type AgentActions = {
  * connection state. Settings sits at the foot of the project rail, or in the top bar.
  */
 export function Sidebar({ snap, sel, go, live, unified, query, setQuery, onSearchNow, onLaunch, selectedProject,
-  onSwitcher, onProjectSwitcher, inboxBox, projectSheets, onNewChannel, dms, agentActions, agentWork, onUnread }: {
+  onSwitcher, onProjectSwitcher, inboxBox, projectSheets, onNewChannel, dms, agentActions, agentWork, onUnread,
+  resizable, threadOpen }: {
   snap: Snapshot;
   sel: Sel;
   go: (next: Sel) => void;
@@ -49,6 +51,8 @@ export function Sidebar({ snap, sel, go, live, unified, query, setQuery, onSearc
   agentActions: AgentActions;
   agentWork: Record<string, AgentWork>;
   onUnread: (channelId: string) => void;
+  resizable?: boolean;
+  threadOpen?: boolean;
 }) {
   const projects = snap.projects ?? [];
   const project = projects.find(item => item.slug === selectedProject) ?? projects[0];
@@ -144,6 +148,7 @@ export function Sidebar({ snap, sel, go, live, unified, query, setQuery, onSearc
           <Terminal size={15} aria-hidden="true" /> Launch agent
         </button>
       )}
+      {resizable && <SidebarResizer threadOpen={Boolean(threadOpen)} />}
     </aside>
   );
 }
