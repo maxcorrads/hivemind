@@ -250,6 +250,18 @@ test("model and effort become software-aware flags", () => {
     cdWorktree: false,
   });
   assert.match(claude, /^HIVEMIND_ROLE='brain' claude-tw --model claude-opus-4-6 --effort max /);
+  for (const model of ["claude-sonnet-5-5", "claude-opus-5-5"]) {
+    const worker = buildLaunchBlock({
+      ...base,
+      role: "worker",
+      seniority: "senior",
+      software: "claude-tw",
+      model,
+      effort: "high",
+      cdWorktree: false,
+    });
+    assert.ok(worker.startsWith(`HIVEMIND_ROLE='worker' claude-tw --model ${model} --effort high `));
+  }
 });
 
 test("workers without seniority cannot launch", () => {
