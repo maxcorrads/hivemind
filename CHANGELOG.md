@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.6.0](https://github.com/maxcorrads/hivemind/compare/v0.5.0...v0.6.0) (2026-09-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* **orchestration:** Restart every agent MCP client after upgrading. Codex profiles must forward HIVEMIND_ROLE.
+
+### Features
+
+* add Claude Sonnet 5.5 to launch models ([#308](https://github.com/maxcorrads/hivemind/issues/308)) ([1fbbb30](https://github.com/maxcorrads/hivemind/commit/1fbbb301c87f150d31eb583e690747dce2263f7d))
+* **codex:** print a Codex MCP block and map unlabelled agents to their session ([#263](https://github.com/maxcorrads/hivemind/issues/263)) ([dd97243](https://github.com/maxcorrads/hivemind/commit/dd9724380e491336fc2859afa45b1cc60869afd4))
+* **ios:** iOS/iPadOS app and remote gateway with QR pairing ([#256](https://github.com/maxcorrads/hivemind/issues/256)) ([63c3c84](https://github.com/maxcorrads/hivemind/commit/63c3c84e61d3096f3bfdbe6b76937c4562e3ea4f))
+* **launch:** offer Claude Opus 5.5 and GPT-6 Sol and Luna ([#260](https://github.com/maxcorrads/hivemind/issues/260)) ([f3f6c65](https://github.com/maxcorrads/hivemind/commit/f3f6c65acf230af54e25a558b42adc49cf02ccb3))
+* **launch:** pass an OpenCode Go API key to launched agents ([#261](https://github.com/maxcorrads/hivemind/issues/261)) ([cdeb306](https://github.com/maxcorrads/hivemind/commit/cdeb3065a59640552629c80fda4e97915277ed82))
+* **launch:** pass environment variables to launched agents ([#264](https://github.com/maxcorrads/hivemind/issues/264)) ([a77dc69](https://github.com/maxcorrads/hivemind/commit/a77dc6935e205501ad11dca08fb91ece245d091a))
+* **macos:** native UI and menu-bar server apps, agents in tmux with an in-app terminal ([#253](https://github.com/maxcorrads/hivemind/issues/253)) ([bf44e56](https://github.com/maxcorrads/hivemind/commit/bf44e5635e9592e758e017665c93ed4dc9ddf526))
+* **orchestration:** complete agent orchestration and role-scoped MCP ([b8cf006](https://github.com/maxcorrads/hivemind/commit/b8cf006dbf635b3c375bc983f5887886c0b1a12d))
+* **terminals:** redesign the Terminals sheet as project rows with Terminate all ([#262](https://github.com/maxcorrads/hivemind/issues/262)) ([5f64304](https://github.com/maxcorrads/hivemind/commit/5f643040729290cddbc7ec400b74aa16a65a566d))
+* **ui:** neutral redesign with project-rail and single-sidebar layouts ([#251](https://github.com/maxcorrads/hivemind/issues/251)) ([b11136b](https://github.com/maxcorrads/hivemind/commit/b11136bf893643aae8178eba8e9afc297338fcec))
+
+
+### Bug Fixes
+
+* keep host turns active while awaiting Hivemind mail ([#302](https://github.com/maxcorrads/hivemind/issues/302)) ([6955c38](https://github.com/maxcorrads/hivemind/commit/6955c38935933b13bc427e9c0a3bada9c99426ef)), closes [#258](https://github.com/maxcorrads/hivemind/issues/258)
+* **launch:** add Grok 4.7 Cursor model choices ([#255](https://github.com/maxcorrads/hivemind/issues/255)) ([84f5e2d](https://github.com/maxcorrads/hivemind/commit/84f5e2dc52a560815b359976445137ff91fc5b84))
+* **launch:** keep the terminal session label out of launch-environment ([#265](https://github.com/maxcorrads/hivemind/issues/265)) ([8f0e583](https://github.com/maxcorrads/hivemind/commit/8f0e5832695cbfdde37d4aaaa12fd1c6185a768c))
+* **macos:** launch agents in an interactive login shell ([#259](https://github.com/maxcorrads/hivemind/issues/259)) ([41bf099](https://github.com/maxcorrads/hivemind/commit/41bf099ce930995c60cd585b1023e3e4c2b23594))
+* **macos:** refresh the Remote Access submenu when its state changes ([#257](https://github.com/maxcorrads/hivemind/issues/257)) ([c8810d9](https://github.com/maxcorrads/hivemind/commit/c8810d9398ee235acc8debcfdf31aa7e841f2e94))
+* omit empty environments from native worker launches ([#301](https://github.com/maxcorrads/hivemind/issues/301)) ([87f5e19](https://github.com/maxcorrads/hivemind/commit/87f5e195959c3d51ab27c84f139629fbbf1606b7)), closes [#277](https://github.com/maxcorrads/hivemind/issues/277)
+* open threads at latest replies and resize sidebar and thread panes ([#307](https://github.com/maxcorrads/hivemind/issues/307)) ([d24b541](https://github.com/maxcorrads/hivemind/commit/d24b541fc62068cbb999c9c48c2a22396ea67ba9))
+
 ## [0.5.0](https://github.com/maxcorrads/hivemind/compare/v0.4.0...v0.5.0) (2026-09-25)
 
 
