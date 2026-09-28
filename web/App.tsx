@@ -30,6 +30,7 @@ import { newerTelegramHealth } from "./telegram-health.ts";
 import { TelegramSheet } from "./TelegramSheet.tsx";
 import { TaskViews } from "./TaskViews.tsx";
 import { ThreadAside } from "./ThreadAside.tsx";
+import { ThreadResizer } from "./ThreadResizer.tsx";
 import { TopBar } from "./TopBar.tsx";
 import { useAdaptiveRouting } from "./use-adaptive-routing.ts";
 import { useChannelPane } from "./use-channel-pane.ts";
@@ -53,6 +54,7 @@ export function App() {
   // the first snapshot and WebSocket (useRealtime), which start before the
   // channel and thread loads (useConversationLoads).
   const [err, setErr] = useState<string | null>(null);
+  const shellRef = useRef<HTMLDivElement>(null);
   const selection = useSelection();
   const { sel, threadId, setThreadId, selRef } = selection;
   const hive = useHiveSnapshot(setErr);
@@ -267,9 +269,11 @@ export function App() {
     onAdaptiveRouting: () => setAdaptiveRoutingOpen(true), onLaunch: () => openLaunch(), onHelp: () => setHelpOpen(true),
   };
   const railProject = projects.some(p => p.slug === selectedProject) ? selectedProject : projects[0]?.slug ?? "";
+  const threadVisible = Boolean(threadId && threadPane && sel.kind === "channel" &&
+    threadPane.channel.id === sel.id && threadPane.threadId === threadId);
 
   return (
-    <div className="shell" data-m={screen}>
+    <div className="shell" data-m={screen} ref={shellRef}>
       {unified ? (
         <TopBar live={live} projectName={projects.find(p => p.slug === railProject)?.name} onSwitcher={() => setSwitcher("all")}
           onAllTasks={() => navigate({ kind: 'tasks', project: null })} allTasksActive={sel.kind === 'tasks' && sel.project === null}
@@ -371,6 +375,7 @@ export function App() {
             unreadTarget={unreadTarget}
             channel={channelPane} threadPaneId={threadPane?.threadId} stickBottom={stickBottom}
             threadOpenAnchor={threadOpenAnchor} go={go} roomTick={roomTick} routingView={routingView}
+            onReopenThread={threadState.refreshThread}
             activeBrainChannel={activeBrainChannel} brainNames={brainNames}
             onOpenRouting={() => setRoutingPanelOpen(true)} onInvite={() => channelSheets.setInviteOpen(true)}
             compose={compose} draftInsert={taskDraft?.channelId === sel.id ? taskDraft : null}
@@ -391,7 +396,8 @@ export function App() {
         )}
       </main>
 
-      {threadId && threadPane && sel.kind === "channel" && threadPane.channel.id === sel.id && threadPane.threadId === threadId && (
+      {threadVisible && !mobile && <ThreadResizer shellRef={shellRef} />}
+      {threadVisible && threadId && threadPane && sel.kind === "channel" && (
         <ThreadAside channelId={sel.id} threadId={threadId} threadPane={threadPane} thread={threadState}
           onClose={() => {
             if (sel.kind === "channel") go({ kind: "channel", id: sel.id });

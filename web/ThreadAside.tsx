@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useMemo } from "react";
+import { Fragment, useCallback, useMemo, useRef } from "react";
 import { ChevronDown, X } from "lucide-react";
 import type { Agent, Message, ThreadStatus } from "../src/shared/types.ts";
 import { api, type ChannelPayload } from "./api.ts";
@@ -7,7 +7,6 @@ import { channelTitle, STATUSES } from "./labels.ts";
 import { BackButton } from "./MobileNav.tsx";
 import { MessageRow } from "./MessageRow.tsx";
 import { streamRows } from "./message-stream.ts";
-import { holdLivePane, isReadingHistory } from "./pane-window.ts";
 import { Popover } from "./Popover.tsx";
 import { StreamDivider } from "./StreamCards.tsx";
 import { TaskCard, TaskChip } from './TaskCard.tsx';
@@ -24,7 +23,9 @@ export function ThreadAside({ channelId, threadId, threadPane, thread, onClose, 
   roomAgents: Agent[];
   compose: ReturnType<typeof useSend>;
 }) {
-  const { threadStream, setThreadPane, onThreadMessage } = thread;
+  const { threadStream, onThreadMessage } = thread;
+  const touchY = useRef<number | null>(null);
+  const scrollbarY = useRef<number | null>(null);
   const onReact = useCallback((m: Message, emoji: string) => {
     void api.react(m.seq, emoji, !m.reactions?.some(reaction => reaction.emoji === emoji && reaction.mine))
       .then((r) => onThreadMessage(r.message));
@@ -58,9 +59,37 @@ export function ThreadAside({ channelId, threadId, threadPane, thread, onClose, 
           {threadPane.deferredLive ? "New replies — refresh thread" : "Refresh thread"}
         </button>
       )}
-      <div className="stream" role="log" aria-label="Thread replies" ref={threadStream} onScroll={() => {
-        if (isReadingHistory(threadStream.current)) setThreadPane((current) => current ? holdLivePane(current) : current);
-      }}>
+      <div className="stream" role="log" aria-label="Thread replies" ref={threadStream}
+        onWheel={(event) => thread.onThreadScrollIntent(event.deltaY)}
+        onTouchStart={(event) => { touchY.current = event.touches[0]?.clientY ?? null; }}
+        onTouchMove={(event) => {
+          const y = event.touches[0]?.clientY;
+          if (y !== undefined && touchY.current !== null && Math.abs(y - touchY.current) > 4) {
+            thread.onThreadScrollIntent(y < touchY.current ? 1 : -1);
+            touchY.current = y;
+          }
+        }}
+        onTouchEnd={() => { touchY.current = null; }}
+        onPointerDown={(event) => {
+          // The scrollbar targets the stream itself; clicks on rows/buttons do not imply scrolling.
+          if (event.target === event.currentTarget && event.clientX >= event.currentTarget.getBoundingClientRect().right - 24) {
+            scrollbarY.current = event.clientY;
+            thread.onThreadScrollIntent();
+          }
+        }}
+        onPointerMove={(event) => {
+          if (scrollbarY.current !== null && event.buttons && Math.abs(event.clientY - scrollbarY.current) > 3) {
+            thread.onThreadScrollIntent(event.clientY > scrollbarY.current ? 1 : -1);
+            scrollbarY.current = event.clientY;
+          }
+        }}
+        onPointerUp={() => { scrollbarY.current = null; }}
+        onPointerCancel={() => { scrollbarY.current = null; }}
+        onKeyDown={(event) => {
+          if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key))
+            thread.onThreadScrollIntent(["ArrowDown", "PageDown", "End", " "].includes(event.key) ? 1 : -1);
+        }}
+        onScroll={thread.onThreadScroll}>
         {threadPane.task && <TaskCard task={threadPane.task} />}
         {threadPane.hasOlder && (
           <button type="button" className="older" onClick={() => thread.loadEarlier(threadPane, channelId, threadId)}>

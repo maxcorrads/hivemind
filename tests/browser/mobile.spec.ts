@@ -67,6 +67,28 @@ async function installHive(page: Page) {
 
 const tabs = (page: Page) => page.getByRole("navigation", { name: "Sections" });
 
+test("tapping a long thread opens its newest replies at the bottom on mobile", async ({ page }) => {
+  const hive = await installHive(page);
+  const replies = Array.from({ length: 122 }, (_, i) => message(`long-${i}`, i + 2, build.id,
+    `Mobile reply ${i}: ${"Long thread content. ".repeat(6)}`, root.id));
+  await page.route("**/api/ui/channels/build/messages*", route => {
+    const query = new URL(route.request().url()).searchParams;
+    if (!query.get("threadId")) return json(route, payload(build, [root], { replyCounts: { root: 122 } }));
+    const all = [root, ...replies], before = query.get("beforeSeq");
+    const rows = before ? all.filter(row => row.seq < Number(before)).slice(-80) : all.slice(0, 80);
+    return json(route, payload(build, rows, { threadId: root.id,
+      hasOlder: rows[0]!.seq > root.seq, hasNewer: rows.at(-1)!.seq < all.at(-1)!.seq }));
+  });
+  await page.goto("/#/c/build");
+  await page.getByRole("button", { name: "122 replies", exact: true }).tap();
+  const aside = page.locator("aside.thread");
+  await expect(aside.getByText(replies.at(-1)!.body, { exact: true })).toBeVisible();
+  await expect(aside.getByRole("button", { name: "Load more replies", exact: true })).toHaveCount(0);
+  await expect.poll(() => aside.locator(".stream").evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(3);
+  await expect(page.getByRole("separator", { name: "Resize thread", exact: true })).toHaveCount(0);
+  expect(hive.unexpected).toEqual([]);
+});
+
 for (const kind of ['root', 'reply', 'system'] as const) {
   test(`the mobile DM unread badge opens and highlights its latest unread ${kind}`, async ({ page }) => {
     const hive = await installHive(page), receipts: number[] = [];

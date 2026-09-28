@@ -4,7 +4,175 @@ import type { Agent, Channel, Message, Project, Thread } from "../../src/shared/
 import type { ChannelPayload, Snapshot } from "../../web/api.ts";
 import type { RoomView } from "../../src/shared/rooms.ts";
 
+for (const deferredReply of [false, true]) {
+  test(`long threads resume live updates when returning to the bottom (deferred=${deferredReply})`, async ({ page }) => {
+    const alpha = project("alpha", "Alpha Hive"), a = channel("a", "Alpha", alpha);
+    const root = message("root", 1, a.id, "Long thread root");
+    const replies = Array.from({ length: 130 }, (_, i) => message(`reply-${i}`, i + 2, a.id,
+      `Reply ${i}: ${"Text that makes this thread scroll. ".repeat(8)}`, root.id));
+    const threads: Thread[] = [{ id: root.id, channelId: a.id, status: "open" }];
+    await installSnapshot(page, () => snapshot([alpha], [a]));
+    await installMessages(page, async (route, _id, threadId) => {
+      const all = threadId ? [root, ...replies] : [root];
+      const params = new URL(route.request().url()).searchParams;
+      const before = params.get("beforeSeq"), after = params.get("afterSeq");
+      // Match storage's actual oldest-first thread default and cursor paging.
+      const rows = before ? all.filter(row => row.seq < Number(before)).slice(-80)
+        : all.filter(row => row.seq > Number(after ?? 0)).slice(0, 80);
+      return fulfillJson(route, { ...payload(a, rows, threads), threadId,
+        replyCounts: { [root.id]: replies.length },
+        hasOlder: rows[0]!.seq > all[0]!.seq, hasNewer: rows.at(-1)!.seq < all.at(-1)!.seq });
+    });
+    const sockets = await installSocketHarness(page);
+    await page.goto("/#/c/a");
+    await page.getByRole("button", { name: "130 replies", exact: true }).click();
+    const aside = page.locator("aside.thread"), stream = aside.locator(".stream");
+    await expect(stream.locator(".msg")).toHaveCount(80);
+    await expect(stream.getByText(replies.at(-1)!.body, { exact: true })).toBeVisible();
+    await expect(aside.getByRole("button", { name: "Load more replies", exact: true })).toHaveCount(0);
+    await expect.poll(() => stream.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(3);
+    await stream.hover();
+    await page.mouse.wheel(0, -400);
+    await expect(aside.getByRole("button", { name: "Refresh thread", exact: true })).toBeVisible();
+    if (deferredReply) {
+      const pending = message("deferred", 132, a.id, "Reply delivered while reading older messages", root.id);
+      replies.push(pending);
+      sockets[0]!.send(JSON.stringify({ type: "message", payload: pending }));
+      await expect(aside.getByRole("button", { name: "New replies — refresh thread", exact: true })).toBeVisible();
+      await expect(stream.getByText(pending.body, { exact: true })).toHaveCount(0);
+    }
+    await page.mouse.wheel(0, 100_000);
+    await expect(aside.getByRole("button", { name: /refresh thread/i })).toHaveCount(0);
+    if (deferredReply) await expect(stream.getByText("Reply delivered while reading older messages", { exact: true })).toBeVisible();
+    const live = message("new-live", 133, a.id, "Automatic live reply after returning to the bottom", root.id);
+    replies.push(live);
+    sockets[0]!.send(JSON.stringify({ type: "message", payload: live }));
+    await expect(stream.getByText(live.body, { exact: true })).toBeVisible();
+    await expect.poll(() => stream.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(3);
+    await expect(aside.getByRole("button", { name: /refresh thread/i })).toHaveCount(0);
+    if (deferredReply) {
+      await stream.hover();
+      await page.mouse.wheel(0, -400);
+      await expect(aside.getByRole("button", { name: "Refresh thread", exact: true })).toBeVisible();
+      await aside.getByRole("button", { name: "Close thread", exact: true }).click();
+      await page.locator("main.desk").getByRole("button", { name: /\d+ replies/ }).click();
+      await expect(stream.getByText(live.body, { exact: true })).toBeVisible();
+      const reopened = message("reopened-live", 134, a.id, "Live reply after reopening the same thread", root.id);
+      replies.push(reopened);
+      sockets[0]!.send(JSON.stringify({ type: "message", payload: reopened }));
+      await expect(stream.getByText(reopened.body, { exact: true })).toBeVisible();
+      await expect(aside.getByRole("button", { name: /refresh thread/i })).toHaveCount(0);
+      await stream.hover();
+      await page.mouse.wheel(0, -400);
+      await expect(aside.getByRole("button", { name: "Refresh thread", exact: true })).toBeVisible();
+      await page.locator("main.desk").getByRole("button", { name: /\d+ replies/ }).click();
+      await expect(stream.getByText(reopened.body, { exact: true })).toBeInViewport();
+      await expect(aside.getByRole("button", { name: /refresh thread/i })).toHaveCount(0);
+    }
+  });
+}
+
+test("scrolling back up cancels a delayed automatic return to live", async ({ page }) => {
+  const alpha = project("alpha", "Alpha Hive"), a = channel("a", "Alpha", alpha);
+  const root = message("root", 1, a.id, "Catch-up conversation");
+  const replies = Array.from({ length: 40 }, (_, i) => message(`reply-${i}`, i + 2, a.id,
+    `Reply ${i}: ${"Scrollable reply content. ".repeat(12)}`, root.id));
+  const started = deferred(), release = deferred(), finished = deferred();
+  let delayNext = false;
+  await installSnapshot(page, () => snapshot([alpha], [a]));
+  await installMessages(page, async (route, _id, threadId) => {
+    const data = { ...payload(a, threadId ? [root, ...replies] : [root]), threadId };
+    if (threadId && delayNext) {
+      delayNext = false;
+      started.resolve();
+      await release.promise;
+      try { await fulfillJson(route, data); } catch { /* The upward gesture aborts this read. */ }
+      finally { finished.resolve(); }
+    } else await fulfillJson(route, data);
+  });
+  const sockets = await installSocketHarness(page);
+  await page.goto("/#/c/a/t/root");
+  const aside = page.locator("aside.thread"), stream = aside.locator(".stream");
+  await expect(stream.locator(".msg")).toHaveCount(41);
+  await stream.hover();
+  await page.mouse.wheel(0, -500);
+  await expect(aside.getByRole("button", { name: "Refresh thread", exact: true })).toBeVisible();
+  delayNext = true;
+  try {
+    await page.mouse.wheel(0, 100_000);
+    await started.promise;
+    await page.mouse.wheel(0, -500);
+    await expect.poll(() => stream.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeGreaterThan(100);
+    release.resolve();
+    await finished.promise;
+    const live = message("held-live", 100, a.id, "Reply retained until the reader returns", root.id);
+    replies.push(live);
+    sockets[0]!.send(JSON.stringify({ type: "message", payload: live }));
+    await expect(aside.getByRole("button", { name: "New replies — refresh thread", exact: true })).toBeVisible();
+    await expect(stream.getByText(live.body, { exact: true })).toHaveCount(0);
+    await page.mouse.wheel(0, 100_000);
+    await expect(stream.getByText(live.body, { exact: true })).toBeVisible();
+    await expect(aside.getByRole("button", { name: /refresh thread/i })).toHaveCount(0);
+  } finally { release.resolve(); }
+});
+
 type Harness = { seq: number; revision: number; receipts: number[][]; unexpected: string[]; errors: string[] };
+
+test("thread panes resize with pointer and keyboard, persist width and keep live replies visible", async ({ page }) => {
+  await page.clock.install();
+  await page.setViewportSize({ width: 1600, height: 900 });
+  const alpha = project("alpha", "Alpha Hive"), a = channel("a", "Alpha", alpha);
+  const root = message("root", 1, a.id, "Resizable conversation");
+  const replies = Array.from({ length: 35 }, (_, i) => message(`reply-${i}`, i + 2, a.id,
+    `Reply ${i}: ${"Text that wraps when resizing the pane. ".repeat(10)}`, root.id));
+  await installSnapshot(page, () => snapshot([alpha], [a]));
+  await installMessages(page, async (route, _id, threadId) => fulfillJson(route,
+    { ...payload(a, threadId ? [root, ...replies] : [root]), threadId }));
+  const sockets = await installSocketHarness(page);
+  await page.goto("/#/c/a/t/root");
+  const splitter = page.getByRole("separator", { name: "Resize thread", exact: true });
+  const aside = page.locator("aside.thread"), stream = aside.locator(".stream");
+  await expect(splitter).toBeVisible();
+  await expect(stream.locator(".msg")).toHaveCount(36);
+  const width = () => aside.evaluate(el => el.getBoundingClientRect().width);
+  const initial = await width();
+  // Resizing is not confined to the initial two-second font/layout settling window.
+  await page.clock.runFor(2_100);
+  const box = (await splitter.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + 140);
+  await page.mouse.down();
+  await page.mouse.move(box.x - 160, box.y + 140, { steps: 12 });
+  await page.mouse.up();
+  await expect.poll(width).toBeGreaterThan(initial + 140);
+  const dragged = await width();
+  await splitter.press("ArrowRight");
+  await expect.poll(width).toBe(dragged - 16);
+  const preferred = await width();
+  await expect.poll(() => stream.evaluate(el => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(3);
+  await expect(aside.getByRole("button", { name: /refresh thread/i })).toHaveCount(0);
+  const live = message("resize-live", 100, a.id, "Live reply after changing pane width", root.id);
+  replies.push(live);
+  sockets[0]!.send(JSON.stringify({ type: "message", payload: live }));
+  await expect(stream.getByText(live.body, { exact: true })).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath("resized-thread.png") });
+  await page.reload();
+  await expect(splitter).toBeVisible();
+  await expect.poll(width).toBe(preferred);
+  await splitter.press("Home");
+  await expect.poll(() => page.locator("main.desk").evaluate(el => el.getBoundingClientRect().width)).toBeGreaterThanOrEqual(299);
+  await splitter.press("End");
+  await expect.poll(width).toBe(280);
+  await page.setViewportSize({ width: 1000, height: 800 });
+  await splitter.press("Home");
+  await expect.poll(() => page.locator("main.desk").evaluate(el => el.getBoundingClientRect().width)).toBeGreaterThanOrEqual(299);
+  await expect.poll(width).toBeGreaterThanOrEqual(280);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(splitter).toBeHidden();
+  await expect(page.locator("main.desk")).toBeHidden();
+  await expect.poll(width).toBe(390);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
+});
+
 const harnesses = new WeakMap<Page, Harness>();
 
 test.beforeEach(async ({ page }) => {
@@ -31,6 +199,12 @@ function deferred() {
     resolve = done;
   });
   return { promise, resolve };
+}
+
+/** These fixtures distinguish historical jumps from the explicit latest-page cursor. */
+function historyBefore(url: URL): string | null {
+  const before = url.searchParams.get("beforeSeq");
+  return before === String(Number.MAX_SAFE_INTEGER) ? null : before;
 }
 
 const human: Agent = {
@@ -205,7 +379,7 @@ for (const inThread of [false, true]) for (const alreadyOpen of [false, true]) {
     await installMessages(page, async (route, id, threadId) => {
       const url = new URL(route.request().url()); requests.push(url.search);
       if (id === b.id) return fulfillJson(route, payload(b, []));
-      if (url.searchParams.get('beforeSeq') === '241') {
+      if (historyBefore(url) === '241') {
         expect(threadId).toBe(thread);
         return fulfillJson(route, { ...payload(a, [...context, target]), threadId: thread, hasOlder: true, hasNewer: true });
       }
@@ -240,7 +414,7 @@ for (const tab of ['Tasks', 'Contract']) for (const inThread of [false, true]) {
     await page.route('**/api/ui/channels/a/last-unread', route =>
       fulfillJson(route, { target: { channelId: a.id, threadId, seq: 240 } }));
     await installMessages(page, async (route, _, requestedThread) => {
-      const targeted = new URL(route.request().url()).searchParams.get('beforeSeq') === '241';
+      const targeted = historyBefore(new URL(route.request().url())) === '241';
       const messages = targeted ? [message('target', 240, a.id, 'Unread destination', requestedThread,
         { authorId: 'worker', authorName: 'Worker', authorRole: 'worker' })] : [];
       await fulfillJson(route, { ...payload(a, messages), threadId: requestedThread, hasNewer: targeted });
@@ -275,7 +449,7 @@ for (const delayed of ['lookup', 'page'] as const) {
       try { await fulfillJson(route, { target: { channelId: a.id, threadId: null, seq: 5 } }); } catch { /* request aborted */ }
     });
     await installMessages(page, async (route, id) => {
-      if (new URL(route.request().url()).searchParams.has('beforeSeq')) {
+      if (historyBefore(new URL(route.request().url()))) {
         targeted++; started.resolve(); await release.promise;
         try { await fulfillJson(route, payload(a, [message('target', 5, a.id, 'stale unread target')])); } catch { /* request aborted */ }
       } else await fulfillJson(route, payload(id === a.id ? a : b, [message('current-' + id, 50, id, 'current ' + id)]));
@@ -305,7 +479,7 @@ for (const [interruption, inThread] of [['hello', false], ['hello', true], ['roo
     await page.route('**/api/ui/channels/a/last-unread', route => fulfillJson(route, { target: { channelId: a.id, threadId, seq: 240 } }));
     await installMessages(page, async (route, id, requestedThread) => {
       if (interrupted && id === a.id && requestedThread === threadId) refreshed.resolve();
-      if (new URL(route.request().url()).searchParams.has('beforeSeq')) {
+      if (historyBefore(new URL(route.request().url()))) {
         started.resolve(); await release.promise;
         try { await fulfillJson(route, { ...payload(a, [target]), threadId, hasOlder: true }); } catch { /* aborted */ }
         return;
@@ -345,7 +519,7 @@ test(`unread anchor releases on explicit live navigation (thread=${inThread}, ke
   await installMessages(page, async (route, id, requestedThread) => {
     if (id === b.id) return fulfillJson(route, payload(b, []));
     if (inThread && !requestedThread) return fulfillJson(route, payload(a, []));
-    const historical = new URL(route.request().url()).searchParams.has('beforeSeq');
+    const historical = Boolean(historyBefore(new URL(route.request().url())));
     await fulfillJson(route, { ...payload(a, [...context, target, ...(historical ? [] : after)]), hasOlder: historical, hasNewer: historical });
   });
   await page.goto('/#/c/b');
@@ -367,7 +541,7 @@ test('a second unread jump replaces the first and survives a room refresh', asyn
   await page.route('**/api/ui/channels/a/last-unread', route => fulfillJson(route,
     { target: { channelId: a.id, threadId: 'root', seq: ++lookups === 1 ? 240 : 120 } }));
   await installMessages(page, async (route, id, threadId) => {
-    const before = new URL(route.request().url()).searchParams.get('beforeSeq');
+    const before = historyBefore(new URL(route.request().url()));
     if (before) {
       if (before === '241') { blocked.resolve(); await release.promise; }
       else { if (++secondLoads === 1) { second.resolve(); await refreshed.promise; } }
@@ -399,7 +573,7 @@ test('explicit thread refresh cancels a pending unread destination permanently',
   await page.route('**/api/ui/channels/a/last-unread', route => fulfillJson(route,
     { target: { channelId: a.id, threadId: 'root', seq: ++lookups === 1 ? 240 : 120 } }));
   await installMessages(page, async (route, id, threadId) => {
-    const before = new URL(route.request().url()).searchParams.get('beforeSeq');
+    const before = historyBefore(new URL(route.request().url()));
     if (before) {
       targetLoads++;
       if (before === '121') { blocked.resolve(); await release.promise; }
@@ -448,7 +622,7 @@ for (const inThread of [false, true]) {
       finally { if (request === 2) lookupDone.resolve(); }
     });
     await installMessages(page, async (route, id, requestedThread) => {
-      const before = new URL(route.request().url()).searchParams.get('beforeSeq');
+      const before = historyBefore(new URL(route.request().url()));
       if (before) targetLoads++;
       const seq = before ? Number(before) - 1 : 1000;
       await fulfillJson(route, { ...payload(id === a.id ? a : b,
@@ -484,7 +658,7 @@ for (const inThread of [false, true]) {
     const sockets = await installSocketHarness(page);
     await page.route('**/api/ui/channels/a/last-unread', route => fulfillJson(route, { target: { channelId: a.id, threadId, seq: 240 } }));
     await installMessages(page, async (route, id, requestedThread) => {
-      const before = new URL(route.request().url()).searchParams.get('beforeSeq');
+      const before = historyBefore(new URL(route.request().url()));
       if (before && ++targetLoads === 1) return fulfillJson(route, { error: 'Transient target page failure' }, 503);
       const seq = before ? 240 : 1000;
       await fulfillJson(route, { ...payload(id === a.id ? a : b, [message('m-' + seq, seq, id, 'Page ' + seq, requestedThread, { authorId: 'worker' })]), threadId: requestedThread });
@@ -508,7 +682,7 @@ for (const inThread of [false, true]) {
     const sockets = await installSocketHarness(page);
     await page.route('**/api/ui/channels/a/last-unread', route => fulfillJson(route, { target: { channelId: a.id, threadId, seq: 240 } }));
     await installMessages(page, async (route, id, requestedThread) => {
-      const before = new URL(route.request().url()).searchParams.get('beforeSeq');
+      const before = historyBefore(new URL(route.request().url()));
       if (before) { targetLoads++; blocked.resolve(); await release.promise; }
       const seq = before ? 240 : 1000;
       try { await fulfillJson(route, { ...payload(id === a.id ? a : b, [message('m-' + seq, seq, id, 'Page ' + id, requestedThread)]), threadId: requestedThread }); }
@@ -542,7 +716,7 @@ for (const [interruption, inThread] of [['hello', false], ['hello', true], ['roo
       await fulfillJson(route, { target: { channelId: a.id, threadId, seq: 240 } });
     });
     await installMessages(page, async (route, id, requestedThread) => {
-      const before = new URL(route.request().url()).searchParams.get('beforeSeq');
+      const before = historyBefore(new URL(route.request().url()));
       if (!before) normalLoads++;
       const seq = before ? 240 : 1000;
       await fulfillJson(route, { ...payload(a, [message('row-' + seq, seq, id, 'Row ' + seq, requestedThread,
@@ -579,7 +753,7 @@ for (const paging of ['channel-older', 'thread-earlier', 'thread-newer'] as cons
       finally { if (call === 2) done.resolve(); }
     });
     await installMessages(page, async (route, id, requestedThread) => {
-      const q = new URL(route.request().url()).searchParams, before = q.get('beforeSeq'), after = q.get('afterSeq');
+      const q = new URL(route.request().url()).searchParams, before = historyBefore(new URL(route.request().url())), after = q.get('afterSeq');
       if (before === '121') staleLoads++;
       const seq = before === '241' ? 240 : before === '121' ? 120 : before ? 200 : after ? 260 : 1000;
       await fulfillJson(route, { ...payload(a, [message('row-' + seq, seq, id, 'Row ' + seq, requestedThread,
@@ -616,7 +790,7 @@ for (const inThread of [false, true]) for (const outcome of ['empty', 'failure']
       return fulfillJson(route, { target: call > 2 ? null : { channelId: a.id, threadId, seq: call === 1 ? 240 : 120 } });
     });
     await installMessages(page, async (route, id, requestedThread) => {
-      const before = new URL(route.request().url()).searchParams.get('beforeSeq');
+      const before = historyBefore(new URL(route.request().url()));
       if (before) targetLoads++; else normalLoads++;
       if (before === '121') {
         blocked.resolve();
@@ -674,7 +848,7 @@ test('automatic refresh retains target highlight and late-reflow anchor: thread=
   const start = Date.now();
   const refreshed = page.waitForResponse(response => {
     const url = new URL(response.url());
-    return url.pathname.endsWith('/messages') && url.searchParams.get('threadId') === threadId && !url.searchParams.has('beforeSeq');
+    return url.pathname.endsWith('/messages') && url.searchParams.get('threadId') === threadId && !historyBefore(url);
   });
   sockets[0]!.send(JSON.stringify({ type: inThread ? 'room' : 'project', payload: { channelId: a.id } }));
   await refreshed;
@@ -1204,7 +1378,7 @@ for (const inThread of [false, true]) {
     await installSnapshot(page, () => snapshot([alpha], [a]));
     await installMessages(page, async (route, _channelId, requestedThread) => {
       if (inThread && !requestedThread) return fulfillJson(route, payload(a, [root], threads));
-      const before = Number(new URL(route.request().url()).searchParams.get("beforeSeq"));
+      const before = Number(historyBefore(new URL(route.request().url())));
       const messages = before ? full().filter(m => m.seq < before) : full().slice(-500);
       await fulfillJson(route, { ...payload(a, messages, threads), threadId,
         hasOlder: !before, snapshotSeq: through, cursors: { before: messages[0]?.seq, after: through } });
@@ -1464,7 +1638,8 @@ for (const inThread of [false, true]) {
     const scope = page.locator(inThread ? "aside.thread" : "main");
     await expect(scope.locator(".msg")).toHaveCount(40);
     const stream = scope.locator(".stream");
-    await stream.evaluate(element => { element.scrollTop = 0; });
+    await stream.hover();
+    await page.mouse.wheel(0, -100_000);
     await expect(scope.getByRole("button", { name: inThread ? "Refresh thread" : "Jump to recent", exact: true })).toBeVisible();
     const composer = scope.locator(".composer textarea");
     await composer.fill("My confirmed message");

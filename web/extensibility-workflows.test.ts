@@ -410,7 +410,7 @@ for (const threaded of [false, true]) {
     await act(async () => f.root.render(createElement(App)));
     const scope = threaded ? f.host.querySelector<HTMLElement>("aside.thread")! : f.host.querySelector<HTMLElement>("main.desk")!;
     assert.ok(scope);
-    const label = threaded ? "Load more replies" : "Load older";
+    const label = threaded ? "Load earlier replies" : "Load older";
     for (let page = 0; scope.querySelectorAll(".msg-b").length < 580; page++) {
       assert.ok(page < 40, "history pagination must progress");
       await f.click(f.button(label, scope));
@@ -423,6 +423,10 @@ for (const threaded of [false, true]) {
       scrollHeight: { configurable: true, value: 4000 },
       clientHeight: { configurable: true, value: 400 },
     });
+    if (threaded) {
+      stream.scrollTop = 3600;
+      await act(async () => stream.dispatchEvent(new window.WheelEvent("wheel", { bubbles: true, deltaY: -400 }) as unknown as Event));
+    }
     stream.scrollTop = 300;
     await act(async () => stream.dispatchEvent(new window.Event("scroll") as unknown as Event));
     const displayedCount = stream.querySelectorAll(".msg-b").length;

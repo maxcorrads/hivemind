@@ -7,6 +7,19 @@
 
 .thread { background: var(--surface); border-left: 1px solid var(--line); box-shadow: none; }
 
+/* Keep the thread's original default width; the 8px track is the keyboard and pointer separator. */
+@media (min-width: 961px) {
+  .shell:has(> .thread-resizer) { grid-template-columns: 60px 264px minmax(0, 1fr) 8px var(--thread-w); }
+  html.layout-unified .shell:has(> .thread-resizer) { grid-template-columns: 264px minmax(0, 1fr) 8px var(--thread-w); }
+  .shell:has(> .thread-resizer) > .thread { border-left: 0; }
+}
+.thread-resizer { position: relative; z-index: 2; width: 16px; min-width: 16px; height: 100%; margin-left: -4px;
+  background: var(--surface); cursor: col-resize; touch-action: none; }
+.thread-resizer::before { content: ""; position: absolute; top: 0; bottom: 0; left: 7px; width: 1px; background: var(--line); }
+.thread-resizer:is(:hover, :focus-visible, .dragging)::before { left: 7px; width: 2px; background: var(--accent); }
+.thread-resizer:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+@media (max-width: 960px) { .thread-resizer { display: none; } }
+
 /* Header: "Thread #channel", the status pill (or the task chip) and the close button. */
 .thread > .thread-h { height: 52px; align-items: center; justify-content: flex-start; gap: 8px; padding: 0 12px 0 18px; }
 .thread-h > div:not(.thread-tools) { flex: 1; min-width: 0; }

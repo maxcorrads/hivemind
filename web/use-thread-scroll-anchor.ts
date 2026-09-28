@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 import type { ChannelPayload } from "./api.ts";
-import { isReadingHistory } from "./pane-window.ts";
+import { hasSelectionInStream, isReadingHistory } from "./pane-window.ts";
 
 /** Where the clicked reply link sat when the Human opened a thread (see `useThreadScrollAnchor`). */
 export type ThreadOpenAnchor = {
@@ -24,6 +24,7 @@ export function useThreadScrollAnchor({ channelStream, threadStream, pane, threa
   const threadOpenAnchor = useRef<ThreadOpenAnchor | null>(null);
   const threadAnchorHold = useRef<{ channelId: string; threadId: string; release: () => void } | null>(null);
   const bottomHold = useRef<(() => void) | null>(null);
+  const threadBottomHold = useRef<(() => void) | null>(null);
 
   // Reflow happens before scroll events: keep a live pane pinned when the side
   // thread opens, even when the bounded message window keeps the same length.
@@ -60,21 +61,32 @@ export function useThreadScrollAnchor({ channelStream, threadStream, pane, threa
     }
     stickBottom.current = true;
   }, [pane, threadVisible, selectedChannelId, threadId, threadPane?.threadId]);
-  useEffect(() => () => { threadAnchorHold.current?.release(); bottomHold.current?.(); }, []);
+  useEffect(() => () => { threadAnchorHold.current?.release(); bottomHold.current?.(); threadBottomHold.current?.(); }, []);
   useLayoutEffect(() => {
-    if (threadPane?.historyThrough === undefined && threadStream.current)
-      threadStream.current.scrollTop = threadStream.current.scrollHeight;
-  }, [threadPane]);
+    threadBottomHold.current?.();
+    threadBottomHold.current = null;
+    const stream = threadStream.current;
+    if (threadPane?.historyThrough !== undefined || !stream) return;
+    const correct = () => {
+      if (!hasSelectionInStream(stream)) stream.scrollTop = stream.scrollHeight;
+    };
+    correct();
+    // A new reply can wrap after React's layout pass. Keep its live viewport
+    // at the bottom while images, fonts and the aside width settle.
+    // Width changes can arrive long after the last reply. Keep observing the
+    // live thread until it becomes a held reading pane or is replaced.
+    threadBottomHold.current = holdScroll(stream, correct, undefined, false);
+  }, [threadPane, threadId, selectedChannelId]);
 
   return { stickBottom, threadOpenAnchor };
 }
 
 /**
  * Late reflow (a web font swapping in, an image decoding) re-wraps the messages after a scroll position was set:
- * re-applies `correct` whenever the stream or a row resizes or fonts finish loading, until the layout settles
- * (2 s) or the user scrolls on their own. Returns the release; `released` runs once it is over.
+ * re-applies `correct` whenever the stream or a row resizes or fonts finish loading. Channel corrections
+ * settle after 2 s or user input; a live thread keeps observing until its pane changes. Returns the release.
  */
-function holdScroll(stream: HTMLElement, correct: () => void, released?: () => void): () => void {
+function holdScroll(stream: HTMLElement, correct: () => void, released?: () => void, settle = true): () => void {
   const resize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(correct);
   resize?.observe(stream);
   for (const child of Array.from(stream.children)) resize?.observe(child);
@@ -84,14 +96,14 @@ function holdScroll(stream: HTMLElement, correct: () => void, released?: () => v
   const release = () => {
     if (done) return;
     done = true;
-    window.clearTimeout(timer);
+    if (timer !== null) window.clearTimeout(timer);
     resize?.disconnect();
     fonts?.removeEventListener?.("loadingdone", correct);
-    for (const type of userScroll) stream.removeEventListener(type, release);
+    if (settle) for (const type of userScroll) stream.removeEventListener(type, release);
     released?.();
   };
-  const timer = window.setTimeout(release, 2_000);
+  const timer = settle ? window.setTimeout(release, 2_000) : null;
   fonts?.addEventListener?.("loadingdone", correct);
-  for (const type of userScroll) stream.addEventListener(type, release, { passive: true });
+  if (settle) for (const type of userScroll) stream.addEventListener(type, release, { passive: true });
   return release;
 }

@@ -38,7 +38,7 @@ export type ChannelTab = "messages" | "tasks" | "contract" | "terminal";
  * Messages, the message stream, Jev advice strip and composer.
  */
 export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, channel, threadPaneId, stickBottom, threadOpenAnchor, unreadTarget,
-  go, roomTick, routingView, activeBrainChannel, brainNames, onOpenRouting, onInvite, compose, draftInsert, onDraftInserted, onMarkUnread, setErr, onBack }: {
+  go, onReopenThread, roomTick, routingView, activeBrainChannel, brainNames, onOpenRouting, onInvite, compose, draftInsert, onDraftInserted, onMarkUnread, setErr, onBack }: {
   channelId: string;
   /** A new explicit badge navigation reveals Messages without remounting its draft. */
   unreadTarget?: UnreadTarget | null;
@@ -50,6 +50,7 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
   stickBottom: MutableRefObject<boolean>;
   threadOpenAnchor: MutableRefObject<ThreadOpenAnchor | null>;
   go: (next: Sel) => void;
+  onReopenThread?: (channelId: string, threadId: string) => void;
   roomTick: number;
   routingView: AdaptiveRoutingView | null;
   activeBrainChannel: boolean;
@@ -74,6 +75,8 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
   const agentNames = useMemo(() => Object.fromEntries(agents.map((agent) => [agent.id, agent.name])), [agents]);
   const markUnreadRef = useRef(onMarkUnread);
   markUnreadRef.current = onMarkUnread;
+  const reopenThreadRef = useRef(onReopenThread);
+  reopenThreadRef.current = onReopenThread;
   // Stable across renders so memoized rows keep their props: the divider moves here at once, the server follows.
   const markUnread = useCallback((m: Message) => {
     setPane((current) => current?.channel.id === m.channelId ? { ...current, firstUnreadSeq: m.seq } : current);
@@ -88,6 +91,7 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
       };
     }
     go({ kind: "channel", id: channelId, thread: m.id });
+    if (threadPaneId === m.id) reopenThreadRef.current?.(channelId, m.id);
   }, [channelStream, threadOpenAnchor, threadPaneId, channelId, go]);
   const onReact = useCallback((m: Message, emoji: string) => {
     api.react(m.seq, emoji, !m.reactions?.some(reaction => reaction.emoji === emoji && reaction.mine)).then((r) => {

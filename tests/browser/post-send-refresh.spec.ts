@@ -71,7 +71,8 @@ async function fixture(page: Page, inThread: boolean) {
       } else h.emit(kind, { channelId: a.id });
     },
     async sendFromHistory() {
-      await scope.locator('.stream').evaluate(el => { el.scrollTop = 0; });
+      await scope.locator('.stream').hover();
+      await page.mouse.wheel(0, -100_000);
       await expect(scope.getByRole('button', { name: inThread ? 'Refresh thread' : 'Jump to recent', exact: true })).toBeVisible();
       await scope.locator('.composer textarea').fill('My confirmed message');
       await scope.locator('.composer textarea').press('Enter');

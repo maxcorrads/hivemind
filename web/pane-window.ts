@@ -10,10 +10,16 @@ export function holdLivePane(pane: ChannelPayload): ChannelPayload {
 /** Read the actual viewport/selection, not a delayed React scroll state. */
 export function isReadingHistory(stream: HTMLElement | null): boolean {
   if (!stream) return false;
-  const selection = stream.ownerDocument.getSelection();
   return stream.scrollHeight - stream.clientHeight - stream.scrollTop > 48 ||
-    Boolean(selection && !selection.isCollapsed &&
-      (stream.contains(selection.anchorNode) || stream.contains(selection.focusNode)));
+    hasSelectionInStream(stream);
+}
+
+/** A text selection is deliberate reading even when the viewport is at the bottom. */
+export function hasSelectionInStream(stream: HTMLElement | null): boolean {
+  if (!stream) return false;
+  const selection = stream.ownerDocument.getSelection();
+  return Boolean(selection && !selection.isCollapsed &&
+    (stream.contains(selection.anchorNode) || stream.contains(selection.focusNode)));
 }
 
 /** A held pane keeps at most this many rows while the Human pages back through history. */
