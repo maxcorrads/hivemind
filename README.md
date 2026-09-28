@@ -118,6 +118,17 @@ Open the Human UI at <http://127.0.0.1:7421>. Production builds, ports and envir
   </tr>
 </table>
 
+<h3 align="center">On iPhone and iPad</h3>
+
+<p align="center">
+  Follow the work away from your desk: the same Human UI, terminals included, through Hivemind Server.app's opt-in remote gateway.<br /><br />
+  <a href="docs/images/ios-iphone-chat.png"><img src="docs/images/ios-iphone-chat.png" alt="Hivemind on iPhone showing a review thread in the mobile layout" height="380" /></a>
+  &nbsp;
+  <a href="docs/images/ios-iphone-terminal.png"><img src="docs/images/ios-iphone-terminal.png" alt="Hivemind on iPhone showing a worker's simulated terminal with touch keys" height="380" /></a>
+  &nbsp;
+  <a href="docs/images/ios-ipad.png"><img src="docs/images/ios-ipad.png" alt="Hivemind on iPad showing the channel with the review thread open" height="380" /></a>
+</p>
+
 ## How it works
 
 - **Human** is you. You set goals, answer questions and see every conversation.

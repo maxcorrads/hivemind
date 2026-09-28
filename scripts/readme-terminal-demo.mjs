@@ -68,8 +68,13 @@ const DEMOS = [
   },
 ];
 
-/** Install before page.goto(); the mock exists only in each new page navigation. */
-export async function installTerminalDemo(page, { agents = [], project = 'paperplane', now = Date.now() } = {}) {
+/**
+ * Install before page.goto(); the mock exists only in each new page navigation. `platform: 'ios'` speaks as the
+ * iPhone/iPad app does (HivemindKit RemoteClientBridge): it answers `ready` with its platform and names it in every
+ * terminal-status. The default is Hivemind.app on the Mac, whose page reads as "macos".
+ */
+export async function installTerminalDemo(page, { agents = [], project = 'paperplane', now = Date.now(), platform = 'macos' } = {}) {
+  if (!['macos', 'ios'].includes(platform)) throw new Error(`Unknown demo platform ${platform}`);
   const projectSlug = typeof project === 'string' ? project : project.slug;
   if (projectSlug !== 'paperplane') throw new Error('The README terminal demo expects project paperplane');
   const agentList = Array.isArray(agents) ? agents : Object.values(agents);
@@ -81,14 +86,34 @@ export async function installTerminalDemo(page, { agents = [], project = 'paperp
     name: demo.name, project: projectSlug, agent: demo.agent, alive: true, attached: 0,
     createdAt: now - demo.ageMinutes * 60_000,
   }));
-  const transcripts = Object.fromEntries(DEMOS.map(demo => [demo.name, {
-    first: `\x1b[1;36mDemo terminal\x1b[0m  ·  \x1b[1m${demo.agent}\x1b[0m — ${demo.role}\r\n` +
-      '\x1b[2mSynthetic README scene · no command was executed\x1b[0m\r\n\r\n',
-    second: demo.lines.map(line => line ? `\x1b[37m${line}\x1b[0m` : '').join('\r\n') +
-      '\r\n\r\n\x1b[1;32m● Session ready\x1b[0m  \x1b[2mWaiting for the next Hivemind update\x1b[0m\r\n',
-  }]));
+  const demos = Object.fromEntries(DEMOS.map(demo => [demo.name, demo]));
 
-  await page.addInitScript(({ sessions, transcripts }) => {
+  await page.addInitScript(({ sessions, demos, platform }) => {
+    // The session redraws at the width the page attaches with, as a CLI in tmux does: a phone gets wrapped lines.
+    const wrap = (line, cols) => {
+      if (line.length <= cols) return [line];
+      const lead = line.match(/^ */)[0];
+      const rows = [];
+      let row = lead;
+      for (const word of line.slice(lead.length).split(/(?<=\s)(?=\S)/)) {
+        if (row.trim() && (row + word).trimEnd().length > cols) { rows.push(row.trimEnd()); row = lead + '  '; }
+        row += word;
+      }
+      return [...rows, row.trimEnd()];
+    };
+    const style = (code, line, cols) => wrap(line, cols).map(row => `\x1b[${code}m${row}\x1b[0m`).join('\r\n');
+    const transcript = (demo, cols) => {
+      const header = `Demo terminal  ·  ${demo.agent} — ${demo.role}`;
+      const ready = '● Session ready  Waiting for the next Hivemind update';
+      return {
+        first: (header.length <= cols ? `\x1b[1;36mDemo terminal\x1b[0m  ·  \x1b[1m${demo.agent}\x1b[0m — ${demo.role}`
+          : `\x1b[1;36mDemo terminal\x1b[0m\r\n\x1b[1m${demo.agent}\x1b[0m — ${demo.role}`) + '\r\n' +
+          style(2, 'Synthetic README scene · no command was executed', cols) + '\r\n\r\n',
+        second: demo.lines.map(line => line ? style(37, line, cols) : '').join('\r\n') + '\r\n\r\n' +
+          (ready.length <= cols ? '\x1b[1;32m● Session ready\x1b[0m  \x1b[2mWaiting for the next Hivemind update\x1b[0m'
+            : '\x1b[1;32m● Session ready\x1b[0m\r\n' + style(2, 'Waiting for the next Hivemind update', cols)) + '\r\n',
+      };
+    };
     const streams = new Map();
     let nextStream = 0;
     window.__readmeUnexpectedNative = [];
@@ -109,20 +134,23 @@ export async function installTerminalDemo(page, { agents = [], project = 'paperp
         if (!message || typeof message !== 'object') { unexpected(message); return; }
         switch (message.type) {
           case 'ready':
+            if (platform === 'ios') queueMicrotask(() => window.dispatchEvent(new CustomEvent('hivemind:native',
+              { detail: { command: 'ready', platform } })));
+            return;
           case 'badge':
           case 'notify':
             return;
           case 'sessions-subscribe':
             queueMicrotask(() => {
-              emit({ type: 'terminal-status', tmux: 'available', broker: 'connected', platform: 'macos' });
+              emit({ type: 'terminal-status', tmux: 'available', broker: 'connected', platform });
               emit({ type: 'sessions', items: sessions });
             });
             return;
           case 'sessions-unsubscribe':
             return;
           case 'terminal-attach': {
-            const transcript = transcripts[message.session];
-            if (!transcript || typeof message.id !== 'string') {
+            const demo = demos[message.session];
+            if (!demo || typeof message.id !== 'string') {
               unexpected(message);
               queueMicrotask(() => emit({ type: 'terminal-error', id: message.id ?? null,
                 code: 'no-such-session', message: 'No demo session', stream: null }));
@@ -134,8 +162,10 @@ export async function installTerminalDemo(page, { agents = [], project = 'paperp
             // The page registers its pending attach after postMessage returns.
             queueMicrotask(() => emit({ type: 'terminal-attached', id: message.id, stream, session: message.session }));
             const entry = streams.get(stream);
-            entry.timers.push(setTimeout(() => output(stream, transcript.first), 30));
-            entry.timers.push(setTimeout(() => output(stream, transcript.second), 100));
+            // One column spare: the last one can sit under the terminal's edge.
+            const text = transcript(demo, Number.isSafeInteger(message.cols) ? message.cols - 1 : 80);
+            entry.timers.push(setTimeout(() => output(stream, text.first), 30));
+            entry.timers.push(setTimeout(() => output(stream, text.second), 100));
             return;
           }
           case 'terminal-resize':
@@ -156,5 +186,5 @@ export async function installTerminalDemo(page, { agents = [], project = 'paperp
     };
     Object.defineProperty(window, 'webkit', { configurable: true,
       value: { messageHandlers: { hivemind: handler } } });
-  }, { sessions, transcripts });
+  }, { sessions, demos, platform });
 }

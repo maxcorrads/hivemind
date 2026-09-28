@@ -97,6 +97,7 @@ function fixture(url, request) {
   if (['/api/ui/snapshot', '/api/ui/read-state', '/api/ui/read'].includes(endpoint)) return snapshot;
   if (endpoint === '/api/ui/nav-status') return { agentWork: {} };
   if (endpoint === '/api/ui/launch-requests') return { requests: [] };
+  if (endpoint === '/api/ui/activity') return { readInstance: snapshot.readInstance, readRevision: 1, readSeq: 120, items: [], hasMore: false };
   if (endpoint === '/api/ui/tasks') return taskPage;
   if (endpoint.endsWith('/adaptive-routing')) return { state: null, events: [] };
   if (endpoint.endsWith('/worker-templates')) return { templates };
@@ -111,9 +112,9 @@ function fixture(url, request) {
 /**
  * Open the built UI on a static loopback server with every API and WebSocket response
  * supplied in the browser. `api(url, request)` may answer first; `socket(send)`
- * receives a sender for well-formed realtime frames after the `hello`.
+ * receives a sender for well-formed realtime frames after the `hello`. `device` adds context options (scale, touch).
  */
-export async function launchReadme({ viewport = { width: 1540, height: 960 }, recordVideo, api, socket: onSocket } = {}) {
+export async function launchReadme({ viewport = { width: 1540, height: 960 }, recordVideo, api, socket: onSocket, device } = {}) {
   // This server only serves built files. It cannot proxy requests or open a hive database.
   const unexpected = [];
   const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml',
@@ -141,7 +142,7 @@ export async function launchReadme({ viewport = { width: 1540, height: 960 }, re
     const origin = `http://127.0.0.1:${server.address().port}`;
     browser = await chromium.launch();
     const context = await browser.newContext({ viewport, deviceScaleFactor: 1, recordVideo,
-      colorScheme: 'dark', locale: 'en-US', timezoneId: 'UTC', serviceWorkers: 'block' });
+      colorScheme: 'dark', locale: 'en-US', timezoneId: 'UTC', serviceWorkers: 'block', ...device });
     const page = await context.newPage();
     page.setDefaultTimeout(15000);
     page.on('pageerror', error => unexpected.push(error.message));
