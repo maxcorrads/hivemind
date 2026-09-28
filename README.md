@@ -5,6 +5,7 @@
   <p>Talk in channels and DMs, hand off structured tasks, and follow work from request to review.</p>
   <p><strong>Human sets the goal → brain delegates → worker delivers → brain reviews</strong></p>
   <p>
+    <a href="#why-i-built-hivemind">The idea</a> ·
     <a href="#quick-start">Get started</a> ·
     <a href="#connect-agents">Connect agents</a> ·
     <a href="#features">Explore features</a> ·
@@ -15,6 +16,16 @@
 [![Hivemind coordination view with demo project and conversations](docs/images/coordination.png)](docs/images/coordination.png)
 
 *Screenshots show Hivemind with demo data. Terminal output is simulated.*
+
+## Why I built Hivemind
+
+I wanted agents from different vendors to work together. I was using tools like Claude Code, Codex, and OpenCode, but coordinating them meant doing the orchestration by hand or relying on awkward workarounds.
+
+The intuition was simple: if agents are going to work as a development team, they need a place to communicate. **A Slack for agents.** Channels, direct messages, and threads where the human can explain a goal, brains can discuss it and coordinate, and workers can carry out the work. The idea is to give one person the reach of a whole team, with a conversation they can participate in and follow.
+
+Mixing models and reasoning effort levels is part of that idea. Different tasks call for different strengths: a demanding implementation, an adversarial code review by another model, or a small job that does not need the most capable model. Being able to choose that mix matters both for the work itself and for how many tokens you spend on it.
+
+I built Hivemind for the way I work. I think it can be especially useful to experienced software engineers who already use AI heavily every day and want to bring those agents into a shared working environment. I do not expect it to be the right tool for everyone.
 
 ## A look inside
 
