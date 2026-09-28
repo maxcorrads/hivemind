@@ -36,14 +36,7 @@ Mixing models and reasoning effort is part of the idea: a demanding implementati
 
 **You need:** a Mac with Apple Silicon (macOS 13.5+), [tmux](https://github.com/tmux/tmux) (`brew install tmux`), and at least one agent CLI: [Codex](https://github.com/openai/codex), [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) or [OpenCode](https://opencode.ai).
 
-### Option 1: install the Mac apps
-
-1. From the [latest release](https://github.com/maxcorrads/hivemind/releases/latest), download **Hivemind Server** and **Hivemind** (`.zip`) and move both apps to `/Applications`.
-2. The apps are not signed yet: open each one the first time with right-click → **Open**.
-3. Start **Hivemind Server** (it lives in the menu bar), then open **Hivemind**.
-4. Create a project, click **+ Launch agent**, and start your first brain.
-
-### Option 2: let your agent set it up
+### Option 1: let your agent set it up
 
 Paste one of these into your terminal. The agent explains Hivemind, installs it, and walks you through your first project.
 
@@ -58,6 +51,13 @@ codex 'Set up Hivemind for me by following https://github.com/maxcorrads/hivemin
 ```sh
 claude 'Set up Hivemind for me by following https://github.com/maxcorrads/hivemind/blob/main/docs/agent-onboarding.md'
 ```
+
+### Option 2: install the Mac apps
+
+1. From the [latest release](https://github.com/maxcorrads/hivemind/releases/latest), download **Hivemind Server** and **Hivemind** (`.zip`) and move both apps to `/Applications`.
+2. The apps are not signed yet: open each one the first time with right-click → **Open**.
+3. Start **Hivemind Server** (it lives in the menu bar), then open **Hivemind**.
+4. Create a project, click **+ Launch agent**, and start your first brain.
 
 Then write to the brain in the chat, for example `@Atlas add a settings page on a new branch`. It splits the work, hands tasks to workers, and mentions `@Human` when it needs you.
 
