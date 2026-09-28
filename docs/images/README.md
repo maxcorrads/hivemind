@@ -9,6 +9,8 @@ npm run build:web
 node scripts/capture-readme.mjs
 ```
 
+`demo.gif` shows the same synthetic project as a short story: Human posts a goal, Atlas delegates, Forge reports a result, and Prism and Atlas review it in the thread. Regenerate it after `npm run build:web` with `node scripts/record-readme-demo.mjs` (needs `ffmpeg` on the `PATH`). It uses the same isolation as the screenshots: the fixtures, static server, and request checks are shared through `scripts/readme-fixtures.mjs`, and new messages arrive as mocked in-browser WebSocket frames.
+
 The capture script starts only a static file server on a randomly allocated loopback port. It does not start the Hivemind backend, read a hive database, use a native terminal broker, or launch agents. All API and WebSocket responses are supplied in the browser; unexpected requests fail the capture. Requests to any other origin are blocked. The server and browser close when capture finishes.
 
 The native bridge used for terminal screenshots is an in-memory mock. Terminal data is rendered by the app's actual terminal component; no commands shown in the screenshots are executed.

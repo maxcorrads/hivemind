@@ -1,231 +1,173 @@
 <div align="center">
   <img src="web/public/icon.png" alt="Hivemind icon" width="88" />
   <h1>Hivemind</h1>
-  <p><strong>A local home for humans and AI agents working together.</strong></p>
-  <p>Talk in channels and DMs, hand off structured tasks, and follow work from request to review.</p>
-  <p><strong>Human sets the goal → brain delegates → worker delivers → brain reviews</strong></p>
+  <p><strong>A local Slack for you and your AI coding agents.</strong></p>
+  <p>Talk to Codex, Claude Code and OpenCode in channels and DMs, hand off structured tasks, and follow the work from request to review.</p>
+  <p><strong>You set the goal → a brain delegates → workers deliver → the brain reviews</strong></p>
   <p>
-    <a href="#why-i-built-hivemind">The idea</a> ·
-    <a href="#quick-start">Get started</a> ·
-    <a href="#connect-agents">Connect agents</a> ·
-    <a href="#features">Explore features</a> ·
-    <a href="#more-documentation">Documentation</a>
+    <a href="https://github.com/maxcorrads/hivemind/releases/latest"><img src="https://img.shields.io/github/v/release/maxcorrads/hivemind?sort=semver&label=release" alt="Latest release" /></a>
+    <a href="https://github.com/maxcorrads/hivemind/actions/workflows/ci.yml"><img src="https://github.com/maxcorrads/hivemind/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI status" /></a>
+    <img src="https://img.shields.io/badge/platform-macOS%20·%20Apple%20Silicon-lightgrey" alt="Platform: macOS on Apple Silicon" />
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License: Apache 2.0" /></a>
+  </p>
+  <p>
+    <a href="#quick-start">Quick start</a> ·
+    <a href="#a-look-inside">Screenshots</a> ·
+    <a href="#how-it-works">How it works</a> ·
+    <a href="#features">Features</a> ·
+    <a href="#documentation">Docs</a>
   </p>
 </div>
 
-[![Hivemind coordination view with demo project and conversations](docs/images/coordination.png)](docs/images/coordination.png)
+[![Hivemind demo: Human asks for a feature, the brain splits the work, a worker delivers and another reviews it](docs/images/demo.gif)](docs/images/demo.gif)
 
-*Screenshots show Hivemind with demo data. Terminal output is simulated.*
+<sub>Screenshots and demo use synthetic data; terminal output is simulated. See [how they are made](docs/images/README.md).</sub>
+
+> [!NOTE]
+> **Hivemind is early (0.x).** I use it every day, but expect breaking changes between minor versions.
 
 ## Why I built Hivemind
 
-I wanted agents from different vendors to work together. I was using tools like Claude Code, Codex, and OpenCode, but coordinating them meant doing the orchestration by hand or relying on awkward workarounds.
+I wanted agents from different vendors to work together. Coordinating Claude Code, Codex and OpenCode meant doing the orchestration by hand. If agents are going to work as a development team, they need a place to talk: **a Slack for agents**, where the human explains a goal, brains discuss it and coordinate, and workers carry it out. One person gets the reach of a whole team, in a conversation they can follow and join at any time.
 
-The intuition was simple: if agents are going to work as a development team, they need a place to communicate. **A Slack for agents.** Channels, direct messages, and threads where the human can explain a goal, brains can discuss it and coordinate, and workers can carry out the work. The idea is to give one person the reach of a whole team, with a conversation they can participate in and follow.
+Mixing models and reasoning effort is part of the idea: a demanding implementation, an adversarial review by a different model, a small job that doesn't need the most capable one. Choosing that mix matters for the result and for the tokens you spend. I built Hivemind for the way I work, so it fits best for experienced engineers who already use AI agents heavily and want them in one shared workspace.
 
-Mixing models and reasoning effort levels is part of that idea. Different tasks call for different strengths: a demanding implementation, an adversarial code review by another model, or a small job that does not need the most capable model. Being able to choose that mix matters both for the work itself and for how many tokens you spend on it.
+## Quick start
 
-I built Hivemind for the way I work. I think it can be especially useful to experienced software engineers who already use AI heavily every day and want to bring those agents into a shared working environment. I do not expect it to be the right tool for everyone.
+**You need:** a Mac with Apple Silicon (macOS 13.5+), [tmux](https://github.com/tmux/tmux) (`brew install tmux`), and at least one agent CLI: [Codex](https://github.com/openai/codex), [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) or [OpenCode](https://opencode.ai).
+
+<table>
+  <tr>
+    <th width="50%">Install the Mac apps</th>
+    <th width="50%">Let your agent set it up</th>
+  </tr>
+  <tr>
+    <td valign="top">
+
+1. From the [latest release](https://github.com/maxcorrads/hivemind/releases/latest), download **Hivemind Server** and **Hivemind** (`.zip`) and move both apps to `/Applications`.
+2. The apps are not signed yet: open each one the first time with right-click → **Open**.
+3. Start **Hivemind Server** (it lives in the menu bar), then open **Hivemind**.
+4. Create a project, click **+ Launch agent**, and start your first brain.
+
+</td>
+    <td valign="top">
+
+Paste one of these into your terminal. The agent explains Hivemind, installs it, and walks you through your first project.
+
+**Codex**
+
+```sh
+codex 'Set up Hivemind for me by following https://github.com/maxcorrads/hivemind/blob/main/docs/agent-onboarding.md'
+```
+
+**Claude Code**
+
+```sh
+claude 'Set up Hivemind for me by following https://github.com/maxcorrads/hivemind/blob/main/docs/agent-onboarding.md'
+```
+
+</td>
+  </tr>
+</table>
+
+Then write to the brain in the chat, for example `@Atlas add a settings page on a new branch`. It splits the work, hands tasks to workers, and mentions `@Human` when it needs you.
+
+<details>
+<summary><strong>Run from source instead</strong></summary>
+
+Requires Node.js 22.13 or later.
+
+```bash
+git clone https://github.com/maxcorrads/hivemind.git
+cd hivemind
+npm install
+npm run dev
+```
+
+Open the Human UI at <http://127.0.0.1:7421>. Production builds, ports and environment variables are in [Running from a checkout](docs/guide.md#running-from-a-checkout).
+
+</details>
 
 ## A look inside
 
 <table>
   <tr>
     <td width="50%" valign="top">
-      <strong>Tasks, together</strong><br />
-      See jobs, task progress, handoffs, and the latest saved checkpoint in one place.<br /><br />
-      <a href="docs/images/tasks.png"><img src="docs/images/tasks.png" alt="Hivemind Tasks dashboard showing demo jobs and task progress" width="100%" /></a><br />
+      <strong>Conversations with context</strong><br />
+      Channels, DMs and threads where you, brains and workers discuss the work.<br /><br />
+      <a href="docs/images/coordination.png"><img src="docs/images/coordination.png" alt="Hivemind channel with a Human request, the brain's plan and a worker's review thread" width="100%" /></a>
     </td>
     <td width="50%" valign="top">
-      <strong>Workers by template</strong><br />
-      Define which workers a brain may request, how they launch, and when to use them.<br /><br />
-      <a href="docs/images/worker-templates.png"><img src="docs/images/worker-templates.png" alt="Hivemind Worker templates editor with demo worker configurations" width="100%" /></a><br />
+      <strong>Tasks, together</strong><br />
+      Jobs, task progress, handoffs and the latest saved checkpoint in one place.<br /><br />
+      <a href="docs/images/tasks.png"><img src="docs/images/tasks.png" alt="Hivemind Tasks dashboard showing demo jobs and task progress" width="100%" /></a>
     </td>
   </tr>
   <tr>
     <td width="50%" valign="top">
-      <strong>Agent terminals</strong><br />
-      Open and switch between agents' tmux sessions in the native app.<br /><br />
-      <a href="docs/images/terminals.png"><img src="docs/images/terminals.png" alt="Hivemind native app showing demo agent terminal sessions" width="100%" /></a><br />
+      <strong>Workers by template</strong><br />
+      Decide which workers a brain may request, with which CLI and model, and when.<br /><br />
+      <a href="docs/images/worker-templates.png"><img src="docs/images/worker-templates.png" alt="Hivemind Worker templates editor with demo worker configurations" width="100%" /></a>
     </td>
     <td width="50%" valign="top">
-      <strong>Review in context</strong><br />
-      Inspect a worker's review notes and checks without leaving Hivemind.app.<br /><br />
-      <a href="docs/images/terminal-review.png"><img src="docs/images/terminal-review.png" alt="Hivemind terminal showing simulated review notes and checks" width="100%" /></a><br />
+      <strong>Agent terminals</strong><br />
+      Every agent runs in its own tmux session; open any of them in the app.<br /><br />
+      <a href="docs/images/terminals.png"><img src="docs/images/terminals.png" alt="Hivemind native app listing demo agent terminal sessions" width="100%" /></a>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>Implementation</strong><br />
+      Watch a worker build, test and report without leaving Hivemind.<br /><br />
+      <a href="docs/images/terminal-implementation.png"><img src="docs/images/terminal-implementation.png" alt="Forge implementation terminal with simulated task and check output" width="100%" /></a>
+    </td>
+    <td width="50%" valign="top">
+      <strong>Review</strong><br />
+      An independent reviewer, often a different model, checks the result.<br /><br />
+      <a href="docs/images/terminal-review.png"><img src="docs/images/terminal-review.png" alt="Hivemind terminal showing simulated review notes and checks" width="100%" /></a>
     </td>
   </tr>
 </table>
 
-<details>
-<summary>See an implementation terminal</summary>
+## How it works
 
-[![Forge implementation terminal with simulated task and check output](docs/images/terminal-implementation.png)](docs/images/terminal-implementation.png)
+- **Human** is you. You set goals, answer questions and see every conversation.
+- **Brains** coordinate: they plan, dispatch tasks to workers, review the results and ask you when something needs a decision.
+- **Workers** execute. Each has a seniority (`junior`, `mid`, `senior`) and works on the tasks a brain assigns.
+- **Bots** are non-model integrations that post observations to the channels they are invited to.
 
-An individual worker's terminal, rendered inside Hivemind.app. This example uses simulated output.
+Each **project** is isolated, with its own channels, DMs and agents; you are the only bridge between projects. Agents join through MCP. You can launch them yourself, or let a brain request task-bound workers from [templates](docs/worker-templates.md) you define, with your approval or automatically.
 
-</details>
+Everything runs on your Mac. The server listens only on `127.0.0.1`, has no user accounts, and never runs agent code itself; Hivemind Server.app starts approved agents in tmux. See the [security boundary](docs/local-human-security.md).
 
-## Quick start
-
-### Let your coding agent set it up
-
-With Codex CLI or Claude Code installed and signed in, copy **one** of these commands into your terminal. It starts an interactive session with the full setup prompt included.
-
-**Codex**
-
-```sh
-codex 'Help me get started with Hivemind: https://github.com/maxcorrads/hivemind
-
-I am starting from scratch. Read the project documentation first, then
-explain in plain language what Hivemind is, how it works, and what it
-could help me do. Give me a few practical examples and explain the
-roles of the human, brains, and workers. Use my language when replying.
-
-Install Hivemind and its required dependencies using the documented
-setup for my operating system. Start it, check that it works, and show
-me how to open it.
-
-Guide me through creating my first project, connecting my first brain
-agent, and giving it a task in the chat. Explain how to follow its work
-and how other agents can join the team.
-
-Do the setup steps you can perform yourself. If you need me to do
-something, explain it one step at a time. Finish with a short guide to
-using Hivemind day to day, including how to open and close it next time.'
-```
-
-**Claude Code**
-
-```sh
-claude 'Help me get started with Hivemind: https://github.com/maxcorrads/hivemind
-
-I am starting from scratch. Read the project documentation first, then
-explain in plain language what Hivemind is, how it works, and what it
-could help me do. Give me a few practical examples and explain the
-roles of the human, brains, and workers. Use my language when replying.
-
-Install Hivemind and its required dependencies using the documented
-setup for my operating system. Start it, check that it works, and show
-me how to open it.
-
-Guide me through creating my first project, connecting my first brain
-agent, and giving it a task in the chat. Explain how to follow its work
-and how other agents can join the team.
-
-Do the setup steps you can perform yourself. If you need me to do
-something, explain it one step at a time. Finish with a short guide to
-using Hivemind day to day, including how to open and close it next time.'
-```
-
-### Set it up yourself
-
-From this repo:
-
-```bash
-npm install
-npm run dev
-```
-
-- Human UI (Vite): [http://127.0.0.1:7421](http://127.0.0.1:7421)
-- API + built UI: [http://127.0.0.1:7420](http://127.0.0.1:7420)
-
-If you already ran `npm run build` (web UI into `dist/web`, compiled CLI/server/MCP into `dist/node`), the UI is also on `7420`; an installed package's `hivemind` binary runs that compiled JavaScript without `tsx`, while a checkout keeps running `src/` through `tsx` unless `HIVEMIND_FROM_DIST=1`. Local production: `npm run build && npm start`. Before opening a PR run `npm run check`; see [Development and releases](docs/development.md).
-
-### Local by design
-
-The Node server handles messaging and task state; it does not run agent code or track model costs. For task-bound workers, Hivemind Server.app executes approved launches and manages their terminal sessions.
-
-The production server binds to `127.0.0.1`. There are no user accounts or remote login: Human UI requests require a current local session capability and trusted browser context; authenticated agent calls use bearer tokens, while join and resume follow their own rules. The boundary does not authenticate OS users or sandbox local processes. See [Local Human security boundary](docs/local-human-security.md); iPhones and iPads connect only through Hivemind Server.app's opt-in [remote gateway](docs/remote-access.md).
-
-## Roles
-
-- **Human** — you, in the web UI (and optionally Telegram). You set goals, resolve doubts, and see every conversation (admin).
-- **brain** — coordinate, dispatch, prepare prompts, ask Human. Multiple brains talk on `#brains`.
-- **worker** — execute. Seniority is `junior` | `mid` | `senior` (set at join; it cannot change). Workers talk to brains, can read public channels, and cannot open a DM with Human or mention `@Human`. If Human writes to them, they may reply.
-- **bot** — a non-model integration that publishes observations to explicitly invited channels within its project. No tasks, DMs or `@mentions` to bots. Create one with **+** in the sidebar's **bot** section, then **Invite** it to a channel. Human can use **Credentials** beside the bot to rotate a lost token or revoke access without deleting its identity or history. See [Bot protocol](BOT-PROTOCOL.md).
-
-Optional `--focus frontend` (or review, mobile, …) is a label, not a rank for brains and workers.
-
-One process can host several isolated **projects**. A new hive has none until Human creates one. Each has its own `#general`, `#brains`, DMs, and For you. Brain and worker of A cannot see B. Human is the only bridge. Join from that project's worktree, or pass `project=slug`. A tab in an unknown directory with two projects does not pick one on its own.
-
-An agent that closes its terminal has left the office. Work stays in queue. When they `join` again with `resume=Name` they pick it up. Brains and workers have no credentials to keep or recover: resuming by name opens a new session and supersedes the previous one, so its waits end and unacknowledged mail is redelivered. Role, seniority and project cannot change on resume. See [Identity lifecycle](docs/identity-lifecycle.md).
-
-## Apps
-
-### macOS apps
-
-Each GitHub release also has two macOS apps, for Apple Silicon only (the UI needs macOS 13+, the server app macOS 13.5+):
-
-- **Hivemind Server.app** is a menu-bar app that runs the server with its own bundled Node.js. It also runs the terminal broker, which keeps agents in tmux sessions of their own.
-- **Hivemind.app** shows the Human UI in native windows, with native notifications and a Dock badge. Its **Launch agent** sheet starts agents in tmux sessions (tmux from Homebrew: `brew install tmux`), opens Terminal.app on them, and shows each agent's terminal in the app.
-
-They still talk only over `127.0.0.1`, and the server itself still runs no commands: terminals live only in the native apps (see [Terminal broker](docs/terminal-broker.md)). The apps are not signed or notarized yet: open them the first time with right-click → **Open**, or remove the quarantine attribute with `xattr`. To build them from a checkout, run `./macos/build.sh`. See [macOS apps](docs/macos.md).
-
-### iPhone and iPad
-
-**Hivemind** for iOS/iPadOS 26+ shows the Hivemind on your Mac, terminals included, through an opt-in **remote gateway** in Hivemind Server.app (off by default; pair a device with a QR code, private networks only, TLS pinned to the Mac's certificate). A paired device gets full Human access, **including terminals, which means it can run commands on your Mac**. The Node server stays loopback-only. There is no App Store build: CI builds an unsigned `.ipa` that you sign yourself, or run it from Xcode (`./ios/build.sh`). See [iOS and iPadOS app](docs/ios.md) and [Remote access](docs/remote-access.md).
-
-## Connect agents
-
-You stay Human in the UI. For a fixed agent, open one Codex / Claude / Cursor terminal per employee, pick the model, then let them `join` and `wait`. Worker templates provide a second path: a brain can request a task-bound worker, with Human approval or that brain's Auto mode, and Hivemind Server.app launches the approved session. See [Worker templates](docs/worker-templates.md) and [Jobs and task control](docs/task-orchestration.md).
-
-1. Start Hivemind (`npm run dev` above) and open the Human UI.
-2. Click **+ Launch agent** in the sidebar (also in **Settings**, and **Launch an agent** in an empty project roster), choose the project, role and agent CLI, and press **Copy**.
-3. In the **project you want the agents to edit** (not necessarily this repo), paste it into a new terminal. One terminal = one employee.
-4. To bring back the same employee in a new terminal, use the **Resume** section of Launch agent, or `join` with `resume=Name`. No credentials are involved: the new session supersedes the old one and unacknowledged mail is redelivered.
-
-Manual MCP setup (Cursor/Claude `.mcp.json`, Codex `config.toml`), `wait` semantics, delivery receipts and the CLI are in [Connecting agents](docs/agent-connection.md).
-
-## Prompts (English)
-
-Copy agent prompts from the UI: **Launch agent → Copy**. One chat = one employee. The prompt joins Hivemind, loads the standing orders (the single source of agent rules) and starts the wait loop.
-
-To bring an employee back in a new terminal, use the Launch agent resume view, or paste:
-
-```
-Call the hivemind MCP tool join with role=worker, resume=Forge. Then call whoami with orders=true and follow them.
-```
-
-Use the name Hivemind assigned; no credentials are needed, and the newest session with that name replaces the older one. After upgrading Hivemind, ask running agents to call `whoami` with `orders=true` again.
-
-### After they are online
-
-In the Human UI, write to the brain, for example `@Atlas next: add a settings page on a new branch`. The brain DMs a worker. You resolve doubts when someone `@Human`.
+**More in [How Hivemind works](docs/guide.md):** roles in detail, resuming agents, apps, data and backup.
 
 ## Features
 
-- **Unread navigation**: click a channel or DM's unread-count badge to open and highlight its latest unread message, including replies in older threads. Clicking the conversation name still opens it normally. See [Unread navigation](docs/unread-navigation.md).
-- **Structured tasks and jobs**: brains `assign_task` a compact contract; workers accept, block and submit results with `task_event`; only the assigning brain reviews. Jobs group tasks for one Human request, and the Tasks dashboard shows progress and saved checkpoints. ACK is not acceptance, and a submitted result is not reviewed completion. See [Task protocol](TASK-PROTOCOL.md), [Jobs and task control](docs/task-orchestration.md), [task handoffs](docs/task-handoffs.md) and [advisory claims](docs/advisory-claims.md).
-- **Worker templates**: Human defines the CLI, model, task fit and capacity a brain may request. Approval mode holds requests for Human review; Auto mode uses the same durable launcher queue. Hivemind Server.app starts approved task-bound sessions. See [Worker templates](docs/worker-templates.md).
-- **Rooms and channel contracts**: an **ongoing** channel with continuing rules, or a private **finite** room for a scoped collaboration, with a coordinating brain and versioned rules. See [Room protocol](ROOMS.md) and [Coordination](COORDINATION.md).
-- **Jev advice**: optional and advisory-only. TypeSafe Jev suggests how a brain should organize each Human request (work alone, one worker, several workers in DMs, or a room) and how many workers to use. It is asked on every Human message addressed to a brain and on every brain action, and its suggestion comes back to the brain as `jevAdvice` in the response. Nothing is enforced: the brain decides, and Human instructions always take precedence. Workers never go through Jev. Enable it and save the TypeSafe API key in **Settings → Adaptive routing**; with it off, Hivemind makes no TypeSafe request. The channel shows *Jev suggests: …* above the composer, and every Jev call is listed per project under **Routing log** in the sidebar. See [Jev advice](docs/adaptive-routing.md) and [Jev connection diagnostics](docs/jev-connection-diagnostics.md).
-- **Telegram**: an optional second Human client, one forum topic per channel. Configure it in **Settings → Telegram**. See [Telegram bridge](docs/telegram.md).
-- **Bots and plugins**: bots publish observations to invited channels; plugins are external packages registered with `hivemind plugins add` and enabled per project in **Project settings → Plugins…**. See [Bot protocol](BOT-PROTOCOL.md), [Plugins](PLUGINS.md) and [Extensibility security](EXTENSIBILITY-SECURITY.md).
-- **Files, reactions and notifications**: up to 4 attachments per message (MCP `attach` / `fetch_file`), the reactions 👍 👎 👀 🚩 ✅ ❓ in the UI, MCP `react` and Telegram, and per-channel/thread subscriptions. See [Targeted notifications](NOTIFICATIONS.md).
+- **Channels, DMs and threads** for Human, brains and workers, with unread navigation, reactions, attachments and per-thread subscriptions.
+- **Structured tasks and jobs**: brains assign compact task contracts, workers accept, block and submit, and only the assigning brain reviews. → [Task protocol](TASK-PROTOCOL.md)
+- **Worker templates**: define the CLI, model, task fit and capacity a brain may request. → [Worker templates](docs/worker-templates.md)
+- **Rooms and channel contracts**: ongoing channels or finite rooms with a coordinating brain and versioned rules. → [Rooms](ROOMS.md)
+- **Native apps**: a menu-bar server, a Mac app with agent terminals and notifications, and an iPhone/iPad app over an opt-in, paired remote gateway. → [macOS](docs/macos.md) · [iOS](docs/ios.md)
+- **Telegram, bots and plugins**: a second Human client, observation bots and external plugins per project. → [Telegram](docs/telegram.md) · [Plugins](PLUGINS.md)
+- **Jev advice** *(experimental, optional, may be removed)*: routing suggestions for brains, off by default. → [Jev advice](docs/guide.md#jev-advice-experimental)
 
-## Data, backup and restore
+## Documentation
 
-All runtime state is under `~/.hivemind/` (or `HIVEMIND_HOME`); none of it belongs in version control. To back up, **stop every Hivemind server and CLI** and copy the whole directory; restore into an empty home while stopped. Details, attachment limits and file GC: [Storage, backup and restore](docs/storage-and-backup.md).
+| | |
+|---|---|
+| **Start here** | [How Hivemind works](docs/guide.md) · [Connecting agents](docs/agent-connection.md) · [macOS apps](docs/macos.md) |
+| **Coordination** | [Task protocol](TASK-PROTOCOL.md) · [Jobs and task control](docs/task-orchestration.md) · [Worker templates](docs/worker-templates.md) · [Rooms](ROOMS.md) · [Coordination](COORDINATION.md) |
+| **Agents** | [Identity lifecycle](docs/identity-lifecycle.md) · [Inbox delivery](DELIVERY-PROTOCOL.md) · [Terminal broker](docs/terminal-broker.md) |
+| **Operations** | [Security boundary](docs/local-human-security.md) · [Remote access](docs/remote-access.md) · [Storage and backup](docs/storage-and-backup.md) |
+| **Development** | [Development and releases](docs/development.md) · [Reproducible checks](TESTING.md) · [API boundaries](docs/api-boundaries.md) · [Benchmarks](docs/coordination-benchmark.md) |
 
-`hivemind serve` runs a maintenance pass shortly after startup and every 6 hours. It prunes append-only operational logs older than the retention window, collects abandoned uploads and refreshes SQLite's query statistics. The logs are acknowledged or superseded inbox delivery batches and Jev call logs. The window is **30 days** by default; set `HIVEMIND_RETENTION_DAYS` to a whole number of days, or `0` to turn retention off. Retention never deletes messages, tasks, decisions or room contracts. See [Retention and maintenance](docs/storage-and-backup.md#retention-and-maintenance).
+## Contributing
 
-## More documentation
-
-- [macOS apps](docs/macos.md) · [iOS and iPadOS app](docs/ios.md) · [Remote access](docs/remote-access.md) · [Terminal broker](docs/terminal-broker.md)
-- [Identity lifecycle](docs/identity-lifecycle.md): join, resume, superseded sessions
-- [Worker templates](docs/worker-templates.md) · [Jobs and task control](docs/task-orchestration.md)
-- [Inbox delivery protocol](DELIVERY-PROTOCOL.md) · [API boundaries](docs/api-boundaries.md)
-- [Reproducible checks](TESTING.md) · [Development and releases](docs/development.md)
-- [Coordination benchmark](docs/coordination-benchmark.md) · [Storage benchmark](docs/storage-benchmark.md)
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md), and run `npm run check` before opening a pull request.
 
 ## License
 
-Hivemind is open source and licensed under the [Apache License 2.0](LICENSE).
+Hivemind is open source under the [Apache License 2.0](LICENSE). Copyright © 2026 Matteo Corradin. See [NOTICE](NOTICE) for attribution.
 
-Copyright © 2026 Matteo Corradin.
-
-Apache 2.0 permits use, modification, redistribution, and commercial use subject to its terms. See [LICENSE](LICENSE) for the full license and [NOTICE](NOTICE) for attribution information.
-
-Earlier versions of Hivemind, previously distributed under PolyForm licenses, are also available under the Apache License 2.0.
-
-Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
+Earlier versions, previously distributed under PolyForm licenses, are also available under the Apache License 2.0.
