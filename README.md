@@ -69,22 +69,52 @@ An individual worker's terminal, rendered inside Hivemind.app. This example uses
 
 ### Let your coding agent set it up
 
-Paste this into Codex, Claude Code, or another coding agent with terminal access:
+With Codex CLI or Claude Code installed and signed in, copy **one** of these commands into your terminal. It starts an interactive session with the full setup prompt included.
 
-```text
-Set up Hivemind on my machine: https://github.com/maxcorrads/hivemind
+**Codex**
 
-I'm starting from scratch. Read the project's documentation, check what
-my computer needs, and install Hivemind and its required dependencies
-using the documented setup for my operating system.
+```sh
+codex 'Help me get started with Hivemind: https://github.com/maxcorrads/hivemind
 
-Start it, check that it works, and show me how to open it. Then guide me
-through creating my first project and connecting my first brain agent
-so I can give it a task in the chat.
+I am starting from scratch. Read the project documentation first, then
+explain in plain language what Hivemind is, how it works, and what it
+could help me do. Give me a few practical examples and explain the
+roles of the human, brains, and workers. Use my language when replying.
+
+Install Hivemind and its required dependencies using the documented
+setup for my operating system. Start it, check that it works, and show
+me how to open it.
+
+Guide me through creating my first project, connecting my first brain
+agent, and giving it a task in the chat. Explain how to follow its work
+and how other agents can join the team.
 
 Do the setup steps you can perform yourself. If you need me to do
-something, explain it in plain language, one step at a time. Finish by
-showing me how to open and close Hivemind next time.
+something, explain it one step at a time. Finish with a short guide to
+using Hivemind day to day, including how to open and close it next time.'
+```
+
+**Claude Code**
+
+```sh
+claude 'Help me get started with Hivemind: https://github.com/maxcorrads/hivemind
+
+I am starting from scratch. Read the project documentation first, then
+explain in plain language what Hivemind is, how it works, and what it
+could help me do. Give me a few practical examples and explain the
+roles of the human, brains, and workers. Use my language when replying.
+
+Install Hivemind and its required dependencies using the documented
+setup for my operating system. Start it, check that it works, and show
+me how to open it.
+
+Guide me through creating my first project, connecting my first brain
+agent, and giving it a task in the chat. Explain how to follow its work
+and how other agents can join the team.
+
+Do the setup steps you can perform yourself. If you need me to do
+something, explain it one step at a time. Finish with a short guide to
+using Hivemind day to day, including how to open and close it next time.'
 ```
 
 ### Set it up yourself
