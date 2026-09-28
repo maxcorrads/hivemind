@@ -67,6 +67,28 @@ An individual worker's terminal, rendered inside Hivemind.app. This example uses
 
 ## Quick start
 
+### Let your coding agent set it up
+
+Paste this into Codex, Claude Code, or another coding agent with terminal access:
+
+```text
+Set up Hivemind on my machine: https://github.com/maxcorrads/hivemind
+
+I'm starting from scratch. Read the project's documentation, check what
+my computer needs, and install Hivemind and its required dependencies
+using the documented setup for my operating system.
+
+Start it, check that it works, and show me how to open it. Then guide me
+through creating my first project and connecting my first brain agent
+so I can give it a task in the chat.
+
+Do the setup steps you can perform yourself. If you need me to do
+something, explain it in plain language, one step at a time. Finish by
+showing me how to open and close Hivemind next time.
+```
+
+### Set it up yourself
+
 From this repo:
 
 ```bash
