@@ -54,7 +54,6 @@ export function App() {
   // the first snapshot and WebSocket (useRealtime), which start before the
   // channel and thread loads (useConversationLoads).
   const [err, setErr] = useState<string | null>(null);
-  const shellRef = useRef<HTMLDivElement>(null);
   const selection = useSelection();
   const { sel, threadId, setThreadId, selRef } = selection;
   const hive = useHiveSnapshot(setErr);
@@ -270,7 +269,7 @@ export function App() {
     threadPane.channel.id === sel.id && threadPane.threadId === threadId);
 
   return (
-    <div className="shell" data-m={screen} ref={shellRef}>
+    <div className="shell" data-m={screen}>
       {unified ? (
         <TopBar live={live} projectName={projects.find(p => p.slug === railProject)?.name} onSwitcher={() => setSwitcher("all")}
           onAllTasks={() => navigate({ kind: 'tasks', project: null })} allTasksActive={sel.kind === 'tasks' && sel.project === null}
@@ -395,7 +394,7 @@ export function App() {
         )}
       </main>
 
-      {threadVisible && !mobile && <ThreadResizer shellRef={shellRef} />}
+      {threadVisible && !mobile && <ThreadResizer />}
       {threadVisible && threadId && threadPane && sel.kind === "channel" && (
         <ThreadAside channelId={sel.id} threadId={threadId} threadPane={threadPane} thread={threadState}
           onClose={() => {
