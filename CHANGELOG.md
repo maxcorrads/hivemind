@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.7.0](https://github.com/maxcorrads/hivemind/compare/v0.6.0...v0.7.0) (2026-09-29)
+
+
+### Features
+
+* **bots:** unify integrations with composable capabilities ([#254](https://github.com/maxcorrads/hivemind/issues/254)) ([ab40428](https://github.com/maxcorrads/hivemind/commit/ab40428eef62981a7d02419dbc74c7df467c6930))
+
+
+### Bug Fixes
+
+* **deps:** migrate markdown-it to 15.0.2 with bundled types ([#305](https://github.com/maxcorrads/hivemind/issues/305)) ([837e991](https://github.com/maxcorrads/hivemind/commit/837e991bb1f40e9ba1b6625c2a3a7d14a6f4767c))
+* **ui:** restore thread width on initial shell mount ([#312](https://github.com/maxcorrads/hivemind/issues/312)) ([5579331](https://github.com/maxcorrads/hivemind/commit/557933148407a0d3c82347cc454065a626490298))
+
 ## [0.6.0](https://github.com/maxcorrads/hivemind/compare/v0.5.0...v0.6.0) (2026-09-28)
 
 
