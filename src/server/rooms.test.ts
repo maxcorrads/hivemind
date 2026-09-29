@@ -15,10 +15,8 @@ function fixture(t: TestContext) {
   t.after(() => { hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
   const human = hive.identity.getAgent('human'), brain = hive.identity.join({ role: 'brain' }), a = hive.identity.join({ role: 'worker', seniority: 'mid' }), b = hive.identity.join({ role: 'worker', seniority: 'senior' });
   const channel = hive.channels.createChannel(brain.agent, { name: 'fixture-sensors', type: 'private', memberNames: [a.agent.name, b.agent.name] });
-  const contract: RoomContract = { mode: 'ongoing', purpose: 'Investigate synthetic sensor anomalies',
-    rules: ['Assign analysis when a sensor reports a blocker.'], limits: ['No real devices'], coordinator: brain.agent.name,
-    participants: [{ name: a.agent.name, boundary: 'Validate inputs' }, { name: b.agent.name, boundary: 'Check aggregation' }],
-    completion: ['Human ends monitoring'], originTaskId: null };
+  const contract: RoomContract = { instructions: 'Investigate synthetic sensor anomalies.\nAssign analysis when a sensor reports a blocker.\nNo real devices.',
+    coordinator: brain.agent.name, participants: [a.agent.name, b.agent.name] };
   const taskContract = { objective: 'Check synthetic sensor input', scope: ['fixture only'], nonGoals: ['No devices'],
     acceptanceCriteria: ['Report the known value'], dependencies: [], evidenceSeqs: [] };
   const command = (text = 'Set the continuing sensor rules.') => hive.messages.postMessage(human, { channel: channel.id, body: text }).seq;
@@ -30,13 +28,14 @@ function fixture(t: TestContext) {
   const taskEvent = (id: string, action: unknown, actor = a.agent) => hive.tasks.event(actor, id, { requestId: `task-${++n}`,
     expectedRevision: hive.tasks.get(actor, id).revision, action });
   const ack = (actor = a.agent) => event({ type: 'acknowledge', contractVersion: hive.rooms.peek(channel.id)!.contractVersion }, actor);
-  return { get hive() { return hive; }, human, brain, a, b, channel, contract, taskContract, command, event, configure, assign, taskEvent, ack,
+  const archive = (archived = true, actor = human, id = channel.id) => hive.rooms.setArchived(actor, id, archived);
+  return { get hive() { return hive; }, human, brain, a, b, channel, contract, taskContract, command, event, configure, assign, taskEvent, ack, archive,
     reopen() { hive.db.close(); hive = new Hive(file); } };
 }
 
 test('room rules, provenance, history and acknowledgements persist after restart', t => {
   const f = fixture(t); const first = f.configure();
-  assert.equal(first.room!.contract.mode, 'ongoing'); assert.equal(first.room!.revision, 1);
+  assert.equal(first.room!.contract.instructions, f.contract.instructions); assert.equal(first.room!.revision, 1);
   const task = f.assign().task;
   assert.equal(task.room!.acknowledged, false);
   assert.throws(() => f.taskEvent(task.id, { type: 'accept' }), /Acknowledge/);
@@ -59,7 +58,7 @@ test('sidebar archive metadata is read-only, visibility-scoped and survives rest
     return await response.json() as { archivedChannelIds: string[]; channels: { id: string }[] };
   };
   assert.deepEqual((await snap()).archivedChannelIds, []);
-  f.event({ type: 'archive', reason: 'End fixture' }, f.human);
+  f.archive();
   const before = {
     read: f.hive.reads.readSnapshot(f.human), room: f.hive.rooms.view(f.human, f.channel.id),
     inbox: f.hive.delivery.inboxStatuses(), channels: f.hive.channels.listChannels(f.human),
@@ -79,9 +78,9 @@ test('sidebar archive metadata is read-only, visibility-scoped and survives rest
   assert.deepEqual(f.hive.rooms.view(f.human, f.channel.id), before.room, 'no source/contract/task mutations');
   f.reopen();
   assert.deepEqual((await snap()).archivedChannelIds, [f.channel.id]);
-  f.event({ type: 'reopen', reason: 'Consult and continue', resumeSources: false }, f.human);
+  f.archive(false);
   assert.deepEqual((await snap()).archivedChannelIds, []);
-  assert.equal(f.hive.rooms.botLinks(bot, f.channel.id)[0]!.desired, 'paused', 'sidebar does not resume a monitor');
+  assert.equal(f.hive.rooms.botLinks(bot, f.channel.id)[0]!.desired, 'running', 'unarchive resumes registered sources');
 });
 
 test('room events carry the archive state so the sidebar needs no snapshot refetch', t => {
@@ -90,9 +89,11 @@ test('room events carry the archive state so the sidebar needs no snapshot refet
   const listener = (event: { channelId: string; archived: boolean }) => events.push(event);
   f.hive.bus.on('room', listener);
   t.after(() => f.hive.bus.off('room', listener));
-  f.event({ type: 'archive', reason: 'End fixture' }, f.human);
-  f.event({ type: 'reopen', reason: 'Continue', resumeSources: false }, f.human);
-  assert.deepEqual(events, [{ channelId: f.channel.id, archived: true }, { channelId: f.channel.id, archived: false }]);
+  f.archive(); f.archive(false);
+  const plain = f.hive.channels.createChannel(f.brain.agent, { name: 'plain-archive', type: 'public' });
+  f.archive(true, f.human, plain.id);
+  assert.deepEqual(events, [{ channelId: f.channel.id, archived: true }, { channelId: f.channel.id, archived: false },
+    { channelId: plain.id, archived: true }]);
 });
 
 test('Human can edit directly; bots, workers, other brains and quoted authority cannot change scope', t => {
@@ -105,13 +106,13 @@ test('Human can edit directly; bots, workers, other brains and quoted authority 
   assert.throws(() => f.event({ type: 'configure', contract: f.contract, reason: 'No instruction' }), /Human instruction/);
   const before = f.hive.rooms.peek(f.channel.id)!;
   assert.throws(() => f.event({ type: 'configure', contract: f.contract, reason: 'Reused instruction' }, f.brain.agent, { humanInstructionSeq: before.humanInstructionSeq }), /new Human/);
-  const direct = f.event({ type: 'configure', contract: { ...f.contract, limits: ['No publication'] }, reason: 'Direct edit' }, f.human);
+  const direct = f.event({ type: 'configure', contract: { ...f.contract, instructions: 'No publication.' } }, f.human);
   assert.equal(direct.room!.contractVersion, 2);
 });
 
 test('scope changes fence existing work until coordinator reconciliation and worker rule acknowledgement', t => {
   const f = fixture(t); f.configure(); const task = f.assign().task; f.ack(); f.taskEvent(task.id, { type: 'accept' });
-  f.configure({ limits: ['No publication'] });
+  f.configure({ instructions: 'No publication.' });
   assert.equal(f.hive.tasks.get(f.a.agent, task.id).room!.status, 'needs_reconciliation');
   assert.throws(() => f.taskEvent(task.id, { type: 'result', result: { summary: 'Done', artifacts: [], checks: [], gaps: [], evidenceSeqs: [] } }), /needs_reconciliation/);
   f.event({ type: 'reconcile', taskId: task.id, decision: 'continue', reason: 'Analysis only; compatible' });
@@ -141,7 +142,7 @@ test('concurrent worker acknowledgements of the same unchanged contract do not c
     [[f.a.agent.id, contractVersion], [f.b.agent.id, contractVersion]].sort());
 
   const staleRevision = f.hive.rooms.peek(f.channel.id)!.revision;
-  f.configure({ limits: ['Changed contract'] });
+  f.configure({ instructions: 'Changed contract' });
   const currentVersion = f.hive.rooms.peek(f.channel.id)!.contractVersion;
   assert.ok(currentVersion > contractVersion);
   assert.throws(() => f.hive.rooms.event(f.a.agent, f.channel.id, {
@@ -168,7 +169,7 @@ test('request retries, stale versions and stable action keys do not create dupli
 
 test('channel access, participants and project boundaries cannot be granted by contracts', t => {
   const f = fixture(t), outsider = f.hive.identity.join({ role: 'worker', seniority: 'mid' }).agent;
-  assert.throws(() => f.configure({ participants: [{ name: outsider.name, boundary: 'Not invited' }] }), /invited worker/);
+  assert.throws(() => f.configure({ participants: [outsider.name] }), /invited worker/);
   f.configure();
   assert.throws(() => f.hive.rooms.view(outsider, f.channel.id), /Cannot access/);
   assert.throws(() => f.assign('outsider', outsider), /access/);
@@ -178,30 +179,126 @@ test('channel access, participants and project boundaries cannot be granted by c
   assert.throws(() => f.configure({ coordinator: other.name }), /invited brain/);
 });
 
-test('archive requires an explicit running-work choice; stop confirmation is not completion', t => {
-  const f = fixture(t); f.configure(); const task = f.assign().task; f.ack(); f.taskEvent(task.id, { type: 'accept' });
-  const seq = f.command('Archive and request interruption.');
-  assert.throws(() => f.event({ type: 'archive', reason: 'End' }, f.brain.agent, { humanInstructionSeq: seq }), /choose finish or stop/);
-  f.event({ type: 'archive', running: 'stop', reason: 'End' }, f.brain.agent, { humanInstructionSeq: seq });
+test('archive cancels every unfinished task, including stop-requested and stopped room work', t => {
+  const f = fixture(t); f.configure();
+  const accepted = f.assign().task, stopping = f.assign().task, stopped = f.assign().task, done = f.assign().task; f.ack();
+  for (const task of [accepted, stopping, stopped, done]) f.taskEvent(task.id, { type: 'accept' });
+  f.taskEvent(done.id, { type: 'result', result: { summary: 'Done', artifacts: [], checks: [], gaps: [], evidenceSeqs: [] } });
+  f.taskEvent(done.id, { type: 'review', decision: 'accepted', summary: 'Checked', evidenceSeqs: [] }, f.brain.agent);
+  f.configure({ instructions: 'Stop two tasks.' });
+  f.event({ type: 'reconcile', taskId: accepted.id, decision: 'continue', reason: 'Compatible' });
+  f.event({ type: 'reconcile', taskId: stopping.id, decision: 'stop', reason: 'Incompatible' });
+  f.event({ type: 'reconcile', taskId: stopped.id, decision: 'stop', reason: 'Incompatible' });
+  f.event({ type: 'stopped', taskId: stopped.id, reason: 'No external work remains' }, f.a.agent);
+  assert.equal(f.hive.tasks.get(f.a.agent, stopped.id).state, 'accepted', 'stop confirmation is not completion');
+  assert.equal(f.archive().archived, true);
+  for (const task of [accepted, stopping, stopped]) {
+    const closed = f.hive.tasks.get(f.a.agent, task.id);
+    assert.equal(closed.state, 'cancelled'); assert.equal(closed.cancellation!.reason, 'Channel archived by Human');
+  }
+  assert.equal(f.hive.tasks.get(f.a.agent, done.id).state, 'accepted_complete', 'finished work stays historical');
+  assert.equal(f.hive.rooms.view(f.human, f.channel.id).activeTaskCount, 0);
+  assert.equal(f.hive.rooms.peek(f.channel.id)!.state, 'archived');
   assert.throws(() => f.assign(), /archived/);
-  assert.equal(f.hive.tasks.get(f.a.agent, task.id).room!.status, 'stop_requested');
-  assert.throws(() => f.event({ type: 'stopped', taskId: task.id, reason: 'Pretend' }, f.b.agent), /assigned worker/);
-  f.event({ type: 'stopped', taskId: task.id, reason: 'No external work remains' }, f.a.agent);
-  assert.equal(f.hive.tasks.get(f.a.agent, task.id).state, 'accepted');
-  assert.equal(f.hive.tasks.get(f.a.agent, task.id).room!.status, 'stopped');
-  f.event({ type: 'reopen', reason: 'New work', resumeSources: false }, f.human);
-  assert.equal(f.hive.tasks.get(f.a.agent, task.id).room!.status, 'stopped');
-  assert.throws(() => f.event({ type: 'reconcile', taskId: task.id, decision: 'continue', reason: 'Restart it' }), /Stopped work/);
+  assert.throws(() => f.taskEvent(accepted.id, { type: 'revise', reason: 'More work', worker: f.a.agent.name, contract: f.taskContract }, f.brain.agent), /archived/);
+  assert.throws(() => f.configure(), /Unarchive/);
+  assert.throws(() => f.event({ type: 'staff', participants: [f.a.agent.name] }), /Unarchive/);
+  const version = f.hive.rooms.peek(f.channel.id)!.contractVersion;
+  f.archive(false);
+  const reopened = f.hive.rooms.peek(f.channel.id)!;
+  assert.equal(reopened.state, 'active'); assert.equal(reopened.contractVersion, version + 1, 'workers acknowledge again');
+  assert.equal(f.hive.tasks.get(f.a.agent, accepted.id).state, 'cancelled', 'cancelled tasks stay cancelled');
+  const next = f.assign().task;
+  assert.equal(next.room!.acknowledged, false);
+  assert.throws(() => f.taskEvent(next.id, { type: 'accept' }), /Acknowledge/);
 });
 
-test('archive with finish allows completion but not new assignments or revised work', t => {
-  const f = fixture(t); f.configure(); const task = f.assign().task; f.ack();
-  f.event({ type: 'archive', running: 'finish', reason: 'Let existing work finish' }, f.human);
-  f.taskEvent(task.id, { type: 'accept' });
-  f.taskEvent(task.id, { type: 'result', result: { summary: 'Finished', artifacts: [], checks: [], gaps: [], evidenceSeqs: [] } });
-  f.taskEvent(task.id, { type: 'review', decision: 'accepted', summary: 'Reviewed', evidenceSeqs: [] }, f.brain.agent);
-  assert.throws(() => f.assign(), /archived/);
-  assert.throws(() => f.taskEvent(task.id, { type: 'revise', reason: 'More work', worker: f.a.agent.name, contract: f.taskContract }, f.brain.agent), /archived/);
+test('archive and unarchive are Human-only, idempotent and recorded in room history', async t => {
+  const f = fixture(t); f.configure();
+  for (const actor of [f.brain.agent, f.a.agent]) assert.throws(() => f.archive(true, actor), /Only Human/);
+  const dm = f.hive.channels.openDm(f.brain.agent, f.a.agent.name);
+  assert.throws(() => f.archive(true, f.human, dm.id), /public and private/);
+  const revision = f.hive.rooms.peek(f.channel.id)!.revision;
+  f.archive(); const archived = f.hive.rooms.peek(f.channel.id)!;
+  assert.equal(archived.revision, revision + 1); assert.equal(archived.changedBy!.role, 'human');
+  assert.equal(archived.authoritySeq, archived.lastEventSeq); assert.equal(archived.humanInstructionSeq, null);
+  const messages = countRows(f.hive, 'messages');
+  assert.equal(f.archive().archived, true);
+  assert.equal(f.hive.rooms.peek(f.channel.id)!.revision, revision + 1, 'a repeated archive is a no-op');
+  assert.equal(countRows(f.hive, 'messages'), messages);
+  f.reopen(); f.archive(false); f.archive(false);
+  const history = f.hive.rooms.history(f.human, f.channel.id);
+  assert.deepEqual(history.slice(0, 2).map(r => r.state), ['active', 'archived']);
+  assert.equal(history[0]!.revision, revision + 2);
+  const app = createApp(f.hive), url = `/api/ui/channels/${f.channel.id}/archive`;
+  const post = await app.request(url, { method: 'POST' });
+  assert.equal(post.status, 200); assert.deepEqual(await post.json(), { archived: true });
+  const del = await app.request(url, { method: 'DELETE' });
+  assert.equal(del.status, 200); assert.deepEqual(await del.json(), { archived: false });
+  assert.equal((await app.request(`/api/ui/channels/${dm.id}/archive`, { method: 'POST' })).status, 400);
+});
+
+test('room_event archive and reopen need a Human request and close the channel like the header button', t => {
+  const f = fixture(t); f.configure(); const task = f.assign().task;
+  const other = f.hive.identity.join({ role: 'brain' }).agent; f.hive.channels.invite(f.human, f.channel.id, [other.name]);
+  assert.throws(() => f.event({ type: 'archive' }, f.a.agent), /Only Human/);
+  assert.throws(() => f.event({ type: 'archive' }, other, { humanInstructionSeq: f.command('Archive it') }), /Only Human/);
+  assert.throws(() => f.event({ type: 'archive' }), /Human instruction/);
+  const seq = f.command('Archive the sensor channel.');
+  const input = { requestId: 'brain-archive', expectedRevision: f.hive.rooms.peek(f.channel.id)!.revision, humanInstructionSeq: seq,
+    action: { type: 'archive', reason: 'Monitoring ended' } };
+  const archived = f.hive.rooms.event(f.brain.agent, f.channel.id, input);
+  assert.equal(archived.archived, true); assert.equal(archived.room!.state, 'archived');
+  assert.equal(archived.room!.authoritySeq, seq);
+  assert.equal(f.hive.tasks.get(f.a.agent, task.id).state, 'cancelled');
+  assert.match(f.hive.tasks.get(f.a.agent, task.id).cancellation!.reason, /Monitoring ended/);
+  assert.equal(f.hive.rooms.event(f.brain.agent, f.channel.id, input).duplicate, true, 'an exact retry repeats nothing');
+  assert.throws(() => f.event({ type: 'archive' }, f.human), /already archived/);
+  assert.throws(() => f.event({ type: 'reopen' }, f.brain.agent, { humanInstructionSeq: seq }), /new Human/);
+  const reopened = f.event({ type: 'reopen' }, f.brain.agent, { humanInstructionSeq: f.command('Resume monitoring.') });
+  assert.equal(reopened.archived, false); assert.equal(reopened.room!.state, 'active');
+  assert.equal(reopened.room!.contractVersion, archived.room!.contractVersion + 1);
+  assert.deepEqual(f.hive.rooms.archivedChannelIds(f.hive.channels.listChannels(f.human)), []);
+});
+
+test('room_event archives a channel without a contract; get_room reports it', t => {
+  const f = fixture(t);
+  const plain = f.hive.channels.createChannel(f.brain.agent, { name: 'plain-mcp', type: 'public', memberNames: [f.a.agent.name] });
+  const task = f.hive.tasks.assign(f.brain.agent, { requestId: 'plain-mcp-task', channel: plain.id, worker: f.a.agent.name, contract: f.taskContract }).task;
+  const seq = f.hive.messages.postMessage(f.human, { channel: plain.id, body: 'Archive this channel.' }).seq;
+  const view = f.hive.rooms.event(f.brain.agent, plain.id, { requestId: 'plain-archive', expectedRevision: 0, humanInstructionSeq: seq, action: { type: 'archive' } });
+  assert.equal(view.room, null); assert.equal(view.archived, true);
+  assert.equal(f.hive.rooms.view(f.a.agent, plain.id).archived, true);
+  assert.equal(f.hive.tasks.get(f.a.agent, task.id).state, 'cancelled');
+  assert.throws(() => f.hive.rooms.event(f.a.agent, plain.id, { requestId: 'worker-reopen', expectedRevision: 0, action: { type: 'reopen' } }), /Only Human/);
+  f.hive.rooms.event(f.human, plain.id, { requestId: 'human-reopen', expectedRevision: 0, action: { type: 'reopen' } });
+  assert.equal(f.hive.rooms.view(f.a.agent, plain.id).archived, false);
+});
+
+test('a channel without a contract archives in one step and closes its tasks', t => {
+  const f = fixture(t);
+  const plain = f.hive.channels.createChannel(f.brain.agent, { name: 'plain-work', type: 'public', memberNames: [f.a.agent.name] });
+  const task = f.hive.tasks.assign(f.brain.agent, { requestId: 'plain-task', channel: plain.id, worker: f.a.agent.name, contract: f.taskContract }).task;
+  f.archive(true, f.human, plain.id);
+  assert.equal(f.hive.rooms.peek(plain.id), null, 'no contract is invented');
+  assert.deepEqual(f.hive.rooms.archivedChannelIds(f.hive.channels.listChannels(f.human)), [plain.id]);
+  assert.equal(f.hive.tasks.get(f.a.agent, task.id).state, 'cancelled');
+  assert.throws(() => f.hive.tasks.assign(f.brain.agent, { requestId: 'plain-late', channel: plain.id, worker: f.a.agent.name, contract: f.taskContract }), /archived/);
+  assert.throws(() => f.taskEvent(task.id, { type: 'revise', reason: 'Again', worker: f.a.agent.name, contract: f.taskContract }, f.brain.agent), /archived/);
+  assert.throws(() => f.hive.rooms.event(f.human, plain.id, { requestId: 'plain-config', expectedRevision: 0,
+    action: { type: 'configure', contract: f.contract } }), /Unarchive/);
+  assert.throws(() => f.hive.messages.postMessage(f.brain.agent, { channel: plain.id, body: 'New root work' }), /Archived channel/);
+  assert.ok(f.hive.messages.postMessage(f.human, { channel: plain.id, body: 'Human may still post' }).seq);
+  const bot = f.hive.bots.createBot(f.human, plain.projectId, { name: 'PlainFeed' }).bot;
+  f.hive.channels.invite(f.human, plain.id, [bot.name]);
+  assert.throws(() => f.hive.bots.postBotMessage(bot, plain.id, { eventId: 'late', body: 'Late observation' }), /archived/);
+  f.reopen(); assert.deepEqual(f.hive.rooms.archivedChannelIds(f.hive.channels.listChannels(f.human)), [plain.id]);
+  f.archive(false, f.human, plain.id);
+  assert.deepEqual(f.hive.rooms.archivedChannelIds(f.hive.channels.listChannels(f.human)), []);
+  const configured = f.hive.rooms.event(f.human, plain.id, { requestId: 'plain-config', expectedRevision: 0,
+    action: { type: 'configure', contract: { ...f.contract, participants: [f.a.agent.name] } } });
+  assert.equal(configured.room!.state, 'active');
+  assert.equal(configured.room!.changedBy!.reason, 'configure', 'a reason is optional');
 });
 
 test('bot suspension is channel-scoped, restart-safe and generation-checked; unsupported is explicit', t => {
@@ -212,7 +309,7 @@ test('bot suspension is channel-scoped, restart-safe and generation-checked; uns
   const register = (channel: string, id: string, suspendSupported = true) => f.hive.rooms.registerLink(bot, channel, { id, label: 'Synthetic events', suspendSupported });
   register(f.channel.id, 'sensor-a'); register(f.channel.id, 'legacy', false); register(second.id, 'sensor-b');
   f.hive.rooms.reportLink(bot, f.channel.id, 'sensor-a', { generation: 1, observed: 'running' });
-  f.event({ type: 'archive', reason: 'End monitoring' }, f.human);
+  f.archive();
   const paused = f.hive.rooms.botLinks(bot, f.channel.id).find(l => l.id === 'sensor-a')!;
   assert.equal(paused.desired, 'paused'); assert.equal(paused.observed, 'pending'); assert.equal(paused.generation, 2);
   assert.equal(f.hive.rooms.botLinks(bot, second.id)[0]!.desired, 'running');
@@ -222,8 +319,9 @@ test('bot suspension is channel-scoped, restart-safe and generation-checked; uns
   f.reopen(); f.hive.rooms.reportLink(bot, f.channel.id, 'sensor-a', { generation: 2, observed: 'failed', detail: 'Fixture pause unavailable' });
   assert.equal(f.hive.rooms.botLinks(bot, f.channel.id).find(l => l.id === 'sensor-a')!.observed, 'failed');
   f.hive.rooms.reportLink(bot, f.channel.id, 'sensor-a', { generation: 2, observed: 'paused' });
-  f.event({ type: 'reopen', reason: 'Resume channel only', resumeSources: false }, f.human);
-  assert.equal(f.hive.rooms.botLinks(bot, f.channel.id).find(l => l.id === 'sensor-a')!.desired, 'paused');
+  f.archive(false);
+  const resumed = f.hive.rooms.botLinks(bot, f.channel.id).find(l => l.id === 'sensor-a')!;
+  assert.equal(resumed.desired, 'running'); assert.equal(resumed.generation, 3);
 });
 
 test('unregistered bots and archived ingress never masquerade as stopped integrations', t => {
@@ -231,35 +329,12 @@ test('unregistered bots and archived ingress never masquerade as stopped integra
   f.hive.channels.invite(f.human, f.channel.id, [bot.name]);
   const input = { eventId: 'before-archive', body: 'Observation' };
   const old = f.hive.bots.postBotMessage(bot, f.channel.id, input);
-  f.event({ type: 'archive', reason: 'End monitoring' }, f.human);
+  f.archive();
   assert.deepEqual(f.hive.rooms.view(f.human, f.channel.id).unmanagedBots, [bot.name]);
   assert.equal(f.hive.bots.postBotMessage(bot, f.channel.id, input).message.id, old.message.id);
   assert.throws(() => f.hive.bots.postBotMessage(bot, f.channel.id, { ...input, eventId: 'after-archive' }), /suspend/);
-  assert.throws(() => f.hive.messages.postMessage(f.brain.agent, { channel: f.channel.id, body: 'New task' }), /Archived room/);
+  assert.throws(() => f.hive.messages.postMessage(f.brain.agent, { channel: f.channel.id, body: 'New task' }), /Archived channel/);
   assert.ok(f.hive.messages.postMessage(f.human, { channel: f.channel.id, body: 'History remains accessible' }));
-});
-
-test('finite shared-interface room summarizes once into origin and retains history on closure', t => {
-  const f = fixture(t);
-  const origin = f.hive.tasks.assign(f.brain.agent, { requestId: 'origin', worker: f.a.agent.name, contract: f.taskContract }).task;
-  f.configure({ mode: 'finite', originTaskId: origin.id, completion: ['Agree input/output interface and summarize'] });
-  const a = f.assign('validate-input', f.a.agent).task, b = f.assign('aggregate-output', f.b.agent).task;
-  f.ack(f.a.agent); f.ack(f.b.agent);
-  f.hive.messages.postMessage(f.a.agent, { channel: f.channel.id, body: 'Use integer samples?', recipients: [f.b.agent.name], eventType: 'question' });
-  f.hive.messages.postMessage(f.b.agent, { channel: f.channel.id, body: 'Yes, report missing samples separately.', recipients: [f.a.agent.name], eventType: 'decision' });
-  for (const [task, actor] of [[a, f.a.agent], [b, f.b.agent]] as const) {
-    f.taskEvent(task.id, { type: 'accept' }, actor);
-    f.taskEvent(task.id, { type: 'result', result: { summary: 'Integer input with missing values separate', artifacts: ['fixture/interface.txt'], checks: [], gaps: [], evidenceSeqs: [] } }, actor);
-    f.taskEvent(task.id, { type: 'review', decision: 'accepted', summary: 'Consistent interface', evidenceSeqs: [] }, f.brain.agent);
-  }
-  const request = { requestId: 'final-summary', expectedRevision: f.hive.rooms.peek(f.channel.id)!.revision,
-    action: { type: 'summarize', summary: 'Integer samples; missing values explicit.', artifacts: ['fixture/interface.txt'] } };
-  const summary = f.hive.rooms.event(f.brain.agent, f.channel.id, request);
-  f.hive.rooms.event(f.brain.agent, f.channel.id, request);
-  assert.ok(summary.room!.summarySeq); assert.equal(f.hive.tasks.get(f.brain.agent, origin.id).state, 'sent');
-  f.event({ type: 'archive', reason: 'Agreed completion policy met' });
-  assert.equal(f.hive.rooms.peek(f.channel.id)!.state, 'archived');
-  assert.equal(f.hive.messageQueries.listMessages(f.brain.agent, origin.channelId, { threadId: origin.id }).messages.filter(m => m.body.startsWith('Room summary')).length, 1);
 });
 
 test('room transactions do not publish or retain partial changes on failure', t => {
@@ -268,6 +343,18 @@ test('room transactions do not publish or retain partial changes on failure', t 
   failWrites(f.hive, 'room_events', { message: 'fixture failure', persistent: true });
   assert.throws(() => f.event({ type: 'configure', contract: f.contract, reason: 'Start' }, f.brain.agent, { humanInstructionSeq: instruction }), /fixture failure/);
   assert.equal(f.hive.rooms.peek(f.channel.id), null); assert.deepEqual(seen, []);
+});
+
+test('a failed archive keeps the channel, its contract and its tasks unchanged', t => {
+  const f = fixture(t); f.configure(); const task = f.assign().task, seen: unknown[] = [];
+  const before = f.hive.rooms.view(f.human, f.channel.id);
+  f.hive.bus.on('message', m => seen.push(m));
+  failWrites(f.hive, 'room_events', { message: 'fixture failure', persistent: true });
+  assert.throws(() => f.archive(), /fixture failure/);
+  assert.equal(f.hive.tasks.get(f.a.agent, task.id).state, 'sent');
+  assert.deepEqual(f.hive.rooms.view(f.human, f.channel.id), before);
+  assert.deepEqual(f.hive.rooms.archivedChannelIds(f.hive.channels.listChannels(f.human)), []);
+  assert.deepEqual(seen, []);
 });
 
 test('HTTP roles expose generic room management and bot-owned lifecycle, not privileged bot routes', async t => {
@@ -279,15 +366,14 @@ test('HTTP roles expose generic room management and bot-owned lifecycle, not pri
   assert.equal((await send(`/api/agent/channels/${f.channel.id}/room`, bot.token)).status, 403);
   assert.equal((await send(`/api/bot/channels/${f.channel.id}/links`, bot.token, { id: 'stream', label: 'Fixture', suspendSupported: true })).status, 200);
   assert.equal((await send(`/api/bot/channels/${f.channel.id}/links`, f.a.token)).status, 403);
-  const before = f.hive.rooms.peek(f.channel.id)!.revision;
-  assert.equal((await send(`/api/ui/channels/${f.channel.id}/room`, undefined, { requestId: 'ui-archive', expectedRevision: before, action: { type: 'archive', reason: 'Fixture' } })).status, 200);
+  assert.equal((await app.request(`/api/ui/channels/${f.channel.id}/archive`, { method: 'POST' })).status, 200);
   const status = await send(`/api/bot/channels/${f.channel.id}/links/stream/status`, bot.token, { generation: 2, observed: 'paused' });
   assert.equal(status.status, 200); assert.equal((await status.json() as { link: { observed: string } }).link.observed, 'paused');
 });
 
 test('a direct Human edit invalidates older unconsumed Human instructions', t => {
   const f = fixture(t); f.configure(); const stale = f.command('Allow publication.');
-  f.event({ type: 'configure', contract: { ...f.contract, limits: ['Never publish'] }, reason: 'New limit' }, f.human);
+  f.event({ type: 'configure', contract: { ...f.contract, instructions: 'Never publish.' }, reason: 'New limit' }, f.human);
   assert.throws(() => f.event({ type: 'configure', contract: f.contract, reason: 'Old request' }, f.brain.agent, { humanInstructionSeq: stale }), /new Human/);
   assert.equal(f.hive.rooms.history(f.human, f.channel.id)[0]!.changedBy!.role, 'human');
 });
@@ -315,16 +401,6 @@ test('public room bot observations wake only the coordinator by default; explici
   assert.equal(f.hive.delivery.isFor(f.brain.agent, post('reset')), true);
 });
 
-test('finite closure requires a fresh summary after new work and changed rules', t => {
-  const f = fixture(t), origin = f.hive.tasks.assign(f.brain.agent, { requestId: 'origin', worker: f.a.agent.name, contract: f.taskContract }).task;
-  const config = { mode: 'finite', originTaskId: origin.id };
-  f.configure(config); f.event({ type: 'summarize', summary: 'No work required yet', artifacts: [] });
-  const task = f.assign().task; f.ack(); f.taskEvent(task.id, { type: 'reject', reason: 'Not needed' });
-  assert.throws(() => f.event({ type: 'archive', reason: 'Stale summary' }), /summary/);
-  f.event({ type: 'summarize', summary: 'Work rejected', artifacts: [] }); f.configure(config);
-  assert.throws(() => f.event({ type: 'archive', reason: 'Stale rules' }, f.human), /summary/);
-});
-
 test('source reports are bot-owned, transactional and cannot claim the opposite requested state', t => {
   const f = fixture(t); f.configure();
   const bot = f.hive.bots.createBot(f.human, f.channel.projectId, { name: 'OwnedFeed' }).bot;
@@ -333,7 +409,7 @@ test('source reports are bot-owned, transactional and cannot claim the opposite 
   f.hive.rooms.registerLink(bot, f.channel.id, { id: 'stream', label: 'Synthetic', suspendSupported: true });
   assert.throws(() => f.hive.rooms.reportLink(other, f.channel.id, 'stream', { generation: 1, observed: 'running' }), /not found/);
   assert.throws(() => f.hive.rooms.reportLink(bot, f.channel.id, 'stream', { generation: 1, observed: 'paused' }), /requested state/);
-  f.event({ type: 'archive', reason: 'Stop' }, f.human);
+  f.archive();
   failWrites(f.hive, 'messages', { message: 'fixture failure', persistent: true });
   assert.throws(() => f.hive.rooms.reportLink(bot, f.channel.id, 'stream', { generation: 2, observed: 'paused' }), /fixture failure/);
   assert.equal(f.hive.rooms.botLinks(bot, f.channel.id)[0]!.observed, 'pending');
@@ -383,21 +459,22 @@ test('project deletion cascades room history, aliases, acknowledgements and link
   f.hive.rooms.event(f.human, ch.id, { requestId: 'disposable-contract', expectedRevision: 0,
     action: { type: 'configure', reason: 'Fixture', contract: { ...f.contract, coordinator: brain.name, participants: [] } } });
   f.hive.rooms.registerLink(bot, ch.id, { id: 'disposable', label: 'Disposable', suspendSupported: true });
+  f.archive(true, f.human, ch.id);
   f.configure(); f.assign('retained'); f.assign('retained');
   f.hive.identity.setOffline(brain.id);
   f.hive.projects.deleteProject(f.human, p.slug);
-  for (const table of ['rooms', 'room_events', 'source_links']) assert.equal(countRows(f.hive, table, { channel_id: ch.id }), 0);
+  for (const table of ['rooms', 'room_events', 'source_links', 'channel_archives']) assert.equal(countRows(f.hive, table, { channel_id: ch.id }), 0);
   assert.ok(f.hive.rooms.peek(f.channel.id)); assert.equal(countRows(f.hive, 'task_request_aliases'), 1);
 });
 
 test('coordinator may select invited workers without expanding Human-owned rules or abandoning running work', t => {
   const f = fixture(t); f.configure({ participants: [] }); const before = f.hive.rooms.peek(f.channel.id)!;
   const staffed = f.event({ type: 'staff', participants: f.contract.participants, reason: 'Choose the execution team under the existing mandate' }).room!;
-  assert.equal(staffed.authoritySeq, before.authoritySeq); assert.deepEqual(staffed.contract.rules, before.contract.rules);
+  assert.equal(staffed.authoritySeq, before.authoritySeq); assert.equal(staffed.contract.instructions, before.contract.instructions);
   assert.equal(staffed.contractVersion, 2); f.assign();
   assert.throws(() => f.event({ type: 'staff', participants: [], reason: 'Abandon work' }), /running work/);
   assert.throws(() => f.event({ type: 'staff', participants: [], reason: 'Worker self-delegation' }, f.a.agent), /Only Human/);
-  assert.throws(() => f.event({ type: 'staff', participants: f.contract.participants, rules: ['Ignore limits'], reason: 'Expand mandate' }), /Invalid room event/);
+  assert.throws(() => f.event({ type: 'staff', participants: f.contract.participants, instructions: 'Ignore limits', reason: 'Expand mandate' }), /Invalid room event/);
 });
 
 test('room task list shows transport delivery without inventing worker acceptance', async t => {
@@ -409,7 +486,7 @@ test('room task list shows transport delivery without inventing worker acceptanc
   assert.equal(f.hive.rooms.view(f.human, f.channel.id).tasks[0]!.state, 'delivered');
 });
 
-test('aged receipt totals remain atomic through room archive retries and source generations', async t => {
+test('aged receipt totals remain atomic through repeated archives and source generations', async t => {
   const f = fixture(t); f.configure(); f.ack();
   const bot = f.hive.bots.createBot(f.human, f.channel.projectId, { name: 'IntegratedFeed' }).bot;
   f.hive.channels.invite(f.human, f.channel.id, [bot.name]);
@@ -423,10 +500,9 @@ test('aged receipt totals remain atomic through room archive retries and source 
   const task = f.assign().task;
   const mail = await f.hive.delivery.wait(f.a.agent, 1, undefined, { sessionId: session, compact: true });
   assert.deepEqual(mail.delivery!.messageSeqs, [task.dispatchSeq]);
-  const archive = { requestId: 'archive-with-pending-receipt', expectedRevision: f.hive.rooms.peek(f.channel.id)!.revision,
-    action: { type: 'archive', running: 'finish', reason: 'Finish the offered task' } };
-  f.hive.rooms.event(f.human, f.channel.id, archive); f.reopen(); forbidAggregation();
-  assert.equal(f.hive.rooms.event(f.human, f.channel.id, archive).duplicate, true);
+  f.archive(); f.reopen(); forbidAggregation();
+  const revision = f.hive.rooms.peek(f.channel.id)!.revision;
+  f.archive(); assert.equal(f.hive.rooms.peek(f.channel.id)!.revision, revision, 'a repeated archive is a no-op');
   const link = () => f.hive.rooms.botLinks(bot, f.channel.id)[0]!;
   assert.equal(link().generation, 2); assert.equal(link().desired, 'paused');
   assert.equal(link().observed, 'pending');
@@ -447,13 +523,12 @@ test('aged receipt totals remain atomic through room archive retries and source 
   f.hive.delivery.acknowledgeInbox(f.a.agent, session, replay.delivery!.id);
   assert.equal(f.hive.delivery.acknowledgeInbox(f.a.agent, session, replay.delivery!.id).duplicate, true);
   assert.equal(f.hive.delivery.inboxStatuses()[f.a.agent.id].acknowledgedMessages, historical + 1);
-  assert.equal(f.hive.rooms.view(f.human, f.channel.id).tasks[0]!.state, 'delivered');
-  f.event({ type: 'reopen', reason: 'Channel only', resumeSources: false }, f.human);
-  assert.equal(link().desired, 'paused'); assert.equal(link().generation, 2);
-  f.event({ type: 'archive', reason: 'Close again', running: 'finish' }, f.human);
-  f.event({ type: 'reopen', reason: 'Resume source explicitly', resumeSources: true }, f.human);
+  assert.equal(f.hive.rooms.view(f.human, f.channel.id).tasks[0]!.state, 'cancelled', 'a receipt never revives archived work');
+  f.archive(false);
+  assert.equal(link().desired, 'running'); assert.equal(link().generation, 3);
+  f.archive(); f.archive(false);
   assert.equal(link().desired, 'running');
-  assert.ok(link().generation > 2);
+  assert.equal(link().generation, 5);
   assert.throws(() => f.hive.rooms.reportLink(bot, f.channel.id, 'sensor', { generation: 2, observed: 'paused' }), /Stale/);
   f.hive.rooms.reportLink(bot, f.channel.id, 'sensor', { generation: link().generation, observed: 'running' });
   assert.equal(f.hive.inbox.status(f.a.agent.id).acknowledgedMessages, historical + 1);
@@ -501,11 +576,11 @@ for (const priorState of ['rejected', 'accepted_complete'] as const) {
       }
       const before = f.hive.tasks.get(f.brain.agent, old.id);
       f.configure();
-      if (archived) f.event({ type: 'archive', reason: 'End this activity' }, f.human);
+      if (archived) f.archive();
       f.reopen();
       const messagesBefore = countRows(f.hive, 'messages');
       assert.throws(() => f.taskEvent(old.id, { type: 'revise', worker: f.a.agent.name,
-        contract: f.taskContract, reason: 'Revive previous work' }, f.brain.agent), /predating.*historical/);
+        contract: f.taskContract, reason: 'Revive previous work' }, f.brain.agent), archived ? /archived channel/ : /predating.*historical/);
       assert.deepEqual(f.hive.tasks.get(f.brain.agent, old.id), before);
       assert.equal(countRows(f.hive, 'messages'), messagesBefore);
       assert.equal(f.hive.rooms.view(f.human, f.channel.id).activeTaskCount, 0);
@@ -537,46 +612,7 @@ test('historical assignment/event retries stay idempotent after room installatio
     assert.throws(() => f.hive.tasks.event(f.a.agent, old.id, { ...rejection,
       action: { ...rejection.action, reason: 'Changed payload' } }), /requestId/);
   };
-  replay(); f.event({ type: 'archive', reason: 'End activity' }, f.human); f.reopen(); replay();
-});
-
-test('direct Human finite archive advances authority and only a newer request can reopen sources', t => {
-  const f = fixture(t), origin = f.hive.tasks.assign(f.brain.agent, { requestId: 'origin', worker: f.a.agent.name, contract: f.taskContract }).task;
-  f.configure({ mode: 'finite', originTaskId: origin.id });
-  const stale = f.command('Reopen when needed.');
-  const bot = f.hive.bots.createBot(f.human, f.channel.projectId, { name: 'FiniteFixtureFeed' }).bot;
-  f.hive.channels.invite(f.human, f.channel.id, [bot.name]);
-  f.hive.rooms.registerLink(bot, f.channel.id, { id: 'sensor', label: 'Synthetic source', suspendSupported: true });
-  f.event({ type: 'summarize', summary: 'No work remains', artifacts: [] });
-  const request = { requestId: 'human-finite-archive', expectedRevision: f.hive.rooms.peek(f.channel.id)!.revision,
-    action: { type: 'archive', reason: 'New decision: stop activity' } };
-  const closed = f.hive.rooms.event(f.human, f.channel.id, request).room!;
-  assert.equal(closed.authoritySeq, closed.lastEventSeq);
-  assert.equal(closed.humanInstructionSeq, null);
-  assert.ok(closed.authoritySeq > stale);
-  f.reopen();
-  assert.equal(f.hive.rooms.event(f.human, f.channel.id, request).duplicate, true);
-  assert.equal(f.hive.rooms.peek(f.channel.id)!.authoritySeq, closed.authoritySeq);
-  assert.throws(() => f.event({ type: 'reopen', resumeSources: true, reason: 'Earlier request' },
-    f.brain.agent, { humanInstructionSeq: stale }), /new Human/);
-  assert.equal(f.hive.rooms.peek(f.channel.id)!.state, 'archived');
-  assert.equal(f.hive.rooms.botLinks(bot, f.channel.id)[0]!.desired, 'paused');
-  const fresh = f.command('Now reopen and resume this source.');
-  const reopened = f.event({ type: 'reopen', resumeSources: true, reason: 'New Human request' },
-    f.brain.agent, { humanInstructionSeq: fresh }).room!;
-  assert.equal(reopened.state, 'active');
-  assert.equal(reopened.authoritySeq, fresh);
-  assert.equal(f.hive.rooms.botLinks(bot, f.channel.id)[0]!.desired, 'running');
-});
-
-test('brain finite closure still uses its agreed policy without a new Human instruction', t => {
-  const f = fixture(t), origin = f.hive.tasks.assign(f.brain.agent, { requestId: 'origin', worker: f.a.agent.name, contract: f.taskContract }).task;
-  const configured = f.configure({ mode: 'finite', originTaskId: origin.id, completion: ['Summarize then archive when no work remains'] }).room!;
-  f.event({ type: 'summarize', summary: 'No work remains', artifacts: [] });
-  const closed = f.event({ type: 'archive', reason: 'Agreed completion policy met' }).room!;
-  assert.equal(closed.state, 'archived');
-  assert.equal(closed.authoritySeq, configured.authoritySeq);
-  assert.equal(closed.humanInstructionSeq, configured.humanInstructionSeq);
+  replay(); f.archive(); f.reopen(); replay();
 });
 
 test('room metadata stays a derived projection, including tasks written by the older prototype', t => {
@@ -603,7 +639,8 @@ test('advisory release and checkpoints remain reports during a room stop, not pe
   const f = fixture(t); f.configure(); const task = f.assign().task; f.ack();
   f.taskEvent(task.id, { type: 'claim', leaseSeconds: 60, paths: ['src/fixture'], overlapAcknowledgements: [] }, f.brain.agent);
   f.taskEvent(task.id, { type: 'accept' });
-  f.event({ type: 'archive', running: 'stop', reason: 'Stop fixture' }, f.brain.agent, { humanInstructionSeq: f.command('Stop and archive') });
+  f.configure({ instructions: 'Stop the fixture work.' });
+  f.event({ type: 'reconcile', taskId: task.id, decision: 'stop', reason: 'Stop fixture' });
   f.taskEvent(task.id, { type: 'checkpoint', checkpoint: { completedSteps: [], unresolvedQuestions: ['Pending stop'], nextAction: 'Confirm host stopped', artifacts: [], checks: [], evidenceSeqs: [] } });
   f.taskEvent(task.id, { type: 'release_claim', reason: 'Releasing advisory intent only' }, f.brain.agent);
   assert.equal(f.hive.tasks.get(f.a.agent, task.id).room!.status, 'stop_requested');

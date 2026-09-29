@@ -373,6 +373,12 @@
  },
  {
   "type": "table",
+  "name": "channel_archives",
+  "tbl": "channel_archives",
+  "sql": "CREATE TABLE channel_archives ( channel_id TEXT PRIMARY KEY REFERENCES channels(id) ON DELETE CASCADE, archived_at INTEGER NOT NULL )"
+ },
+ {
+  "type": "table",
   "name": "channel_members",
   "tbl": "channel_members",
   "sql": "CREATE TABLE channel_members ( channel_id TEXT NOT NULL, agent_id TEXT NOT NULL, PRIMARY KEY (channel_id, agent_id) )"

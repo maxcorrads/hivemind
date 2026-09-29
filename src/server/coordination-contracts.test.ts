@@ -52,9 +52,8 @@ async function fixture(t: TestContext) {
       body: body === undefined ? undefined : JSON.stringify(body) });
     return { status: response.status, body: await response.json() as T };
   };
-  const contract = { mode: 'ongoing', purpose: 'Review a shared fixture', rules: ['Only fixture work'], limits: ['No external writes'],
-    coordinator: brain.agent.name, participants: [{ name: worker.agent.name, boundary: 'Inspect the fixture' }],
-    completion: ['Human archives'], originTaskId: null };
+  const contract = { instructions: 'Review a shared fixture. Only fixture work; no external writes.',
+    coordinator: brain.agent.name, participants: [worker.agent.name] };
   const taskContract = { objective: 'Inspect the shared fixture', scope: ['Fixture only'], nonGoals: [],
     acceptanceCriteria: ['Return a reviewed result'], dependencies: [], evidenceSeqs: [] };
   return { hive, brain, worker, channel, contract, taskContract, frame, request };

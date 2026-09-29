@@ -9,15 +9,11 @@ export function RoomDetails({ view }: { view: RoomView }) {
   const room = view.room;
   if (!room) return null;
   return <>
-    <p className="room-summary"><strong>{room.contract.mode === 'finite' ? 'Task-scoped room' : 'Ongoing channel'} · {room.state}</strong> · revision {room.revision} / contract {room.contractVersion}</p>
-    <p className="room-meta">Coordinating brain: {room.contract.coordinator}</p>
-    <p className="room-purpose">{room.contract.purpose}</p>
-    <h4>Operating rules</h4><ul>{room.contract.rules.map((r, i) => <li key={i}>{r}</li>)}</ul>
-    {room.contract.limits.length > 0 && <><h4>Limits</h4><ul>{room.contract.limits.map((r, i) => <li key={i}>{r}</li>)}</ul></>}
-    <details><Disclosure>Participants, completion and task state</Disclosure>
-      <ul>{room.contract.participants.map(p => <li key={p.name}>{p.name}: {p.boundary}</li>)}</ul>
-      <p>Completion: {room.contract.completion.join('; ')}</p>
-      {room.contract.originTaskId && <p>Originating task: {room.contract.originTaskId}</p>}
+    <p className="room-summary"><strong>{room.state === 'archived' ? 'Archived' : 'Active'}</strong> · revision {room.revision} / contract {room.contractVersion}</p>
+    <p className="room-meta">Coordinating brain: {room.contract.coordinator}
+      {room.contract.participants.length > 0 && <> · Workers: {room.contract.participants.join(', ')}</>}</p>
+    <p className="room-purpose">{room.contract.instructions}</p>
+    <details><Disclosure>Task state</Disclosure>
       <ul>{view.tasks.map(t => <li key={t.id}><a href={`#/c/${encodeURIComponent(room.channelId)}/t/${encodeURIComponent(t.id)}`}>{t.worker} · {t.id.slice(0, 8)}</a>: {t.state} · {t.room.status} · rules {t.room.acknowledged ? 'acknowledged' : 'not yet acknowledged'}</li>)}</ul>
       {view.tasksHasMore && <p>Showing up to 100 tasks. Older tasks remain in channel history; agents can page with get_room beforeTask.</p>}
     </details>
@@ -28,12 +24,11 @@ export function RoomDetails({ view }: { view: RoomView }) {
     </details>}
   </>;
 }
-export function RoomPanel({ channel, agents, tick }: { channel: Channel; agents: Agent[]; tick: number }) {
+export function RoomPanel({ channel, archived = false, agents, tick }: { channel: Channel; archived?: boolean; agents: Agent[]; tick: number }) {
   const [view, setView] = useState<RoomView | null>(null), [error, setError] = useState('');
   const [editing, setEditing] = useState(false), [draft, setDraft] = useState<RoomContract | null>(null);
-  const [base, setBase] = useState(0), [reason, setReason] = useState('');
-  const [busy, setBusy] = useState(false), [archiving, setArchiving] = useState(false);
-  const [running, setRunning] = useState(''), [resumeSources, setResumeSources] = useState(false);
+  const [base, setBase] = useState(0);
+  const [busy, setBusy] = useState(false);
   const [history, setHistory] = useState<Room[]>([]);
   const [pending, setPending] = useState<{ requestId: string; expectedRevision: number; action: unknown } | null>(null);
   const request = useRef(0), mounted = useRef(true), inFlight = useRef(false);
@@ -44,11 +39,9 @@ export function RoomPanel({ channel, agents, tick }: { channel: Channel; agents:
   const room = view?.room;
   const workers = agents.filter(a => a.role === 'worker' && channel.memberIds.includes(a.id));
   const brains = agents.filter(a => a.role === 'brain' && channel.memberIds.includes(a.id));
-  const hasRunning = (view?.activeTaskCount ?? 0) > 0;
   const begin = () => {
-    setBase(room?.revision ?? 0); setReason(''); setError('');
-    setDraft(room?.contract ?? { mode: 'ongoing', purpose: '', rules: [], limits: [], coordinator: brains[0]?.name ?? '',
-      participants: [], completion: ['Human archives when this activity is no longer needed.'], originTaskId: null });
+    setBase(room?.revision ?? 0); setError('');
+    setDraft(room?.contract ?? { instructions: '', coordinator: brains[0]?.name ?? '', participants: [] });
     setEditing(true);
   };
   const submit = async (action: unknown, expectedRevision: number) => {
@@ -60,7 +53,7 @@ export function RoomPanel({ channel, agents, tick }: { channel: Channel; agents:
       await api.roomEvent(channel.id, operation);
       if (!mounted.current) return;
       setPending(null);
-      setEditing(false); setArchiving(false); setReason('');
+      setEditing(false);
       // A delayed POST snapshot can predate live updates already displayed. Read
       // after the commit instead; task/source changes need not bump room.revision.
       await refresh();
@@ -86,10 +79,9 @@ export function RoomPanel({ channel, agents, tick }: { channel: Channel; agents:
     } catch (e) { if (mounted.current && id === request.current) setError((e as Error).message); }
     finally { inFlight.current = false; if (mounted.current) setBusy(false); }
   };
-  const lines = (v: string) => v.split('\n');
   return <section className="room-panel" aria-label="Channel contract">
     <div className="room-panel-heading"><strong>Channel contract</strong>
-      {!editing && room?.state !== 'archived' && <button type="button" className="btn" disabled={!view || busy || !!pending} onClick={begin}>{room ? 'Edit contract' : 'Set up contract'}</button>}
+      {!editing && !archived && <button type="button" className="btn" disabled={!view || busy || !!pending} onClick={begin}>{room ? 'Edit contract' : 'Set up contract'}</button>}
     </div>
     {error && <p role="alert">{error}</p>}
     {pending && !busy && <p role="status">The save outcome is unknown. Retry the exact request, or inspect the latest state before changing it. Leaving this channel discards the local retry; check history before resubmitting after returning.</p>}
@@ -97,23 +89,15 @@ export function RoomPanel({ channel, agents, tick }: { channel: Channel; agents:
     {(pending || error) && <button type="button" className="btn" disabled={busy} onClick={() => void reconcile()}>Reconcile with latest state</button>}
     {view && <RoomDetails view={view} />}
     {!room && !editing && <p>No persistent contract. Ordinary channel behavior is unchanged.</p>}
-    {editing && draft && <form onSubmit={e => { e.preventDefault(); void submit({ type: 'configure', contract: {
-      ...draft, rules: draft.rules.filter(Boolean), limits: draft.limits.filter(Boolean), completion: draft.completion.filter(Boolean) }, reason }, base); }}>
+    {editing && draft && <form onSubmit={e => { e.preventDefault(); void submit({ type: 'configure', contract: draft }, base); }}>
       <fieldset disabled={busy || !!pending}>
-      <label>Mode<select value={draft.mode} disabled={Boolean(room)} onChange={e => setDraft({ ...draft, mode: e.target.value as RoomContract['mode'] })}><option value="ongoing">Ongoing activity</option><option value="finite" disabled={channel.type !== 'private'}>Finite collaboration (private channel)</option></select></label>
-      <label>Purpose<textarea required maxLength={700} value={draft.purpose} onChange={e => setDraft({ ...draft, purpose: e.target.value })} /></label>
-      <label>Operating rules (one per line)<textarea required value={draft.rules.join('\n')} onChange={e => setDraft({ ...draft, rules: lines(e.target.value) })} /></label>
-      <label>Limits (one per line)<textarea value={draft.limits.join('\n')} onChange={e => setDraft({ ...draft, limits: lines(e.target.value) })} /></label>
+      <label>Instructions<textarea required maxLength={4000} rows={8} value={draft.instructions}
+        placeholder="What this channel is for, how agents should work here, and when it is done."
+        onChange={e => setDraft({ ...draft, instructions: e.target.value })} /></label>
       <label>Coordinating brain<select required value={draft.coordinator} onChange={e => setDraft({ ...draft, coordinator: e.target.value })}><option value="">Select an invited brain</option>{brains.map(a => <option key={a.id}>{a.name}</option>)}</select></label>
-      <fieldset><legend>Invited workers and ownership boundaries</legend>{workers.map(w => {
-        const p = draft.participants.find(p => p.name === w.name);
-        return <div key={w.id} className="room-participant"><label className="check"><input type="checkbox" checked={Boolean(p)} onChange={e => setDraft({ ...draft, participants: e.target.checked ? [...draft.participants, { name: w.name, boundary: '' }] : draft.participants.filter(p => p.name !== w.name) })} />{w.name}</label>
-          {p && <label>Boundary for {w.name}<input required maxLength={700} value={p.boundary} onChange={e => setDraft({ ...draft, participants: draft.participants.map(p => p.name === w.name ? { ...p, boundary: e.target.value } : p) })} /></label>}</div>;
-      })}</fieldset>
-      {draft.mode === 'finite' && <label>Originating task ID<input required disabled={Boolean(room)} value={draft.originTaskId ?? ''} onChange={e => setDraft({ ...draft, originTaskId: e.target.value || null })} /></label>}
-      <label>Completion policy (one criterion per line)<textarea required value={draft.completion.join('\n')} onChange={e => setDraft({ ...draft, completion: lines(e.target.value) })} /></label>
-      <label>Reason for this change<input required maxLength={700} value={reason} onChange={e => setReason(e.target.value)} /></label>
-      <p>Human is changing these rules. Existing tasks will require reconciliation with the new version.</p>
+      {workers.length > 0 && <fieldset><legend>Workers who take tasks here</legend>{workers.map(w =>
+        <label key={w.id} className="check"><input type="checkbox" checked={draft.participants.includes(w.name)} onChange={e => setDraft({ ...draft,
+          participants: e.target.checked ? [...draft.participants, w.name] : draft.participants.filter(name => name !== w.name) })} />{w.name}</label>)}</fieldset>}
       <div className="room-actions">
         <button className="btn btn-primary" disabled={busy} type="submit">Save contract</button>
         <button className="btn btn-ghost" disabled={busy} type="button" onClick={() => { setEditing(false); setError(''); }}>Cancel</button>
@@ -121,28 +105,8 @@ export function RoomPanel({ channel, agents, tick }: { channel: Channel; agents:
       </fieldset>
     </form>}
     {room && !editing && <div className="room-controls">
-      {room.state === 'active' && !archiving && <button className="btn" disabled={busy || !!pending} onClick={() => { setBase(room.revision); setReason(''); setError(''); setRunning(''); setArchiving(true); }}>Archive channel…</button>}
-      {archiving && <form onSubmit={e => { e.preventDefault(); void submit({ type: 'archive', reason, ...(hasRunning ? { running } : {}) }, base); }}>
-        <fieldset disabled={busy || !!pending}>
-        <p>Prevent new work and request suspension of source links for this channel only. History is retained.</p>
-        {hasRunning && <label>Running tasks<select required value={running} onChange={e => setRunning(e.target.value)}><option value="">Choose explicitly</option><option value="finish">Let existing tasks finish</option><option value="stop">Request interruption (not completion)</option></select></label>}
-        <label>Reason<input required maxLength={700} value={reason} onChange={e => setReason(e.target.value)} /></label>
-        <div className="room-actions">
-          <button className="btn btn-primary" disabled={busy} type="submit">Confirm archive</button>
-          <button className="btn btn-ghost" disabled={busy} type="button" onClick={() => setArchiving(false)}>Cancel</button>
-        </div>
-        </fieldset>
-      </form>}
-      {room.state === 'archived' && <form onSubmit={e => { e.preventDefault(); void submit({ type: 'reopen', reason, resumeSources }, room.revision); }}>
-        <fieldset disabled={busy || !!pending}>
-        <label>Reason to reopen<input required maxLength={700} value={reason} onChange={e => setReason(e.target.value)} /></label>
-        <label className="check"><input type="checkbox" checked={resumeSources} onChange={e => setResumeSources(e.target.checked)} />Request resumption of registered source links</label>
-        <p>Stopped tasks stay stopped. Old observations are not automatically replayed.</p>
-        <div className="room-actions"><button className="btn btn-primary" disabled={busy} type="submit">Reopen channel</button></div>
-        </fieldset>
-      </form>}
       <button className="btn btn-ghost" disabled={busy} type="button" onClick={() => api.roomHistory(channel.id).then(r => { if (mounted.current) setHistory(r.history); }).catch(e => setError(e.message))}>Show recent contract history</button>
-      {history.length > 0 && <details open className="room-history"><Disclosure>Latest {history.length} revisions</Disclosure>{history.map(r => <div key={r.revision} className="room-revision"><strong>Revision {r.revision}, contract {r.contractVersion} · {r.state}</strong><p>{r.contract.purpose}</p><p>{r.contract.rules.join('; ')}</p><p>{r.changedBy?.name} ({r.changedBy?.role}): {r.changedBy?.reason}</p><p>Human instruction: {r.humanInstructionSeq ?? 'direct Human configuration'}</p></div>)}</details>}
+      {history.length > 0 && <details open className="room-history"><Disclosure>Latest {history.length} revisions</Disclosure>{history.map(r => <div key={r.revision} className="room-revision"><strong>Revision {r.revision}, contract {r.contractVersion} · {r.state}</strong><p>{r.contract.instructions}</p><p>{r.changedBy?.name} ({r.changedBy?.role}): {r.changedBy?.reason}</p><p>Human instruction: {r.humanInstructionSeq ?? 'direct Human configuration'}</p></div>)}</details>}
     </div>}
   </section>;
 }

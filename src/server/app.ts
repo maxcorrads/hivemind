@@ -394,6 +394,8 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   ui.get('/channels/:id/room', c => c.json(hive.rooms.view(hive.identity.getAgent('human'), c.req.param('id'))));
   ui.get('/channels/:id/room/history', c => c.json({ history: hive.rooms.history(hive.identity.getAgent('human'), c.req.param('id'), Number(c.req.query('before') ?? Number.MAX_SAFE_INTEGER)) }));
   ui.post('/channels/:id/room', async c => c.json(hive.rooms.event(hive.identity.getAgent('human'), c.req.param('id'), await requestJson(c.req.raw))));
+  ui.post('/channels/:id/archive', c => c.json(hive.rooms.setArchived(hive.identity.getAgent('human'), c.req.param('id'), true)));
+  ui.delete('/channels/:id/archive', c => c.json(hive.rooms.setArchived(hive.identity.getAgent('human'), c.req.param('id'), false)));
   ui.get('/projects/:id/worker-templates', c => c.json({ templates: hive.workerTemplates.list(projectRef(c.req.param('id')).id) }));
   ui.post('/projects/:id/worker-templates', async c => c.json(hive.workerTemplates.create(hive.identity.getAgent('human'),
     projectRef(c.req.param('id')).id, await requestJson(c.req.raw)), 201));

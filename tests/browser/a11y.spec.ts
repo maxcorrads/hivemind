@@ -50,7 +50,7 @@ async function install(page: Page, fixture: Partial<Fixture> = {}): Promise<Fixt
     await json(route, { readInstance: "a11y-fixture", readRevision: 0, readSeq: 3, items: [], hasMore: false })
       .catch(() => undefined);
   });
-  const room: RoomView = { room: null, tasks: [], activeTaskCount: 0, tasksHasMore: false, nextTaskCursor: null, links: [],
+  const room: RoomView = { room: null, archived: false, tasks: [], activeTaskCount: 0, tasksHasMore: false, nextTaskCursor: null, links: [],
     unmanagedBots: [] };
   await page.route("**/api/ui/channels/*/room", route => json(route, room));
   await page.route("**/api/ui/channels/*/tasks", route => json(route, { items: [], hasMore: false }));

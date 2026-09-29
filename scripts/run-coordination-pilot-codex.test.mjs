@@ -226,11 +226,11 @@ test('room workflow requires and embeds a real Human instruction sequence', () =
   assert.throws(() => buildBrainPrompt(room, fixture, 3), /requires a real Human instruction sequence/);
   const prompt = buildBrainPrompt(room, fixture, 3, 42);
   assert.match(prompt, /humanInstructionSeq=42/);
-  assert.match(prompt, /originTaskId/);
+  assert.match(prompt, /contract\.participants lists every benchmark worker/);
   assert.match(prompt, /Do not ask Human for another authorization/);
   const authority = humanRoomInstructionBody(room);
   assert.match(authority, new RegExp(room.blindId));
-  assert.match(authority, /finite task-scoped collaboration room/);
+  assert.match(authority, /collaboration room contract for this trial only/);
 });
 
 test('benchmark Human session bootstrap requires a returned local session cookie', async t => {

@@ -37,9 +37,7 @@ test('a room event archives from its payload without a snapshot refetch and keep
   const human = hive.identity.getAgent('human'), brain = hive.identity.join({ role: 'brain' }).agent;
   const room = hive.channels.createChannel(brain, { name: 'existing-room', type: 'private' });
   hive.rooms.event(human, room.id, { requestId: 'configure', expectedRevision: 0,
-    action: { type: 'configure', reason: 'Fixture', contract: { mode: 'ongoing', purpose: 'Navigation fixture',
-      rules: ['Fixture only'], limits: ['No external writes'], coordinator: brain.name, participants: [],
-      completion: ['Human archives'], originTaskId: null } } });
+    action: { type: 'configure', contract: { instructions: 'Navigation fixture. No external writes.', coordinator: brain.name, participants: [] } } });
   window.happyDOM.setURL(`http://localhost/#/c/${room.id}`);
   const app = createApp(hive);
   let snapshots = 0;
@@ -65,7 +63,7 @@ test('a room event archives from its payload without a snapshot refetch and keep
   await act(async () => root.render(<App />));
   const before = snapshots;
   await act(async () => {
-    hive.rooms.event(human, room.id, { requestId: 'archive', expectedRevision: 1, action: { type: 'archive', reason: 'Done' } });
+    hive.rooms.setArchived(human, room.id, true);
   });
   assert.equal(snapshots, before, 'the room event carries the archive state; no snapshot refetch');
   assert.ok(host.querySelector('.archived-channels'), 'archive metadata updates live');
@@ -92,9 +90,7 @@ test('mounted Human App follows task review and contract history without offerin
   const worker = hive.identity.join({ role: 'worker', seniority: 'mid' }).agent;
   const channel = hive.channels.createChannel(brain, { name: 'mounted-coordination', type: 'private', memberNames: [worker.name] });
   hive.rooms.event(human, channel.id, { requestId: 'app-room', expectedRevision: 0, action: { type: 'configure', reason: 'Human fixture',
-    contract: { mode: 'ongoing', purpose: 'A visible shared contract', rules: ['Fixture only'], limits: ['No external writes'],
-      coordinator: brain.name, participants: [{ name: worker.name, boundary: 'Read the fixture' }],
-      completion: ['Human archives'], originTaskId: null } } });
+    contract: { instructions: 'A visible shared contract. No external writes.', coordinator: brain.name, participants: [worker.name] } } });
   const initial = hive.tasks.assign(brain, { requestId: 'app-task', worker: worker.name, channel: channel.id,
     room: { contractVersion: 1, actionKey: 'visible-task' }, contract: { objective: 'Review the mounted fixture', scope: ['Fixture'],
       nonGoals: [], acceptanceCriteria: ['Reviewed result'], dependencies: [], evidenceSeqs: [] } }).task;

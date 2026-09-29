@@ -123,7 +123,7 @@ test("a populated current-main (user_version 2) hive upgrades with every row and
   // #217 (performance_retention) adds the per-message receipt index, backfilled from the delivery ledger;
   // worker_templates (#276) adds an empty table.
   const added = ["inbox_receipts", "bot_access", "worker_templates", "launch_requests", "launcher_commands", "jobs", "job_events",
-    "agent_name_aliases", "agent_lifecycle_events"];
+    "agent_name_aliases", "agent_lifecycle_events", "channel_archives"];
   type AgentRow = { id: string; token_hash: string; removed_at?: number | null; terminal_session?: string | null };
   const beforeAgents = before.rows.agents as AgentRow[], afterAgents = after.rows.agents as AgentRow[];
   // agent_reservations adds pending_until, claim_hash and template_id, all empty for agents that already joined.
@@ -137,6 +137,7 @@ test("a populated current-main (user_version 2) hive upgrades with every row and
     before.rows.worker_capabilities!.map(row => ({ ...(row as object), last_editor_id: null })));
   assert.deepEqual(after.rows.agent_name_aliases, []);
   assert.deepEqual(after.rows.agent_lifecycle_events, []);
+  assert.deepEqual(after.rows.channel_archives, []);
   for (const [i, row] of afterAgents.entries()) {
     if (row.id === "human") assert.match(row.token_hash, /^[0-9a-f]{64}$/);
     if (row.id === "human") assert.notEqual(row.token_hash, beforeAgents[i]!.token_hash, "the constant Human hash is replaced");

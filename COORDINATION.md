@@ -74,5 +74,5 @@ Functional acceptance is not a model-productivity benchmark. No automatic
 authorization is inferred from the meaning of Human prose. Source pause/stop
 states remain requests and participant/provider reports, not independently
 verified process termination. A stopped task is not successful completion, and
-a finite room's summary does not complete its originating task. Browser/native
+archiving a channel cancels its open tasks rather than completing them. Browser/native
 provider acceptance and general token/latency savings require separate evidence.

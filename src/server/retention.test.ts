@@ -24,8 +24,8 @@ async function fixture(t: TestContext) {
   const contracted = hive.channels.createChannel(brain, { name: 'retention-room', type: 'private', memberNames: [a.name, b.name] });
   hive.rooms.event(brain, contracted.id, { requestId: 'room-1', expectedRevision: 0, humanInstructionSeq:
     hive.messages.postMessage(human, { channel: contracted.id, body: 'Keep monitoring the fixture.' }).seq,
-    action: { type: 'configure', reason: 'Human request', contract: { mode: 'ongoing', purpose: 'Fixture', rules: ['Rule'], limits: ['Limit'],
-      coordinator: brain.name, participants: [{ name: a.name, boundary: 'A' }, { name: b.name, boundary: 'B' }], completion: ['Done'], originTaskId: null } } });
+    action: { type: 'configure', reason: 'Human request', contract: { instructions: 'Fixture rule.',
+      coordinator: brain.name, participants: [a.name, b.name] } } });
   const task = hive.tasks.assign(brain, { requestId: 'task', worker: a.name, channel: room.id,
     contract: { objective: 'Pick a boundary', scope: ['src'], nonGoals: [], acceptanceCriteria: ['Decided'], dependencies: [], evidenceSeqs: [] } }).task;
   const answered = hive.messages.postMessage(human, { channel: room.id, body: 'Take X.', recipients: [a.name, b.name] });

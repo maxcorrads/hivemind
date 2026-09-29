@@ -122,7 +122,7 @@ export type TaskStoreDeps = TaskCoordinationDeps & Agents & Messages<"getMessage
   };
 export type RoomStoreDeps = Core & Channels & Agents & Messages<"getMessageById" | "getVisibleMessage"> &
   Poster<"publishTaskMessage"> & CoordinationWriter<"insertCoordinationMessage"> & {
-    readonly tasks: Pick<TaskStore, "get">;
+    readonly tasks: Pick<TaskStore, "get" | "control">;
     readonly bots: Pick<BotService, "access">;
   };
 export type NotificationDeps = Core & Channels<"getChannel" | "canSeeChannel"> & {

@@ -29,8 +29,8 @@ test('real stdio MCP preserves HTTP task/room payloads across client reconnect a
   const foreign = hive.identity.join({ role: 'brain', project: other.slug });
   const channel = hive.channels.createChannel(brain.agent, { name: 'contract-fixture', type: 'private', memberNames: [worker.agent.name] });
   hive.rooms.event(human, channel.id, { requestId: 'setup', expectedRevision: 0, action: { type: 'configure', reason: 'Fixture',
-    contract: { mode: 'ongoing', purpose: 'Private shared fixture', rules: ['Inspect only'], limits: ['No external writes'],
-      coordinator: brain.agent.name, participants: [{ name: worker.agent.name, boundary: 'Inspect' }], completion: ['Human archives'], originTaskId: null } } });
+    contract: { instructions: 'Private shared fixture. Inspect only; no external writes.',
+      coordinator: brain.agent.name, participants: [worker.agent.name] } } });
   const assigned = hive.tasks.assign(brain.agent, { requestId: 'assign', channel: channel.id, worker: worker.agent.name,
     room: { contractVersion: 1, actionKey: 'fixture-1' }, contract: { objective: 'Private fixture objective', scope: ['Fixture'], nonGoals: [],
       acceptanceCriteria: ['Report reviewed result'], dependencies: [], evidenceSeqs: [] } });

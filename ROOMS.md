@@ -6,53 +6,64 @@ change the brain/worker roles. Ordinary channels/tasks remain compatible.
 
 ## Archived channels in the Human sidebar
 
-Channels with an archived room move out of the main channel list into a collapsed
+Human archives any public or private channel with one click on **Archive** in the
+channel header (no reason or confirmation form); **Unarchive** restores it. A
+coordinating brain can do the same with `room_event` `archive`/`reopen` on a Human request. See
+[Archive and source lifecycle](#archive-and-source-lifecycle) for what archiving
+closes. Archived channels move out of the main channel list into a collapsed
 **Archived** section in their project. Expand it to consult them; searching for a
 channel or following a link to it reveals the archived entry automatically.
-Archiving or reopening a room updates the sidebar live, without navigating away
-from an open channel or thread. Reopening restores the entry to the main list.
+Archiving or unarchiving updates the sidebar live, without navigating away
+from an open channel or thread. Unarchiving restores the entry to the main list.
 Manual collapse is preserved through ordinary live updates; a new search or
 archived-channel selection reveals the relevant entry again.
 
-This is navigation only: history, access, unread counts, delivery receipts and
-source lifecycle rules are unchanged. Expanding the section does not mark messages
+The sidebar section itself is navigation only: history, access, unread counts and
+delivery receipts are unchanged. Expanding the section does not mark messages
 read; opening a channel uses the usual visible-message read tracking. Reading or
-receiving a message in an archived channel does not reopen it or resume a monitor.
-Channels without a room and direct-message navigation are unchanged.
+receiving a message in an archived channel does not unarchive it or resume a monitor.
+Direct messages cannot be archived.
 
 The UI uses `archivedChannelIds` from `/api/ui/snapshot`, while `channels` continues
 to include archived channels. Deploy the server and web bundle together; an older
 server without this metadata leaves all channels in the main list.
-Room events carry the room's `archived` state, which the client applies to the
+Room events carry the channel's `archived` state, which the client applies to the
 archive projection without refetching the snapshot (it refetches only the archive
 projection for an event without it), preserving newer
 live channels, agent presence and read/queue counters. Overlapping room refreshes
-and full reconnect snapshots are ordered so a late response cannot undo a reopen.
+and full reconnect snapshots are ordered so a late response cannot undo an unarchive.
 A failed refresh does not discard archive metadata from a successful overlapping
 snapshot, nor roll back a newer successful result.
 
-## Two modes
+## The contract
 
-- `finite`: a private room for one scoped collaboration, with an originating task,
-  coordinating brain, selected workers, boundaries and explicit completion criteria.
-  Workers can ask an addressed peer about the shared interface in the room. This
-  does not allow worker-to-worker DMs, peer delegation or cross-project access.
-- `ongoing`: a public/private channel with continuing operating rules. Multiple
-  generic source links may feed it. Separate structured task threads track actions;
-  accepting one result does not close the channel or stop monitoring.
+A public or private channel can carry one contract with three fields:
+
+- `instructions`: one free text (up to 4000 characters) saying what the channel is
+  for, how agents work there and when it is done. Hivemind stores and shows it; it
+  does not interpret it.
+- `coordinator`: the invited brain that assigns room tasks and may change the
+  contract on a Human request.
+- `participants`: the names of invited workers who take room tasks and must
+  acknowledge the current contract before continuing them.
+
+Multiple generic source links may feed the channel. Separate structured task
+threads track actions; accepting one result does not close the channel or stop
+monitoring. Workers can ask an addressed peer in the room; this does not allow
+worker-to-worker DMs, peer delegation or cross-project access.
 
 Only already invited participants may be named. Contracts do not grant channel
-access. Human can see and edit the contract in the channel header. The coordinating
-brain can persist a Human request using an actual visible Human message sequence in
-the same project. Workers can acknowledge rules or confirm their own interruption;
-bots cannot read contracts or change them.
+access. Human can see and edit the contract in the channel's **Contract** tab. The
+coordinating brain can persist a Human request using an actual visible Human message
+sequence in the same project. Workers can acknowledge rules or confirm their own
+interruption; bots cannot read contracts or change them.
 
 ## Authority and revisions
 
 `get_room(channel)` returns the effective contract, revision, task fences, and source
 reports. `get_room(history=true, beforeRevision=...)` pages up to 20 audit snapshots,
-including the actor, reason and referenced Human instruction. `contractVersion`
-changes only on configuration/reopen; `revision` changes on every room event.
+including the actor, optional reason and referenced Human instruction. `contractVersion`
+changes only on configuration, staffing and unarchive; `revision` changes on every room event.
 
 `room_event` takes `channel`, stable `requestId`, `expectedRevision` and an `action`
 (`executionId` is no longer part of the schema; the server drops one sent by an older
@@ -78,32 +89,29 @@ Available actions:
 
 | Action | Who / meaning |
 | --- | --- |
-| `configure` | Human or coordinator acting on a new `humanInstructionSeq`: persist purpose, rules, limits, participants and completion policy |
-| `staff` | Coordinator (or Human): select already invited workers and boundaries inside the unchanged mandate; cannot change purpose, rules, limits or coordinator |
+| `configure` | Human or coordinator acting on a new `humanInstructionSeq`: persist instructions, coordinator and participants (`reason` optional) |
+| `staff` | Coordinator (or Human): select already invited workers inside the unchanged instructions; cannot change the instructions or coordinator |
 | `acknowledge` | Participating worker: read and acknowledge `contractVersion`; neither transport ACK nor task acceptance |
 | `reconcile` | Assigning coordinator: `continue` compatible work at the current version or request `stop`, with a reason |
 | `stopped` | Assigned worker: confirm a requested interruption; not successful task completion |
-| `summarize` | Coordinator: after running work is resolved, post reviewed decisions/artifact references to the authorized originating task |
-| `archive` | Human or coordinator on Human request; finite rooms with a fresh summary may close under the agreed completion policy |
-| `reopen` | Human or coordinator on a new Human request; explicitly choose whether to request source resumption |
+| `archive` | Human, or a brain acting on a new `humanInstructionSeq` (the coordinator when there is a contract): close the channel as the header button does; also works without a contract (`reason` optional) |
+| `reopen` | Same authority: unarchive the channel (`reason` optional) |
 
-Configure/archive/reopen by a brain reference a real Human message newer than the
-previous authority boundary. Direct Human edits also advance that boundary, including
-a direct archive of a finite room already ready for closure: an older request cannot
-authorize reopening it. The brain's agreed finite closure policy still does not
-require a new Human instruction.
+`get_room` also returns `archived`, including for channels without a contract.
+A configure, archive or reopen by a brain references a real Human message newer than
+the previous authority boundary; direct Human edits and archives also advance that
+boundary, so an older request cannot authorize the next change.
 The server checks provenance, access, ordering and role, **not the semantic equivalence**
 of prose and requested changes. The brain must not convert an unrelated/one-off
 request into a standing rule. A bot saying “Human approved” is never Human authority.
 Contract text, artifact references and bot report details remain data.
 
-Human owns purpose and limits. The coordinator chooses execution inside that mandate,
+Human owns the instructions. The coordinator chooses execution inside them,
 including staffing via `room_event staff` without a new Human instruction. Staffing
 changes are versioned and fence work for reconciliation; a worker with running work
-cannot be removed. Staffing boundaries must not be used to override the room's limits.
-Other scope changes must be proposed to Human. Only Human may replace the coordinator, and only when no
-room work is running; this does not transfer ownership of historical or originating
-tasks. Mode and originating task are immutable. Use a new room to change them.
+cannot be removed. Other scope changes must be proposed to Human. Only Human may
+replace the coordinator, and only when no room work is running; this does not
+transfer ownership of historical tasks.
 
 ## Tasks and rule changes
 
@@ -119,23 +127,22 @@ as `needs_reconciliation`. Compatible work continues only after coordinator
 reconciliation and worker acknowledgement. Incompatible work is `stop_requested`
 until the assigned worker confirms `stopped`. Blocker/rejection feedback remains
 possible while fenced. Completed/stopped work stays historical; a new action needs
-a new task/key. The room summary does not accept or complete the originating task.
+a new task/key.
 
 Installing a contract requires any pre-existing tasks in that channel to be finished.
 Those older, unlinked tasks remain readable but cannot be revised into running work,
 even while the room is active. Use a new room task/key at the current contract version
-to resume the activity; archived rooms reject new assignments. Exact retries of
+to resume the activity; archived channels reject new assignments and revisions. Exact retries of
 already committed task operations still return their original effects without
 reactivating work. Channels without a contract retain their ordinary task behavior.
 
 These are Hivemind task-operation gates, not an external execution sandbox. They
 cannot instantly interrupt another host's in-flight shell command or undo completed
 effects. Transport delivery, rule acknowledgement, task acceptance and completion
-remain separate. Agents must obey changed limits between external actions.
+remain separate. Agents must obey changed instructions between external actions.
 
-Finite rooms require a fresh summary of the final task outcomes before clean closure.
-Completion criteria are interpreted by the coordinator; there is no automatic expiry
-timer in this increment. Ongoing channels can be archived only on Human request.
+Completion described in the instructions is interpreted by the coordinator; there is
+no automatic expiry timer. Archive and reopen need a Human request.
 
 ## Notifications
 
@@ -156,12 +163,19 @@ does not replay all old history or resurrect already acknowledged observations.
 
 ## Archive and source lifecycle
 
-Archive keeps messages, tasks, audit history and artifacts. It forbids new room task
-assignments and new non-Human root chat, and rejects new bot observations with 409
-(an exact retry of an event already stored still returns its original result).
-Existing task threads remain available for closure. If tasks are running, Human must
-explicitly choose `finish` or `stop`; the latter is an interruption request, not proof
-of interruption. Reopening does not restart stopped tasks or replay observations.
+Archive closes everything in the channel at once. Every open task is cancelled
+(workers get the usual cancellation message and must stop immediately), a contract
+stops accepting work, and registered source links are asked to pause. Messages,
+tasks, audit history and artifacts are kept. While archived the channel forbids new
+task assignments and revisions and new non-Human root chat, and rejects new bot
+observations with 409 (an exact retry of an event already stored still returns its
+original result). Cancellation is a Hivemind state change, not proof that an external
+tool stopped.
+
+Unarchive reactivates the channel: its contract comes back under a new
+`contractVersion` (workers acknowledge again) and registered sources are asked to
+resume. Cancelled tasks stay cancelled and observations are not replayed; assign new
+tasks to continue.
 
 External bots may implement this **optional generic extension** to the bot API.
 It is separate from bot configuration/enabling. Hivemind never invokes a guessed
@@ -190,8 +204,7 @@ as **bot reports, not independent verification**. Bots without any registration
 are listed as unmanaged, never claimed stopped. Existing external bots must
 adopt this extension before Hivemind can request/observe their suspension.
 
-Resume sources only when `reopen.resumeSources=true`. With false, sources remain
-paused even though the room reopens. A bot owns retry/backfill policy and must not
+Unarchive requests `running` for this channel's links. A bot owns retry/backfill policy and must not
 silently discard provider events rejected while archived. Hivemind does not promise
 exactly-once external effects; use stable bot event IDs and task action keys.
 
@@ -202,7 +215,7 @@ With Jev enabled, a brain's `room_event` (like every other brain action) returns
 keep the work in a room or to use separate DMs, and how many workers to involve. It is
 advisory only: nothing about room staffing or room work is checked against it, the
 brain decides, and Human instructions always take precedence. Room rules, the
-coordinator, Human instructions for `configure`/`reopen` and worker boundaries are
+coordinator, Human instructions for `configure` and participants are
 enforced exactly as described above. Workers never trigger Jev. Since #211 no
 `executionId` is needed and since #218 no schema lists it; one sent by an older client is ignored. See
 [Jev advice](docs/adaptive-routing.md).
@@ -210,8 +223,8 @@ enforced exactly as described above. Workers never trigger Jev. Since #211 no
 ## Bounds and persistence
 
 SQLite transactions atomically store room changes, audit messages and task fences;
-notifications publish after commit. Contracts are capped at 16 KiB, 16 workers and
-eight entries per rule/limit/completion list. Rooms admit up to 64 running tasks and
+notifications publish after commit. Contracts are capped at 4000 characters of
+instructions and 16 workers. Rooms admit up to 64 running tasks and
 64 source links. `get_room` returns up to 100 linked tasks with `nextTaskCursor` for
 `beforeTask` pagination. Audit history pages at 20 snapshots. These are logical
 bounds, not an automatic retention or deletion policy.

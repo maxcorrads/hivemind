@@ -403,7 +403,7 @@ async function installSnapshot(page: Page, current: () => Snapshot) {
     readInstance: "browser-fixture", readRevision: harness.revision, readSeq: harness.seq,
     items: [], hasMore: false,
   }));
-  const room: RoomView = { room: null, tasks: [], activeTaskCount: 0, tasksHasMore: false,
+  const room: RoomView = { room: null, archived: false, tasks: [], activeTaskCount: 0, tasksHasMore: false,
     nextTaskCursor: null, links: [], unmanagedBots: [] };
   await page.route("**/api/ui/channels/*/room", async route => fulfillJson(route, room));
   // The Tasks tab counts the channel's tasks.

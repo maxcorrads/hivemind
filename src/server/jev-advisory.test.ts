@@ -176,8 +176,8 @@ test('every brain action on a request returns one call\'s advice; waits, workers
     'x-file-name': 'plan.txt', 'x-file-mime': 'text/plain', 'content-length': '4' }, body: 'plan' });
   const uploaded = await upload.json() as { file: { id: string } };
   await step('attach', () => f.agent(f.brain.token, 'POST', `/channels/${migration.id}/messages`, { body: '', attachmentIds: [uploaded.file.id], requestId: 'a1' }));
-  const roomContract: RoomContract = { mode: 'ongoing', purpose: 'Coordinate the migration', rules: ['Report blockers.'], limits: ['Fixture only'],
-    coordinator: f.brain.agent.name, participants: [{ name: worker!.agent.name, boundary: 'Schema' }], completion: ['Human ends it'], originTaskId: null };
+  const roomContract: RoomContract = { instructions: 'Coordinate the migration. Report blockers; fixture only.',
+    coordinator: f.brain.agent.name, participants: [worker!.agent.name] };
   await step('room_event', () => f.agent(f.brain.token, 'POST', `/channels/${room.id}/room`, { requestId: 'r1', expectedRevision: 0,
     humanInstructionSeq: instruction.json.message.seq, action: { type: 'configure', contract: roomContract, reason: 'Human request' } }));
   const assigned = await step('assign_task', () => f.agent<{ task: TaskSnapshot }>(f.brain.token, 'POST', '/tasks',

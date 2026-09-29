@@ -170,7 +170,7 @@ details[open] > summary.disclosure > .lucide { transform: rotate(90deg); }
 .room-panel .room-summary { margin: 8px 0 2px; font-size: 12.5px; color: var(--mute); }
 .room-summary strong { font-weight: 600; color: var(--ink); }
 .room-panel .room-meta { margin: 0; font-size: 12.5px; color: var(--mute); }
-.room-panel .room-purpose { margin: 10px 0; font-size: 14px; color: var(--ink); }
+.room-panel .room-purpose { margin: 10px 0; font-size: 14px; color: var(--ink); white-space: pre-wrap; }
 .room-panel h4 { margin: 12px 0 4px; font-size: 12px; font-weight: 600; color: var(--mute); }
 .room-panel ul { display: grid; gap: 3px; margin: 0; padding-left: 18px; }
 .room-panel details { margin-top: 10px; border-top: 1px solid var(--line); }

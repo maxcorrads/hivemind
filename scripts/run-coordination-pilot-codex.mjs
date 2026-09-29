@@ -240,9 +240,8 @@ export function buildBrainPrompt(trial, fixture, workerCount, humanInstructionSe
   const roomInstructions = workflow === 'brain_multi_room'
     ? [
         `A real Human-authored benchmark authorization message already exists in this project at message sequence ${humanInstructionSeq}. Use humanInstructionSeq=${humanInstructionSeq} on the initial room_event configure. Do not ask Human for another authorization.`,
-        'Bootstrap the finite room deterministically: assign the first dependency-ready runbook task outside the room solely to obtain contract.originTaskId, then configure the room immediately before expecting clarification work. If this fixture is information-partitioned, direct the origin worker to wait for room setup before asking peers for missing facts.',
         'Create one private collaboration channel with all benchmark workers as members. Do not invite a worker again if create_channel already included that worker.',
-        'Configure one finite task-scoped room contract, then use its current contractVersion and stable actionKey values on remaining room-bound structured assignments.',
+        'Configure one room contract before assigning any work: contract.instructions summarizes this trial scope, contract.coordinator is you, and contract.participants lists every benchmark worker name. Then use its current contractVersion and stable actionKey values on every room-bound structured assignment.',
         fixture.id === 'noisy-room'
           ? 'Before the first peer clarification, post exactly 12 unrelated progress observations labelled noise-01 through noise-12 in that room; do not turn them into assignments.'
           : 'Do not add unrelated room traffic.',
@@ -296,9 +295,9 @@ export function buildSinglePrompt(trial, fixture) {
 export function humanRoomInstructionBody(trial) {
   return [
     `Benchmark authorization for ${trial.blindId}.`,
-    'Human authorizes the coordinating brain to create and configure one finite task-scoped collaboration room for this trial only.',
+    'Human authorizes the coordinating brain to create and configure one collaboration room contract for this trial only.',
     'Use only the benchmark workers in project acme, preserve the generated runbook scope and dependencies, and do not grant broader authority.',
-    'The room may be archived after the benchmark tasks are reviewed and the final result artifact is produced.',
+    'Human archives the room after the benchmark tasks are reviewed and the final result artifact is produced.',
   ].join(' ');
 }
 

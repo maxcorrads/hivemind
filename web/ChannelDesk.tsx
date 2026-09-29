@@ -1,4 +1,4 @@
-import { Hash, Lock, Sparkles, UserPlus } from "lucide-react";
+import { Archive, ArchiveRestore, Hash, Lock, Sparkles, UserPlus } from "lucide-react";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import type { AdaptiveRoutingView } from "../src/shared/adaptive-topology.ts";
 import type { ChannelTaskPage } from "../src/shared/tasks.ts";
@@ -37,12 +37,14 @@ export type ChannelTab = "messages" | "tasks" | "contract" | "terminal";
  * The selected channel: header with its members, tabs (Messages · Tasks · Contract for rooms) and, on
  * Messages, the message stream, Jev advice strip and composer.
  */
-export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, channel, threadPaneId, stickBottom, threadOpenAnchor, unreadTarget,
+export function ChannelDesk({ channelId, activeChannel, archived = false, agents, roomAgents, channel, threadPaneId, stickBottom, threadOpenAnchor, unreadTarget,
   go, onReopenThread, roomTick, routingView, activeBrainChannel, brainNames, onOpenRouting, onInvite, compose, draftInsert, onDraftInserted, onMarkUnread, setErr, onBack }: {
   channelId: string;
   /** A new explicit badge navigation reveals Messages without remounting its draft. */
   unreadTarget?: UnreadTarget | null;
   activeChannel: Channel | undefined;
+  /** Archived channels leave the main sidebar list; history and posting stay available. */
+  archived?: boolean;
   agents: Agent[];
   roomAgents: Agent[];
   channel: ChannelPane;
@@ -104,6 +106,11 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
   const [picked, setPicked] = useState<{ channelId: string; tab: ChannelTab; unreadTarget?: UnreadTarget | null }>({ channelId, tab: "messages" });
   const room = Boolean(activeChannel && ["private", "public"].includes(activeChannel.type));
   const dm = activeChannel?.type === "dm";
+  const [archiving, setArchiving] = useState(false);
+  const toggleArchived = () => {
+    setArchiving(true);
+    api.setChannelArchived(channelId, !archived).catch((error) => setErr(String(error))).finally(() => setArchiving(false));
+  };
   const newUnreadJump = unreadTarget?.channelId === channelId && unreadTarget !== picked.unreadTarget;
   const requested = picked.channelId === channelId && !newUnreadJump ? picked.tab : "messages";
   // The selector retains the broker's last complete list while reconnecting; no missing list is treated as an ended session.
@@ -158,6 +165,12 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
                 Invite
               </button>
             )}
+            {room && (
+              <button type="button" className="btn" disabled={archiving} onClick={toggleArchived}>
+                {archived ? <ArchiveRestore size={14} aria-hidden="true" /> : <Archive size={14} aria-hidden="true" />}
+                {archived ? "Unarchive" : "Archive"}
+              </button>
+            )}
           </div>
         )}
       </header>
@@ -168,7 +181,7 @@ export function ChannelDesk({ channelId, activeChannel, agents, roomAgents, chan
         </div>
       ) : tab === "contract" && activeChannel ? (
         <div className="stream channel-panel" role="tabpanel" id="channel-panel-contract" aria-labelledby="channel-tab-contract">
-          <RoomPanel key={activeChannel.id} channel={activeChannel} agents={agents} tick={roomTick} />
+          <RoomPanel key={activeChannel.id} channel={activeChannel} archived={archived} agents={agents} tick={roomTick} />
         </div>
       ) : tab === "terminal" && terminalSession ? (
         <div className="channel-panel terminal-panel" role="tabpanel" id="channel-panel-terminal" aria-labelledby="channel-tab-terminal">

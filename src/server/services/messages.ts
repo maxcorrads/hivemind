@@ -32,7 +32,7 @@ export type MessageServiceDeps = Core & {
   readonly delivery: Pick<DeliveryService, "wakeMembers">;
   /** Idempotent send receipts (requestId). */
   readonly sendRequests: SendRequests;
-  readonly rooms: Pick<RoomStore, "peek">;
+  readonly rooms: Pick<RoomStore, "archived">;
   readonly tasks: Pick<TaskStore, "has">;
   readonly timeline: Pick<TimelineStore, "prepare" | "recordMessage" | "source">;
   readonly adaptiveTopology: Pick<AdaptiveTopologyRuntime, "threadStatusChange">;
@@ -67,9 +67,9 @@ export class MessageService implements MessagePoster {
     if (!this.deps.channels.canSeeChannel(actor, ch) || !this.deps.channels.canPost(actor, ch)) {
       throw new HiveError(403, `You cannot post to ${channelLabel(ch)}`);
     }
-    if (actor.role !== 'human' && this.deps.rooms.peek(ch.id)?.state === 'archived' &&
+    if (actor.role !== 'human' && this.deps.rooms.archived(ch.id) &&
       (!input.threadId || !this.deps.tasks.has(input.threadId)))
-      throw new HiveError(409, 'Archived room: no new work or root messages; use an existing task thread for closure');
+      throw new HiveError(409, 'Archived channel: no new work or root messages; use an existing task thread for closure');
     if (recipientNames.length > 32 || recipientNames.some(name => typeof name !== 'string')) throw new HiveError(400, 'Provide 1–32 recipient names');
     const recipients = [...new Set(recipientNames.map(name => {
       const target = this.deps.identity.getAgentByName(name);

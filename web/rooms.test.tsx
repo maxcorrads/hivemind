@@ -9,14 +9,13 @@ import { reconcileTask } from './thread-state.ts';
 import { loadLatestRoomView } from './room-state.ts';
 
 const view: RoomView = { room: { channelId: 'fixture', revision: 3, contractVersion: 2, state: 'archived', coordinatorId: 'brain', participantIds: ['worker'],
-  contract: { mode: 'ongoing', purpose: '<script>not markup</script>', rules: ['Only inspect'], limits: ['Do not publish'], coordinator: 'FixtureBrain',
-    participants: [{ name: 'FixtureWorker', boundary: 'Analysis' }], completion: ['Human ends monitoring'], originTaskId: null },
-  updatedAt: 1, humanInstructionSeq: null, authoritySeq: 4, lastEventSeq: 4, summarySeq: null, archivedRunning: 'stop' },
-  tasks: [], activeTaskCount: 0, tasksHasMore: false, nextTaskCursor: null,
+  contract: { instructions: '<script>not markup</script>\nOnly inspect. Do not publish.', coordinator: 'FixtureBrain', participants: ['FixtureWorker'] },
+  updatedAt: 1, humanInstructionSeq: null, authoritySeq: 4, lastEventSeq: 4 },
+  archived: true, tasks: [], activeTaskCount: 0, tasksHasMore: false, nextTaskCursor: null,
   links: [{ id: 'source', botId: 'bot', label: 'Synthetic source', suspendSupported: true, desired: 'paused', generation: 2, observed: 'pending', detail: '', updatedAt: 1 }], unmanagedBots: ['LegacyFeed'] };
 test('room UI separates archive from confirmed suspension and escapes untrusted text', () => {
   const html = renderToStaticMarkup(<RoomDetails view={view} />);
-  assert.ok(html.includes('archived')); assert.ok(html.includes('reported pending')); assert.ok(html.includes('does not mean stopped'));
+  assert.ok(html.includes('Archived')); assert.ok(html.includes('FixtureWorker')); assert.ok(html.includes('reported pending')); assert.ok(html.includes('does not mean stopped'));
   assert.ok(html.includes('No lifecycle registration:')); assert.ok(html.includes('LegacyFeed'));
   assert.ok(!html.includes('<script>')); assert.ok(html.includes('&lt;script&gt;')); assert.ok(html.includes('Do not publish'));
 });

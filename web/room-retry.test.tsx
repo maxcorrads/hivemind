@@ -22,8 +22,7 @@ async function fixture(t: TestContext) {
   const hive = new Hive(path.join(dir, 'hive.db')), human = hive.identity.getAgent('human');
   const brain = hive.identity.join({ role: 'brain' }).agent;
   const channel = hive.channels.createChannel(brain, { name: 'synthetic-room', type: 'private' });
-  const contract = { mode: 'ongoing', purpose: 'Synthetic observations', rules: ['Inspect only'], limits: [],
-    coordinator: brain.name, participants: [], completion: ['Human ends the fixture'], originTaskId: null };
+  const contract = { instructions: 'Synthetic observations. Inspect only.', coordinator: brain.name, participants: [] };
   hive.rooms.event(human, channel.id, { requestId: 'initial', expectedRevision: 0,
     action: { type: 'configure', contract, reason: 'Fixture setup' } });
   const app = createApp(hive), posts: string[] = [];
@@ -66,7 +65,7 @@ async function fixture(t: TestContext) {
   return { hive, human, channel, contract, posts, host, button, click, input, render,
     fail: (kind: typeof fault) => { fault = kind; },
     hold: () => { let release!: () => void; gate = new Promise<void>(resolve => { release = resolve; }); return () => { gate = null; release(); }; },
-    edit: async () => { await click('Edit contract'); await input('Purpose', 'Changed synthetic rules'); await input('Reason for this change', 'Fixture edit'); },
+    edit: async () => { await click('Edit contract'); await input('Instructions', 'Changed synthetic rules'); },
     count: () => countRows(hive, 'room_events') };
 }
 
@@ -74,7 +73,7 @@ for (const fault of ['disconnect', 'server', 'invalid-json'] as const) {
   test(`mounted room editor retries the exact committed request after ${fault}, including a live refresh`, async t => {
     const f = await fixture(t); await f.edit(); f.fail(fault); await f.click('Save contract');
     assert.equal(f.count(), 2);
-    assert.equal(f.hive.rooms.peek(f.channel.id)!.contract.purpose, 'Changed synthetic rules');
+    assert.equal(f.hive.rooms.peek(f.channel.id)!.contract.instructions, 'Changed synthetic rules');
     await f.render(); // Live data changes, but the pending operation must not.
     await f.click(f.button('Retry exact request') ? 'Retry exact request' : 'Save contract');
     assert.equal(f.posts.length, 2);
@@ -94,7 +93,7 @@ test('mounted editor freezes an uncertain draft, then explicitly reconciles with
   await f.click('Reconcile with latest state');
   assert.equal(f.button('Retry exact request'), undefined);
   assert.equal(f.host.querySelector('textarea')!.value, 'Changed synthetic rules');
-  await f.input('Purpose', 'Explicitly revised draft'); await f.click('Save contract');
+  await f.input('Instructions', 'Explicitly revised draft'); await f.click('Save contract');
   const first = JSON.parse(f.posts[0]!), next = JSON.parse(f.posts[1]!);
   assert.notEqual(next.requestId, first.requestId); assert.equal(next.expectedRevision, 2);
   assert.equal(f.count(), 3);
@@ -103,28 +102,15 @@ test('mounted editor freezes an uncertain draft, then explicitly reconciles with
 test('a definitive rejection allows correction; a stale edit is not silently rebased', async t => {
   const f = await fixture(t); await f.edit(); f.fail('validation'); await f.click('Save contract');
   assert.equal(f.count(), 1); assert.equal(f.button('Retry exact request'), undefined);
-  await f.input('Purpose', 'Corrected draft');
+  await f.input('Instructions', 'Corrected draft');
   f.hive.rooms.event(f.human, f.channel.id, { requestId: 'other-edit', expectedRevision: 1,
-    action: { type: 'configure', contract: { ...f.contract, purpose: 'Concurrent edit' }, reason: 'Other edit' } });
+    action: { type: 'configure', contract: { ...f.contract, instructions: 'Concurrent edit' }, reason: 'Other edit' } });
   await f.render(); await f.click('Save contract');
   assert.match(f.host.textContent!, /Room changed/); assert.equal(f.count(), 2);
   assert.equal(JSON.parse(f.posts[1]!).expectedRevision, 1);
   assert.notEqual(JSON.parse(f.posts[1]!).requestId, JSON.parse(f.posts[0]!).requestId);
   await f.click('Reconcile with latest state'); await f.click('Save contract');
   assert.equal(JSON.parse(f.posts[2]!).expectedRevision, 2); assert.equal(f.count(), 3);
-});
-
-test('archive and reopen can retry after live updates hide their original forms', async t => {
-  const f = await fixture(t);
-  await f.click('Archive channel…'); await f.input('Reason', 'End fixture');
-  f.fail('disconnect'); await f.click('Confirm archive'); await f.render();
-  await f.click('Retry exact request');
-  assert.equal(f.posts[1], f.posts[0]); assert.equal(f.count(), 2);
-  await f.input('Reason to reopen', 'Resume fixture');
-  f.fail('disconnect'); await f.click('Reopen channel'); await f.render();
-  await f.click('Retry exact request');
-  assert.equal(f.posts[3], f.posts[2]); assert.equal(f.count(), 3);
-  assert.equal(f.hive.rooms.peek(f.channel.id)!.state, 'active');
 });
 
 test('an uncommitted transport failure retries the same operation exactly once', async t => {

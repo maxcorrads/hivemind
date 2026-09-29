@@ -131,7 +131,7 @@ Executor behavior:
 - Codex benchmark seats override `memories.use_memories=false` and `memories.generate_memories=false` so prior Codex memory is neither injected into nor generated from the trial;
 - OpenCode runs with `--pure`, an explicit isolated `--dir`, `--auto`, and its native `task` tool disabled;
 - before each `brain_multi_room` seat starts, the isolated harness posts a real local Human authorization message into that trial's project and passes its positive message sequence to the brain; the brain must use that exact `humanInstructionSeq` when configuring the finite room, so it never blocks waiting for a Human process that is not part of the benchmark;
-- finite room setup uses the first dependency-ready runbook task as the external origin task, then binds the room contract to that `originTaskId`; remaining room-bound assignments use the live contract version/action keys;
+- room setup configures one contract (instructions, coordinator, participating workers) before any work; room-bound assignments use the live contract version/action keys;
 - worker capability cards mirror the versioned fixture capabilities;
 - the brain assembles `BENCHMARK_RESULT.json` from reviewed worker results; the harness compares it with the hidden deterministic expected artifact;
 - wall time is retained for both hosts; Codex CLI token counts are retained when available, while OpenCode JSONL `step_finish.part.tokens.total` is cumulative per seat, so the latest valid total is retained for each seat and seat totals are then summed across the trial;

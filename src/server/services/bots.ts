@@ -16,7 +16,7 @@ export type BotServiceDeps = Core & {
   readonly messageQueries: Pick<MessageReader, "getMessageById">;
   readonly files: Pick<FileService, "validateAttachments" | "bindAttachments">;
   readonly delivery: Pick<DeliveryService, "wakeMembers">;
-  readonly rooms: Pick<RoomStore, "peek">;
+  readonly rooms: Pick<RoomStore, "archived">;
   readonly timeline: Pick<TimelineStore, "recordMessage">;
 };
 
@@ -159,7 +159,7 @@ export class BotService {
         if (previous.payload_hash !== payloadHash) throw new HiveError(409, "Event ID already used with different content; use a new revision/event ID");
         return { messageId: previous.message_id, duplicate: true };
       }
-      if (this.deps.rooms.peek(ch.id)?.state === 'archived') throw new HiveError(409, 'Channel is archived; suspend this source link. Do not discard undelivered source events.');
+      if (this.deps.rooms.archived(ch.id)) throw new HiveError(409, 'Channel is archived; suspend this source link. Do not discard undelivered source events.');
       this.deps.files.validateAttachments(actor, input.attachmentIds);
       const messageId = crypto.randomUUID();
       this.db.prepare(`INSERT INTO messages (id, channel_id, thread_id, author_id, body, kind, mentions, created_at, event_type)

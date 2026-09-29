@@ -63,9 +63,8 @@ test('benchmark coupled fixture traverses real room, dependencies and advisory c
   const f = runtime(t, 3);
   const room = f.hive.channels.createChannel(f.brain, { name: 'benchmark-coupled', type: 'private', memberNames: f.pool.map(worker => worker.name) });
   const configured = f.hive.rooms.event(f.human, room.id, { requestId: f.next('room'), expectedRevision: 0,
-    action: { type: 'configure', reason: 'Benchmark fixture', contract: { mode: 'ongoing', purpose: fixture.description,
-      rules: ['Deterministic fake agents only'], limits: ['No external writes'], coordinator: f.brain.name,
-      participants: f.pool.map((worker, index) => ({ name: worker.name, boundary: `fixture-${index}` })), completion: ['Harness finishes'], originTaskId: null } } });
+    action: { type: 'configure', reason: 'Benchmark fixture', contract: { instructions: `${fixture.description}\nDeterministic fake agents only; no external writes.`,
+      coordinator: f.brain.name, participants: f.pool.map(worker => worker.name) } } });
   const roomVersion = configured.room!.contractVersion;
   for (const worker of f.pool) f.hive.rooms.event(worker, room.id, { requestId: f.next('ack'), expectedRevision: f.hive.rooms.peek(room.id)!.revision,
     action: { type: 'acknowledge', contractVersion: roomVersion } });

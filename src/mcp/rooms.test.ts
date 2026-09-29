@@ -37,9 +37,8 @@ test('real MCP and CLI room lifecycle shares durable rules, task fences, source 
     assert.match(sendDescription, /requestId makes retries idempotent for 24 hours \(rules in standing orders\)/);
     assert.doesNotMatch(sendDescription, /failed call did not deliver/);
     const created = await call(b, 'room_event', { channel: channel.id, requestId: 'setup', expectedRevision: 0, humanInstructionSeq,
-      action: { type: 'configure', reason: 'Human requested ongoing checks', contract: { mode: 'ongoing', purpose: 'Inspect synthetic anomalies',
-        rules: ['Assign an anomaly check'], limits: ['No external writes'], coordinator: brain.agent.name,
-        participants: [{ name: worker.agent.name, boundary: 'Fixture analysis' }], completion: ['Human archives'], originTaskId: null } } });
+      action: { type: 'configure', reason: 'Human requested ongoing checks', contract: { instructions: 'Inspect synthetic anomalies. Assign an anomaly check; no external writes.',
+        coordinator: brain.agent.name, participants: [worker.agent.name] } } });
     assert.equal(created.room.contractVersion, 1);
     const mail = await call(w, 'wait', {}); await call(w, 'ack_delivery', { deliveryId: mail.delivery.id });
     const current = await call(w, 'get_room', { channel: `#${channel.name}` });
@@ -48,16 +47,18 @@ test('real MCP and CLI room lifecycle shares durable rules, task fences, source 
       room: { contractVersion: 1, actionKey: 'fixture-anomaly-1' }, contract: { objective: 'Inspect anomaly 1', scope: ['Fixture'], nonGoals: [], acceptanceCriteria: ['Report value'], dependencies: [], evidenceSeqs: [] } });
     const delivery = await call(w, 'wait', {}); await call(w, 'ack_delivery', { deliveryId: delivery.delivery.id });
     await call(w, 'task_event', { taskId: assigned.task.id, requestId: 'accept', expectedRevision: 1, action: { type: 'accept' } });
-    const file = path.join(dir, 'archive.json'); writeFileSync(file, JSON.stringify({ requestId: 'cli-archive', expectedRevision: hive.rooms.peek(channel.id)!.revision,
-      humanInstructionSeq: hive.messages.postMessage(hive.identity.getAgent('human'), { channel: channel.id, body: 'Archive and request interruption.' }).seq,
-      action: { type: 'archive', running: 'stop', reason: 'Human ended monitoring' } }));
+    const file = path.join(dir, 'stop.json'); writeFileSync(file, JSON.stringify({ requestId: 'cli-stop', expectedRevision: hive.rooms.peek(channel.id)!.revision,
+      action: { type: 'reconcile', taskId: assigned.task.id, decision: 'stop', reason: 'Human ended monitoring' } }));
     const cli = await promisify(execFile)(process.execPath, [...args, 'room', 'event', '--channel', channel.id, '--input', file], { cwd: dir, env: env(brain.token), timeout: 10000 });
-    assert.equal(JSON.parse(cli.stdout).room.state, 'archived');
+    assert.equal(JSON.parse(cli.stdout).room.state, 'active');
     const stopped = await call(w, 'get_task', { taskId: assigned.task.id }); assert.equal(stopped.task.room.status, 'stop_requested');
     const room = await call(w, 'get_room', { channel: channel.id });
     await call(w, 'room_event', { channel: channel.id, requestId: 'stopped', expectedRevision: room.room.revision, action: { type: 'stopped', taskId: assigned.task.id, reason: 'No work remains in progress' } });
     assert.equal(hive.tasks.get(worker.agent, assigned.task.id).room!.status, 'stopped');
-    const audit = await call(b, 'get_room', { channel: channel.id, history: true }); assert.equal(audit.history.length, 4);
+    hive.rooms.setArchived(hive.identity.getAgent('human'), channel.id, true);
+    assert.equal((await call(w, 'get_room', { channel: channel.id })).room.state, 'archived');
+    assert.equal(hive.tasks.get(worker.agent, assigned.task.id).state, 'cancelled', 'archive closes the stopped task too');
+    const audit = await call(b, 'get_room', { channel: channel.id, history: true }); assert.equal(audit.history.length, 5);
   } finally {
     for (const c of clients) await c.close(); server.shutdown(); server.server.closeAllConnections(); hive.db.close(); rmSync(dir, { recursive: true, force: true });
   }
