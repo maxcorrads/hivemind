@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { KeyboardEvent, PointerEvent, RefObject } from "react";
+import type { KeyboardEvent, PointerEvent } from "react";
 import { clampThreadWidth, defaultThreadWidth, readThreadWidth, saveThreadWidth, threadWidthBounds,
   widthAfterKey, type ThreadWidthBounds } from "./thread-resize.ts";
 
@@ -10,7 +10,8 @@ function browserStorage(): Storage | null {
 }
 
 /** The desktop separator owns only the split width; it never changes thread scroll or content state. */
-export function ThreadResizer({ shellRef }: { shellRef: RefObject<HTMLDivElement | null> }) {
+export function ThreadResizer() {
+  const separatorRef = useRef<HTMLDivElement>(null);
   const [preferredWidth, setPreferredWidth] = useState<number | null>(() => readThreadWidth(browserStorage()));
   const [bounds, setBounds] = useState<ThreadWidthBounds | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -18,9 +19,12 @@ export function ThreadResizer({ shellRef }: { shellRef: RefObject<HTMLDivElement
   const fallbackBounds = { min: 280, max: Math.max(280, window.innerWidth) };
   const currentBounds = bounds ?? fallbackBounds;
   const width = clampThreadWidth(preferredWidth ?? defaultThreadWidth(window.innerWidth), currentBounds);
+  // The parent shell's ref is not attached yet when both mount in one commit.
+  // Our own host ref is ready before this component's layout effects run.
+  const shellElement = () => separatorRef.current?.closest<HTMLDivElement>(".shell") ?? null;
 
   useLayoutEffect(() => {
-    const shell = shellRef.current;
+    const shell = shellElement();
     if (!shell) return;
     const desk = shell.querySelector<HTMLElement>(".desk");
     if (!desk) return;
@@ -36,15 +40,15 @@ export function ThreadResizer({ shellRef }: { shellRef: RefObject<HTMLDivElement
     if (sidebar) observer?.observe(sidebar); // CSS may shrink the thread while keeping desk width fixed.
     window.addEventListener("resize", measure);
     return () => { observer?.disconnect(); window.removeEventListener("resize", measure); };
-  }, [shellRef]);
+  }, []);
 
   useLayoutEffect(() => {
-    shellRef.current?.style.setProperty("--thread-w", `${width}px`);
-  }, [shellRef, width]);
+    shellElement()?.style.setProperty("--thread-w", `${width}px`);
+  }, [width]);
   useEffect(() => {
-    const shell = shellRef.current;
+    const shell = shellElement();
     return () => { shell?.style.removeProperty("--thread-w"); };
-  }, [shellRef]);
+  }, []);
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 || drag.current) return;
@@ -88,7 +92,7 @@ export function ThreadResizer({ shellRef }: { shellRef: RefObject<HTMLDivElement
     saveThreadWidth(browserStorage(), next);
   };
 
-  return <div className={`thread-resizer${dragging ? " dragging" : ""}`} role="separator" tabIndex={0}
+  return <div ref={separatorRef} className={`thread-resizer${dragging ? " dragging" : ""}`} role="separator" tabIndex={0}
     aria-label="Resize thread" aria-orientation="vertical" aria-valuemin={currentBounds.min}
     aria-valuemax={currentBounds.max} aria-valuenow={width} aria-valuetext={`${width} pixels wide`}
     onPointerDown={onPointerDown} onPointerMove={onPointerMove}
