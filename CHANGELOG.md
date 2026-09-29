@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.8.0](https://github.com/maxcorrads/hivemind/compare/v0.7.0...v0.8.0) (2026-09-29)
+
+
+### ⚠ BREAKING CHANGES
+
+* **rooms:** room contracts are {instructions, coordinator, participants: string[]}; room_event drops summarize, archive's running choice and reopen's resumeSources. Restart MCP clients to pick up the new tool descriptions.
+
+### Features
+
+* **rooms:** one-click channel archive that closes everything, single-text contracts ([#313](https://github.com/maxcorrads/hivemind/issues/313)) ([d3f9541](https://github.com/maxcorrads/hivemind/commit/d3f95414426944dba496dc85770ed3c525c92711))
+
 ## [0.7.0](https://github.com/maxcorrads/hivemind/compare/v0.6.0...v0.7.0) (2026-09-29)
 
 
