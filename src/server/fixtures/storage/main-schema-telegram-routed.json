@@ -355,6 +355,12 @@
  },
  {
   "type": "table",
+  "name": "archive_policy",
+  "tbl": "archive_policy",
+  "sql": "CREATE TABLE archive_policy ( id INTEGER PRIMARY KEY CHECK (id = 1), auto_archive_task_channels INTEGER NOT NULL DEFAULT 0 CHECK (auto_archive_task_channels IN (0, 1)) )"
+ },
+ {
+  "type": "table",
   "name": "attachments",
   "tbl": "attachments",
   "sql": "CREATE TABLE attachments ( id TEXT PRIMARY KEY, message_id TEXT, name TEXT NOT NULL, mime TEXT NOT NULL, bytes INTEGER NOT NULL, sha256 TEXT NOT NULL, created_by TEXT NOT NULL, created_at INTEGER NOT NULL )"

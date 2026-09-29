@@ -52,7 +52,7 @@ const OWNERSHIP: Record<string, { modules: string[]; tables: string[] }> = {
   coordination: {
     modules: ["tasks.ts", "task-coordination.ts", "rooms.ts", "routing.ts"],
     tables: ["task_records", "task_events", "task_request_aliases", "rooms", "room_acks", "room_events", "room_tasks",
-      "source_links", "channel_archives", "decision_requests", "decision_mutations", "routing_outcomes", "worker_capabilities"],
+      "source_links", "channel_archives", "archive_policy", "decision_requests", "decision_mutations", "routing_outcomes", "worker_capabilities"],
   },
   timeline: { modules: ["timeline.ts"], tables: ["message_provenance", "timeline_deliveries"] },
   // Brain-launched, task-bound workers (docs/agent-management-roadmap.md).

@@ -220,7 +220,7 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const agents = hive.identity.listAgents().map(agent => ({ ...agent, activity: hive.activity.forAgent(agent, queue.queued[agent.id] ?? 0) }));
     return c.json({ you: human, projects: hive.projects.listProjects(), agents, channels,
       agentTraffic: hive.traffic.snapshot(agents.map(item => item.id)),
-      archivedChannelIds: hive.rooms.archivedChannelIds(channels),
+      archivedChannelIds: hive.rooms.archivedChannelIds(channels), autoArchiveTaskChannels: hive.rooms.autoArchiveTaskChannels(),
       ...hive.reads.readSnapshot(human), ...queue, agentWork: hive.tasks.workStatus(),
       telegram: { running: Boolean(hooks.telegramRunning?.()), configured: publicTelegramView(hive.home).configured, ...hive.telegramAdmin.health() },
       jev: { enabled: adaptiveRoutingPublic(hive.home).enabled }, launcherAvailable: Boolean(hooks.instanceSecret) });
@@ -396,6 +396,8 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   ui.post('/channels/:id/room', async c => c.json(hive.rooms.event(hive.identity.getAgent('human'), c.req.param('id'), await requestJson(c.req.raw))));
   ui.post('/channels/:id/archive', c => c.json(hive.rooms.setArchived(hive.identity.getAgent('human'), c.req.param('id'), true)));
   ui.delete('/channels/:id/archive', c => c.json(hive.rooms.setArchived(hive.identity.getAgent('human'), c.req.param('id'), false)));
+  ui.post('/settings/auto-archive-task-channels', c => c.json(hive.workerOrchestration.setAutoArchiveTaskChannels(hive.identity.getAgent('human'), true)));
+  ui.delete('/settings/auto-archive-task-channels', c => c.json(hive.workerOrchestration.setAutoArchiveTaskChannels(hive.identity.getAgent('human'), false)));
   ui.get('/projects/:id/worker-templates', c => c.json({ templates: hive.workerTemplates.list(projectRef(c.req.param('id')).id) }));
   ui.post('/projects/:id/worker-templates', async c => c.json(hive.workerTemplates.create(hive.identity.getAgent('human'),
     projectRef(c.req.param('id')).id, await requestJson(c.req.raw)), 201));

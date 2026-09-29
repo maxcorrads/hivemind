@@ -9,6 +9,7 @@ import type { IdentityService } from "./identity.ts";
 import type { ChannelService } from "./channels.ts";
 import type { MessageService } from "./messages.ts";
 import type { JobStore } from "./jobs.ts";
+import type { RoomStore } from "../rooms.ts";
 
 type Deps = Core & {
   readonly identity: IdentityService;
@@ -18,6 +19,7 @@ type Deps = Core & {
   readonly channels: ChannelService;
   readonly messages: MessageService;
   readonly jobs: Pick<JobStore, "resolve" | "attach">;
+  readonly rooms: Pick<RoomStore, "autoArchiveTaskChannels" | "setAutoArchiveTaskChannels" | "archiveFinishedChannel">;
 };
 
 /** One transaction owns the reservation, task assignment and encrypted launch intent. */
@@ -125,6 +127,25 @@ export class WorkerOrchestration {
     const agent = this.deps.identity.getAgent(workerId);
     if (agent.archivedAt === undefined && agent.removedAt === undefined) this.deps.identity.archiveTaskWorker(workerId);
     this.deps.launcherQueue.kill(row.id);
+    this.archiveTaskChannel(taskId, row.id);
+  }
+
+  /** The channel request_worker opened for this launch, auto-archived when the policy allows it. */
+  private archiveTaskChannel(taskId: string, requestId: string): boolean {
+    const task = this.deps.tasks.get(this.deps.identity.getAgent("human"), taskId);
+    const channel = this.deps.channels.getChannel(task.channelId);
+    return channel.name === `task-${requestId}` && this.deps.rooms.archiveFinishedChannel(channel.id);
+  }
+
+  /** Turning auto-archive on also closes the task channels whose work already finished. */
+  setAutoArchiveTaskChannels(actor: Agent, enabled: boolean): { enabled: boolean; archived: number } {
+    return this.deps.storage.transaction(() => {
+      this.deps.rooms.setAutoArchiveTaskChannels(actor, enabled);
+      if (!enabled) return { enabled, archived: 0 };
+      const launches = this.db.prepare("SELECT id, task_id FROM launch_requests WHERE task_id IS NOT NULL ORDER BY requested_at, rowid")
+        .all() as Array<{ id: string; task_id: string }>;
+      return { enabled, archived: launches.filter(row => this.archiveTaskChannel(row.task_id, row.id)).length };
+    });
   }
 
   /** Grace expiry closes the native session but keeps the identity and task for explicit resume. */

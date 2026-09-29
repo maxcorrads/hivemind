@@ -20,13 +20,17 @@ function simpleRoom(snapshot: string): string {
 }
 
 /**
- * Archive state for every public/private channel (a contract room mirrors it in its snapshot),
- * and room contracts reduced to one instructions text plus coordinator and participant names.
+ * Archive state for every public/private channel (a contract room mirrors it in its snapshot), the
+ * Human's auto-archive policy for task channels, and room contracts reduced to one instructions text plus coordinator and participant names.
  */
 export function channelArchives(db: DatabaseSync): void {
   db.exec(`CREATE TABLE IF NOT EXISTS channel_archives (
     channel_id TEXT PRIMARY KEY REFERENCES channels(id) ON DELETE CASCADE,
     archived_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS archive_policy (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    auto_archive_task_channels INTEGER NOT NULL DEFAULT 0 CHECK (auto_archive_task_channels IN (0, 1))
   );
   INSERT OR IGNORE INTO channel_archives(channel_id, archived_at)
     SELECT channel_id, COALESCE(json_extract(snapshot,'$.updatedAt'), 0) FROM rooms WHERE json_extract(snapshot,'$.state')='archived';`);

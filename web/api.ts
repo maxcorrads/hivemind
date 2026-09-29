@@ -41,6 +41,8 @@ export type Snapshot = ReadSnapshot & {
   channels: Channel[];
   /** Room lifecycle metadata; all channels remain addressable, including archived ones. */
   archivedChannelIds?: string[];
+  /** Human policy: archive a task-bound worker's channel once its task finishes. */
+  autoArchiveTaskChannels?: boolean;
   queued: Record<string, number>;
   inbox?: Record<string, InboxStatus>;
   /** Complete current work per agent. Optional while old fixtures and servers are upgraded. */
@@ -187,6 +189,8 @@ export const api = {
   room: (channel: string) => req<RoomView>(`/api/ui/channels/${encodeURIComponent(channel)}/room`),
   roomHistory: (channel: string, before?: number) => req<{ history: Room[] }>(`/api/ui/channels/${encodeURIComponent(channel)}/room/history?before=${before ?? Number.MAX_SAFE_INTEGER}`),
   roomEvent: (channel: string, body: unknown) => req<RoomView>(`/api/ui/channels/${encodeURIComponent(channel)}/room`, { method: 'POST', body: JSON.stringify(body) }),
+  setAutoArchiveTaskChannels: (enabled: boolean) =>
+    req<{ enabled: boolean; archived: number }>('/api/ui/settings/auto-archive-task-channels', { method: enabled ? 'POST' : 'DELETE' }),
   setChannelArchived: (channel: string, archived: boolean) =>
     req<{ archived: boolean }>(`/api/ui/channels/${encodeURIComponent(channel)}/archive`, { method: archived ? 'POST' : 'DELETE' }),
   launchContext: (project: string) => req<LaunchContext>(`/api/ui/launch-context?project=${encodeURIComponent(project)}`),

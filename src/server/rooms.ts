@@ -46,6 +46,31 @@ export class RoomStore {
     this.roomChanged(ch.id);
     return { archived: this.archived(ch.id) };
   }
+  /** Human setting: close a task-bound worker's channel once none of its tasks is left open. */
+  autoArchiveTaskChannels(): boolean {
+    return Boolean(this.db.prepare('SELECT auto_archive_task_channels AS enabled FROM archive_policy WHERE id=1').get()?.enabled);
+  }
+  setAutoArchiveTaskChannels(actor: Agent, enabled: boolean): void {
+    if (actor.role !== 'human') throw new HiveError(403, 'Only Human changes the archive policy');
+    this.db.prepare(`INSERT INTO archive_policy(id,auto_archive_task_channels) VALUES(1,?)
+      ON CONFLICT(id) DO UPDATE SET auto_archive_task_channels=excluded.auto_archive_task_channels`).run(enabled ? 1 : 0);
+  }
+  /**
+   * Auto-archive, inside the caller's transaction: only under the Human policy and only when every
+   * task in the channel is finished, so nothing is cancelled. Effects publish after commit.
+   */
+  archiveFinishedChannel(channelId: string): boolean {
+    if (!this.autoArchiveTaskChannels() || this.archived(channelId) || this.unfinished(channelId).length) return false;
+    const ch = this.deps.channels.getChannel(channelId);
+    if (!['private', 'public'].includes(ch.type)) return false;
+    const messages = this.applyArchive(this.deps.identity.getAgent('human'), ch, true,
+      { requestId: randomUUID(), reason: 'Task finished; channel auto-archived', authority: null });
+    this.deps.storage.afterCommit(() => {
+      for (const message of messages) this.deps.messages.publishTaskMessage(message);
+      this.roomChanged(ch.id);
+    });
+    return true;
+  }
   private archivable(actor: Agent, channel: string) {
     const ch = this.channel(actor, channel);
     if (!['private', 'public'].includes(ch.type)) throw new HiveError(400, 'Only public and private channels can be archived');

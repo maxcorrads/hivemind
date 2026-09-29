@@ -8,7 +8,13 @@ change the brain/worker roles. Ordinary channels/tasks remain compatible.
 
 Human archives any public or private channel with one click on **Archive** in the
 channel header (no reason or confirmation form); **Unarchive** restores it. A
-coordinating brain can do the same with `room_event` `archive`/`reopen` on a Human request. See
+coordinating brain can do the same with `room_event` `archive`/`reopen` on a Human request.
+
+**Settings → Auto-archive task channels** (off by default) archives the private
+`task-…` channel that `request_worker` opened as soon as its task is accepted or
+cancelled and no other task there is open, so nothing is cancelled by it. Turning it on
+also archives the task channels whose work already finished. The policy is stored on the
+server and shared by every Human session. See
 [Archive and source lifecycle](#archive-and-source-lifecycle) for what archiving
 closes. Archived channels move out of the main channel list into a collapsed
 **Archived** section in their project. Expand it to consult them; searching for a

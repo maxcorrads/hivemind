@@ -163,3 +163,42 @@ test("rejected launch cancels task, archives identity, and a revision assigns a 
   assert.equal(next.request.jobId, first.task.jobId);
   assert.throws(() => f.request(randomUUID(), { taskId: next.task.id, expectedRevision: next.task.revision }), status(409));
 });
+
+test("auto-archive closes a task channel once its task finishes and, when enabled, sweeps finished ones", t => {
+  const f = fixture(t);
+  const archivedIds = () => f.hive.rooms.archivedChannelIds(f.hive.channels.listChannels(f.human));
+  const review = (id: string, worker: string) => {
+    const agent = f.hive.identity.getAgent(worker);
+    const event = (actor: typeof f.brain, action: unknown) => f.hive.tasks.event(actor, id,
+      { requestId: randomUUID(), expectedRevision: f.hive.tasks.get(f.brain, id).revision, action });
+    event(agent, { type: "accept" });
+    event(agent, { type: "result", result: { summary: "Done", artifacts: [], checks: [], gaps: [], evidenceSeqs: [] } });
+    event(f.brain, { type: "review", decision: "accepted", summary: "Checked", evidenceSeqs: [] });
+  };
+  const beforePolicy = f.request();
+  f.hive.launcherQueue.reject(f.human, beforePolicy.request.id);
+  assert.equal(f.hive.tasks.get(f.brain, beforePolicy.task.id).state, "cancelled");
+  assert.deepEqual(archivedIds(), [], "off by default");
+  assert.throws(() => f.hive.workerOrchestration.setAutoArchiveTaskChannels(f.brain, true), status(403));
+
+  const running = f.request();
+  const enabled = f.hive.workerOrchestration.setAutoArchiveTaskChannels(f.human, true);
+  assert.deepEqual(enabled, { enabled: true, archived: 1 });
+  assert.deepEqual(archivedIds(), [beforePolicy.task.channelId], "enabling sweeps only channels whose work finished");
+  assert.equal(f.hive.rooms.autoArchiveTaskChannels(), true);
+
+  f.hive.launcherQueue.approve(f.human, running.request.id);
+  review(running.task.id, running.worker.id);
+  assert.equal(f.hive.tasks.get(f.brain, running.task.id).state, "accepted_complete");
+  assert.deepEqual(archivedIds().sort(), [beforePolicy.task.channelId, running.task.channelId].sort(), "acceptance archives its channel");
+
+  const replaced = f.request(randomUUID(), { taskId: beforePolicy.task.id,
+    expectedRevision: f.hive.tasks.get(f.brain, beforePolicy.task.id).revision, contract: contract("Reattempt") });
+  assert.notEqual(replaced.task.channelId, beforePolicy.task.channelId, "a replacement opens its own active channel");
+  assert.equal(archivedIds().includes(replaced.task.channelId), false);
+
+  assert.deepEqual(f.hive.workerOrchestration.setAutoArchiveTaskChannels(f.human, false), { enabled: false, archived: 0 });
+  const later = f.request();
+  f.hive.launcherQueue.reject(f.human, later.request.id);
+  assert.equal(archivedIds().includes(later.task.channelId), false, "turning it off stops archiving");
+});

@@ -17,6 +17,8 @@ export type SettingsMenuProps = {
   onAdaptiveRouting: () => void;
   onLaunch: () => void;
   onHelp: () => void;
+  /** Server-side policy shared by every Human session; absent until the snapshot loads. */
+  autoArchive?: { enabled: boolean; onToggle: () => void };
   /** Bumped by the macOS app's Settings… command to open this menu. */
   openRequest?: number;
 };
@@ -29,7 +31,7 @@ let reopenAfterSwitch = 0;
 
 /** The Settings and tools menu: theme, layout, notifications, integrations, launch and help. */
 export function SettingsMenu({ theme, onToggleTheme, layout, onLayout, notifications, telegram, onTelegram, onAdaptiveRouting,
-  onLaunch, onHelp, openRequest, iconOnly }: SettingsMenuProps & { iconOnly?: boolean }) {
+  onLaunch, onHelp, autoArchive, openRequest, iconOnly }: SettingsMenuProps & { iconOnly?: boolean }) {
   const menu = useRef<HTMLDetailsElement>(null);
   const layoutLabel = useId();
   useEffect(() => {
@@ -96,6 +98,13 @@ export function SettingsMenu({ theme, onToggleTheme, layout, onLayout, notificat
             onClick={() => void notifications.toggle()}>
             {notifications.blocked ? "Notifications blocked by the browser"
               : `Desktop notifications: ${notifications.enabled ? "on" : "off"}`}
+          </button>
+        )}
+        {autoArchive && (
+          <button type="button" className="tool-action" aria-pressed={autoArchive.enabled}
+            title="Archive a task-bound worker's channel as soon as its task is accepted or cancelled"
+            onClick={autoArchive.onToggle}>
+            Auto-archive task channels: {autoArchive.enabled ? "on" : "off"}
           </button>
         )}
         <button

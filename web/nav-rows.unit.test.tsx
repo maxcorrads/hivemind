@@ -6,7 +6,7 @@ import type { Snapshot } from "./api.ts";
 import { AgentList } from "./AgentList.tsx";
 import { ChannelItem } from "./ChannelNav.tsx";
 import { ProjectRail } from "./ProjectRail.tsx";
-import type { SettingsMenuProps } from "./SettingsMenu.tsx";
+import { SettingsMenu, type SettingsMenuProps } from "./SettingsMenu.tsx";
 
 const channel = (patch: Partial<Channel>): Channel => ({ id: "c", name: "general", type: "public", topic: null, createdBy: "human", createdAt: 0,
   memberIds: ["human"], projectId: "p", project: "example", ...patch });
@@ -47,4 +47,14 @@ test("the project rail holds Help, Settings and the Human only when it is given 
   assert.match(full, /class="rail-tools"><button type="button" class="icon-btn" title="How to join" aria-label="Help">/);
   assert.match(full, /class="tools-menu"/);
   assert.match(full, /role="img" aria-label="You are Human"[^>]*>Hu<i class="sdot ok"/);
+});
+
+test("the settings menu shows the auto-archive toggle with its state once the snapshot knows it", () => {
+  const base = { theme: "light", onToggleTheme: noop, layout: "rail", onLayout: noop, telegram: undefined, onTelegram: noop, onAdaptiveRouting: noop,
+    onLaunch: noop, onHelp: noop, notifications: { supported: false, enabled: false, blocked: false, toggle: async () => {} } } as unknown as SettingsMenuProps;
+  assert.doesNotMatch(renderToStaticMarkup(<SettingsMenu {...base} />), /Auto-archive/);
+  const on = renderToStaticMarkup(<SettingsMenu {...base} autoArchive={{ enabled: true, onToggle: noop }} />);
+  assert.match(on, /aria-pressed="true"[^>]*>Auto-archive task channels: on</);
+  const off = renderToStaticMarkup(<SettingsMenu {...base} autoArchive={{ enabled: false, onToggle: noop }} />);
+  assert.match(off, /aria-pressed="false"[^>]*>Auto-archive task channels: off</);
 });
