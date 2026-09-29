@@ -14,7 +14,7 @@ test("launch model dropdown has Codex, Claude, and Cursor slugs", () => {
   const names = allLaunchModels();
   assert.ok(names.length > 80);
   assert.ok(names.includes("gpt-6-astra"));
-  for (const slug of ["gpt-6-sol", "gpt-6-luna", "claude-opus-5-5", "claude-sonnet-5-5"]) assert.ok(names.includes(slug), slug);
+  for (const slug of ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "claude-opus-5-5", "claude-sonnet-5-5"]) assert.ok(names.includes(slug), slug);
   assert.ok(names.includes("gpt-5.3-codex"));
   assert.ok(names.includes("opus"));
   assert.ok(names.includes("claude-opus-5-thinking-high"));
@@ -73,6 +73,11 @@ test("Cursor offers all Grok 4.7 effort and speed variants without a cursor- pre
 });
 
 test("selectedChoiceId follows the software family", () => {
+  for (const effort of ["", "low", "medium", "high", "xhigh", "max"]) {
+    const id = selectedChoiceId("codex2", "gpt-6.1-sol", effort);
+    assert.ok(modelChoiceGroups("codex2")[0]?.choices.some(choice => choice.id === id));
+    assert.deepEqual(parseChoiceId(id), { model: "gpt-6.1-sol", effort });
+  }
   for (const model of ["claude-sonnet-5-5", "claude-opus-5-5"]) {
     for (const effort of ["", "low", "medium", "high", "xhigh", "max"]) {
       const id = selectedChoiceId("claude-tw", model, effort);

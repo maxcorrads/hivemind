@@ -3,6 +3,7 @@ import { softwareFamily } from "./launch-prompt.ts";
 export type ModelGroup = { label: string; models: string[] };
 
 const CODEX = [
+  "gpt-6.1-sol",
   "gpt-6-sol",
   "gpt-6-luna",
   "gpt-6-astra",

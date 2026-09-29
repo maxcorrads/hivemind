@@ -243,6 +243,8 @@ test("model and effort become software-aware flags", () => {
     cdWorktree: false,
   });
   assert.match(codex, /^HIVEMIND_ROLE='brain' codex2 -m gpt-5\.4 -c model_reasoning_effort=high /);
+  const sol = buildLaunchBlock({ ...base, role: "worker", seniority: "senior", software: "codex2", model: "gpt-6.1-sol", effort: "high", cdWorktree: false });
+  assert.ok(sol.startsWith("HIVEMIND_ROLE='worker' codex2 -m gpt-6.1-sol -c model_reasoning_effort=high "));
   const claude = buildLaunchBlock({
     ...base,
     software: "claude-tw",
