@@ -327,7 +327,7 @@ test("Grok 4.7 dropdown selection launches a senior frontend worker with the ori
   for (const model of ["grok-4.7-xhigh", "grok-4.7-xhigh-fast"]) {
     const selection = parseChoiceId(selectedChoiceId(input.software, model, ""));
     const block = buildLaunchBlock({ ...input, ...selection });
-    assert.equal(block, `cd -- '/tmp/hive-work' && HIVEMIND_ROLE='worker' agent --model ${model} ${shSingleQuote(buildLaunchPrompt(input))}\n`);
+    assert.equal(block, `cd -- '/tmp/hive-work' && HIVEMIND_ROLE='worker' agent --model ${model} ${shSingleQuote(buildLaunchPrompt({ ...input, ...selection }))}\n`);
     assert.match(block, /join with role=worker, seniority=senior, focus=frontend, project=alpha/);
     assert.doesNotMatch(block, /--effort|model_reasoning_effort|cursor-grok-4\.7/);
   }

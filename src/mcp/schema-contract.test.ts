@@ -68,7 +68,7 @@ test("production MCP schemas and calls retain their observable contracts", { tim
     const expected: Record<string, [string[], Record<string, string>]> = {
       bot_tools: [[], {}],
       call_bot_tool: [['botId', 'tool', 'arguments'], { botId: 'string', tool: 'string', arguments: 'object' }],
-      join: [["role"], { role: "string", seniority: "string", focus: "string", resume: "string", project: "string", claim: "string" }],
+      join: [["role"], { role: "string", seniority: "string", focus: "string", resume: "string", project: "string", claim: "string", nativeSession: "object", requireLaunchTracking: "boolean" }],
       get_worker_capabilities: [["workerId"], { workerId: "string" }],
       set_capabilities: [["expectedRevision", "card"], { expectedRevision: "integer", card: "object" }],
       worker_match_suggest: [["taskId", "mode", "category"], { taskId: "string", requiredCapabilities: "array", mode: "string", category: "string", minContext: "integer", minReviewedResults: "integer", minimumAcceptedRate: "number", offset: "integer" }],

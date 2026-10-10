@@ -25,6 +25,7 @@ import { packageVersion } from "../shared/package-root.ts";
 import { attachablePath } from "./attach-guard.ts";
 import { MESSAGE_EVENT_TYPES } from "../shared/types.ts";
 import { terminalSessionFields } from "../shared/terminal-session.ts";
+import { nativeSessionSchema } from '../shared/native-session.ts';
 import { JOIN_SESSION, PARAM_DESCRIPTIONS, SEARCH_NEXT, TOOL_DESCRIPTIONS, joinNext } from "./tool-text.ts";
 import { MCP_HEARTBEAT_MS, MCP_WAIT_POLL_MS, type Agent, type Channel, type WaitResult } from "../shared/types.ts";
 
@@ -53,7 +54,7 @@ export function resolveVisibleWorkerReference(reference: string, roster: Agent[]
   throw new Error(`Worker name ${value} is ambiguous; pass the worker UUID from agents/worker_match_suggest`);
 }
 
-export async function startMcp() {
+export async function startMcp(launchTicket = process.env.HIVEMIND_LAUNCH_TICKET) {
   let sessionToken = process.env.HIVEMIND_TOKEN;
   const toolRole = configuredToolRole(process.env);
   let heartbeat: ReturnType<typeof setInterval> | undefined;
@@ -106,8 +107,12 @@ export async function startMcp() {
       resume: z.string().optional(),
       project: z.string().optional(),
       claim: z.string().optional().describe(PARAM_DESCRIPTIONS.claim),
+      requireLaunchTracking: z.boolean().optional().describe('Set true when the integrated launch prompt requests it. Rejects a missing launch binding instead of silently joining without saved resume settings. Never retry with false to bypass a failed launch.'),
+      nativeSession: nativeSessionSchema.optional().describe('Legacy optional CLI/model and exact conversation ID. Integrated launches record these automatically. Not the Hivemind identity or tmux name. Never guess an ID; use null when unavailable.'),
     },
-    async ({ role, seniority, focus, resume, project, claim }) => joinSerial(async () => {
+    async ({ role, seniority, focus, resume, project, claim, nativeSession, requireLaunchTracking }) => joinSerial(async () => {
+      if (requireLaunchTracking && !launchTicket)
+        throw new Error('The MCP process did not receive this launch binding. Stop and fix the MCP configuration, then relaunch. For Cursor CLI, use hivemind mcp-config --cursor and review its native MCP approval. Do not retry without requireLaunchTracking.');
       if (toolRole && role !== toolRole)
         throw new Error(`This MCP process is configured for ${toolRole}; join with role=${toolRole} or start another MCP process`);
       if (joinedName && claim)
@@ -143,6 +148,8 @@ export async function startMcp() {
           cwd: process.cwd(),
           ...(claim ? { claim } : {}),
           ...terminalSessionFields(process.env),
+          ...(nativeSession ? { nativeSession } : {}),
+          ...(launchTicket ? { launchTicket } : {}),
         },
         claim ? null : auth ?? null,
       );

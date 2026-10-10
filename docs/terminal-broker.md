@@ -520,9 +520,11 @@ value; it offers neither Copy nor a launch until the field is fixed.
 
 **Where it is kept.** The field's text is remembered per software (the
 Software field, trimmed) in this browser's `localStorage`, under
-`hivemind-launch`, and comes back when that software is chosen again. It is
-never sent to the Node server. Because it is stored, the sheet says under the
-field not to put secrets there: the OpenCode Go API key has its own field.
+`hivemind-launch`, and comes back when that software is chosen again. Preparing a tracked
+launch also sends its environment to the Human-only Node launcher API, encrypted at rest
+with the launch settings. A successful join selects that snapshot for the employee's next
+Resume. Do not put secrets in this field: the OpenCode Go API key and template secrets
+have separate native fields and are not included in the saved launch snapshot.
 
 **In a browser** (no app), the copied command and its preview put the
 variables before the command, each value single-quoted:
@@ -546,8 +548,9 @@ the script loads before the `cd` and deletes (steps 4 and 5 above). They are
 never in argv (tmux's or the shell's), never in `tmux -e` or tmux's
 environment, and never in the script text.
 
-**Resume same employees** applies the same variables to every employee it
-launches. The whole `terminal-launch` has to fit in one broker line (1 MiB), so
+**Resume same employees** restores the environment saved with each employee's successful launch, or uses
+per-software defaults for legacy employees. An explicit per-card edit overrides it; it does not share one provider's profile with
+another. See [Agent resume](agent-resume.md). The whole `terminal-launch` has to fit in one broker line (1 MiB), so
 the sheet refuses to send one that would not (24 employees with the largest
 variables full of characters JSON escapes), and asks to launch fewer at once.
 

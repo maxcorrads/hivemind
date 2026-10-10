@@ -182,7 +182,7 @@ test('targeted fixed resume selects exactly one agent and requires an explicit s
   const root = createRoot(host as unknown as Element);
   try {
     await act(async () => root.render(<LaunchSheet projects={[{ id: 'p1', slug: 'acme', name: 'Acme',
-      worktree: '/tmp/acme', createdAt: 0 }]} agents={[agent, { ...agent, id: 'a2', name: 'Bea' }]}
+      worktree: '/tmp/acme', createdAt: 0 }]} agents={[{ ...agent, online: false }, { ...agent, id: 'a2', name: 'Bea' }]}
       defaultProject="acme" resumeAgentId="a1" onClose={() => {}} />));
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 5)); });
     const software = Array.from(host.querySelectorAll('label')).find(label => label.firstChild?.textContent?.trim() === 'Software')?.querySelector('input');

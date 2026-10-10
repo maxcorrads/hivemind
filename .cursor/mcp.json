@@ -4,7 +4,11 @@
       "command": "npx",
       "args": ["tsx", "src/cli.ts", "mcp"],
       "env": {
-        "HIVEMIND_URL": "http://127.0.0.1:7420"
+        "HIVEMIND_URL": "http://127.0.0.1:7420",
+        "HIVEMIND_TOKEN": "",
+        "HIVEMIND_ROLE": "${env:HIVEMIND_ROLE}",
+        "HIVEMIND_TMUX_SESSION": "${env:HIVEMIND_TMUX_SESSION}",
+        "HIVEMIND_LAUNCH_TICKET": "${env:HIVEMIND_LAUNCH_TICKET}"
       },
       "tool_timeout_sec": 28800
     }

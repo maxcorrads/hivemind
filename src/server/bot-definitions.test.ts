@@ -40,6 +40,8 @@ import {
 } from "../shared/launch-prompt.ts";
 import { Hive } from "./hive.ts";
 import { createApp } from "./app.ts";
+import { settingsForLaunch } from '../shared/launch-settings.ts';
+import { setAgentPresence } from './test-fixtures.ts';
 function setup(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-definitions-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -1035,7 +1037,8 @@ test("worker launch keeps exact MCP binding when packages, profiles or registrie
       writeFileSync(path.join(f.home, "bot-definitions.json"), "{broken");
     if (failure === "bindings")
       writeFileSync(path.join(f.home, "project-bots.json"), "{broken");
-    const response = await createApp(hive).request(
+    const app = createApp(hive);
+    const response = await app.request(
       url + "/api/ui/launch-context?project=acme",
     );
     assert.equal(response.status, 200, failure);
@@ -1062,6 +1065,35 @@ test("worker launch keeps exact MCP binding when packages, profiles or registrie
       assert.ok(command.includes('"HIVEMIND_URL":"' + url + '"'));
       assert.doesNotMatch(command, /Bot service:/);
     }
+    const settings = settingsForLaunch({ ...base, software: 'claude', role: 'worker', seniority: 'senior' }, {});
+    const prepare = (extra = {}) => app.request(url + '/api/ui/launch-prepare', { method: 'POST',
+      headers: { 'content-type': 'application/json' }, body: JSON.stringify({ project: project.slug, settings, ...extra }) });
+    const join = async (prepared: Response, extra = {}) => {
+      assert.equal(prepared.status, 200, failure);
+      const { command } = await prepared.json() as { command: string };
+      assert.match(command, /--mcp-config/);
+      assert.ok(command.includes('"HIVEMIND_URL":"' + url + '"'), failure);
+      assert.doesNotMatch(command, /Bot service:/);
+      const ticket = /hml_[a-f0-9]{64}/.exec(command)?.[0];
+      assert.ok(ticket);
+      const response = await app.request(url + '/api/agent/join', { method: 'POST',
+        headers: { 'content-type': 'application/json' }, body: JSON.stringify({ role: 'worker', seniority: 'senior',
+          project: project.slug, launchTicket: ticket, ...extra }) });
+      assert.equal(response.status, 200, failure);
+      return (await response.json() as { agent: { id: string; name: string } }).agent;
+    };
+    const worker = await join(await prepare());
+    setAgentPresence(hive, worker.id, { online: false, lastSeenAt: Date.now() - 300_000 });
+    assert.equal((await join(await prepare({ agentId: worker.id }), { resume: worker.name })).id, worker.id);
+    const human = hive.identity.getAgent('human');
+    const template = hive.workerTemplates.create(human, project.id, { slug: 'manual-worker', spec: {
+      label: 'Manual worker', description: 'Human launch', software: 'claude', model: 'default', effort: '', extraFlags: '',
+      environment: {}, secretNames: [], seniority: 'senior', focus: '', maxConcurrent: 2, enabled: true } });
+    const reserved = hive.identity.reserve(human, template, 'manual');
+    assert.equal((await join(await prepare({ agentId: reserved.agent.id, claim: reserved.ticket }),
+      { claim: reserved.ticket })).id, reserved.agent.id);
+    assert.equal((await prepare({ settings: { ...settings, role: 'brain', seniority: null } })).status, 503,
+      'brains still require their bot instructions');
   }
 });
 

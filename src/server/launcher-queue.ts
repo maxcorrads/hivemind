@@ -1,9 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import { HiveError, type Agent, type Project } from "../shared/types.ts";
-import { buildLaunchCommand, projectLaunchTools } from "../shared/launch-prompt.ts";
+import { softwareFamily } from "../shared/launch-prompt.ts";
+import type { NativeSession } from '../shared/native-session.ts';
 import { terminalSessionName } from "../shared/terminal-session.ts";
 import type { WorkerTemplate } from "../shared/worker-templates.ts";
-import { launchContext } from "./bot-definitions.ts";
+import { trackedLaunch } from './prepare-launch.ts';
+import type { LaunchSessions } from './launch-sessions.ts';
+import type { LaunchSettings } from '../shared/launch-settings.ts';
 import type { Core } from "./services/ports.ts";
 import { LauncherQueueCipher } from "./launcher-queue-crypto.ts";
 
@@ -26,8 +29,10 @@ export type LauncherCommand = { id: string; kind: "launch"; requestId: string; t
   environment?: Record<string, string> } | { id: string; kind: "kill"; session: string };
 
 export type LauncherQueueDeps = Core & { readonly home: string;
+  readonly launchSessions: LaunchSessions;
   readonly identity: { getAgent(id: string): Agent; archiveTaskWorker(agentId: string): Agent; suspendSession(agentId: string): Agent;
     templateWorkerCount(templateId: string): number;
+    nativeSession(id: string): NativeSession | null;
     retargetReservation(actor: Agent, agentId: string, template: WorkerTemplate): Agent };
   readonly projects: { getProject(id: string): Project };
   readonly workerTemplates: { get(id: string): WorkerTemplate };
@@ -387,21 +392,24 @@ export class LauncherQueue {
         const ticket = resuming ? undefined : this.cipher.open<{ ticket: string }>(command.payload).ticket;
         if (!resuming && createHash("sha256").update(ticket!).digest("hex") !== row.ticket_hash)
           throw new HiveError(500, "Launch ticket integrity failed");
-        const context = launchContext(this.deps.home, serverUrl, project);
-        if (context.botError) throw new HiveError(503, "Project launch context is unavailable");
-        const built = buildLaunchCommand({ software: template.spec.software, model: template.spec.model,
-          effort: template.spec.effort, extraFlags: template.spec.extraFlags,
-          ...projectLaunchTools(context, project, "worker"), workspacePath: project.worktree,
-          cdWorktree: Boolean(project.worktree), projectSlug: project.slug, hiveName: project.name,
-          passProject: true, role: "worker", seniority: template.spec.seniority, focus: template.spec.focus || null,
-          adoptUntrusted: true, claim: ticket, claimName: agent.name,
-          resume: resuming, resumeName: resuming ? agent.name : undefined });
+        const saved = resuming ? this.deps.launchSessions.saved(agent.id) : null;
+        const settings: LaunchSettings = saved?.settings ?? {
+          software: template.spec.software, model: template.spec.model, effort: template.spec.effort, extraFlags: template.spec.extraFlags,
+          environment: template.spec.environment, workspacePath: project.worktree, cdWorktree: Boolean(project.worktree),
+          passProject: true, role: 'worker', seniority: template.spec.seniority, focus: template.spec.focus || null, adoptUntrusted: true };
+        const previous = resuming ? this.deps.identity.nativeSession(agent.id) : null;
+        const nativeResume = saved?.sessionId && ['codex', 'claude', 'cursor'].includes(softwareFamily(settings.software))
+          ? { software: softwareFamily(settings.software) as NativeSession['software'], sessionId: saved.sessionId }
+          : previous?.sessionId && previous.software === softwareFamily(settings.software)
+          ? { software: previous.software, sessionId: previous.sessionId } : undefined;
+        const built = trackedLaunch(this.deps, serverUrl, project, settings, agent,
+          { claim: ticket, claimName: agent.name, nativeResume, requireBotContext: true });
         if (!built.cwd) throw new HiveError(409, "Project needs a worktree before a worker can launch");
         const session = workerSession(project.slug, agent.name);
         payload = { id: command.id, kind: "launch", requestId: row.id, templateId: template.id,
           project: project.slug, agent: agent.name, title: template.spec.label,
           session, command: built.command, cwd: built.cwd,
-          ...(Object.keys(template.spec.environment).length ? { environment: template.spec.environment } : {}) };
+          ...(Object.keys(settings.environment).length ? { environment: settings.environment } : {}) };
         this.db.prepare("UPDATE launch_requests SET state = 'launching', session = ? WHERE id = ?").run(session, row.id);
         this.changed(row.id);
       }

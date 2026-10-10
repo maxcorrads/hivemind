@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, beforeEach, test, type TestContext } from "node:test";
-import { arg, argRest, codexMcpConfig, isCliEntrypoint, MCP_TOOL_TIMEOUT_SEC, mcpLauncher, runCli, stopOnSignals } from "./cli.ts";
+import { arg, argRest, codexMcpConfig, cursorMcpConfig, isCliEntrypoint, MCP_TOOL_TIMEOUT_SEC, mcpLauncher, runCli, stopOnSignals } from "./cli.ts";
 import { BODY_MAX } from "./shared/types.ts";
 
 // Every command runs in-process against a mocked fetch; HIVEMIND_HOME is a
@@ -98,6 +98,29 @@ test("mcp-config points Codex users at --codex", async (t) => {
   const { err } = harness(t);
   await runCli(["mcp-config"]);
   assert.match(err.join("\n"), /For Codex, run hivemind mcp-config --codex/);
+});
+
+test('Cursor config forwards dynamic launch values, never the generating process credentials', async t => {
+  const { calls, out, err } = harness(t);
+  await runCli(['mcp-config', '--cursor']);
+  const binding = JSON.parse(out[0]!).mcpServers.hivemind;
+  assert.equal(calls.length, 0);
+  assert.equal(binding.command, process.execPath);
+  assert.deepEqual(binding.args.slice(0, 1), ['--import']);
+  assert.ok(binding.args[1].endsWith('/node_modules/tsx/dist/loader.mjs'));
+  assert.ok(path.isAbsolute(binding.args[1]));
+  assert.equal(binding.env.HIVEMIND_URL, 'http://127.0.0.1:7999');
+  assert.equal(binding.env.HIVEMIND_TOKEN, '');
+  for (const key of ['HIVEMIND_ROLE', 'HIVEMIND_TMUX_SESSION', 'HIVEMIND_LAUNCH_TICKET'])
+    assert.equal(binding.env[key], '${env:' + key + '}');
+  assert.doesNotMatch(out[0]!, /env-token/);
+  assert.match(err.join('\n'), /preserving other servers/);
+  assert.match(err.join('\n'), /approval again for each prepared launch/);
+  const installed = cursorMcpConfig('http://127.0.0.1:8123', true, '/a path/pkg').mcpServers.hivemind;
+  assert.deepEqual(installed.args, ['/a path/pkg/dist/node/cli.js', 'mcp']);
+  assert.equal(installed.env.HIVEMIND_URL, 'http://127.0.0.1:8123');
+  assert.equal(installed.tool_timeout_sec, MCP_TOOL_TIMEOUT_SEC);
+  await assert.rejects(runCli(['mcp-config', '--codex', '--cursor']), /not both/);
 });
 
 test("mcp-config --codex prints a Codex TOML block that passes the session and generated role through", async (t) => {

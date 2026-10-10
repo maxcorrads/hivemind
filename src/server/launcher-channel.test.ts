@@ -175,7 +175,7 @@ test("signed launch wire omits an empty template environment and keeps nonempty 
   assert.equal("environment" in withoutEnvironment, false);
 });
 
-test("signed resume wire also omits an empty template environment", async t => {
+for (const previousSoftware of [null, 'codex', 'claude'] as const) test(`signed task resume keeps environment and restores only a matching native conversation (${previousSoftware})`, async t => {
   const f = fixture(t), target = "/api/launcher/next?timeoutMs=0";
   const template = f.hive.workerTemplates.create(f.human, f.project.id,
     { slug: "no-variables", spec: { ...spec(), environment: {} } });
@@ -191,7 +191,9 @@ test("signed resume wire also omits an empty template environment", async t => {
   assert.ok(ticket);
   assert.equal((await f.signed("POST", `/api/launcher/${claim.id}/result`,
     { status: "launched", session: claim.session })).status, 200);
-  f.hive.identity.join({ role: "worker", claim: ticket });
+  const sessionId = '67d735d1-9e33-4a61-9645-a931afc97f2b';
+  f.hive.identity.join({ role: "worker", claim: ticket,
+    ...(previousSoftware ? { nativeSession: { software: previousSoftware, sessionId, model: 'fixture', effort: 'high' as const } } : {}) });
 
   const task = () => f.hive.tasks.get(f.human, requested.task.id);
   const pause = f.hive.tasks.control(f.human, requested.task.id,
@@ -205,6 +207,12 @@ test("signed resume wire also omits an empty template environment", async t => {
   const resume = (await (await f.signed("GET", target)).json() as { command: Record<string, unknown> }).command;
   assert.equal(resume.kind, "launch");
   assert.equal("environment" in resume, false);
+  if (previousSoftware === 'codex') assert.match(String(resume.command), new RegExp(`codex2 resume '${sessionId}'`));
+  else {
+    assert.doesNotMatch(String(resume.command), /codex2 resume /);
+    assert.match(String(resume.command), /new host conversation recovering Hivemind context/);
+  }
+  assert.match(String(resume.command), /get_handoffs/);
 });
 
 test("missing, corrupt and non-private escrow keys fail closed while a command is pending", async t => {
@@ -219,6 +227,43 @@ test("missing, corrupt and non-private escrow keys fail closed while a command i
   assert.throws(() => new Hive(f.file), /private 0600/);
   chmodSync(key, 0o600);
   assert.equal(f.hive.launcherQueue.get(id).state, "approved");
+});
+
+test('task resume restores its original launch choices after its template changes', async t => {
+  const f = fixture(t), target = '/api/launcher/next?timeoutMs=0';
+  f.hive.identity.setLaunchMode(f.human, f.brain.name, 'auto');
+  const request = f.hive.workerOrchestration.request(f.hive.identity.getAgent(f.brain.id), { requestId: randomUUID(),
+    template: f.template.slug, contract: { objective: 'Original settings test', scope: [], nonGoals: [], acceptanceCriteria: ['ok'],
+      dependencies: [], evidenceSeqs: [] } });
+  const first = (await (await f.signed('GET', target)).json() as { command: Record<string, any> }).command;
+  const launchTicket = /hml_[a-f0-9]{64}/.exec(first.command)![0], claim = /hmc_[a-f0-9]{48}/.exec(first.command)![0];
+  const sessionId = '67d735d1-9e33-4a61-9645-a931afc97f2b';
+  f.hive.launchSessions.capture(launchTicket, sessionId);
+  const response = await f.app.request('/api/agent/join', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ role: 'worker', project: f.project.slug, seniority: 'mid', claim, launchTicket }) });
+  assert.equal(response.status, 200, await response.text());
+  await f.signed('POST', `/api/launcher/${first.id}/result`, { status: 'launched', session: first.session });
+  f.hive.workerTemplates.update(f.human, f.template.id, { expectedRevision: f.template.revision,
+    spec: { ...spec(), software: 'claude-other', model: 'other-model', effort: 'low', extraFlags: '--verbose',
+      environment: { DIFFERENT_PROFILE: 'changed' } } });
+  const task = () => f.hive.tasks.get(f.human, request.task.id);
+  const pause = f.hive.tasks.control(f.human, request.task.id,
+    { requestId: randomUUID(), expectedRevision: task().revision, action: { type: 'pause', mode: 'hard' } });
+  f.hive.tasks.sweepHardPauses(pause.task.pause!.graceUntil!);
+  const kill = (await (await f.signed('GET', target)).json() as { command: Record<string, any> }).command;
+  await f.signed('POST', `/api/launcher/${kill.id}/result`, { status: 'killed' });
+  const reconnect = await f.app.request('/api/agent/join', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ role: 'worker', project: f.project.slug, resume: first.agent, launchTicket }) });
+  assert.equal(reconnect.status, 409);
+  assert.match(await reconnect.text(), /hard-paused/, 'launch reconnect must retain Human task-pause gates');
+  f.hive.tasks.control(f.human, request.task.id,
+    { requestId: randomUUID(), expectedRevision: task().revision, action: { type: 'resume' } });
+  const resumed = (await (await f.signed('GET', target)).json() as { command: Record<string, any> }).command;
+  assert.match(resumed.command, new RegExp(`codex2 resume '${sessionId}' -m gpt-6-sol -c model_reasoning_effort=high`));
+  assert.doesNotMatch(resumed.command, /claude-other|other-model|--verbose/);
+  assert.deepEqual(resumed.environment, spec().environment);
+  assert.equal(resumed.cwd, f.project.worktree);
+  assert.equal(resumed.agent, first.agent);
 });
 
 test("Human approval cards retain older pending requests beyond the settled history page", async t => {

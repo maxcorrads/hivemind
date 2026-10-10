@@ -13,6 +13,7 @@ import { assignTaskSchema, taskEventSchema } from "../shared/tasks.ts";
 import { launchModeSchema, requestWorkerSchema, releaseWorkerSchema } from "../shared/worker-orchestration.ts";
 import { roomEventSchema, sourceLinkSchema, sourceReportSchema } from "../shared/rooms.ts";
 import { HiveError } from "../shared/types.ts";
+import { launchTicketSchema, prepareLaunchSchema } from '../shared/launch-settings.ts';
 
 const empty = z.object({}).strict();
 const destination = z.object({ name: nameSchema.optional(), to: nameSchema.optional(),
@@ -28,7 +29,7 @@ const unread = z.object({ channelId: referenceSchema, fromSeq: sequenceSchema })
 const expand = z.object({ channel: referenceSchema, messageIds: z.array(z.string().uuid()).max(100).min(1),
   afterSeq: cursorSchema.optional() }).strict();
 const wait = z.object({ sessionId: z.string().uuid().optional(), compact: z.boolean().optional(), timeoutMs: waitDurationSchema.optional() }).strict();
-const join = joinInputSchema.extend({ resume: nameSchema.nullish() });
+const join = joinInputSchema.extend({ resume: nameSchema.nullish(), launchTicket: launchTicketSchema.optional() });
 const telegramId = z.union([z.number().int().safe(), z.string().regex(/^-?[0-9]+$/)]);
 const telegram = z.object({ botToken: z.string().max(512).optional(),
   projects: z.record(z.string().max(32), z.union([telegramId, z.object({ groupChatId: telegramId }).strict()]))
@@ -42,6 +43,7 @@ const launcherResult = z.object({ status: z.enum(["launched", "failed", "killed"
   session: z.string().max(82).optional(), error: z.string().max(500).optional() }).strict();
 
 function schemaFor(path: string, method: string): z.ZodType | undefined {
+  if (path === '/api/ui/launch-prepare' && method === 'POST') return prepareLaunchSchema;
   if (/^\/api\/ui\/agents\/[^/]+\/identity$/.test(path) && method === 'PATCH') return agentIdentityEditSchema;
   if (/^\/api\/ui\/agents\/[^/]+\/capability$/.test(path) && method === 'PUT') return setCapabilitiesSchema;
   if (/^\/api\/ui\/agents\/[^/]+\/remove$/.test(path) && method === 'POST') return agentRemoveSchema;

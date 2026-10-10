@@ -40,6 +40,12 @@ Call the hivemind MCP tool join with role=worker, resume=Forge. Then call whoami
 
 Use the name Hivemind assigned. Brains and workers have no credentials to keep or recover: resuming by name opens a new session and supersedes the previous one, so its waits end and unacknowledged mail is redelivered. Role, seniority and project cannot change on resume. See [Identity lifecycle](identity-lifecycle.md).
 
+That restores the **Hivemind identity**, not necessarily the host conversation. In **Resume same employees**, each card
+restores its saved CLI/model choices and **Resume original conversation** with the exact Codex/Claude/Cursor conversation ID.
+Mixed batches do not need separate launches by software. Without an ID, choose **New conversation · recover Hivemind
+checkpoints**; it recovers unfinished task state, not the old transcript. Task-bound workers use their task's Resume
+control instead. See [Agent resume](agent-resume.md) for session capture, profiles and limitations.
+
 After upgrading Hivemind, ask running agents to call `whoami` with `orders=true` again so they pick up the new standing orders.
 
 ## Tasks and jobs

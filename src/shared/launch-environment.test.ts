@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { childEnv } from "../test-support/child-process.ts";
 import {
   LAUNCH_ENVIRONMENT_LIMITS, launchEnvironmentNameProblem, launchEnvironmentPrefix, launchEnvironmentProblem, launchEnvironmentValueProblem,
-  parseLaunchEnvironment,
+  formatLaunchEnvironment, parseLaunchEnvironment,
 } from "./launch-environment.ts";
 import { buildLaunchCommand, launchBlockText, shSingleQuote } from "./launch-prompt.ts";
 
@@ -79,6 +79,23 @@ test("the field takes NAME=value lines, skips blanks and comments, and strips on
     DQ: "double quoted", SQ: "single quoted", MIXED: `"not stripped'`, ONE: `"`, INNER: `a "b" c`, EQ: "a=b=c", HASH: "#not a comment",
   });
   assert.deepEqual(parseLaunchEnvironment(""), { environment: {}, errors: [], warnings: [] });
+});
+
+test('saved environment values round-trip through the editor without stripping literal quotes or whitespace', () => {
+  assert.equal(formatLaunchEnvironment({}), '');
+  const values = [...vectors.validValues, '"enabled"', "'literal'", '""', "''", '\t spaced \t',
+    '"' + 'x'.repeat(8190) + '"'];
+  for (const value of values) {
+    const environment = { ORIGINAL: value };
+    const text = formatLaunchEnvironment(environment);
+    assert.deepEqual(parseLaunchEnvironment(text), { environment, errors: [], warnings: [] });
+    assert.deepEqual(parseLaunchEnvironment(text + '\nADDED=1'),
+      { environment: { ...environment, ADDED: '1' }, errors: [], warnings: [] });
+  }
+  for (const prefix of ['', "'", '"', ' ', '\t']) for (const suffix of ['', "'", '"', ' ', '\t']) {
+    const environment = { VALUE: `${prefix}a'"\\$ 日本${suffix}` };
+    assert.deepEqual(parseLaunchEnvironment(formatLaunchEnvironment(environment)).environment, environment);
+  }
 });
 
 test("a name set twice keeps its last value and says so", () => {

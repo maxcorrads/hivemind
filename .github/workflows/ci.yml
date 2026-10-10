@@ -144,6 +144,9 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
+      - name: Install launcher test shells
+        run: sudo apt-get update && sudo apt-get install -y zsh
+
       - name: Integration shard with coverage
         run: |
           mkdir -p artifacts/coverage
@@ -229,6 +232,9 @@ jobs:
 
       - name: Install locked dependencies
         run: npm ci
+
+      - name: Install launcher test shells
+        run: sudo apt-get update && sudo apt-get install -y zsh
 
       - name: Integration shard
         run: |

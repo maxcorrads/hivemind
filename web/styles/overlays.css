@@ -111,6 +111,7 @@
 .sheet .launch-pre { flex: 0 0 auto; overflow-wrap: anywhere; word-break: break-word; margin: 0; padding: 12px; border: 0; border-radius: 0; background: transparent; color: inherit;
   font-size: 12px; line-height: 1.6; white-space: pre-wrap; max-height: 18rem; overflow: auto; }
 .launch-card { gap: 8px; padding: 10px 12px 12px; border-radius: 10px; background: var(--surface); }
+.launch-card-fields { display: flex; flex-direction: column; gap: 8px; min-width: 0; margin: 0; padding: 0; border: 0; }
 .launch-card-h { align-items: center; }
 .launch-card-h strong { font-size: 14px; font-weight: 600; }
 .launch-card-h span { font-size: 12.5px; }

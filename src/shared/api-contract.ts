@@ -2,6 +2,7 @@ import { z } from "zod";
 import { BODY_MAX, DEFAULT_WAIT_MS, FILE_MAX_BYTES, HiveError, MESSAGE_EVENT_TYPES } from "./types.ts";
 import { requestIdSchema } from "./mutation.ts";
 import { TERMINAL_SESSION_PATTERN } from "./terminal-session.ts";
+import { nativeSessionSchema } from './native-session.ts';
 
 /** Fits a worst-case JSON-escaped BODY_MAX body (6 bytes per unit) plus request metadata. */
 export const API_JSON_BYTES = 256 * 1024;
@@ -35,6 +36,7 @@ export const joinInputSchema = z.object({
   cwd: z.string().min(1).max(4096).nullish(),
   // The Hivemind tmux session the client runs in: a label only (src/shared/terminal-session.ts).
   terminalSession: z.string().regex(TERMINAL_SESSION_PATTERN).nullish(),
+  nativeSession: nativeSessionSchema.nullish(),
   // A reserved worker's single-use launch ticket (src/server/services/identity.ts, reserve).
   claim: z.string().regex(/^hmc_[0-9a-f]{48}$/).nullish(),
 }).strict();

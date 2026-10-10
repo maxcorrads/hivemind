@@ -13,13 +13,15 @@ import { TemplateLaunchSheet } from "./TemplateLaunch.tsx";
 import { TerminalNotice } from "./TerminalNotice.tsx";
 import { agentTerminalSession, terminalBlocker, terminalHub, useTerminalState, type TerminalLaunched } from "./use-terminal.ts";
 import { projectLaunchTools, type LaunchContext } from "../src/shared/launch-prompt.ts";
-import { parseLaunchEnvironment } from "../src/shared/launch-environment.ts";
+import { formatLaunchEnvironment, parseLaunchEnvironment } from "../src/shared/launch-environment.ts";
+import { readResumePreferences, resumeSettings, type ResumePreferences, type ResumeEdits } from './resume-settings.ts';
+import { settingsForLaunch, type PrepareLaunch } from '../src/shared/launch-settings.ts';
+import type { LaunchInput } from '../src/shared/launch-prompt.ts';
 import {
   EFFORTS,
   buildLaunchCommand,
   buildRosterPaste,
   codexSessionTitle,
-  resolveLaunchTune,
   launchBlockText,
   softwareFamily,
   type LaunchRole,
@@ -43,9 +45,12 @@ type Saved = {
   resumeName: string;
   allHives: boolean;
   tunes: Record<string, { model: string; effort: string }>;
+  resumePreferences: Record<string, ResumePreferences>;
   /** The Environment variables field's text per software (the Software field, trimmed). */
   environments: Record<string, string>;
 };
+
+type LaunchOptions = Pick<Saved, 'cdWorktree' | 'passProject' | 'adoptUntrusted'>;
 
 const defaults: Saved = {
   software: "codex",
@@ -63,6 +68,7 @@ const defaults: Saved = {
   resumeName: "",
   allHives: false,
   tunes: {},
+  resumePreferences: {},
   environments: {},
 };
 
@@ -130,6 +136,7 @@ function loadSaved(): Saved {
       resumeName: typeof parsed.resumeName === "string" ? parsed.resumeName : "",
       allHives: parsed.allHives === true,
       tunes,
+      resumePreferences: readResumePreferences(parsed.resumePreferences),
       environments,
     };
   } catch {
@@ -145,7 +152,18 @@ function persist(next: Saved) {
   }
 }
 
-async function copyText(text: string) {
+async function copyText(pendingText: Promise<string>) {
+  // Safari requires the clipboard call during the click, before launch preparation's network await.
+  // ClipboardItem accepts deferred content while retaining that user activation.
+  if (typeof ClipboardItem !== 'undefined' && navigator.clipboard.write) {
+    try {
+      await navigator.clipboard.write([new ClipboardItem({
+        'text/plain': pendingText.then(text => new Blob([text], { type: 'text/plain' })),
+      })]);
+      return;
+    } catch { /* older hosts still support writeText / execCommand */ }
+  }
+  const text = await pendingText;
   try {
     await navigator.clipboard.writeText(text);
     return;
@@ -161,6 +179,17 @@ async function copyText(text: string) {
   const ok = document.execCommand("copy");
   el.remove();
   if (!ok) throw new Error("Could not copy");
+}
+
+/** Commit an edited executable as one choice, not the intermediate letters of an alias. */
+function ResumeSoftware({ name, value, onChange }: { name: string; value: string; onChange(value: string): void }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  return <label>Software for {name}<input value={draft ?? value} list="launch-software" spellCheck={false}
+    onChange={e => setDraft(e.target.value)}
+    onBlur={e => {
+      if (draft !== null) onChange(e.target.value);
+      setDraft(null);
+    }} /></label>;
 }
 
 export function LaunchSheet({
@@ -193,13 +222,19 @@ export function LaunchSheet({
   const [cdWorktree, setCdWorktree] = useState(initial.cdWorktree);
   const [passProject, setPassProject] = useState(initial.passProject);
   const [adoptUntrusted, setAdoptUntrusted] = useState(initial.adoptUntrusted);
+  // Only explicit checkbox changes in this sheet override each employee's saved choices.
+  const [launchOptionEdits, setLaunchOptionEdits] = useState<Partial<LaunchOptions>>({});
   const [role, setRole] = useState<LaunchRole>(initial.role);
   const [seniority, setSeniority] = useState<Seniority>(initial.seniority);
   const [focus, setFocus] = useState(initial.focus);
   const [resume, setResume] = useState(Boolean(resumeAgentId) || initial.resume);
   const [allHives, setAllHives] = useState(initial.allHives);
-  const [tunes, setTunes] = useState<Record<string, { model: string; effort: string }>>(resumeAgentId ? {} : initial.tunes);
-  // Kept per software in this browser (never sent anywhere but with a launch); restored when that software is chosen.
+  const [tunes] = useState<Record<string, { model: string; effort: string }>>(resumeAgentId ? {} : initial.tunes);
+  const [resumePreferences, setResumePreferences] = useState(initial.resumePreferences);
+  const [editedSeats, setEditedSeats] = useState<Record<string, boolean>>({});
+  // Conversation IDs and environment edits are not persisted in browser preferences.
+  const [resumeEdits, setResumeEdits] = useState<Record<string, ResumeEdits>>({});
+  // Browser defaults per software; tracked launches also save their own environment on the server.
   const [environments, setEnvironments] = useState<Record<string, string>>(initial.environments);
   const envKey = environmentKey(software);
   const envText = Object.hasOwn(environments, envKey) ? environments[envKey]! : "";
@@ -257,6 +292,7 @@ export function LaunchSheet({
     const slug = project?.slug ?? projectSlug;
     return agents
       .filter((a) => a.role === "brain" || a.role === "worker")
+      .filter((a) => !a.removedAt && !a.archivedAt && !a.pending && !a.templateId)
       .filter((a) => !resumeAgentId || a.id === resumeAgentId)
       .filter((a) => allHives || a.project === slug)
       .slice()
@@ -279,7 +315,7 @@ export function LaunchSheet({
   const built = useMemo(() => {
     try {
       if (contextError) throw new Error(contextError);
-      const launch = buildLaunchCommand({
+      const input: LaunchInput = {
         ...shared,
         ...projectLaunchTools(launchContext, project ?? projects.find((p) => p.slug === projectSlug), role),
         workspacePath,
@@ -289,9 +325,11 @@ export function LaunchSheet({
         seniority: role === "worker" ? seniority : null,
         focus,
         resume: false,
-      });
+      };
+      const launch = buildLaunchCommand(input);
       if (envError) throw new Error(envError);
-      return { ok: true as const, launch, text: launchBlockText(launch, environment) };
+      const request: PrepareLaunch = { project: input.projectSlug, settings: settingsForLaunch(input, environment ?? {}) };
+      return { ok: true as const, launch, text: launchBlockText(launch, environment), request };
     } catch (e) {
       return { ok: false as const, error: String((e as Error).message || e) };
     }
@@ -300,19 +338,44 @@ export function LaunchSheet({
   const resumeBlocks = useMemo(() => {
     return roster.map((agent) => {
       const hive = projects.find((p) => p.slug === agent.project);
+      const context = contexts[hive?.slug ?? ''];
+      const contextReady = Boolean(context && !contextErrors[hive?.slug ?? '']);
+      const saved = context?.savedLaunches?.[agent.id];
       const selectedSlug = project?.slug ?? projectSlug;
       const path =
         pathDirty && hive?.slug === selectedSlug
           ? workspacePath
-          : (hive?.worktree ?? (hive?.slug === selectedSlug ? workspacePath : ""));
-      const seat = resolveLaunchTune({ model, effort }, tunes[agent.name]);
+          : (saved?.settings.workspacePath ?? hive?.worktree ?? (hive?.slug === selectedSlug ? workspacePath : ""));
+      const reported = context?.nativeSessions?.[agent.id];
+      const preferences = saved && !editedSeats[agent.id] ? undefined
+        : resumePreferences[agent.id] ?? (!reported && tunes[agent.name]?.model ? tunes[agent.name] : undefined);
+      const seat = resumeSettings(shared, reported, preferences, resumeEdits[agent.id], saved);
+      const savedEnv = saved && seat.software === saved.settings.software
+        ? formatLaunchEnvironment(saved.settings.environment) : undefined;
+      const seatEnvText = resumeEdits[agent.id]?.environment ?? savedEnv ?? environments[environmentKey(seat.software)] ?? '';
+      const seatEnv = parseLaunchEnvironment(seatEnvText);
+      const running = agent.online || Boolean(verifiedStopSession(agent, agents, terminals, resumeAgentId ? resumeAliases : []));
+      const included = resumeEdits[agent.id]?.included ?? !running;
+      const launchOptions: LaunchOptions = {
+        cdWorktree: launchOptionEdits.cdWorktree ?? saved?.settings.cdWorktree ?? cdWorktree,
+        passProject: launchOptionEdits.passProject ?? saved?.settings.passProject ?? passProject,
+        adoptUntrusted: launchOptionEdits.adoptUntrusted ?? saved?.settings.adoptUntrusted ?? adoptUntrusted,
+      };
+      const card = { agent, hive, seat, included, running, seatEnvText, launchOptions, contextReady };
       try {
-        if (agent.role !== "brain" && agent.role !== "worker") {
-          return { agent, hive, ok: false as const, error: "not an agent", text: "" };
-        }
         if (contextErrors[hive?.slug ?? ""]) throw new Error(contextErrors[hive!.slug]);
-        const launch = buildLaunchCommand({
+        if (!contextReady) throw new Error('Loading this employee’s launch context…');
+        if (running) throw new Error('Already online or running. Stop this agent explicitly before resuming.');
+        if (!seat.software.trim()) throw new Error('Choose software for this employee.');
+        if (seatEnv.errors.length) throw new Error('Fix this employee’s environment variables first.');
+        if (agent.role !== "brain" && agent.role !== "worker") {
+          return { ...card, ok: false as const, error: "not an agent", text: "" };
+        }
+        const input: LaunchInput = {
           ...shared,
+          ...launchOptions,
+          software: seat.software,
+          extraFlags: seat.extraFlags,
           ...projectLaunchTools(contexts[hive?.slug ?? ""], hive, agent.role),
           model: seat.model,
           effort: seat.effort,
@@ -324,14 +387,17 @@ export function LaunchSheet({
           focus: agent.focus,
           resume: true,
           resumeName: agent.name,
-        });
-        if (envError) throw new Error(envError);
-        return { agent, hive, ok: true as const, launch, text: launchBlockText(launch, environment) };
+          ...(seat.native ? { nativeResume: { software: softwareFamily(seat.software) as 'codex' | 'claude' | 'cursor', sessionId: seat.sessionId } } : {}),
+        };
+        const launch = buildLaunchCommand(input);
+        const request: PrepareLaunch = { project: input.projectSlug, agentId: agent.id,
+          settings: settingsForLaunch(input, seatEnv.environment), native: seat.native, sessionId: seat.sessionId };
+        return { ...card, ok: true as const, launch, environment: seatEnv.environment, text: launchBlockText(launch, seatEnv.environment), request };
       } catch (e) {
-        return { agent, hive, ok: false as const, error: String((e as Error).message || e), text: "" };
+        return { ...card, ok: false as const, error: String((e as Error).message || e), text: "" };
       }
     });
-  }, [roster, projects, project, projectSlug, pathDirty, workspacePath, software, extraFlags, model, effort, tunes, cdWorktree, passProject, adoptUntrusted, contexts, contextErrors, environment, envError]);
+  }, [roster, projects, project, projectSlug, pathDirty, workspacePath, software, extraFlags, model, effort, tunes, resumePreferences, resumeEdits, cdWorktree, passProject, adoptUntrusted, contexts, contextErrors, environments, agents, terminals, resumeAgentId, resumeAliases, editedSeats, launchOptionEdits]);
 
   const remember = (patch: Partial<Saved> = {}) => {
     const next: Saved = {
@@ -350,6 +416,7 @@ export function LaunchSheet({
       resumeName: "",
       allHives: patch.allHives ?? allHives,
       tunes: patch.tunes ?? tunes,
+      resumePreferences: patch.resumePreferences ?? resumePreferences,
       environments: patch.environments ?? environments,
     };
     persist(next);
@@ -365,13 +432,23 @@ export function LaunchSheet({
     remember({ environments: trimmed });
   };
 
-  const setTune = (name: string, patch: Partial<{ model: string; effort: string }>) => {
-    const next = {
-      ...tunes,
-      [name]: { model: tunes[name]?.model ?? "", effort: tunes[name]?.effort ?? "", ...patch },
-    };
-    setTunes(next);
-    remember({ tunes: next });
+  const setResumePreference = (id: string, patch: ResumePreferences) => {
+    const block = resumeBlocks.find(block => block.agent.id === id);
+    // Never promote provisional browser defaults into explicit per-employee overrides.
+    if (!block?.contextReady) return;
+    const current = block.seat;
+    const prior = editedSeats[id] ? resumePreferences[id] : {
+      software: current.software, model: current.model, effort: current.effort, extraFlags: current.extraFlags };
+    setEditedSeats(old => ({ ...old, [id]: true }));
+    const next = { ...resumePreferences, [id]: { ...prior, ...patch } };
+    setResumePreferences(next);
+    remember({ resumePreferences: next });
+  };
+  const setResumeEdit = (id: string, patch: ResumeEdits) => {
+    // Batch selection is safe while loading; configuration and recovery choices are not.
+    if (!resumeBlocks.find(block => block.agent.id === id)?.contextReady &&
+      Object.keys(patch).some(key => key !== 'included')) return;
+    setResumeEdits(old => ({ ...old, [id]: { ...old[id], ...patch } }));
   };
 
   const rememberSoftware = () => {
@@ -390,31 +467,45 @@ export function LaunchSheet({
     }, 1600);
   };
 
-  const onCopy = async (text: string, key: string) => {
+  const onCopy = async (key: string) => {
+    if (launching) return;
+    const requests = key === 'one' ? built.ok ? [{ title: '', request: built.request }] : []
+      : resumeBlocks.flatMap(b => b.ok && (key === 'all' ? b.included : key === b.agent.id)
+        ? [{ title: codexSessionTitle(b.hive?.name ?? '', b.agent.name), request: b.request }] : []);
+    if (!requests.length) return;
+    setLaunching(true);
+    setLaunchNote(null);
     try {
-      await copyText(text);
-    } catch {
-      return;
+      const blocks = Promise.all(requests.map(async ({ title, request }) => {
+        const launch = await api.prepareLaunch(request);
+        return { title, text: launchBlockText(launch, launch.environment) };
+      }));
+      await copyText(blocks.then(items => key === 'all' ? buildRosterPaste(items) : items[0]!.text));
+      rememberSoftware();
+      markCopied(key);
+    } catch (error) {
+      setLaunchNote({ error: true, text: (error as Error).message });
+    } finally {
+      setLaunching(false);
     }
-    rememberSoftware();
-    markCopied(key);
   };
 
   const seatTitle = (hive: string, agent: string) => codexSessionTitle(hive, agent) || agent;
-  const allText = buildRosterPaste(
-    resumeBlocks
-      .filter((b) => b.ok)
-      .map((b) => ({
-        title: seatTitle(b.hive?.name ?? "", b.agent.name),
-        text: b.text,
-      })),
-  );
 
   const canCopyOne = built.ok && projects.length > 0;
+  const selectedBlocks = resumeBlocks.filter(b => b.included);
   // Only where the page can launch (the apps) and only for OpenCode, whose opencode-go and Zen providers read it.
-  const showOpencodeKey = native && softwareFamily(software) === "opencode";
-  // Only where launches run in tmux (the apps): without env_vars a Codex agent never reports its session.
-  const showCodexEnvHint = native && softwareFamily(software) === "codex";
+  // Resume uses the selected employees' loaded choices, not the unrelated shared/browser default.
+  const showOpencodeKey = native && (resume
+    ? selectedBlocks.some(b => b.contextReady && !b.running && softwareFamily(b.seat.software) === 'opencode')
+    : softwareFamily(software) === "opencode");
+  // Setup also applies to copied commands and each selected client in a mixed roster.
+  const showCodexEnvHint = resume
+    ? selectedBlocks.some(b => softwareFamily(b.seat.software) === 'codex')
+    : softwareFamily(software) === 'codex';
+  const showCursorEnvHint = resume
+    ? selectedBlocks.some(b => softwareFamily(b.seat.software) === 'cursor')
+    : softwareFamily(software) === 'cursor';
   useEffect(() => { if (!showOpencodeKey) setOpencodeKey(""); }, [showOpencodeKey]);
   const opencodeKeyValue = showOpencodeKey ? opencodeKey.trim() : "";
   const opencodeKeyProblem = opencodeKeyValue ? terminalSecretProblem(opencodeKeyValue) : null;
@@ -428,20 +519,18 @@ export function LaunchSheet({
   const targetSession = resumeAgentId && roster[0]
     ? verifiedStopSession(roster[0], agents, terminals, resumeAliases) ? 'running'
       : agentRuntime(roster[0], { agents }, terminals).sessionState : null;
-  const canCopyAll = resume && resumeBlocks.length > 0 && resumeBlocks.every((b) => b.ok) &&
-    (!resumeAgentId || Boolean(software.trim()) && targetSession !== 'running');
-  const canCopyResumeCard = !resumeAgentId || Boolean(software.trim()) && targetSession !== 'running';
+  const canCopyAll = resume && selectedBlocks.length > 0 && selectedBlocks.every((b) => b.ok);
 
   // Hivemind.app only: the same launches as the copied text, each in its own tmux session (reused when that
   // employee's is still running), optionally with a Terminal window attached.
   const terminalLaunches: TerminalSessionLaunch[] = resume
-    ? (canCopyAll ? resumeBlocks.flatMap((b) => b.ok ? [{
+    ? (canCopyAll ? selectedBlocks.flatMap((b) => b.ok ? [{
         project: b.hive?.slug ?? b.agent.project ?? projectSlug, agent: b.agent.name,
         title: seatTitle(b.hive?.name ?? "", b.agent.name), ...b.launch,
         // The session this employee already runs in, even one named hm-<project>-new-<n>, is reused.
         session: agentTerminalSession(b.agent),
-        ...secrets,
-        ...launchEnv,
+        ...(softwareFamily(b.seat.software) === 'opencode' ? secrets : {}),
+        ...(Object.keys(b.environment).length ? { environment: b.environment } : {}),
       }] : []) : [])
     : (canCopyOne && built.ok
       ? [{ project: project?.slug ?? projectSlug, agent: null, title: seatTitle(hiveName, `new ${role}`), ...built.launch, ...secrets,
@@ -468,12 +557,17 @@ export function LaunchSheet({
   const onLaunchTerminal = (openInTerminal: boolean) => {
     const hub = terminalHub();
     if (!canLaunchTerminal || !hub) return;
-    const launches = terminalLaunches;
+    const previews = terminalLaunches;
+    const requests = resume ? selectedBlocks.flatMap(b => b.ok ? [b.request] : []) : built.ok ? [built.request] : [];
     setLaunching(true);
     setLaunchNote(null);
     rememberSoftware();
-    hub.launch(launches, openInTerminal)
-      .then((result) => {
+    Promise.all(requests.map(request => api.prepareLaunch(request)))
+      .then(async prepared => {
+        const launches = previews.map((preview, i) => ({ ...preview, command: prepared[i]!.command, cwd: prepared[i]!.cwd }));
+        const problem = terminalSessionLaunchProblem(launches);
+        if (problem) throw new Error(problem);
+        const result = await hub.launch(launches, openInTerminal);
         const note = describeLaunch(launches, result);
         setLaunchNote(note);
         if (note?.error) return;
@@ -501,11 +595,17 @@ export function LaunchSheet({
     if (nextFocus !== focus) setFocus(nextFocus);
     remember({ role: next, focus: nextFocus });
   };
+  const optionState = (key: keyof LaunchOptions) => {
+    const values = resume ? resumeBlocks.map(block => block.launchOptions[key]) : [];
+    return { checked: values.length ? values.every(Boolean) : shared[key],
+      mixed: values.some(value => value !== values[0]) };
+  };
+  const cdOption = optionState('cdWorktree'), projectOption = optionState('passProject'), mailOption = optionState('adoptUntrusted');
   // The closed Advanced disclosure still says what the launch will do.
   const advancedSummary = [
-    cdWorktree && "cd into workspace",
-    passProject && "pass project",
-    adoptUntrusted && "trust hive mail",
+    cdOption.mixed ? 'mixed workspace settings' : cdOption.checked && "cd into workspace",
+    projectOption.mixed ? 'mixed project settings' : projectOption.checked && "pass project",
+    mailOption.mixed ? 'mixed mail authorization' : mailOption.checked && "trust hive mail",
     extraFlags.trim() && "extra flags",
     envCount > 0 && (envCount === 1 ? "1 env variable" : `${envCount} env variables`),
     parsedEnv.errors.length > 0 && "env variables to fix",
@@ -584,7 +684,7 @@ export function LaunchSheet({
               autoFocus
             />
           </label>
-          {resumeAgentId && <p className="help-p">Choose the CLI and model for this launch. The fixed agent has no saved model or software in its identity.</p>}
+          {resume && <p className="help-p">Defaults for employees without a reported launch. Choose each employee’s CLI, model and conversation below. Task-bound workers resume through their task controls.</p>}
           {resumeAgentId && targetSession === 'running' && <p className="err" role="alert">This agent already has a running session. Close it before resuming.</p>}
           <datalist id="launch-software">
             {softwareUsed.map((name) => (
@@ -593,11 +693,18 @@ export function LaunchSheet({
           </datalist>
           {showCodexEnvHint && (
             <p className="help-p launch-codex-env">
-              Codex passes the session label and generated role to MCP servers only if its config lists them. Add{" "}
-              <code>env_vars = ["HIVEMIND_TMUX_SESSION", "HIVEMIND_ROLE"]</code> under <code>[mcp_servers.hivemind]</code> in each{" "}
-              <code>CODEX_HOME</code>’s <code>config.toml</code> — <code>hivemind mcp-config --codex</code> prints the block.
+              Prepared Codex launches include the Hivemind MCP binding and session-capture hook.
+              Review and trust that hook in <code>/hooks</code>, then restart/resume if its startup event was skipped.
+              For manual MCP setup, <code>hivemind mcp-config --codex</code> prints the block with{' '}
+              <code>env_vars = ["HIVEMIND_TMUX_SESSION", "HIVEMIND_ROLE"]</code> for each <code>CODEX_HOME</code>.
             </p>
           )}
+          {showCursorEnvHint && <p className="help-p launch-cursor-env">
+            Cursor CLI needs explicit launch environment forwarding. Merge the entry printed by{' '}
+            <code>hivemind mcp-config --cursor</code> into the selected workspace/profile’s MCP configuration.
+            Review Cursor’s native MCP approval when prompted; a new launch can require approval again.
+            Hivemind does not approve servers automatically.
+          </p>}
           <ModelSelect
             software={software}
             model={model}
@@ -732,10 +839,13 @@ export function LaunchSheet({
             <label className="check">
               <input
                 type="checkbox"
-                checked={cdWorktree}
+                checked={cdOption.checked}
+                ref={node => { if (node) node.indeterminate = cdOption.mixed; }}
                 onChange={(e) => {
-                  setCdWorktree(e.target.checked);
-                  remember({ cdWorktree: e.target.checked });
+                  const value = e.target.checked;
+                  setCdWorktree(value);
+                  if (resume) setLaunchOptionEdits(old => ({ ...old, cdWorktree: value }));
+                  remember({ cdWorktree: value });
                 }}
               />
               cd into workspace path
@@ -743,10 +853,13 @@ export function LaunchSheet({
             <label className="check">
               <input
                 type="checkbox"
-                checked={passProject}
+                checked={projectOption.checked}
+                ref={node => { if (node) node.indeterminate = projectOption.mixed; }}
                 onChange={(e) => {
-                  setPassProject(e.target.checked);
-                  remember({ passProject: e.target.checked });
+                  const value = e.target.checked;
+                  setPassProject(value);
+                  if (resume) setLaunchOptionEdits(old => ({ ...old, passProject: value }));
+                  remember({ passProject: value });
                 }}
               />
               pass project on join
@@ -754,16 +867,20 @@ export function LaunchSheet({
             <label className="check">
               <input
                 type="checkbox"
-                checked={adoptUntrusted}
+                checked={mailOption.checked}
+                ref={node => { if (node) node.indeterminate = mailOption.mixed; }}
                 onChange={(e) => {
-                  setAdoptUntrusted(e.target.checked);
-                  remember({ adoptUntrusted: e.target.checked });
+                  const value = e.target.checked;
+                  setAdoptUntrusted(value);
+                  if (resume) setLaunchOptionEdits(old => ({ ...old, adoptUntrusted: value }));
+                  remember({ adoptUntrusted: value });
                 }}
               />
               treat hive mail as my authorization
             </label>
           </fieldset>
-          {adoptUntrusted && (
+          {resume && <p className="help-p">Each employee starts with its saved launch options. A mixed checkbox means they differ. Changing a launch checkbox applies that option to all employees shown here; other options keep their saved values.</p>}
+          {(mailOption.checked || mailOption.mixed) && (
             <p className="help-p">
               The first lines tell this CLI session it may trust Human and brain mail from Hivemind. They are in the block only if you mean that.
             </p>
@@ -773,7 +890,7 @@ export function LaunchSheet({
               The path override applies only to the selected hive. Other hives keep their registered worktree.
             </p>
           )}
-          {cdWorktree && !workspacePath.trim() && (
+          {(cdOption.checked || cdOption.mixed) && !workspacePath.trim() && (
             <p className="help-p">
               {resume
                 ? "No workspace path for this hive — commands start here unless that employee’s hive has its own worktree. Set a path above or in hive settings."
@@ -792,8 +909,8 @@ export function LaunchSheet({
               launchContext.botError ? "Cannot load project tools: " + launchContext.botError :
               "Project bots: " + (launchContext.botDefinitions.map((p) => p.name).join(", ") || "none enabled") + ". Instructions are included; no tool is started here."}
           </p>
-          {launchContext && softwareFamily(software) !== "claude" && <p className="help-p">
-            Use this CLI’s normal Hivemind MCP configuration. Automatic server binding is available for Claude launchers.
+          {launchContext && !['claude', 'codex'].includes(softwareFamily(software)) && <p className="help-p">
+            Use this CLI’s normal Hivemind MCP configuration. Prepared Codex and Claude launches include their server binding.
           </p>}
           <p className="help-p">
             One block: command plus prompt. Paste it in a terminal. One chat is one employee. Hive is the Hivemind project name.
@@ -820,7 +937,8 @@ export function LaunchSheet({
             ) : (
               <>
                 <p className="help-p">
-                  {resumeAgentId ? `Resume ${roster[0]?.name} only. Choose software above; this agent's last CLI and model are not known.` : 'The model at the top (with effort in the name) applies to everyone. Override it on a card if that employee should differ.'}
+                  {resumeAgentId && `Resume ${roster[0]?.name} only. `}
+                  Resume selected employees with their original CLI, model and launch settings. Changes made inside a running CLI are not tracked. A recorded conversation ID restores that host’s transcript; without it, only Hivemind tasks/checkpoints are recovered.
                   Copy all pastes a zsh script that opens one macOS Terminal window per employee (title Hive - Name). macOS may ask to control Terminal the first time.
                   {native && " Open terminals starts each employee in its own tmux session instead (an employee whose session still runs keeps it) and opens a Terminal window on each."}
                 </p>
@@ -837,28 +955,46 @@ export function LaunchSheet({
                       <button
                         type="button"
                         className="btn btn-ghost"
-                        disabled={!block.ok || !canCopyResumeCard}
-                        onClick={() => void onCopy(block.text, block.agent.id)}
+                        disabled={!block.ok || launching}
+                        onClick={() => void onCopy(block.agent.id)}
                       >
                         <Copy size={13} aria-hidden="true" />
                         {copied === block.agent.id ? "Copied" : "Copy"}
                       </button>
                     </div>
-                    <ModelSelect
-                      software={software}
-                      model={tunes[block.agent.name]?.model ?? ""}
-                      effort={tunes[block.agent.name]?.effort ?? ""}
-                      inherit={
-                        model
-                          ? softwareFamily(software) !== "cursor" && effort
-                            ? `${model} · ${effort}`
-                            : model
-                          : "default"
-                      }
-                      onChange={(next) => setTune(block.agent.name, next)}
-                    />
-                    {resumeAgentId && !software.trim() ? <p className="help-p">Choose software to build this launch command.</p> :
-                      block.ok ? <pre className="launch-pre">{block.text}</pre> : <p className="help-p">{block.error}</p>}
+                    <label className="check"><input type="checkbox" checked={block.included} disabled={block.running}
+                      onChange={e => setResumeEdit(block.agent.id, { included: e.target.checked })} /> Include in batch</label>
+                    <fieldset className="launch-card-fields" disabled={!block.contextReady}
+                      aria-label={`Launch settings for ${block.agent.name}`}>
+                      <ResumeSoftware name={block.agent.name} value={block.seat.software}
+                        onChange={value => {
+                          const changedFamily = softwareFamily(value) !== softwareFamily(block.seat.software);
+                          setResumePreference(block.agent.id, { software: value, ...(changedFamily ? { model: '', effort: '', extraFlags: '' } : {}) });
+                          if (changedFamily) setResumeEdit(block.agent.id, { sessionId: '', native: false, environment: '' });
+                        }} />
+                      <ModelSelect
+                        software={block.seat.software}
+                        model={block.seat.model}
+                        effort={block.seat.effort}
+                        onChange={(next) => setResumePreference(block.agent.id, next)}
+                      />
+                      <label>Recovery<select value={block.seat.native ? 'native' : 'handoff'}
+                        onChange={e => setResumeEdit(block.agent.id, { native: e.target.value === 'native' })}>
+                        <option value="handoff">New conversation · recover Hivemind checkpoints</option>
+                        {['codex', 'claude', 'cursor'].includes(softwareFamily(block.seat.software)) && <option value="native">Resume original conversation</option>}
+                      </select></label>
+                      {block.seat.native ? <label>Conversation ID<input value={block.seat.sessionId} spellCheck={false}
+                        onChange={e => setResumeEdit(block.agent.id, { sessionId: e.target.value })} /></label>
+                        : <p className="help-p">The previous transcript is not restored. Existing unfinished tasks and saved checkpoints will be read after joining; unsaved context may be missing.</p>}
+                      <details><summary>Employee launch options</summary>
+                        <label>CLI flags<input value={block.seat.extraFlags} onChange={e => setResumePreference(block.agent.id, { extraFlags: e.target.value })} /></label>
+                        <label>Environment variables<textarea value={block.seatEnvText} spellCheck={false}
+                          onChange={e => setResumeEdit(block.agent.id, { environment: e.target.value })} /></label>
+                        <p className="help-p">Resume restores the last launch settings saved by Hivemind, including the CLI/profile environment. Edits are saved when the launched agent joins. Environment values are encrypted on the server but appear in copied commands; do not enter secrets here. Keychain credentials and conversation files are not imported.</p>
+                      </details>
+                    </fieldset>
+                    {block.ok ? <details><summary>Command preview</summary><pre className="launch-pre">{block.text}</pre></details>
+                      : <p className="err" role="alert">{block.error}</p>}
                   </article>
                 ))}
               </>
@@ -867,7 +1003,7 @@ export function LaunchSheet({
             <section className="launch-preview" aria-label="Command preview">
               <header>
                 <span>Command preview</span>
-                <button type="button" disabled={!canCopyOne} onClick={() => void onCopy(built.text, "one")}>
+                <button type="button" disabled={!canCopyOne || launching} onClick={() => void onCopy("one")}>
                   <Copy size={13} aria-hidden="true" />
                   {copied === "one" ? "Copied" : "Copy"}
                 </button>
@@ -878,7 +1014,7 @@ export function LaunchSheet({
             <p className="help-p">{built.error}</p>
           )}
           {native && terminalBlock && <TerminalNotice blocker={terminalBlock} compact />}
-          {native && launchNote && (
+          {launchNote && (
             <p className={launchNote.error ? "err launch-note" : "help-p launch-note"} role={launchNote.error ? "alert" : "status"}>{launchNote.text}</p>
           )}
         </div>
@@ -914,8 +1050,8 @@ export function LaunchSheet({
             <button
               type="button"
               className={native ? "btn" : "primary"}
-              disabled={!canCopyAll}
-              onClick={() => void onCopy(allText, "all")}
+              disabled={!canCopyAll || launching}
+              onClick={() => void onCopy("all")}
             >
               <Copy size={14} aria-hidden="true" />
               {copied === "all" ? "Copied" : "Copy all"}
@@ -924,8 +1060,8 @@ export function LaunchSheet({
             <button
               type="button"
               className={native ? "btn" : "primary"}
-              disabled={!canCopyOne}
-              onClick={() => void onCopy(built.ok ? built.text : "", "one")}
+              disabled={!canCopyOne || launching}
+              onClick={() => void onCopy("one")}
             >
               <Copy size={14} aria-hidden="true" />
               {copied === "one" ? "Copied" : "Copy command"}

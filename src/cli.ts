@@ -59,7 +59,7 @@ function help() {
   hivemind doctor
   hivemind leave
   hivemind mcp
-  hivemind mcp-config [--codex]
+  hivemind mcp-config [--codex | --cursor]
   hivemind bots add /absolute/hivemind-bot.json [--home /hive]
   hivemind bots list | remove ID [--home /hive]
   hivemind bots bind ID --project SLUG --config-home /existing/profile [--home /hive]
@@ -123,7 +123,13 @@ export async function runCli(argv: string[]): Promise<void> {
 
   if (cmd === "mcp") {
     const { startMcp } = await import("./mcp/index.ts");
-    await startMcp();
+    await startMcp(arg(argv, '--launch-ticket'));
+    return;
+  }
+
+  if (cmd === '_capture-session') {
+    const { captureSession } = await import('./client/capture-session.ts');
+    await captureSession(argv.slice(1));
     return;
   }
 
@@ -134,6 +140,15 @@ export async function runCli(argv: string[]): Promise<void> {
   }
 
   if (cmd === "mcp-config") {
+    if (argv.includes('--codex') && argv.includes('--cursor')) throw new Error('Choose --codex or --cursor, not both');
+    if (argv.includes('--cursor')) {
+      console.log(JSON.stringify(cursorMcpConfig(), null, 2));
+      console.error('Merge the hivemind entry above into .cursor/mcp.json in the workspace (or ~/.cursor/mcp.json), preserving other servers.');
+      console.error('Cursor must explicitly forward the launch ticket, role and terminal session. Use the same Hivemind instance and CLI/profile as the launcher.');
+      console.error('Review the native MCP approval when prompted. Cursor may require approval again for each prepared launch because its resolved configuration changes. Hivemind does not approve servers automatically.');
+      console.error(`Then in the agent: join as worker or brain. Server must be running at ${hiveUrl()}`);
+      return;
+    }
     if (argv.includes("--codex")) {
       console.log(codexMcpConfig());
       console.error("Paste the TOML above into ~/.codex/config.toml (or config.toml in each CODEX_HOME), then restart Codex.");
@@ -157,6 +172,7 @@ export async function runCli(argv: string[]): Promise<void> {
       ? "Paste the JSON above into your agent's MCP configuration."
       : "This repo already has .cursor/mcp.json and .mcp.json.");
     console.error("For Codex, run hivemind mcp-config --codex: it prints the TOML block for ~/.codex/config.toml.");
+    console.error('For Cursor CLI, run hivemind mcp-config --cursor: it prints the required launch environment forwarding.');
     console.error(`Then in the agent: join as worker or brain. Server must be running at ${hiveUrl()}`);
     return;
   }
@@ -506,6 +522,23 @@ export function mcpLauncher(compiled = runningCompiled, root = packageRoot()): {
 
 /** Tool timeout for the Hivemind MCP server: high enough that a sleeping `wait` is not killed (docs/agent-connection.md). */
 export const MCP_TOOL_TIMEOUT_SEC = 28800;
+
+/** Cursor filters its stdio environment; these references are resolved by Cursor at each launch. */
+export function cursorMcpConfig(url = hiveUrl(), compiled = runningCompiled, root = packageRoot()) {
+  return { mcpServers: { hivemind: {
+    command: process.execPath,
+    args: compiled ? [resolve(root, COMPILED_CLI), 'mcp']
+      : ['--import', resolve(root, 'node_modules/tsx/dist/loader.mjs'), resolve(root, 'src/cli.ts'), 'mcp'],
+    env: {
+      HIVEMIND_URL: url,
+      HIVEMIND_TOKEN: '',
+      HIVEMIND_ROLE: '${env:HIVEMIND_ROLE}',
+      HIVEMIND_TMUX_SESSION: '${env:HIVEMIND_TMUX_SESSION}',
+      HIVEMIND_LAUNCH_TICKET: '${env:HIVEMIND_LAUNCH_TICKET}',
+    },
+    tool_timeout_sec: MCP_TOOL_TIMEOUT_SEC,
+  } } };
+}
 
 /**
  * `mcp-config --codex`: the `[mcp_servers.hivemind]` block for Codex's config.toml. Codex hands a stdio MCP server

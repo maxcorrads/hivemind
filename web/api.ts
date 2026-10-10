@@ -7,6 +7,7 @@ import type { Agent, AgentTrafficView, BotCredentialView, AttachmentMeta, Channe
 import type { ActivityPage, ActivityReason, MentionPage, ReadSnapshot } from "../src/shared/read-state.ts";
 import { resolveUploadMime } from "../src/shared/mime.ts";
 import type { LaunchContext } from "../src/shared/launch-prompt.ts";
+import type { PrepareLaunch } from '../src/shared/launch-settings.ts';
 import type { ProjectBotConfiguration, SettingsValues } from "../src/shared/bot-settings.ts";
 import type { BotAccess } from '../src/shared/bot-capabilities.ts';
 import { humanSession, connectHumanWs } from "./human-session.ts";
@@ -194,6 +195,8 @@ export const api = {
   setChannelArchived: (channel: string, archived: boolean) =>
     req<{ archived: boolean }>(`/api/ui/channels/${encodeURIComponent(channel)}/archive`, { method: archived ? 'POST' : 'DELETE' }),
   launchContext: (project: string) => req<LaunchContext>(`/api/ui/launch-context?project=${encodeURIComponent(project)}`),
+  prepareLaunch: (input: PrepareLaunch) => req<{ command: string; cwd: string | null; environment: Record<string, string> }>(
+    '/api/ui/launch-prepare', { method: 'POST', body: JSON.stringify(input) }),
   projectBotConfigurations: (slug: string) => req<{ configurations: ProjectBotConfiguration[] }>(`/api/ui/projects/${encodeURIComponent(slug)}/bots/catalog`),
   setBotAvailability: (slug: string, id: string, body: { enabled: boolean; expectedRevision: number }) =>
     req<{ configuration: ProjectBotConfiguration }>(`/api/ui/projects/${encodeURIComponent(slug)}/bots/catalog/${encodeURIComponent(id)}`,

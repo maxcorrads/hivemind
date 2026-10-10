@@ -137,6 +137,16 @@ export function parseLaunchEnvironment(text: string): ParsedLaunchEnvironment {
   return { environment, errors, warnings };
 }
 
+/** Inverse of the editor parser for validated environment values, NOT shell quoting.
+ * The parser drops exactly one matching outer pair; protect any literal pair so
+ * an untouched field (or editing a different line) never changes a saved value. */
+export function formatLaunchEnvironment(environment: Record<string, string>): string {
+  return Object.entries(environment).map(([name, value]) => {
+    const quoted = value.length >= 2 && (value[0] === "'" || value[0] === '"') && value.at(-1) === value[0];
+    return `${name}=${quoted ? `"${value}"` : value}`;
+  }).join('\n');
+}
+
 /**
  * The copied command's prefix: `NAME='value' NAME2='value' `, each value single-quoted so nothing in it is expanded,
  * or "" for none. Only for text a person pastes into a terminal; the apps never put a value in a command line.

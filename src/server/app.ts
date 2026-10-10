@@ -20,6 +20,7 @@ import { ACTIVITY_REASONS, type ActivityReason } from "../shared/read-state.ts";
 import { installJevDiagnostics } from './adaptive-routing-diagnostics.ts';
 import { installInstanceProof } from "./instance-proof.ts";
 import { installLauncherChannel } from "./launcher-channel.ts";
+import { prepareHumanLaunch } from './prepare-launch.ts';
 import { adviseAfterWait, assignAdaptiveTask, mutateAdaptiveTask, mutateAdaptiveRoom, sendAdaptiveAgentMessage, setAdaptiveThreadStatus } from './adaptive-topology-actions.ts';
 
 export type AppHooks = {
@@ -64,6 +65,16 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   app.get("/api/health", c => c.json({ ok: true, name: "hivemind" }));
   installInstanceProof(app, hooks.instanceSecret ?? null);
   installLauncherChannel(app, hive, hooks.instanceSecret ?? null);
+  app.post('/api/launch-session/capture', async c => {
+    // No Human/agent authority: this capability can only record the ID for its own prepared launch.
+    if (c.req.header('origin')) throw new HiveError(403, 'Session callbacks are not browser operations');
+    const body = await readLimitedJson(c.req.raw, 2048);
+    const input = z.object({ sessionId: z.string().max(128) }).strict().safeParse(body);
+    if (!input.success) throw new HiveError(400, 'Invalid session callback');
+    hive.launchSessions.capture((c.req.header('authorization') ?? '').replace(/^Bearer /, ''), input.data.sessionId);
+    c.header('Cache-Control', 'no-store');
+    return c.json({ ok: true });
+  });
   /** The channel and root of a thread id (a message or task id); null when the id is unknown. */
   const threadOwner = (id: string): { channelId: string; threadId: string } | null => {
     const ref = hive.messageQueries.messageRef(id);
@@ -189,8 +200,16 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   });
   ui.get("/launch-context", c => {
     const slug = c.req.query("project");
-    return c.json(launchContext(hive.home, serverOrigin(c.req.url), slug ? hive.projects.getProjectBySlug(slug) : undefined));
+    const project = slug ? hive.projects.getProjectBySlug(slug) : undefined;
+    const nativeSessions = Object.fromEntries(hive.identity.listAgents()
+      .filter(a => project && a.projectId === project.id && !a.removedAt && !a.archivedAt && (a.role === 'brain' || a.role === 'worker'))
+      .flatMap(a => { const session = hive.identity.nativeSession(a.id); return session ? [[a.id, session]] : []; }));
+    const savedLaunches = Object.fromEntries(hive.identity.listAgents()
+      .filter(a => project && a.projectId === project.id && !a.removedAt && !a.archivedAt)
+      .flatMap(a => { const saved = hive.launchSessions.saved(a.id); return saved ? [[a.id, saved]] : []; }));
+    return c.json({ ...launchContext(hive.home, serverOrigin(c.req.url), project), nativeSessions, savedLaunches });
   });
+  ui.post('/launch-prepare', async c => c.json(prepareHumanLaunch(hive, serverOrigin(c.req.url), await requestJson(c.req.raw))));
   ui.get("/adaptive-routing", c => {
     hive.identity.getAgent("human");
     return c.json(adaptiveRoutingPublic(hive.home));
@@ -519,9 +538,20 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   agent.post('/join', async c => {
     const body = await requestJson(c.req.raw);
     const bearer = (c.req.header('authorization') ?? '').replace(/^Bearer\s+/i, '').trim();
-    const result = hive.identity.join({ role: body.role, seniority: body.seniority ?? null, focus: body.focus ?? null,
-      token: bearer || body.token || null, resumeName: body.resume || body.resumeName || null, project: body.project ?? null, cwd: body.cwd ?? null,
-      terminalSession: body.terminalSession ?? null, claim: body.claim ?? null });
+    const result = hive.storage.transaction(() => {
+      const project = body.launchTicket ? hive.projects.getProject(hive.launchSessions.projectId(body.launchTicket)) : null;
+      const candidate = !body.launchTicket ? null : bearer ? hive.identity.agentByToken(bearer) : body.resume || body.resumeName
+        ? hive.identity.getAgentByResumeName(body.resume || body.resumeName) : null;
+      const launch = body.launchTicket ? hive.launchSessions.forJoin(body.launchTicket, { role: body.role },
+        body.project ? hive.projects.getProjectBySlug(body.project).id : project!.id, candidate, candidate && bearer ? candidate.id : null) : null;
+      const joined = hive.identity.join({ role: body.role, seniority: body.seniority ?? null, focus: body.focus ?? null,
+      token: bearer || body.token || null, resumeName: body.resume || body.resumeName || null,
+      project: launch ? project!.slug : body.project ?? null, cwd: body.cwd ?? null,
+      terminalSession: body.terminalSession ?? null, claim: body.claim ?? null, nativeSession: launch ? launch.nativeSession ?? null : body.nativeSession });
+      if (launch) hive.launchSessions.bind(launch.row.id, joined.agent);
+      else if (joined.token !== (bearer || body.token)) hive.launchSessions.forget(joined.agent.id);
+      return joined;
+    });
     return c.json({ ...result, describe: describeAgent(result.agent), standingOrders: result.created ? standingOrders(result.agent) : undefined,
       ordersRef: result.created ? undefined : 'unchanged', handoffs: hive.tasks.handoffs(result.agent) });
   });

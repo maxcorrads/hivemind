@@ -223,6 +223,12 @@
  },
  {
   "type": "index",
+  "name": "launch_sessions_agent",
+  "tbl": "launch_sessions",
+  "sql": "CREATE INDEX launch_sessions_agent ON launch_sessions(agent_id, bound_at)"
+ },
+ {
+  "type": "index",
   "name": "message_reads_message",
   "tbl": "message_reads",
   "sql": "CREATE INDEX message_reads_message ON message_reads(message_id)"
@@ -337,6 +343,12 @@
  },
  {
   "type": "table",
+  "name": "agent_launch_settings",
+  "tbl": "agent_launch_settings",
+  "sql": "CREATE TABLE agent_launch_settings ( agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE, launch_id TEXT NOT NULL UNIQUE REFERENCES launch_sessions(id) ON DELETE CASCADE )"
+ },
+ {
+  "type": "table",
   "name": "agent_lifecycle_events",
   "tbl": "agent_lifecycle_events",
   "sql": "CREATE TABLE agent_lifecycle_events ( seq INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, project_id TEXT REFERENCES projects(id) ON DELETE CASCADE, actor_id TEXT REFERENCES agents(id) ON DELETE SET NULL, kind TEXT NOT NULL, summary TEXT NOT NULL, at INTEGER NOT NULL, source TEXT NOT NULL CHECK(source IN ('server','human_ui')) )"
@@ -346,6 +358,12 @@
   "name": "agent_name_aliases",
   "tbl": "agent_name_aliases",
   "sql": "CREATE TABLE agent_name_aliases ( name TEXT PRIMARY KEY COLLATE NOCASE, agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, created_at INTEGER NOT NULL )"
+ },
+ {
+  "type": "table",
+  "name": "agent_native_sessions",
+  "tbl": "agent_native_sessions",
+  "sql": "CREATE TABLE agent_native_sessions ( agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE, metadata TEXT NOT NULL )"
  },
  {
   "type": "table",
@@ -454,6 +472,12 @@
   "name": "launch_requests",
   "tbl": "launch_requests",
   "sql": "CREATE TABLE launch_requests ( id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, brain_id TEXT NOT NULL REFERENCES agents(id), template_id TEXT REFERENCES worker_templates(id) ON DELETE SET NULL, template_snapshot TEXT NOT NULL, task_id TEXT, job_id TEXT, agent_id TEXT NOT NULL REFERENCES agents(id), ticket_hash TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('awaiting_approval','approved','launching','launched','failed','rejected','cancelled','expired')), reason TEXT, requested_at INTEGER NOT NULL, decided_by TEXT, decided_at INTEGER, session TEXT, error TEXT , request_hash TEXT, launch_kind TEXT NOT NULL DEFAULT 'claim' CHECK(launch_kind IN ('claim','resume')))"
+ },
+ {
+  "type": "table",
+  "name": "launch_sessions",
+  "tbl": "launch_sessions",
+  "sql": "CREATE TABLE launch_sessions ( id TEXT PRIMARY KEY, ticket_hash TEXT NOT NULL UNIQUE, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, expected_agent_id TEXT REFERENCES agents(id) ON DELETE CASCADE, previous_launch_id TEXT, agent_id TEXT REFERENCES agents(id) ON DELETE CASCADE, settings TEXT NOT NULL, provider TEXT NOT NULL, session_id TEXT, captured INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, bound_at INTEGER , previous_session_fingerprint TEXT)"
  },
  {
   "type": "table",

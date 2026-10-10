@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { Agent, Project } from "../src/shared/types.ts";
 import { buildLaunchCommand, codexSessionTitle, launchBlockText, projectLaunchTools, type LaunchContext } from "../src/shared/launch-prompt.ts";
 import type { WorkerTemplate } from "../src/shared/worker-templates.ts";
+import { settingsForLaunch } from '../src/shared/launch-settings.ts';
 import { api } from "./api.ts";
 import { Modal } from "./Modal.tsx";
 import { inNativeApp, onMacDesktop, terminalSessionLaunchProblem } from "./native-bridge.ts";
@@ -91,7 +92,9 @@ export function TemplateLaunchSheet({ projects, agents, defaultProject, onBack, 
     setNotice("");
     try {
       const { agent, ticket } = await api.reserveWorker(template.id, label.trim() || null);
-      const launch = templateLaunch(template, project, context, workspacePath, { ticket, name: agent.name });
+      const launch = await api.prepareLaunch({ project: project.slug, agentId: agent.id, claim: ticket,
+        settings: settingsForLaunch({ ...template.spec, workspacePath, cdWorktree: Boolean(workspacePath.trim()),
+          projectSlug: project.slug, passProject: true, adoptUntrusted: true, role: 'worker' }, template.spec.environment) });
       const environment = Object.keys(template.spec.environment).length ? template.spec.environment : undefined;
       if (openInTerminal === null) {
         await navigator.clipboard.writeText(launchBlockText(launch, environment));
