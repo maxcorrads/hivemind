@@ -31,7 +31,7 @@ Taken while splitting #319 into phases (2026-10-12). Where #319 says otherwise, 
 | Copy-only launches (browser) | No account. The sheet says that accounts apply to launches from the apps. |
 | Claude `~/.claude.json` | Confirmed by [Findings: Claude](#findings-claude): with `CLAUDE_CONFIG_DIR` set, Claude reads and writes `$CLAUDE_CONFIG_DIR/.claude.json` and never `~/.claude.json`. The swap in #319 and the "one Claude account at a time" limit are dropped. `.claude.json` is a private real file in each shadow, and parallel Claude accounts are allowed. |
 | Variables an account controls | Codex: `CODEX_HOME`, `CODEX_SQLITE_HOME`, `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN`. Claude: `CLAUDE_CONFIG_DIR`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_SECURESTORAGE_CONFIG_DIR`. With an account, none of them may appear in the free-form environment or among the secret names. The broker sets the account's own variables and unsets the rest, because a login shell's `.zshrc` could export them and they override the directory's login ([Claude](#findings-claude), [Codex](#findings-codex)). |
-| Codex shadow runs | `CODEX_HOME=<shadow>` and `CODEX_SQLITE_HOME=<absolute home>`. With the second variable, every SQLite database stays in the home and none is linked ([Findings: Codex](#findings-codex)). The shared `config.toml` must not set `cli_auth_credentials_store` to `keyring` or `auto`. Each shadow runs its own Codex daemon, as separate homes do today. |
+| Codex shadow runs | `CODEX_HOME=<shadow>` and `CODEX_SQLITE_HOME=<absolute home>`. With the second variable, every SQLite database stays in the home and none is linked ([Findings: Codex](#findings-codex)). The shared `config.toml` must not set `cli_auth_credentials_store` to `keyring`, `auto` or `ephemeral`. Each shadow runs its own Codex daemon, as separate homes do today. |
 | Prepare before login | The Accounts sheet asks Server.app to create the shadow and its links **before** Human runs the login command. A login on an empty folder would create real files that later conflict with the links. |
 | Exact paths | Claude keys its keychain login to the exact `CLAUDE_CONFIG_DIR` string. Paths are stored and exported exactly: no trailing `/`, no `//`, no `.` or `..` segments. The broker expands only a leading `~/`. |
 
@@ -180,6 +180,11 @@ Settings → **Accounts** opens the sheet, after **Adaptive routing**. It has on
 - **Add account**, disabled at 8 accounts: label, home path and shadow path, with the path problem shown under the
   field. Once both paths are valid, the login command for them appears with a **Copy** button and the line "Log in
   once in a terminal; HiveMind never stores tokens." Editing an account does not show the command.
+- **Prepare**, in the apps only, on each account: Hivemind Server.app builds a shadow's folder and links before its
+  login, and only checks a primary's login
+  ([Preparing an account](terminal-broker.md#preparing-an-account)). The row then shows "Ready", "Not logged in" or
+  the error text, which names the fix. After a successful Prepare the row shows the account's login command with
+  **Copy**. Editing either path hides the status. In a browser the sheet says "Prepare needs the Mac app".
 
 A server error shows as text in the sheet. An `accounts` event refetches the list.
 
@@ -188,9 +193,8 @@ A server error shows as text in the sheet. An `accounts` event refetches the lis
 Each account logs in once, in a terminal on the Mac that launches; the commands are in [Logging in](#logging-in). The
 sheet shows the command for the paths typed in **Add account**, before a label is typed.
 
-In this phase HiveMind writes no files for an account: the sheet shows a shadow's command but does not prepare the
-shadow first, as [Logging in](#logging-in) describes, so the command's `mkdir -p` creates an empty folder. Preparing a
-shadow comes with [Codex shadow](#codex-shadow) (phase 3).
+For a Codex shadow, **Prepare** first, then run the command the row shows: the login then finds the links in place,
+as [Logging in](#logging-in) describes. Claude accounts are prepared from phase 4.
 
 ## Choosing an account
 
@@ -256,7 +260,106 @@ accounts apply only when Software is exactly codex." The hint never disables Lau
 
 ## Codex shadow
 
-(phase 3, [#323](https://github.com/maxcorrads/hivemind/issues/323))
+A second Codex login on one home's threads. The shadow links the shared entries (sessions, history, config, writer
+locks) from the home and keeps its own `auth.json`. The account's `homePath` is the home and its `shadowPath` is the
+shadow folder ([An account](#an-account)). Hivemind Server.app builds the shadow when the account is prepared and checks
+it again before each launch. It deletes, moves and chmods nothing, and it never reads a login.
+
+### Layout
+
+Only the entries the home has are linked. The writes are the shadow's links, the shadow folder, and the home's
+`sessions` and `thread-writer-locks` folders, which are created (0700) before the links when missing. A second run on a
+good shadow changes nothing.
+
+| Class | Names | In the shadow |
+| --- | --- | --- |
+| Shared | `sessions`, `archived_sessions`, `session_index.jsonl`, `history.jsonl`, `thread-writer-locks`, `rollout-migrations`, `external_agent_session_imports.json`, `attachments`, `generated_images`, `visualizations`, `tui-thread-reference-capabilities`, `config.toml`, `AGENTS.md`, `AGENTS.override.md`, `hooks.json`, `prompts`, `skills`, `rules`, `memories`, `plugins`, `pets`, `.sandbox_migration`, `.personality_migration`, `mcp-oauth-locks`, `.credentials.json`, and `<profile>.config.toml` (any name matching `^[A-Za-z0-9_-]+\.config\.toml$`) | A link to the home's entry. A name the home does not have is not linked |
+| Private | `auth.json`, `installation_id`, `models_cache.json`, `version.json`, `cache`, `.tmp`, `tmp`, `shell_snapshots`, `log`, `app-server-control`, `app-server-daemon`, `packages`, `ipc`, `process_manager` | Real, kept by the shadow. Never linked |
+| Home only | `<name>_<N>.sqlite`, also with `-wal`, `-shm` or `-journal` (`^[a-z][a-z0-9_]*_[0-9]+\.sqlite(-wal\|-shm\|-journal)?$`); `.sqlite-maintenance.lock`; `db-backups` | Never. A real one is a conflict, because Codex keeps these in the home |
+| Ignored | names ending in `.tmp`, containing `.tmp-` or `.bak`, starting with `.tmp`, and `.DS_Store` | Skipped. Never linked, never a conflict |
+| Other | any name in none of the lists | Fine when it is in one tree only. A conflict when it is in both, as a real file or a link |
+
+### The two variables
+
+A launch under a Codex shadow sets two variables, with a leading `~/` expanded by the broker ([Variables](#variables)):
+
+- `CODEX_HOME=<shadowPath>`, the shadow, which holds its own `auth.json`;
+- `CODEX_SQLITE_HOME=<homePath, or ~/.codex>`, the shared home. Every database stays there and is never linked or copied.
+
+### Prepare, then log in
+
+1. In **Settings → Accounts**, use **Add account** with the shared home as `homePath` (empty for `~/.codex`) and the
+   folder as `shadowPath`.
+2. Click **Prepare** on its row. It works in the apps only. Hivemind Server.app checks the shared `config.toml`, creates
+   the shadow folder (0700) when it is missing, and links the shadow. The row then shows **Ready** when the shadow's
+   `auth.json` is a regular file, **Not logged in** when it is not, or the error text with its fix.
+3. After a successful Prepare the row shows the login command. Click **Copy** and run it in a terminal on the same Mac:
+
+   ```sh
+   mkdir -p <shadow> && CODEX_HOME=<shadow> CODEX_SQLITE_HOME=<home> codex -c cli_auth_credentials_store=file login
+   ```
+
+Prepare comes first because Codex creates files on its first run in a home, login included. A login into a folder whose
+links are not in place yet leaves real files where the links belong, and they conflict later. A launch checks the shadow
+again; with no login it is refused with the command above, and nothing runs.
+
+### Shared config
+
+The shared `config.toml` must not set `cli_auth_credentials_store` to `keyring`, `auto` or `ephemeral`. Hivemind Server.app reads its
+lines up to the first table header, and refuses a shadow on that home when one of them sets any of these values. The login
+command passes `-c cli_auth_credentials_store=file`, which applies to that login only. The fix is to remove the line or
+set it to `file`. The setting is shared by every account on that home, the primary included. With `file`, Codex reads
+`auth.json` and not the keychain, so a primary whose login is in the keychain has to log in again.
+
+### Errors and fixes
+
+A launch that fails here refuses only its own item, with `internal` and `launches[<i>].account: <message>`; the other
+items start. Prepare shows the same message on the row, without the prefix.
+
+| Message | Fix |
+| --- | --- |
+| "`<home>` must be an existing folder, not a symlink." | The shared home is missing or is a symlink. Run `codex` once to create `~/.codex`, or set `homePath` to a real folder. |
+| "`<shadow>` does not exist yet. Prepare the account in the Accounts sheet, then log in with `<login command>`." | A launch found no shadow folder. Click **Prepare** on the row, then launch again. |
+| "`<shadow>` must be a folder, not a symlink or a file." | Move that entry out of the way and Prepare, or choose another `shadowPath`. |
+| "`<shadow>` is the shared home itself; a shadow needs a folder of its own." | The shadow leads to the home folder, for example `/Users/<you>/.codex` with an empty `homePath`, or through a symlinked parent folder. The catalog compares the typed paths only, so choose a folder that is not the home. |
+| "`<link>` is a real file; HiveMind shares it from `<home>`. Move it away, then launch again." | A shared name is real in the shadow, or a link to anywhere else; usually a copied home. Move it out of the shadow (to a folder outside both homes if it holds threads), then Prepare or launch again. The home's copy is the one used. |
+| "`<path>` should not be here: Codex keeps its databases in `<home>` (CODEX_SQLITE_HOME). Move it away." | A database, a `-wal`/`-shm`/`-journal` file, the lock or `db-backups` is in the shadow (real or a link), usually from a copied home or an earlier run. Move it out of the shadow. |
+| "Unknown Codex file `<name>` in both homes; HiveMind's shadow layout needs an update." | The name is in both trees (in the shadow as a real file or a link) and is in no list. `ShadowLayout.codex` needs it, shared or private: a HiveMind code change. Until then, move the shadow's copy out of the way. |
+| "`<shadow>` has no login yet. Run `<login command>` to log in." | Log in with the row's command, then launch again. |
+| "`<home>/config.toml` sets cli_auth_credentials_store = `<value>`; shadow accounts need `file` (or no setting)." | Remove the line or set it to `file`, as in [Shared config](#shared-config). |
+| "Cannot link `<link>` to `<target>`", "Cannot create `<path>`", "Cannot read `<path>`", each with the system's reason | The Mac user cannot write there, or the volume refuses. Fix the folder's permissions or the volume, then Prepare. |
+| "Claude shadow accounts arrive in phase 4" (and "Preparing Claude accounts arrives in phase 4" on a Claude row) | Claude accounts are prepared from phase 4 ([#324](https://github.com/maxcorrads/hivemind/issues/324)). Until then a Claude account without a `shadowPath` launches as before. |
+| "Codex thread `<id>` is already open in another process. Close it there, or start a new session." (`launches[<i>].command`) | A `codex resume <id>` or `codex exec resume <id>` launch found the thread's writer lock held by another process. Close the thread there, or start a new session. `--last`, names and `fork` are not checked. Codex refuses a second writer by itself. |
+| "Cannot check `<path>`: <reason>" (`launches[<i>].command`) | The thread's lock folder in the shared home cannot be read or locked. Fix its permissions, then launch again. |
+
+### Known replacements of a link
+
+Codex replaces a link in a shadow in one known case. Deleting a thread rewrites `session_index.jsonl` through a temp file
+and a rename, which puts a real file where the shared link was, and the next launch refuses it ("is a real file" above).
+Move the shadow's copy out of the way and launch again. The home's `session_index.jsonl` keeps its old content. Database
+recovery also replaces a link, but it cannot happen in a shadow, because its databases stay in the home. A write to the
+shared `config.toml` through a shadow's link changes it for every account on that home.
+
+### Daemons
+
+Each shadow runs its own `codex app-server` daemon. Its `app-server-control` and `app-server-daemon` are private, as each
+separate home's already are. A shared daemon would run the shadow under the primary's login.
+
+### Turning an existing home into a shadow
+
+An existing separate home, such as a `~/.codex2` that an alias sets as `CODEX_HOME`, can stay a primary or become a
+shadow of the shared home.
+
+- **Stay a primary.** Set its `homePath` to that folder and leave `shadowPath` empty. Its threads and databases stay
+  where they are, separate from the shared home's threads.
+- **Become a shadow.** First move out of that folder everything the layout shares (`sessions`, `archived_sessions`,
+  `history.jsonl`, `session_index.jsonl`, `thread-writer-locks`, `config.toml` and the other shared names above), and its
+  databases (`*_N.sqlite` with their `-wal`, `-shm` or `-journal`, `.sqlite-maintenance.lock`, `db-backups`). Put them in
+  a folder outside both homes. Moving them into the shared home would add those threads to it. Leave `auth.json` and the
+  other private names: the shadow keeps its own login, so an existing file login still counts. Then add the account with
+  that folder as `shadowPath`, Prepare it, and launch `codex` under that account ([Choosing an
+  account](#choosing-an-account)). Stop using the alias for that folder: it sets only `CODEX_HOME`, not
+  `CODEX_SQLITE_HOME`, so Codex would create its databases in the shadow and the next launch would refuse them.
 
 ## Claude shadow
 
@@ -415,7 +518,7 @@ For the report's fixture the expected parse is plan `subscription`; `codex.prima
 - Precedence: managed requirements (MDM), then `-c`, then `config.toml`.
 - Keyring item: service "Codex Auth", account `cli|<first 16 hex of sha256(canonical CODEX_HOME)>`
   (`login/src/auth/storage.rs:243–257`).
-- Only `file` gives a shadow its own `auth.json`. The shared `config.toml` must not set `keyring` or `auto`; check it
+- Only `file` gives a shadow its own `auth.json`. The shared `config.toml` must not set `keyring`, `auto` or `ephemeral`; check it
   before adding a shadow. `-c cli_auth_credentials_store=file` works per invocation, for example on `codex login`.
 - `CODEX_ACCESS_TOKEN` (every front-end) and `CODEX_API_KEY` (exec, doctor, mcp) override the file login
   (`login/src/auth/manager.rs:1500–1538`). `forced_login_method` and `forced_chatgpt_workspace_id` in the shared

@@ -1,10 +1,11 @@
 import { useSyncExternalStore } from "react";
 import type { Agent } from "../src/shared/types.ts";
+import type { LaunchAccount } from "../src/shared/accounts.ts";
 import { terminalSessionName } from "../src/shared/terminal-session.ts";
 import { agentSessionLabel, recordedAgentSession } from "./agent-runtime.ts";
 import {
   TERMINAL_EVENT, brokerUnavailableHint, decodeTerminalData, encodeTerminalInput, inNativeApp, onMacDesktop, onNativePlatform,
-  parseTerminalEvent, postNative, reportedNativePlatform, serverUnverifiedHint, terminalDataLength, terminalLaunchItems,
+  launchAccountProblem, parseTerminalEvent, postNative, reportedNativePlatform, serverUnverifiedHint, terminalDataLength, terminalLaunchItems,
   templateSecretNameProblem, templateSecretValueProblem, terminalSessionLaunchProblem, terminalSize, tmuxInstallHint,
   TERMINAL_BROKER_LIMITS, type NativePlatform, type TerminalEvent,
   type TerminalKillFailure, type TerminalMessage, type TerminalSessionInfo, type TerminalSessionLaunch,
@@ -19,6 +20,8 @@ type Status = Extract<TerminalEvent, { type: "terminal-status" }>;
 export type TerminalLaunched = Extract<TerminalEvent, { type: "terminal-launched" }>;
 /** What a batch kill (Terminate all) ended, and why the rest did not. */
 export type TerminalKilledMany = { sessions: string[]; errors: TerminalKillFailure[] };
+/** What the app's Prepare found: whether the account is logged in, and, when not `ok`, what is wrong and its fix. */
+export type AccountPreparation = { ok: boolean; loggedIn: boolean; error?: string };
 
 export type TerminalState = {
   /** False in a browser: no terminal UI at all. */
@@ -89,6 +92,7 @@ type Pending =
   | { kind: "kill"; resolve: () => void; reject: (error: TerminalRequestError) => void; timer: number }
   | { kind: "kill-many"; resolve: (result: TerminalKilledMany) => void; reject: (error: TerminalRequestError) => void; timer: number }
   | { kind: "secrets"; resolve: (names: string[]) => void; reject: (error: TerminalRequestError) => void; timer: number }
+  | { kind: "account"; resolve: (result: AccountPreparation) => void; reject: (error: TerminalRequestError) => void; timer: number }
   | { kind: "attach"; stream: StreamEntry };
 type StreamEntry = {
   handlers: TerminalStreamHandlers;
@@ -242,6 +246,14 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
         request.resolve(detail.names);
         return;
       }
+      case "account-prepared": {
+        const request = detail.id ? pending.get(detail.id) : undefined;
+        if (request?.kind !== "account") return;
+        pending.delete(detail.id!);
+        win.clearTimeout(request.timer);
+        request.resolve({ ok: detail.ok, loggedIn: detail.loggedIn, ...(detail.error === undefined ? {} : { error: detail.error }) });
+        return;
+      }
       case "terminal-attached": {
         const request = detail.id ? pending.get(detail.id) : undefined;
         if (request?.kind !== "attach") return;
@@ -319,7 +331,8 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
     }, linger);
   };
 
-  function request<T>(kind: "launch" | "kill" | "kill-many" | "secrets", message: TerminalMessage & { id?: string }, timeout = requestTimeout) {
+  function request<T>(kind: "launch" | "kill" | "kill-many" | "secrets" | "account", message: TerminalMessage & { id?: string },
+    timeout = requestTimeout) {
     return new Promise<T>((resolve, reject) => {
       const id = message.id!;
       if (!post(message)) { reject(new TerminalRequestError("not-sent", "Terminals are available only in Hivemind.app")); return; }
@@ -398,6 +411,18 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
     /** Deletes one secret, or every secret of the template when `name` is null; resolves with the names left. */
     deleteTemplateSecrets(template: string, name: string | null): Promise<string[]> {
       return request<string[]>("secrets", { type: "template-secrets-delete", id: newId(), template, name });
+    },
+    /**
+     * The Accounts sheet's Prepare: Hivemind Server.app builds the account's shadow before its login (a primary is only
+     * checked). The account is checked here as the app checks it and sent with its five fields only. An older app
+     * answers unknown-type.
+     */
+    prepareAccount(account: LaunchAccount): Promise<AccountPreparation> {
+      const problem = launchAccountProblem(account);
+      if (problem) return Promise.reject(new TerminalRequestError("bad-message", problem));
+      const { driver, label, homePath, shadowPath } = account;
+      return request<AccountPreparation>("account",
+        { type: "account-prepare", id: newId(), account: { id: account.id, driver, label, homePath, shadowPath } });
     },
     attach(session: string, cols: number, rows: number, handlers: TerminalStreamHandlers): TerminalAttachment {
       const entry: StreamEntry = {

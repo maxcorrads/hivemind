@@ -140,6 +140,59 @@ struct BridgeTerminalMessageTests {
     }
   }
 
+  @Test func parsesAnAccountPrepareAndLeavesItsPathsToTheBroker() {
+    #expect(BridgeMessage(body: ["type": "account-prepare", "id": "p1", "account": accountFields()])
+      == .accountPrepare(id: "p1", account: codexPersonal))
+    #expect(BridgeMessage(body: ["type": "account-prepare", "account": accountFields(["shadowPath": "", "homePath": "/Volumes/x/.codex"])])
+      == .accountPrepare(id: nil, account: LaunchAccount(id: "a1", driver: .codex, label: "Codex personal", homePath: "/Volumes/x/.codex", shadowPath: "")))
+    let bad: [[String: Any]] = [
+      ["type": "account-prepare", "id": "p1"],
+      ["type": "account-prepare", "id": "p1", "account": NSNull()],
+      ["type": "account-prepare", "id": "p1", "account": "a1"],
+      ["type": "account-prepare", "id": "p1", "account": accountFields(["driver": "opencode"])],
+      ["type": "account-prepare", "id": "p1", "account": accountFields(["homePath": NSNull()])],
+      ["type": "account-prepare", "id": "p1", "account": accountFields(["id": ""])],
+      ["type": "account-prepare", "id": "p1", "account": accountFields(["label": " "])],
+      ["type": "account-prepare", "id": "p1", "account": accountFields(["shadowPath": ".codex_personal"])],
+      ["type": "account-prepare", "id": "p1", "account": accountFields(["shadowPath": "~/.codex_personal/"])],
+      ["type": "account-prepare", "id": "p1", "account": accountFields(["shadowPath": "~/.codex"])],
+      ["type": "account-prepare", "id": 5, "account": accountFields()],
+      ["type": "account-prepare", "id": "", "account": accountFields()],
+    ]
+    for body in bad {
+      #expect(BridgeMessage(body: body) == nil, "\(body)")
+    }
+  }
+
+  @Test @MainActor func anAccountPrepareGoesToTheBrokerAndOnlyItsPageHearsTheAnswer() {
+    let client = FakeBrokerClient()
+    let recorder = RouterRecorder()
+    let router = TerminalBridgeRouter(client: client, environment: .init(
+      home: "/Users/me", tmuxConfigPath: "/tmp/tmux.conf", now: { recorder.clock },
+      deliver: { recorder.delivered.append($0) }, openTerminals: { recorder.opened.append($0) }, scheduler: FakeScheduler()))
+    router.handle(.accountPrepare(id: "p1", account: codexPersonal))
+    #expect(client.started == 1)
+    #expect(client.sent == [.accountPrepare(account: codexPersonal)], "the paths go as the page sent them")
+    client.answer(.accountPrepared(AccountPreparation(loggedIn: false)))
+    #expect(recorder.delivered == [.accountPrepared(id: "p1", AccountPreparation(loggedIn: false))])
+    router.handle(.accountPrepare(id: "p2", account: codexPersonal))
+    router.pageDidChange()
+    client.answer(.accountPrepared(AccountPreparation(loggedIn: true)))
+    #expect(recorder.delivered.count == 1, "an answer for a page that is gone is dropped")
+    client.push(.accountPrepared(AccountPreparation(loggedIn: true)))
+    #expect(recorder.delivered.count == 1, "an answer nobody asked for is dropped")
+  }
+
+  @Test func anAccountPrepareFromAnUnverifiedPageIsRefusedAndTheIOSAppForwardsItAsIs() {
+    #expect(TerminalTrustGate.refusal(.accountPrepare(id: "p1", account: codexPersonal))
+      == .answer(.error(id: "p1", code: .unauthorized, message: TerminalTrustGate.unverifiedMessage, stream: nil)))
+    // On a device the broker, through the gateway, expands the account's ~/: no home is needed for it.
+    for home in ["/Users/me", nil] {
+      #expect(RemoteTerminalPolicy.decide(.accountPrepare(id: "p1", account: codexPersonal), home: home)
+        == .forward(.accountPrepare(id: "p1", account: codexPersonal)))
+    }
+  }
+
   @Test func dropsBadStreamMessages() {
     let bad: [[String: Any]] = [
       ["type": "terminal-attach", "session": "acme", "cols": 80, "rows": 24],
@@ -217,6 +270,22 @@ struct BridgeTerminalEventTests {
     #expect((many["errors"] as? [[String: String]]) == [["session": "hm-acme-bea", "code": "no-such-session", "message": "gone"]])
     let error = try detail(.error(id: "a", code: .noSuchSession, message: "</script>\u{2028}", stream: nil))
     #expect(error["message"] as? String == "</script>\u{2028}")
+  }
+
+  @Test func encodesTheAccountPreparedAnswerWithOkAndTheErrorOnlyWhenThereIsOne() throws {
+    let ready = try detail(.accountPrepared(id: "p1", AccountPreparation(loggedIn: true)))
+    #expect(ready["type"] as? String == "account-prepared")
+    #expect(ready["id"] as? String == "p1")
+    #expect(ready["ok"] as? Bool == true)
+    #expect(ready["loggedIn"] as? Bool == true)
+    #expect(ready["error"] == nil)
+    let failed = try detail(.accountPrepared(id: nil, AccountPreparation(loggedIn: false, error: "Move it away.")))
+    #expect(failed["id"] is NSNull)
+    #expect(failed["ok"] as? Bool == false)
+    #expect(failed["loggedIn"] as? Bool == false)
+    #expect(failed["error"] as? String == "Move it away.")
+    #expect(BridgeTerminalEvent(BrokerEventFrame(id: "b-3", .accountPrepared(AccountPreparation(loggedIn: false))), id: "p1")
+      == .accountPrepared(id: "p1", AccountPreparation(loggedIn: false)))
   }
 
   @Test func neverSplicesRawTextIntoTheScript() throws {

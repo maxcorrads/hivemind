@@ -305,6 +305,9 @@ public enum BrokerRequest: Equatable, Sendable {
   case secretsDelete(template: TemplateID, name: String?)
   case launcherApprove(requestId: String, templateId: TemplateID?)
   case launcherReject(requestId: String)
+  /// The Accounts sheet's Prepare (docs/accounts.md): build the account's
+  /// directory before its login, paths as stored; answered with `account.prepared`.
+  case accountPrepare(account: LaunchAccount)
 
   public var type: String {
     switch self {
@@ -323,6 +326,7 @@ public enum BrokerRequest: Equatable, Sendable {
     case .secretsDelete: "secrets.delete"
     case .launcherApprove: "launcher.approve"
     case .launcherReject: "launcher.reject"
+    case .accountPrepare: "account.prepare"
     }
   }
 }
@@ -443,6 +447,12 @@ extension BrokerRequestFrame: Codable {
       } else {
         request = .launcherReject(requestId: requestId)
       }
+    case "account.prepare":
+      guard let account = try BrokerCoding.optionalAccount(c, .account, field: "account") else {
+        throw BrokerProtocolError.invalid("account", "is missing")
+      }
+      try account.validate()
+      request = .accountPrepare(account: account)
     default:
       throw BrokerProtocolError(.unknownType, "unknown message type \(BrokerText.quoted(type))")
     }
@@ -504,6 +514,8 @@ extension BrokerRequestFrame: Codable {
       try c.encodeIfPresent(templateId?.rawValue, forKey: .templateId)
     case .launcherReject(let requestId):
       try c.encode(requestId, forKey: .requestId)
+    case .accountPrepare(let account):
+      try c.encode(account, forKey: .account)
     }
   }
 }
@@ -531,6 +543,9 @@ public enum BrokerEvent: Equatable, Sendable {
   /// The template's secret names after a secrets.list, .set or .delete, sorted. Never a value.
   case secrets(template: TemplateID, names: [String])
   case launcherDecided(requestId: String, action: String)
+  /// The answer to `account.prepare`: `ok` (no `error`) and `loggedIn` on the
+  /// wire, `error` naming the fix when the account is not ready.
+  case accountPrepared(AccountPreparation)
   /// `stream` is set when the error is about one stream.
   case error(code: BrokerErrorCode, message: String, stream: BrokerStreamID?)
 
@@ -545,6 +560,7 @@ public enum BrokerEvent: Equatable, Sendable {
     case .killed: "killed"
     case .secrets: "secrets"
     case .launcherDecided: "launcher.decided"
+    case .accountPrepared: "account.prepared"
     case .error: "error"
     }
   }
@@ -580,7 +596,7 @@ public struct BrokerEventFrame: Equatable, Sendable {
 extension BrokerEventFrame: Codable {
   private enum Key: String, CodingKey {
     case type, id, version, tmuxPath, items, names, created, errors, stream, session, data, status, code, message
-    case template, requestId, action
+    case template, requestId, action, ok, loggedIn, error
   }
 
   public init(from decoder: any Decoder) throws {
@@ -630,6 +646,18 @@ extension BrokerEventFrame: Codable {
         throw BrokerProtocolError.invalid("launcher.decided", "invalid decision")
       }
       event = .launcherDecided(requestId: requestId, action: action)
+    case "account.prepared":
+      let ok: Bool
+      let loggedIn: Bool
+      do {
+        ok = try c.decode(Bool.self, forKey: .ok)
+        loggedIn = try c.decode(Bool.self, forKey: .loggedIn)
+      } catch {
+        throw BrokerProtocolError.invalid("account.prepared", "needs ok and loggedIn booleans")
+      }
+      let error = try BrokerCoding.optionalString(c, .error).map { String($0.prefix(1000)) }
+      guard ok == (error == nil) else { throw BrokerProtocolError.invalid("error", "is set exactly when ok is false") }
+      event = .accountPrepared(AccountPreparation(loggedIn: loggedIn, error: error))
     case "error":
       let code: BrokerErrorCode
       do { code = try c.decode(BrokerErrorCode.self, forKey: .code) } catch {
@@ -676,6 +704,10 @@ extension BrokerEventFrame: Codable {
     case .launcherDecided(let requestId, let action):
       try c.encode(requestId, forKey: .requestId)
       try c.encode(action, forKey: .action)
+    case .accountPrepared(let preparation):
+      try c.encode(preparation.ok, forKey: .ok)
+      try c.encode(preparation.loggedIn, forKey: .loggedIn)
+      try c.encodeIfPresent(preparation.error, forKey: .error)
     case .error(let code, let message, let stream):
       try c.encode(code, forKey: .code)
       try c.encode(message, forKey: .message)

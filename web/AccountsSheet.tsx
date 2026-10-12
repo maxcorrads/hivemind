@@ -1,9 +1,10 @@
-import { ArrowDown, ArrowUp, Copy, Pencil, Plus, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Copy, FolderCog, Pencil, Plus, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ACCOUNT_DRIVERS, ACCOUNT_LIMITS, ACCOUNT_POLICIES, accountLoginCommand, accountPathProblem, type AccountDriver,
-  type AccountPolicy, type AgentAccount } from "../src/shared/accounts.ts";
+  toLaunchAccount, type AccountPolicy, type AgentAccount } from "../src/shared/accounts.ts";
 import { api, type AccountsView } from "./api.ts";
 import { Modal } from "./Modal.tsx";
+import { terminalHub, type AccountPreparation } from "./use-terminal.ts";
 
 const DRIVER_NAMES: Record<AccountDriver, string> = { codex: "Codex", claude: "Claude" };
 const POLICY_NAMES: Record<AccountPolicy, string> = { sequential: "Sequential", balanced: "Balanced" };
@@ -14,6 +15,9 @@ const POLICY_LINES: Record<AccountPolicy, string> = {
 
 /** An account's editable fields. A path is stored exactly as typed; "" is the driver's default tree or no shadow. */
 type AccountFields = { label: string; homePath: string; shadowPath: string };
+
+/** A row's last Prepare, for the paths it ran with: null while the app works on it. */
+type Prepared = { homePath: string; shadowPath: string; result: AccountPreparation | null };
 
 const errorText = (failure: unknown) => String((failure as Error)?.message || failure);
 
@@ -31,6 +35,9 @@ export function AccountsSheet({ tick = 0, onClose }: { tick?: number; onClose: (
   const [editing, setEditing] = useState<AgentAccount | null>(null);
   const [deleting, setDeleting] = useState<AgentAccount | null>(null);
   const [reload, setReload] = useState(0);
+  // By account id. Only the apps can prepare: Hivemind Server.app builds the shadow (docs/accounts.md#sheet).
+  const [prepared, setPrepared] = useState<Record<string, Prepared>>({});
+  const hub = terminalHub();
   useEffect(() => {
     let active = true;
     setError("");
@@ -61,6 +68,21 @@ export function AccountsSheet({ tick = 0, onClose }: { tick?: number; onClose: (
     void change(async () => setView(await api.reorderAccounts(driver, ids)));
   };
 
+  // A status is about the paths it ran with: an edit of either path hides it.
+  const preparedFor = (account: AgentAccount) => {
+    const last = prepared[account.id];
+    return last && last.homePath === account.homePath && last.shadowPath === account.shadowPath ? last : null;
+  };
+  // A shadow is built before Human runs its login command, which shows once Prepare succeeds; the row keeps the status.
+  const prepare = (account: AgentAccount) => {
+    if (!hub) return;
+    const paths = { homePath: account.homePath, shadowPath: account.shadowPath };
+    setPrepared(old => ({ ...old, [account.id]: { ...paths, result: null } }));
+    hub.prepareAccount(toLaunchAccount(account))
+      .catch((failure): AccountPreparation => ({ ok: false, loggedIn: false, error: errorText(failure) }))
+      .then(result => setPrepared(old => ({ ...old, [account.id]: { ...paths, result } })));
+  };
+
   const remove = (account: AgentAccount) => {
     setDeleting(null);
     void change(async () => {
@@ -85,6 +107,7 @@ export function AccountsSheet({ tick = 0, onClose }: { tick?: number; onClose: (
         <div className="sheet-body">
           {error && <p className="err" role="alert">{error}</p>}
           {view === null && !error && <p role="status">Loading…</p>}
+          {!hub && <p className="help-p">Prepare needs the Mac app</p>}
           {view && ACCOUNT_DRIVERS.map(driver => {
             const accounts = view.accounts.filter(account => account.driver === driver);
             const policy = view.policies[driver];
@@ -121,7 +144,7 @@ export function AccountsSheet({ tick = 0, onClose }: { tick?: number; onClose: (
                             setEditing(null);
                             refetch();
                           })} />
-                      ) : (
+                      ) : (<>
                         <div className="bot-settings-heading">
                           <strong>{account.label}</strong>
                           <span>Home path <code>{account.homePath || "default"}</code></span>
@@ -134,6 +157,12 @@ export function AccountsSheet({ tick = 0, onClose }: { tick?: number; onClose: (
                             aria-label={`Move ${account.label} down`} onClick={() => move(driver, accounts, index, 1)}>
                             <ArrowDown size={13} aria-hidden="true" /> Down
                           </button>
+                          {hub && (
+                            <button type="button" className="btn" disabled={busy || preparedFor(account)?.result === null}
+                              aria-label={`Prepare ${account.label}`} onClick={() => prepare(account)}>
+                              <FolderCog size={13} aria-hidden="true" /> Prepare
+                            </button>
+                          )}
                           <button type="button" className="btn" disabled={busy} aria-label={`Edit ${account.label}`}
                             onClick={() => { setAdding(null); setEditing(account); }}>
                             <Pencil size={13} aria-hidden="true" /> Edit
@@ -143,7 +172,8 @@ export function AccountsSheet({ tick = 0, onClose }: { tick?: number; onClose: (
                             <Trash2 size={13} aria-hidden="true" /> Remove
                           </button>
                         </div>
-                      )}
+                        <PreparedStatus account={account} prepared={preparedFor(account)} />
+                      </>)}
                     </li>
                   ))}
                 </ol>
@@ -201,7 +231,6 @@ function AccountForm({ driver, initial, busy, submitLabel, showLogin, onSubmit, 
   onCancel: () => void;
 }) {
   const [fields, setFields] = useState(initial);
-  const [copied, setCopied] = useState("");
   const set = (patch: Partial<AccountFields>) => setFields(old => ({ ...old, ...patch }));
   const homeProblem = accountPathProblem(fields.homePath);
   const shadowProblem = accountPathProblem(fields.shadowPath);
@@ -209,14 +238,6 @@ function AccountForm({ driver, initial, busy, submitLabel, showLogin, onSubmit, 
   const valid = fields.label.trim() !== "" && pathsValid;
   // The command depends on the paths only, so it shows before a label is typed.
   const login = showLogin && pathsValid ? accountLoginCommand({ driver, homePath: fields.homePath, shadowPath: fields.shadowPath }) : null;
-  const copy = async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied("Copied");
-    } catch {
-      setCopied("Copy failed; select the command to copy it");
-    }
-  };
 
   return (
     <form className="template-editor account-form" aria-label={`${submitLabel} for ${DRIVER_NAMES[driver]}`}
@@ -243,20 +264,49 @@ function AccountForm({ driver, initial, busy, submitLabel, showLogin, onSubmit, 
           onChange={event => set({ shadowPath: event.target.value })} />
       </label>
       {shadowProblem && <p className="err">Shadow path: {shadowProblem}</p>}
-      {login && <>
-        <pre className="launch-pre">{login}</pre>
-        <div className="row">
-          <button type="button" className="btn" onClick={() => void copy(login)}>
-            <Copy size={13} aria-hidden="true" /> Copy
-          </button>
-          {copied && <span role="status">{copied}</span>}
-        </div>
-        <p className="help-p">Log in once in a terminal; HiveMind never stores tokens.</p>
-      </>}
+      {login && <LoginCommand command={login} />}
       <div className="row">
         <button type="button" disabled={busy} onClick={onCancel}>Cancel</button>
         <button type="submit" className="primary" disabled={busy || !valid}>{busy ? "Saving…" : submitLabel}</button>
       </div>
     </form>
+  );
+}
+
+/** A row's Prepare status: "Ready", "Not logged in" or what is wrong; once Prepare worked, the login command to run. */
+function PreparedStatus({ account, prepared }: { account: AgentAccount; prepared: Prepared | null }) {
+  if (!prepared) return null;
+  const { result } = prepared;
+  const status = !result ? "Preparing…" : !result.ok ? result.error ?? "Prepare failed" : result.loggedIn ? "Ready" : "Not logged in";
+  return (
+    <>
+      <p className={result?.ok === false ? "err" : "help-p"} role="status">{status}</p>
+      {result?.ok && <LoginCommand command={accountLoginCommand(account)} />}
+    </>
+  );
+}
+
+/** An account's login command with a Copy button, and the line that says Human runs it once. */
+function LoginCommand({ command }: { command: string }) {
+  const [copied, setCopied] = useState("");
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopied("Copied");
+    } catch {
+      setCopied("Copy failed; select the command to copy it");
+    }
+  };
+  return (
+    <>
+      <pre className="launch-pre">{command}</pre>
+      <div className="row">
+        <button type="button" className="btn" onClick={() => void copy()}>
+          <Copy size={13} aria-hidden="true" /> Copy
+        </button>
+        {copied && <span role="status">{copied}</span>}
+      </div>
+      <p className="help-p">Log in once in a terminal; HiveMind never stores tokens.</p>
+    </>
   );
 }

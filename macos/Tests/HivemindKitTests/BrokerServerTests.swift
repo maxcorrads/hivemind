@@ -785,6 +785,14 @@ struct BrokerAccountTests {
                      environment: environment.map { try LaunchEnvironment($0) }, account: account)
   }
 
+  /// A fake Mac home under the temp dir: `~/` is `root`, and the shared Codex tree is `<root>/.codex`.
+  func fakeHome() throws -> (root: URL, codex: String) {
+    let root = try temporaryHome()
+    let codex = root.appendingPathComponent(".codex").path
+    try FileManager.default.createDirectory(atPath: codex, withIntermediateDirectories: true)
+    return (root, codex)
+  }
+
   @Test func aCreatedCodexShadowGetsItsTwoVariablesAndUnsetsTheOtherControlledNames() async throws {
     let (h, store) = try harness()
     h.shadowHomes = FakeShadowHomes()
@@ -907,6 +915,212 @@ struct BrokerAccountTests {
       names: [nil], created: [],
       errors: [BrokerLaunchFailure(index: 0, code: .internal, message: "launches[0].account: cannot create /Users/me/.codex_work: disk full")]))
     #expect(h.tmux.calls("new-session").isEmpty)
+  }
+
+  @Test func aCodexShadowThatIsNotPreparedFailsItsItemWithTheShadowHomeErrorAndTheOtherStarts() async throws {
+    let (h, _) = try harness()
+    let (root, codex) = try fakeHome()
+    defer { try? FileManager.default.removeItem(at: root) }
+    h.home = root.path
+    h.shadowHomes = FileShadowHomes()
+    await h.start()
+    let (transport, connection) = await h.client()
+    await h.send(connection, .launch([try launch(codexShadow), brokerLaunch(nil)]))
+    let second = SessionName("hm-acme-new-1")!
+    let shadow = root.appendingPathComponent(".codex_work").path
+    let message = "`\(shadow)` does not exist yet. Prepare the account in the Accounts sheet, "
+      + "then log in with `\(ShadowLayout.codex.loginCommand(shadow, codex))`."
+    #expect(transport.events().first == .launched(
+      names: [nil, second], created: [second],
+      errors: [BrokerLaunchFailure(index: 0, code: .internal, message: "launches[0].account: \(message)")]))
+    #expect(h.tmux.calls("new-session").count == 1)
+  }
+
+  @Test(arguments: [
+    ("cli_auth_credentials_store = \"keyring\"", "keyring"),
+    ("  cli_auth_credentials_store=auto", "auto"),
+    ("cli_auth_credentials_store = 'ephemeral'", "ephemeral"),
+  ])
+  func aSharedConfigThatKeepsTheLoginOutOfAuthJSONFailsTheShadowsItem(setting: String, value: String) async throws {
+    let (h, _) = try harness()
+    let (root, codex) = try fakeHome()
+    defer { try? FileManager.default.removeItem(at: root) }
+    try Data("model = \"gpt-5\"\n\(setting)\n".utf8).write(to: URL(fileURLWithPath: "\(codex)/config.toml"))
+    h.home = root.path
+    h.shadowHomes = FileShadowHomes()
+    await h.start()
+    let (transport, connection) = await h.client()
+    await h.send(connection, .launch([try launch(codexShadow), brokerLaunch(nil)]))
+    let second = SessionName("hm-acme-new-1")!
+    #expect(transport.events().first == .launched(
+      names: [nil, second], created: [second],
+      errors: [BrokerLaunchFailure(index: 0, code: .internal, message:
+        "launches[0].account: `\(codex)/config.toml` sets cli_auth_credentials_store = `\(value)`; shadow accounts need `file` (or no setting).")]))
+    #expect(h.tmux.calls("new-session").count == 1)
+  }
+
+  @Test func aPreparedAndLoggedInCodexShadowLaunchesAndItsConfigIsReadOnlyToTheFirstTable() async throws {
+    let (h, store) = try harness()
+    let (root, codex) = try fakeHome()
+    defer { try? FileManager.default.removeItem(at: root) }
+    try Data("cli_auth_credentials_store = \"file\"\n[profiles.work]\ncli_auth_credentials_store = \"keyring\"\n".utf8)
+      .write(to: URL(fileURLWithPath: "\(codex)/config.toml"))
+    let shadow = root.appendingPathComponent(".codex_work")
+    try FileManager.default.createDirectory(at: shadow, withIntermediateDirectories: true)
+    try Data().write(to: shadow.appendingPathComponent("auth.json"))
+    h.home = root.path
+    h.shadowHomes = FileShadowHomes()
+    await h.start()
+    let (transport, connection) = await h.client()
+    await h.send(connection, .launch([try launch(codexShadow)]))
+    #expect(transport.events().first == .launched(names: [atlas], created: [atlas], errors: []))
+    #expect(try FileManager.default.destinationOfSymbolicLink(atPath: shadow.appendingPathComponent("config.toml").path) == "\(codex)/config.toml")
+    let written = try #require(files(store).first)
+    #expect(try String(contentsOfFile: written, encoding: .utf8) == "CODEX_HOME=\(shadow.path)\nCODEX_SQLITE_HOME=\(codex)\n")
+  }
+
+  @Test func aCodexPrimaryNeverMakesOrChecksAShadowHome() async throws {
+    let (h, _) = try harness()
+    h.shadowHomes = FileShadowHomes()
+    await h.start()
+    let (transport, connection) = await h.client()
+    // The shared folder does not exist: a shadow check would fail, a primary never makes one.
+    let missing = FileManager.default.temporaryDirectory.appendingPathComponent("hivemindkit-\(UUID().uuidString)").path
+    let primary = LaunchAccount(id: "a4", driver: .codex, label: "Codex", homePath: missing, shadowPath: "")
+    await h.send(connection, .launch([try launch(primary)]))
+    #expect(transport.events().first == .launched(names: [atlas], created: [atlas], errors: []))
+    #expect(!FileManager.default.fileExists(atPath: missing))
+  }
+
+  @Test func aClaudeShadowIsRefusedUntilPhaseFour() async throws {
+    let (h, store) = try harness()
+    h.shadowHomes = FileShadowHomes()
+    await h.start()
+    let (transport, connection) = await h.client()
+    let claudeShadow = LaunchAccount(id: "a5", driver: .claude, label: "Claude work", homePath: "", shadowPath: "~/.claude_work")
+    await h.send(connection, .launch([try launch(claudeShadow), brokerLaunch(nil)]))
+    let second = SessionName("hm-acme-new-1")!
+    #expect(transport.events().first == .launched(
+      names: [nil, second], created: [second],
+      errors: [BrokerLaunchFailure(index: 0, code: .internal, message: "launches[0].account: Claude shadow accounts arrive in phase 4")]))
+    #expect(files(store).isEmpty)
+  }
+
+  /// Every entry under `folder`, links shown with their target, so a test can tell nothing changed.
+  func tree(_ folder: String) -> [String] {
+    let manager = FileManager.default
+    return ((try? manager.contentsOfDirectory(atPath: folder)) ?? []).sorted().map { name in
+      let path = folder + "/" + name
+      return (try? manager.destinationOfSymbolicLink(atPath: path)).map { "\(name) -> \($0)" } ?? name
+    }
+  }
+
+  @Test func prepareBuildsACodexShadowBeforeItsLoginThenReportsTheLoginAndTheLaunchStarts() async throws {
+    let (h, _) = try harness()
+    let (root, codex) = try fakeHome()
+    defer { try? FileManager.default.removeItem(at: root) }
+    try Data("model = \"gpt-5\"\n".utf8).write(to: URL(fileURLWithPath: "\(codex)/config.toml"))
+    try Data("{}\n".utf8).write(to: URL(fileURLWithPath: "\(codex)/history.jsonl"))
+    try Data("{}".utf8).write(to: URL(fileURLWithPath: "\(codex)/auth.json"))
+    h.home = root.path
+    h.shadowHomes = FileShadowHomes()
+    await h.start()
+    let (transport, connection) = await h.client()
+    await h.send(connection, .accountPrepare(account: codexShadow), id: "p1")
+    #expect(transport.take() == [BrokerEventFrame(id: "p1", .accountPrepared(AccountPreparation(loggedIn: false)))],
+            "the primary's auth.json is not the shadow's login")
+    let shadow = root.appendingPathComponent(".codex_work").path
+    #expect(tree(shadow) == ["config.toml -> \(codex)/config.toml", "history.jsonl -> \(codex)/history.jsonl",
+                             "sessions -> \(codex)/sessions", "thread-writer-locks -> \(codex)/thread-writer-locks"])
+    #expect(tree(codex) == ["auth.json", "config.toml", "history.jsonl", "sessions", "thread-writer-locks"])
+    #expect(h.logs.contains("[broker] account a1 (codex): prepare: not logged in"))
+    #expect(h.tmux.calls("new-session").isEmpty)
+
+    // A second Prepare changes nothing; the login Human then runs shows as Ready.
+    await h.send(connection, .accountPrepare(account: codexShadow), id: "p2")
+    #expect(transport.take() == [BrokerEventFrame(id: "p2", .accountPrepared(AccountPreparation(loggedIn: false)))])
+    #expect(tree(shadow).count == 4)
+    try Data("{}".utf8).write(to: URL(fileURLWithPath: "\(shadow)/auth.json"))
+    await h.send(connection, .accountPrepare(account: codexShadow), id: "p3")
+    #expect(transport.take() == [BrokerEventFrame(id: "p3", .accountPrepared(AccountPreparation(loggedIn: true)))])
+    await h.send(connection, .launch([try launch(codexShadow)]))
+    #expect(transport.events().first == .launched(names: [atlas], created: [atlas], errors: []))
+  }
+
+  @Test func prepareNamesWhatIsWrongWithAShadowAndItsFixAndTheConnectionStays() async throws {
+    let (h, _) = try harness()
+    let (root, codex) = try fakeHome()
+    defer { try? FileManager.default.removeItem(at: root) }
+    h.home = root.path
+    h.shadowHomes = FileShadowHomes()
+    await h.start()
+    let (transport, connection) = await h.client()
+    let config = URL(fileURLWithPath: "\(codex)/config.toml")
+    let shadow = root.appendingPathComponent(".codex_work")
+
+    try Data("cli_auth_credentials_store = \"keyring\"\n".utf8).write(to: config)
+    await h.send(connection, .accountPrepare(account: codexShadow), id: "keyring")
+    #expect(transport.take() == [BrokerEventFrame(id: "keyring", .accountPrepared(AccountPreparation(loggedIn: false, error:
+      "`\(codex)/config.toml` sets cli_auth_credentials_store = `keyring`; shadow accounts need `file` (or no setting).")))])
+    #expect(!FileManager.default.fileExists(atPath: shadow.path), "nothing is built on a keyring config")
+
+    // A copied home: its real sessions/ is a conflict, and its own login still shows.
+    try FileManager.default.removeItem(at: config)
+    try FileManager.default.createDirectory(at: shadow.appendingPathComponent("sessions"), withIntermediateDirectories: true)
+    try Data("{}".utf8).write(to: shadow.appendingPathComponent("auth.json"))
+    await h.send(connection, .accountPrepare(account: codexShadow), id: "copied")
+    #expect(transport.take() == [BrokerEventFrame(id: "copied", .accountPrepared(AccountPreparation(loggedIn: true, error:
+      "`\(shadow.path)/sessions` is a real file; HiveMind shares it from `\(codex)`. Move it away, then launch again.")))])
+    #expect(connection.isOpen)
+  }
+
+  @Test func prepareOnlyChecksAPrimarysLoginAndBuildsNothing() async throws {
+    let (h, _) = try harness()
+    let (root, codex) = try fakeHome()
+    defer { try? FileManager.default.removeItem(at: root) }
+    h.home = root.path
+    h.shadowHomes = FileShadowHomes()
+    await h.start()
+    let (transport, connection) = await h.client()
+    let primary = LaunchAccount(id: "a4", driver: .codex, label: "Codex", homePath: "", shadowPath: "")
+    await h.send(connection, .accountPrepare(account: primary), id: "none")
+    // A symlinked auth.json is no login either: only a regular file is.
+    try FileManager.default.createSymbolicLink(atPath: "\(codex)/auth.json", withDestinationPath: "\(root.path)/elsewhere.json")
+    await h.send(connection, .accountPrepare(account: primary), id: "link")
+    try FileManager.default.removeItem(atPath: "\(codex)/auth.json")
+    try Data("{}".utf8).write(to: URL(fileURLWithPath: "\(codex)/auth.json"))
+    await h.send(connection, .accountPrepare(account: primary), id: "file")
+    let missing = root.appendingPathComponent("nowhere").path
+    await h.send(connection, .accountPrepare(account: LaunchAccount(id: "a5", driver: .codex, label: "Codex elsewhere", homePath: missing,
+                                                                   shadowPath: "")), id: "missing")
+    #expect(transport.take() == [
+      BrokerEventFrame(id: "none", .accountPrepared(AccountPreparation(loggedIn: false))),
+      BrokerEventFrame(id: "link", .accountPrepared(AccountPreparation(loggedIn: false))),
+      BrokerEventFrame(id: "file", .accountPrepared(AccountPreparation(loggedIn: true))),
+      BrokerEventFrame(id: "missing", .accountPrepared(AccountPreparation(loggedIn: false))),
+    ])
+    #expect(tree(codex) == ["auth.json"], "a primary's home gets no folders")
+    #expect(!FileManager.default.fileExists(atPath: missing))
+  }
+
+  @Test func prepareRefusesClaudeUntilPhaseFourAndABrokerThatBuildsNoShadows() async throws {
+    let (h, _) = try harness()
+    h.shadowHomes = FileShadowHomes()
+    await h.start()
+    let (transport, connection) = await h.client()
+    await h.send(connection, .accountPrepare(account: LaunchAccount(id: "a5", driver: .claude, label: "Claude work", homePath: "",
+                                                                   shadowPath: "~/.claude_work")), id: "shadow")
+    await h.send(connection, .accountPrepare(account: claudePrimary), id: "primary")
+    #expect(transport.take() == [
+      BrokerEventFrame(id: "shadow", .accountPrepared(AccountPreparation(loggedIn: false, error: "Claude shadow accounts arrive in phase 4"))),
+      BrokerEventFrame(id: "primary", .accountPrepared(AccountPreparation(loggedIn: false, error: "Preparing Claude accounts arrives in phase 4"))),
+    ])
+
+    let bare = BrokerHarness()
+    await bare.start()
+    let (other, client) = await bare.client()
+    await bare.send(client, .accountPrepare(account: codexShadow), id: "x")
+    #expect(other.take() == [BrokerEventFrame(id: "x", .accountPrepared(AccountPreparation(loggedIn: false, error: "this broker cannot prepare accounts")))])
   }
 
   @Test func withoutAStoreAnAccountWithVariablesFailsAndRunsNothing() async throws {

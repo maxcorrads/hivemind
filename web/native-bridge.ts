@@ -341,7 +341,12 @@ export type TerminalMessage =
   | { type: "template-secrets-list"; id: string; template: string }
   | { type: "template-secrets-set"; id: string; template: string; name: string; value: string }
   /** `name` null: every secret of the template. */
-  | { type: "template-secrets-delete"; id: string; template: string; name: string | null };
+  | { type: "template-secrets-delete"; id: string; template: string; name: string | null }
+  /**
+   * The Accounts sheet's Prepare (docs/accounts.md#sheet): Hivemind Server.app builds a shadow's folder and links before
+   * its login, and checks a primary's login. Paths as stored: the app expands their `~/`. Answered with account-prepared.
+   */
+  | { type: "account-prepare"; id: string; account: LaunchAccount };
 
 export type TerminalSessionInfo = {
   name: string;
@@ -378,6 +383,8 @@ export type TerminalEvent =
   | { type: "template-secrets"; id: string | null; template: string; names: string[] }
   /** The broker relayed a signed Human decision to the launcher channel. */
   | { type: "launcher-decided"; id: string; requestId: string; action: "approve" | "reject" }
+  /** The answer to account-prepare: `error` (never a token or file contents) exactly when not `ok`. */
+  | { type: "account-prepared"; id: string | null; ok: boolean; loggedIn: boolean; error?: string }
   /** `code` is a BrokerErrorCode (bad-message, no-such-session, tmux-missing, …). */
   | { type: "terminal-error"; id: string | null; code: string; message: string; stream: number | null };
 
@@ -468,6 +475,12 @@ export function parseTerminalEvent(detail: unknown): TerminalEvent | null {
       return id !== null && typeof detail.requestId === "string" && detail.requestId.length > 0 &&
         (detail.action === "approve" || detail.action === "reject")
         ? { type: "launcher-decided", id, requestId: detail.requestId, action: detail.action } : null;
+    case "account-prepared": {
+      const { ok, loggedIn, error } = detail;
+      if (typeof ok !== "boolean" || typeof loggedIn !== "boolean") return null;
+      if (ok) return error === undefined || error === null ? { type: "account-prepared", id, ok, loggedIn } : null;
+      return typeof error === "string" ? { type: "account-prepared", id, ok, loggedIn, error } : null;
+    }
     case "terminal-error": {
       const stream = nullableStream(detail.stream);
       return typeof detail.code === "string" && typeof detail.message === "string" && stream !== undefined
@@ -530,8 +543,8 @@ const CONTROL = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
 /** Bytes of an account id, at most (HivemindKit LaunchAccount.maxIDBytes). */
 const ACCOUNT_ID_MAX_BYTES = 64;
 
-/** Why the app would refuse a launch's account (HivemindKit LaunchAccount.validate), or null. */
-function launchAccountProblem(value: unknown): string | null {
+/** Why the app would refuse a launch's or a Prepare's account (HivemindKit LaunchAccount.validate), or null. */
+export function launchAccountProblem(value: unknown): string | null {
   if (!isRecord(value)) return "Not a Codex or Claude account";
   const { id, driver, label, homePath, shadowPath } = value;
   if (typeof id !== "string" || !id || utf8Length(id) > ACCOUNT_ID_MAX_BYTES || typeof driver !== "string" ||

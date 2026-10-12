@@ -32,7 +32,7 @@ public final class TerminalBroker {
     /// The Mac's home, which a launch's `~/` account paths are expanded with.
     public var home: String
     /// Builds an account's own directory before a session runs under it;
-    /// NoShadowHomes until shadow directories exist (docs/accounts.md).
+    /// NoShadowHomes by default; Server.app gives FileShadowHomes (docs/accounts.md).
     public var shadowHomes: any ShadowHomePreparing
     /// Never given a secret or a variable's value: the broker logs names,
     /// counts and paths only.
@@ -281,6 +281,68 @@ public final class TerminalBroker {
   }
 }
 
+/// Whether a Codex thread is open in another process (docs/accounts.md, "Live sessions"). An open thread holds an
+/// exclusive flock on `<shared home>/thread-writer-locks/<id>.lock`; the probe is Codex's own, under its
+/// `.coordination.lock`. Only `resume <id>` in a Codex launch is checked: `--last` and names are not, and `fork` never is.
+/// Codex refuses a second writer by itself, so this only makes the refusal clearer.
+public struct CodexThreadLock {
+  /// The folder Codex keeps its writer locks in.
+  public let directory: String
+
+  public init(home: String) {
+    directory = home + "/thread-writer-locks"
+  }
+
+  /// The thread a launch command resumes by id (`codex resume <uuid>`, `codex exec resume <uuid>`), or nil. The command
+  /// must name Codex: `claude --resume <uuid>` is not checked.
+  public static func resumedThread(in command: String) -> String? {
+    let words = command.split(whereSeparator: \.isWhitespace)
+    guard words.contains(where: { $0 == "codex" || $0.hasSuffix("/codex") }) else { return nil }
+    let uuid = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/
+    return zip(words, words.dropFirst()).first { $0.0 == "resume" && $0.1.wholeMatch(of: uuid) != nil }.map { String($0.1) }
+  }
+
+  /// The shared Codex home a launch's threads live in: its Codex account's `homePath` (empty: ~/.codex), with a leading
+  /// `~/` expanded with `home`, compared by scalar as LaunchAccount does. A launch with no Codex account uses ~/.codex.
+  public static func sharedHome(for account: LaunchAccount?, home: String) -> String {
+    var path = LaunchAccount.Driver.codex.defaultHome
+    if let account, account.driver == .codex, !account.homePath.isEmpty { path = account.homePath }
+    guard path.unicodeScalars.starts(with: "~/".unicodeScalars) else { return path }
+    return (home.hasSuffix("/") ? String(home.dropLast()) : home) + String(path.unicodeScalars.dropFirst())
+  }
+
+  /// True while another process holds the thread's lock. False when none does, or when the folder is missing (no thread
+  /// is open in it). Throws when a file cannot be opened or locked, so the launch is refused rather than run unchecked.
+  /// Both files are close-on-exec: a child spawned meanwhile must not inherit, and keep, either lock.
+  public func isOpen(_ id: String) throws -> Bool {
+    let coordinationPath = directory + "/.coordination.lock"
+    let coordination = open(coordinationPath, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+    if coordination < 0 {
+      if errno == ENOENT { return false }
+      throw Self.failure(coordinationPath, errno)
+    }
+    defer { close(coordination) }
+    guard flock(coordination, LOCK_EX) == 0 else { throw Self.failure(coordinationPath, errno) }
+    let threadPath = directory + "/\(id).lock"
+    let thread = open(threadPath, O_RDWR | O_CLOEXEC)
+    if thread < 0 {
+      if errno == ENOENT { return false }
+      throw Self.failure(threadPath, errno)
+    }
+    defer { close(thread) }
+    if flock(thread, LOCK_EX | LOCK_NB) == 0 {
+      flock(thread, LOCK_UN)
+      return false
+    }
+    guard errno == EWOULDBLOCK else { throw Self.failure(threadPath, errno) }
+    return true
+  }
+
+  private static func failure(_ path: String, _ code: Int32) -> BrokerProtocolError {
+    BrokerProtocolError(.internal, "Cannot check `\(path)`: \(String(cString: strerror(code)))")
+  }
+}
+
 /// One client of the broker, whatever transport carries it. The transport
 /// reports its bytes here; everything the broker answers goes back through
 /// the transport's `send`.
@@ -420,6 +482,8 @@ public final class BrokerConnection {
         try Self.vaultCall { () throws(BrokerFiles.Failure) in try vault.delete(name: name, for: template) }
         broker?.deps.log("[broker] template \(template): deleted \(name.map { "secret \($0)" } ?? "every secret")")
       }
+    case .accountPrepare(let account):
+      prepareAccount(account, id: id)
     case .sessionsList, .sessionsSubscribe, .sessionsUnsubscribe, .launch, .attach, .kill,
          .launcherApprove, .launcherReject:
       enqueue(frame)
@@ -441,6 +505,17 @@ public final class BrokerConnection {
       if error.code == .internal { broker?.deps.log("[broker] template \(template): \(error.message)") }
       send(.error(error), id: id)
     }
+  }
+
+  /// The Accounts sheet's Prepare, answered at once (it runs no tmux): the
+  /// account's directory is built before its login, and the answer says
+  /// whether it is logged in, or names what is wrong and its fix.
+  private func prepareAccount(_ account: LaunchAccount, id: String?) {
+    guard let broker else { return }
+    let preparation = broker.deps.shadowHomes.prepareForLogin(account, home: broker.deps.home)
+    let outcome = preparation.error ?? (preparation.loggedIn ? "ready" : "not logged in")
+    broker.deps.log("[broker] account \(account.id) (\(account.driver.rawValue)): prepare: \(outcome)")
+    send(.accountPrepared(preparation), id: id)
   }
 
   private static func vaultCall<T>(_ work: () throws(BrokerFiles.Failure) -> T) throws(BrokerProtocolError) -> T {
@@ -493,7 +568,7 @@ public final class BrokerConnection {
       await decide(requestId: requestId, templateId: templateId, approve: true, id: id)
     case .launcherReject(let requestId):
       await decide(requestId: requestId, templateId: nil, approve: false, id: id)
-    case .hello, .input, .resize, .detach, .secretsList, .secretsSet, .secretsDelete:
+    case .hello, .input, .resize, .detach, .secretsList, .secretsSet, .secretsDelete, .accountPrepare:
       break
     }
   }
@@ -561,6 +636,23 @@ public final class BrokerConnection {
         // Reused: nothing runs, so its secrets and variables (if any) are never written.
         results.append(name)
         continue
+      }
+      // A Codex thread another process has open is not resumed here (docs/accounts.md, "Live sessions"). Checked before the
+      // launch file is written, so a refused item leaves no secrets behind.
+      if let thread = CodexThreadLock.resumedThread(in: launch.command) {
+        do {
+          let lock = CodexThreadLock(home: CodexThreadLock.sharedHome(for: launch.account, home: broker.deps.home))
+          if try lock.isOpen(thread) {
+            results.append(nil)
+            let message = "Codex thread `\(thread)` is already open in another process. Close it there, or start a new session."
+            errors.append(BrokerLaunchFailure(index: index, code: .internal, message: "launches[\(index)].command: \(message)"))
+            continue
+          }
+        } catch {
+          results.append(nil)
+          errors.append(BrokerLaunchFailure(index: index, code: .internal, message: "launches[\(index)].command: \(error.localizedDescription)"))
+          continue
+        }
       }
       // The account the session runs under (docs/accounts.md): its variables join the launch file, and the controlled
       // names it does not set are unset by the script. A conflict or a shadow that cannot be built fails only this item.

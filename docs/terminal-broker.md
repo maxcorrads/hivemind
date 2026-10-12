@@ -324,6 +324,7 @@ speaks. The broker answers with `min(client, broker)`, or with
 | `secrets.list` | `template` id | `secrets` |
 | `secrets.set` | `template` id, `name`, `value` | `secrets` |
 | `secrets.delete` | `template` id, `name`? (absent or null: every secret of the template) | `secrets` |
+| `account.prepare` | `account`: as a launch's `account` below, required | `account.prepared` |
 
 A launch is:
 
@@ -351,6 +352,7 @@ A launch is:
 | `exit` | `stream`, `status` int or null. The stream is over: detached, the session ended, or its tmux client exited. |
 | `killed` | `session` |
 | `secrets` | `template`, `names`: the template's secret names after the request, sorted; never a value |
+| `account.prepared` | `ok` boolean, `loggedIn` boolean, `error` string exactly when `ok` is false. See [Preparing an account](#preparing-an-account). |
 | `error` | `code`, `message`, `stream`? |
 
 Error codes (`BrokerErrorCode`):
@@ -603,11 +605,11 @@ it unsets all five Claude names.
 
 **Shadow accounts.** Before the session of a created launch starts, the broker
 prepares the account's own directory (`ShadowHomePreparing`). A failure refuses
-that item alone, with `internal` and `launches[<i>].account: <reason>`. Until
-shadow directories are built (phases 3 and 4 of
-[#319](https://github.com/maxcorrads/hivemind/issues/319)), `NoShadowHomes`
-refuses every shadow with "Shadow accounts are not supported yet". A primary
-account launches as above.
+that item alone, with `internal` and `launches[<i>].account: <reason>`. A Codex
+shadow is built from its shared home (`FileShadowHomes`); its messages and fixes
+are in [Codex shadow](accounts.md#codex-shadow). A Claude shadow is refused until
+phase 4 of [#319](https://github.com/maxcorrads/hivemind/issues/319) with "Claude
+shadow accounts arrive in phase 4". A primary account launches as above.
 
 **Reused sessions with an account.** A reused session is not checked against
 its account: nothing runs, nothing is written, and it keeps the account it
@@ -639,6 +641,22 @@ the Node server. `secrets.set`, `secrets.delete` and `secrets.list` are answered
   command separately, so whoever may launch (anything holding the token, or a page the app trusts; see
   [Security notes](#security-notes)) can start any command with a template's secrets in its environment: the same
   trust the broker already gives such a client over every terminal.
+
+## Preparing an account
+
+The Accounts sheet's **Prepare** ([accounts](accounts.md#sheet)) sends `account.prepare` before Human runs an
+account's login command. It is answered at once (it runs no tmux) with `account.prepared`:
+
+- a Codex shadow is checked and built as before a launch, except that its folder is created (0700) when missing and no
+  login is required yet; `error` is the reason it is not ready, naming the fix, and `loggedIn` is whether the shadow's
+  `auth.json` is a regular file ([Codex shadow](accounts.md#codex-shadow) has the rules and every message);
+- a primary account is only checked: nothing is created, and `loggedIn` says whether `<home>/auth.json` is a regular
+  file;
+- a Claude account answers `ok: false` until phase 4, and a broker that builds no shadows answers `ok: false` with
+  "this broker cannot prepare accounts".
+
+The only file read is the shared `config.toml`, up to its first table; `error` never holds a token or file contents.
+A bad `account` is refused with `bad-message`, as in a launch.
 
 ## Clients
 
@@ -733,6 +751,7 @@ Page → app (`window.webkit.messageHandlers.hivemind.postMessage`):
 | `terminal-kill` (batch) | `id`?, `sessions`: 1–24 names | **Terminate all**, after its confirm modal. Instead of `session`, never with it; every name must be a Hivemind session name or the message is dropped, and repeats are dropped. The app sends the broker one `kill` after another (a failure does not stop the rest) and answers once. The batch counts as one request against the kill throttle; the page sends more than 24 in batches a second apart (`TerminalHub.killAll`). |
 | `sessions-subscribe` / `sessions-unsubscribe` | none | Subscribing also sends `terminal-status` |
 | `template-secrets-list` / `-set` / `-delete` | `id`?, `template`, and `name`, `value` / `name`? as the broker's `secrets.*` | [Template secrets](#template-secrets); answered with `template-secrets`. A page of an unverified server is answered `unauthorized`. |
+| `account-prepare` | `id`?, `account`: `{id, driver, label, homePath, shadowPath}` | [Preparing an account](#preparing-an-account); answered with `account-prepared`. The account is checked as a launch's and its paths go as stored. A page of an unverified server is answered `unauthorized`. |
 
 App → page: `window.dispatchEvent(new CustomEvent("hivemind:terminal", {detail}))`
 (`TERMINAL_EVENT`; `parseTerminalEvent` reads the detail):
@@ -747,6 +766,7 @@ App → page: `window.dispatchEvent(new CustomEvent("hivemind:terminal", {detail
 | `terminal-exit` | `stream`, `status` |
 | `terminal-killed` | `id`, `session`; or, answering a batch `terminal-kill`, `id`, `sessions` (the names that ended, in order) and `errors`: `[{session, code, message}]` (`no-such-session` for one that had already ended) |
 | `template-secrets` | `id`, `template`, `names` |
+| `account-prepared` | `id`, `ok`, `loggedIn`, and `error` when `ok` is false |
 | `terminal-error` | `id`, `code`, `message`, `stream` |
 
 `terminal-status` is sent on every `sessions-subscribe`, and then on every
