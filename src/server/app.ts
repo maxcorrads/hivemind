@@ -413,7 +413,8 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     return c.json({ ok: true });
   });
   // The named account catalog (docs/accounts.md). Order and policy are registered before /accounts/:id, which would match them.
-  ui.get('/accounts', c => c.json(hive.accounts.list()));
+  // Each account's latest usage rides along; an account with no entry has no snapshot yet.
+  ui.get('/accounts', c => c.json({ ...hive.accounts.list(), usage: hive.accountUsage.list() }));
   ui.post('/accounts', async c => c.json(hive.accounts.create(hive.identity.getAgent('human'), await requestJson(c.req.raw)), 201));
   ui.put('/accounts/order', async c => {
     const body = await requestJson(c.req.raw);

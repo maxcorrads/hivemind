@@ -199,6 +199,27 @@ struct ShadowHomeTests {
     }
   }
 
+  // #319's test plan: a copied full home is rejected, since it would make both accounts look like the same login.
+  @Test func aCopiedHomeIsRefusedAndLeftAsItWas() throws {
+    try withTrees { t in
+      for folder in [t.home, t.shadow] {
+        try t.file(folder + "/auth.json", "primary-login")
+        try t.file(folder + "/config.toml", "model = \"x\"\n")
+        try t.file(folder + "/history.jsonl")
+        try t.file(folder + "/sessions/2026/10/12/rollout.jsonl")
+        try t.folder(folder + "/thread-writer-locks")
+        try t.file(folder + "/state_5.sqlite", "database")
+      }
+      let before = try snapshot(t)
+
+      #expect(throws: ShadowHomeError(path: t.inShadow("config.toml"),
+                                      message: "`\(t.inShadow("config.toml"))` is a real file; HiveMind shares it from `\(t.home)`. Move it away, then launch again.")) {
+        try t.materialize(requireLogin: true)
+      }
+      #expect(try snapshot(t) == before, "nothing is linked, moved or written in either tree")
+    }
+  }
+
   @Test func anUnknownNameIsAConflictOnlyWhenBothTreesHaveIt() throws {
     try withTrees { t in
       try t.folder(t.home)

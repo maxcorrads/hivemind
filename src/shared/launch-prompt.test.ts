@@ -11,6 +11,7 @@ import {
   buildLaunchBlock,
   buildLaunchPrompt,
   buildRosterPaste,
+  CLAUDE_SETTINGS_FLAG,
   codexSessionTitle,
   sanitizeExtraFlags,
   sanitizeModel,
@@ -140,7 +141,7 @@ test("one block cds then runs the alias with a literal prompt", () => {
 
 test("cd toggle off skips the worktree", () => {
   const block = buildLaunchBlock({ ...base, cdWorktree: false, software: "claude" });
-  assert.ok(block.startsWith("HIVEMIND_ROLE='brain' claude '"));
+  assert.ok(block.startsWith(`HIVEMIND_ROLE='brain' claude ${CLAUDE_SETTINGS_FLAG} '`));
   assert.equal(block.includes("cd "), false);
 });
 
@@ -160,7 +161,9 @@ test("Claude launch requests eager loading only for Hivemind without changing pe
         // Capture argv using a shell function, never launch the real model.
         const capture = `function ${software}() { ${shSingleQuote(process.execPath)} -e 'console.log(JSON.stringify(process.argv.slice(1)))' -- "$@"; }\n`;
         const shell = process.platform === "darwin" ? "zsh" : "/bin/bash";
-        const result = spawnSync(shell, ["-f"], { input: capture + block, encoding: "utf8", env: childEnv() });
+        // As outside a session the broker started with a Claude account, which would add --settings.
+        const env = childEnv({ ...process.env, HIVEMIND_CLAUDE_SETTINGS: undefined });
+        const result = spawnSync(shell, ["-f"], { input: capture + block, encoding: "utf8", env });
         assert.equal(result.status, 0, result.stderr);
         const argv = JSON.parse(result.stdout) as string[];
         assert.deepEqual(argv.slice(0, 3), ["--mcp-config", JSON.stringify({
@@ -175,6 +178,27 @@ test("Claude launch requests eager loading only for Hivemind without changing pe
   assert.deepEqual(binding, original);
   for (const software of ["codex", "agent", "opencode"]) {
     assert.doesNotMatch(buildLaunchBlock({ ...base, software, hivemindMcp: binding }), /alwaysLoad|--mcp-config/);
+  }
+});
+
+test("exactly claude passes --settings only when the broker sets HIVEMIND_CLAUDE_SETTINGS, in zsh and bash", () => {
+  const settings = "/Users/me/Library/Application Support/Hivemind/accounts/a1/settings.json";
+  const input = { ...base, software: "claude", model: "opus", cdWorktree: false };
+  const block = buildLaunchBlock(input);
+  assert.ok(block.startsWith(`HIVEMIND_ROLE='brain' claude ${CLAUDE_SETTINGS_FLAG} --model opus '`));
+  // Capture argv using a shell function, never launch the real model.
+  const capture = `function claude() { ${shSingleQuote(process.execPath)} -e 'console.log(JSON.stringify(process.argv.slice(1)))' -- "$@"; }\n`;
+  const shells = process.platform === "darwin" ? [["zsh", "-f"], ["zsh", "-f", "-o", "shwordsplit"], ["/bin/bash", "-f"]] : [["/bin/bash", "-f"]];
+  for (const [value, flag] of [[settings, ["--settings", settings]], ["", []], [undefined, []]] as const) {
+    for (const [shell, ...args] of shells) {
+      const env = childEnv({ ...process.env, HIVEMIND_CLAUDE_SETTINGS: value });
+      const result = spawnSync(shell, args, { input: capture + block, encoding: "utf8", env });
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), [...flag, "--model", "opus", buildLaunchPrompt(input)], `${shell} ${args.join(" ")}`);
+    }
+  }
+  for (const software of ["claude-tw", "bin/claude", "codex", "opencode", "agent"]) {
+    assert.doesNotMatch(buildLaunchBlock({ ...base, software }), /HIVEMIND_CLAUDE_SETTINGS/);
   }
 });
 

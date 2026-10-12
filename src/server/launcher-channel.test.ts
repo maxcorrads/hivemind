@@ -451,3 +451,64 @@ test("a pin to an account that was removed fails the queued launch", async t => 
   queueLaunch(f, pinned);
   assert.throws(() => takeLaunch(f), { message: "The pinned account no longer exists" });
 });
+
+/** A usage snapshot as Server.app posts it; `overrides` replaces any field. */
+const usageSnapshot = (accountId: string, overrides: Record<string, unknown> = {}) => ({ accountId, capturedAt: Date.now(),
+  source: "codex", plan: "subscription", windows: [{ key: "codex.primary", label: "5 h", usedPercent: 40, resetsAt: Date.now() + 3_600_000 }],
+  error: null, limitErrorAt: null, ...overrides });
+
+test("launcher accounts and usage refuse an unsigned request exactly as /next does", async t => {
+  const f = fixture(t);
+  const answer = async (response: Response) => ({ status: response.status, body: await response.json() });
+  const next = await answer(await f.app.request("/api/launcher/next?timeoutMs=0"));
+  const accounts = await answer(await f.app.request("/api/launcher/accounts"));
+  const usage = await answer(await f.app.request("/api/launcher/usage", { method: "POST",
+    headers: { "content-type": "application/json" }, body: JSON.stringify({ snapshots: [] }) }));
+  assert.equal(next.status, 401);
+  assert.deepEqual(accounts, next);
+  assert.deepEqual(usage, next);
+  const unavailable = createApp(f.hive);
+  assert.equal((await unavailable.request("/api/launcher/accounts")).status, 404);
+  assert.equal((await unavailable.request("/api/launcher/usage", { method: "POST", body: "{}" })).status, 404);
+});
+
+test("signed accounts list answers each catalog entry as a LaunchAccount and nothing more", async t => {
+  const f = fixture(t);
+  assert.deepEqual(await (await f.signed("GET", "/api/launcher/accounts")).json(), { accounts: [] });
+  const work = f.hive.accounts.create(f.human, { driver: "codex", label: "Codex work", homePath: "~/.codex-work", shadowPath: "" });
+  const personal = f.hive.accounts.create(f.human, { driver: "claude", label: "Claude personal", homePath: "", shadowPath: "~/.claude-personal" });
+  const response = await f.signed("GET", "/api/launcher/accounts");
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { accounts: [toLaunchAccount(personal), toLaunchAccount(work)] });
+});
+
+test("signed usage post stores snapshots, refuses unknown keys, sizes and accounts, and an error keeps the windows", async t => {
+  const f = fixture(t);
+  const work = f.hive.accounts.create(f.human, { driver: "codex", label: "Codex work", homePath: "~/.codex-work", shadowPath: "" });
+  const post = (body: unknown) => f.signed("POST", "/api/launcher/usage", body);
+  assert.equal((await post({ snapshots: [], extra: true })).status, 400);
+  assert.equal((await post({ snapshots: [usageSnapshot(work.id, { extra: true })] })).status, 400);
+  assert.equal((await post({ snapshots: Array.from({ length: 17 }, () => usageSnapshot(work.id)) })).status, 400);
+  assert.equal((await post({ snapshots: [usageSnapshot(work.id), usageSnapshot("missing-account")] })).status, 404);
+  assert.deepEqual(f.hive.accountUsage.list(), [], "a refused batch stores nothing");
+
+  const good = usageSnapshot(work.id);
+  assert.equal((await post({ snapshots: [good] })).status, 200);
+  assert.deepEqual(f.hive.accountUsage.map().get(work.id)?.snapshot?.windows, good.windows);
+
+  const failed = usageSnapshot(work.id, { capturedAt: good.capturedAt + 60_000, windows: [], error: "Usage read failed" });
+  assert.equal((await post({ snapshots: [failed] })).status, 200);
+  const usage = f.hive.accountUsage.map().get(work.id)!;
+  assert.deepEqual(usage.snapshot?.windows, good.windows, "an error keeps the previous windows");
+  assert.equal(usage.snapshot?.capturedAt, good.capturedAt);
+  assert.equal(usage.lastError, "Usage read failed");
+  assert.equal(usage.lastAttemptAt, failed.capturedAt);
+
+  const windows = Array.from({ length: 8 }, (_, n) => ({ key: `codex.window${n}`, label: `Window ${n} label`, usedPercent: n * 10, resetsAt: null }));
+  const sixteen = { snapshots: Array.from({ length: 16 }, () => usageSnapshot(work.id, { windows })) };
+  assert.ok(JSON.stringify(sixteen).length > 4096, "the usage post carries more than the 4 KiB launcher limit");
+  assert.equal((await post(sixteen)).status, 200);
+  assert.equal((await post({ snapshots: [], padding: "x".repeat(64 * 1024) })).status, 413);
+  assert.equal((await f.signed("POST", "/api/launcher/requests/none/reject", { padding: "x".repeat(5000) })).status, 413,
+    "the 4 KiB limit still applies to the other launcher routes");
+});

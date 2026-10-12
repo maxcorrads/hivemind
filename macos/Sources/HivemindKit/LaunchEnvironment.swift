@@ -37,7 +37,8 @@ public struct LaunchEnvironment: Equatable, Sendable {
     try self.init(values, field: "environment")
   }
 
-  init(_ values: [String: String], field: String) throws(BrokerProtocolError) {
+  /// `brokerNames` are the broker's own variables, which pass the denied names (ClaudeStatusTap.variable).
+  init(_ values: [String: String], field: String, brokerNames: Set<String> = []) throws(BrokerProtocolError) {
     guard !values.isEmpty else { throw .invalid(field, "must name at least one variable") }
     guard values.count <= Self.maxVariables else { throw .invalid(field, "must hold at most \(Self.maxVariables) variables") }
     var total = 0
@@ -45,7 +46,7 @@ public struct LaunchEnvironment: Equatable, Sendable {
       guard Self.isValidName(name) else {
         throw .invalid(field, "a name is letters, digits and _, starts with a letter or _, and has at most \(Self.maxNameCharacters) characters")
       }
-      guard !Self.isDenied(name) else { throw .invalid("\(field).\(name)", "cannot be set by a launch") }
+      guard brokerNames.contains(name) || !Self.isDenied(name) else { throw .invalid("\(field).\(name)", "cannot be set by a launch") }
       let value = values[name]!
       guard Self.isValidValue(value) else {
         throw .invalid("\(field).\(name)", "must be at most \(Self.maxValueBytes) bytes without control characters")

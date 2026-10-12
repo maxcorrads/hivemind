@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { ROUTINE_BATCH_MS } from "../shared/notifications.ts";
 import { AccountStore } from "./accounts.ts";
+import { AccountUsageStore } from "./account-usage.ts";
 import { WorkerTemplateStore } from "./worker-templates.ts";
 import { LauncherQueue } from "./launcher-queue.ts";
 import { AgentActivityService } from './services/agent-activity.ts';
@@ -63,6 +64,7 @@ type ServiceRegistry = Core & {
   uploads: UploadBudget;
   workerTemplates: WorkerTemplateStore;
   accounts: AccountStore;
+  accountUsage: AccountUsageStore;
   launcherQueue: LauncherQueue;
   workerOrchestration: WorkerOrchestration;
   jobs: JobStore;
@@ -126,6 +128,7 @@ export class Hive {
   readonly routing!: RoutingStore;
   readonly workerTemplates!: WorkerTemplateStore;
   readonly accounts!: AccountStore;
+  readonly accountUsage!: AccountUsageStore;
   readonly launcherQueue!: LauncherQueue;
   readonly workerOrchestration!: WorkerOrchestration;
   readonly jobs!: JobStore;
@@ -160,7 +163,9 @@ export class Hive {
       this.telegramAdmin = services.telegramAdmin = new TelegramAdminService(services);
       this.files = services.files = new FileService(services);
       this.workerTemplates = services.workerTemplates = new WorkerTemplateStore(services);
-      this.accounts = services.accounts = new AccountStore(services);
+      this.accountUsage = services.accountUsage = new AccountUsageStore(services);
+      // The policy reads the same stored usage snapshots as the Accounts sheet (docs/accounts.md, "Usage").
+      this.accounts = services.accounts = new AccountStore(services, () => this.accountUsage.map());
       this.lifecycleLog = services.lifecycleLog = new AgentLifecycleLog(services);
       this.launcherQueue = services.launcherQueue = new LauncherQueue(services);
       this.projects = services.projects = new ProjectService(services);

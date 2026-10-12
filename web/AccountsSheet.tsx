@@ -1,8 +1,9 @@
 import { ArrowDown, ArrowUp, Copy, FolderCog, Pencil, Plus, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ACCOUNT_DRIVERS, ACCOUNT_LIMITS, ACCOUNT_POLICIES, accountLoginCommand, accountPathProblem, type AccountDriver,
-  toLaunchAccount, type AccountPolicy, type AgentAccount } from "../src/shared/accounts.ts";
+  toLaunchAccount, type AccountPolicy, type AccountUsage as Usage, type AgentAccount } from "../src/shared/accounts.ts";
 import { api, type AccountsView } from "./api.ts";
+import { AccountUsage, useNow } from "./AccountUsage.tsx";
 import { Modal } from "./Modal.tsx";
 import { terminalHub, type AccountPreparation } from "./use-terminal.ts";
 
@@ -28,6 +29,9 @@ const errorText = (failure: unknown) => String((failure as Error)?.message || fa
  */
 export function AccountsSheet({ tick = 0, onClose }: { tick?: number; onClose: () => void }) {
   const [view, setView] = useState<AccountsView | null>(null);
+  // Each account's latest usage, read with the catalog; a change or an accounts event brings a newer one.
+  const [usage, setUsage] = useState<Usage[]>([]);
+  const now = useNow();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [adding, setAdding] = useState<AccountDriver | null>(null);
@@ -42,7 +46,7 @@ export function AccountsSheet({ tick = 0, onClose }: { tick?: number; onClose: (
     let active = true;
     setError("");
     api.accounts()
-      .then(result => { if (active) setView(result); })
+      .then(result => { if (active) { setView(result); setUsage(result.usage); } })
       .catch(failure => { if (active) setError(errorText(failure)); });
     return () => { active = false; };
   }, [tick, reload]);
@@ -173,6 +177,7 @@ export function AccountsSheet({ tick = 0, onClose }: { tick?: number; onClose: (
                           </button>
                         </div>
                         <PreparedStatus account={account} prepared={preparedFor(account)} />
+                        <AccountUsage usage={usage.find(item => item.accountId === account.id)} now={now} />
                       </>)}
                     </li>
                   ))}

@@ -53,7 +53,14 @@ one reserves nothing and the sheet says why: the pinned account was removed or e
 secret name of the template that the account manages disables both and shows the conflict. A pin wins even when its
 account is used up: the worker starts and, on the Mac, the sheet shows the account's warning. **Reserve and copy**
 copies the command with no account. A brain's approved request chooses its account the same way; if none can take it,
-the request stays queued. See [Choosing an account](accounts.md#choosing-an-account).
+the request stays queued and is tried again on each poll, so it starts once the first reset has passed. See
+[Choosing an account](accounts.md#choosing-an-account).
+
+"Used up" comes from the account's stored usage, which the Accounts sheet shows too ([Usage](accounts.md#usage)): an
+account without a read yet is never used up. A worker of a Claude template that runs under an account also feeds that
+account's usage: its session gets Hivemind's status-line tap, which shows the account's own status line but not one set
+in the project's `.claude/settings.json` or `.claude/settings.local.json`
+([Claude status-line tap](accounts.md#claude-status-line-tap)).
 
 ## Secrets
 

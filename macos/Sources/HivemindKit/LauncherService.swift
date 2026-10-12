@@ -22,6 +22,34 @@ public protocol LauncherHTTP: Sendable {
   func send(_ request: URLRequest) async throws -> (status: Int, body: Data)
 }
 
+// The two calls every launcher-channel client makes (LauncherService, UsageProbeService).
+extension LauncherHTTP {
+  /// Whether the server answers its instance proof with `server`'s secret.
+  func verifies(_ server: LauncherService.Server) async -> Bool {
+    let nonce = InstanceNonce.generate()
+    do {
+      var request = URLRequest(url: server.endpoint.instanceURL(nonce: nonce), timeoutInterval: 3)
+      request.httpMethod = "GET"
+      let (status, data) = try await send(request)
+      return InstanceVerifier.interpret(status: status, body: data, secret: server.secret,
+                                        nonce: nonce, port: server.endpoint.port) == .verified
+    } catch { return false }
+  }
+
+  /// A request to `path` (with its leading `/`) of `server`, signed with its secret (LauncherProof).
+  func signed(_ server: LauncherService.Server, method: String, path: String, body: Data?, timeout: TimeInterval,
+              now: Date) async throws -> (Int, Data) {
+    let url = URL(string: String(path.dropFirst()), relativeTo: server.endpoint.baseURL)!.absoluteURL
+    var request = URLRequest(url: url, timeoutInterval: timeout)
+    request.httpMethod = method
+    request.httpBody = body
+    if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
+    LauncherProof.sign(&request, secret: server.secret, now: now)
+    let (status, data) = try await send(request)
+    return (status, data)
+  }
+}
+
 /// An ephemeral session never sends Human cookies to the launcher channel.
 public struct URLSessionLauncherHTTP: LauncherHTTP {
   private let session: URLSession
@@ -258,25 +286,11 @@ public struct LauncherApproval: Decodable, Equatable, Sendable {
   }
 
   private func verify(_ current: Server) async -> Bool {
-    let nonce = InstanceNonce.generate()
-    do {
-      var request = URLRequest(url: current.endpoint.instanceURL(nonce: nonce), timeoutInterval: 3)
-      request.httpMethod = "GET"
-      let (status, data) = try await http.send(request)
-      return InstanceVerifier.interpret(status: status, body: data, secret: current.secret,
-                                        nonce: nonce, port: current.endpoint.port) == .verified && server() == current
-    } catch { return false }
+    await http.verifies(current) && server() == current
   }
 
   private func signed(_ current: Server, method: String, path: String, body: Data?, timeout: TimeInterval) async throws -> (Int, Data) {
-    let url = URL(string: String(path.dropFirst()), relativeTo: current.endpoint.baseURL)!.absoluteURL
-    var request = URLRequest(url: url, timeoutInterval: timeout)
-    request.httpMethod = method
-    request.httpBody = body
-    if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
-    LauncherProof.sign(&request, secret: current.secret, now: now())
-    let (status, data) = try await http.send(request)
-    return (status, data)
+    try await http.signed(current, method: method, path: path, body: body, timeout: timeout, now: now())
   }
 
   public func execute(_ command: LauncherCommand) async throws -> LauncherResult {

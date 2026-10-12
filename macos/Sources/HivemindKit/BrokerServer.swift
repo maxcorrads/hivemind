@@ -34,6 +34,9 @@ public final class TerminalBroker {
     /// Builds an account's own directory before a session runs under it;
     /// NoShadowHomes by default; Server.app gives FileShadowHomes (docs/accounts.md).
     public var shadowHomes: any ShadowHomePreparing
+    /// Where a Claude launch with an account records its status line (docs/accounts.md, "Claude status-line tap");
+    /// nil by default: no tap, and the launch runs as before. Server.app gives HivemindPaths.accounts.
+    public var claudeTap: ClaudeStatusTap?
     /// A process's start time as `TZ=UTC LC_ALL=C ps -o lstart=` prints it, which tells a live Claude session from a
     /// reused pid (ClaudeLiveSessions.systemProcessStart unless a test says otherwise).
     public var processStart: (Int32) -> String?
@@ -46,7 +49,7 @@ public final class TerminalBroker {
       locateTmux: @escaping () -> String?, isDirectory: @escaping (String) -> Bool,
       environment: [String: String], idlePollInterval: TimeInterval = 15, secrets: LaunchSecretStore? = nil,
       templateSecrets: (any TemplateSecretVault)? = nil, home: String = HivemindPaths.userHome.path,
-      shadowHomes: any ShadowHomePreparing = NoShadowHomes(),
+      shadowHomes: any ShadowHomePreparing = NoShadowHomes(), claudeTap: ClaudeStatusTap? = nil,
       processStart: @escaping (Int32) -> String? = ClaudeLiveSessions.systemProcessStart, log: @escaping (String) -> Void = { _ in }
     ) {
       self.tmux = tmux
@@ -60,6 +63,7 @@ public final class TerminalBroker {
       self.templateSecrets = templateSecrets
       self.home = home
       self.shadowHomes = shadowHomes
+      self.claudeTap = claudeTap
       self.processStart = processStart
       self.log = log
     }
@@ -91,9 +95,10 @@ public final class TerminalBroker {
   private var nextTaskID = 0
   /// The launch running now, which the next one waits for (`launching`).
   private var lastLaunch: Task<Void, Never>?
-  /// Every Claude account a launch or a Prepare named since the broker started, newest last, one per directory. The
-  /// broker never reads the catalog, so these are the shadows whose live sessions it can see (ClaudeLiveSessions); after
-  /// a restart an account counts again from its next launch or Prepare.
+  /// Every Claude account a launch, a Prepare or the catalog (`learnClaudeAccounts`) named since the broker started,
+  /// newest last, one per directory. The broker never reads the catalog itself, so these are the shadows whose live
+  /// sessions it can see (ClaudeLiveSessions); after a restart an account counts again from the usage probe's first
+  /// read of the catalog, or its next launch or Prepare.
   private(set) var claudeAccounts: [LaunchAccount] = []
   /// More than the catalog holds (8 per driver), so an edited path keeps its old directory for a while.
   static let maxClaudeAccounts = 32
@@ -202,6 +207,12 @@ public final class TerminalBroker {
     lastLaunch = task
     await task.value
     if lastLaunch == task { lastLaunch = nil }
+  }
+
+  /// Remembers the catalog's Claude accounts for the live-session check, as a launch or a Prepare would: Hivemind
+  /// Server.app's usage probe passes them at start and on each refresh (UsageProbeService). Any other account is ignored.
+  public func learnClaudeAccounts(_ accounts: [LaunchAccount]) {
+    for account in accounts { noteClaudeAccount(account) }
   }
 
   /// Remembers a Claude account's directory for the live-session check; any other account is ignored.
@@ -723,6 +734,9 @@ public final class BrokerConnection {
       var accountVariables: [(name: String, value: String)] = []
       var fileEnvironment = launch.environment
       var unsetNames: [String] = []
+      // A Claude account's session records its status line (docs/accounts.md, "Claude status-line tap"). Its settings
+      // file is written once every check has passed, below, and its variable goes in the launch file.
+      let tap = launch.account?.driver == .claude && broker.deps.secrets != nil ? broker.deps.claudeTap : nil
       if let account = launch.account {
         if let message = account.environmentConflict(in: launch.environment, secretNames: launch.secrets?.names ?? []) {
           results.append(nil)
@@ -749,7 +763,7 @@ public final class BrokerConnection {
         }
       }
       var environmentFile: LaunchEnvironmentFile?
-      if launch.handsVariables || !accountVariables.isEmpty {
+      if launch.handsVariables || !accountVariables.isEmpty || tap != nil {
         guard let store = broker.deps.secrets else {
           results.append(nil)
           let message = launch.secrets != nil ? "launches[\(index)].secrets: this broker cannot pass secrets"
@@ -796,6 +810,17 @@ public final class BrokerConnection {
           results.append(nil)
           errors.append(BrokerLaunchFailure(index: index, code: .internal, message: "launches[\(index)].account: \(error.localizedDescription)"))
           continue
+        }
+        // Usage is not worth a launch: a tap that cannot be written leaves the session with no `--settings`, and so
+        // with its own status line.
+        if let tap {
+          do {
+            var values = fileEnvironment?.dictionary ?? [:]
+            values[ClaudeStatusTap.variable] = try tap.install(for: account, home: broker.deps.home)
+            fileEnvironment = try LaunchEnvironment(values, field: "account", brokerNames: [ClaudeStatusTap.variable])
+          } catch {
+            broker.deps.log("[broker] \(name): no Claude status-line tap: \(error.localizedDescription)")
+          }
         }
       }
       if let file = environmentFile, let store = broker.deps.secrets {

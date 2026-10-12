@@ -36,7 +36,7 @@ function parse<T>(schema: z.ZodType<T>, raw: unknown): T {
  * checks. Paths are checked by accountSpecSchema, which applies accountPathProblem to both.
  */
 export class AccountStore {
-  /** `usage` supplies each account's latest usage; until phase 5 there is none, so every account reads as unknown. */
+  /** `usage` supplies each account's latest usage (the Hive's `AccountUsageStore`); without it every account is unknown. */
   constructor(private readonly deps: Core, private readonly usage: () => ReadonlyMap<string, AccountUsage> = () => new Map()) {}
 
   private get db() { return this.deps.storage.db; }

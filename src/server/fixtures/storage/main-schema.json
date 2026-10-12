@@ -355,6 +355,12 @@
  },
  {
   "type": "table",
+  "name": "agent_account_usage",
+  "tbl": "agent_account_usage",
+  "sql": "CREATE TABLE agent_account_usage ( account_id TEXT PRIMARY KEY REFERENCES agent_accounts(id) ON DELETE CASCADE, captured_at INTEGER, source TEXT, plan TEXT NOT NULL DEFAULT 'unknown', windows TEXT NOT NULL DEFAULT '[]', last_attempt_at INTEGER NOT NULL, last_error TEXT, limit_reset_at INTEGER, limit_error_at INTEGER )"
+ },
+ {
+  "type": "table",
   "name": "agent_accounts",
   "tbl": "agent_accounts",
   "sql": "CREATE TABLE agent_accounts ( id TEXT PRIMARY KEY, driver TEXT NOT NULL CHECK (driver IN ('codex','claude')), label TEXT NOT NULL, position INTEGER NOT NULL, home_path TEXT NOT NULL DEFAULT '', shadow_path TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 1, last_selected_at INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL )"

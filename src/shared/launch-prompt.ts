@@ -315,6 +315,13 @@ export function buildLaunchPrompt(input: LaunchInput): string {
 }
 
 /**
+ * `--settings <file>` when HIVEMIND_CLAUDE_SETTINGS is set, else nothing. Hivemind Server.app's broker sets it, for a
+ * launch with a Claude account, to the settings file of the account's status-line tap (docs/accounts.md#claude-status-line-tap).
+ * Two expansions, since zsh does not split one `${…:+--settings "$…"}` into two words.
+ */
+export const CLAUDE_SETTINGS_FLAG = '${HIVEMIND_CLAUDE_SETTINGS:+--settings} ${HIVEMIND_CLAUDE_SETTINGS:+"$HIVEMIND_CLAUDE_SETTINGS"}';
+
+/**
  * The launch as its two parts: the folder to start in (null when the cd
  * toggle is off or there is no path) and the command run there. The copied
  * block and the macOS app's "Open in Terminal" are both built from this.
@@ -323,6 +330,8 @@ export function buildLaunchCommand(input: LaunchInput): { cwd: string | null; co
   if (input.role !== "brain" && input.role !== "worker") throw new Error("Launch role must be brain or worker");
   const software = sanitizeSoftware(input.software);
   const flags = [
+    // Accounts apply only to exactly `claude` (accountDriverForSoftware), so an alias never gets the tap.
+    software === "claude" ? CLAUDE_SETTINGS_FLAG : "",
     buildModelFlags(software, input.model, input.effort),
     sanitizeExtraFlags(input.extraFlags ?? ""),
     input.hivemindMcp && softwareFamily(software) === "claude"

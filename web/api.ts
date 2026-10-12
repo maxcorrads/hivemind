@@ -3,7 +3,7 @@ import type { EvidenceCollectorHealth } from '../src/shared/evidence-health.ts';
 import type { RoutingRequest, RoutingSuggestions } from '../src/shared/routing.ts';
 import type { TelegramHealth } from "./telegram-health.ts";
 import type { WorkerTemplate, WorkerTemplateSpec } from "../src/shared/worker-templates.ts";
-import type { AccountDriver, AccountPolicies, AccountPolicy, AccountSpec, AgentAccount } from "../src/shared/accounts.ts";
+import type { AccountDriver, AccountPolicies, AccountPolicy, AccountSpec, AccountUsage, AgentAccount } from "../src/shared/accounts.ts";
 import type { AccountSelection } from "../src/shared/account-selection.ts";
 import type { Agent, AgentTrafficView, BotCredentialView, AttachmentMeta, Channel, Message, Project, SearchHit, Thread, ThreadStatus, InboxStatus } from "../src/shared/types.ts";
 import type { ActivityPage, ActivityReason, MentionPage, ReadSnapshot } from "../src/shared/read-state.ts";
@@ -139,6 +139,8 @@ export type ChannelPayload = {
 
 /** The account catalog: every account in list order, and each driver's policy. */
 export type AccountsView = { accounts: AgentAccount[]; policies: AccountPolicies };
+/** What GET /api/ui/accounts answers: the catalog and each account's latest usage (no entry before the account's first read). */
+export type AccountsWithUsage = AccountsView & { usage: AccountUsage[] };
 
 export const api = {
   adaptiveRouting: () => req<AdaptiveRoutingSettings>("/api/ui/adaptive-routing"),
@@ -219,7 +221,7 @@ export const api = {
       { method: "POST", body: JSON.stringify({ label }) }),
   deleteWorkerTemplate: (id: string, revision: number) =>
     req<{ ok: true }>(`/api/ui/worker-templates/${encodeURIComponent(id)}?revision=${revision}`, { method: "DELETE" }),
-  accounts: () => req<AccountsView>("/api/ui/accounts"),
+  accounts: () => req<AccountsWithUsage>("/api/ui/accounts"),
   createAccount: (body: AccountSpec) => req<AgentAccount>("/api/ui/accounts", { method: "POST", body: JSON.stringify(body) }),
   updateAccount: (id: string, body: { expectedRevision: number; label?: string; homePath?: string; shadowPath?: string }) =>
     req<AgentAccount>(`/api/ui/accounts/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(body) }),

@@ -195,6 +195,8 @@ html.dark {
 .bot-settings-fields input, .bot-settings-fields select, .bot-settings-fields textarea { width: 100%; padding: 8px; }
 .bot-settings-card input[type=checkbox] { width: auto; }
 .bot-settings-fields textarea { resize: vertical; min-height: 75px; border: 1px solid var(--line); border-radius: 6px; background: var(--desk); }
+.account-usage-window { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 4px 0; font-size: 0.9em; }
+.account-usage-window progress { width: 120px; accent-color: var(--moss); }
 
 * { box-sizing: border-box; }
 html, body, #root {
