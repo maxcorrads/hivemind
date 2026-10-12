@@ -175,6 +175,12 @@
  },
  {
   "type": "index",
+  "name": "idx_messages_thread_author_seq",
+  "tbl": "messages",
+  "sql": "CREATE INDEX idx_messages_thread_author_seq ON messages(thread_id, author_id, seq)"
+ },
+ {
+  "type": "index",
   "name": "idx_room_events_channel_revision",
   "tbl": "room_events",
   "sql": "CREATE INDEX idx_room_events_channel_revision ON room_events(channel_id, revision)"
