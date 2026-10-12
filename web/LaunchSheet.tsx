@@ -9,12 +9,15 @@ import {
   inNativeApp, onMacDesktop, terminalSecretProblem, terminalSessionLaunchProblem, type TerminalLaunchSecrets, type TerminalSessionLaunch,
 } from "./native-bridge.ts";
 import { SessionsSheet } from "./SessionsSheet.tsx";
-import { accountOutcome, TemplateLaunchSheet, type AccountOutcome } from "./TemplateLaunch.tsx";
+import { accountOutcome, TemplateLaunchSheet } from "./TemplateLaunch.tsx";
 import { TerminalNotice } from "./TerminalNotice.tsx";
 import { agentTerminalSession, terminalBlocker, terminalHub, useTerminalState, type TerminalLaunched } from "./use-terminal.ts";
 import { projectLaunchTools, type LaunchContext } from "../src/shared/launch-prompt.ts";
 import { parseLaunchEnvironment } from "../src/shared/launch-environment.ts";
-import { ACCOUNT_DRIVERS, accountDriverForSoftware, accountEnvironmentConflict, softwareAliasWarning, toLaunchAccount, type AccountDriver } from "../src/shared/accounts.ts";
+import {
+  ACCOUNT_DRIVERS, accountDriverForSoftware, accountEnvironmentConflict, softwareAliasWarning, toLaunchAccount, type AccountDriver,
+  type LaunchAccount,
+} from "../src/shared/accounts.ts";
 import {
   EFFORTS,
   buildLaunchCommand,
@@ -27,6 +30,9 @@ import {
 } from "../src/shared/launch-prompt.ts";
 
 const STORE = "hivemind-launch";
+
+/** One employee's Resume card: its software, model and effort, each empty to follow the sheet's. */
+type Tune = { software: string; model: string; effort: string };
 
 type Saved = {
   software: string;
@@ -43,7 +49,8 @@ type Saved = {
   resume: boolean;
   resumeName: string;
   allHives: boolean;
-  tunes: Record<string, { model: string; effort: string }>;
+  /** Per employee name, the Resume card's overrides; an empty field follows the sheet's own. */
+  tunes: Record<string, Tune>;
   /** The Environment variables field's text per software (the Software field, trimmed). */
   environments: Record<string, string>;
   /** The Account select's pick per driver: an account id; absent follows the driver's policy. */
@@ -77,6 +84,13 @@ const MAX_ENVIRONMENT_TEXT = 64 * 1024;
 /** The software an Environment variables text belongs to: the Software field as the launch uses it. */
 const environmentKey = (software: string) => software.trim() || "codex";
 
+/** The variables kept for `key`'s software, parsed: null when there are none. */
+function keptEnvironment(environments: Record<string, string>, key: string): { environment: Record<string, string> | null; error: string | null } {
+  const parsed = parseLaunchEnvironment(Object.hasOwn(environments, key) ? environments[key]! : "");
+  if (parsed.errors.length) return { environment: null, error: `Fix the environment variables of ${key} first: choose it as Software above` };
+  return { environment: Object.keys(parsed.environment).length ? parsed.environment : null, error: null };
+}
+
 function loadSaved(): Saved {
   try {
     const raw = localStorage.getItem(STORE);
@@ -98,14 +112,15 @@ function loadSaved(): Saved {
       typeof parsed.effort === "string" && (EFFORTS as readonly string[]).includes(parsed.effort)
         ? parsed.effort
         : "";
-    const tunes: Record<string, { model: string; effort: string }> = {};
+    const tunes: Record<string, Tune> = {};
     if (parsed.tunes && typeof parsed.tunes === "object") {
       for (const [name, raw] of Object.entries(parsed.tunes)) {
         if (!name || !raw || typeof raw !== "object") continue;
         const model = typeof raw.model === "string" ? raw.model.trim() : "";
         const seatEffort =
           typeof raw.effort === "string" && (EFFORTS as readonly string[]).includes(raw.effort) ? raw.effort : "";
-        tunes[name] = { model, effort: seatEffort };
+        const seatSoftware = typeof raw.software === "string" ? raw.software.trim() : "";
+        tunes[name] = { software: seatSoftware, model, effort: seatEffort };
       }
     }
     const environments: Record<string, string> = {};
@@ -210,7 +225,7 @@ export function LaunchSheet({
   const [focus, setFocus] = useState(initial.focus);
   const [resume, setResume] = useState(Boolean(resumeAgentId) || initial.resume);
   const [allHives, setAllHives] = useState(initial.allHives);
-  const [tunes, setTunes] = useState<Record<string, { model: string; effort: string }>>(resumeAgentId ? {} : initial.tunes);
+  const [tunes, setTunes] = useState<Record<string, Tune>>(resumeAgentId ? {} : initial.tunes);
   // Kept per software in this browser (never sent anywhere but with a launch); restored when that software is chosen.
   const [environments, setEnvironments] = useState<Record<string, string>>(initial.environments);
   const envKey = environmentKey(software);
@@ -235,6 +250,8 @@ export function LaunchSheet({
   const [launching, setLaunching] = useState(false);
   const [launchNote, setLaunchNote] = useState<{ error: boolean; text: string } | null>(null);
   const copiedTimer = useRef<number | null>(null);
+  // A Resume card's Software as it was when focused, so leaving it can tell a change of CLI.
+  const cardSoftwareAtFocus = useRef("");
   const [contexts, setContexts] = useState<Record<string, LaunchContext>>({});
   const [contextErrors, setContextErrors] = useState<Record<string, string>>({});
   const launchContext = contexts[projectSlug];
@@ -329,14 +346,22 @@ export function LaunchSheet({
         pathDirty && hive?.slug === selectedSlug
           ? workspacePath
           : (hive?.worktree ?? (hive?.slug === selectedSlug ? workspacePath : ""));
-      const seat = resolveLaunchTune({ model, effort }, tunes[agent.name]);
+      const seatSoftware = tunes[agent.name]?.software.trim() || software;
+      // Another CLI starts from its own defaults: the model and extra flags above are for the Software field's.
+      const sameFamily = softwareFamily(seatSoftware) === softwareFamily(software);
+      const seat = resolveLaunchTune(sameFamily ? { model, effort } : { model: "", effort: "" }, tunes[agent.name]);
+      const seatKey = environmentKey(seatSoftware);
+      const seatEnv = seatKey === envKey ? { environment, error: envError } : keptEnvironment(environments, seatKey);
+      const base = { agent, hive, software: seatSoftware, environment: seatEnv.environment };
       try {
         if (agent.role !== "brain" && agent.role !== "worker") {
-          return { agent, hive, ok: false as const, error: "not an agent", text: "" };
+          return { ...base, ok: false as const, error: "not an agent", text: "" };
         }
         if (contextErrors[hive?.slug ?? ""]) throw new Error(contextErrors[hive!.slug]);
         const launch = buildLaunchCommand({
           ...shared,
+          software: seatSoftware,
+          extraFlags: sameFamily ? extraFlags : "",
           ...projectLaunchTools(contexts[hive?.slug ?? ""], hive, agent.role),
           model: seat.model,
           effort: seat.effort,
@@ -349,13 +374,13 @@ export function LaunchSheet({
           resume: true,
           resumeName: agent.name,
         });
-        if (envError) throw new Error(envError);
-        return { agent, hive, ok: true as const, launch, text: launchBlockText(launch, environment) };
+        if (seatEnv.error) throw new Error(seatEnv.error);
+        return { ...base, ok: true as const, launch, text: launchBlockText(launch, seatEnv.environment) };
       } catch (e) {
-        return { agent, hive, ok: false as const, error: String((e as Error).message || e), text: "" };
+        return { ...base, ok: false as const, error: String((e as Error).message || e), text: "" };
       }
     });
-  }, [roster, projects, project, projectSlug, pathDirty, workspacePath, software, extraFlags, model, effort, tunes, cdWorktree, passProject, adoptUntrusted, contexts, contextErrors, environment, envError]);
+  }, [roster, projects, project, projectSlug, pathDirty, workspacePath, software, extraFlags, model, effort, tunes, cdWorktree, passProject, adoptUntrusted, contexts, contextErrors, environment, envError, envKey, environments]);
 
   const remember = (patch: Partial<Saved> = {}) => {
     const next: Saved = {
@@ -390,10 +415,10 @@ export function LaunchSheet({
     remember({ environments: trimmed });
   };
 
-  const setTune = (name: string, patch: Partial<{ model: string; effort: string }>) => {
+  const setTune = (name: string, patch: Partial<Tune>) => {
     const next = {
       ...tunes,
-      [name]: { model: tunes[name]?.model ?? "", effort: tunes[name]?.effort ?? "", ...patch },
+      [name]: { software: tunes[name]?.software ?? "", model: tunes[name]?.model ?? "", effort: tunes[name]?.effort ?? "", ...patch },
     };
     setTunes(next);
     remember({ tunes: next });
@@ -401,7 +426,10 @@ export function LaunchSheet({
 
   const rememberSoftware = () => {
     const name = software.trim() || "codex";
-    const used = [name, ...softwareUsed.filter((s) => s !== name)].slice(0, 12);
+    // The cards' own software is offered next time too, after the Software field's.
+    const cards = resume ? resumeBlocks.map((b) => b.software.trim()).filter((s) => s && s !== name) : [];
+    const first = [name, ...new Set(cards)];
+    const used = [...first, ...softwareUsed.filter((s) => !first.includes(s))].slice(0, 12);
     setSoftwareUsed(used);
     remember({ software: name, softwareUsed: used });
   };
@@ -436,10 +464,12 @@ export function LaunchSheet({
   );
 
   const canCopyOne = built.ok && projects.length > 0;
+  // What the launches run: with Resume, each employee's card can choose its own.
+  const launchSoftware = resume ? resumeBlocks.map((b) => b.software) : [software];
   // Only where the page can launch (the apps) and only for OpenCode, whose opencode-go and Zen providers read it.
-  const showOpencodeKey = native && softwareFamily(software) === "opencode";
+  const showOpencodeKey = native && launchSoftware.some((name) => softwareFamily(name) === "opencode");
   // Only where launches run in tmux (the apps): without env_vars a Codex agent never reports its session.
-  const showCodexEnvHint = native && softwareFamily(software) === "codex";
+  const showCodexEnvHint = native && launchSoftware.some((name) => softwareFamily(name) === "codex");
   useEffect(() => { if (!showOpencodeKey) setOpencodeKey(""); }, [showOpencodeKey]);
   const opencodeKeyValue = showOpencodeKey ? opencodeKey.trim() : "";
   const opencodeKeyProblem = opencodeKeyValue ? terminalSecretProblem(opencodeKeyValue) : null;
@@ -457,39 +487,63 @@ export function LaunchSheet({
     (!resumeAgentId || Boolean(software.trim()) && targetSession !== 'running');
   const canCopyResumeCard = !resumeAgentId || Boolean(software.trim()) && targetSession !== 'running';
 
+  const runningAgents = resume ? roster.filter((agent) => agentRuntime(agent, { agents }, terminals).sessionState === "running") : [];
+  const running = new Set(runningAgents.map((agent) => agent.id));
   // Hivemind.app only: the same launches as the copied text, each in its own tmux session (reused when that
-  // employee's is still running), optionally with a Terminal window attached.
-  const terminalLaunches: TerminalSessionLaunch[] = resume
-    ? (canCopyAll ? resumeBlocks.flatMap((b) => b.ok ? [{
+  // employee's is still running), optionally with a Terminal window attached. Each keeps the software it runs, for its
+  // account, and whether it reuses a running session, which keeps the account it started with.
+  const seats: { launch: TerminalSessionLaunch; software: string; kept: boolean }[] = resume
+    ? (canCopyAll ? resumeBlocks.flatMap((b) => b.ok ? [{ software: b.software, kept: running.has(b.agent.id), launch: {
         project: b.hive?.slug ?? b.agent.project ?? projectSlug, agent: b.agent.name,
         title: seatTitle(b.hive?.name ?? "", b.agent.name), ...b.launch,
         // The session this employee already runs in, even one named hm-<project>-new-<n>, is reused.
         session: agentTerminalSession(b.agent),
-        ...secrets,
-        ...launchEnv,
-      }] : []) : [])
+        ...(softwareFamily(b.software) === "opencode" ? secrets : {}),
+        // Beside the command, never in it: the app hands them to the session through its private launch file.
+        ...(b.environment ? { environment: b.environment } : {}),
+      } }] : []) : [])
     : (canCopyOne && built.ok
-      ? [{ project: project?.slug ?? projectSlug, agent: null, title: seatTitle(hiveName, `new ${role}`), ...built.launch, ...secrets,
-          ...launchEnv }] : []);
+      ? [{ software, kept: false, launch: { project: project?.slug ?? projectSlug, agent: null, title: seatTitle(hiveName, `new ${role}`),
+          ...built.launch, ...secrets, ...launchEnv } }] : []);
+  const terminalLaunches = seats.map((seat) => seat.launch);
+  const driversWithAccounts = new Set<AccountDriver>(accounts?.accounts.map((account) => account.driver) ?? []);
   // A hint only: an alias such as codex2 still launches, without an account (docs/accounts.md).
-  const aliasWarning = softwareAliasWarning(software, new Set<AccountDriver>(accounts?.accounts.map((account) => account.driver) ?? []));
-  // The Account select follows the driver of Software. An employee whose session still runs keeps its account, so
-  // nothing is resolved when every launch reuses a running session.
-  const accountDriver = accountDriverForSoftware(software);
-  const driverAccounts = accountDriver && accounts ? accounts.accounts.filter((account) => account.driver === accountDriver) : [];
-  const accountPin = accountDriver ? accountPins[accountDriver] ?? "" : "";
-  const runningAgents = resume ? roster.filter((agent) => agentRuntime(agent, { agents }, terminals).sessionState === "running") : [];
+  const aliasWarning = softwareAliasWarning(software, driversWithAccounts);
+  const accountsOf = (driver: AccountDriver) => accounts?.accounts.filter((account) => account.driver === driver) ?? [];
+  // One Account select per driver the launches run, the Software field's first. An employee whose session still runs
+  // keeps its account, so a driver is resolved only for the launches that start a session.
+  const accountDrivers = [...new Set(launchSoftware.map(accountDriverForSoftware))]
+    .filter((driver): driver is AccountDriver => driver !== null && driversWithAccounts.has(driver));
   const accountKept = runningAgents.length > 0;
-  const accountNeeded = !resume || runningAgents.length < roster.length;
+  const startingSoftware = resume ? resumeBlocks.filter((b) => !running.has(b.agent.id)).map((b) => b.software) : [software];
+  const neededDrivers = accountDrivers.filter((driver) => startingSoftware.some((name) => accountDriverForSoftware(name) === driver));
   // The conflict depends on the driver only, so the pinned account (else the first) stands in for the policy's pick.
-  const accountForConflict = driverAccounts.find((account) => account.id === accountPin) ?? driverAccounts[0];
-  const accountConflict = native && accountForConflict && accountNeeded
-    ? accountEnvironmentConflict(environment ?? {}, Object.keys(secrets.secrets ?? {}), toLaunchAccount(accountForConflict)) : null;
-  /** On Launch: the account the new sessions start under (docs/accounts.md). A driver without accounts launches as before. */
-  const resolveLaunchAccount = async (): Promise<AccountOutcome> => {
-    if (!native || !accountDriver || driverAccounts.length === 0 || !accountNeeded) return { ok: true, account: null, text: null };
-    const { selection } = await api.resolveAccount({ driver: accountDriver, accountId: accountPin || null, record: true });
-    return accountOutcome(selection, accountDriver, Date.now());
+  const standIn = (driver: AccountDriver) => accountsOf(driver).find((account) => account.id === accountPins[driver]) ?? accountsOf(driver)[0];
+  const accountConflict = native ? (resume
+    ? resumeBlocks.filter((b) => !running.has(b.agent.id)).map((b) => ({ software: b.software, environment: b.environment }))
+    : [{ software, environment }])
+    .map((seat) => {
+      const driver = accountDriverForSoftware(seat.software);
+      const account = driver && neededDrivers.includes(driver) ? standIn(driver) : undefined;
+      const secretNames = softwareFamily(seat.software) === "opencode" ? Object.keys(secrets.secrets ?? {}) : [];
+      return account ? accountEnvironmentConflict(seat.environment ?? {}, secretNames, toLaunchAccount(account)) : null;
+    })
+    .find(Boolean) ?? null : null;
+  /** On Launch: the account each driver's new sessions start under (docs/accounts.md). A driver without accounts launches as before. */
+  const resolveLaunchAccounts = async (): Promise<
+    { ok: true; accounts: Partial<Record<AccountDriver, LaunchAccount>>; text: string | null } | { ok: false; text: string }
+  > => {
+    const picked: Partial<Record<AccountDriver, LaunchAccount>> = {};
+    const notes: string[] = [];
+    if (!native) return { ok: true, accounts: picked, text: null };
+    for (const driver of neededDrivers) {
+      const { selection } = await api.resolveAccount({ driver, accountId: accountPins[driver] || null, record: true });
+      const outcome = accountOutcome(selection, driver, Date.now());
+      if (!outcome.ok) return outcome;
+      if (outcome.account) picked[driver] = outcome.account;
+      if (outcome.text) notes.push(outcome.text);
+    }
+    return { ok: true, accounts: picked, text: notes.join("\n") || null };
   };
 
   const terminalBlock = native ? terminalBlocker(terminals) : null;
@@ -518,18 +572,18 @@ export function LaunchSheet({
     setLaunchNote(null);
     setAccountNote(null);
     rememberSoftware();
-    resolveLaunchAccount()
+    resolveLaunchAccounts()
       .then((outcome) => {
         if (!outcome.ok) {
           setLaunchNote({ error: true, text: outcome.text });
           return;
         }
-        const attached = outcome.account;
-        // Only new sessions take the account: a running employee's session keeps the one it started with.
-        const kept = new Set(runningAgents.map((agent) => agent.name));
-        const launches = attached
-          ? terminalLaunches.map((launch) => (kept.has(launch.agent ?? "") ? launch : { ...launch, account: attached }))
-          : terminalLaunches;
+        // Only new sessions take an account, their own driver's: a running employee's session keeps the one it started with.
+        const launches = seats.map((seat) => {
+          const driver = accountDriverForSoftware(seat.software);
+          const account = driver ? outcome.accounts[driver] : undefined;
+          return account && !seat.kept ? { ...seat.launch, account } : seat.launch;
+        });
         setAccountNote(outcome.text);
         return hub.launch(launches, openInTerminal)
           .then((result) => {
@@ -652,27 +706,33 @@ export function LaunchSheet({
             ))}
           </datalist>
           {aliasWarning && <p className="help-p" role="status">{aliasWarning}</p>}
-          {accountDriver && driverAccounts.length > 0 && (native ? (
+          {accountDrivers.length > 0 && (native ? (
             <>
-              <label>
-                Account
-                <select
-                  value={accountPin}
-                  onChange={(e) => {
-                    const next = { ...accountPins, [accountDriver]: e.target.value };
-                    setAccountPins(next);
-                    remember({ accountPins: next });
-                  }}
-                >
-                  <option value="">Auto ({accounts?.policies[accountDriver] === "balanced" ? "Balanced" : "Sequential"})</option>
-                  {driverAccounts.map((account) => (
-                    <option key={account.id} value={account.id}>{account.label}</option>
-                  ))}
-                  {accountPin && !driverAccounts.some((account) => account.id === accountPin) && (
-                    <option value={accountPin}>Removed account</option>
-                  )}
-                </select>
-              </label>
+              {accountDrivers.map((driver) => {
+                const pin = accountPins[driver] ?? "";
+                const pool = accountsOf(driver);
+                return (
+                  <label key={driver}>
+                    {accountDrivers.length > 1 ? `Account (${driver === "codex" ? "Codex" : "Claude"})` : "Account"}
+                    <select
+                      value={pin}
+                      onChange={(e) => {
+                        const next = { ...accountPins, [driver]: e.target.value };
+                        setAccountPins(next);
+                        remember({ accountPins: next });
+                      }}
+                    >
+                      <option value="">Auto ({accounts?.policies[driver] === "balanced" ? "Balanced" : "Sequential"})</option>
+                      {pool.map((account) => (
+                        <option key={account.id} value={account.id}>{account.label}</option>
+                      ))}
+                      {pin && !pool.some((account) => account.id === pin) && (
+                        <option value={pin}>Removed account</option>
+                      )}
+                    </select>
+                  </label>
+                );
+              })}
               {accountKept && (
                 <p className="help-p">This session keeps the account it started with. Terminate it and launch again to switch.</p>
               )}
@@ -909,7 +969,7 @@ export function LaunchSheet({
             ) : (
               <>
                 <p className="help-p">
-                  {resumeAgentId ? `Resume ${roster[0]?.name} only. Choose software above; this agent's last CLI and model are not known.` : 'The model at the top (with effort in the name) applies to everyone. Override it on a card if that employee should differ.'}
+                  {resumeAgentId ? `Resume ${roster[0]?.name} only. Choose software above; this agent's last CLI and model are not known.` : 'The software and model at the top (with effort in the name) apply to everyone. Override them on a card if that employee should differ: another CLI starts from its own default model, without the extra flags, with the environment variables kept for it.'}
                   Copy all pastes a zsh script that opens one macOS Terminal window per employee (title Hive - Name). macOS may ask to control Terminal the first time.
                   {native && " Open terminals starts each employee in its own tmux session instead (an employee whose session still runs keeps it) and opens a Terminal window on each."}
                 </p>
@@ -933,12 +993,40 @@ export function LaunchSheet({
                         {copied === block.agent.id ? "Copied" : "Copy"}
                       </button>
                     </div>
+                    {!resumeAgentId && (
+                      <label>
+                        Software
+                        <input
+                          className="mono"
+                          list="launch-software"
+                          value={tunes[block.agent.name]?.software ?? ""}
+                          placeholder={`same as above (${software.trim() || "codex"})`}
+                          onFocus={(e) => { cardSoftwareAtFocus.current = e.target.value; }}
+                          onChange={(e) => setTune(block.agent.name, { software: e.target.value })}
+                          onBlur={(e) => {
+                            // Another kind of CLI has other models: the card's own model starts again from the default.
+                            const before = cardSoftwareAtFocus.current.trim() || software;
+                            if (softwareFamily(e.target.value.trim() || software) !== softwareFamily(before) && tunes[block.agent.name]?.model) {
+                              setTune(block.agent.name, { software: e.target.value, model: "", effort: "" });
+                            }
+                          }}
+                          autoComplete="off"
+                          spellCheck={false}
+                        />
+                      </label>
+                    )}
+                    {block.software !== software && softwareAliasWarning(block.software, driversWithAccounts) && (
+                      <p className="help-p" role="status">{softwareAliasWarning(block.software, driversWithAccounts)}</p>
+                    )}
+                    {softwareFamily(block.software) !== softwareFamily(software) && extraFlags.trim() && (
+                      <p className="help-p">The extra flags above are for {software.trim() || "codex"}: {block.software} launches without them.</p>
+                    )}
                     <ModelSelect
-                      software={software}
+                      software={block.software}
                       model={tunes[block.agent.name]?.model ?? ""}
                       effort={tunes[block.agent.name]?.effort ?? ""}
-                      inherit={
-                        model
+                      inherit={softwareFamily(block.software) !== softwareFamily(software) ? undefined
+                        : model
                           ? softwareFamily(software) !== "cursor" && effort
                             ? `${model} · ${effort}`
                             : model

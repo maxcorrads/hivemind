@@ -240,7 +240,9 @@ counts as no snapshot.
 
 **Reuse.** The account is chosen when a session is created. A launch that reuses a running session keeps the account
 that session started with. In the Launch sheet, **Resume same employees** gives an account only to employees whose
-session is not running. While one is running, the sheet says "This session keeps the account it started with. Terminate
+session is not running. A card can choose its own **Software**, so one launch can run both drivers: the sheet then
+shows one select per driver, "Account (Codex)" and "Account (Claude)", resolves each once and gives each new session
+its own driver's account. While one is running, the sheet says "This session keeps the account it started with. Terminate
 it and launch again to switch." The broker does the same for a reused session: it checks no account and writes nothing
 ([Launch environment](terminal-broker.md#launch-environment)).
 
