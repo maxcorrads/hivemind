@@ -13,6 +13,24 @@
  },
  {
   "type": "index",
+  "name": "agent_accounts_driver_label",
+  "tbl": "agent_accounts",
+  "sql": "CREATE UNIQUE INDEX agent_accounts_driver_label ON agent_accounts(driver, label)"
+ },
+ {
+  "type": "index",
+  "name": "agent_accounts_driver_position",
+  "tbl": "agent_accounts",
+  "sql": "CREATE INDEX agent_accounts_driver_position ON agent_accounts(driver, position)"
+ },
+ {
+  "type": "index",
+  "name": "agent_accounts_shadow",
+  "tbl": "agent_accounts",
+  "sql": "CREATE UNIQUE INDEX agent_accounts_shadow ON agent_accounts(shadow_path) WHERE shadow_path <> ''"
+ },
+ {
+  "type": "index",
   "name": "capabilities_project",
   "tbl": "worker_capabilities",
   "sql": "CREATE INDEX capabilities_project ON worker_capabilities(project_id, worker_id)"
@@ -334,6 +352,18 @@
   "name": "adaptive_topology_executions",
   "tbl": "adaptive_topology_executions",
   "sql": "CREATE TABLE \"adaptive_topology_executions\" (execution_id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, brain_id TEXT NOT NULL, project_id TEXT NOT NULL, root_message_id TEXT NOT NULL, snapshot TEXT NOT NULL, UNIQUE(channel_id,brain_id))"
+ },
+ {
+  "type": "table",
+  "name": "agent_account_policies",
+  "tbl": "agent_account_policies",
+  "sql": "CREATE TABLE agent_account_policies ( driver TEXT PRIMARY KEY CHECK (driver IN ('codex','claude')), policy TEXT NOT NULL CHECK (policy IN ('sequential','balanced')), revision INTEGER NOT NULL DEFAULT 1, updated_at INTEGER NOT NULL )"
+ },
+ {
+  "type": "table",
+  "name": "agent_accounts",
+  "tbl": "agent_accounts",
+  "sql": "CREATE TABLE agent_accounts ( id TEXT PRIMARY KEY, driver TEXT NOT NULL CHECK (driver IN ('codex','claude')), label TEXT NOT NULL, position INTEGER NOT NULL, home_path TEXT NOT NULL DEFAULT '', shadow_path TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 1, last_selected_at INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL )"
  },
  {
   "type": "table",

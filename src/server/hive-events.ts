@@ -60,6 +60,8 @@ export type HiveEvents = {
   "evidence-health": EvidenceCollectorHealth;
   /** A project's worker templates were created, edited or deleted; clients refetch them. */
   "worker-templates": { projectId: string };
+  /** The account catalog (order, paths, policy) changed; clients refetch it. */
+  accounts: Record<string, never>;
   "launch-requests": { request: LaunchRequestView };
   "launcher-queue": void;
 };

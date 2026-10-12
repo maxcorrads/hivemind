@@ -12,6 +12,7 @@ import { claimPreviewSchema } from '../shared/task-claims.ts';
 import { assignTaskSchema, taskEventSchema } from "../shared/tasks.ts";
 import { launchModeSchema, requestWorkerSchema, releaseWorkerSchema } from "../shared/worker-orchestration.ts";
 import { roomEventSchema, sourceLinkSchema, sourceReportSchema } from "../shared/rooms.ts";
+import { ACCOUNT_DRIVERS, ACCOUNT_LIMITS, ACCOUNT_POLICIES } from "../shared/accounts.ts";
 import { HiveError } from "../shared/types.ts";
 
 const empty = z.object({}).strict();
@@ -38,6 +39,13 @@ const telegram = z.object({ botToken: z.string().max(512).optional(),
 
 const workerTemplateEnvelope = z.object({ slug: z.unknown().optional(), expectedRevision: z.unknown().optional(),
   spec: z.record(z.string(), z.unknown()) }).strict();
+// Only the envelopes here: AccountStore validates each field and reports its reason. On an edit `driver` is accepted
+// only so that changing it is refused.
+const accountEnvelope = z.object({ driver: z.unknown().optional(), label: z.unknown().optional(),
+  homePath: z.unknown().optional(), shadowPath: z.unknown().optional() }).strict();
+const accountEditEnvelope = accountEnvelope.extend({ expectedRevision: z.unknown().optional() });
+const accountOrder = z.object({ driver: z.enum(ACCOUNT_DRIVERS), ids: z.array(z.string().min(1).max(64)).max(ACCOUNT_LIMITS.perDriver) }).strict();
+const accountPolicy = z.object({ driver: z.enum(ACCOUNT_DRIVERS), policy: z.enum(ACCOUNT_POLICIES) }).strict();
 const launcherResult = z.object({ status: z.enum(["launched", "failed", "killed"]),
   session: z.string().max(82).optional(), error: z.string().max(500).optional() }).strict();
 
@@ -90,6 +98,10 @@ function schemaFor(path: string, method: string): z.ZodType | undefined {
   if (/^\/api\/ui\/worker-templates\/[^/]+\/reserve$/.test(path)) return z.object({ label: z.string().max(200).nullish() }).strict();
   // Only the envelope here: WorkerTemplateStore validates the spec itself, reporting each field's reason.
   if (/^\/api\/ui\/projects\/[^/]+\/worker-templates$/.test(path) || /^\/api\/ui\/worker-templates\/[^/]+$/.test(path)) return workerTemplateEnvelope;
+  if (path === '/api/ui/accounts' && method === 'POST') return accountEnvelope;
+  if (path === '/api/ui/accounts/order' && method === 'PUT') return accountOrder;
+  if (path === '/api/ui/accounts/policy' && method === 'PUT') return accountPolicy;
+  if (/^\/api\/ui\/accounts\/[^/]+$/.test(path) && method === 'PUT') return accountEditEnvelope;
   if (/\/(?:ping|leave)$/.test(path) || /\/(?:retry|discard)$/.test(path)) return empty;
   // Bot/configuration/recovery schemas have their own narrower ingress readers.
   return undefined;

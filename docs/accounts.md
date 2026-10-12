@@ -6,8 +6,9 @@ picks a policy; a launch or a worker template may pin one. HiveMind keeps paths,
 stores, reads or shows a provider token: login stays a CLI command Human runs once in a terminal.
 
 The design is [#319](https://github.com/maxcorrads/hivemind/issues/319); this page grows with its phases. Phase 0
-([#320](https://github.com/maxcorrads/hivemind/issues/320)) fixes the names and rules below; nothing uses them yet.
-They live in `src/shared/accounts.ts` and, for the broker, HivemindKit's `LaunchAccount`. Both read
+([#320](https://github.com/maxcorrads/hivemind/issues/320)) fixes the names and rules below; phase 1
+([#321](https://github.com/maxcorrads/hivemind/issues/321)) stores the [Catalog](#catalog), and nothing launches with
+an account yet. They live in `src/shared/accounts.ts` and, for the broker, HivemindKit's `LaunchAccount`. Both read
 `src/shared/account-paths.vectors.json`, so the page and the app check paths and build variables the same way.
 
 ## Decisions
@@ -112,7 +113,80 @@ files where the shared links belong.
 
 ## Catalog
 
-(phase 1, [#321](https://github.com/maxcorrads/hivemind/issues/321))
+Human keeps the catalog in the server's database, from migration v41: `agent_accounts` has one row per account, and
+`agent_account_policies` one row per driver that has a chosen policy. Only Human changes it. Like the other Human
+routes, a request with an `Authorization` header gets 403. Nothing launches with an account yet.
+
+| Field | Column | Set by |
+| --- | --- | --- |
+| `id` | `id` | the server, a UUID at create |
+| `driver` | `driver` | create only; an edit that names another driver gets 400 |
+| `label` | `label` | create, edit |
+| `order` | `position` | create (the end of the list), reorder, remove |
+| `homePath` | `home_path` | create, edit |
+| `shadowPath` | `shadow_path` | create, edit |
+| `revision` | `revision` | 1 at create; +1 on each edit, on each reorder that moves the account, and on each remove that moves it up |
+| `lastSelectedAt` | `last_selected_at` | a launch that picks the account (internal, no event) |
+| `createdAt`, `updatedAt` | `created_at`, `updated_at` | create; `updatedAt` on each change |
+
+`command` is not stored: it is always the driver. A driver with no policy row is `sequential`. A policy change names
+the driver and the policy only; it has no revision check, so the last change wins.
+
+Rules:
+
+- At most 8 accounts per driver. The ninth is refused with 429.
+- `label` is unique per driver (409). A non-empty `shadowPath` is unique across the catalog (409). At most one primary
+  account (empty `shadowPath`) per driver and `homePath` (409).
+- `shadowPath` cannot be the shared tree: the same as `homePath`, or the CLI default when `homePath` is empty (400,
+  compared after Unicode NFC).
+- Paths follow the rules in [An account](#an-account) and are checked on create and on edit (400).
+- A refusal names the field or the rule. It never shows file contents or a token.
+- An edit names the `expectedRevision` it started from; another current revision is 409. Omitted fields keep their
+  value.
+- Remove needs `revision` in the query (a missing or non-integer value is 400). While a worker template's `accountId`
+  names the account, remove is refused with 409 `account_pinned`, and the message names those templates. Otherwise the
+  account goes, and each later account in its driver's list moves up one place and gets a new revision.
+- Reorder takes `ids`, which must list every account of the driver exactly once (400 otherwise). Positions become
+  0…n−1, and each account whose position changes gets a new revision.
+- Every committed change publishes one `accounts` realtime event after the commit. It carries no data; the open
+  Accounts sheet refetches its list on it. A launch picking an account publishes nothing.
+
+| Method and path | Body | Answer |
+| --- | --- | --- |
+| `GET /api/ui/accounts` | | `{accounts, policies}` |
+| `POST /api/ui/accounts` | `AccountSpec` | the account, `201` |
+| `PUT /api/ui/accounts/order` | `{driver, ids}` | `{accounts, policies}` |
+| `PUT /api/ui/accounts/policy` | `{driver, policy}` | `{accounts, policies}` |
+| `PUT /api/ui/accounts/:id` | `{expectedRevision, label?, homePath?, shadowPath?}` | the account |
+| `DELETE /api/ui/accounts/:id?revision=N` | | `{ok: true}` |
+
+Errors: `400` for a bad body or path, a changed driver, a reorder with the wrong ids, or an unknown policy; `404` for an
+unknown account id; `409` for a stale revision, a duplicate label, shadow or primary, and a pinned remove; `429` for a
+ninth account in one driver; `403` for an `Authorization` header.
+
+### Sheet
+
+Settings → **Accounts** opens the sheet, after **Adaptive routing**. It has one section per driver:
+
+- **Policy**: a Sequential / Balanced control. Each policy has one line saying what it does, as in
+  [An account](#an-account).
+- The ordered list: label, home path and shadow path (`default` and `none` when empty), **Up**, **Down**, **Edit**
+  and **Remove**. Remove asks first. It says HiveMind forgets the account and that its folders and login stay where
+  they are.
+- **Add account**, disabled at 8 accounts: label, home path and shadow path, with the path problem shown under the
+  field. Once both paths are valid, the login command for them appears with a **Copy** button and the line "Log in
+  once in a terminal; HiveMind never stores tokens." Editing an account does not show the command.
+
+A server error shows as text in the sheet. An `accounts` event refetches the list.
+
+### Login commands
+
+Each account logs in once, in a terminal on the Mac that launches; the commands are in [Logging in](#logging-in). The
+sheet shows the command for the paths typed in **Add account**, before a label is typed.
+
+In this phase HiveMind writes no files for an account: the sheet shows a shadow's command but does not prepare the
+shadow first, as [Logging in](#logging-in) describes, so the command's `mkdir -p` creates an empty folder. Preparing a
+shadow comes with [Codex shadow](#codex-shadow) (phase 3).
 
 ## Choosing an account
 

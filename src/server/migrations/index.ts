@@ -17,6 +17,7 @@ import { jobsTaskControl } from './jobs-task-control.ts';
 import { brainWorkerOrchestration } from "./brain-worker-orchestration.ts";
 import { agentManagement } from './agent-management.ts';
 import { channelArchives } from './channel-archives.ts';
+import { agentAccounts } from './agent-accounts.ts';
 import { schemaShape, validateCoreStorage, validateSchema, type SchemaShape } from "./validate.ts";
 
 /**
@@ -89,6 +90,7 @@ export const MIGRATIONS: readonly Migration[] = [
     botCapabilities(db);
   } },
   { version: 40, name: "channel_archives", up: channelArchives },
+  { version: 41, name: "agent_accounts", up: agentAccounts },
 ];
 
 /** The last idempotent baseline migration; later migrations may assume its schema. */

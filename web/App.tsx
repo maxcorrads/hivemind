@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Agent } from "../src/shared/types.ts";
 import type { TaskOverview } from "../src/shared/task-views.ts";
+import { AccountsSheet } from "./AccountsSheet.tsx";
 import { AdaptiveRoutingPanel } from "./AdaptiveRoutingPanel.tsx";
 import { AdaptiveRoutingSettings } from "./AdaptiveRoutingSettings.tsx";
 import { api } from "./api.ts";
@@ -104,7 +105,7 @@ export function App() {
     taskRefreshTimer.current = window.setTimeout(() => { taskRefreshTimer.current = null; setTaskTick(value => value + 1); }, 80);
   };
   useEffect(() => () => { if (taskRefreshTimer.current !== null) window.clearTimeout(taskRefreshTimer.current); }, []);
-  const { live, roomTick, jevTick, subscribeJev } = useRealtime({
+  const { live, roomTick, jevTick, subscribeJev, accountsTick } = useRealtime({
     selection, hive, channel: channelPane, thread: threadState, inboxLoad: inbox.inboxLoad, changeSelection,
     reopenDm: dms.reopenDm, onActivity: inbox.receive, refreshRoutingView, onRoutingEvent, setErr,
     onLiveEvent: event => {
@@ -152,6 +153,7 @@ export function App() {
   const [templatesProject, setTemplatesProject] = useState<string | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const [adaptiveRoutingOpen, setAdaptiveRoutingOpen] = useState(false);
+  const [accountsOpen, setAccountsOpen] = useState(false);
   const [launchOpen, setLaunchOpen] = useState(false);
   const [agentPanelId, setAgentPanelId] = useState<string | null>(null);
   const [resumeAgentId, setResumeAgentId] = useState<string | null>(null);
@@ -262,7 +264,8 @@ export function App() {
   const settings = {
     theme, onToggleTheme: toggleTheme, layout, onLayout: setLayout, notifications, openRequest: settingsRequest,
     telegram: snap.telegram, onTelegram: () => telegramSheet.openTelegram(snap?.projects ?? []),
-    onAdaptiveRouting: () => setAdaptiveRoutingOpen(true), onLaunch: () => openLaunch(), onHelp: () => setHelpOpen(true),
+    onAdaptiveRouting: () => setAdaptiveRoutingOpen(true), onAccounts: () => setAccountsOpen(true),
+    onLaunch: () => openLaunch(), onHelp: () => setHelpOpen(true),
     autoArchive: snap.autoArchiveTaskChannels === undefined ? undefined : {
       enabled: snap.autoArchiveTaskChannels,
       // Channels it archives arrive as room events; only the flag is patched here.
@@ -466,6 +469,8 @@ export function App() {
           refreshRoutingView();
         }} />
       )}
+
+      {accountsOpen && <AccountsSheet tick={accountsTick} onClose={() => setAccountsOpen(false)} />}
 
       {routingPanelOpen && activeChannel && routingView && (
         <AdaptiveRoutingPanel

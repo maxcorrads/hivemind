@@ -24,7 +24,7 @@ import { takeInstanceSecret } from "./instance-proof.ts";
 /** Hive events forwarded verbatim to every web UI socket; Telegram wake signals stay server-side. */
 const FORWARDED_EVENTS = [
   "message", "activity", "agent", "channel", "thread", "reaction", "queued", "project", "telegram-health",
-  "task", "job", "agent-work", "room", "adaptive-routing", "jev-call", "evidence-health", "worker-templates", "launch-requests",
+  "task", "job", "agent-work", "room", "adaptive-routing", "jev-call", "evidence-health", "worker-templates", "accounts", "launch-requests",
 ] as const satisfies ReadonlyArray<keyof HiveEvents>;
 type ForwardedEvent = (typeof FORWARDED_EVENTS)[number];
 
