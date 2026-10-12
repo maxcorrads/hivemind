@@ -4,6 +4,7 @@ import type { RoutingRequest, RoutingSuggestions } from '../src/shared/routing.t
 import type { TelegramHealth } from "./telegram-health.ts";
 import type { WorkerTemplate, WorkerTemplateSpec } from "../src/shared/worker-templates.ts";
 import type { AccountDriver, AccountPolicies, AccountPolicy, AccountSpec, AgentAccount } from "../src/shared/accounts.ts";
+import type { AccountSelection } from "../src/shared/account-selection.ts";
 import type { Agent, AgentTrafficView, BotCredentialView, AttachmentMeta, Channel, Message, Project, SearchHit, Thread, ThreadStatus, InboxStatus } from "../src/shared/types.ts";
 import type { ActivityPage, ActivityReason, MentionPage, ReadSnapshot } from "../src/shared/read-state.ts";
 import { resolveUploadMime } from "../src/shared/mime.ts";
@@ -229,6 +230,9 @@ export const api = {
     req<AccountsView>("/api/ui/accounts/order", { method: "PUT", body: JSON.stringify({ driver, ids }) }),
   setAccountPolicy: (driver: AccountDriver, policy: AccountPolicy) =>
     req<AccountsView>("/api/ui/accounts/policy", { method: "PUT", body: JSON.stringify({ driver, policy }) }),
+  /** The account a launch uses: the pin, else the driver's policy. `record` counts it as used (docs/accounts.md). */
+  resolveAccount: (body: { driver: AccountDriver; accountId?: string | null; record?: boolean }) =>
+    req<{ selection: AccountSelection }>("/api/ui/accounts/resolve", { method: "POST", body: JSON.stringify(body) }),
   createBot: (projectId: string, name: string) => req<{ bot: Agent; token: string }>(
     `/api/ui/projects/${encodeURIComponent(projectId)}/bots`, { method: "POST", body: JSON.stringify({ name }) },
   ),

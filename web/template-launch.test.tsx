@@ -9,6 +9,8 @@ import { Hive } from "../src/server/hive.ts";
 import { createApp } from "../src/server/app.ts";
 import type { NativeMessage } from "./native-bridge.ts";
 import type { WorkerTemplateSpec } from "../src/shared/worker-templates.ts";
+import type { AccountSpec } from "../src/shared/accounts.ts";
+import type { AccountSelection } from "../src/shared/account-selection.ts";
 
 const window = new Window({ url: "http://127.0.0.1:7420/" });
 Object.assign(globalThis, { window, document: window.document, localStorage: window.localStorage, CustomEvent: window.CustomEvent,
@@ -16,7 +18,7 @@ Object.assign(globalThis, { window, document: window.document, localStorage: win
 const { createRoot } = await import("react-dom/client");
 const { TERMINAL_EVENT } = await import("./native-bridge.ts");
 const { resetTerminalHub } = await import("./use-terminal.ts");
-const { TemplateLaunchSheet } = await import("./TemplateLaunch.tsx");
+const { TemplateLaunchSheet, accountOutcome } = await import("./TemplateLaunch.tsx");
 after(() => window.happyDOM.close());
 
 const spec = (patch: Partial<WorkerTemplateSpec> = {}): WorkerTemplateSpec => ({
@@ -25,17 +27,36 @@ const spec = (patch: Partial<WorkerTemplateSpec> = {}): WorkerTemplateSpec => ({
   maxConcurrent: 2, enabled: true, ...patch,
 });
 
-async function fixture(t: TestContext, native: boolean) {
+const account = (patch: Partial<AccountSpec> = {}): AccountSpec => ({ driver: "codex", label: "Work", homePath: "", shadowPath: "", ...patch });
+
+type Options = {
+  patch?: Partial<WorkerTemplateSpec>;
+  /** Accounts Human has; `pin` makes the template pin the first of them. */
+  accounts?: AccountSpec[];
+  pin?: boolean;
+  /** What the resolve endpoint answers instead of the server's own choice (the server has no usage yet). */
+  resolution?: AccountSelection;
+};
+
+async function fixture(t: TestContext, native: boolean, options: Options = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "template-launch-ui-"));
   const hive = new Hive(path.join(dir, "hive.db"));
   const app = createApp(hive);
   const human = hive.identity.getAgent("human");
   const project = { ...hive.projects.listProjects()[0]!, worktree: "/Users/me/acme" };
-  const template = hive.workerTemplates.create(human, project.id, { slug: "opencode", spec: spec() });
+  const accounts = (options.accounts ?? []).map(item => hive.accounts.create(human, item));
+  const template = hive.workerTemplates.create(human, project.id, { slug: "opencode",
+    spec: spec({ ...options.patch, ...(options.pin ? { accountId: accounts[0]!.id } : {}) }) });
   let copied = "";
+  // Every resolve request the sheet sends, as its body.
+  const resolves: unknown[] = [];
   Object.defineProperty(globalThis.navigator, "clipboard", { configurable: true, value: { writeText: async (text: string) => { copied = text; } } });
   t.mock.method(globalThis, "fetch", async (url: string, init?: RequestInit) => {
     if (url === "/api/ui/session") return Response.json({ ok: true }, { headers: { "cache-control": "no-store" } });
+    if (url === "/api/ui/accounts/resolve") {
+      resolves.push(JSON.parse(String(init?.body)));
+      if (options.resolution) return Response.json({ selection: options.resolution });
+    }
     return app.request(url, init);
   });
   const posted: NativeMessage[] = [];
@@ -66,7 +87,8 @@ async function fixture(t: TestContext, native: boolean) {
     await act(async () => button.click());
     await settle();
   };
-  return { hive, host, template, type, click, settle, posted, copied: () => copied };
+  const button = (label: string) => Array.from(host.querySelectorAll("button")).find(b => b.textContent?.trim() === label);
+  return { hive, host, template, accounts, type, click, button, settle, posted, copied: () => copied, resolves: () => resolves };
 }
 
 test("in a browser, Reserve and copy reserves a worker named after the task and copies its ticketed command", async t => {
@@ -103,4 +125,53 @@ test("in the apps, Start launches the reserved worker in tmux with its template,
     names: [`hm-acme-${worker!.name.toLowerCase()}`], created: [`hm-acme-${worker!.name.toLowerCase()}`], errors: [] } })); });
   await f.settle();
   assert.match(f.host.textContent!, new RegExp(`Started ${worker!.name}\\.`));
+});
+
+test("in the apps, Start under the template's pinned account attaches it, and the notice says which", async t => {
+  const f = await fixture(t, true, { accounts: [account()], pin: true, patch: { software: "codex", environment: {}, secretNames: [] } });
+  await act(async () => { window.dispatchEvent(new window.CustomEvent(TERMINAL_EVENT, { detail: { type: "terminal-status", tmux: "available", broker: "connected" } })); });
+  await f.type("Task", "api");
+  await f.click("Start in background");
+  const launch = f.posted.find(message => message.type === "terminal-launch");
+  assert.ok(launch && "launches" in launch);
+  assert.deepEqual(launch.launches[0]!.account, { id: f.accounts[0]!.id, driver: "codex", label: "Work", homePath: "", shadowPath: "" });
+  assert.deepEqual(f.resolves(), [{ driver: "codex", accountId: f.accounts[0]!.id, record: true }]);
+  await act(async () => { window.dispatchEvent(new window.CustomEvent(TERMINAL_EVENT, { detail: { type: "terminal-launched", id: launch.id,
+    names: ["hm-acme-api"], created: ["hm-acme-api"], errors: [] } })); });
+  await f.settle();
+  assert.match(f.host.textContent!, /Account: Work · usage unknown/);
+});
+
+test("an exhausted account reserves no worker and says when the first one resets", async t => {
+  const f = await fixture(t, true, { accounts: [account()], pin: true, patch: { software: "codex", environment: {}, secretNames: [] },
+    resolution: { kind: "exhausted", earliestReset: Date.now() + 2 * 3_600_000 + 60_000 } });
+  await act(async () => { window.dispatchEvent(new window.CustomEvent(TERMINAL_EVENT, { detail: { type: "terminal-status", tmux: "available", broker: "connected" } })); });
+  await f.type("Task", "api");
+  await f.click("Start in background");
+  assert.deepEqual(f.hive.identity.listAgents().filter(agent => agent.templateId === f.template.id), []);
+  assert.equal(f.posted.some(message => message.type === "terminal-launch"), false);
+  assert.match(f.host.textContent!, /Every Codex account is used up\. The first resets at .+ \(in 2h\)\./);
+  assert.doesNotMatch(f.host.textContent!, /gives up after 30 minutes/, "nothing was reserved, so nothing gives up");
+});
+
+test("in the apps, a variable the account controls disables Start, and Reserve and copy stays open", async t => {
+  const f = await fixture(t, true, { accounts: [account()], patch: { software: "codex", environment: { CODEX_HOME: "/tmp/elsewhere" }, secretNames: [] } });
+  await act(async () => { window.dispatchEvent(new window.CustomEvent(TERMINAL_EVENT, { detail: { type: "terminal-status", tmux: "available", broker: "connected" } })); });
+  assert.match(f.host.textContent!, /CODEX_HOME is managed by the account Work; remove it\./);
+  assert.equal(f.button("Start in background")!.disabled, true);
+  assert.equal(f.button("Reserve and copy")!.disabled, false);
+});
+
+test("each resolved account reads as the launch's line or as the reason it cannot start", () => {
+  const now = Date.UTC(2026, 0, 1, 9);
+  const work = { id: "acct_1", driver: "codex" as const, label: "Work", homePath: "", shadowPath: "", command: "codex" as const,
+    order: 0, revision: 1, lastSelectedAt: null, createdAt: 1, updatedAt: 1 };
+  assert.deepEqual(accountOutcome({ kind: "none" }, "codex", now), { ok: true, account: null, text: null });
+  const warning = "Work is used up until 2026-01-01T10:00:00.000Z";
+  assert.deepEqual(accountOutcome({ kind: "account", account: work, reason: "pin", stale: false, warning }, "codex", now),
+    { ok: true, account: { id: "acct_1", driver: "codex", label: "Work", homePath: "", shadowPath: "" }, text: `Account: Work · ${warning}` });
+  assert.deepEqual(accountOutcome({ kind: "exhausted", earliestReset: null }, "claude", now),
+    { ok: false, text: "Every Claude account is used up." });
+  assert.deepEqual(accountOutcome({ kind: "unknown-pin", pin: "gone" }, "codex", now),
+    { ok: false, text: "That account was removed; pick another." });
 });

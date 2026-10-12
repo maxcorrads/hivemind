@@ -3,15 +3,46 @@ import { useEffect, useMemo, useState } from "react";
 import type { Agent, Project } from "../src/shared/types.ts";
 import { buildLaunchCommand, codexSessionTitle, launchBlockText, projectLaunchTools, type LaunchContext } from "../src/shared/launch-prompt.ts";
 import type { WorkerTemplate } from "../src/shared/worker-templates.ts";
+import { accountDriverForSoftware, accountEnvironmentConflict, toLaunchAccount, type AccountDriver, type AgentAccount,
+  type LaunchAccount } from "../src/shared/accounts.ts";
+import type { AccountSelection } from "../src/shared/account-selection.ts";
 import { api } from "./api.ts";
 import { Modal } from "./Modal.tsx";
 import { inNativeApp, onMacDesktop, terminalSessionLaunchProblem } from "./native-bridge.ts";
+import { relativeTime } from "./RelativeTime.tsx";
 import { SessionsSheet } from "./SessionsSheet.tsx";
 import { TerminalNotice } from "./TerminalNotice.tsx";
 import { terminalBlocker, terminalHub, useTerminalState } from "./use-terminal.ts";
 
 /** Stands in for the ticket in the preview: the real one exists only once Start reserves the worker. */
 const PREVIEW_TICKET = `hmc_${"0".repeat(48)}`;
+
+/** What a launch's account means for it: the account to attach and its line, or why the launch cannot start. */
+export type AccountOutcome = { ok: true; account: LaunchAccount | null; text: string | null } | { ok: false; text: string };
+
+const DRIVER_NAMES: Record<AccountDriver, string> = { codex: "Codex", claude: "Claude" };
+
+/** The Launch sheet's and template launch's reading of a resolved account (docs/accounts.md). */
+export function accountOutcome(selection: AccountSelection, driver: AccountDriver, now: number): AccountOutcome {
+  if (selection.kind === "none") return { ok: true, account: null, text: null };
+  if (selection.kind === "unknown-pin") return { ok: false, text: "That account was removed; pick another." };
+  if (selection.kind === "exhausted") {
+    const name = DRIVER_NAMES[driver];
+    if (selection.earliestReset === null) return { ok: false, text: `Every ${name} account is used up.` };
+    const reset = selection.earliestReset;
+    return { ok: false, text: `Every ${name} account is used up. The first resets at ${new Date(reset).toLocaleString()} (${relativeTime(reset, now)}).` };
+  }
+  const line = [`Account: ${selection.account.label}`, selection.warning, selection.stale ? "usage unknown" : null];
+  return { ok: true, account: toLaunchAccount(selection.account), text: line.filter(Boolean).join(" · ") };
+}
+
+/** Start only: the account the worker runs under, from the template's pin or its driver's policy (the server records it). */
+async function resolveTemplateAccount(template: WorkerTemplate): Promise<AccountOutcome> {
+  const driver = accountDriverForSoftware(template.spec.software);
+  if (!driver) return { ok: true, account: null, text: null };
+  const { selection } = await api.resolveAccount({ driver, accountId: template.spec.accountId ?? null, record: true });
+  return accountOutcome(selection, driver, Date.now());
+}
 
 /** The command a reserved worker's launch runs: the template's CLI with a prompt that joins it with its ticket. */
 export function templateLaunch(template: WorkerTemplate, project: Project, context: LaunchContext | undefined, workspacePath: string,
@@ -49,6 +80,14 @@ export function TemplateLaunchSheet({ projects, agents, defaultProject, onBack, 
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [started, setStarted] = useState<string | null | undefined>(undefined);
+  const [catalog, setCatalog] = useState<AgentAccount[]>([]);
+
+  useEffect(() => {
+    let active = true;
+    // Only the conflict check reads the catalog; the server still resolves the account when Start is pressed.
+    api.accounts().then(view => { if (active) setCatalog(view.accounts); }).catch(() => undefined);
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     if (!project) return;
@@ -82,6 +121,12 @@ export function TemplateLaunchSheet({ projects, agents, defaultProject, onBack, 
   }, [template, project, context, workspacePath]);
   const blocker = native ? terminalBlocker(terminals) : null;
   const canStart = Boolean(template && project && preview?.ok && !full && !busy && (!native || !blocker));
+  // The conflict depends on the driver only, so the pinned account (else the first) stands in for the policy's pick.
+  const templateDriver = template ? accountDriverForSoftware(template.spec.software) : null;
+  const driverAccounts = templateDriver ? catalog.filter(account => account.driver === templateDriver) : [];
+  const accountForConflict = driverAccounts.find(account => account.id === template?.spec.accountId) ?? driverAccounts[0];
+  const accountConflict = native && template && accountForConflict
+    ? accountEnvironmentConflict(template.spec.environment, template.spec.secretNames, toLaunchAccount(accountForConflict)) : null;
 
   /** Reserves the worker, then starts it in tmux (the apps) or copies its command. */
   const go = async (openInTerminal: boolean | null) => {
@@ -89,7 +134,15 @@ export function TemplateLaunchSheet({ projects, agents, defaultProject, onBack, 
     setBusy(true);
     setError("");
     setNotice("");
+    // Only a failure from the reservation on can leave a reserved worker behind.
+    let reserving = false;
     try {
+      // Before the reservation, so an account that cannot run the worker leaves no reserved worker behind.
+      const account = openInTerminal === null
+        ? { ok: true as const, account: null, text: null }
+        : await resolveTemplateAccount(template);
+      if (!account.ok) throw new Error(account.text);
+      reserving = true;
       const { agent, ticket } = await api.reserveWorker(template.id, label.trim() || null);
       const launch = templateLaunch(template, project, context, workspacePath, { ticket, name: agent.name });
       const environment = Object.keys(template.spec.environment).length ? template.spec.environment : undefined;
@@ -101,15 +154,15 @@ export function TemplateLaunchSheet({ projects, agents, defaultProject, onBack, 
       }
       const hub = terminalHub();
       const item = { project: project.slug, agent: agent.name, title: codexSessionTitle(project.name, agent.name) || agent.name, ...launch,
-        ...(environment ? { environment } : {}), template: template.id };
+        ...(environment ? { environment } : {}), template: template.id, ...(account.account ? { account: account.account } : {}) };
       const problem = terminalSessionLaunchProblem([item]);
       if (!hub || problem) throw new Error(problem ?? "Terminals are available only in Hivemind.app");
       const result = await hub.launch([item], openInTerminal);
       if (result.errors.length) throw new Error(result.errors.map(item => item.message).join("\n"));
-      if (terminalApp) setNotice(`Started ${agent.name}.`);
+      if (terminalApp) setNotice([`Started ${agent.name}.`, account.text].filter(Boolean).join(" "));
       else setStarted(result.names[0] ?? null);
     } catch (failure) {
-      setError(`${String((failure as Error).message || failure)} A worker already reserved gives up after 30 minutes.`);
+      setError(`${String((failure as Error).message || failure)}${reserving ? " A worker already reserved gives up after 30 minutes." : ""}`);
     } finally {
       setBusy(false);
     }
@@ -175,6 +228,7 @@ export function TemplateLaunchSheet({ projects, agents, defaultProject, onBack, 
             </section>
           ) : <p className="help-p">{preview.error}</p>)}
           {native && blocker && <TerminalNotice blocker={blocker} compact />}
+          {native && accountConflict && <p className="err" role="alert">{accountConflict}</p>}
           {error && <p className="err" role="alert">{error}</p>}
           {notice && <p className="help-p" role="status">{notice}</p>}
         </div>
@@ -184,12 +238,13 @@ export function TemplateLaunchSheet({ projects, agents, defaultProject, onBack, 
             <Copy size={14} aria-hidden="true" /> Reserve and copy
           </button>
           {native && (
-            <button type="button" className={terminalApp ? "btn" : "primary"} disabled={!canStart} onClick={() => void go(false)}>
+            <button type="button" className={terminalApp ? "btn" : "primary"} disabled={!canStart || Boolean(accountConflict)}
+              onClick={() => void go(false)}>
               <Play size={14} aria-hidden="true" /> {busy ? "Launching…" : terminalApp ? "Start in background" : "Start on Mac"}
             </button>
           )}
           {terminalApp && (
-            <button type="button" className="primary" disabled={!canStart} onClick={() => void go(true)}>
+            <button type="button" className="primary" disabled={!canStart || Boolean(accountConflict)} onClick={() => void go(true)}>
               <SquareTerminal size={14} aria-hidden="true" /> Open in Terminal
             </button>
           )}
