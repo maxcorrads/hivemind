@@ -45,15 +45,15 @@ private func date(ms: Int) -> Date {
 struct ClaudeUsageTests {
   @Test func statusLineKeepsBothWindowsAndIgnoresOtherFields() {
     #expect(ClaudeUsage.parseStatusLine(Data(statusA.utf8)) == [
-      UsageWindow(key: "five_hour", label: "Session (5 h)", usedPercent: 23.5, resetsAt: 1_791_820_800_000),
-      UsageWindow(key: "seven_day", label: "Week", usedPercent: 41.2, resetsAt: 1_792_252_800_000),
+      UsageWindow(key: "five_hour", label: "Session (5 h)", usedPercent: 23.5, resetsAt: 1_791_820_800_000, windowMs: 18_000_000),
+      UsageWindow(key: "seven_day", label: "Week", usedPercent: 41.2, resetsAt: 1_792_252_800_000, windowMs: 604_800_000),
     ])
   }
 
   @Test func statusLineWithOnlySevenDayKeepsThatWindow() {
     #expect(statusB != statusA, "fixture B is derived from A")
     #expect(ClaudeUsage.parseStatusLine(Data(statusB.utf8)) == [
-      UsageWindow(key: "seven_day", label: "Week", usedPercent: 100, resetsAt: 1_792_252_800_000),
+      UsageWindow(key: "seven_day", label: "Week", usedPercent: 100, resetsAt: 1_792_252_800_000, windowMs: 604_800_000),
     ])
   }
 
@@ -64,24 +64,24 @@ struct ClaudeUsageTests {
   @Test func statusLineClampsPercentAndKeepsAMissingResetAsNil() {
     let json = #"{"rate_limits":{"five_hour":{"used_percentage":140,"resets_at":null},"seven_day":{"used_percentage":-3,"resets_at":1792252800},"seven_day_opus":{"used_percentage":9,"resets_at":1792252800}}}"#
     #expect(ClaudeUsage.parseStatusLine(Data(json.utf8)) == [
-      UsageWindow(key: "five_hour", label: "Session (5 h)", usedPercent: 100, resetsAt: nil),
-      UsageWindow(key: "seven_day", label: "Week", usedPercent: 0, resetsAt: 1_792_252_800_000),
+      UsageWindow(key: "five_hour", label: "Session (5 h)", usedPercent: 100, resetsAt: nil, windowMs: 18_000_000),
+      UsageWindow(key: "seven_day", label: "Week", usedPercent: 0, resetsAt: 1_792_252_800_000, windowMs: 604_800_000),
     ])
   }
 
   @Test func statusLineLeavesOutAWindowWithoutAPercentage() {
     let json = #"{"rate_limits":{"five_hour":{"resets_at":1791820800},"seven_day":{"used_percentage":41.2,"resets_at":1792252800}}}"#
     #expect(ClaudeUsage.parseStatusLine(Data(json.utf8)) == [
-      UsageWindow(key: "seven_day", label: "Week", usedPercent: 41.2, resetsAt: 1_792_252_800_000),
+      UsageWindow(key: "seven_day", label: "Week", usedPercent: 41.2, resetsAt: 1_792_252_800_000, windowMs: 604_800_000),
     ])
   }
 
   @Test func cacheOfTheSameAccountGivesItsWindowsSortedByKey() {
     let windows = ClaudeUsage.parseUsageCache(claudeJSON: Data(claudeJSON().utf8), now: date(ms: fetchedAtMs + 1_800_000))
     #expect(windows == [
-      UsageWindow(key: "five_hour", label: "Session (5 h)", usedPercent: 23, resetsAt: 1_791_820_800_000),
-      UsageWindow(key: "seven_day", label: "Week", usedPercent: 41, resetsAt: 1_792_137_600_000),
-      UsageWindow(key: "seven_day_opus", label: "Opus (week)", usedPercent: 12, resetsAt: 1_792_137_600_000),
+      UsageWindow(key: "five_hour", label: "Session (5 h)", usedPercent: 23, resetsAt: 1_791_820_800_000, windowMs: 18_000_000),
+      UsageWindow(key: "seven_day", label: "Week", usedPercent: 41, resetsAt: 1_792_137_600_000, windowMs: 604_800_000),
+      UsageWindow(key: "seven_day_opus", label: "Opus (week)", usedPercent: 12, resetsAt: 1_792_137_600_000, windowMs: 604_800_000),
     ])
   }
 
@@ -101,17 +101,20 @@ struct ClaudeUsageTests {
     #expect(ClaudeUsage.parseUsageCache(claudeJSON: Data(noAccount.utf8), now: now) == nil)
   }
 
-  @Test func cacheOlderThanAnHourIsNil() {
+  @Test func cacheOlderThanEightDaysIsNil() {
     let data = Data(claudeJSON().utf8)
-    #expect(ClaudeUsage.parseUsageCache(claudeJSON: data, now: date(ms: fetchedAtMs + 3_600_000)) != nil, "an hour old still counts")
-    #expect(ClaudeUsage.parseUsageCache(claudeJSON: data, now: date(ms: fetchedAtMs + 3_600_001)) == nil)
+    let eightDays = 8 * 86_400_000
+    #expect(ClaudeUsage.parseUsageCache(claudeJSON: data, now: date(ms: fetchedAtMs + 22 * 3_600_000)) != nil,
+            "a day-old cache still counts: the probe sends it with its own age, as stale")
+    #expect(ClaudeUsage.parseUsageCache(claudeJSON: data, now: date(ms: fetchedAtMs + eightDays)) != nil)
+    #expect(ClaudeUsage.parseUsageCache(claudeJSON: data, now: date(ms: fetchedAtMs + eightDays + 1)) == nil)
   }
 
   @Test func cacheClampsPercentAndReadsZuluTimes() {
     let cache = #"{"fetchedAtMs":\#(fetchedAtMs),"accountUuid":"\#(fakeUUID)","utilization":{"five_hour":{"utilization":120,"resets_at":"2026-10-16T08:00:00Z"},"seven_day_sonnet":{"utilization":-1,"resets_at":null}}}"#
     #expect(ClaudeUsage.parseUsageCache(claudeJSON: Data(claudeJSON(cache: cache).utf8), now: date(ms: fetchedAtMs)) == [
-      UsageWindow(key: "five_hour", label: "Session (5 h)", usedPercent: 100, resetsAt: 1_792_137_600_000),
-      UsageWindow(key: "seven_day_sonnet", label: "Sonnet (week)", usedPercent: 0, resetsAt: nil),
+      UsageWindow(key: "five_hour", label: "Session (5 h)", usedPercent: 100, resetsAt: 1_792_137_600_000, windowMs: 18_000_000),
+      UsageWindow(key: "seven_day_sonnet", label: "Sonnet (week)", usedPercent: 0, resetsAt: nil, windowMs: 604_800_000),
     ])
   }
 

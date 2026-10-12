@@ -50,7 +50,7 @@ async function fixture(t: TestContext) {
   return { hive, human, render, row };
 }
 
-test("an account shows each window as a bar, a used number, its reset and a countdown, under its row", async t => {
+test("an account shows each window as a bar of what is left, its reset and a countdown, under its row", async t => {
   const f = await fixture(t);
   const work = f.hive.accounts.create(f.human, spec());
   f.hive.accountUsage.record(usageSnapshot(work.id, { windows: [
@@ -62,23 +62,41 @@ test("an account shows each window as a bar, a used number, its reset and a coun
   const text = row.textContent!;
   assert.match(text, /Usage as of 2m ago/);
   assert.doesNotMatch(text, /stale/);
-  assert.equal(row.querySelector('progress[aria-label="5 h used"]')!.getAttribute("value"), "42.4");
-  assert.equal(row.querySelector('progress[aria-label="Week used"]')!.getAttribute("value"), "7");
-  assert.ok(text.includes("42% used") && text.includes("7% used"), "the used percent is shown as a number, rounded");
+  // Full when nothing is used, empty when the window is used up.
+  assert.equal(row.querySelector('progress[aria-label="5 h left"]')!.getAttribute("value"), "57.6");
+  assert.equal(row.querySelector('progress[aria-label="Week left"]')!.getAttribute("value"), "93");
+  assert.ok(text.includes("58% left") && text.includes("93% left"), "what is left is shown as a number, rounded");
+  assert.ok(text.includes("At this pace it lasts until the reset"), "both windows last at their pace so far");
   assert.ok(text.includes(`Resets ${local(NOW + 134 * MINUTE)} · in 2 h 14 min`));
   assert.ok(text.includes(`Resets ${local(NOW + 3 * DAY)} · in 3 d`));
 });
 
-test("an account with no snapshot is unknown, and a failed read shows its error as text", async t => {
+test("a window used faster than it lasts says when it runs out at this pace", async t => {
+  const f = await fixture(t);
+  const work = f.hive.accounts.create(f.human, spec());
+  // Read 2 min ago, 1 h into a 5 h window at 40%: the other 60% go in 1.5 h, before the reset.
+  f.hive.accountUsage.record(usageSnapshot(work.id, { windows: [
+    { key: "codex.primary", label: "5 h", usedPercent: 40, resetsAt: NOW - 2 * MINUTE + 4 * 60 * MINUTE, windowMs: 5 * 60 * MINUTE },
+  ] }));
+  await f.render();
+  const runsOut = NOW - 2 * MINUTE + 90 * MINUTE;
+  assert.ok(f.row("Codex work").textContent!.includes(`At this pace it runs out ${local(runsOut)} · in 1 h 28 min`));
+});
+
+test("an account with no read yet says how its numbers come, and only a real failure shows as an error", async t => {
   const f = await fixture(t);
   const claude = f.hive.accounts.create(f.human, spec({ driver: "claude", label: "Claude work", homePath: "~/.claude-work" }));
+  // What older Server.app builds sent before any Claude data: not shown as a failure.
   f.hive.accountUsage.record({ accountId: claude.id, capturedAt: NOW, source: "claude", plan: "unknown", windows: [],
     error: "No recent Claude usage data", limitErrorAt: null });
+  const broken = f.hive.accounts.create(f.human, spec({ label: "Codex broken", homePath: "~/.codex-broken" }));
+  f.hive.accountUsage.record(usageSnapshot(broken.id, { plan: "unknown", error: "Usage read failed" }));
   f.hive.accounts.create(f.human, spec({ label: "Codex new", homePath: "~/.codex-new" }));
   await f.render();
-  assert.match(f.row("Claude work").textContent!, /Usage unknown/);
-  assert.match(f.row("Claude work").textContent!, /Last read failed: No recent Claude usage data/);
-  assert.match(f.row("Codex new").textContent!, /Usage unknown/);
+  assert.match(f.row("Claude work").textContent!, /No usage yet\. Claude reports it from sessions Hivemind launches with this account/);
+  assert.doesNotMatch(f.row("Claude work").textContent!, /Last read failed/);
+  assert.match(f.row("Codex broken").textContent!, /Last read failed: Usage read failed/);
+  assert.match(f.row("Codex new").textContent!, /No usage yet: Hivemind Server\.app reads it every 5 minutes/);
   assert.equal(f.row("Codex new").querySelector("progress"), null);
 });
 
@@ -101,7 +119,7 @@ test("the countdown is drawn again every 30 s, without a reload", async t => {
   ] }), lastAttemptAt: NOW, lastError: null, limitResetAt: null, limitErrorAt: null };
   function Live() {
     const now = useNow();
-    return <AccountUsage usage={usage} now={now} />;
+    return <AccountUsage usage={usage} now={now} driver="codex" />;
   }
   const host = document.createElement("div"); document.body.append(host);
   const root = createRoot(host);

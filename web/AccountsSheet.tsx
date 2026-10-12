@@ -177,7 +177,7 @@ export function AccountsSheet({ tick = 0, onClose }: { tick?: number; onClose: (
                           </button>
                         </div>
                         <PreparedStatus account={account} prepared={preparedFor(account)} />
-                        <AccountUsage usage={usage.find(item => item.accountId === account.id)} now={now} />
+                        <AccountUsage usage={usage.find(item => item.accountId === account.id)} now={now} driver={account.driver} />
                       </>)}
                     </li>
                   ))}

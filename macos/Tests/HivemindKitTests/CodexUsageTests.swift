@@ -18,9 +18,9 @@ private let subscriberLines = [
 
 /// The windows of `subscriberLines`: the main bucket, then the extra bucket `codex_other` with no secondary window.
 private let subscriberWindows = [
-  UsageWindow(key: "codex.primary", label: "5 h", usedPercent: 42, resetsAt: 1_791_820_800_000),
-  UsageWindow(key: "codex.secondary", label: "Week", usedPercent: 17, resetsAt: 1_792_252_800_000),
-  UsageWindow(key: "codex_other.primary", label: "codex_other 30 min", usedPercent: 88, resetsAt: 1_791_810_000_000),
+  UsageWindow(key: "codex.primary", label: "5 h", usedPercent: 42, resetsAt: 1_791_820_800_000, windowMs: 18_000_000),
+  UsageWindow(key: "codex.secondary", label: "Week", usedPercent: 17, resetsAt: 1_792_252_800_000, windowMs: 604_800_000),
+  UsageWindow(key: "codex_other.primary", label: "codex_other 30 min", usedPercent: 88, resetsAt: 1_791_810_000_000, windowMs: 1_800_000),
 ]
 
 /// The init reply, which the parser never reads.
@@ -75,7 +75,7 @@ struct CodexUsageTests {
     #expect(exhausted != subscriberLines, "the exhausted variant changes the fixture")
     let parsed = CodexUsage.parseCodexProbe(lines: exhausted)
     #expect(parsed == .success(CodexUsageProbe(plan: "subscription", windows: [
-      UsageWindow(key: "codex.primary", label: "5 h", usedPercent: 100, resetsAt: 1_791_820_800_000),
+      UsageWindow(key: "codex.primary", label: "5 h", usedPercent: 100, resetsAt: 1_791_820_800_000, windowMs: 18_000_000),
       subscriberWindows[1],
       subscriberWindows[2],
     ])))
@@ -131,15 +131,15 @@ struct CodexUsageTests {
     ]
     #expect(try probe(lines).windows == [
       UsageWindow(key: "codex.primary", label: "Primary", usedPercent: 1, resetsAt: nil),
-      UsageWindow(key: "codex.secondary", label: "Month", usedPercent: 2, resetsAt: 1_792_252_800_000),
-      UsageWindow(key: "beta.primary", label: "beta Week", usedPercent: 3, resetsAt: 1_792_252_800_000),
-      UsageWindow(key: "beta.secondary", label: "beta 30 min", usedPercent: 4, resetsAt: nil),
+      UsageWindow(key: "codex.secondary", label: "Month", usedPercent: 2, resetsAt: 1_792_252_800_000, windowMs: 2_592_000_000),
+      UsageWindow(key: "beta.primary", label: "beta Week", usedPercent: 3, resetsAt: 1_792_252_800_000, windowMs: 604_800_000),
+      UsageWindow(key: "beta.secondary", label: "beta 30 min", usedPercent: 4, resetsAt: nil, windowMs: 1_800_000),
     ])
   }
 
   @Test func dayLengthIsDay() throws {
     let lines = [initLine, rateLimitsLine(primary: #"{"usedPercent":5,"windowDurationMins":1440,"resetsAt":1792252800}"#, secondary: "null"), accountLine("null")]
-    #expect(try probe(lines).windows == [UsageWindow(key: "codex.primary", label: "Day", usedPercent: 5, resetsAt: 1_792_252_800_000)])
+    #expect(try probe(lines).windows == [UsageWindow(key: "codex.primary", label: "Day", usedPercent: 5, resetsAt: 1_792_252_800_000, windowMs: 86_400_000)])
   }
 
   @Test func usedPercentIsClampedAndAMissingResetStaysNil() throws {
@@ -148,8 +148,8 @@ struct CodexUsageTests {
       secondary: #"{"usedPercent":-5,"windowDurationMins":10080,"resetsAt":1792252800}"#
     ), accountLine("null")]
     #expect(try probe(lines).windows == [
-      UsageWindow(key: "codex.primary", label: "5 h", usedPercent: 100, resetsAt: nil),
-      UsageWindow(key: "codex.secondary", label: "Week", usedPercent: 0, resetsAt: 1_792_252_800_000),
+      UsageWindow(key: "codex.primary", label: "5 h", usedPercent: 100, resetsAt: nil, windowMs: 18_000_000),
+      UsageWindow(key: "codex.secondary", label: "Week", usedPercent: 0, resetsAt: 1_792_252_800_000, windowMs: 604_800_000),
     ])
   }
 
@@ -178,8 +178,8 @@ struct CodexUsageTests {
       accountLine("null"),
     ]
     #expect(try probe(lines).windows == [
-      UsageWindow(key: "codex.primary", label: "5 h", usedPercent: 1, resetsAt: nil),
-      UsageWindow(key: "\(edgeId).primary", label: "edge 5 h", usedPercent: 4, resetsAt: nil),
+      UsageWindow(key: "codex.primary", label: "5 h", usedPercent: 1, resetsAt: nil, windowMs: 18_000_000),
+      UsageWindow(key: "\(edgeId).primary", label: "edge 5 h", usedPercent: 4, resetsAt: nil, windowMs: 18_000_000),
     ])
   }
 
