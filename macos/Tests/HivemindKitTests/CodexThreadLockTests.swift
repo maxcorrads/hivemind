@@ -117,11 +117,29 @@ struct CodexThreadLockBrokerTests {
     try #require(flock(fd, LOCK_EX) == 0)
     await h.start()
     let (transport, connection) = await h.client()
-    await h.send(connection, .launch([brokerLaunch("Atlas", command: "codex resume \(thread)"), brokerLaunch(nil)]))
+    let primary = LaunchAccount(id: "a0", driver: .codex, label: "Codex", homePath: "", shadowPath: "")
+    let resume = try BrokerLaunch(project: "acme", agent: "Atlas", title: "Acme - Atlas", cwd: "/Users/me/acme",
+                                  command: "codex resume \(thread)", account: primary)
+    await h.send(connection, .launch([resume, brokerLaunch(nil)]))
     let second = SessionName("hm-acme-new-1")!
     let message = "launches[0].command: Codex thread `\(thread)` is already open in another process. Close it there, or start a new session."
     #expect(transport.events().first == .launched(
       names: [nil, second], created: [second], errors: [BrokerLaunchFailure(index: 0, code: .internal, message: message)]))
+    #expect(h.tmux.calls("new-session").count == 1)
+  }
+
+  @Test func withoutAnAccountAResumeOfAnOpenThreadRunsAsBefore() async throws {
+    let (h, root, folder) = try harness()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let fd = open(folder + "/\(thread).lock", O_RDWR | O_CREAT, 0o600)
+    try #require(fd >= 0)
+    defer { close(fd) }
+    try #require(flock(fd, LOCK_EX) == 0)
+    await h.start()
+    let (transport, connection) = await h.client()
+    await h.send(connection, .launch([brokerLaunch("Atlas", command: "codex resume \(thread)")]))
+    let atlas = SessionName("hm-acme-atlas")!
+    #expect(transport.events().first == .launched(names: [atlas], created: [atlas], errors: []), "no account, no check: Codex decides")
     #expect(h.tmux.calls("new-session").count == 1)
   }
 

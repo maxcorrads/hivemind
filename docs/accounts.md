@@ -193,8 +193,8 @@ A server error shows as text in the sheet. An `accounts` event refetches the lis
 Each account logs in once, in a terminal on the Mac that launches; the commands are in [Logging in](#logging-in). The
 sheet shows the command for the paths typed in **Add account**, before a label is typed.
 
-For a Codex shadow, **Prepare** first, then run the command the row shows: the login then finds the links in place,
-as [Logging in](#logging-in) describes. Claude accounts are prepared from phase 4.
+For a Codex or Claude shadow, **Prepare** first, then run the command the row shows: the login then finds the links in
+place, as [Logging in](#logging-in) describes.
 
 ## Choosing an account
 
@@ -328,8 +328,7 @@ items start. Prepare shows the same message on the row, without the prefix.
 | "`<shadow>` has no login yet. Run `<login command>` to log in." | Log in with the row's command, then launch again. |
 | "`<home>/config.toml` sets cli_auth_credentials_store = `<value>`; shadow accounts need `file` (or no setting)." | Remove the line or set it to `file`, as in [Shared config](#shared-config). |
 | "Cannot link `<link>` to `<target>`", "Cannot create `<path>`", "Cannot read `<path>`", each with the system's reason | The Mac user cannot write there, or the volume refuses. Fix the folder's permissions or the volume, then Prepare. |
-| "Claude shadow accounts arrive in phase 4" (and "Preparing Claude accounts arrives in phase 4" on a Claude row) | Claude accounts are prepared from phase 4 ([#324](https://github.com/maxcorrads/hivemind/issues/324)). Until then a Claude account without a `shadowPath` launches as before. |
-| "Codex thread `<id>` is already open in another process. Close it there, or start a new session." (`launches[<i>].command`) | A `codex resume <id>` or `codex exec resume <id>` launch found the thread's writer lock held by another process. Close the thread there, or start a new session. `--last`, names and `fork` are not checked. Codex refuses a second writer by itself. |
+| "Codex thread `<id>` is already open in another process. Close it there, or start a new session." (`launches[<i>].command`) | A `codex resume <id>` or `codex exec resume <id>` launch with an account found the thread's writer lock held by another process. Without an account nothing is checked. Close the thread there, or start a new session. `--last`, names and `fork` are not checked. Codex refuses a second writer by itself. |
 | "Cannot check `<path>`: <reason>" (`launches[<i>].command`) | The thread's lock folder in the shared home cannot be read or locked. Fix its permissions, then launch again. |
 
 ### Known replacements of a link
@@ -363,7 +362,142 @@ shadow of the shared home.
 
 ## Claude shadow
 
-(phase 4, [#324](https://github.com/maxcorrads/hivemind/issues/324))
+A second Claude login on one shared tree's transcripts. The shadow links the transcripts, history, file history, pastes,
+plans and tasks from the shared tree and keeps its own login, settings and live-session state. The account's `homePath`
+is the shared tree and its `shadowPath` is the shadow folder ([An account](#an-account)). Hivemind Server.app builds the
+shadow when the account is prepared and checks it again before each launch. It deletes, moves and chmods nothing, and it
+never reads a login.
+
+### Layout
+
+A shared name is linked when the shared tree has it. Five folders are created in the shared tree (0700) when missing, so
+those are always linked. A second run on a good shadow changes nothing.
+
+| Class | Names | In the shadow |
+| --- | --- | --- |
+| Shared | `projects`, `history.jsonl`, `file-history`, `paste-cache`, `plans`, `tasks` | A link to the shared tree's entry. `projects`, `file-history`, `paste-cache`, `plans` and `tasks` are always linked; `history.jsonl` only when the shared tree has it |
+| Private: login and settings | `.claude.json`, `.claude.json.lock`, `.config.json`, `.credentials.json`, `backups`, `settings.json`, `settings.local.json`, `settings.json.bak`, `policy-limits.json`, `policy-limits.json.stamp.json`, `remote-settings.json`, `mcp-needs-auth-cache.json` | Real, kept by the shadow. Never linked |
+| Private: sessions and daemon | `sessions`, `session-env`, `shell-snapshots`, `daemon`, `daemon.log`, `daemon-auth-status.json`, `daemon-auth-cooldown`, `jobs`, `debug`, `state`, `ide` | Real, kept by the shadow. Never linked |
+| Private: plugins and caches | `plugins`, `skills`, `chrome`, `telemetry`, `feedback`, `feedback-bundles`, `statusline-command.sh`, `cache`, `stats-cache.json`, `gh-pr-status-cache.json`, `.last-cleanup`, `.last-update-result.json`, `usage-data`, `downloads` | Real, kept by the shadow. Never linked |
+| Ignored | `.DS_Store` | Skipped. Never linked, never a conflict |
+| Other | any name in none of the lists | Kept private: real in the shadow, never linked, never an error |
+
+Only the shared row is linked. A shadow does not see the shared tree's own `CLAUDE.md`, `agents`, `commands`, `skills` or
+`plugins`; it starts without them and keeps its own.
+
+### Login check and command
+
+An account is logged in when its folder has a regular file `.credentials.json`, or a regular file `.claude.json` that
+parses as a JSON object with a top-level `oauthAccount` key. Hivemind looks only at that key, never at its value. A
+primary account is checked the same way in its shared tree. Log in once, in a terminal on the same Mac:
+
+```sh
+mkdir -p <shadow> && CLAUDE_CONFIG_DIR=<shadow> claude auth login
+```
+
+### Why `CLAUDE_CONFIG_DIR`, never `HOME`
+
+With `CLAUDE_CONFIG_DIR` set, Claude reads and writes `<shadow>/.claude.json` and never `~/.claude.json`, and its keychain
+item is keyed by the same folder. The login, settings and live-session state therefore follow the folder. `HOME` is never
+set: it would move every `~/` for the session, including the git and ssh settings other tools read, and Claude does not
+need it. Claude still reads two things from the real home: `~/.claude/ide/` (IDE lockfiles, read only) and
+`~/.config/anthropic` (global Anthropic profiles). Per Claude's docs, separate folders do not keep two Console sign-ins
+apart.
+
+### Exact path for the keychain
+
+Claude keys its keychain login to the exact `CLAUDE_CONFIG_DIR` string: the item is `Claude Code-credentials-<first 8 hex
+of the sha256 of that string>`. It does not resolve symlinks or trim a trailing `/`, so another spelling of the same folder
+is another item, and the account looks logged out. Hivemind therefore exports the shadow exactly as the account stores it,
+with only a leading `~/` expanded, and Prepare and each launch refuse a shadow with a trailing `/` or a symlink in it: "Use
+the real path of `<dir>`: Claude keys its login to the exact folder name." `<dir>` is the path to store instead. A
+primary's `homePath` is exported the same way and is not checked for a symlink, so log in with the same string the
+account stores.
+
+### cleanupPeriodDays
+
+Each config folder runs Claude's retention sweep over the shared `projects/`, with its own `cleanupPeriodDays` and its own
+`.last-cleanup`. So the shadow's `settings.json` and the shared tree's must set the same top-level `cleanupPeriodDays`; a
+missing file or key means the default. Otherwise the smallest value deletes every account's transcripts. Hivemind reads only
+this key in each file. It refuses a shadow whose two values differ, and a `settings.json` that is not a JSON object. Prepare
+gives a new shadow that has no `settings.json` the shared tree's value: it writes a `settings.json` (0600) holding only
+`cleanupPeriodDays`. A launch never writes it.
+
+### Variables and project settings
+
+With an account, Claude gets `CLAUDE_CONFIG_DIR=<shadowPath, or homePath>` when one is set ([Variables](#variables)). Its
+controlled names are `CLAUDE_CONFIG_DIR`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN` and
+`CLAUDE_SECURESTORAGE_CONFIG_DIR` (undocumented; it overrides the keychain's hash input). The broker unsets the ones the
+account does not set. These variables and an `apiKeyHelper` outrank the folder's login.
+
+Before a launch with an account, Hivemind reads `<cwd>/.claude/settings.json` and then `<cwd>/.claude/settings.local.json`.
+A missing or unreadable file is no check. The item is refused when a file sets a top-level `apiKeyHelper`, or has an `env`
+key named as a controlled name (without case): "`<file>` sets `<KEY>`, which overrides the account `<label>`. Remove it from
+that file." Only key names are read, never values, and no value is logged. The account's own `settings.json` in its folder
+is not checked, so keep the same keys out of it too.
+
+### Same API
+
+Share a tree only between first-party Claude logins. Never share one with a login that goes through a proxy or OpenRouter
+(see [pingdotgg/t3code#2365](https://github.com/pingdotgg/t3code/issues/2365)).
+
+### One writer per transcript
+
+A launch of `claude` with an account that resumes a transcript is refused while another process has it open. A launch
+without an account runs as it always did, and Claude decides. `--resume <id>`, `-r <id>` or `--resume=<id>` is refused when a live session has that id. `--continue` or `-c` is
+refused when a live session has the launch's folder, compared by real path. New sessions are always allowed, and so is
+`--fork-session`. `--resume` with no id opens Claude's picker and is not checked.
+
+Claude keeps live sessions in `sessions/<pid>.json` in each config folder, and sees only its own. Hivemind reads only the
+`pid`, `sessionId`, `procStart`, `pidDomain` and `cwd` of each `sessions/[0-9]*.json`, in the shared tree and in each shadow
+it knows, and never opens `sessions/*.key`. A record is live when `pidDomain` is `darwin`, `kill(pid, 0)` succeeds, and the
+process start time equals `procStart`. The broker never reads the catalog: it learns a shadow when an account of it
+launches or is prepared, so after Hivemind Server.app restarts a shadow counts again from its next launch or Prepare.
+
+### Parallel accounts
+
+Parallel Claude accounts are allowed. Each has its own `.claude.json`, keychain item, settings and `sessions/`, so two can run
+at once. The `~/.claude.json` swap and the "one Claude account at a time" limit of #319 are dropped ([Decisions](#decisions)).
+
+### Prepare, then log in
+
+1. In **Settings → Accounts**, use **Add account** with the shared tree as `homePath` (empty for `~/.claude`) and the folder
+   as `shadowPath`, written as its real path.
+2. `cleanupPeriodDays` must match between the shared tree's `settings.json` and the shadow's. For a new shadow with no
+   `settings.json`, Prepare writes one holding only the shared tree's value. If the shadow already has a `settings.json`,
+   set the same value there yourself.
+3. Click **Prepare** on its row. It works in the apps only. Hivemind Server.app checks the path and `cleanupPeriodDays`,
+   creates the shadow folder (0700) and links the shared names. The row then shows **Ready** when the shadow has a login, or
+   **Not logged in** when it does not, or the error text with its fix. A primary account only gets its login checked; for
+   the default primary (empty `homePath`) that is `~/.claude.json` in the Mac home, where Claude keeps it without
+   `CLAUDE_CONFIG_DIR`.
+4. After a successful Prepare the row shows the login command. Click **Copy** and run it in a terminal on the same Mac.
+
+Prepare comes first so the shared names are links before anything runs in the folder. A login into a folder whose links are
+not in place yet can leave a real `projects/` or `history.jsonl` there, and that conflicts later. A launch checks the shadow
+again; with no login it is refused with the command above, and nothing runs.
+
+### Errors and fixes
+
+A launch that fails here refuses only its own item; the other items start. A shadow fails with `internal` and
+`launches[<i>].account: <message>`, a project setting with `bad-message` and the same prefix, and an open session with
+`internal` and `launches[<i>].command: <message>`. Prepare shows the same message on the row, without the prefix.
+
+| Message | Fix |
+| --- | --- |
+| "`<home>` must be an existing folder, not a symlink." | The shared tree is missing or is a symlink. Create `~/.claude` or set `homePath` to a real folder. |
+| "`<shadow>` does not exist yet. Prepare the account in the Accounts sheet, then log in with `<login command>`." | A launch found no shadow folder. Click **Prepare** on the row, then launch again. |
+| "`<shadow>` must be a folder, not a symlink or a file." | Move that entry out of the way and Prepare, or choose another `shadowPath`. |
+| "`<shadow>` is the shared home itself; a shadow needs a folder of its own." | Choose a folder that is not the shared tree. A symlinked parent folder can lead to it too. |
+| "Use the real path of `<dir>`: Claude keys its login to the exact folder name." | Set `shadowPath` to the real path shown, then Prepare. A login made under another spelling is not found there. |
+| "`<shadow>/settings.json` has cleanupPeriodDays `<a>` but `<home>/settings.json` has `<b>`. Set the same value: each account cleans the shared transcripts with its own value." | Set the same top-level `cleanupPeriodDays` in both files, or leave it out of both, then Prepare or launch again. |
+| "`<path>` is not a readable JSON object; fix it before launching a shadow account." | Fix that file so its top level is a JSON object, then launch again. |
+| "`<link>` is a real file; HiveMind shares it from `<home>`. Move it away, then launch again." | A shared name (for example `projects` or `history.jsonl`) is real in the shadow, usually from a copied folder. Move it out of the shadow, then Prepare or launch again. The shared tree's copy is the one used. |
+| "`<shadow>` has no login yet. Run `<login command>` to log in." | Log in with the row's command, then launch again. |
+| "`<file>` sets `<KEY>`, which overrides the account `<label>`. Remove it from that file." (`launches[<i>].account`) | Remove that key from the project's `.claude/settings.json` or `settings.local.json`, then launch again. |
+| "Claude session `<id>` is already open in another process (account `<label>`)." (`launches[<i>].command`) | Close that session where it runs, or start a new session. |
+| "Cannot check `<path>`: <reason>" (`launches[<i>].command`) | The session folder cannot be read. Fix its permissions, then launch again. |
+| "Cannot link `<link>` to `<target>`", "Cannot create `<path>`", "Cannot read `<path>`", each with the system's reason | The Mac user cannot write there, or the volume refuses. Fix the folder's permissions or the volume, then Prepare. |
 
 ## Usage
 

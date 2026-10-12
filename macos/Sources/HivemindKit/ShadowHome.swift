@@ -5,8 +5,8 @@ import Foundation
 // (sessions, history, config, writer locks) and keeps its login (auth.json) to
 // itself. Codex's SQLite databases stay in the home (CODEX_SQLITE_HOME), so
 // they are never linked or copied. The lists in `ShadowLayout.codex` come from
-// spike 0.3 (issue #320). Nothing here deletes, moves or chmods an existing
-// entry, and nothing reads a login.
+// spike 0.3 and `ShadowLayout.claude` from spike 0.2 (issue #320). Nothing here
+// deletes, moves or chmods an existing entry, and nothing reads a login.
 
 /// What to do with a name that is present in both trees and that no list or pattern covers.
 public enum UnknownNameRule: Sendable { case conflict, keepPrivate }
@@ -72,6 +72,43 @@ extension ShadowLayout {
   )
 }
 
+extension ShadowLayout {
+  /// Claude (docs/accounts.md, "Claude shadow"). The login is the shadow's own
+  /// `.credentials.json`, or the `oauthAccount` key of its `.claude.json`; the
+  /// transcripts (`projects`) are shared, so `claude --resume` finds them from
+  /// either account. The lists come from spike 0.2 (issue #320).
+  public static let claude = ShadowLayout(
+    shared: ["projects", "history.jsonl", "file-history", "paste-cache", "plans", "tasks"],
+    sharedPatterns: [],
+    privateNames: [
+      ".claude.json", ".claude.json.lock", ".config.json", ".credentials.json", "backups", "settings.json", "settings.local.json",
+      "settings.json.bak",
+      "sessions", "session-env", "shell-snapshots", "daemon", "daemon.log", "daemon-auth-status.json", "daemon-auth-cooldown",
+      "jobs", "debug", "state", "ide",
+      "policy-limits.json", "policy-limits.json.stamp.json", "remote-settings.json", "mcp-needs-auth-cache.json", "plugins", "skills",
+      "chrome", "telemetry", "feedback", "feedback-bundles", "statusline-command.sh",
+      "cache", "stats-cache.json", "gh-pr-status-cache.json", ".last-cleanup", ".last-update-result.json", "usage-data", "downloads",
+    ],
+    homeOnlyPatterns: [],
+    ignoredPatterns: [#"^\.DS_Store$"#],
+    ensureInHome: ["projects", "file-history", "paste-cache", "plans", "tasks"],
+    unknownNames: .keepPrivate,
+    isLoggedIn: { shadow in
+      // lstat only, as for Codex: a symlinked file is not this shadow's login. Of `.claude.json` only the
+      // top-level `oauthAccount` key is looked at, never its value.
+      func regularFile(_ name: String) -> Bool {
+        var info = stat()
+        return lstat(shadow.appendingPathComponent(name).path, &info) == 0 && (info.st_mode & S_IFMT) == S_IFREG
+      }
+      if regularFile(".credentials.json") { return true }
+      return ShadowLayout.hasClaudeLogin(configFile: shadow.appendingPathComponent(".claude.json"))
+    },
+    loginCommand: { shadow, _ in
+      "mkdir -p \(shellWord(shadow)) && CLAUDE_CONFIG_DIR=\(shellWord(shadow)) claude auth login"
+    }
+  )
+}
+
 /// Why a shadow is wrong: `path` is the entry at fault, `message` names the fix.
 public struct ShadowHomeError: Error, Equatable {
   public let path: String
@@ -119,7 +156,7 @@ public struct ShadowHome {
       throw ShadowHomeError(path: shadow, message: "`\(shadow)` is the shared home itself; a shadow needs a folder of its own.")
     }
 
-    // 3. The folders Codex needs in the home exist before anything links to them.
+    // 3. The folders the CLI needs in the home exist before anything links to them.
     for name in layout.ensureInHome {
       let path = Self.join(home, name)
       if try Self.kind(of: path) == nil { try Self.makeFolder(path) }
@@ -219,4 +256,16 @@ private func shellWord(_ path: String) -> String {
   let plain = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./+@,:-")
   guard !path.allSatisfy({ plain.contains($0) }) else { return path }
   return "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+}
+
+extension ShadowLayout {
+  /// Whether a Claude `.claude.json` holds a login: a regular file (lstat) whose top-level `oauthAccount` key is
+  /// present. Only the key is looked at, never its value.
+  static func hasClaudeLogin(configFile: URL) -> Bool {
+    var info = stat()
+    guard lstat(configFile.path, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG,
+          let data = FileManager.default.contents(atPath: configFile.path),
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+    return json["oauthAccount"] != nil
+  }
 }
