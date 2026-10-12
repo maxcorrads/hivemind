@@ -1,0 +1,60 @@
+{
+  "comment": "Account path rules and variables both sides check: src/shared/accounts.test.ts and macos/Tests/HivemindKitTests/LaunchAccountTests.swift read this file. Keep src/shared/accounts.ts and HivemindKit's LaunchAccount in step with it. Values in environments are as stored; the broker expands a leading ~/ with the user's home.",
+  "limits": { "label": 80, "path": 1024, "perDriver": 8 },
+  "controlledEnv": {
+    "codex": ["CODEX_HOME", "CODEX_SQLITE_HOME", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"],
+    "claude": ["CLAUDE_CONFIG_DIR", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_SECURESTORAGE_CONFIG_DIR"]
+  },
+  "validPaths": [
+    "", "/a", "~/a", "~/.codex", "~/.claude", "~/.codex_personal", "~/.claude-work", "/Users/test/.codex", "~/.config/codex",
+    "/Users/test/My Accounts/claude work", "~/a b ", "~/.hidden/.x", "~/...", "/x/.../y", "/a.", "/a..b", "/.a", "/a/~/b", "~/~",
+    "~/it's \"quoted\" $HOME `id`", "~/日本/😀", "/́", "~/a:b,c@d+e"
+  ],
+  "invalidPaths": [
+    { "path": "~", "problem": "a path starts with / or ~/" },
+    { "path": "codex", "problem": "a path starts with / or ~/" },
+    { "path": ".codex", "problem": "a path starts with / or ~/" },
+    { "path": "./x", "problem": "a path starts with / or ~/" },
+    { "path": " ~/x", "problem": "a path starts with / or ~/" },
+    { "path": "~user/x", "problem": "a path starts with / or ~/" },
+    { "path": "$HOME/.codex", "problem": "a path starts with / or ~/" },
+    { "path": "́/a", "problem": "a path starts with / or ~/" },
+    { "path": "/a\nb", "problem": "a path cannot hold control characters" },
+    { "path": "/a\rb", "problem": "a path cannot hold control characters" },
+    { "path": "/a\tb", "problem": "a path cannot hold control characters" },
+    { "path": "/a\u0000", "problem": "a path cannot hold control characters" },
+    { "path": "~/\u001b[31m", "problem": "a path cannot hold control characters" },
+    { "path": "/del\u007f", "problem": "a path cannot hold control characters" },
+    { "path": "/c1\u0085", "problem": "a path cannot hold control characters" },
+    { "path": "/c1\u009f", "problem": "a path cannot hold control characters" },
+    { "path": "/", "problem": "a path cannot end with /" },
+    { "path": "~/", "problem": "a path cannot end with /" },
+    { "path": "~/.codex/", "problem": "a path cannot end with /" },
+    { "path": "/a//", "problem": "a path cannot end with /" },
+    { "path": "//a", "problem": "a path cannot hold //" },
+    { "path": "/a//b", "problem": "a path cannot hold //" },
+    { "path": "~//a", "problem": "a path cannot hold //" },
+    { "path": "/.", "problem": "a path cannot hold a . or .. segment" },
+    { "path": "~/.", "problem": "a path cannot hold a . or .. segment" },
+    { "path": "~/..", "problem": "a path cannot hold a . or .. segment" },
+    { "path": "/a/./b", "problem": "a path cannot hold a . or .. segment" },
+    { "path": "/a/../b", "problem": "a path cannot hold a . or .. segment" },
+    { "path": "/a/..", "problem": "a path cannot hold a . or .. segment" }
+  ],
+  "environments": [
+    { "account": { "driver": "codex", "homePath": "", "shadowPath": "" }, "environment": [] },
+    { "account": { "driver": "codex", "homePath": "~/.codex-work", "shadowPath": "" },
+      "environment": [{ "name": "CODEX_HOME", "value": "~/.codex-work" }] },
+    { "account": { "driver": "codex", "homePath": "", "shadowPath": "~/.codex_personal" },
+      "environment": [{ "name": "CODEX_HOME", "value": "~/.codex_personal" }, { "name": "CODEX_SQLITE_HOME", "value": "~/.codex" }] },
+    { "account": { "driver": "codex", "homePath": "/Users/test/shared codex", "shadowPath": "~/codex work" },
+      "environment": [{ "name": "CODEX_HOME", "value": "~/codex work" }, { "name": "CODEX_SQLITE_HOME", "value": "/Users/test/shared codex" }] },
+    { "account": { "driver": "claude", "homePath": "", "shadowPath": "" }, "environment": [] },
+    { "account": { "driver": "claude", "homePath": "~/.claude-work", "shadowPath": "" },
+      "environment": [{ "name": "CLAUDE_CONFIG_DIR", "value": "~/.claude-work" }] },
+    { "account": { "driver": "claude", "homePath": "", "shadowPath": "~/.claude-personal" },
+      "environment": [{ "name": "CLAUDE_CONFIG_DIR", "value": "~/.claude-personal" }] },
+    { "account": { "driver": "claude", "homePath": "~/.claude-shared", "shadowPath": "/Users/test/claude work" },
+      "environment": [{ "name": "CLAUDE_CONFIG_DIR", "value": "/Users/test/claude work" }] }
+  ]
+}
