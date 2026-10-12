@@ -12,18 +12,22 @@ public struct UsageWindow: Equatable, Sendable {
   public let label: String
   public let usedPercent: Double
   public let resetsAt: Int?
+  /// The window's length in ms, when the provider tells it: what the dashboard's forecast measures the pace against.
+  public let windowMs: Int?
 
-  public init(key: String, label: String, usedPercent: Double, resetsAt: Int?) {
+  public init(key: String, label: String, usedPercent: Double, resetsAt: Int?, windowMs: Int? = nil) {
     self.key = key
     self.label = label
     self.usedPercent = usedPercent
     self.resetsAt = resetsAt
+    self.windowMs = windowMs
   }
 }
 
 public enum ClaudeUsage {
-  /// The cache is read only while Claude itself trusts it: at most an hour after `fetchedAtMs`.
-  static let maxCacheAgeMs = 60.0 * 60 * 1000
+  /// A cache older than a week tells nothing about any window still running. A younger one is sent with its own
+  /// `fetchedAtMs`, so the dashboard shows its age and calls it stale; the probe drops its windows that have reset since.
+  static let maxCacheAgeMs = 8.0 * 24 * 60 * 60 * 1000
 
   /// The windows of a status-line payload: `rate_limits.five_hour` and `rate_limits.seven_day`, in that order. Nil when
   /// the payload has no `rate_limits`, as for an API-key login or a session before its first API response. A window
@@ -32,12 +36,13 @@ public enum ClaudeUsage {
     guard let status = try? JSONDecoder().decode(StatusLine.self, from: data), let limits = status.rateLimits else { return nil }
     return ["five_hour", "seven_day"].compactMap { key in
       guard let window = limits[key]?.value, let used = window.usedPercentage, let label = windowLabel(key) else { return nil }
-      return UsageWindow(key: key, label: label, usedPercent: clamped(used), resetsAt: window.resetsAt.flatMap(unixMilliseconds))
+      return UsageWindow(key: key, label: label, usedPercent: clamped(used), resetsAt: window.resetsAt.flatMap(unixMilliseconds),
+                         windowMs: windowLength(key))
     }
   }
 
   /// The windows of `cachedUsageUtilization` in `<configDir>/.claude.json`, sorted by key, or nil unless its `accountUuid`
-  /// equals the `oauthAccount.accountUuid` of the same file and it was fetched at most an hour before `now`. A null entry,
+  /// equals the `oauthAccount.accountUuid` of the same file and it was fetched at most 8 days before `now`. A null entry,
   /// a key that is not a quota window and an entry without a number are left out.
   public static func parseUsageCache(claudeJSON: Data, now: Date) -> [UsageWindow]? {
     readUsageCache(claudeJSON: claudeJSON, now: now)?.windows
@@ -52,9 +57,16 @@ public enum ClaudeUsage {
           now.timeIntervalSince1970 * 1000 - cache.fetchedAtMs <= maxCacheAgeMs else { return nil }
     let windows = cache.utilization.compactMap { key, entry -> UsageWindow? in
       guard let label = windowLabel(key), let window = entry.value, let used = window.utilization else { return nil }
-      return UsageWindow(key: key, label: label, usedPercent: clamped(used), resetsAt: window.resetsAt.flatMap(isoMilliseconds))
+      return UsageWindow(key: key, label: label, usedPercent: clamped(used), resetsAt: window.resetsAt.flatMap(isoMilliseconds),
+                         windowMs: windowLength(key))
     }.sorted { $0.key < $1.key }
     return (Int(cache.fetchedAtMs.rounded()), windows)
+  }
+
+  /// The length of a quota window key: 5 h for `five_hour`, a week for `seven_day` and `seven_day_<family>`.
+  private static func windowLength(_ key: String) -> Int? {
+    if key == "five_hour" { return 5 * 3_600_000 }
+    return key == "seven_day" || key.hasPrefix("seven_day_") ? 7 * 86_400_000 : nil
   }
 
   /// The label of a quota window key: "Session (5 h)", "Week", or "<Family> (week)" for `seven_day_<family>`. Nil for any

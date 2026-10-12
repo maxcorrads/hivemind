@@ -7,9 +7,9 @@ import Foundation
 // a login. It also gives the broker the catalog's Claude accounts, so the live-session check sees a shadow after a
 // restart. An error snapshot carries a fixed message, never a command's output or a file's contents.
 
-/// Every key of a window, `resetsAt` as null when there is none: the server's schema is strict.
+/// Every key of a window, `resetsAt` and `windowMs` as null when there is none: the server's schema is strict.
 extension UsageWindow: Encodable {
-  private enum Keys: String, CodingKey { case key, label, usedPercent, resetsAt }
+  private enum Keys: String, CodingKey { case key, label, usedPercent, resetsAt, windowMs }
 
   public func encode(to encoder: Encoder) throws {
     var container = encoder.container(keyedBy: Keys.self)
@@ -17,6 +17,7 @@ extension UsageWindow: Encodable {
     try container.encode(label, forKey: .label)
     try container.encode(usedPercent, forKey: .usedPercent)
     try container.encode(resetsAt, forKey: .resetsAt)
+    try container.encode(windowMs, forKey: .windowMs)
   }
 }
 
@@ -165,7 +166,7 @@ public struct UsageSnapshot: Encodable, Equatable, Sendable {
     var snapshots: [UsageSnapshot] = []
     for account in accounts {
       try Task.checkCancellation()
-      snapshots.append(await snapshot(of: account))
+      if let snapshot = await snapshot(of: account) { snapshots.append(snapshot) }
     }
     try Task.checkCancellation()
     guard !snapshots.isEmpty else { return }
@@ -180,8 +181,8 @@ public struct UsageSnapshot: Encodable, Equatable, Sendable {
     }
   }
 
-  /// The snapshot of one account: Codex from its probe, Claude from its files.
-  private func snapshot(of account: LaunchAccount) async -> UsageSnapshot {
+  /// The snapshot of one account: Codex from its probe, Claude from its files; nil when there is nothing to say yet.
+  private func snapshot(of account: LaunchAccount) async -> UsageSnapshot? {
     switch account.driver {
     case .codex: await codexSnapshot(account)
     case .claude: claudeSnapshot(account)
@@ -214,9 +215,10 @@ public struct UsageSnapshot: Encodable, Equatable, Sendable {
 
   /// The tap's `statusline.json` when it is newer than the last snapshot; otherwise, and before the first one, the newer
   /// of it and the usage cache in `.claude.json` that is not older than the last snapshot, so a round never goes back in
-  /// time; otherwise noClaudeData. Each read's time is when it was true: the file's modification time, or the cache's
-  /// `fetchedAtMs`. A `rate_limit` stop the tap saw sets `limitErrorAt` either way.
-  private func claudeSnapshot(_ account: LaunchAccount) -> UsageSnapshot {
+  /// time. Each read's time is when it was true: the file's modification time, or the cache's `fetchedAtMs`; windows
+  /// that have reset since are left out. With no read there is no snapshot: Claude has not reported anything yet, which
+  /// is not a failure. Only a `rate_limit` stop the tap saw is still sent then, as noClaudeData with `limitErrorAt`.
+  private func claudeSnapshot(_ account: LaunchAccount) -> UsageSnapshot? {
     let date = now(), at = Self.milliseconds(date)
     let limitErrorAt = limitError(of: account)
     let last = lastCapturedAt[account.id]
@@ -229,10 +231,13 @@ public struct UsageSnapshot: Encodable, Equatable, Sendable {
         .filter { $0.capturedAt >= last ?? 0 }
         .max { $0.capturedAt < $1.capturedAt }
     }
-    guard let read else { return .failed(account, Self.noClaudeData, at: at, limitErrorAt: limitErrorAt) }
+    let windows = read?.windows.filter { ($0.resetsAt ?? Int.max) > at } ?? []
+    guard let read, !windows.isEmpty else {
+      return limitErrorAt.map { .failed(account, Self.noClaudeData, at: at, limitErrorAt: $0) }
+    }
     // Only a Claude subscription has rate limits, on the status line or in the cache.
     return UsageSnapshot(accountId: account.id, capturedAt: read.capturedAt, source: .claude, plan: "subscription",
-                         windows: read.windows, limitErrorAt: limitErrorAt)
+                         windows: windows, limitErrorAt: limitErrorAt)
   }
 
   /// The status line the tap saved for `account`, if it has `rate_limits`, as of its modification time.
@@ -242,7 +247,7 @@ public struct UsageSnapshot: Encodable, Equatable, Sendable {
     return Read(windows: windows, capturedAt: max(0, min(saved.modified, now)))
   }
 
-  /// The usage cache of `account`'s `.claude.json`, if it is its login's and under an hour old, as of `fetchedAtMs`.
+  /// The usage cache of `account`'s `.claude.json`, if it is its login's and at most 8 days old, as of `fetchedAtMs`.
   /// Without CLAUDE_CONFIG_DIR (a primary with no `homePath`) Claude keeps the file in the Mac home, next to `~/.claude`.
   private func usageCache(of account: LaunchAccount, now: Date) -> Read? {
     let file = account.homePath.isEmpty && account.shadowPath.isEmpty

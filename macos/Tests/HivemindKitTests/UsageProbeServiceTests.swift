@@ -36,17 +36,17 @@ private let subscriberLines = [
 ]
 
 private var subscriberWindows: [[String: Any]] { [
-  ["key": "codex.primary", "label": "5 h", "usedPercent": 42, "resetsAt": 1_791_820_800_000],
-  ["key": "codex.secondary", "label": "Week", "usedPercent": 17, "resetsAt": 1_792_252_800_000],
-  ["key": "codex_other.primary", "label": "codex_other 30 min", "usedPercent": 88, "resetsAt": NSNull()],
+  ["key": "codex.primary", "label": "5 h", "usedPercent": 42, "resetsAt": 1_791_820_800_000, "windowMs": 18_000_000],
+  ["key": "codex.secondary", "label": "Week", "usedPercent": 17, "resetsAt": 1_792_252_800_000, "windowMs": 604_800_000],
+  ["key": "codex_other.primary", "label": "codex_other 30 min", "usedPercent": 88, "resetsAt": NSNull(), "windowMs": 1_800_000],
 ] }
 
 /// Spike 0.2's fixture A, trimmed: a status line with both windows and the fields around them.
 private let statusLine = #"{"session_id":"00000000-0000-4000-8000-000000000001","cwd":"/Users/test/repo","cost":{"total_cost_usd":1.25},"rate_limits":{"five_hour":{"used_percentage":23.5,"resets_at":1791820800},"seven_day":{"used_percentage":41.2,"resets_at":1792252800}}}"#
 
 private var statusWindows: [[String: Any]] { [
-  ["key": "five_hour", "label": "Session (5 h)", "usedPercent": 23.5, "resetsAt": 1_791_820_800_000],
-  ["key": "seven_day", "label": "Week", "usedPercent": 41.2, "resetsAt": 1_792_252_800_000],
+  ["key": "five_hour", "label": "Session (5 h)", "usedPercent": 23.5, "resetsAt": 1_791_820_800_000, "windowMs": 18_000_000],
+  ["key": "seven_day", "label": "Week", "usedPercent": 41.2, "resetsAt": 1_792_252_800_000, "windowMs": 604_800_000],
 ] }
 
 /// A `.claude.json` with spike 0.2's cache D, trimmed, fetched at `fetched`, and a fake email and mcpServers value.
@@ -55,9 +55,9 @@ private func claudeJSON(fetched: Int = fetchedAtMs, uuid: String = fakeUUID) -> 
 }
 
 private var cacheWindows: [[String: Any]] { [
-  ["key": "five_hour", "label": "Session (5 h)", "usedPercent": 23, "resetsAt": 1_791_820_800_000],
-  ["key": "seven_day", "label": "Week", "usedPercent": 41, "resetsAt": 1_792_137_600_000],
-  ["key": "seven_day_opus", "label": "Opus (week)", "usedPercent": 12, "resetsAt": 1_792_137_600_000],
+  ["key": "five_hour", "label": "Session (5 h)", "usedPercent": 23, "resetsAt": 1_791_820_800_000, "windowMs": 18_000_000],
+  ["key": "seven_day", "label": "Week", "usedPercent": 41, "resetsAt": 1_792_137_600_000, "windowMs": 604_800_000],
+  ["key": "seven_day_opus", "label": "Opus (week)", "usedPercent": 12, "resetsAt": 1_792_137_600_000, "windowMs": 604_800_000],
 ] }
 
 /// The server: its instance proof, `GET /api/launcher/accounts` and `POST /api/launcher/usage`.
@@ -234,7 +234,7 @@ private func snapshot(_ account: LaunchAccount, at capturedAt: Int = nowMs, plan
         snapshot(codexWork, plan: "unknown", error: "Usage read failed"),
         snapshot(codexShadow, plan: "unknown", error: UsageProbeService.shadowNotReady),
         snapshot(codexKey, plan: "api-key"),
-        snapshot(claudeShadow, plan: "unknown", error: UsageProbeService.noClaudeData),
+        // Claude work has reported nothing yet: no snapshot, which is not a failure. Claude only carries its limit error.
         snapshot(claudePrimary, plan: "unknown", error: UsageProbeService.noClaudeData, limitErrorAt: 1_791_801_000_000),
       ] as NSArray)
       #expect(codex.calls.count == 3, "a shadow that cannot be prepared runs no probe")
@@ -264,8 +264,9 @@ private func snapshot(_ account: LaunchAccount, at capturedAt: Int = nowMs, plan
       try mac.write(statusLine, at: status, modified: now.addingTimeInterval(-10))
       #expect(try await round() == snapshot(claudeShadow, at: nowMs - 10_000, windows: statusWindows), "the status line is newer again")
       try mac.write(statusLine, at: status, modified: now.addingTimeInterval(-60))
-      #expect(try await round() == snapshot(claudeShadow, plan: "unknown", error: UsageProbeService.noClaudeData),
-              "both older than the last snapshot: never back in time")
+      let sent = try await posts(http).count
+      try await sut.refreshOnce()
+      #expect(try await posts(http).count == sent, "both older than the last snapshot: nothing is sent, never back in time")
       try mac.write(statusLine, at: status, modified: now.addingTimeInterval(-5))
       try mac.write(claudeJSON(fetched: nowMs - 2 * 3_600_000), at: cache)
       #expect(try await round() == snapshot(claudeShadow, at: nowMs - 5_000, windows: statusWindows))
@@ -280,6 +281,20 @@ private func snapshot(_ account: LaunchAccount, at capturedAt: Int = nowMs, plan
       try mac.write(claudeJSON(), at: ".claude-work/.claude.json")
       try await service(mac, http: http, codex: CodexProbeFake([])).refreshOnce()
       #expect(try await posts(http).first == [snapshot(claudeShadow, at: fetchedAtMs, windows: cacheWindows)] as NSArray)
+    }
+  }
+
+  @Test func anOldCacheIsSentWithItsOwnAgeAndWithoutTheWindowsThatHaveResetSince() async throws {
+    try await withFakeMac { mac in
+      let http = UsageHTTPFake(secret: secret, accounts: [claudeShadow])
+      // Fetched a day before the round: its 5 h window reset at 05:00, before the round's clock; its week has not.
+      let dayOld = nowMs - 86_400_000
+      let cache = #"{"oauthAccount":{"accountUuid":"\#(fakeUUID)"},"cachedUsageUtilization":{"fetchedAtMs":\#(dayOld),"accountUuid":"\#(fakeUUID)","utilization":{"five_hour":{"utilization":90.0,"resets_at":"2026-10-12T05:00:00Z"},"seven_day":{"utilization":41.0,"resets_at":"2026-10-16T08:00:00Z"}}}}"#
+      try mac.write(cache, at: ".claude-work/.claude.json")
+      try await service(mac, http: http, codex: CodexProbeFake([])).refreshOnce()
+      #expect(try await posts(http).first == [snapshot(claudeShadow, at: dayOld, windows: [
+        ["key": "seven_day", "label": "Week", "usedPercent": 41, "resetsAt": 1_792_137_600_000, "windowMs": 604_800_000],
+      ])] as NSArray, "the dashboard shows it as a day old, and stale")
     }
   }
 
@@ -321,7 +336,7 @@ private func snapshot(_ account: LaunchAccount, at capturedAt: Int = nowMs, plan
     let json = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(fitting)) as? NSDictionary)
     #expect(Set(json.allKeys as? [String] ?? []) == ["accountId", "capturedAt", "source", "plan", "windows", "error", "limitErrorAt"])
     #expect(json["error"] is NSNull && json["limitErrorAt"] is NSNull)
-    #expect((json["windows"] as? [NSDictionary])?[1] == ["key": "w1", "label": "W 1", "usedPercent": 1, "resetsAt": NSNull()])
+    #expect((json["windows"] as? [NSDictionary])?[1] == ["key": "w1", "label": "W 1", "usedPercent": 1, "resetsAt": NSNull(), "windowMs": NSNull()])
   }
 }
 
@@ -390,7 +405,7 @@ private let fakeCodex = #"""
     #expect(environment["key"] as? String == "unset", "unset after ~/.zshrc exported it")
     #expect(environment["token"] as? String == "unset", "the app's own is removed too")
     #expect(CodexUsage.parseCodexProbe(lines: lines) == .success(CodexUsageProbe(plan: "subscription", windows: [
-      UsageWindow(key: "codex.primary", label: "5 h", usedPercent: 42, resetsAt: 1_791_820_800_000),
+      UsageWindow(key: "codex.primary", label: "5 h", usedPercent: 42, resetsAt: 1_791_820_800_000, windowMs: 18_000_000),
     ])), "the delayed reply 3 arrived: stdin was still open")
   }
 
@@ -401,7 +416,7 @@ private let fakeCodex = #"""
                                     directory: home)
     let lines = await probe.probe(set: [], unset: [])
     #expect(CodexUsage.parseCodexProbe(lines: lines) == .success(CodexUsageProbe(plan: "subscription", windows: [
-      UsageWindow(key: "codex.primary", label: "5 h", usedPercent: 42, resetsAt: 1_791_820_800_000),
+      UsageWindow(key: "codex.primary", label: "5 h", usedPercent: 42, resetsAt: 1_791_820_800_000, windowMs: 18_000_000),
     ])), "stdin stayed open after reply 3 until reply 2 arrived")
   }
 

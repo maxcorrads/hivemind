@@ -132,7 +132,8 @@ public enum CodexUsage {
       let key = "\(limitId).\(slot)"
       let label = windowLabel(minutes: window.windowDurationMins, slot: slot, prefix: prefix)
       guard key.utf16.count <= maxKeyLength, label.utf16.count <= maxLabelLength else { return nil }
-      return UsageWindow(key: key, label: label, usedPercent: clamped(used), resetsAt: window.resetsAt.flatMap(unixMilliseconds))
+      return UsageWindow(key: key, label: label, usedPercent: clamped(used), resetsAt: window.resetsAt.flatMap(unixMilliseconds),
+                         windowMs: window.windowDurationMins.flatMap { $0 > 0 ? $0 * 60_000 : nil })
     }
   }
 

@@ -198,6 +198,8 @@ export const usageWindowSchema = z.object({
   usedPercent: z.number().min(0).max(100),
   /** Unix ms; null when the provider gives no reset time. */
   resetsAt: z.number().int().nonnegative().nullable(),
+  /** The window's length in ms when the provider tells it; the dashboard's forecast measures the pace against it. */
+  windowMs: z.number().int().positive().nullable().optional(),
 }).strict();
 
 /**

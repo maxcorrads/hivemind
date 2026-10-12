@@ -519,11 +519,11 @@ used up. No read costs quota, and Hivemind itself reads no login (phase 5,
 | --- | --- | --- |
 | Codex | `codex app-server`, with the requests `account/read` and `account/rateLimits/read` ([Findings: Codex](#findings-codex)) | On every round, for an account that is logged in. An API-key login has plan `api-key` and no window |
 | Claude | 1. The [status-line tap](#claude-status-line-tap) of the sessions Hivemind launches with the account | After a session's first API response, until its windows go [stale](#stale-and-unknown) |
-| Claude | 2. `cachedUsageUtilization` in the account's `.claude.json`, which Claude itself writes (undocumented) | While its `accountUuid` is the login's and it is under an hour old |
+| Claude | 2. `cachedUsageUtilization` in the account's `.claude.json`, which Claude itself writes (undocumented) | While its `accountUuid` is the login's and it is at most 8 days old; an older one than 10 minutes shows as stale, with its age |
 
 Claude has no headless read: `/usage` runs only inside a session, and `claude -p` does not run it. So a Claude account
-has no data before its session's first API response, with no Hivemind session and no recent cache, or with an API-key
-login; its row then says "No recent Claude usage data".
+has no data before its session's first API response, with no Hivemind session and no cache of the last 8 days, or with
+an API-key login. That is not a failure: the probe sends nothing for it, and its row says how the numbers come.
 
 | Source | Key | Label |
 | --- | --- | --- |
@@ -595,7 +595,8 @@ failed"; an API-key login is plan `api-key` with no windows.
 - the tap's `<id>/statusline.json`, as of its modification time;
 - `cachedUsageUtilization` in the account's `.claude.json`, as of its `fetchedAtMs`. The file is
   `<shadowPath, else homePath>/.claude.json`, or `~/.claude.json` for a primary with neither. The cache counts only when
-  its `accountUuid` is the login's (`oauthAccount.accountUuid`) and it is under an hour old.
+  its `accountUuid` is the login's (`oauthAccount.accountUuid`) and it is at most 8 days old. Claude refreshes it rarely,
+  so it is usually stale; it is sent with its own `fetchedAtMs`, and its windows that have reset since are left out.
 
 The status line is used when it is newer than the account's last snapshot. Otherwise, and before the first snapshot, the
 newer of the two is used, as long as it is not older than that snapshot, so a round never goes back in time. The last
@@ -651,9 +652,13 @@ account's last snapshot, so a round never moves an account back in time.
 
 Each account row of **Settings → Accounts** shows its usage under it (`web/AccountUsage.tsx`):
 
-- "Usage as of <age>", with " · stale" for a stale snapshot, or "Usage unknown" before the first good read;
-- per window: its label, the used percent as a bar and as "<n>% used", and "Resets <local time> · in 2 h 14 min"
-  ("in 3 d 4 h" for a week; "reset passed" once it is behind; "No reset time" when the provider gives none);
+- "Usage as of <age>", with " · stale" for a stale snapshot; before the first read, "No usage yet" and how the numbers
+  come (for Claude: from sessions Hivemind launches with the account, after their first reply);
+- per window: its label, what is left as a bar (full when nothing is used, empty when the window is used up) and as
+  "<n>% left", and "Resets <local time> · in 2 h 14 min" ("in 3 d 4 h" for a week; "reset passed" once it is behind;
+  "No reset time" when the provider gives none);
+- per window, a forecast: "At this pace it runs out <local time> · in 1 h 28 min", "At this pace it lasts until the
+  reset", or "Used up until the reset" (see below);
 - "API key: no plan window" for an `api-key` plan, and "No quota window reported" for a good read without windows;
 - "Last read failed: <error>" while the last read failed, next to the previous windows;
 - " · Limit error at <local time>" next to the snapshot when the Claude tap saw a `rate_limit` stop, so a real limit can
@@ -662,6 +667,11 @@ Each account row of **Settings → Accounts** shows its usage under it (`web/Acc
   in again stays a manual step.
 
 Ages and countdowns are drawn again every 30 s; an `accounts` event refetches the numbers.
+
+The forecast (`src/shared/usage-forecast.ts`) is a straight line: the window's average pace from its start (its reset
+minus its length, `windowMs`, which Codex reports and Claude's keys imply) to the read's time, carried on to 100%. It
+knows nothing of bursts or quiet hours. It is left out while less than 5% of the window, or 10 minutes, has passed, when
+the window's length or reset is unknown, and when the read is older than the window.
 
 ### What never appears
 
@@ -697,7 +707,7 @@ Manual checks, on the Mac with real logins, after the apps are installed; the fa
   minutes each row shows its windows; compare them with `/status` in each session.
 - **Claude.** Same with a Claude shadow and `claude --resume`. Run both accounts at once. After one answer in a session
   the row shows "Session (5 h)" and "Week" as `/usage` does, and the account's own status line still shows. An account
-  with no session reads "No recent Claude usage data", unless Claude's cache is under an hour old.
+  with no session says "No usage yet", unless Claude's cache of the last 8 days has a window still running.
 - **Dashboard without the apps.** Start a server with a secret of 64 lowercase hex characters (any other value is
   ignored): `HIVEMIND_HOME=$(mktemp -d) HIVEMIND_INSTANCE_SECRET=<secret> npx tsx src/cli.ts serve --port 7520`. Add
   accounts in the sheet, post signed snapshots to `POST /api/launcher/usage` with that secret (as `launcherSignature` in

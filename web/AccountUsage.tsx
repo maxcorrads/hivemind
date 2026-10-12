@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { USAGE_STALE_MS, type AccountUsage as Usage, type UsageWindow } from "../src/shared/accounts.ts";
+import { USAGE_STALE_MS, type AccountDriver, type AccountUsage as Usage, type UsageWindow } from "../src/shared/accounts.ts";
+import { usageForecast } from "../src/shared/usage-forecast.ts";
 import { relativeTime } from "./RelativeTime.tsx";
 
 /** How often the ages and countdowns are drawn again, so the Accounts sheet stays current without a reload. */
@@ -34,38 +35,60 @@ function localTime(at: number): string {
   return new Date(at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
+/** What older Server.app builds sent when a Claude account had reported nothing yet: not a failure, so not shown as one. */
+const LEGACY_NO_CLAUDE_DATA = "No recent Claude usage data";
+
+/** Why a row has no numbers yet, and how they come. */
+function noUsageYet(driver: AccountDriver): string {
+  return driver === "claude"
+    ? "No usage yet. Claude reports it from sessions Hivemind launches with this account, after their first reply."
+    : "No usage yet: Hivemind Server.app reads it every 5 minutes.";
+}
+
 /**
- * An account's quota usage (docs/accounts.md, "Usage"): each window as a bar and a number, with its reset time and a
- * countdown to it, and what is known about the latest read. `now` comes from the caller, so every row shares one clock.
+ * An account's quota usage (docs/accounts.md, "Usage"): each window as a bar of what is left, its reset time with a
+ * countdown, and where the current pace leads, plus what is known about the latest read. `now` comes from the caller,
+ * so every row shares one clock.
  */
-export function AccountUsage({ usage, now }: { usage: Usage | undefined; now: number }) {
+export function AccountUsage({ usage, now, driver }: { usage: Usage | undefined; now: number; driver: AccountDriver }) {
   const snapshot = usage?.snapshot ?? null;
   const stale = snapshot !== null && now - snapshot.capturedAt > USAGE_STALE_MS;
   const limitErrorAt = usage?.limitErrorAt ?? null;
+  const lastError = usage?.lastError === LEGACY_NO_CLAUDE_DATA ? null : usage?.lastError ?? null;
   return (
     <div className="account-usage">
       <p className="help-p">
-        {snapshot ? `Usage as of ${relativeTime(snapshot.capturedAt, now)}${stale ? " · stale" : ""}` : "Usage unknown"}
+        {snapshot ? `Usage as of ${relativeTime(snapshot.capturedAt, now)}${stale ? " · stale" : ""}` : noUsageYet(driver)}
         {limitErrorAt !== null && <> · Limit error at <time dateTime={new Date(limitErrorAt).toISOString()}>{localTime(limitErrorAt)}</time></>}
       </p>
-      {usage?.lastError && <p className="err">Last read failed: {usage.lastError}</p>}
+      {lastError && <p className="err">Last read failed: {lastError}</p>}
       {snapshot && (snapshot.plan === "api-key" ? <p className="help-p">API key: no plan window</p>
         : snapshot.windows.length === 0 ? <p className="help-p">No quota window reported</p>
-        : snapshot.windows.map(quota => <UsageWindowRow key={quota.key} quota={quota} now={now} />))}
+        : snapshot.windows.map(quota => <UsageWindowRow key={quota.key} quota={quota} now={now} capturedAt={snapshot.capturedAt} />))}
     </div>
   );
 }
 
-function UsageWindowRow({ quota, now }: { quota: UsageWindow; now: number }) {
+function UsageWindowRow({ quota, now, capturedAt }: { quota: UsageWindow; now: number; capturedAt: number }) {
   const { label, usedPercent, resetsAt } = quota;
+  const left = Math.max(0, 100 - usedPercent);
+  const forecast = resetsAt !== null && resetsAt > now ? usageForecast(quota, capturedAt) : null;
   return (
     <div className="account-usage-window">
       <span>{label}</span>
-      <progress max={100} value={usedPercent} aria-label={`${label} used`} />
-      <span>{Math.round(usedPercent)}% used</span>
+      {/* Full when nothing is used, empty when the window is used up. */}
+      <progress max={100} value={left} aria-label={`${label} left`} />
+      <span>{Math.round(left)}% left</span>
       <span>
         {resetsAt === null ? "No reset time" : <>Resets <time dateTime={new Date(resetsAt).toISOString()}>{localTime(resetsAt)}</time> · {countdown(resetsAt, now)}</>}
       </span>
+      {forecast && (
+        <span className="account-usage-forecast">
+          {forecast.kind === "usedUp" ? "Used up until the reset"
+            : forecast.kind === "lasts" ? "At this pace it lasts until the reset"
+            : <>At this pace it runs out <time dateTime={new Date(forecast.at).toISOString()}>{localTime(forecast.at)}</time> · {countdown(forecast.at, now)}</>}
+        </span>
+      )}
     </div>
   );
 }
