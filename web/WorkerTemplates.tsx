@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { Project, Seniority } from "../src/shared/types.ts";
 import { buildLaunchCommand } from "../src/shared/launch-prompt.ts";
 import { launchEnvironmentPrefix, parseLaunchEnvironment } from "../src/shared/launch-environment.ts";
-import { accountDriverForSoftware } from "../src/shared/accounts.ts";
+import { accountDriverForSoftware, softwareAliasWarning, type AccountDriver } from "../src/shared/accounts.ts";
 import type { WorkerTemplate, WorkerTemplateSpec } from "../src/shared/worker-templates.ts";
 import { api, type AccountsView } from "./api.ts";
 import { Modal } from "./Modal.tsx";
@@ -282,6 +282,8 @@ function TemplateEditor({ project, editing, busy, onBusy, onCancel, onSaved }: {
   const driver = accountDriverForSoftware(spec.software);
   // A driver without accounts shows no select: its launches run as they did before accounts.
   const driverAccounts = driver ? accounts?.accounts.filter(account => account.driver === driver) ?? [] : [];
+  // A hint only: an alias such as codex2 still saves and launches, without an account (docs/accounts.md).
+  const aliasWarning = softwareAliasWarning(spec.software, new Set<AccountDriver>(accounts?.accounts.map(account => account.driver) ?? []));
   useEffect(() => {
     let active = true;
     api.accounts()
@@ -333,6 +335,7 @@ function TemplateEditor({ project, editing, busy, onBusy, onCancel, onSaved }: {
         <input className="mono" value={spec.software} onChange={event => setSoftware(event.target.value)}
           placeholder="codex2, opencode-hm, claude…" autoComplete="off" spellCheck={false} />
       </label>
+      {aliasWarning && <p className="help-p" role="status">{aliasWarning}</p>}
       {driver && accounts && driverAccounts.length > 0 && (
         <label>
           Account

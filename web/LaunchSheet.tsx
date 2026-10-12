@@ -14,7 +14,7 @@ import { TerminalNotice } from "./TerminalNotice.tsx";
 import { agentTerminalSession, terminalBlocker, terminalHub, useTerminalState, type TerminalLaunched } from "./use-terminal.ts";
 import { projectLaunchTools, type LaunchContext } from "../src/shared/launch-prompt.ts";
 import { parseLaunchEnvironment } from "../src/shared/launch-environment.ts";
-import { ACCOUNT_DRIVERS, accountDriverForSoftware, accountEnvironmentConflict, toLaunchAccount, type AccountDriver } from "../src/shared/accounts.ts";
+import { ACCOUNT_DRIVERS, accountDriverForSoftware, accountEnvironmentConflict, softwareAliasWarning, toLaunchAccount, type AccountDriver } from "../src/shared/accounts.ts";
 import {
   EFFORTS,
   buildLaunchCommand,
@@ -471,6 +471,8 @@ export function LaunchSheet({
     : (canCopyOne && built.ok
       ? [{ project: project?.slug ?? projectSlug, agent: null, title: seatTitle(hiveName, `new ${role}`), ...built.launch, ...secrets,
           ...launchEnv }] : []);
+  // A hint only: an alias such as codex2 still launches, without an account (docs/accounts.md).
+  const aliasWarning = softwareAliasWarning(software, new Set<AccountDriver>(accounts?.accounts.map((account) => account.driver) ?? []));
   // The Account select follows the driver of Software. An employee whose session still runs keeps its account, so
   // nothing is resolved when every launch reuses a running session.
   const accountDriver = accountDriverForSoftware(software);
@@ -649,6 +651,7 @@ export function LaunchSheet({
               <option key={name} value={name} />
             ))}
           </datalist>
+          {aliasWarning && <p className="help-p" role="status">{aliasWarning}</p>}
           {accountDriver && driverAccounts.length > 0 && (native ? (
             <>
               <label>

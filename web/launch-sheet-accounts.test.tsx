@@ -213,3 +213,29 @@ test("with one employee running, only the new sessions take the chosen account",
   assert.equal(bea!.account?.label, "Personal");
   assert.deepEqual(f.resolves(), [{ driver: "codex", accountId: f.accounts[1]!.id, record: true }]);
 });
+
+test("an alias of a driver with accounts shows a hint, and Launch still starts without an account", async t => {
+  const f = await fixture(t, true, { accounts: [spec(), personal] });
+  await f.setInput("Software", "codex2");
+  assert.match(f.host.textContent!, /codex2 launches without a Codex account: accounts apply only when Software is exactly codex\./);
+  assert.equal(f.labelled("Account"), undefined, "an alias has no Account select");
+  assert.equal(f.button("Start in background")!.disabled, false, "the hint does not disable Launch");
+  await f.setInput("Software", "codex");
+  assert.doesNotMatch(f.host.textContent!, /launches without/, "the exact command has no hint");
+  assert.ok(f.labelled("Account"), "the exact command has its Account select");
+  await f.setInput("Software", "codex2");
+  await f.click("Start in background");
+  const launch = f.launched();
+  assert.ok(launch && "launches" in launch);
+  assert.equal("account" in launch.launches[0]!, false);
+  assert.deepEqual(f.resolves(), [], "an alias asks nothing");
+});
+
+test("the alias hint is shown only for a driver with accounts", async t => {
+  const f = await fixture(t, true, { accounts: [spec({ driver: "claude", label: "Claude work", homePath: "~/.claude-work" })] });
+  await f.setInput("Software", "claude");
+  assert.ok(f.labelled("Account"), "the accounts are loaded");
+  assert.doesNotMatch(f.host.textContent!, /launches without/, "the exact command has no hint");
+  await f.setInput("Software", "codex2");
+  assert.doesNotMatch(f.host.textContent!, /launches without/, "Codex has no accounts");
+});
