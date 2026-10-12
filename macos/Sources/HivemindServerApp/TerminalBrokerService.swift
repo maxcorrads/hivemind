@@ -61,6 +61,7 @@ final class TerminalBrokerService {
         secrets: LaunchSecretStore(folder: paths.launchSecrets),
         templateSecrets: KeychainTemplateSecretVault(),
         shadowHomes: FileShadowHomes(),
+        claudeTap: ClaudeStatusTap(folder: paths.accounts),
         log: { log.append($0) }))
     broker.onChange = { [weak self] in self?.onChange?() }
     broker.launcherDecision = { [weak self] requestId, templateId, approve in

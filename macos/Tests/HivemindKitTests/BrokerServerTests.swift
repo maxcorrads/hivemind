@@ -1219,6 +1219,84 @@ struct BrokerAccountTests {
     #expect(shadows.prepared.isEmpty)
   }
 
+  /// A tap under a fresh temp folder (docs/accounts.md, "Claude status-line tap"); the caller removes `root`.
+  func tap() throws -> (root: URL, tap: ClaudeStatusTap) {
+    let root = try temporaryHome()
+    return (root, ClaudeStatusTap(folder: root.appendingPathComponent("accounts")))
+  }
+
+  @Test func aClaudeAccountsLaunchWritesItsTapAndPassesTheSettingsFileInTheLaunchFile() async throws {
+    let (h, store) = try harness()
+    let (root, tap) = try tap()
+    defer { try? FileManager.default.removeItem(at: root) }
+    h.claudeTap = tap
+    h.home = "/Users/tester"
+    h.shadowHomes = FakeShadowHomes()
+    await h.start()
+    let (transport, connection) = await h.client()
+    await h.send(connection, .launch([try launch(claudeShared, environment: ["A": "1"])]))
+    #expect(transport.events().first == .launched(names: [atlas], created: [atlas], errors: []))
+    let settings = tap.folder.appendingPathComponent("a2/settings.json").path
+    let written = try #require(files(store).first)
+    #expect(try String(contentsOfFile: written, encoding: .utf8)
+      == "A=1\nCLAUDE_CONFIG_DIR=/Users/tester/.claude-work\n\(ClaudeStatusTap.variable)=\(settings)\n")
+    #expect(FileManager.default.contents(atPath: settings) == tap.settings(for: claudeShared, home: "/Users/tester"))
+    #expect(FileManager.default.contents(atPath: tap.script.path) == Data(ClaudeStatusTap.scriptText.utf8))
+  }
+
+  @Test func aPrimaryClaudeAccountWithNoDirectoryGetsALaunchFileForItsTapAlone() async throws {
+    let (h, store) = try harness()
+    let (root, tap) = try tap()
+    defer { try? FileManager.default.removeItem(at: root) }
+    h.claudeTap = tap
+    await h.start()
+    let (transport, connection) = await h.client()
+    await h.send(connection, .launch([try launch(claudePrimary)]))
+    #expect(transport.events().first == .launched(names: [atlas], created: [atlas], errors: []))
+    let written = try #require(files(store).first)
+    #expect(try String(contentsOfFile: written, encoding: .utf8) == "\(ClaudeStatusTap.variable)=\(tap.folder.path)/a3/settings.json\n")
+    let created = try #require(h.tmux.calls("new-session").first)
+    #expect(created.contains { $0.contains("\nbuiltin unset -v CLAUDE_CONFIG_DIR ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN CLAUDE_SECURESTORAGE_CONFIG_DIR\ncd -- ") })
+  }
+
+  @Test func aCodexAccountALaunchWithoutAnAccountAndARefusedItemWriteNoTap() async throws {
+    let (h, store) = try harness()
+    let (root, tap) = try tap()
+    defer { try? FileManager.default.removeItem(at: root) }
+    h.claudeTap = tap
+    h.shadowHomes = FakeShadowHomes()
+    await h.start()
+    let (transport, connection) = await h.client()
+    await h.send(connection, .launch([try launch(codexShadow), brokerLaunch("Bea"),
+                                      try launch(claudeShared, agent: "Cy", environment: ["ANTHROPIC_API_KEY": "sk-ant-FAKE"])]))
+    let bea = SessionName("hm-acme-bea")!
+    #expect(transport.events().first == .launched(
+      names: [atlas, bea, nil], created: [atlas, bea],
+      errors: [BrokerLaunchFailure(index: 2, code: .badMessage,
+                                   message: "launches[2].account: ANTHROPIC_API_KEY is managed by the account Claude work; remove it.")]))
+    let written = try #require(files(store).first)
+    #expect(files(store).count == 1)
+    #expect(try String(contentsOfFile: written, encoding: .utf8) == "CODEX_HOME=/Users/me/.codex_work\nCODEX_SQLITE_HOME=/Users/me/.codex\n")
+    #expect(!FileManager.default.fileExists(atPath: tap.folder.path))
+  }
+
+  @Test func aTapThatCannotBeWrittenLeavesTheLaunchWithoutItsSettingsAndLogsWhy() async throws {
+    let (h, store) = try harness()
+    let (root, tap) = try tap()
+    defer { try? FileManager.default.removeItem(at: root) }
+    try Data("not a folder".utf8).write(to: tap.folder)
+    h.claudeTap = tap
+    h.home = "/Users/tester"
+    h.shadowHomes = FakeShadowHomes()
+    await h.start()
+    let (transport, connection) = await h.client()
+    await h.send(connection, .launch([try launch(claudeShared)]))
+    #expect(transport.events().first == .launched(names: [atlas], created: [atlas], errors: []))
+    let written = try #require(files(store).first)
+    #expect(try String(contentsOfFile: written, encoding: .utf8) == "CLAUDE_CONFIG_DIR=/Users/tester/.claude-work\n")
+    #expect(h.logs.contains { $0.hasPrefix("[broker] hm-acme-atlas: no Claude status-line tap: Cannot create \(tap.folder.path)") })
+  }
+
   @Test func aClaudeProjectWhoseSettingsSetAnApiKeyHelperFailsItsItemOnlyBeforeAnyShadowIsBuilt() async throws {
     let (h, store) = try harness()
     let (root, cwd) = try project(#"{"apiKeyHelper": "/Users/me/keys.sh"}"#)

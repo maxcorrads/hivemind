@@ -612,6 +612,15 @@ and fixes are in [Codex shadow](accounts.md#codex-shadow) and
 Claude project's settings and of an open transcript. A primary account launches
 as above.
 
+**The Claude status-line tap.** For a created launch with a Claude account, once
+its shadow is ready, the broker writes the account's tap settings and adds
+`HIVEMIND_CLAUDE_SETTINGS=<settings file>` to the same launch file (a primary
+with no path now gets a file for it alone). The command of exactly `claude`
+passes that file to `--settings` only when the variable is set. A tap that
+cannot be written is logged and the session starts without it. Server.app gives
+the broker `ClaudeStatusTap` (`TerminalBroker.Dependencies.claudeTap`); without
+one nothing changes. See [Claude status-line tap](accounts.md#claude-status-line-tap).
+
 **Reused sessions with an account.** A reused session is not checked against
 its account: nothing runs, nothing is written, and it keeps the account it
 started with.

@@ -503,6 +503,48 @@ A launch that fails here refuses only its own item; the other items start. A sha
 
 (phase 5, [#325](https://github.com/maxcorrads/hivemind/issues/325))
 
+### Claude status-line tap
+
+Claude has no headless usage read, but it gives a status-line command `rate_limits` on its input once a session has had
+an API response ([Findings: Claude](#findings-claude)). So a Claude session that Hivemind launches with an account records
+that input for its account. It costs no quota and reads no login.
+
+| File, under `~/Library/Application Support/Hivemind/accounts/` | Written by | Holds |
+| --- | --- | --- |
+| `statusline-tap.sh` (0600) | Hivemind Server.app, before each launch | The tap, run with `/bin/sh` |
+| `<id>/settings.json` (0600) | Hivemind Server.app, before each launch | `statusLine` and the `StopFailure` hook below, nothing else |
+| `<id>/statusline.json` (0600) | The tap, each time the status line runs | Claude's last status-line input for the account, as given |
+| `<id>/limit-error` (0600) | The tap, on a `rate_limit` stop | The time, in Unix seconds |
+
+The folders are 0700, and `<id>` is the account's id; an id that is not a plain file name (letters, digits, `-`, `_`) gets
+no tap.
+
+**The settings.** Before a created session of a Claude account starts, after its other checks and its shadow, the broker
+writes `<id>/settings.json` and the script, and puts `HIVEMIND_CLAUDE_SETTINGS=<that file>` in the launch file. The launch
+command of exactly `claude` carries `${HIVEMIND_CLAUDE_SETTINGS:+--settings} ${HIVEMIND_CLAUDE_SETTINGS:+"$HIVEMIND_CLAUDE_SETTINGS"}`,
+so Claude gets `--settings <file>` only then: a copied block run outside such a session, an alias (`claude-work`) or a
+launch without an account gets nothing. The session's shell exports the variable, like `CLAUDE_CONFIG_DIR`, so a block run
+there after Claude exits records for the same account. A launch never sets the variable itself: `HIVEMIND_` names are
+refused in its environment. When the files cannot be written, the session starts without `--settings` and the broker log
+says why. The file holds:
+
+- `statusLine`: `/bin/sh <tap> status <account folder> <own settings>`, where the own settings are the account's
+  `settings.json`: `<shadowPath, else homePath, else ~/.claude>/settings.json`.
+- `hooks.StopFailure`: one entry with matcher `rate_limit` that runs `/bin/sh <tap> limit-error <account folder>`. Claude
+  merges it with the other hooks.
+
+**The tap.** `status` saves its input as `statusline.json`, then reads only `statusLine.command` from the own settings
+(`plutil`, each time) and runs it with `/bin/sh -c` on the same input, in Claude's folder and environment. It prints that
+command's output and exits with its status, so the account's own status line shows as before. With no such command it
+prints nothing. `limit-error` writes the time and keeps nothing of its input. Each write goes to a temporary file in the
+account folder, then a rename, so a reader never sees half a file. A missing account folder writes nothing. The tap writes
+nothing anywhere else.
+
+**Limits.** The tap's `statusLine` replaces every other one, and only the account's own is chained: a project's
+`statusLine` (`.claude/settings.json`, `.claude/settings.local.json`) is not shown in these sessions. `disableAllHooks`,
+`allowManagedHooksOnly`, a managed `statusLine` or an untrusted workspace turn the tap off. A session that Hivemind did not
+launch with an account records nothing. A `rate_limit` stop is a suspected limit, not a proof: the windows decide.
+
 ## Findings: Claude
 
 Spike 0.2: Claude Code 2.1.296 on macOS, 2026-10-12 ([full report and parser
