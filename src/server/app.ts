@@ -412,6 +412,22 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     hive.workerTemplates.delete(hive.identity.getAgent('human'), c.req.param('id'), integerArgument(c.req.query('revision') ?? '', 1));
     return c.json({ ok: true });
   });
+  // The named account catalog (docs/accounts.md). Order and policy are registered before /accounts/:id, which would match them.
+  ui.get('/accounts', c => c.json(hive.accounts.list()));
+  ui.post('/accounts', async c => c.json(hive.accounts.create(hive.identity.getAgent('human'), await requestJson(c.req.raw)), 201));
+  ui.put('/accounts/order', async c => {
+    const body = await requestJson(c.req.raw);
+    return c.json(hive.accounts.reorder(hive.identity.getAgent('human'), body.driver, body.ids));
+  });
+  ui.put('/accounts/policy', async c => {
+    const body = await requestJson(c.req.raw);
+    return c.json(hive.accounts.setPolicy(hive.identity.getAgent('human'), body.driver, body.policy));
+  });
+  ui.put('/accounts/:id', async c => c.json(hive.accounts.update(hive.identity.getAgent('human'), c.req.param('id'), await requestJson(c.req.raw))));
+  ui.delete('/accounts/:id', c => {
+    hive.accounts.delete(hive.identity.getAgent('human'), c.req.param('id'), integerArgument(c.req.query('revision') ?? '', 1));
+    return c.json({ ok: true });
+  });
   ui.post('/projects/:id/bots', async c => {
     c.header('Cache-Control', 'no-store');
     return c.json(hive.bots.createBot(hive.identity.getAgent('human'), c.req.param('id'), await readLimitedJson(c.req.raw, CREDENTIAL_JSON_BYTES)), 201);
