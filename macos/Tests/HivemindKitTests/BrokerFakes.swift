@@ -124,6 +124,18 @@ final class FakeTerminal: BrokerTerminal {
   func exit(_ status: Int?) { onExit(status) }
 }
 
+/// Records every account a launch asked a shadow home to prepare, and fails
+/// with `failure` when one is set.
+final class FakeShadowHomes: ShadowHomePreparing {
+  var prepared: [(account: LaunchAccount, home: String)] = []
+  var failure: String?
+
+  func prepare(_ account: LaunchAccount, home: String) throws {
+    prepared.append((account, home))
+    if let failure { throw BrokerProtocolError(.internal, failure) }
+  }
+}
+
 struct SpawnFailure: Error, LocalizedError {
   var errorDescription: String? { "out of ptys" }
 }
@@ -189,6 +201,10 @@ final class BrokerHarness {
   var secretStore: LaunchSecretStore?
   /// Where template secrets go (FakeTemplateSecretVault in the tests that use it).
   var templateSecrets: (any TemplateSecretVault)?
+  /// The Mac's home for `~/` account paths; set before the broker is first used.
+  var home = "/Users/me"
+  /// Builds shadow directories (NoShadowHomes unless a test says otherwise); set before the broker is first used.
+  var shadowHomes: any ShadowHomePreparing = NoShadowHomes()
   nonisolated static let environment = ["PATH": "/usr/bin:/bin", "HOME": "/Users/me", "TMUX": "/private/tmp/tmux-501/default,1,0", "LANG": "it_IT.UTF-8"]
 
   lazy var broker: TerminalBroker = {
@@ -201,6 +217,7 @@ final class BrokerHarness {
         environment: Self.environment,
         secrets: secretStore,
         templateSecrets: templateSecrets,
+        home: home, shadowHomes: shadowHomes,
         log: { [unowned self] in self.logs.append($0) }))
     broker.onChange = { [unowned self] in self.changes += 1 }
     return broker

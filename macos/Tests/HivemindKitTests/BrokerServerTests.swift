@@ -762,3 +762,177 @@ struct BrokerOutputBufferTests {
     #expect(buffer.unsentBytes == 0)
   }
 }
+
+private let codexShadow = LaunchAccount(id: "a1", driver: .codex, label: "Codex work", homePath: "", shadowPath: "~/.codex_work")
+private let claudeShared = LaunchAccount(id: "a2", driver: .claude, label: "Claude work", homePath: "~/.claude-work", shadowPath: "")
+private let claudePrimary = LaunchAccount(id: "a3", driver: .claude, label: "Claude", homePath: "", shadowPath: "")
+
+@MainActor
+struct BrokerAccountTests {
+  func harness() throws -> (BrokerHarness, LaunchSecretStore) {
+    let h = BrokerHarness()
+    let store = LaunchSecretStore(folder: HivemindPaths(home: try temporaryHome()).launchSecrets)
+    h.secretStore = store
+    return (h, store)
+  }
+
+  func files(_ store: LaunchSecretStore) -> [String] {
+    ((try? FileManager.default.contentsOfDirectory(atPath: store.folder.path)) ?? []).map { store.folder.appendingPathComponent($0).path }
+  }
+
+  func launch(_ account: LaunchAccount?, agent: String? = "Atlas", environment: [String: String]? = nil) throws -> BrokerLaunch {
+    try BrokerLaunch(project: "acme", agent: agent, title: "Acme - \(agent ?? "new")", cwd: "/Users/me/acme", command: "agent",
+                     environment: environment.map { try LaunchEnvironment($0) }, account: account)
+  }
+
+  @Test func aCreatedCodexShadowGetsItsTwoVariablesAndUnsetsTheOtherControlledNames() async throws {
+    let (h, store) = try harness()
+    h.shadowHomes = FakeShadowHomes()
+    await h.start()
+    let (transport, connection) = await h.client()
+    await h.send(connection, .launch([try launch(codexShadow)]), id: "go")
+    #expect(transport.take().first == BrokerEventFrame(id: "go", .launched(names: [atlas], created: [atlas], errors: [])))
+    let written = try #require(files(store).first)
+    #expect(files(store).count == 1)
+    #expect(try String(contentsOfFile: written, encoding: .utf8) == "CODEX_HOME=/Users/me/.codex_work\nCODEX_SQLITE_HOME=/Users/me/.codex\n")
+    let created = try #require(h.tmux.calls("new-session").first)
+    #expect(created.contains { $0.hasPrefix("if builtin test -r '\(written)'; then") })
+    // Unset once the file is loaded (a login shell's ~/.zshrc ran before it) and before the command.
+    #expect(created.contains { $0.contains("/bin/rm -f -- '\(written)'\nbuiltin unset -v CODEX_API_KEY CODEX_ACCESS_TOKEN\ncd -- '/Users/me/acme'") })
+  }
+
+  @Test func theAccountsVariablesJoinTheLaunchsAndTildeIsExpandedWithTheInjectedHome() async throws {
+    let (h, store) = try harness()
+    h.home = "/Users/tester"
+    let shadows = FakeShadowHomes()
+    h.shadowHomes = shadows
+    await h.start()
+    let (transport, connection) = await h.client()
+    await h.send(connection, .launch([try launch(claudeShared, environment: ["A": "1"])]))
+    #expect(transport.events().first == .launched(names: [atlas], created: [atlas], errors: []))
+    let written = try #require(files(store).first)
+    #expect(try String(contentsOfFile: written, encoding: .utf8) == "A=1\nCLAUDE_CONFIG_DIR=/Users/tester/.claude-work\n")
+    let created = try #require(h.tmux.calls("new-session").first)
+    #expect(created.contains { $0.contains("\nbuiltin unset -v ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN CLAUDE_SECURESTORAGE_CONFIG_DIR\ncd -- ") })
+    #expect(shadows.prepared.map(\.account) == [claudeShared])
+    #expect(shadows.prepared.map(\.home) == ["/Users/tester"])
+  }
+
+  @Test func aPrimaryAccountWithNoDirectoryWritesNoFileAndUnsetsEveryControlledName() async throws {
+    let (h, store) = try harness()
+    await h.start()
+    let (transport, connection) = await h.client()
+    await h.send(connection, .launch([try launch(claudePrimary)]))
+    #expect(transport.events().first == .launched(names: [atlas], created: [atlas], errors: []))
+    #expect(files(store).isEmpty)
+    let created = try #require(h.tmux.calls("new-session").first)
+    #expect(created.contains { $0.hasPrefix("builtin unset -v CLAUDE_CONFIG_DIR ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN CLAUDE_SECURESTORAGE_CONFIG_DIR\ncd -- ") })
+  }
+
+  @Test func aReusedSessionKeepsItsAccountAndWritesAndRunsNothing() async throws {
+    let (h, store) = try harness()
+    h.tmux.add("hm-acme-atlas", agent: "Atlas")
+    let shadows = FakeShadowHomes()
+    h.shadowHomes = shadows
+    await h.start()
+    let (transport, connection) = await h.client()
+    await h.send(connection, .launch([try launch(codexShadow, environment: ["A": "1"])]))
+    #expect(transport.events().first == .launched(names: [atlas], created: [], errors: []))
+    #expect(h.tmux.calls("new-session").isEmpty)
+    #expect(files(store).isEmpty)
+    #expect(shadows.prepared.isEmpty)
+  }
+
+  @Test func aVariableTheAccountControlsFailsItsItemOnlyAndIsCheckedWithoutCase() async throws {
+    let (h, store) = try harness()
+    let shadows = FakeShadowHomes()
+    h.shadowHomes = shadows
+    await h.start()
+    let (transport, connection) = await h.client()
+    await h.send(connection, .launch([try launch(claudeShared, environment: ["anthropic_api_key": "sk-test"]), brokerLaunch(nil)]))
+    let second = SessionName("hm-acme-new-1")!
+    #expect(transport.events().first == .launched(
+      names: [nil, second], created: [second],
+      errors: [BrokerLaunchFailure(index: 0, code: .badMessage,
+                                   message: "launches[0].account: anthropic_api_key is managed by the account Claude work; remove it.")]))
+    #expect(h.tmux.calls("new-session").count == 1)
+    #expect(shadows.prepared.isEmpty, "a conflict is refused before a shadow is built")
+    #expect(files(store).isEmpty)
+  }
+
+  @Test func aTemplateSecretTheAccountControlsFailsItsItemBeforeTheShadowIsBuilt() async throws {
+    let (h, store) = try harness()
+    let template = TemplateID("0f8fad5b-d9cb-469f-a165-70867728950e")!
+    let vault = FakeTemplateSecretVault()
+    vault.values[template.rawValue] = ["CODEX_HOME": "/Users/me/.other"]
+    h.templateSecrets = vault
+    let shadows = FakeShadowHomes()
+    h.shadowHomes = shadows
+    await h.start()
+    let (transport, connection) = await h.client()
+    let launch = try BrokerLaunch(project: "acme", agent: "Atlas", title: "Acme - Atlas", cwd: "/Users/me/acme", command: "codex",
+                                  template: template, account: codexShadow)
+    await h.send(connection, .launch([launch]))
+    #expect(transport.events().first == .launched(
+      names: [nil], created: [],
+      errors: [BrokerLaunchFailure(index: 0, code: .badMessage,
+                                   message: "launches[0].account: CODEX_HOME is managed by the account Codex work; remove it.")]))
+    #expect(h.tmux.calls("new-session").isEmpty)
+    #expect(shadows.prepared.isEmpty)
+    #expect(files(store).isEmpty)
+  }
+
+  @Test func aShadowThatCannotBeBuiltFailsItsItemOnlyAndWritesNothingForIt() async throws {
+    let (h, store) = try harness()
+    await h.start()
+    let (transport, connection) = await h.client()
+    await h.send(connection, .launch([try launch(codexShadow), brokerLaunch(nil)]))
+    let second = SessionName("hm-acme-new-1")!
+    #expect(transport.events().first == .launched(
+      names: [nil, second], created: [second],
+      errors: [BrokerLaunchFailure(index: 0, code: .internal, message: "launches[0].account: Shadow accounts are not supported yet")]))
+    #expect(h.tmux.calls("new-session").count == 1)
+    #expect(files(store).isEmpty)
+  }
+
+  @Test func aShadowErrorsTextIsTheFailuresMessage() async throws {
+    let (h, _) = try harness()
+    let shadows = FakeShadowHomes()
+    shadows.failure = "cannot create /Users/me/.codex_work: disk full"
+    h.shadowHomes = shadows
+    await h.start()
+    let (transport, connection) = await h.client()
+    await h.send(connection, .launch([try launch(codexShadow)]))
+    #expect(transport.events().first == .launched(
+      names: [nil], created: [],
+      errors: [BrokerLaunchFailure(index: 0, code: .internal, message: "launches[0].account: cannot create /Users/me/.codex_work: disk full")]))
+    #expect(h.tmux.calls("new-session").isEmpty)
+  }
+
+  @Test func withoutAStoreAnAccountWithVariablesFailsAndRunsNothing() async throws {
+    let h = BrokerHarness()
+    await h.start()
+    let (transport, connection) = await h.client()
+    await h.send(connection, .launch([try launch(claudeShared), brokerLaunch(nil)]))
+    let second = SessionName("hm-acme-new-1")!
+    #expect(transport.events().first == .launched(
+      names: [nil, second], created: [second],
+      errors: [BrokerLaunchFailure(index: 0, code: .internal, message: "launches[0].account: this broker cannot pass account variables")]))
+    #expect(h.tmux.calls("new-session").count == 1)
+  }
+
+  @Test func aLaunchWithoutAnAccountIsUnchangedAndPreparesNothing() async throws {
+    let h = BrokerHarness()
+    let shadows = FakeShadowHomes()
+    h.shadowHomes = shadows
+    await h.start()
+    let (transport, connection) = await h.client()
+    let plain = brokerLaunch("Atlas")
+    await h.send(connection, .launch([plain]))
+    #expect(transport.events().first == .launched(names: [atlas], created: [atlas], errors: []))
+    let tmux = TmuxCommand(executable: "/opt/homebrew/bin/tmux", configPath: BrokerHarness.config)
+    #expect(h.tmux.calls("new-session").first.map { base + $0 } == tmux.newSession(TmuxNewSession(name: atlas, launch: plain)))
+    #expect(!h.tmux.calls("new-session").joined().contains { $0.contains("unset") })
+    #expect(shadows.prepared.isEmpty)
+  }
+}

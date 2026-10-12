@@ -29,6 +29,11 @@ public final class TerminalBroker {
     /// Where worker template secrets are kept (the Keychain in the app); nil:
     /// secrets.* requests are answered with an error.
     public var templateSecrets: (any TemplateSecretVault)?
+    /// The Mac's home, which a launch's `~/` account paths are expanded with.
+    public var home: String
+    /// Builds an account's own directory before a session runs under it;
+    /// NoShadowHomes until shadow directories exist (docs/accounts.md).
+    public var shadowHomes: any ShadowHomePreparing
     /// Never given a secret or a variable's value: the broker logs names,
     /// counts and paths only.
     public var log: (String) -> Void
@@ -37,7 +42,8 @@ public final class TerminalBroker {
       tmux: any TmuxRunning, terminals: any BrokerTerminalSpawning, scheduler: any Scheduling,
       locateTmux: @escaping () -> String?, isDirectory: @escaping (String) -> Bool,
       environment: [String: String], idlePollInterval: TimeInterval = 15, secrets: LaunchSecretStore? = nil,
-      templateSecrets: (any TemplateSecretVault)? = nil, log: @escaping (String) -> Void = { _ in }
+      templateSecrets: (any TemplateSecretVault)? = nil, home: String = FileManager.default.homeDirectoryForCurrentUser.path,
+      shadowHomes: any ShadowHomePreparing = NoShadowHomes(), log: @escaping (String) -> Void = { _ in }
     ) {
       self.tmux = tmux
       self.terminals = terminals
@@ -48,6 +54,8 @@ public final class TerminalBroker {
       self.idlePollInterval = idlePollInterval
       self.secrets = secrets
       self.templateSecrets = templateSecrets
+      self.home = home
+      self.shadowHomes = shadowHomes
       self.log = log
     }
   }
@@ -554,19 +562,44 @@ public final class BrokerConnection {
         results.append(name)
         continue
       }
+      // The account the session runs under (docs/accounts.md): its variables join the launch file, and the controlled
+      // names it does not set are unset by the script. A conflict or a shadow that cannot be built fails only this item.
+      var accountVariables: [(name: String, value: String)] = []
+      var fileEnvironment = launch.environment
+      var unsetNames: [String] = []
+      if let account = launch.account {
+        if let message = account.environmentConflict(in: launch.environment, secretNames: launch.secrets?.names ?? []) {
+          results.append(nil)
+          errors.append(BrokerLaunchFailure(index: index, code: .badMessage, message: "launches[\(index)].account: \(message)"))
+          continue
+        }
+        accountVariables = account.environment(home: broker.deps.home)
+        unsetNames = account.controlledNames.filter { controlled in !accountVariables.contains { $0.name == controlled } }
+        if !accountVariables.isEmpty {
+          var values = launch.environment?.dictionary ?? [:]
+          for variable in accountVariables { values[variable.name] = variable.value }
+          do { fileEnvironment = try LaunchEnvironment(values) } catch {
+            results.append(nil)
+            errors.append(BrokerLaunchFailure(index: index, code: .badMessage, message: "launches[\(index)].account: \(error.message)"))
+            continue
+          }
+        }
+      }
       var environmentFile: LaunchEnvironmentFile?
-      if launch.handsVariables {
+      if launch.handsVariables || !accountVariables.isEmpty {
         guard let store = broker.deps.secrets else {
           results.append(nil)
           let message = launch.secrets != nil ? "launches[\(index)].secrets: this broker cannot pass secrets"
             : launch.environment != nil ? "launches[\(index)].environment: this broker cannot pass environment variables"
-            : "launches[\(index)].template: this broker cannot pass template secrets"
+            : launch.template != nil ? "launches[\(index)].template: this broker cannot pass template secrets"
+            : "launches[\(index)].account: this broker cannot pass account variables"
           errors.append(BrokerLaunchFailure(index: index, code: .internal, message: message))
           continue
         }
         environmentFile = store.file()
       }
-      let arguments = tmux.newSession(TmuxNewSession(name: name, launch: launch, environmentFile: environmentFile))
+      let arguments = tmux.newSession(TmuxNewSession(
+        name: name, launch: launch, environmentFile: environmentFile, unsetNames: unsetNames))
       let bytes = TmuxCommand.commandLineBytes(arguments)
       guard bytes <= TmuxCommand.maxCommandLineBytes else {
         results.append(nil)
@@ -589,11 +622,24 @@ public final class BrokerConnection {
         }
         if !templateSecrets.isEmpty { broker.deps.log("[broker] \(name): template secrets \(templateSecrets.keys.sorted())") }
       }
+      // The vault's names are known only now; the shadow is built once every check has passed.
+      if let account = launch.account {
+        if let message = account.environmentConflict(in: nil, secretNames: templateSecrets.keys.sorted()) {
+          results.append(nil)
+          errors.append(BrokerLaunchFailure(index: index, code: .badMessage, message: "launches[\(index)].account: \(message)"))
+          continue
+        }
+        do { try broker.deps.shadowHomes.prepare(account, home: broker.deps.home) } catch {
+          results.append(nil)
+          errors.append(BrokerLaunchFailure(index: index, code: .internal, message: "launches[\(index)].account: \(error.localizedDescription)"))
+          continue
+        }
+      }
       if let file = environmentFile, let store = broker.deps.secrets {
-        do { try store.write(environment: launch.environment, secrets: launch.secrets, templateSecrets: templateSecrets, to: file) } catch {
+        do { try store.write(environment: fileEnvironment, secrets: launch.secrets, templateSecrets: templateSecrets, to: file) } catch {
           broker.deps.log("[broker] \(name): cannot write its launch file: \(error.message)")
           results.append(nil)
-          let field = launch.secrets != nil ? "secrets" : launch.environment != nil ? "environment" : "template"
+          let field = launch.secrets != nil ? "secrets" : launch.environment != nil ? "environment" : launch.template != nil ? "template" : "account"
           errors.append(BrokerLaunchFailure(index: index, code: .internal, message: "launches[\(index)].\(field): \(error.message)"))
           continue
         }

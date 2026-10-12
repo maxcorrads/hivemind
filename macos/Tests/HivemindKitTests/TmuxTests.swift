@@ -77,6 +77,14 @@ struct TmuxCommandTests {
     #expect(TmuxCommand.script(cwd: "/Users/me/it's", command: "echo hi \\\n\n") == "cd -- '/Users/me/it'\\''s' || exit 1\necho hi \\\n\nexec /bin/zsh -l")
   }
 
+  @Test func theScriptUnsetsAnAccountsOtherNamesOnceTheFileIsLoadedAndBeforeTheCd() throws {
+    let file = LaunchEnvironmentFile(path: "/Users/me/A.env")
+    #expect(TmuxCommand.script(cwd: "/Users/me/acme", command: "codex", environmentFile: file, unsetNames: ["CODEX_API_KEY", "CODEX_ACCESS_TOKEN"])
+      == TmuxCommand.environmentLine(file) + "builtin unset -v CODEX_API_KEY CODEX_ACCESS_TOKEN\ncd -- '/Users/me/acme' || exit 1\ncodex\n\nexec /bin/zsh -l")
+    #expect(TmuxCommand.script(cwd: "/Users/me/acme", command: "claude", unsetNames: ["CLAUDE_CONFIG_DIR"])
+      == "builtin unset -v CLAUDE_CONFIG_DIR\ncd -- '/Users/me/acme' || exit 1\nclaude\n\nexec /bin/zsh -l")
+  }
+
   @Test func windowNamesAreOneShortLine() {
     #expect(TmuxCommand.windowName("Acme\n- \u{1B}[31mAtlas") == "Acme - [31mAtlas")
     #expect(TmuxCommand.windowName(String(repeating: "x", count: 100)).count == 60)

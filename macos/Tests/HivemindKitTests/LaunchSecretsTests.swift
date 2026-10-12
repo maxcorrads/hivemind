@@ -186,7 +186,10 @@ struct LaunchSecretsScriptTests {
     let folder = "/" + String(repeating: "s", count: BrokerPaths.maxSocketPathBytes) + "/launch-secrets"
     let file = LaunchSecretStore(folder: URL(fileURLWithPath: folder)).file()
     let name = BrokerLaunch.sessionNames(for: [launch], existing: []).first!
-    let bytes = TmuxCommand.commandLineBytes(longest.newSession(TmuxNewSession(name: name, launch: launch, environmentFile: file)))
+    // With an account, the longest unset line as well: a Claude primary that sets no variable unsets every name.
+    let unset = LaunchAccount.Driver.claude.controlledNames
+    #expect(unset.joined().count >= LaunchAccount.Driver.codex.controlledNames.joined().count)
+    let bytes = TmuxCommand.commandLineBytes(longest.newSession(TmuxNewSession(name: name, launch: launch, environmentFile: file, unsetNames: unset)))
     #expect(bytes <= TmuxCommand.maxCommandLineBytes, "\(bytes)")
   }
 }

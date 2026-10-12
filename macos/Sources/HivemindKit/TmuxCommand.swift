@@ -18,8 +18,11 @@ public struct TmuxNewSession: Equatable, Sendable {
   /// secrets from (LaunchSecretStore). Only its path is in argv; the values
   /// never are.
   public let environmentFile: LaunchEnvironmentFile?
+  /// Variables the script unsets once it has loaded the file: the account's
+  /// controlled names that the launch does not set (LaunchAccount.controlledNames).
+  public let unsetNames: [String]
 
-  public init(name: SessionName, launch: BrokerLaunch, environmentFile: LaunchEnvironmentFile? = nil) {
+  public init(name: SessionName, launch: BrokerLaunch, environmentFile: LaunchEnvironmentFile? = nil, unsetNames: [String] = []) {
     self.name = name
     self.cwd = launch.cwd
     self.command = launch.command
@@ -27,6 +30,7 @@ public struct TmuxNewSession: Equatable, Sendable {
     self.project = launch.project
     self.agent = launch.agent
     self.environmentFile = environmentFile
+    self.unsetNames = unsetNames
   }
 }
 
@@ -87,7 +91,8 @@ public struct TmuxCommand: Equatable, Sendable {
       "-n", Self.argument(Self.windowName(spec.title)),
       "-e", "\(SessionName.environmentVariable)=\(spec.name.rawValue)",
       "--",
-      Self.shell, "-lic", Self.argument(Self.script(cwd: spec.cwd, command: spec.command, environmentFile: spec.environmentFile)),
+      Self.shell, "-lic", Self.argument(Self.script(
+        cwd: spec.cwd, command: spec.command, environmentFile: spec.environmentFile, unsetNames: spec.unsetNames)),
     ]
     // ";" as its own argument chains tmux commands in one call. set-option
     // takes a pane target, which needs "=name:" (SessionName.windowTarget).
@@ -131,15 +136,18 @@ public struct TmuxCommand: Equatable, Sendable {
   }
 
   /// The script zsh -lic runs: first the launch's variables loaded from its
-  /// file and the file deleted (`environmentLine`), then cd to the folder
-  /// (single-quoted), the command as the sheet built it, then an interactive
-  /// login shell so the session outlives the agent. Joined by a blank line,
-  /// not "; ", so a trailing comment or backslash in the command cannot
-  /// swallow the exec.
-  public static func script(cwd: String, command: String, environmentFile: LaunchEnvironmentFile? = nil) -> String {
+  /// file and the file deleted (`environmentLine`), then the account's
+  /// controlled variables it does not set unset (`unsetNames`: a login
+  /// shell's ~/.zshrc could export them; `builtin` for the same reason as
+  /// environmentLine), then cd to the folder (single-quoted), the command as
+  /// the sheet built it, then an interactive login shell so the session
+  /// outlives the agent. Joined by a blank line, not "; ", so a trailing
+  /// comment or backslash in the command cannot swallow the exec.
+  public static func script(cwd: String, command: String, environmentFile: LaunchEnvironmentFile? = nil, unsetNames: [String] = []) -> String {
     var command = command
     while command.hasSuffix("\n") || command.hasSuffix("\r") { command.removeLast() }
-    return (environmentFile.map(environmentLine) ?? "")
+    let unset = unsetNames.isEmpty ? "" : "builtin unset -v \(unsetNames.joined(separator: " "))\n"
+    return (environmentFile.map(environmentLine) ?? "") + unset
       + "cd -- \(TerminalScript.shellQuoted(cwd)) || exit 1\n" + command + "\n\nexec \(shell) -l"
   }
 
