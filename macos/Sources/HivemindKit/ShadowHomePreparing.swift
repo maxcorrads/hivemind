@@ -61,11 +61,16 @@ public struct FileShadowHomes: ShadowHomePreparing {
     let (shared, shadow) = Self.paths(account, home: home)
     // A primary logs in to the shared home itself: nothing to build, only its login to report.
     guard !account.shadowPath.isEmpty else {
-      return AccountPreparation(loggedIn: layout.isLoggedIn(URL(fileURLWithPath: shared)))
+      var loggedIn = layout.isLoggedIn(URL(fileURLWithPath: shared))
+      // Without CLAUDE_CONFIG_DIR, Claude keeps `.claude.json` in the Mac home, next to `~/.claude`, not inside it.
+      if !loggedIn, account.driver == .claude, account.homePath.isEmpty {
+        loggedIn = ShadowLayout.hasClaudeLogin(configFile: URL(fileURLWithPath: expandingHome("~/.claude.json", home: home)))
+      }
+      return AccountPreparation(loggedIn: loggedIn)
     }
     var error: String?
     do {
-      try Self.checkShadow(account.driver, shared: shared, shadow: shadow)
+      try Self.checkShadow(account.driver, shared: shared, shadow: shadow, seedRetention: true)
       try ShadowHome().materialize(home: shared, shadow: shadow, layout: layout, createShadow: true, requireLogin: false)
     } catch let failure as ShadowHomeError {
       error = failure.message
@@ -82,14 +87,33 @@ public struct FileShadowHomes: ShadowHomePreparing {
     }
   }
 
-  /// The checks that run before `materialize`, for each driver's shadow.
-  private static func checkShadow(_ driver: LaunchAccount.Driver, shared: String, shadow: String) throws {
+  /// The checks that run before `materialize`, for each driver's shadow. Prepare (`seedRetention`) first gives a new
+  /// Claude shadow the home's `cleanupPeriodDays`, so its first check can pass.
+  private static func checkShadow(_ driver: LaunchAccount.Driver, shared: String, shadow: String, seedRetention: Bool = false) throws {
     switch driver {
     case .codex:
       try checkConfig(home: shared)
     case .claude:
       try checkExactPath(shadow)
+      if seedRetention { try Self.seedRetention(home: shared, shadow: shadow) }
       try checkRetention(home: shared, shadow: shadow)
+    }
+  }
+
+  /// When the shadow has no `settings.json` and the home's sets `cleanupPeriodDays`, writes a `settings.json` (0600)
+  /// holding only that key, creating the shadow folder (0700) if needed. Reads nothing else of the home's file.
+  private static func seedRetention(home: String, shadow: String) throws {
+    let target = shadow + "/settings.json"
+    guard !FileManager.default.fileExists(atPath: target),
+          let data = FileManager.default.contents(atPath: home + "/settings.json"),
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let days = json["cleanupPeriodDays"], !(days is NSNull) else { return }
+    if mkdir(shadow, 0o700) != 0 && errno != EEXIST {
+      throw ShadowHomeError(path: shadow, message: "Cannot create `\(shadow)`: \(String(cString: strerror(errno)))")
+    }
+    let body = try JSONSerialization.data(withJSONObject: ["cleanupPeriodDays": days], options: [.prettyPrinted, .sortedKeys])
+    guard FileManager.default.createFile(atPath: target, contents: body + Data("\n".utf8), attributes: [.posixPermissions: 0o600]) else {
+      throw ShadowHomeError(path: target, message: "Cannot write `\(target)`.")
     }
   }
 

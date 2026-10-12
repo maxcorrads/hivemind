@@ -456,7 +456,15 @@ struct ShadowHomeTests {
       }
 
       try t.file(t.inHome("settings.json"), "{\"cleanupPeriodDays\": 30}")
-      #expect(error() == mismatch("default", "30"))
+      #expect(error() == nil, "Prepare gives a new shadow the home's value")
+      let seeded = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: t.inShadow("settings.json")))) as? [String: Int]
+      #expect(seeded == ["cleanupPeriodDays": 30], "and only that key")
+      let mode = try FileManager.default.attributesOfItem(atPath: t.inShadow("settings.json"))[.posixPermissions] as? Int
+      #expect(mode == 0o600)
+      try FileManager.default.removeItem(atPath: t.inShadow("settings.json"))
+      #expect(throws: BrokerProtocolError(.internal, mismatch("default", "30")), "a launch seeds nothing and is refused") {
+        try FileShadowHomes().prepare(account, home: t.root.path)
+      }
       try t.file(t.inShadow("settings.json"), "{\"cleanupPeriodDays\": 7}")
       #expect(error() == mismatch("7", "30"))
       #expect(throws: BrokerProtocolError(.internal, mismatch("7", "30")), "a launch is refused the same way") {
@@ -481,5 +489,22 @@ struct ShadowHomeTests {
       #expect(preparation.ok)
       #expect(preparation.loggedIn == false)
     }
+  }
+}
+
+/// Without CLAUDE_CONFIG_DIR, Claude keeps `.claude.json` in the Mac home, so Prepare reports a default primary's
+/// login from there (only the `oauthAccount` key is looked at).
+struct ClaudeDefaultPrimaryLoginTests {
+  @Test func aDefaultClaudePrimaryIsLoggedInByTheClaudeJSONInTheMacHome() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("hivemindkit-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root.appendingPathComponent(".claude"), withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let primary = LaunchAccount(id: "a7", driver: .claude, label: "Claude", homePath: "", shadowPath: "")
+    #expect(!FileShadowHomes().prepareForLogin(primary, home: root.path).loggedIn)
+    try Data(#"{"oauthAccount": {"accountUuid": "fake"}}"#.utf8).write(to: root.appendingPathComponent(".claude.json"))
+    #expect(FileShadowHomes().prepareForLogin(primary, home: root.path).loggedIn)
+    let work = LaunchAccount(id: "a8", driver: .claude, label: "Claude work", homePath: root.path + "/.claude-work", shadowPath: "")
+    try FileManager.default.createDirectory(atPath: work.homePath, withIntermediateDirectories: true)
+    #expect(!FileShadowHomes().prepareForLogin(work, home: root.path).loggedIn, "a primary with its own folder keeps its login there")
   }
 }

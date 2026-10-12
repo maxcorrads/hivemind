@@ -682,9 +682,10 @@ public final class BrokerConnection {
         results.append(name)
         continue
       }
-      // A Codex thread another process has open is not resumed here (docs/accounts.md, "Live sessions"). Checked before the
-      // launch file is written, so a refused item leaves no secrets behind.
-      if let thread = CodexThreadLock.resumedThread(in: launch.command) {
+      // With an account, a Codex thread another process has open is not resumed here (docs/accounts.md, "Live
+      // sessions"); without one the launch runs as it always did. Checked before the launch file is written, so a
+      // refused item leaves no secrets behind.
+      if launch.account != nil, let thread = CodexThreadLock.resumedThread(in: launch.command) {
         do {
           let lock = CodexThreadLock(home: CodexThreadLock.sharedHome(for: launch.account, home: broker.deps.home))
           if try lock.isOpen(thread) {
@@ -699,10 +700,10 @@ public final class BrokerConnection {
           continue
         }
       }
-      // Nor is a Claude transcript (docs/accounts.md, "Live sessions"). Claude keeps its live sessions per config
+      // Nor, with an account, is a Claude transcript (docs/accounts.md, "Live sessions"). Claude keeps its live sessions per config
       // directory, so every directory of the launch's shared tree the broker knows is read, this launch's own included.
       if let account = launch.account { broker.noteClaudeAccount(account) }
-      if let resume = ClaudeLiveSessions.resumed(in: launch.command) {
+      if launch.account != nil, let resume = ClaudeLiveSessions.resumed(in: launch.command) {
         do {
           let directories = ClaudeLiveSessions.directories(for: launch.account, known: broker.claudeAccounts, home: broker.deps.home)
           if let holder = try ClaudeLiveSessions(processStart: broker.deps.processStart).holder(of: resume, cwd: launch.cwd, in: directories) {

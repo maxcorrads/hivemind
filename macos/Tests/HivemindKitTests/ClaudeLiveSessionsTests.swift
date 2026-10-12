@@ -219,9 +219,22 @@ struct ClaudeLiveSessionsBrokerTests {
     let (transport, connection) = await h.client()
     await h.send(connection, .accountPrepare(account: personal), id: "prepare")
     _ = transport.take()
-    await h.send(connection, .launch([brokerLaunch("Atlas", command: "claude --resume \(session)"), brokerLaunch(nil)]))
+    let resume = try BrokerLaunch(project: "acme", agent: "Atlas", title: "Acme - Atlas", cwd: "/Users/me/acme",
+                                  command: "claude --resume \(session)", account: primary)
+    await h.send(connection, .launch([resume, brokerLaunch(nil)]))
     #expect(transport.events().first == .launched(names: [nil, second], created: [second], errors: [refusal("Claude personal")]))
     #expect(h.tmux.calls("new-session").count == 1)
+  }
+
+  @Test func withoutAnAccountAResumeOfALiveSessionRunsAsBefore() async throws {
+    let (h, root) = try harness()
+    defer { try? FileManager.default.removeItem(at: root) }
+    try writeRecord(in: root.path + "/.claude")
+    await h.start()
+    let (transport, connection) = await h.client()
+    await h.send(connection, .launch([brokerLaunch("Atlas", command: "claude --resume \(session)")]))
+    let atlas = SessionName("hm-acme-atlas")!
+    #expect(transport.events().first == .launched(names: [atlas], created: [atlas], errors: []), "no account, no check: Claude decides")
   }
 
   @Test func aShadowsLaunchSeesTheSharedTreesSessionsAndNothingOfItRuns() async throws {
@@ -245,9 +258,10 @@ struct ClaudeLiveSessionsBrokerTests {
     try writeRecord(in: root.path + "/.claude", cwd: "/Users/me/acme")
     await h.start()
     let (transport, connection) = await h.client()
-    await h.send(connection, .launch([brokerLaunch("Atlas", command: "claude --continue"), brokerLaunch(nil, command: "claude")]))
-    // No account named the default tree yet: the message names its folder.
-    #expect(transport.events().first == .launched(names: [nil, second], created: [second], errors: [refusal(root.path + "/.claude")]))
+    let resume = try BrokerLaunch(project: "acme", agent: "Atlas", title: "Acme - Atlas", cwd: "/Users/me/acme",
+                                  command: "claude --continue", account: primary)
+    await h.send(connection, .launch([resume, brokerLaunch(nil, command: "claude")]))
+    #expect(transport.events().first == .launched(names: [nil, second], created: [second], errors: [refusal("Claude")]))
   }
 
   @Test func resumingASessionWhoseProcessIsGoneStarts() async throws {

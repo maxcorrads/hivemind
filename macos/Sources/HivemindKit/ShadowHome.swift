@@ -101,10 +101,7 @@ extension ShadowLayout {
         return lstat(shadow.appendingPathComponent(name).path, &info) == 0 && (info.st_mode & S_IFMT) == S_IFREG
       }
       if regularFile(".credentials.json") { return true }
-      guard regularFile(".claude.json"),
-            let data = FileManager.default.contents(atPath: shadow.appendingPathComponent(".claude.json").path),
-            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
-      return json["oauthAccount"] != nil
+      return ShadowLayout.hasClaudeLogin(configFile: shadow.appendingPathComponent(".claude.json"))
     },
     loginCommand: { shadow, _ in
       "mkdir -p \(shellWord(shadow)) && CLAUDE_CONFIG_DIR=\(shellWord(shadow)) claude auth login"
@@ -259,4 +256,16 @@ private func shellWord(_ path: String) -> String {
   let plain = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./+@,:-")
   guard !path.allSatisfy({ plain.contains($0) }) else { return path }
   return "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+}
+
+extension ShadowLayout {
+  /// Whether a Claude `.claude.json` holds a login: a regular file (lstat) whose top-level `oauthAccount` key is
+  /// present. Only the key is looked at, never its value.
+  static func hasClaudeLogin(configFile: URL) -> Bool {
+    var info = stat()
+    guard lstat(configFile.path, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG,
+          let data = FileManager.default.contents(atPath: configFile.path),
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+    return json["oauthAccount"] != nil
+  }
 }
