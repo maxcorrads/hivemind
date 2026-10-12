@@ -606,10 +606,11 @@ it unsets all five Claude names.
 **Shadow accounts.** Before the session of a created launch starts, the broker
 prepares the account's own directory (`ShadowHomePreparing`). A failure refuses
 that item alone, with `internal` and `launches[<i>].account: <reason>`. A Codex
-shadow is built from its shared home (`FileShadowHomes`); its messages and fixes
-are in [Codex shadow](accounts.md#codex-shadow). A Claude shadow is refused until
-phase 4 of [#319](https://github.com/maxcorrads/hivemind/issues/319) with "Claude
-shadow accounts arrive in phase 4". A primary account launches as above.
+or Claude shadow is built from its shared home (`FileShadowHomes`); its messages
+and fixes are in [Codex shadow](accounts.md#codex-shadow) and
+[Claude shadow](accounts.md#claude-shadow), which also has the checks of a
+Claude project's settings and of an open transcript. A primary account launches
+as above.
 
 **Reused sessions with an account.** A reused session is not checked against
 its account: nothing runs, nothing is written, and it keeps the account it
@@ -647,15 +648,17 @@ the Node server. `secrets.set`, `secrets.delete` and `secrets.list` are answered
 The Accounts sheet's **Prepare** ([accounts](accounts.md#sheet)) sends `account.prepare` before Human runs an
 account's login command. It is answered at once (it runs no tmux) with `account.prepared`:
 
-- a Codex shadow is checked and built as before a launch, except that its folder is created (0700) when missing and no
-  login is required yet; `error` is the reason it is not ready, naming the fix, and `loggedIn` is whether the shadow's
-  `auth.json` is a regular file ([Codex shadow](accounts.md#codex-shadow) has the rules and every message);
-- a primary account is only checked: nothing is created, and `loggedIn` says whether `<home>/auth.json` is a regular
-  file;
-- a Claude account answers `ok: false` until phase 4, and a broker that builds no shadows answers `ok: false` with
-  "this broker cannot prepare accounts".
+- a Codex or Claude shadow is checked and built as before a launch, except that its folder is created (0700) when
+  missing and no login is required yet; `error` is the reason it is not ready, naming the fix, and `loggedIn` is the
+  driver's login check on the shadow: a regular `auth.json` for Codex, a regular `.credentials.json` or a top-level
+  `oauthAccount` key in `.claude.json` for Claude ([Codex shadow](accounts.md#codex-shadow) and
+  [Claude shadow](accounts.md#claude-shadow) have the rules and every message);
+- a primary account is only checked: nothing is created, and `loggedIn` is the same login check on its home;
+- a broker that builds no shadows answers `ok: false` with "this broker cannot prepare accounts".
 
-The only file read is the shared `config.toml`, up to its first table; `error` never holds a token or file contents.
+For Codex the only file read is the shared `config.toml`, up to its first table. For Claude only the top-level
+`cleanupPeriodDays` of each `settings.json` is read, and whether `.claude.json` has a top-level `oauthAccount` key.
+`error` never holds a token or file contents.
 A bad `account` is refused with `bad-message`, as in a launch.
 
 ## Clients
