@@ -83,6 +83,21 @@ test("a window used faster than it lasts says when it runs out at this pace", as
   assert.ok(f.row("Codex work").textContent!.includes(`At this pace it runs out ${local(runsOut)} · in 1 h 28 min`));
 });
 
+test("a stale read whose pace has already run the window out says so instead of a past time", async t => {
+  const f = await fixture(t);
+  const work = f.hive.accounts.create(f.human, spec());
+  // Read a day ago, a day into a week at 90%: at that pace the rest went 2.7 h after the read, long before now.
+  const read = NOW - DAY;
+  f.hive.accountUsage.record(usageSnapshot(work.id, { capturedAt: read, windows: [
+    { key: "codex.secondary", label: "Week", usedPercent: 90, resetsAt: read + 6 * DAY, windowMs: 7 * DAY },
+  ] }));
+  await f.render();
+  const text = f.row("Codex work").textContent!;
+  assert.match(text, /stale/);
+  assert.match(text, /At this pace it is probably used up already/);
+  assert.doesNotMatch(text, /runs out/);
+});
+
 test("an account with no read yet says how its numbers come, and only a real failure shows as an error", async t => {
   const f = await fixture(t);
   const claude = f.hive.accounts.create(f.human, spec({ driver: "claude", label: "Claude work", homePath: "~/.claude-work" }));

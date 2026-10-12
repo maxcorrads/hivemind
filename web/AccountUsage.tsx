@@ -86,6 +86,8 @@ function UsageWindowRow({ quota, now, capturedAt }: { quota: UsageWindow; now: n
         <span className="account-usage-forecast">
           {forecast.kind === "usedUp" ? "Used up until the reset"
             : forecast.kind === "lasts" ? "At this pace it lasts until the reset"
+            // An old read can lead to a time already behind us: at that pace the window is gone by now.
+            : forecast.at <= now ? "At this pace it is probably used up already"
             : <>At this pace it runs out <time dateTime={new Date(forecast.at).toISOString()}>{localTime(forecast.at)}</time> · {countdown(forecast.at, now)}</>}
         </span>
       )}
