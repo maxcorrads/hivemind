@@ -195,6 +195,7 @@ running, in which case it is reused and its command is not run again:
 ```text
 tmux … new-session -d -s <name> -n <window name> -e HIVEMIND_TMUX_SESSION=<name> \
   -- /bin/zsh -lic "[<one line loading the launch file>]
+[builtin unset -v <an account's other controlled names>]
 cd -- '<cwd>' || exit 1
 <command>
 
@@ -224,10 +225,13 @@ exec /bin/zsh -l" \
   server stores it and returns it as `agent.terminalSession` (see
   [The session label](#the-session-label)).
 - The two user options record the project and the agent for `sessions`.
-- A launch with [secrets](#launch-secrets) or
-  [environment variables](#launch-environment) starts its script with one line
-  that loads them from a private file and deletes the file. Only the file's
-  path is in the script; no value ever is.
+- A launch with [secrets](#launch-secrets),
+  [environment variables](#launch-environment) or an
+  [account](accounts.md#choosing-an-account) that sets a variable starts its
+  script with one line that loads them from a private file and deletes the
+  file. Only the file's path is in the script; no value ever is. A launch with
+  an account then unsets the account's controlled variables that it does not
+  set, before the `cd` ([Launch environment](#launch-environment)).
 
 The other calls:
 
@@ -562,6 +566,52 @@ variables add nothing to a launch's `new-session` arguments beyond the loader
 line; the largest valid launch, with every field and variable at its limit,
 stays under `TmuxCommand.maxCommandLineBytes` (checked in
 `LaunchEnvironmentTests`).
+
+**The account variable.** A launch with an [account](accounts.md#choosing-an-account)
+(its `account` field, already chosen by the server) also gets that account's
+variables, listed under [Variables](accounts.md#variables): `CODEX_HOME` and
+`CODEX_SQLITE_HOME` for a Codex shadow, `CODEX_HOME` for a Codex primary with a
+home path, and `CLAUDE_CONFIG_DIR` for Claude when it has a path. They join the
+same launch file as the environment variables and secrets, and the rules above
+for that file apply. `HOME` is never set.
+
+**`~` in account paths.** The client sends an account's paths as stored and
+never expands them. The broker expands a leading `~/` with the Mac's home
+directory (`TerminalBroker.Dependencies.home`, through
+`LaunchAccount.environment(home:)`) before it writes the file, so
+`~/.codex-work` reaches the session as an absolute path. A path that does not
+start with `~/` is used as written.
+
+**The conflict rule.** An account controls these names: `CODEX_HOME`,
+`CODEX_SQLITE_HOME`, `CODEX_API_KEY` and `CODEX_ACCESS_TOKEN` for Codex;
+`CLAUDE_CONFIG_DIR`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
+`CLAUDE_CODE_OAUTH_TOKEN` and `CLAUDE_SECURESTORAGE_CONFIG_DIR` for Claude. A
+launch with an account may not carry one of them in its environment variables,
+its [secret](#launch-secrets) names or, for a template, its template secret
+names, compared without case, even when the account sets no variable. Such an
+item is refused alone: its `names` entry is `null`, and `errors` gets
+`{index, code: "bad-message", message: "launches[<i>].account: <NAME> is managed
+by the account <label>; remove it."}`. The message names the variable, never a
+value, and nothing runs for that item. Other items in the same `launch` go on.
+
+**The unset line.** After the launch file is loaded (first, when the launch
+has no file), the script runs `builtin unset -v` naming the account's
+controlled names that the account does not set, before the `cd`. A login
+shell's `~/.zshrc` could export one of them, and a token variable outranks the
+directory's login. A primary Claude account with no path sets no variable, so
+it unsets all five Claude names.
+
+**Shadow accounts.** Before the session of a created launch starts, the broker
+prepares the account's own directory (`ShadowHomePreparing`). A failure refuses
+that item alone, with `internal` and `launches[<i>].account: <reason>`. Until
+shadow directories are built (phases 3 and 4 of
+[#319](https://github.com/maxcorrads/hivemind/issues/319)), `NoShadowHomes`
+refuses every shadow with "Shadow accounts are not supported yet". A primary
+account launches as above.
+
+**Reused sessions with an account.** A reused session is not checked against
+its account: nothing runs, nothing is written, and it keeps the account it
+started with.
 
 ## Template secrets
 

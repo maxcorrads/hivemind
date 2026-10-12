@@ -7,9 +7,11 @@ stores, reads or shows a provider token: login stays a CLI command Human runs on
 
 The design is [#319](https://github.com/maxcorrads/hivemind/issues/319); this page grows with its phases. Phase 0
 ([#320](https://github.com/maxcorrads/hivemind/issues/320)) fixes the names and rules below; phase 1
-([#321](https://github.com/maxcorrads/hivemind/issues/321)) stores the [Catalog](#catalog), and nothing launches with
-an account yet. They live in `src/shared/accounts.ts` and, for the broker, HivemindKit's `LaunchAccount`. Both read
-`src/shared/account-paths.vectors.json`, so the page and the app check paths and build variables the same way.
+([#321](https://github.com/maxcorrads/hivemind/issues/321)) stores the [Catalog](#catalog); phase 2
+([#322](https://github.com/maxcorrads/hivemind/issues/322)) lets a launch pick one
+([Choosing an account](#choosing-an-account)). They live in `src/shared/accounts.ts` and, for the broker, HivemindKit's
+`LaunchAccount`. Both read `src/shared/account-paths.vectors.json`, so the page and the app check paths and build
+variables the same way.
 
 ## Decisions
 
@@ -115,7 +117,8 @@ files where the shared links belong.
 
 Human keeps the catalog in the server's database, from migration v41: `agent_accounts` has one row per account, and
 `agent_account_policies` one row per driver that has a chosen policy. Only Human changes it. Like the other Human
-routes, a request with an `Authorization` header gets 403. Nothing launches with an account yet.
+routes, a request with an `Authorization` header gets 403. Launches pick their account from it
+([Choosing an account](#choosing-an-account)).
 
 | Field | Column | Set by |
 | --- | --- | --- |
@@ -157,6 +160,7 @@ Rules:
 | `POST /api/ui/accounts` | `AccountSpec` | the account, `201` |
 | `PUT /api/ui/accounts/order` | `{driver, ids}` | `{accounts, policies}` |
 | `PUT /api/ui/accounts/policy` | `{driver, policy}` | `{accounts, policies}` |
+| `POST /api/ui/accounts/resolve` | `{driver, accountId?, record?}` | `{selection}`, see [Choosing an account](#choosing-an-account) |
 | `PUT /api/ui/accounts/:id` | `{expectedRevision, label?, homePath?, shadowPath?}` | the account |
 | `DELETE /api/ui/accounts/:id?revision=N` | | `{ok: true}` |
 
@@ -190,7 +194,65 @@ shadow comes with [Codex shadow](#codex-shadow) (phase 3).
 
 ## Choosing an account
 
-(phase 2, [#322](https://github.com/maxcorrads/hivemind/issues/322))
+A launch of `codex` or `claude` runs under one account, chosen when its session starts. The Launch sheet and a worker
+template's **Start** ask the server with `POST /api/ui/accounts/resolve` (`{driver, accountId?, record?}`, answering
+`{selection}`); a brain's approved request is chosen the same way in the launch queue. The rules are in
+`selectAccount` (`src/shared/account-selection.ts`). A driver with no accounts launches exactly as before, and so does
+a Software that is not exactly `codex` or `claude` (see Aliases below).
+
+**Pins.** A launch can pin one account: the Launch sheet's **Account** (anything but Auto) or a template's **Account**.
+A pin skips the policy and wins even when its account is used up. The launch then runs and, on the Mac, the sheet
+shows "<label> is used up until <ISO time>", or "<label> is used up" when no reset time is known; off the Mac the
+sheet gives way to the sessions as before. A pin to an account that has been removed does not launch.
+
+**Policies.** Without a pin, the driver's policy chooses among its accounts that are not used up, in Human's order:
+
+- **Sequential** takes the first account. It stays on it until it is used up, then takes the next one, and returns to
+  the first after its reset.
+- **Balanced** scores each account with a usable snapshot as `100 − usedPercent` of the window that resets first. When
+  no window has a future reset, it scores the most used window instead. The highest score wins, and ties go to the
+  earlier account. An account without a snapshot is never picked while another eligible account has one.
+- **Round-robin** is balanced's fallback when no eligible account has a snapshot: the account picked longest ago wins,
+  an account never picked comes first, and ties go by order. Its picks always read "usage unknown".
+
+A launch that picks an account records the pick, so balanced round-robin moves on to the next account.
+
+**Used up.** An account is used up while one of its windows is at 100% and its reset is unknown or still ahead, or while
+its recorded limit reset (`limitResetAt`) is still ahead. A window whose reset has passed counts as reset, so sequential
+returns to the first account after it. When every account is used up, the launch does not start (see the table below).
+The message names the first reset: "Every Codex account is used up. The first resets at <local time> (in <countdown>)."
+The time is left out when no reset is known.
+
+**Until usage is known.** Usage snapshots arrive with phase 5
+([#325](https://github.com/maxcorrads/hivemind/issues/325)). Until then no account is ever used up: sequential takes
+the first account, balanced round-robins, and every pick reads "usage unknown". A snapshot older than ten minutes
+(`USAGE_STALE_MS`) also reads "usage unknown", but it still scores. A snapshot with no windows (a failed read, or an
+API-key login) counts as no snapshot.
+
+**Reuse.** The account is chosen when a session is created. A launch that reuses a running session keeps the account
+that session started with. In the Launch sheet, **Resume same employees** gives an account only to employees whose
+session is not running. While one is running, the sheet says "This session keeps the account it started with. Terminate
+it and launch again to switch." The broker does the same for a reused session: it checks no account and writes nothing
+([Launch environment](terminal-broker.md#launch-environment)).
+
+**Copy-only launches.** **Copy**, **Copy all**, **Copy command** and **Reserve and copy** pick no account: the copied
+command runs without one, in whatever terminal it is pasted into. A browser picks no account either and keeps copying as
+before. Where its driver has accounts, the Launch sheet says "Accounts apply to launches from the apps."
+
+**Aliases.** Only a Software that is exactly `codex` or `claude` takes an account; an empty Software is `codex`.
+An alias such as `codex2` or `claude-work` still launches, but without an account, even when its driver has accounts.
+The Launch sheet and the template editor then show a hint, for example "codex2 launches without a Codex account:
+accounts apply only when Software is exactly codex." The hint never disables Launch or Save.
+
+**What a launch shows.**
+
+| Pick | In the apps: Launch sheet and template **Start** | A brain's request, or a queued template launch |
+| --- | --- | --- |
+| An account | Launches. On the Mac the sheet shows "Account: <label>", the pin's warning, and "usage unknown" when stale | Launches under it |
+| Used up | Does not launch, with the message above. **Start** reserves no worker | Stays queued with "Every Codex account is used up until <local time>", as a launch without a worktree does, and is tried again on each poll |
+| Pin removed | Does not launch: "That account was removed; pick another." | Stays queued: "The pinned account no longer exists" |
+| Conflict | Launch is disabled and the conflict shows, as in [Variables](#variables) | Stays queued with the conflict message |
+| No accounts | Launches as before | Launches as before |
 
 ## Codex shadow
 

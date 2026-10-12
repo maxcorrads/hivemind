@@ -46,6 +46,15 @@ copies the command for a terminal; secrets are then not passed. The launch promp
 the worker to create its own git worktree and branch when its task arrives. A template at its `maxConcurrent` limit
 cannot be launched; a reserved worker whose launch fails gives up after 30 minutes.
 
+A template with an **Account** (`accountId`) starts every worker under that account. Without one, a template whose
+Software is exactly `codex` or `claude` follows that driver's policy when it has accounts, as the Launch sheet's Auto
+does. **Start** and **Open in Terminal** choose the account before they reserve the worker, so a launch that cannot take
+one reserves nothing and the sheet says why: the pinned account was removed or every account is used up. A variable or
+secret name of the template that the account manages disables both and shows the conflict. A pin wins even when its
+account is used up: the worker starts and, on the Mac, the sheet shows the account's warning. **Reserve and copy**
+copies the command with no account. A brain's approved request chooses its account the same way; if none can take it,
+the request stays queued. See [Choosing an account](accounts.md#choosing-an-account).
+
 ## Secrets
 
 The server stores only secret **names**. Their values are entered in the template editor, in Hivemind.app on the Mac or
