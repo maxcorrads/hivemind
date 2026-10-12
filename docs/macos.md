@@ -247,8 +247,10 @@ command instead, and the broker hands them to the new session through the same
 private file as the key, loaded before the `cd`, never on a command line or in
 tmux's environment
 ([Launch environment](terminal-broker.md#launch-environment)). **Resume same
-employees** gives every employee the same variables; one whose session is still
-running keeps the environment it started with.
+employees** gives each employee the variables kept for its software: the field's
+for the Software field's, and for a card that chooses its own **Software**, the
+ones last entered with that software. One whose session is still running keeps
+the environment it started with.
 
 Each session is named `hm-<project>-<agent>`, or `hm-<project>-new-<n>` for a
 new agent whose name is not known yet. It starts in the workspace folder and

@@ -239,3 +239,57 @@ test("the alias hint is shown only for a driver with accounts", async t => {
   await f.setInput("Software", "codex2");
   assert.doesNotMatch(f.host.textContent!, /launches without/, "Codex has no accounts");
 });
+
+const workers = (human: Agent): Agent[] => ["Atlas", "Bea"].map(name => ({ ...human, id: name.toLowerCase(), name, role: "worker",
+  seniority: "mid", focus: "frontend", project: "acme" }));
+const claudeWork = spec({ driver: "claude", label: "Claude work", homePath: "~/.claude-work" });
+/** The Resume card of `name`. */
+const card = (host: Element, name: string) => Array.from(host.querySelectorAll("article.launch-card"))
+  .find(item => item.querySelector("strong")?.textContent === name)!;
+
+test("a Resume card can choose its own software, which brings its own account, model and environment", async t => {
+  const f = await fixture(t, true, { accounts: [spec(), claudeWork], extraAgents: workers, saved: {
+    resume: true, software: "codex", model: "gpt-6-astra", effort: "xhigh", extraFlags: "--search",
+    tunes: { Bea: { software: "claude", model: "", effort: "" } },
+    environments: { claude: "CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000" } } });
+  const atlas = card(f.host, "Atlas").textContent!, bea = card(f.host, "Bea").textContent!;
+  assert.match(atlas, /codex -m gpt-6-astra -c model_reasoning_effort=xhigh --search/);
+  assert.match(bea, /CLAUDE_CODE_MAX_OUTPUT_TOKENS='64000' HIVEMIND_ROLE='worker' claude /, "the variables kept for claude");
+  assert.doesNotMatch(bea, /gpt-6-astra|--search/, "another CLI takes neither the model nor the extra flags above");
+  assert.match(bea, /The extra flags above are for codex: claude launches without them\./);
+  assert.ok(Array.from(card(f.host, "Bea").querySelectorAll("option")).some(option => option.value.includes("claude-haiku-5-5")),
+    "Bea's Model lists Claude's models");
+  // One Account select per driver the launches run, the Software field's first.
+  assert.ok(f.labelled("Account (Codex)") && f.labelled("Account (Claude)"));
+  assert.equal(f.labelled("Account"), undefined);
+  await f.click("Start 2 in background");
+  const launch = f.launched();
+  assert.ok(launch && "launches" in launch);
+  const [first, second] = launch.launches;
+  assert.equal(first!.account?.label, "Work");
+  assert.equal(second!.account?.label, "Claude work");
+  assert.equal("environment" in first!, false);
+  assert.deepEqual(second!.environment, { CLAUDE_CODE_MAX_OUTPUT_TOKENS: "64000" });
+  assert.deepEqual(f.resolves(), [{ driver: "codex", accountId: null, record: true }, { driver: "claude", accountId: null, record: true }]);
+});
+
+test("a card that changes to another kind of CLI starts its model again from the default, and is remembered", async t => {
+  const f = await fixture(t, true, { accounts: [spec()], extraAgents: workers, saved: {
+    resume: true, software: "codex", tunes: { Bea: { software: "", model: "gpt-6-sol", effort: "high" } } } });
+  assert.match(card(f.host, "Bea").textContent!, /codex -m gpt-6-sol -c model_reasoning_effort=high/);
+  const input = Array.from(card(f.host, "Bea").querySelectorAll("label")).find(item => item.firstChild?.textContent?.trim() === "Software")!
+    .querySelector("input")!;
+  assert.equal(input.placeholder, "same as above (codex)");
+  await act(async () => {
+    input.dispatchEvent(new window.FocusEvent("focusin", { bubbles: true }) as unknown as Event);
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!.call(input, "claude");
+    input.dispatchEvent(new window.Event("input", { bubbles: true }) as unknown as Event);
+  });
+  await act(async () => { input.dispatchEvent(new window.FocusEvent("focusout", { bubbles: true }) as unknown as Event); });
+  await f.settle();
+  const bea = card(f.host, "Bea").textContent!;
+  assert.match(bea, /HIVEMIND_ROLE='worker' claude /);
+  assert.doesNotMatch(bea, /gpt-6-sol/, "Codex's model is dropped for Claude");
+  assert.deepEqual(JSON.parse(window.localStorage.getItem("hivemind-launch")!).tunes.Bea, { software: "claude", model: "", effort: "" });
+  assert.match(card(f.host, "Atlas").textContent!, /HIVEMIND_ROLE='worker' codex /, "the other cards keep the Software field's");
+});
