@@ -1,13 +1,21 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { Hono } from "hono";
+import { z } from "zod";
+import { toLaunchAccount, usageSnapshotSchema } from "../shared/accounts.ts";
+import { validated } from "../shared/api-contract.ts";
 import { HiveError } from "../shared/types.ts";
 import { requestJson } from "./api-input.ts";
+import { readLimitedJson } from "./ingress.ts";
 import type { Hive } from "./hive.ts";
 
 export const LAUNCHER_CONTEXT = "hivemind-launcher-v1";
 const HEX = /^[0-9a-f]{64}$/;
 const MAX_BODY = 4096;
+const USAGE_PATH = "/api/launcher/usage";
+/** Only the usage post may be larger: up to 16 snapshots, each a few kilobytes at most. */
+const USAGE_BODY = 64 * 1024;
 const SKEW_SECONDS = 60;
+const usageInput = z.object({ snapshots: z.array(usageSnapshotSchema).max(16) }).strict();
 
 /** Swift's HivemindKit launcher signer uses this exact UTF-8 string. */
 export function launcherSignature(secret: Buffer, method: string, pathAndQuery: string, timestamp: string,
@@ -18,9 +26,9 @@ export function launcherSignature(secret: Buffer, method: string, pathAndQuery: 
     .digest("hex");
 }
 
-async function boundedBody(request: Request): Promise<Uint8Array> {
+async function boundedBody(request: Request, maxBody: number): Promise<Uint8Array> {
   const declared = request.headers.get("content-length");
-  if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > MAX_BODY))
+  if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > maxBody))
     throw new HiveError(413, "Launcher body is too large");
   if (!request.body) return new Uint8Array();
   const reader = request.body.getReader(), chunks: Uint8Array[] = [];
@@ -36,7 +44,7 @@ async function boundedBody(request: Request): Promise<Uint8Array> {
       const part = await Promise.race([reader.read(), deadline]);
       if (part.done) break;
       size += part.value.byteLength;
-      if (size > MAX_BODY) {
+      if (size > maxBody) {
         void reader.cancel().catch(() => {});
         throw new HiveError(413, "Launcher body is too large");
       }
@@ -63,9 +71,9 @@ export class LauncherVerifier {
       throw new HiveError(401, "Invalid launcher proof");
     const at = Number(timestamp), now = Math.floor(this.now() / 1000);
     if (!Number.isSafeInteger(at) || Math.abs(now - at) > SKEW_SECONDS) throw new HiveError(401, "Invalid launcher proof");
-    const body = await boundedBody(request.clone());
-    if (request.method === "GET" && body.byteLength !== 0) throw new HiveError(400, "GET launcher request has a body");
     const url = new URL(request.url), pathAndQuery = url.pathname + url.search;
+    const body = await boundedBody(request.clone(), url.pathname === USAGE_PATH ? USAGE_BODY : MAX_BODY);
+    if (request.method === "GET" && body.byteLength !== 0) throw new HiveError(400, "GET launcher request has a body");
     const expected = launcherSignature(this.secret, request.method, pathAndQuery, timestamp, nonce, body);
     if (!timingSafeEqual(Buffer.from(signature, "hex"), Buffer.from(expected, "hex")))
       throw new HiveError(401, "Invalid launcher proof");
@@ -119,6 +127,13 @@ export function installLauncherChannel(app: Hono, hive: Hive, secret: Buffer | n
     return c.json({ command });
   });
   app.get("/api/launcher/approvals", c => c.json({ requests: hive.launcherQueue.listPending() }));
+  app.get("/api/launcher/accounts", c => c.json({ accounts: hive.accounts.list().accounts.map(toLaunchAccount) }));
+  app.post(USAGE_PATH, async c => {
+    const { snapshots } = validated(usageInput, await readLimitedJson(c.req.raw, USAGE_BODY));
+    // One transaction: an unknown account refuses the whole post, so a batch is never half kept.
+    hive.storage.transaction(() => { for (const snapshot of snapshots) hive.accountUsage.record(snapshot); });
+    return c.json({ ok: true });
+  });
   app.post("/api/launcher/:id/result", async c => {
     hive.launcherQueue.result(c.req.param("id"), await requestJson(c.req.raw) as { status: "launched" | "failed" | "killed"; session?: string; error?: string });
     return c.json({ ok: true });
