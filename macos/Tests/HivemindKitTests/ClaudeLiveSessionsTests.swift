@@ -270,6 +270,28 @@ struct ClaudeLiveSessionsBrokerTests {
     #expect(h.tmux.calls("new-session").isEmpty)
   }
 
+  // Parallel Claude accounts are allowed (docs/accounts.md, "Parallel accounts"): #319's "one Claude account at a time"
+  // limit is dropped, so a live session of one account does not hold back a new session of another.
+  @Test func aSecondAccountStartsANewSessionWhileAnotherAccountsSessionIsLive() async throws {
+    let (h, root) = try harness()
+    defer { try? FileManager.default.removeItem(at: root) }
+    try writeRecord(in: root.path + "/.claude")
+    let store = LaunchSecretStore(folder: HivemindPaths(home: root).launchSecrets)
+    h.secretStore = store
+    await h.start()
+    let (transport, connection) = await h.client()
+    let launch = try BrokerLaunch(project: "acme", agent: "Atlas", title: "Acme - Atlas", cwd: "/Users/me/acme",
+                                  command: "claude", account: personal)
+    await h.send(connection, .launch([launch]))
+    let atlas = SessionName("hm-acme-atlas")!
+    #expect(transport.events().first == .launched(names: [atlas], created: [atlas], errors: []))
+    #expect(h.tmux.calls("new-session").count == 1)
+    let written = try FileManager.default.contentsOfDirectory(atPath: store.folder.path)
+    #expect(written.count == 1)
+    #expect(try String(contentsOfFile: store.folder.appendingPathComponent(written[0]).path, encoding: .utf8)
+      == "CLAUDE_CONFIG_DIR=\(root.path)/.claude-personal\n", "it runs under its own config folder")
+  }
+
   @Test func continuingInTheFolderOfALiveSessionFailsAndANewSessionThereStarts() async throws {
     let (h, root) = try harness()
     defer { try? FileManager.default.removeItem(at: root) }

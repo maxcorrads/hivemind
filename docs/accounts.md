@@ -9,9 +9,12 @@ The design is [#319](https://github.com/maxcorrads/hivemind/issues/319); this pa
 ([#320](https://github.com/maxcorrads/hivemind/issues/320)) fixes the names and rules below; phase 1
 ([#321](https://github.com/maxcorrads/hivemind/issues/321)) stores the [Catalog](#catalog); phase 2
 ([#322](https://github.com/maxcorrads/hivemind/issues/322)) lets a launch pick one
-([Choosing an account](#choosing-an-account)). They live in `src/shared/accounts.ts` and, for the broker, HivemindKit's
-`LaunchAccount`. Both read `src/shared/account-paths.vectors.json`, so the page and the app check paths and build
-variables the same way.
+([Choosing an account](#choosing-an-account)); phases 3 and 4 ([#323](https://github.com/maxcorrads/hivemind/issues/323),
+[#324](https://github.com/maxcorrads/hivemind/issues/324)) build the [Codex shadow](#codex-shadow) and the
+[Claude shadow](#claude-shadow); phase 5 ([#325](https://github.com/maxcorrads/hivemind/issues/325)) reads each account's
+[Usage](#usage). The rules live in `src/shared/accounts.ts` and, for the broker, HivemindKit's `LaunchAccount`. Both read
+`src/shared/account-paths.vectors.json`, so the page and the app check paths and build variables the same way.
+[Acceptance](#acceptance) maps #319's test plan to the tests.
 
 ## Decisions
 
@@ -24,7 +27,8 @@ Taken while splitting #319 into phases (2026-10-12). Where #319 says otherwise, 
 | Empty catalog | A driver with no accounts launches exactly as today. |
 | Account paths | Same shape for both drivers. `homePath` is the shared tree (`""` = the CLI default `~/.codex` / `~/.claude`). `shadowPath` is this account's own directory (`""` = a primary account). The variable is `shadowPath` if set, else `homePath` if set, else not set. A primary with an empty `homePath` sets nothing: `CLAUDE_CONFIG_DIR=~/.claude` set explicitly changes which `.claude.json` and keychain item Claude uses. |
 | Aliases | Keep working. When `software` is in the codex/claude family (`softwareFamily`) but is not exactly `codex`/`claude`, and that driver has accounts, the Launch sheet and the template editor show a warning. Such a launch skips accounts. |
-| Exhaustion | From usage snapshots only, unless spikes 0.2/0.3 find a reliable source for limit errors. HiveMind does not read terminal output. |
+| Exhaustion | From usage snapshots only. Spikes 0.2/0.3 found no reliable limit-error source: Claude's `rate_limit` stop is shown next to the snapshot but not used by the policy, and Codex's limit errors cannot be tied to an account without reading the session. HiveMind does not read terminal output. |
+| Usage storage | SQLite, migration v42 (`agent_account_usage`): one row per account, the last good snapshot and the last attempt ([Stored usage](#stored-usage)). |
 | Balanced with partial data | Accounts without a snapshot are eligible but rank after accounts with one. When no eligible account has a snapshot: round-robin by `lastSelectedAt` (oldest first, `null` first, ties by order), marked stale. |
 | Pin on an exhausted account | The pin wins (it skips the policy). The result carries a warning the UI shows. |
 | Usage probe | Runs in Hivemind Server.app, on the Mac that launches. Snapshots go to Node over the signed launcher channel. Policy and dashboard read the same stored snapshot. |
@@ -156,7 +160,7 @@ Rules:
 
 | Method and path | Body | Answer |
 | --- | --- | --- |
-| `GET /api/ui/accounts` | | `{accounts, policies}` |
+| `GET /api/ui/accounts` | | `{accounts, policies, usage}`, `usage` as in [Stored usage](#stored-usage) |
 | `POST /api/ui/accounts` | `AccountSpec` | the account, `201` |
 | `PUT /api/ui/accounts/order` | `{driver, ids}` | `{accounts, policies}` |
 | `PUT /api/ui/accounts/policy` | `{driver, policy}` | `{accounts, policies}` |
@@ -185,6 +189,7 @@ Settings → **Accounts** opens the sheet, after **Adaptive routing**. It has on
   ([Preparing an account](terminal-broker.md#preparing-an-account)). The row then shows "Ready", "Not logged in" or
   the error text, which names the fix. After a successful Prepare the row shows the account's login command with
   **Copy**. Editing either path hides the status. In a browser the sheet says "Prepare needs the Mac app".
+- Under each account, its quota windows and the age of their read ([In the Accounts sheet](#in-the-accounts-sheet)).
 
 A server error shows as text in the sheet. An `accounts` event refetches the list.
 
@@ -227,11 +232,11 @@ returns to the first account after it. When every account is used up, the launch
 The message names the first reset: "Every Codex account is used up. The first resets at <local time> (in <countdown>)."
 The time is left out when no reset is known.
 
-**Until usage is known.** Usage snapshots arrive with phase 5
-([#325](https://github.com/maxcorrads/hivemind/issues/325)). Until then no account is ever used up: sequential takes
-the first account, balanced round-robins, and every pick reads "usage unknown". A snapshot older than ten minutes
-(`USAGE_STALE_MS`) also reads "usage unknown", but it still scores. A snapshot with no windows (a failed read, or an
-API-key login) counts as no snapshot.
+**Until usage is known.** The policy reads the stored snapshots of [Usage](#usage), the same ones the Accounts sheet
+shows. An account with no snapshot yet is never used up: sequential can take it, balanced ranks it after every account
+with a snapshot, and its pick reads "usage unknown". A snapshot older than ten minutes (`USAGE_STALE_MS`) also reads
+"usage unknown", but it still scores and can still be used up. A snapshot with no windows, such as an API-key login's,
+counts as no snapshot.
 
 **Reuse.** The account is chosen when a session is created. A launch that reuses a running session keeps the account
 that session started with. In the Launch sheet, **Resume same employees** gives an account only to employees whose
@@ -502,7 +507,29 @@ A launch that fails here refuses only its own item; the other items start. A sha
 
 ## Usage
 
-(phase 5, [#325](https://github.com/maxcorrads/hivemind/issues/325))
+Each account's quota windows, as its provider reports them: per window the used percent and the reset time, and in the
+Accounts sheet a countdown to that reset. Nothing forecasts how fast the rest will be used. Hivemind Server.app reads
+them on the Mac that launches ([Usage probe](#usage-probe)) and posts them to the server, which keeps the last good read
+of each account ([Stored usage](#stored-usage)). The [policy](#choosing-an-account) and the
+[Accounts sheet](#in-the-accounts-sheet) read that same stored snapshot, so they cannot disagree about which account is
+used up. No read costs quota, and Hivemind itself reads no login (phase 5,
+[#325](https://github.com/maxcorrads/hivemind/issues/325)).
+
+| Driver | Source | Has data |
+| --- | --- | --- |
+| Codex | `codex app-server`, with the requests `account/read` and `account/rateLimits/read` ([Findings: Codex](#findings-codex)) | On every round, for an account that is logged in. An API-key login has plan `api-key` and no window |
+| Claude | 1. The [status-line tap](#claude-status-line-tap) of the sessions Hivemind launches with the account | After a session's first API response, until its windows go [stale](#stale-and-unknown) |
+| Claude | 2. `cachedUsageUtilization` in the account's `.claude.json`, which Claude itself writes (undocumented) | While its `accountUuid` is the login's and it is under an hour old |
+
+Claude has no headless read: `/usage` runs only inside a session, and `claude -p` does not run it. So a Claude account
+has no data before its session's first API response, with no Hivemind session and no recent cache, or with an API-key
+login; its row then says "No recent Claude usage data".
+
+| Source | Key | Label |
+| --- | --- | --- |
+| Claude | `five_hour`, `seven_day` | "Session (5 h)", "Week" |
+| Claude, cache only | `seven_day_<family>` | "<Family> (week)", for example "Opus (week)" |
+| Codex | `<limitId>.primary`, `<limitId>.secondary` | By the window's length: 300 min "5 h", 1440 "Day", 10080 "Week", 43200 "Month", else "<n> min". The main bucket comes first; each other bucket's label starts with its `limitName`. At most 8 windows |
 
 ### Claude status-line tap
 
@@ -580,6 +607,102 @@ limits. The tap's `<id>/limit-error` sets `limitErrorAt`.
 **Snapshots.** A snapshot's time is when its windows were true, so an idle session's status line reads as old as it is,
 and is stale after `USAGE_STALE_MS`. An error snapshot carries one of the fixed messages above, never a command's output
 or a file's contents, and the server keeps the previous windows. A round that fails to post is read again in the next one.
+
+### Stored usage
+
+The server keeps one row per account in `agent_account_usage`, from migration v42 (`AccountUsageStore`,
+`src/server/account-usage.ts`). Removing an account removes its row.
+
+| Field (`AccountUsage`) | Column | Holds |
+| --- | --- | --- |
+| `snapshot` | `captured_at`, `source`, `plan`, `windows` | The last good read: when its windows were true, the driver, `subscription`, `api-key` or `unknown`, and its windows. `null` until the first good read |
+| `lastAttemptAt`, `lastError` | `last_attempt_at`, `last_error` | The last read, good or not, and its fixed error. A good read clears the error |
+| `limitErrorAt` | `limit_error_at` | The last `rate_limit` stop the Claude tap saw. A read without one keeps it. Shown, never used by the policy |
+| `limitResetAt` | `limit_reset_at` | A recorded limit's reset, which the policy honours. No source sets it yet |
+
+A read with an `error` keeps the previous windows, capture time and plan. Each stored read publishes an `accounts` event
+after the commit, so an open Accounts sheet refetches.
+
+Server.app uses two routes of the signed [launcher channel](terminal-broker.md#launcher-channel), which answer an
+unsigned request as `GET /api/launcher/next` does:
+
+| Method and path | Body | Answer |
+| --- | --- | --- |
+| `GET /api/launcher/accounts` | | `{accounts}`: each catalog entry as a launch carries it (`{id, driver, label, homePath, shadowPath}`), nothing more |
+| `POST /api/launcher/usage` | `{snapshots}`: at most 16 `UsageSnapshot`s, 64 KiB in all | `{ok: true}` |
+
+A snapshot is strict (`usageSnapshotSchema`): `accountId`, `capturedAt` (Unix ms), `source`, `plan`, at most 8 `windows`
+of `{key, label, usedPercent, resetsAt}` with distinct keys (`usedPercent` used, 0–100; `resetsAt` Unix ms or `null`),
+`error` (`null` or at most 200 characters) and `limitErrorAt`. An unknown key or a bad value is 400, naming the field
+paths only; an unknown account is 404. One post is one transaction: a refusal keeps none of its snapshots.
+`GET /api/ui/accounts` answers each account's `usage` with the catalog; an account that has never been read has no
+entry.
+
+### Stale and unknown
+
+A snapshot is stale when its capture time is more than ten minutes ago (`USAGE_STALE_MS`). The capture time is when the
+windows were true, not when they were posted: an idle Claude session's status line, or Claude's cache, is as old as
+Claude last wrote it. A stale snapshot is shown with its age and "stale", never as live. The policy still scores it and
+an exhausted window still counts, but its pick reads "usage unknown". An account with no snapshot is "unknown" in the
+sheet and never used up ([Choosing an account](#choosing-an-account)). The probe sends no Claude read older than the
+account's last snapshot, so a round never moves an account back in time.
+
+### In the Accounts sheet
+
+Each account row of **Settings → Accounts** shows its usage under it (`web/AccountUsage.tsx`):
+
+- "Usage as of <age>", with " · stale" for a stale snapshot, or "Usage unknown" before the first good read;
+- per window: its label, the used percent as a bar and as "<n>% used", and "Resets <local time> · in 2 h 14 min"
+  ("in 3 d 4 h" for a week; "reset passed" once it is behind; "No reset time" when the provider gives none);
+- "API key: no plan window" for an `api-key` plan, and "No quota window reported" for a good read without windows;
+- "Last read failed: <error>" while the last read failed, next to the previous windows;
+- " · Limit error at <local time>" next to the snapshot when the Claude tap saw a `rate_limit` stop, so a real limit can
+  be told from a stale login ([anthropics/claude-code#39198](https://github.com/anthropics/claude-code/issues/39198)): a
+  limit error while every window is far from 100% suggests the login or a passing error, not a used-up quota. Logging
+  in again stays a manual step.
+
+Ages and countdowns are drawn again every 30 s; an `accounts` event refetches the numbers.
+
+### What never appears
+
+No token, `auth.json` or `.credentials.json` body, keychain item, email or MCP setting reaches a snapshot, a log line, an
+HTTP answer, a stored row or the sheet. The parsers decode only the keys above: `rate_limits`; `cachedUsageUtilization`
+and `oauthAccount.accountUuid`, which is compared and dropped; the reply ids, `account.type` and the rate-limit buckets
+of Codex. The probe sends fixed error messages, and the tap's `limit-error` keeps only a time. The server refuses a
+snapshot with an unknown key and names no value. `src/server/account-redaction.test.ts` and
+`macos/Tests/HivemindKitTests/AccountRedactionTests.swift` plant fake secrets in fake homes and payloads and check every
+one of these surfaces.
+
+## Acceptance
+
+#319's test plan, line by line. Every test uses fakes (fake homes under a temp folder, fake `codex` and `claude`
+runners), so none needs a login.
+
+| #319 test plan | Covered by |
+| --- | --- |
+| Two Codex accounts share session files and keep different `auth.json` files. A copied full home is rejected. | `ShadowHomeTests`: `freshShadowGetsItsLinksAndTheHomeFoldersFirst`, `theLoginsOfThePrimaryAndTheShadowAreNeverTouched`, `aCopiedHomeIsRefusedAndLeftAsItWas`, `aRealSessionsFolderInTheShadowIsAConflict`, `aRealDatabaseInTheShadowIsAConflict`; `BrokerAccountTests`: `aPreparedAndLoggedInCodexShadowLaunchesAndItsConfigIsReadOnlyToTheFirstTable` |
+| Two Claude accounts share `projects/` and keep different `.credentials.json` files. A second launch against a live transcript is refused. | `ShadowHomeTests`: `aClaudeShadowSharesTheSixNamesAndKeepsItsLoginAndSettingsReal`; `ClaudeLiveSessionsBrokerTests`: `resumingASessionLiveUnderAPreparedShadowFailsOnlyItsItem`, `aShadowsLaunchSeesTheSharedTreesSessionsAndNothingOfItRuns`, `continuingInTheFolderOfALiveSessionFailsAndANewSessionThereStarts` |
+| A second Claude account does not start while another Claude process is running (`~/.claude.json` swap). | Dropped ([Decisions](#decisions)): each account keeps its own `.claude.json`, so parallel accounts are allowed. `ClaudeLiveSessionsBrokerTests`: `aSecondAccountStartsANewSessionWhileAnotherAccountsSessionIsLive`; `ShadowHomeTests`: `aClaudeShadowSharesTheSixNamesAndKeepsItsLoginAndSettingsReal` (`.claude.json` stays real) |
+| Sequential uses account 1 until its window is exhausted, then account 2, and returns to account 1 after the reset. | `src/shared/account-selection.test.ts`: "sequential uses the first account…", "a past reset is not exhausted"; `src/server/accounts-http.test.ts`: "the policy and the exhausted set agree on stored snapshots…" |
+| Balanced picks the account with more remaining percent; equal remaining follows the configured order. | `src/shared/account-selection.test.ts`: "balanced picks the account with the most quota left…", "balanced ties go by order…", "with no snapshots, balanced round-robins…" |
+| A pinned template ignores the policy. | `src/shared/account-selection.test.ts`: "a pin ignores the policy", "a pin on an exhausted account wins…"; `src/server/launcher-channel.test.ts`: "a Codex template launch runs under the policy's account or its pin…"; `web/template-launch.test.tsx`: "in the apps, Start under the template's pinned account…" |
+| Resuming a tmux session does not change `CODEX_HOME` or `CLAUDE_CONFIG_DIR`. | `BrokerAccountTests`: `aReusedSessionKeepsItsAccountAndWritesAndRunsNothing`; `web/launch-sheet-accounts.test.tsx`: "an employee whose session still runs keeps its account…" |
+| The dashboard shows used percent, reset time and countdown, and labels a stale snapshot with its age. | `web/account-usage.test.tsx` (fixed clock): all four tests; `src/server/accounts-http.test.ts` for the stored snapshot both read |
+| Logs and UI snapshots contain no token, `auth.json` body or keychain secret. | `src/server/account-redaction.test.ts` (usage post, Human routes the sheet renders, launches, every table); `AccountRedactionTests` (parsers, a probe round, a refused post, a shadow launch's journal, logs and files); `ClaudeUsageTests.parsedWindowsHoldNoEmailMcpValueOrUuid`, `CodexUsageTests.parsedResultHoldsNoEmail` |
+
+Manual checks, on the Mac with real logins, after the apps are installed; the fakes cannot prove what the CLIs do:
+
+- **Codex.** Add a Codex shadow, **Prepare**, run its login command, then launch `codex` once under each account and
+  `codex resume` a thread of one under the other. Both `auth.json` files stay where they were and differ. Within 5
+  minutes each row shows its windows; compare them with `/status` in each session.
+- **Claude.** Same with a Claude shadow and `claude --resume`. Run both accounts at once. After one answer in a session
+  the row shows "Session (5 h)" and "Week" as `/usage` does, and the account's own status line still shows. An account
+  with no session reads "No recent Claude usage data", unless Claude's cache is under an hour old.
+- **Dashboard without the apps.** Start a server with a secret of 64 lowercase hex characters (any other value is
+  ignored): `HIVEMIND_HOME=$(mktemp -d) HIVEMIND_INSTANCE_SECRET=<secret> npx tsx src/cli.ts serve --port 7520`. Add
+  accounts in the sheet, post signed snapshots to `POST /api/launcher/usage` with that secret (as `launcherSignature` in
+  `src/server/launcher-channel.ts` signs), then check the bars, the countdowns, "stale" after ten minutes and "Limit
+  error at".
 
 ## Findings: Claude
 

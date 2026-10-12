@@ -34,6 +34,11 @@ cookies and agent bearer tokens:
 - `POST /api/launcher/:id/result` reports `launched`, `killed`, or `failed`.
 - `POST /api/launcher/requests/:id/approve` and `/reject` decide a request.
   Approval may include a replacement `templateId` in the same project.
+- `GET /api/launcher/accounts` reads the [account](accounts.md) catalog as
+  launches carry it, and `POST /api/launcher/usage` stores up to 16 usage
+  snapshots (a 64 KiB body; every other route takes at most 4 KiB). Both are
+  for Server.app's `UsageProbeService`, which asks a server only after its
+  instance proof; see [Usage](accounts.md#usage).
 
 Each request carries `X-Hivemind-Timestamp` (Unix seconds), a 32-byte lowercase
 hex `X-Hivemind-Nonce`, and `X-Hivemind-Signature`. The signature is the hex
@@ -92,6 +97,9 @@ The contract lives in `macos/Sources/HivemindKit`:
 | `BrokerPaths.swift` | The socket, token and config paths, and `BrokerToken` |
 | `LaunchSecrets.swift` | A launch's secrets (`LaunchSecrets`, the OpenCode Go API key) and the private file that hands them, with its environment variables, to a session (`LaunchSecretStore`, `LaunchEnvironmentFile`); see [Launch secrets](#launch-secrets) |
 | `LaunchEnvironment.swift` | A launch's environment variables (`LaunchEnvironment`: the rules, the denylist and the limits); see [Launch environment](#launch-environment) |
+| `LaunchAccount.swift` | A launch's [account](accounts.md) (`LaunchAccount`: its path rules, its variables and the names it controls); see [Launch environment](#launch-environment) |
+| `ShadowHome.swift`, `ShadowHomePreparing.swift`, `ClaudeLiveSessions.swift` | Building and checking a Codex or Claude shadow (`ShadowHome`, `ShadowLayout`, `FileShadowHomes`) and the open-transcript check; Codex's open-thread check is `CodexThreadLock` in `BrokerServer.swift` |
+| `ClaudeStatusTap.swift`, `ClaudeUsage.swift`, `CodexUsage.swift`, `UsageProbeService.swift` | Usage: the Claude status-line tap, the parsers of each source, and the probe that posts every account's snapshot ([Usage](accounts.md#usage)) |
 | `Bridge.swift` | The page ↔ app terminal messages (`BridgeMessage`, `BridgeTerminalEvent`) |
 | `BrokerServer.swift`, `BrokerIO.swift`, `BrokerOutput.swift`, `BrokerFiles.swift`, `BrokerStatus.swift` | The broker itself (`TerminalBroker`, `BrokerConnection`) behind injectable tmux, PTY and transport seams, output batching and backpressure, its files, and the menu's status line |
 | `ClientBroker.swift`, `ClientTransport.swift`, `ClientTerminalRouter.swift` | The client (`BrokerClient`), the Unix-socket transport, and the per-window relay to the page (`TerminalBridgeRouter`) |
@@ -942,6 +950,15 @@ that terminals are off in this window and offers no button.
   of course read what the user types into it, as with any field. tmux format expansion and
   its `;` command separator are handled as described in
   [What tmux runs](#what-tmux-runs).
+- **No login is read for an account.** A shadow's checks and Prepare look only
+  at whether a login is there (a regular `auth.json` or `.credentials.json`, or
+  a top-level `oauthAccount` key in `.claude.json`), never at its value. The
+  Claude tap keeps the status-line input in the account's own `0700` folder
+  under the app-support folder, and its `limit-error` keeps only a time. The
+  usage probe decodes only the quota keys of `.claude.json` (with the login's
+  `accountUuid`, to compare) and of `codex app-server`'s replies, and posts
+  fixed error messages, never a
+  command's output ([What never appears](accounts.md#what-never-appears)).
 - **The user's tmux is never touched.** Everything goes to `-L hivemind` with
   Hivemind's own config, and only `hm-*` sessions are listed.
 - **Bounded everything**: line sizes, launches, one tmux command, streams,
