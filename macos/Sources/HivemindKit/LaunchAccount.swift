@@ -107,6 +107,20 @@ public struct LaunchAccount: Codable, Equatable, Sendable {
   /// The driver's controlled variables, for the launch script's `unset`.
   public var controlledNames: [String] { driver.controlledNames }
 
+  /// Why a launch's variables or secret names cannot go with this account,
+  /// or nil: any of the controlled names, compared without case, even for an
+  /// account that sets no variable (nil = a launch with no variables). Names
+  /// the variable as it was written, never a value; the page's
+  /// accountEnvironmentConflict, message for message. The variables come in
+  /// name order, the page's in insertion order: with two conflicts the two
+  /// sides may name different ones (src/shared/account-environment.vectors.json).
+  public func environmentConflict(in environment: LaunchEnvironment?, secretNames: [String]) -> String? {
+    let controlled = Set(controlledNames)
+    let names = (environment?.names ?? []) + secretNames
+    guard let name = names.first(where: { controlled.contains($0.uppercased()) }) else { return nil }
+    return "\(name) is managed by the account \(label); remove it."
+  }
+
   /// The variables for the launch file, with a leading `~/` expanded with
   /// `home`; the page's accountEnvironment, pair for pair:
   /// - Codex shadow: `CODEX_HOME=<shadowPath>`, `CODEX_SQLITE_HOME=<homePath or ~/.codex>`;

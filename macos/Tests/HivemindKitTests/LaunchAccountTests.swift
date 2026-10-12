@@ -2,8 +2,9 @@ import Foundation
 import Testing
 @testable import HivemindKit
 
-// A launch's account (docs/accounts.md): the same path rules and variables as the page
-// (src/shared/account-paths.vectors.json), validation and the wire shape. Pure values only.
+// A launch's account (docs/accounts.md): the same path rules, variables and conflicts as the page
+// (src/shared/account-paths.vectors.json, src/shared/account-environment.vectors.json), validation and the wire shape.
+// Pure values only.
 
 private struct AccountVectors: Decodable {
   struct Invalid: Decodable {
@@ -38,6 +39,31 @@ private struct AccountVectors: Decodable {
     let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
       .deletingLastPathComponent().appendingPathComponent("src/shared/account-paths.vectors.json")
     return try JSONDecoder().decode(AccountVectors.self, from: Data(contentsOf: url))
+  }
+}
+
+private struct ConflictVectors: Decodable {
+  struct Case: Decodable {
+    struct Account: Decodable {
+      let driver: LaunchAccount.Driver
+      let label: String
+      let homePath: String
+      let shadowPath: String
+    }
+
+    let account: Account
+    let environment: [String: String]
+    let secretNames: [String]
+    let message: String?
+  }
+
+  let cases: [Case]
+
+  static func load() throws -> ConflictVectors {
+    // macos/Tests/HivemindKitTests/ → the repository's src/shared/.
+    let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+      .deletingLastPathComponent().appendingPathComponent("src/shared/account-environment.vectors.json")
+    return try JSONDecoder().decode(ConflictVectors.self, from: Data(contentsOf: url))
   }
 }
 
@@ -130,6 +156,24 @@ struct LaunchAccountTests {
     #expect(LaunchAccount.Driver.codex.controlledNames == ["CODEX_HOME", "CODEX_SQLITE_HOME", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"])
     #expect(LaunchAccount.Driver.claude.controlledNames
       == ["CLAUDE_CONFIG_DIR", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_SECURESTORAGE_CONFIG_DIR"])
+  }
+
+  @Test func namesTheSameConflictsAsThePage() throws {
+    let vectors = try ConflictVectors.load()
+    #expect(vectors.cases.count >= 20)
+    for driver in LaunchAccount.Driver.allCases {
+      for name in driver.controlledNames {
+        #expect(vectors.cases.contains(where: { item in
+          item.account.driver == driver && (item.environment[name] != nil || item.secretNames.contains(name))
+        }), "\(name)")
+      }
+    }
+    for item in vectors.cases {
+      let launch = account(item.account.driver, label: item.account.label, homePath: item.account.homePath, shadowPath: item.account.shadowPath)
+      let environment = item.environment.isEmpty ? nil : try LaunchEnvironment(item.environment)
+      #expect(launch.environmentConflict(in: environment, secretNames: item.secretNames) == item.message,
+              "\(item.account.driver) \(item.environment) \(item.secretNames)")
+    }
   }
 
   @Test func travelsAsThePageSendsIt() throws {
