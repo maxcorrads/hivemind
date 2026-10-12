@@ -1,0 +1,336 @@
+# Accounts
+
+An account is one named login of Codex or Claude that a launch of `codex` or `claude` can run under, instead of a
+shell alias that points `CODEX_HOME` or `CLAUDE_CONFIG_DIR` somewhere else. Human orders each driver's accounts and
+picks a policy; a launch or a worker template may pin one. HiveMind keeps paths, order and policy only. It never
+stores, reads or shows a provider token: login stays a CLI command Human runs once in a terminal.
+
+The design is [#319](https://github.com/maxcorrads/hivemind/issues/319); this page grows with its phases. Phase 0
+([#320](https://github.com/maxcorrads/hivemind/issues/320)) fixes the names and rules below; nothing uses them yet.
+They live in `src/shared/accounts.ts` and, for the broker, HivemindKit's `LaunchAccount`. Both read
+`src/shared/account-paths.vectors.json`, so the page and the app check paths and build variables the same way.
+
+## Decisions
+
+Taken while splitting #319 into phases (2026-10-12). Where #319 says otherwise, this table wins.
+
+| Topic | Decision |
+| --- | --- |
+| Catalog storage | SQLite, migration v41 (`agent_accounts`, `agent_account_policies`), revision rules as in `worker_templates`. |
+| Who resolves an account | The Node server. The broker receives the resolved paths and never reads the catalog (`TerminalBrokerService` does not know `HIVEMIND_HOME`). |
+| Empty catalog | A driver with no accounts launches exactly as today. |
+| Account paths | Same shape for both drivers. `homePath` is the shared tree (`""` = the CLI default `~/.codex` / `~/.claude`). `shadowPath` is this account's own directory (`""` = a primary account). The variable is `shadowPath` if set, else `homePath` if set, else not set. A primary with an empty `homePath` sets nothing: `CLAUDE_CONFIG_DIR=~/.claude` set explicitly changes which `.claude.json` and keychain item Claude uses. |
+| Aliases | Keep working. When `software` is in the codex/claude family (`softwareFamily`) but is not exactly `codex`/`claude`, and that driver has accounts, the Launch sheet and the template editor show a warning. Such a launch skips accounts. |
+| Exhaustion | From usage snapshots only, unless spikes 0.2/0.3 find a reliable source for limit errors. HiveMind does not read terminal output. |
+| Balanced with partial data | Accounts without a snapshot are eligible but rank after accounts with one. When no eligible account has a snapshot: round-robin by `lastSelectedAt` (oldest first, `null` first, ties by order), marked stale. |
+| Pin on an exhausted account | The pin wins (it skips the policy). The result carries a warning the UI shows. |
+| Usage probe | Runs in Hivemind Server.app, on the Mac that launches. Snapshots go to Node over the signed launcher channel. Policy and dashboard read the same stored snapshot. |
+| Copy-only launches (browser) | No account. The sheet says that accounts apply to launches from the apps. |
+| Claude `~/.claude.json` | Confirmed by [Findings: Claude](#findings-claude): with `CLAUDE_CONFIG_DIR` set, Claude reads and writes `$CLAUDE_CONFIG_DIR/.claude.json` and never `~/.claude.json`. The swap in #319 and the "one Claude account at a time" limit are dropped. `.claude.json` is a private real file in each shadow, and parallel Claude accounts are allowed. |
+| Variables an account controls | Codex: `CODEX_HOME`, `CODEX_SQLITE_HOME`, `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN`. Claude: `CLAUDE_CONFIG_DIR`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_SECURESTORAGE_CONFIG_DIR`. With an account, none of them may appear in the free-form environment or among the secret names. The broker sets the account's own variables and unsets the rest, because a login shell's `.zshrc` could export them and they override the directory's login ([Claude](#findings-claude), [Codex](#findings-codex)). |
+| Codex shadow runs | `CODEX_HOME=<shadow>` and `CODEX_SQLITE_HOME=<absolute home>`. With the second variable, every SQLite database stays in the home and none is linked ([Findings: Codex](#findings-codex)). The shared `config.toml` must not set `cli_auth_credentials_store` to `keyring` or `auto`. Each shadow runs its own Codex daemon, as separate homes do today. |
+| Prepare before login | The Accounts sheet asks Server.app to create the shadow and its links **before** Human runs the login command. A login on an empty folder would create real files that later conflict with the links. |
+| Exact paths | Claude keys its keychain login to the exact `CLAUDE_CONFIG_DIR` string. Paths are stored and exported exactly: no trailing `/`, no `//`, no `.` or `..` segments. The broker expands only a leading `~/`. |
+
+## An account
+
+| Field | Rule |
+| --- | --- |
+| `id` | Stable id. Templates, launches and usage snapshots name this, never a path |
+| `driver` | `codex` or `claude` |
+| `label` | 1–80 characters, trimmed; shown in the pickers and in messages |
+| `command` | Always the driver itself (`codex` or `claude`), never an alias |
+| `order` | Position in the driver's list, from 0. Human reorders it |
+| `homePath` | The shared tree. `""` is the CLI's default (`~/.codex`, `~/.claude`) |
+| `shadowPath` | This account's own directory, where its login lives. `""` for a primary account, which logs in to `homePath` itself. Never the shared tree |
+| `revision` | Bumped by every edit; an edit names the revision it started from |
+| `lastSelectedAt` | Unix ms of the last launch that picked it, or `null`; balanced round-robin starts from the oldest |
+| `createdAt`, `updatedAt` | Unix ms |
+
+A driver has at most 8 accounts and one policy: `sequential` (use the first account until a quota window is used
+up, then the next) or `balanced` (spread launches; prefer the most quota left in the window that resets first).
+
+A path is `""` or written exactly as it will be exported: it starts with `/` or `~/`, has at most 1024 bytes, no
+control characters, no trailing `/`, no `//` and no `.` or `..` segment. `accountPathProblem` gives the reason a
+path is refused, and `LaunchAccount.validate()` refuses the same paths with the same words.
+
+| Account | `homePath` | `shadowPath` | Login lives in |
+| --- | --- | --- | --- |
+| Codex, the default | `""` | `""` | `~/.codex` |
+| Codex, a second login on the same sessions | `""` | `~/.codex_personal` | the shadow |
+| Codex, its own sessions | `~/.codex-work` | `""` | `~/.codex-work` |
+| Claude, the default | `""` | `""` | `~/.claude` |
+| Claude, its own directory | `~/.claude-work` | `""` | `~/.claude-work` |
+| Claude, a second login on the same transcripts | `""` | `~/.claude-personal` | the shadow |
+
+Error codes the later phases answer with: `accounts_exhausted`, `account_pinned`, `account_unknown`,
+`account_env_conflict`, `account_driver_mismatch` (`ACCOUNT_ERRORS`).
+
+## Variables
+
+A launch with an account gets these variables, values as stored (`accountEnvironment`); the broker expands a leading
+`~/` with the user's home before it writes the launch file (`LaunchAccount.environment(home:)`):
+
+| Account | Variables |
+| --- | --- |
+| Codex shadow | `CODEX_HOME=<shadowPath>`, `CODEX_SQLITE_HOME=<homePath, or ~/.codex>` |
+| Codex primary | `CODEX_HOME=<homePath>` when it is set, otherwise none |
+| Claude | `CLAUDE_CONFIG_DIR=<shadowPath, or homePath>` when one is set, otherwise none |
+
+Each driver's controlled variables (`ACCOUNT_CONTROLLED_ENV`, `LaunchAccount.controlledNames`) belong to the account:
+
+- Codex: `CODEX_HOME`, `CODEX_SQLITE_HOME`, `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN`;
+- Claude: `CLAUDE_CONFIG_DIR`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`,
+  `CLAUDE_SECURESTORAGE_CONFIG_DIR`.
+
+With an account, none of them may be set in the launch's environment variables or named as a template secret,
+compared without case, even when the account itself sets no variable. `accountEnvironmentConflict` names the first
+one: "`CODEX_API_KEY` is managed by the account Codex work; remove it." The broker sets the account's variables and
+unsets the other controlled names, since a login shell could export them and a token variable outranks the
+directory's login. `HOME` is never set.
+
+Only Software that is exactly `codex` or `claude` takes an account (`accountDriverForSoftware`; an empty field is
+`codex`). An alias such as `codex2` or `claude-work` still launches, without an account; when its driver has
+accounts, `softwareAliasWarning` gives the hint the Launch sheet and the template editor show.
+
+## Logging in
+
+Each account logs in once, in a terminal on the Mac that launches (`accountLoginCommand`):
+
+| Account | Command |
+| --- | --- |
+| Codex shadow | `mkdir -p <dir> && CODEX_HOME=<dir> CODEX_SQLITE_HOME=<home> codex -c cli_auth_credentials_store=file login` |
+| Codex primary | `codex login`, or `CODEX_HOME=<home> codex login` for a home other than the default |
+| Claude | `mkdir -p <dir> && CLAUDE_CONFIG_DIR=<dir> claude auth login`, or `claude auth login` for the default |
+
+For example `mkdir -p ~/.codex_personal && CODEX_HOME=~/.codex_personal CODEX_SQLITE_HOME=~/.codex codex -c
+cli_auth_credentials_store=file login`. A path with spaces or quotes is single-quoted after its leading `~/`, so the
+shell still expands `~` to `$HOME`, as the broker does later: Claude then finds the keychain item it logged in with.
+`-c cli_auth_credentials_store=file` keeps a Codex shadow's login in its own `auth.json` whatever the shared
+`config.toml` says. A shadow is prepared by HiveMind before its login; a login into an empty folder creates real
+files where the shared links belong.
+
+## Catalog
+
+(phase 1, [#321](https://github.com/maxcorrads/hivemind/issues/321))
+
+## Choosing an account
+
+(phase 2, [#322](https://github.com/maxcorrads/hivemind/issues/322))
+
+## Codex shadow
+
+(phase 3, [#323](https://github.com/maxcorrads/hivemind/issues/323))
+
+## Claude shadow
+
+(phase 4, [#324](https://github.com/maxcorrads/hivemind/issues/324))
+
+## Usage
+
+(phase 5, [#325](https://github.com/maxcorrads/hivemind/issues/325))
+
+## Findings: Claude
+
+Spike 0.2: Claude Code 2.1.296 on macOS, 2026-10-12 ([full report and parser
+fixtures](https://github.com/maxcorrads/hivemind/issues/320#issuecomment-6123057980)). Every run used a fresh
+`mktemp -d` config directory under `env -i`, with a timeout; from real directories only entry and JSON key names were
+read, with no login and no prompt. Code quotes come from the minified bundle, where function names change between
+versions, so each names a literal to search for.
+
+**`.claude.json`.** With `CLAUDE_CONFIG_DIR` set, Claude uses `$CLAUDE_CONFIG_DIR/.claude.json` and nothing reads
+`~/.claude.json`.
+
+- `CLAUDE_CONFIG_DIR=<tmp> claude auth status --json` exits 1, prints `{"loggedIn": false, "authMethod": "none", …,
+  "configDirectory": "<tmp>"}` and creates `<tmp>/.claude.json`, `.claude.json.lock` and `backups/`.
+- A sentinel `$HOME/.claude.json` under a fake `HOME` kept its atime through `auth status` and a full interactive start.
+- Code (search `` .claude${ ``): `` `.claude${suffix}.json` `` joined to `process.env.CLAUDE_CONFIG_DIR || homedir()`.
+- Still read outside the directory: `~/.claude/ide/` (IDE lockfiles, read-only) and the global Anthropic profiles in
+  `~/.config/anthropic`; per the docs, separate directories do not keep two Console sign-ins apart.
+- An explicit `CLAUDE_CONFIG_DIR=$HOME/.claude` uses `~/.claude/.claude.json`, not `~/.claude.json`.
+
+**Keychain and the login marker.** The keychain service is `Claude Code-credentials-<first 8 hex of sha256(the exact
+CLAUDE_CONFIG_DIR string, NFC)>`, or `Claude Code-credentials` with the variable unset.
+
+- No realpath and no trailing-slash trimming: an existing login's item matched the hash of its expanded `~/…` path,
+  and the same path with a trailing `/` names another item. HiveMind must export the exact string the login used
+  (absolute, no trailing `/`, not through a symlink, never moved), or the account looks logged out.
+- `CLAUDE_SECURESTORAGE_CONFIG_DIR` (undocumented) overrides the hash input. API-key logins use `Claude Code[-<hash8>]`
+  (no `-credentials`) or `primaryApiKey` in `.claude.json`. When the Keychain refuses a write, the login goes to
+  `<dir>/.credentials.json` (mode 0600).
+- No file's existence alone means "logged in": `.claude.json` appears even after a logged-out `auth status`. The
+  marker is a top-level `oauthAccount` key in `<dir>/.claude.json` (key check only; logout clears it), or an existing
+  `<dir>/.credentials.json`.
+- Stronger checks that read no secret: `security find-generic-password -s "Claude Code-credentials-<hash8>"` (exit 0
+  found, 44 not), or `CLAUDE_CONFIG_DIR=<dir> claude auth status --json` (`loggedIn`, no quota, but it rewrites
+  `.claude.json`).
+- `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, `apiKeyHelper` and `CLAUDE_CODE_OAUTH_TOKEN` outrank the directory's
+  login: a launch with an account unsets them and refuses them in its environment.
+
+**Config directory layout.**
+
+| Class | Names |
+| --- | --- |
+| Shared transcripts | `projects`, `history.jsonl` (appended under a lock, safe through a symlink), `file-history`, `paste-cache` (history references pastes by hash), `plans`, `tasks` |
+| Private per login | `.claude.json`, `.claude.json.lock`, `.config.json`, `.credentials.json`, `backups`, `settings.json`, `settings.local.json`, `settings.json.bak`, `policy-limits.json`, `policy-limits.json.stamp.json`, `remote-settings.json`, `mcp-needs-auth-cache.json`, `daemon-auth-status.json`, `daemon-auth-cooldown`, `skills` (account-synced), `plugins` (absolute paths into its own directory), `chrome`, `telemetry`, `feedback`, `feedback-bundles`, `statusline-command.sh` |
+| Private per process | `sessions`, `session-env`, `shell-snapshots`, `daemon`, `daemon.log`, `jobs`, `debug`, `state`, `ide`; session-keyed when present: `uploads`, `dev-mods` |
+| Cache | `cache`, `stats-cache.json`, `gh-pr-status-cache.json`, `.last-cleanup`, `.last-update-result.json`, `usage-data`, `downloads` |
+
+Each shadow runs Claude's retention sweep over the shared `projects/` with its own `cleanupPeriodDays`
+(`.last-cleanup` is per directory), so every shadow's `settings.json` needs the primary's value; otherwise the
+smallest one deletes every account's transcripts. Proposed shadow layout: the shared row is linked; everything else,
+dotfiles, names starting with `daemon` and unknown names stay private (real in the shadow, never linked, logged once).
+A name becomes shared only through an explicit list change.
+
+**Usage.** The status-line JSON carries `rate_limits.five_hour` and `rate_limits.seven_day`, each with
+`used_percentage` (0–100) and `resets_at` (Unix seconds).
+
+- Docs: present "only for claude.ai Pro and Max subscribers, or behind a Claude apps gateway…, and only after the first
+  API response in the session". A window may be absent and is dropped once its `resets_at` passes. Team and
+  Enterprise are unverified; API-key logins carry no `rate_limits`. A payload without it is ambiguous, so the plan
+  comes from the login marker or `auth status --json` `authMethod`.
+- A `statusLine` passed with `--settings` replaces the user's (verified), while hooks from `--settings` merge
+  (verified). A tap must chain to the user's own command; a project-scope `statusLine` is lost even then. It needs a
+  live session and one API response, costs no quota and re-runs after each assistant message (300 ms debounce).
+  `disableAllHooks`, `allowManagedHooksOnly` and an untrusted workspace switch it off.
+- There is no headless `/usage`: no subcommand, and `-p` does not run it (the text could reach the model and spend
+  quota). No hook input carries usage numbers.
+- Undocumented cache: `cachedUsageUtilization` in `<dir>/.claude.json`, `{fetchedAtMs, accountUuid, utilization:
+  {five_hour|seven_day|seven_day_opus|seven_day_sonnet|…: {utilization 0–100, resets_at ISO}|null}, limits: […]}`.
+  Written at most once a minute, trusted by Claude for up to an hour, dropped on an `accountUuid` mismatch, cleared
+  on logout. The file also holds `mcpServers` (may contain secrets) and `oauthAccount` (personal data): extract only
+  that key; never store or log the file.
+- Recommended: the status-line tap through `--settings`, recording only `rate_limits` and the capture time, plus a
+  `StopFailure` (`rate_limit`) hook as a "suspected exhaustion" signal. Fallback: `cachedUsageUtilization` when its
+  `accountUuid` matches and `fetchedAtMs` is under an hour old, stale after `USAGE_STALE_MS`. No active probing.
+
+**Limit errors.** Claude shows `You've hit your session limit · resets 3:45pm` (and weekly, Opus and Sonnet
+variants) or `API Error: Request rejected (429)`; interactive sessions wait and continue on their own. Without
+reading the terminal HiveMind can observe the `StopFailure` hook with matcher `rate_limit` (input `error`,
+`error_details`, `last_assistant_message`), the `Notification` types `quota_auto_resume_*`, and `used_percentage`
+reaching 100. Whether quota exhaustion and a transient 429 both arrive as `rate_limit` is unverified: treat
+`StopFailure` as suspected and confirm it from the numbers.
+
+**Live sessions.** `sessions/<pid>.json` holds `cwd`, `entrypoint`, `kind`, `messagingSocketPath`, `name`, `pid`,
+`pidDomain`, `procStart`, `sessionId`, `startedAt`, `status`, `updatedAt`, `version`… and is removed on exit.
+`sessions/<pid>.<sha256>.key` is a secret: never read it. `session-env/<id>/` outlives the process and says nothing
+about liveness. `sessions/` is per config directory, so Claude cannot see a process under another shadow. The
+broker's check:
+
+1. For each account directory (the primary and every shadow), read `sessions/[0-9]*.json`: `pid`, `sessionId`,
+   `procStart`, `pidDomain`, `cwd`.
+2. A record is live when `kill(pid, 0)` succeeds, `pidDomain` is `darwin` and `procStart` equals
+   `TZ=UTC LC_ALL=C ps -o lstart= -p <pid>` with spaces squeezed (Claude's own guard against pid reuse).
+3. A transcript id is live when a live record has that `sessionId`.
+4. `--continue`/`-c` takes the newest transcript in `projects/<cwd>`, with every non-alphanumeric character of the
+   cwd replaced by `-`: resolve it and check it, or refuse when a live record has the same realpath `cwd`. Paths
+   compare by realpath.
+
+## Findings: Codex
+
+Spike 0.3: codex-cli 0.162.1, read from the source at tag `rust-v0.162.1` (paths below are under `codex-rs/`),
+checked on macOS 2026-10-12 ([full report and probe
+fixture](https://github.com/maxcorrads/hivemind/issues/320#issuecomment-6123125814)). Live runs used only
+`codex app-server` with `CODEX_HOME=$(mktemp -d)` on fake primary/shadow pairs, never logged in; the only network
+calls were unauthenticated 401s. From `~/.codex` only entry names were read.
+
+**Headless rate limits.** `account/rateLimits/read` is what the TUI sends for `/status`.
+
+- Params `{"excludeResetCreditDetails": true}`; leave out `supportsLunaReserve`, which records an experiment exposure.
+- Response `{rateLimits: Snapshot, rateLimitsByLimitId?: {<limitId>: Snapshot}, ordinaryUsageAllowed?, …}`, with
+  `Snapshot = {limitId, limitName, primary: Window|null, secondary: Window|null, planType, rateLimitReachedType, …}`
+  and `Window = {usedPercent: int 0–100 (used, not remaining), windowDurationMins: int|null, resetsAt: unix
+  seconds|null}`.
+- Schema: `codex app-server generate-json-schema --out <dir>` (`ClientRequest.json`,
+  `v2/GetAccountRateLimitsResponse.json`). Sources: `protocol/src/protocol.rs:2421`,
+  `app-server-protocol/src/protocol/v2/account.rs:760`, the TUI call `tui/src/app/background_requests.rs:815–827`,
+  the backend call `app-server/src/request_processors/account_processor.rs:1189–1280`.
+- The TUI labels windows by length (`tui/src/chatwidget/rate_limits.rs:109–128`): about 300 min "5h", 1440 "daily",
+  10080 "weekly", about 30 days "monthly".
+- Stdio, one JSON object per line: send `initialize` with `{"clientInfo": {...}}` first (`initialized` is optional;
+  anything earlier gets `-32600 "Not initialized"`). Keep stdin open until the reply arrives, since on EOF the server
+  drops pending requests. Replies can come out of order: match by `id` and ignore notifications.
+- No TTY needed. Unauthenticated, the whole process takes about 0.15 s; authenticated latency (one GET to the usage
+  backend) is unverified.
+- Errors: `-32600 "codex account authentication required to read rate limits"` (not logged in, seen live),
+  `-32600 "chatgpt authentication required to read rate limits"` (API-key login, from the source),
+  `-32603 "failed to fetch codex rate limits: …"` (backend failure).
+- The plan comes from `account/read` `account.type` (`chatgpt` or `apiKey`), which also returns the email: the
+  parser drops it. Nothing else prints the plan windows: there is no `status` subcommand, `codex exec --json` emits
+  no rate limits and `account/usage/read` is token usage. `codex login status` exits 0 logged in and 1 not, without
+  reading `auth.json`.
+
+The probe sends, with a 20 s timeout:
+
+```jsonl
+{"id":1,"method":"initialize","params":{"clientInfo":{"name":"hivemind_usage_probe","title":"HiveMind usage probe","version":"1"}}}
+{"method":"initialized"}
+{"id":2,"method":"account/read","params":{"refreshToken":false}}
+{"id":3,"method":"account/rateLimits/read","params":{"excludeResetCreditDetails":true}}
+```
+
+For the report's fixture the expected parse is plan `subscription`; `codex.primary` "5 h", 42, 1791820800000;
+`codex.secondary` "Week", 17, 1792252800000; `codex_other.primary` "codex_other", 88; no email anywhere. Exhausted:
+`usedPercent` 100, `rateLimitReachedType: "rate_limit_reached"`, `ordinaryUsageAllowed: false`.
+
+**`cli_auth_credentials_store`.** `file` (the default, `CODEX_HOME/auth.json`), `keyring`, `auto` or `ephemeral`
+(`config/src/types.rs:133–146`, `config/defaults.toml:6`); an invalid value is refused with the list.
+
+- Precedence: managed requirements (MDM), then `-c`, then `config.toml`.
+- Keyring item: service "Codex Auth", account `cli|<first 16 hex of sha256(canonical CODEX_HOME)>`
+  (`login/src/auth/storage.rs:243–257`).
+- Only `file` gives a shadow its own `auth.json`. The shared `config.toml` must not set `keyring` or `auto`; check it
+  before adding a shadow. `-c cli_auth_credentials_store=file` works per invocation, for example on `codex login`.
+- `CODEX_ACCESS_TOKEN` (every front-end) and `CODEX_API_KEY` (exec, doctor, mcp) override the file login
+  (`login/src/auth/manager.rs:1500–1538`). `forced_login_method` and `forced_chatgpt_workspace_id` in the shared
+  `config.toml` apply to every account.
+
+**Shadow layout.** `~/.codex` had 67 entries.
+
+| Class | Names |
+| --- | --- |
+| Shared: conversation state | `sessions`, `archived_sessions`, `session_index.jsonl`, `history.jsonl`, `thread-writer-locks` (writer locks; shared with `sessions`), `rollout-migrations`, `external_agent_session_imports.json`, `attachments`, `generated_images`, `visualizations`, `tui-thread-reference-capabilities` |
+| Shared: user config and content | `config.toml` (config writes follow symlinks), `AGENTS.md`, `AGENTS.override.md`, `<profile>.config.toml`, `hooks.json`, `prompts`, `skills`, `rules`, `memories`, `plugins`, `pets` |
+| Shared: markers and MCP OAuth | `.sandbox_migration`, `.personality_migration`, `mcp-oauth-locks` (the keychain key is server + URL, not `CODEX_HOME`), `.credentials.json` (MCP OAuth fallback, not the Codex login) |
+| Private: login and account caches | `auth.json`, `installation_id`, `models_cache.json`, `version.json`, `cache` |
+| Private: per process | `.tmp`, `tmp`, `shell_snapshots`, `log`, `app-server-control`, `app-server-daemon`, `packages`, `ipc`, `process_manager` |
+| SQLite (home only) | `state_5`, `thread_history_1`, `goals_1`, `queue_1`, `memories_1`, `memories_v2_1`, `logs_2` (`.sqlite` with `-wal`/`-shm`), `.sqlite-maintenance.lock`, `db-backups` |
+| Used only by other tools | `.codex-global-state.json*`, `sqlite/`, `browser`, `computer-use`, `chrome-native-hosts-v2.json`, `node_repl`, `dictation-history`, `transcription-history.jsonl`, `vendor_imports`, `code-review-plugin`, `*.bak-*` |
+
+- First run on a fresh home creates `.sandbox_migration`, `.tmp`, `tmp`, `installation_id`, `skills`,
+  `shell_snapshots`, every `*_N.sqlite` with sidecars, `thread-writer-locks`, and `sessions` after the first turn.
+  Links not in place before the first run (the login included) become real files that conflict later.
+- SQLite through a symlink is safe: it resolves the link and puts `-wal`/`-shm` next to the target, so both paths
+  share one lock (verified with Python and with codex); WAL with a 5 s `busy_timeout` (`state/src/sqlite.rs:356–392`).
+  Better: `CODEX_SQLITE_HOME=<absolute home>` on shadow runs keeps every database, `.sqlite-maintenance.lock` and
+  `db-backups` in the home whatever their version suffix (verified); it must be absolute
+  (`core/src/config/mod.rs:273`). The `_N` suffixes are compile-time constants, so a bump creates a new file.
+- A dangling directory link breaks codex: `thread/start` fails with "File exists (os error 17)" (verified). Deleting a
+  thread rewrites `session_index.jsonl` by temp file and rename (`rollout/src/session_index.rs:99–102`), and database
+  corruption recovery recreates the database (`state/src/runtime/recovery.rs:186–200`, avoided by
+  `CODEX_SQLITE_HOME`): both replace a link with a real file.
+- Each Codex home runs its own `codex app-server --managed-daemon` with an updater; every separate home already runs
+  one. A shadow gets its own through its private `app-server-control` / `app-server-daemon`; sharing them would run
+  the shadow on the primary's daemon and login. `--no-daemon` turns this off for interactive commands.
+- Proposed layout: link the shared rows and the pattern `^[A-Za-z0-9_-]+\.config\.toml$`; keep the private rows real;
+  never let `^[a-z][a-z0-9_]*_[0-9]+\.sqlite(-wal|-shm|-journal)?$`, `.sqlite-maintenance.lock` or `db-backups` appear
+  in a shadow (a real one is a conflict); ignore `*.tmp`, `*.tmp-*`, `.tmp*`, `*.bak*`, `.DS_Store`. An unknown name
+  is a conflict when real in both trees and fine in one. Create `sessions` and `thread-writer-locks` in the home
+  before linking. Logged in means `auth.json` is a regular file; never read it.
+
+**Live sessions.** An open thread holds an exclusive `flock` on `<CODEX_HOME>/thread-writer-locks/<threadId>.lock`
+(`rollout/src/writer_lock.rs:43–105`). Codex's own probe: `flock(LOCK_EX)` on `.coordination.lock`; `open(<uuid>.lock,
+O_RDWR)` without `O_CREAT` (ENOENT: not live); `flock(LOCK_EX|LOCK_NB)` (EWOULDBLOCK: live); unlock and close
+everything. `lsof -t -- <file>` is a read-only alternative. Verified across a shared `thread-writer-locks`: with a
+thread open in process A, process B's `thread/resume` got `-32600 "thread … already has an active writer"`. Codex
+already protects itself (the TUI falls back to a read-only view), so a HiveMind check only makes the refusal clearer.
+Resume forms: `codex resume <uuid|name>`, `codex resume --last`, `codex exec resume <uuid|name>`, `codex exec resume
+--last`; `codex fork` makes a new thread and never conflicts.
+
+**Limit errors.** The backend answers 429 `usage_limit_reached` with `resets_at` (unix seconds) and Codex does not
+retry (`codex-api/src/api_bridge.rs:181–217`, `protocol/src/error.rs:419`). The message is "You’ve hit your usage
+limit. … try again at 3:45 PM." (curly apostrophe, local time). Without reading the terminal it shows as app-server
+notifications (`error` with `codexErrorInfo: "usageLimitExceeded"`, `turn/completed` with status failed), exit code 1
+in exec mode, `task_complete.error.codex_error_info == "usage_limit_exceeded"` plus `token_count` events with
+`rate_limits` in the rollout JSONL, and `thread_turns` in `thread_history_1.sqlite`. Attributing one to an account
+needs the launching account, so v1 stays snapshot-only.
