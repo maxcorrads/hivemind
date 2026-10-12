@@ -408,8 +408,10 @@ private let fakeCodex = #"""
   @Test func withoutReply3TheProbeEndsAtItsTimeoutAndCodexIsEnded() async throws {
     let (root, home, codex) = try fakeMac()
     defer { try? FileManager.default.removeItem(at: root) }
+    // The deadline starts when the login shell launches; on a loaded machine `zsh -lic` alone can take most of a short
+    // one before the fake codex prints its first line, so leave it 3 s (plus the 2 s exit grace, still under 10 s).
     let probe = CodexAppServerProbe(codex: codex, environment: ["PATH": "/usr/bin:/bin", "HOME": home, "FAKE_SILENT": "1"],
-                                    directory: home, timeout: 0.5)
+                                    directory: home, timeout: 3)
     let started = Date()
     let lines = await probe.probe(set: [], unset: [])
     #expect(Date().timeIntervalSince(started) < 10)
