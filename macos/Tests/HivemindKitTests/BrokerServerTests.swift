@@ -780,9 +780,20 @@ struct BrokerAccountTests {
     ((try? FileManager.default.contentsOfDirectory(atPath: store.folder.path)) ?? []).map { store.folder.appendingPathComponent($0).path }
   }
 
-  func launch(_ account: LaunchAccount?, agent: String? = "Atlas", environment: [String: String]? = nil) throws -> BrokerLaunch {
-    try BrokerLaunch(project: "acme", agent: agent, title: "Acme - \(agent ?? "new")", cwd: "/Users/me/acme", command: "agent",
+  func launch(
+    _ account: LaunchAccount?, agent: String? = "Atlas", environment: [String: String]? = nil, cwd: String = "/Users/me/acme"
+  ) throws -> BrokerLaunch {
+    try BrokerLaunch(project: "acme", agent: agent, title: "Acme - \(agent ?? "new")", cwd: cwd, command: "agent",
                      environment: environment.map { try LaunchEnvironment($0) }, account: account)
+  }
+
+  /// A fake project folder under the temp dir, with `.claude/<file>` holding `json` when one is given.
+  func project(_ json: String?, file: String = "settings.json") throws -> (root: URL, cwd: String) {
+    let root = try temporaryHome()
+    let cwd = root.appendingPathComponent("project").path
+    try FileManager.default.createDirectory(atPath: cwd + "/.claude", withIntermediateDirectories: true)
+    if let json { try Data(json.utf8).write(to: URL(fileURLWithPath: "\(cwd)/.claude/\(file)")) }
+    return (root, cwd)
   }
 
   /// A fake Mac home under the temp dir: `~/` is `root`, and the shared Codex tree is `<root>/.codex`.
@@ -1206,5 +1217,102 @@ struct BrokerAccountTests {
     #expect(h.tmux.calls("new-session").first.map { base + $0 } == tmux.newSession(TmuxNewSession(name: atlas, launch: plain)))
     #expect(!h.tmux.calls("new-session").joined().contains { $0.contains("unset") })
     #expect(shadows.prepared.isEmpty)
+  }
+
+  @Test func aClaudeProjectWhoseSettingsSetAnApiKeyHelperFailsItsItemOnlyBeforeAnyShadowIsBuilt() async throws {
+    let (h, store) = try harness()
+    let (root, cwd) = try project(#"{"apiKeyHelper": "/Users/me/keys.sh"}"#)
+    defer { try? FileManager.default.removeItem(at: root) }
+    h.folders.insert(cwd)
+    let shadows = FakeShadowHomes()
+    h.shadowHomes = shadows
+    await h.start()
+    let (transport, connection) = await h.client()
+    await h.send(connection, .launch([try launch(claudeShared, cwd: cwd), brokerLaunch(nil)]))
+    let second = SessionName("hm-acme-new-1")!
+    #expect(transport.events().first == .launched(
+      names: [nil, second], created: [second],
+      errors: [BrokerLaunchFailure(index: 0, code: .badMessage,
+                                   message: "launches[0].account: `\(cwd)/.claude/settings.json` sets `apiKeyHelper`, "
+                                     + "which overrides the account `Claude work`. Remove it from that file.")]))
+    #expect(h.tmux.calls("new-session").count == 1)
+    #expect(shadows.prepared.isEmpty, "a project that overrides the login is refused before a shadow is built")
+    #expect(files(store).isEmpty)
+    #expect(!h.logs.contains { $0.contains("keys.sh") }, "the broker never logs a value")
+  }
+
+  @Test func aClaudeProjectsLocalSettingsSettingAControlledNameFailsItsItemWithoutCase() async throws {
+    let (h, store) = try harness()
+    let (root, cwd) = try project(#"{"env": {"FOO": "1", "anthropic_auth_token": "sk-test"}}"#, file: "settings.local.json")
+    defer { try? FileManager.default.removeItem(at: root) }
+    h.folders.insert(cwd)
+    await h.start()
+    let (transport, connection) = await h.client()
+    await h.send(connection, .launch([try launch(claudePrimary, cwd: cwd)]))
+    #expect(transport.events().first == .launched(
+      names: [nil], created: [],
+      errors: [BrokerLaunchFailure(index: 0, code: .badMessage,
+                                   message: "launches[0].account: `\(cwd)/.claude/settings.local.json` sets `anthropic_auth_token`, "
+                                     + "which overrides the account `Claude`. Remove it from that file.")]))
+    #expect(h.tmux.calls("new-session").isEmpty)
+    #expect(files(store).isEmpty)
+  }
+
+  @Test(arguments: [
+    #"{"apiKeyHelper": null}"#,
+    #"{"env": {"FOO": "1", "NOTE": "ANTHROPIC_API_KEY"}}"#,
+    #"{"env": ["ANTHROPIC_API_KEY"]}"#,
+    "[]",
+    "{not json",
+  ])
+  func aProjectFileThatSetsNoLoginOverrideOrCannotBeReadIsNoCheck(json: String) async throws {
+    let (h, _) = try harness()
+    let (root, cwd) = try project(json)
+    defer { try? FileManager.default.removeItem(at: root) }
+    h.folders.insert(cwd)
+    await h.start()
+    let (transport, connection) = await h.client()
+    await h.send(connection, .launch([try launch(claudeShared, cwd: cwd)]))
+    #expect(transport.events().first == .launched(names: [atlas], created: [atlas], errors: []))
+  }
+
+  @Test func aCleanSettingsFileStillChecksTheLocalOneAndATrailingSlashIsNotRepeated() async throws {
+    let (h, _) = try harness()
+    let (root, cwd) = try project(#"{"apiKeyHelper": "/Users/me/keys.sh"}"#, file: "settings.local.json")
+    defer { try? FileManager.default.removeItem(at: root) }
+    try Data(#"{"env": {"FOO": "1"}}"#.utf8).write(to: URL(fileURLWithPath: "\(cwd)/.claude/settings.json"))
+    await h.start()
+    let (transport, connection) = await h.client()
+    await h.send(connection, .launch([try launch(claudeShared, cwd: cwd + "/")]))
+    #expect(transport.events().first == .launched(
+      names: [nil], created: [],
+      errors: [BrokerLaunchFailure(index: 0, code: .badMessage,
+                                   message: "launches[0].account: `\(cwd)/.claude/settings.local.json` sets `apiKeyHelper`, "
+                                     + "which overrides the account `Claude work`. Remove it from that file.")]))
+  }
+
+  @Test func aMissingProjectSettingsFileIsNoCheck() async throws {
+    let (h, _) = try harness()
+    let (root, cwd) = try project(nil)
+    defer { try? FileManager.default.removeItem(at: root) }
+    h.folders.insert(cwd)
+    await h.start()
+    let (transport, connection) = await h.client()
+    await h.send(connection, .launch([try launch(claudePrimary, cwd: cwd)]))
+    #expect(transport.events().first == .launched(names: [atlas], created: [atlas], errors: []))
+  }
+
+  @Test func aProjectsSettingsAreNotCheckedForACodexAccountOrForALaunchWithoutAnAccount() async throws {
+    let (h, _) = try harness()
+    let (root, cwd) = try project(#"{"apiKeyHelper": "/Users/me/keys.sh", "env": {"ANTHROPIC_API_KEY": "sk-test"}}"#)
+    defer { try? FileManager.default.removeItem(at: root) }
+    h.folders.insert(cwd)
+    h.shadowHomes = FakeShadowHomes()
+    await h.start()
+    let (transport, connection) = await h.client()
+    await h.send(connection, .launch([try launch(codexShadow, cwd: cwd)]))
+    #expect(transport.events().first == .launched(names: [atlas], created: [atlas], errors: []))
+    await h.send(connection, .launch([brokerLaunch("Beta", cwd: cwd)]))
+    #expect(transport.events().first == .launched(names: [SessionName("hm-acme-beta")!], created: [SessionName("hm-acme-beta")!], errors: []))
   }
 }

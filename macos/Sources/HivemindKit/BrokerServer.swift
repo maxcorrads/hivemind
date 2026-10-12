@@ -632,6 +632,30 @@ public final class BrokerConnection {
       + "more than the \(TmuxCommand.maxCommandLineBytes) a tmux command may take"
   }
 
+  /// Why a Claude launch's folder overrides the account's login, or nil (docs/accounts.md, "Claude shadow"). Only
+  /// `apiKeyHelper` and the key names of `env` are read, from `<cwd>/.claude/settings.json` and then
+  /// `settings.local.json`; a missing or unreadable file is no check, and no value is read out. An `env` name counts
+  /// when it matches one of the account's controlled names without case, as environmentConflict matches a launch's own.
+  static func projectOverride(of account: LaunchAccount, cwd: String) -> String? {
+    guard account.driver == .claude else { return nil }
+    let controlled = Set(account.controlledNames)
+    for file in ["settings.json", "settings.local.json"] {
+      let path = (cwd.hasSuffix("/") ? String(cwd.dropLast()) : cwd) + "/.claude/" + file
+      guard let data = FileManager.default.contents(atPath: path),
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+      var key: String?
+      if let helper = json["apiKeyHelper"], !(helper is NSNull) {
+        key = "apiKeyHelper"
+      } else if let env = json["env"] as? [String: Any] {
+        key = env.keys.sorted().first { controlled.contains($0.uppercased()) }
+      }
+      if let key {
+        return "`\(path)` sets `\(key)`, which overrides the account `\(account.label)`. Remove it from that file."
+      }
+    }
+    return nil
+  }
+
   private func launch(_ launches: [BrokerLaunch], id: String?) async {
     guard let broker else { return }
     await broker.launching { [weak self] in await self?.launchNow(launches, id: id) }
@@ -700,6 +724,13 @@ public final class BrokerConnection {
       var unsetNames: [String] = []
       if let account = launch.account {
         if let message = account.environmentConflict(in: launch.environment, secretNames: launch.secrets?.names ?? []) {
+          results.append(nil)
+          errors.append(BrokerLaunchFailure(index: index, code: .badMessage, message: "launches[\(index)].account: \(message)"))
+          continue
+        }
+        // A project's own settings outrank the login the same way (docs/accounts.md, "Claude shadow"). Checked before
+        // anything is written, so a refused item leaves no launch file behind.
+        if let message = Self.projectOverride(of: account, cwd: launch.cwd) {
           results.append(nil)
           errors.append(BrokerLaunchFailure(index: index, code: .badMessage, message: "launches[\(index)].account: \(message)"))
           continue
