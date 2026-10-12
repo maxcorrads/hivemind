@@ -3,6 +3,7 @@ import type { EvidenceCollectorHealth } from '../src/shared/evidence-health.ts';
 import type { RoutingRequest, RoutingSuggestions } from '../src/shared/routing.ts';
 import type { TelegramHealth } from "./telegram-health.ts";
 import type { WorkerTemplate, WorkerTemplateSpec } from "../src/shared/worker-templates.ts";
+import type { AccountDriver, AccountPolicies, AccountPolicy, AccountSpec, AgentAccount } from "../src/shared/accounts.ts";
 import type { Agent, AgentTrafficView, BotCredentialView, AttachmentMeta, Channel, Message, Project, SearchHit, Thread, ThreadStatus, InboxStatus } from "../src/shared/types.ts";
 import type { ActivityPage, ActivityReason, MentionPage, ReadSnapshot } from "../src/shared/read-state.ts";
 import { resolveUploadMime } from "../src/shared/mime.ts";
@@ -135,6 +136,9 @@ export type ChannelPayload = {
   replyCounts: Record<string, number>;
 };
 
+/** The account catalog: every account in list order, and each driver's policy. */
+export type AccountsView = { accounts: AgentAccount[]; policies: AccountPolicies };
+
 export const api = {
   adaptiveRouting: () => req<AdaptiveRoutingSettings>("/api/ui/adaptive-routing"),
   saveAdaptiveRouting: (body: {
@@ -214,6 +218,17 @@ export const api = {
       { method: "POST", body: JSON.stringify({ label }) }),
   deleteWorkerTemplate: (id: string, revision: number) =>
     req<{ ok: true }>(`/api/ui/worker-templates/${encodeURIComponent(id)}?revision=${revision}`, { method: "DELETE" }),
+  accounts: () => req<AccountsView>("/api/ui/accounts"),
+  createAccount: (body: AccountSpec) => req<AgentAccount>("/api/ui/accounts", { method: "POST", body: JSON.stringify(body) }),
+  updateAccount: (id: string, body: { expectedRevision: number; label?: string; homePath?: string; shadowPath?: string }) =>
+    req<AgentAccount>(`/api/ui/accounts/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteAccount: (id: string, revision: number) =>
+    req<{ ok: true }>(`/api/ui/accounts/${encodeURIComponent(id)}?revision=${revision}`, { method: "DELETE" }),
+  /** `ids` is the driver's whole list in its new order. */
+  reorderAccounts: (driver: AccountDriver, ids: string[]) =>
+    req<AccountsView>("/api/ui/accounts/order", { method: "PUT", body: JSON.stringify({ driver, ids }) }),
+  setAccountPolicy: (driver: AccountDriver, policy: AccountPolicy) =>
+    req<AccountsView>("/api/ui/accounts/policy", { method: "PUT", body: JSON.stringify({ driver, policy }) }),
   createBot: (projectId: string, name: string) => req<{ bot: Agent; token: string }>(
     `/api/ui/projects/${encodeURIComponent(projectId)}/bots`, { method: "POST", body: JSON.stringify({ name }) },
   ),

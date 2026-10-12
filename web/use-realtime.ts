@@ -58,6 +58,7 @@ export function useRealtime({ selection, hive, channel, thread, inboxLoad, chang
   const [live, setLive] = useState(false);
   const [roomTick, setRoomTick] = useState(0);
   const [jevTick, setJevTick] = useState(0);
+  const [accountsTick, setAccountsTick] = useState(0);
   const jevListeners = useRef(new Set<(event: JevLiveEvent) => void>());
   const subscribeJev = useCallback<JevLiveSubscribe>((listener) => {
     jevListeners.current.add(listener);
@@ -83,6 +84,7 @@ export function useRealtime({ selection, hive, channel, thread, inboxLoad, chang
     refreshSnap().catch((e) => { if (e?.name !== "AbortError") setErr(String(e.message || e)); });
     const snapUpdates = createUpdateBatch<Snapshot | null>(setSnap, SNAP_BATCH_MS);
     const roomTicks = createThrottle(() => setRoomTick(t => t + 1), TICK_MS);
+    const accountTicks = createThrottle(() => setAccountsTick(t => t + 1), TICK_MS);
     const jev = (event: JevLiveEvent) => { for (const listener of jevListeners.current) listener(event); };
     const off = connectWs((ev) => {
       tap.current?.(ev);
@@ -91,6 +93,8 @@ export function useRealtime({ selection, hive, channel, thread, inboxLoad, chang
         snapUpdates.cancel();
         resetReadConnection();
         roomTicks.request();
+        // An open Accounts sheet may have missed `accounts` events while disconnected.
+        accountTicks.request();
         if (selRef.current.kind === "jev") setJevTick(t => t + 1);
         return;
       }
@@ -112,6 +116,11 @@ export function useRealtime({ selection, hive, channel, thread, inboxLoad, chang
       }
       if (ev.type === "adaptive-routing") {
         onRoutingEvent(ev.payload as { channelId: string; event: AdaptiveRoutingEvent; state: AdaptiveExecutionState | null });
+        return;
+      }
+      if (ev.type === "accounts") {
+        // The Accounts sheet refetches its list on its tick; the event carries no account data.
+        accountTicks.request();
         return;
       }
       if (ev.type === "message") {
@@ -215,6 +224,7 @@ export function useRealtime({ selection, hive, channel, thread, inboxLoad, chang
       off();
       snapUpdates.cancel();
       roomTicks.cancel();
+      accountTicks.cancel();
       channelLoad.current.cancel();
       channelJournal.current = null;
       threadLoad.current.cancel();
@@ -225,5 +235,5 @@ export function useRealtime({ selection, hive, channel, thread, inboxLoad, chang
     };
   }, [loadChannel, refreshSnap, refreshArchivedChannels, setArchivedChannel, resetReadConnection, changeSelection, onThreadMessage, viewingThread, loadThread, setThreadPane]);
 
-  return { live, roomTick, setRoomTick, jevTick, subscribeJev };
+  return { live, roomTick, setRoomTick, jevTick, subscribeJev, accountsTick };
 }

@@ -15,6 +15,7 @@ export type SettingsMenuProps = {
   telegram: Snapshot["telegram"];
   onTelegram: () => void;
   onAdaptiveRouting: () => void;
+  onAccounts: () => void;
   onLaunch: () => void;
   onHelp: () => void;
   /** Server-side policy shared by every Human session; absent until the snapshot loads. */
@@ -31,7 +32,7 @@ let reopenAfterSwitch = 0;
 
 /** The Settings and tools menu: theme, layout, notifications, integrations, launch and help. */
 export function SettingsMenu({ theme, onToggleTheme, layout, onLayout, notifications, telegram, onTelegram, onAdaptiveRouting,
-  onLaunch, onHelp, autoArchive, openRequest, iconOnly }: SettingsMenuProps & { iconOnly?: boolean }) {
+  onAccounts, onLaunch, onHelp, autoArchive, openRequest, iconOnly }: SettingsMenuProps & { iconOnly?: boolean }) {
   const menu = useRef<HTMLDetailsElement>(null);
   const layoutLabel = useId();
   useEffect(() => {
@@ -117,6 +118,9 @@ export function SettingsMenu({ theme, onToggleTheme, layout, onLayout, notificat
         </button>
         <button type="button" className="tool-action" title="Adaptive routing" onClick={onAdaptiveRouting}>
           Adaptive routing
+        </button>
+        <button type="button" className="tool-action" title="Accounts" onClick={onAccounts}>
+          Accounts
         </button>
         <button type="button" className="tool-action" title="Launch agent" onClick={onLaunch}>
           Launch agent
