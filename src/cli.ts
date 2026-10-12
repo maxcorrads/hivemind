@@ -17,6 +17,7 @@ import type { Agent, Channel, Message, WaitResult } from "./shared/types.ts";
 import { parseJoinArgs } from "./shared/join-args.ts";
 import { terminalSessionFields } from "./shared/terminal-session.ts";
 import { COMPILED_CLI, packageRoot, runningCompiled } from "./shared/package-root.ts";
+import { CURSOR_HOOK_TIMEOUT_SEC, CURSOR_STOP_HOOK_COMMAND } from "./mcp/cursor-idle.ts";
 
 function help() {
   console.log(`hivemind — local hive for Human, brains, and workers
@@ -59,7 +60,8 @@ function help() {
   hivemind doctor
   hivemind leave
   hivemind mcp
-  hivemind mcp-config [--codex]
+  hivemind mcp-config [--codex | --cursor | --cursor-hooks]
+  hivemind cursor-stop-hook
   hivemind bots add /absolute/hivemind-bot.json [--home /hive]
   hivemind bots list | remove ID [--home /hive]
   hivemind bots bind ID --project SLUG --config-home /existing/profile [--home /hive]
@@ -133,7 +135,28 @@ export async function runCli(argv: string[]): Promise<void> {
     return;
   }
 
+  if (cmd === "cursor-stop-hook") {
+    // Cursor's stop hook (docs/agent-connection.md, "Cursor"): stdin is the stop event, stdout its JSON answer.
+    const { cursorStopHookOutput } = await import("./mcp/cursor-idle.ts");
+    let input = "";
+    for await (const chunk of process.stdin) input += String(chunk);
+    console.log(JSON.stringify(await cursorStopHookOutput(input)));
+    return;
+  }
+
   if (cmd === "mcp-config") {
+    if (argv.includes("--cursor-hooks")) {
+      console.log(cursorHooksConfig());
+      console.error("Merge the JSON above into ~/.cursor/hooks.json (its stop list), then restart the Cursor agents Hivemind launches.");
+      console.error("A Cursor session with this hook ends its turn when idle; Hivemind waits for its mail outside the model and opens the next turn.");
+      return;
+    }
+    if (argv.includes("--cursor")) {
+      console.log(cursorMcpConfig());
+      console.error("Paste the JSON above into ~/.cursor/mcp.json (or a project's .cursor/mcp.json).");
+      console.error("For idle listening without spending tokens, also install the stop hook: hivemind mcp-config --cursor-hooks.");
+      return;
+    }
     if (argv.includes("--codex")) {
       console.log(codexMcpConfig());
       console.error("Paste the TOML above into ~/.codex/config.toml (or config.toml in each CODEX_HOME), then restart Codex.");
@@ -528,6 +551,41 @@ export function codexMcpConfig(url = hiveUrl(), compiled = runningCompiled, root
     "[mcp_servers.hivemind.env]",
     `HIVEMIND_URL = ${str(url)}`,
   ].join("\n");
+}
+
+/**
+ * `mcp-config --cursor`: the `hivemind` entry for Cursor's mcp.json. Cursor hands a stdio MCP server only the SDK's
+ * default variables, so the session label and launch role are passed through by `${env:…}` references.
+ */
+export function cursorMcpConfig(url = hiveUrl(), compiled = runningCompiled, root = packageRoot()): string {
+  return JSON.stringify({
+    mcpServers: {
+      hivemind: {
+        ...cursorLauncher(compiled, root, "mcp"),
+        env: { HIVEMIND_URL: url, HIVEMIND_TMUX_SESSION: "${env:HIVEMIND_TMUX_SESSION}", HIVEMIND_ROLE: "${env:HIVEMIND_ROLE}" },
+      },
+    },
+  }, null, 2);
+}
+
+/**
+ * `mcp-config --cursor-hooks`: the stop hook for ~/.cursor/hooks.json. Its `timeout` lets one hook wait for mail for
+ * a day, and `loop_limit: null` lets it open any number of follow-up turns (Cursor's default stops after 5).
+ */
+export function cursorHooksConfig(compiled = runningCompiled, root = packageRoot()): string {
+  const { command, args } = cursorLauncher(compiled, root, CURSOR_STOP_HOOK_COMMAND);
+  const shell = (value: string) => /^[\w@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
+  return JSON.stringify({
+    version: 1,
+    hooks: { stop: [{ command: [command, ...args].map(shell).join(" "), timeout: CURSOR_HOOK_TIMEOUT_SEC, loop_limit: null }] },
+  }, null, 2);
+}
+
+/** Cursor runs commands outside any checkout, so a source checkout names its own tsx rather than relying on npx. */
+function cursorLauncher(compiled: boolean, root: string, subcommand: string): { command: string; args: string[] } {
+  return compiled
+    ? { command: "node", args: [resolve(root, COMPILED_CLI), subcommand] }
+    : { command: resolve(root, "node_modules/.bin/tsx"), args: [resolve(root, "src/cli.ts"), subcommand] };
 }
 
 /** True only when this module is the process entrypoint (`node dist/node/cli.js …` or `tsx src/cli.ts …`), not when imported. */

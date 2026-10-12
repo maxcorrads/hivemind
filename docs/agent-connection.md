@@ -57,6 +57,50 @@ The server stores the name on the agent. Only the Human UI sees it, as `terminal
 
 The agent CLI has to pass `HIVEMIND_TMUX_SESSION` on to the MCP process. Claude Code passes its environment on. Codex starts stdio MCP servers with a fixed environment (`HOME`, `PATH`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `TERM`, `TMPDIR` and a few more) and drops everything else, so its `[mcp_servers.hivemind]` block **requires** forwarding `HIVEMIND_TMUX_SESSION` for the label (historically verified with codex-cli 0.157.1). The generated config now also forwards `HIVEMIND_ROLE`; the new role behavior has protocol-fixture coverage, not a new real-host version qualification. `hivemind mcp-config --codex` prints it, and the Launch sheet in the apps reminds you when the software is Codex. Add it to the config of every `CODEX_HOME` you launch with. Without it the agent works as before; the apps then fall back to the session the broker recorded at launch for that agent's name in its project, when exactly one such session runs, and otherwise show no terminal for it.
 
+### Cursor
+
+Cursor's CLI ends every MCP tool call after 60 seconds and offers no setting to raise that: it calls tools without
+request options, so neither `tool_timeout_sec` nor progress notifications keep a call alive (checked in cursor-agent
+2026.10.01). A Cursor worker therefore cannot keep `wait` in flight the way Codex and Claude do. With Hivemind's stop
+hook installed it does not need to: it ends its turn when idle, and Hivemind waits for its mail outside the model, so an
+idle Cursor worker spends no tokens.
+
+1. Print the MCP entry and put it in `~/.cursor/mcp.json` (or a project's `.cursor/mcp.json`). Cursor hands a stdio MCP
+   server only the SDK's default variables, so the entry forwards `HIVEMIND_TMUX_SESSION` and `HIVEMIND_ROLE` with
+   `${env:…}` references:
+
+   ```bash
+   npx tsx src/cli.ts mcp-config --cursor
+   ```
+
+2. Print the stop hook and merge it into the `stop` list of `~/.cursor/hooks.json`:
+
+   ```bash
+   npx tsx src/cli.ts mcp-config --cursor-hooks
+   ```
+
+   It runs `hivemind cursor-stop-hook` with `"timeout": 86400` (Cursor's default is 60 seconds) and `"loop_limit": null`
+   (Cursor's default stops after 5 follow-ups).
+
+3. Restart the Cursor agents Hivemind launches.
+
+How it works: the MCP process turns this on only for a client that introduces itself as `Cursor`, runs in a Hivemind tmux
+session (`HIVEMIND_TMUX_SESSION`), and finds a stop hook running `cursor-stop-hook` in `~/.cursor/hooks.json` or in a
+project `.cursor/hooks.json`. Then:
+
+- `join` and `wait` tell the session to end its turn without output. `wait` looks for mail once, for a second at most,
+  and answers right away instead of running into Cursor's limit.
+- When the turn ends, Cursor runs the stop hook. The hook asks the session's MCP process, over a private Unix socket
+  (`/tmp/hivemind-idle-<uid>/`, mode 0700), to wait. The MCP process waits with the session key it already holds,
+  retrying through server restarts; the key never leaves it.
+- When mail arrives, the hook answers with a `followup_message` that holds the mail. Cursor opens the next turn with it;
+  the session acknowledges with `ack_delivery`, replies, and ends its turn again.
+- After a day without mail the hook re-arms the session with a one-line follow-up, so it keeps listening.
+
+The hook does nothing outside a Hivemind session, after an interrupted or failed turn, or when no Hivemind MCP process
+listens for that session, so other Cursor sessions on the machine are not affected. Without the hook, a Cursor session
+keeps the ordinary `wait` loop and its 60-second limit.
+
 ### Tool set changes (#218)
 
 Near-duplicate tools were merged; the old names no longer exist, so restart every agent's MCP client after upgrading:

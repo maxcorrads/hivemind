@@ -132,7 +132,10 @@ test("the reported label carries no capability; the launcher validates independe
   assert.equal(labelReference.test("agent.terminalSession"), true);
   assert.equal(labelReference.test("terminalSessionFields(process.env)"), true);
   assert.equal(labelReference.test("terminalSessionName(value)"), true);
-  assert.deepEqual(mentions(labelReference), ["cli.ts", "mcp/index.ts", "server/app.ts", "server/launcher-queue.ts", "server/services/agent-management.ts", "server/services/identity.ts",
+  // mcp/cursor-idle.ts validates the label only to name this user's private idle socket (0700 directory); the socket
+  // serves that session's MCP process's own waits and grants nothing on the server.
+  assert.deepEqual(mentions(labelReference), ["cli.ts", "mcp/cursor-idle.ts", "mcp/index.ts", "server/app.ts", "server/launcher-queue.ts",
+    "server/services/agent-management.ts", "server/services/identity.ts",
     "shared/agent-management.ts", "shared/api-contract.ts", "shared/terminal-session.ts", "shared/types.ts"]);
   // Human management exposes display/impact metadata and UI observations, never Node execution authority.
   // The queue may reuse the name validator, but never turn an agent's self-reported label into kill authority.
