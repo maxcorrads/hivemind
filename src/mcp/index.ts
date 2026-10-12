@@ -13,8 +13,10 @@ import { randomUUID } from "node:crypto";
 import { agentDownloadToFile, agentRequest } from "../client/http.ts";
 import { imagePreview } from "../server/files.ts";
 import { guessMime } from "../shared/mime.ts";
-import { waitUntilMail } from "./wait-loop.ts";
+import { waitHasMail, waitUntilMail } from "./wait-loop.ts";
 import { createWaitView } from "./wait-view.ts";
+import { CURSOR_CLIENT_NAME, CURSOR_HOOK_NEXT, CURSOR_IDLE_NEXT, cursorIdleSession, cursorIdleSocketPath, cursorStopHookConfigured,
+  startCursorIdleServer } from "./cursor-idle.ts";
 import { digestExpansionSchema } from "../shared/digest.ts";
 import { claimPreviewSchema } from '../shared/task-claims.ts';
 import { assignTaskSchema, taskEventSchema } from '../shared/tasks.ts';
@@ -84,6 +86,7 @@ export async function startMcp() {
   let inboxId = randomUUID();
   let inboxReady: Promise<{ sessionId: string }> | undefined;
   let waitView = createWaitView();
+  let hookView = createWaitView();
   const inboxSession = (signal?: AbortSignal) => {
     if (!inboxReady) {
       inboxReady = agentRequest<{ sessionId: string }>(
@@ -94,6 +97,41 @@ export async function startMcp() {
       });
     }
     return inboxReady;
+  };
+
+  // Cursor ends every MCP tool call after 60 s, so with Hivemind's stop hook installed a Cursor session does not keep
+  // wait in flight: it ends its turn and the hook asks this process to wait outside the model (./cursor-idle.ts).
+  const idleSession = cursorIdleSession();
+  let cursorHook: boolean | undefined;
+  const cursorHookMode = () => {
+    cursorHook ??= Boolean(idleSession) && server.server.getClientVersion()?.name === CURSOR_CLIENT_NAME && cursorStopHookConfigured();
+    return cursorHook;
+  };
+  const cursorWaitView = (result: WaitResult) => ({ ...hookView(result), next: CURSOR_HOOK_NEXT });
+  let idleServer: { close(): void } | undefined;
+  const startIdleServer = () => {
+    if (idleServer || !sessionToken || !cursorHookMode()) return;
+    try {
+      idleServer = startCursorIdleServer(cursorIdleSocketPath(idleSession!), async (signal, maxMs) => {
+        const deadline = AbortSignal.any([signal, AbortSignal.timeout(maxMs)]);
+        try {
+          const { sessionId } = await inboxSession(deadline);
+          // Hours long: a server restart in between is retried, never a reason to stop listening.
+          const result = await waitUntilMail(
+            () => agentRequest<WaitResult>("POST", "/api/agent/wait", { timeoutMs: MCP_WAIT_POLL_MS, compact: true, sessionId },
+              token(), MCP_WAIT_POLL_MS + 10_000, deadline),
+            { signal: deadline, maxServerErrors: Number.MAX_SAFE_INTEGER, maxTransientErrors: Number.MAX_SAFE_INTEGER },
+          );
+          return JSON.stringify(cursorWaitView(result));
+        } catch (error) {
+          if (!signal.aborted && deadline.aborted) return null;
+          throw error;
+        }
+      });
+    } catch (error) {
+      cursorHook = false;
+      console.error(`hivemind: Cursor idle listening is off: ${error instanceof Error ? error.message : String(error)}`);
+    }
   };
 
   server.tool(
@@ -146,11 +184,12 @@ export async function startMcp() {
         },
         claim ? null : auth ?? null,
       );
-      if (sessionToken !== result.token) { inboxId = randomUUID(); inboxReady = undefined; waitView = createWaitView(); }
+      if (sessionToken !== result.token) { inboxId = randomUUID(); inboxReady = undefined; waitView = createWaitView(); hookView = createWaitView(); }
       sessionToken = result.token;
       joinedName = result.agent.name;
       joinedNames.add(joinedName.toLowerCase());
       ensureHeartbeat();
+      startIdleServer();
       return text({
         name: result.agent.name,
         describe: result.describe,
@@ -159,7 +198,7 @@ export async function startMcp() {
         standingOrders: result.standingOrders,
         ordersRef: result.ordersRef,
         handoffs: result.handoffs,
-        next: joinNext(result.created, Boolean(result.handoffs?.items.length)),
+        next: joinNext(result.created, Boolean(result.handoffs?.items.length), cursorHookMode()),
       });
     }),
   );
@@ -374,6 +413,13 @@ export async function startMcp() {
     {},
     async (_args, extra) => {
       const { sessionId } = await inboxSession(extra.signal);
+      if (cursorHookMode()) {
+        startIdleServer();
+        // One short look; with nothing pending the session ends its turn and the stop hook waits outside the model.
+        const result = await agentRequest<WaitResult>("POST", "/api/agent/wait", { timeoutMs: 1000, compact: true, sessionId },
+          token(), 15_000, extra.signal);
+        return text(waitHasMail(result) ? cursorWaitView(result) : { idle: true, next: CURSOR_IDLE_NEXT });
+      }
       const result = await waitUntilMail(
         () =>
           agentRequest<WaitResult>(
@@ -550,7 +596,7 @@ export async function startMcp() {
   if (toolRole === "worker") for (const tool of brainTools) tool.disable();
   if (sessionToken) ensureHeartbeat();
   const previousClose = server.server.onclose;
-  server.server.onclose = () => { if (heartbeat) clearInterval(heartbeat); previousClose?.(); };
+  server.server.onclose = () => { if (heartbeat) clearInterval(heartbeat); idleServer?.close(); previousClose?.(); };
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

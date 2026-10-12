@@ -58,11 +58,14 @@ export const PARAM_DESCRIPTIONS = {
 
 /** Texts returned by join and search results. */
 export const JOIN_SESSION = "Held privately by this MCP process; to come back later, join with resume=<your name>.";
-export function joinNext(created: boolean, handoffs: boolean): string {
+export function joinNext(created: boolean, handoffs: boolean, cursorHook = false): string {
   return [
     created ? "Follow standingOrders." : "Orders unchanged: if they are not in your context, call whoami with orders=true.",
     handoffs ? "Read get_handoffs with taskId for relevant unfinished tasks before acting; saved reports may be stale." : "",
-    "Then call wait once with no arguments and stay silent while it runs.",
+    cursorHook
+      // A Cursor session with Hivemind's stop hook listens outside the model (./cursor-idle.ts).
+      ? "Then end your turn without output and without calling wait: in this Cursor session Hivemind waits for mail outside the model and opens your next turn with it."
+      : "Then call wait once with no arguments and stay silent while it runs.",
   ].filter(Boolean).join(" ");
 }
 /** Replaces WAIT_NEXT on every wake after the first of an MCP session. */
