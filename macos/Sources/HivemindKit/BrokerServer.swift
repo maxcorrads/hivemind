@@ -48,7 +48,7 @@ public final class TerminalBroker {
       tmux: any TmuxRunning, terminals: any BrokerTerminalSpawning, scheduler: any Scheduling,
       locateTmux: @escaping () -> String?, isDirectory: @escaping (String) -> Bool,
       environment: [String: String], idlePollInterval: TimeInterval = 15, secrets: LaunchSecretStore? = nil,
-      templateSecrets: (any TemplateSecretVault)? = nil, home: String = FileManager.default.homeDirectoryForCurrentUser.path,
+      templateSecrets: (any TemplateSecretVault)? = nil, home: String = HivemindPaths.userHome.path,
       shadowHomes: any ShadowHomePreparing = NoShadowHomes(), claudeTap: ClaudeStatusTap? = nil,
       processStart: @escaping (Int32) -> String? = ClaudeLiveSessions.systemProcessStart, log: @escaping (String) -> Void = { _ in }
     ) {
