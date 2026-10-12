@@ -939,8 +939,9 @@ struct BrokerAccountTests {
   @Test(arguments: [
     ("cli_auth_credentials_store = \"keyring\"", "keyring"),
     ("  cli_auth_credentials_store=auto", "auto"),
+    ("cli_auth_credentials_store = 'ephemeral'", "ephemeral"),
   ])
-  func aSharedConfigThatKeepsTheLoginInTheKeyringOrAutoFailsTheShadowsItem(setting: String, value: String) async throws {
+  func aSharedConfigThatKeepsTheLoginOutOfAuthJSONFailsTheShadowsItem(setting: String, value: String) async throws {
     let (h, _) = try harness()
     let (root, codex) = try fakeHome()
     defer { try? FileManager.default.removeItem(at: root) }

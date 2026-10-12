@@ -87,14 +87,14 @@ public struct FileShadowHomes: ShadowHomePreparing {
      expandingHome(account.shadowPath, home: home))
   }
 
-  /// A shared config that keeps the login in the keyring (or picks it automatically) cannot
-  /// back a shadow, whose login is its own auth.json. Reads `<home>/config.toml` line by line
+  /// A shared config that keeps the login in the keyring, picks it automatically or keeps it
+  /// in memory only cannot back a shadow, whose login is its own auth.json. Reads `<home>/config.toml` line by line
   /// up to its first table header and nothing else; a missing file sets nothing.
   private static func checkConfig(home: String) throws {
     let path = home + "/config.toml"
     guard let file = fopen(path, "r") else { return }
     defer { fclose(file) }
-    let setting = /^\s*cli_auth_credentials_store\s*=\s*"?(keyring|auto)"?/
+    let setting = /^\s*cli_auth_credentials_store\s*=\s*["']?(keyring|auto|ephemeral)["']?/
     var buffer: UnsafeMutablePointer<CChar>?
     var capacity = 0
     defer { free(buffer) }
