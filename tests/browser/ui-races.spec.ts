@@ -1925,6 +1925,10 @@ test("settings stay inside the viewport and backdrop dismissal requires a comple
     project: { id: alpha.id, slug: alpha.slug }, botDefinitions: [], botInstructions: "",
     hivemindMcp: { command: "hivemind", args: ["mcp"], env: {} },
   }));
+  // The Launch sheet loads the account catalog for its account picker (docs/accounts.md).
+  await page.route("**/api/ui/accounts", route => fulfillJson(route, {
+    accounts: [], policies: { codex: "sequential", claude: "sequential" }, usage: [],
+  }));
   await page.setViewportSize({ width: 1180, height: 700 });
   await page.goto("/#/c/a");
   for (const title of ["Adaptive routing", "Telegram", "Launch agent"]) {
