@@ -6,7 +6,9 @@ import { test, type TestContext } from "node:test";
 import { createApp } from "./app.ts";
 import { Hive } from "./hive.ts";
 import { insertRow } from "./test-fixtures.ts";
-import { ACCOUNT_LIMITS, type AccountSpec, type AccountUsage, type AgentAccount } from "../shared/accounts.ts";
+import { ACCOUNT_LIMITS, type AccountSpec, type AccountUsage, type AgentAccount, type UsageSnapshot, type UsageWindow }
+  from "../shared/accounts.ts";
+import { accountExhausted } from "../shared/account-selection.ts";
 
 // Agent accounts (phase 1, #321): Human-only catalog over HTTP. In-process only: no server or socket is started.
 
@@ -176,7 +178,7 @@ test("resolve answers the account a launch uses: policy, pin, exhaustion and rec
     ["account", "pin", personal.json.id]);
   assert.deepEqual((await resolve({ driver: "codex", accountId: "missing" })).json, { selection: { kind: "unknown-pin", pin: "missing" } });
 
-  // Usage is phase 5's; here limit resets stand in for it through the store's usage provider.
+  // No snapshot carries `limitResetAt`, so here limit resets stand in for stored usage through the store's usage provider.
   const soon = Date.now() + 3_600_000, later = soon + 3_600_000;
   const usage = new Map([[work.json.id, limited(work.json.id, soon)], [personal.json.id, limited(personal.json.id, later)]]);
   (hive.accounts as unknown as { usage: () => ReadonlyMap<string, AccountUsage> }).usage = () => usage;
@@ -190,4 +192,54 @@ test("resolve answers the account a launch uses: policy, pin, exhaustion and rec
   assert.equal((await resolve({ driver: "random" })).status, 400);
   assert.equal((await resolve({ driver: "codex" }, { authorization: "Bearer not-a-human-token" })).status, 403);
   assert.equal(events.length, 2, "only the two creates publish an event");
+});
+
+const HOUR = 3_600_000;
+
+const usageWindow = (usedPercent: number, resetsAt: number | null): UsageWindow =>
+  ({ key: "codex.primary", label: "5 h", usedPercent, resetsAt });
+
+const stored = (accountId: string, capturedAt: number, windows: UsageWindow[]): UsageSnapshot => ({ accountId, capturedAt, source: "codex",
+  plan: "subscription", windows, error: null, limitErrorAt: null });
+
+test("the policy and the exhausted set agree on stored snapshots: used up is skipped, all used up refused, none yet usable", async t => {
+  const { hive, call } = fixture(t);
+  const resolve = async (body: Record<string, unknown> = {}) =>
+    (await call("POST", "/api/ui/accounts/resolve", { driver: "codex", ...body })).json.selection;
+  // The exhausted set of the same stored usage, by the rule the policy uses (shared/account-selection.ts).
+  const exhausted = () => hive.accounts.list().accounts
+    .filter(account => accountExhausted(hive.accountUsage.map().get(account.id), Date.now()).exhausted).map(account => account.label);
+  const work = (await call("POST", "/api/ui/accounts", spec())).json as AgentAccount;
+  const personal = (await call("POST", "/api/ui/accounts",
+    spec({ label: "Codex personal", homePath: "", shadowPath: "~/.codex-personal" }))).json as AgentAccount;
+  const now = Date.now();
+
+  // No snapshot yet: nothing is used up, sequential takes the first account, and the pick is stale ("usage unknown").
+  assert.deepEqual(exhausted(), []);
+  assert.deepEqual(await resolve(), { kind: "account", account: work, reason: "sequential", stale: true, warning: null });
+
+  // A window at 100% with a reset ahead uses the account up: the policy takes the next one, and a pin keeps the warning.
+  hive.accountUsage.record(stored(work.id, now, [usageWindow(100, now + HOUR)]));
+  assert.deepEqual(exhausted(), ["Codex work"]);
+  assert.equal((await resolve()).account.id, personal.id);
+  const pinned = await resolve({ accountId: work.id });
+  assert.deepEqual([pinned.reason, pinned.stale, pinned.warning],
+    ["pin", false, `Codex work is used up until ${new Date(now + HOUR).toISOString()}`]);
+
+  // Every account used up: the launch is refused and the answer names the earliest reset.
+  hive.accountUsage.record(stored(personal.id, now, [usageWindow(100, now + 2 * HOUR)]));
+  assert.deepEqual(exhausted(), ["Codex work", "Codex personal"]);
+  assert.deepEqual(await resolve(), { kind: "exhausted", earliestReset: now + HOUR });
+
+  // A failed read keeps the last good windows, so neither the set nor the answer changes; only the error is recorded.
+  hive.accountUsage.record({ ...stored(work.id, now + 1_000, []), error: "Usage read failed" });
+  assert.equal(hive.accountUsage.map().get(work.id)?.lastError, "Usage read failed");
+  assert.deepEqual(exhausted(), ["Codex work", "Codex personal"]);
+  assert.deepEqual(await resolve(), { kind: "exhausted", earliestReset: now + HOUR });
+
+  // A window whose reset has passed no longer uses the account up: sequential returns to it, and it is fresh again.
+  hive.accountUsage.record(stored(work.id, Date.now(), [usageWindow(100, now - 1)]));
+  assert.deepEqual(exhausted(), ["Codex personal"]);
+  const back = await resolve();
+  assert.deepEqual([back.account.id, back.stale, back.warning], [work.id, false, null]);
 });

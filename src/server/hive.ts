@@ -163,8 +163,9 @@ export class Hive {
       this.telegramAdmin = services.telegramAdmin = new TelegramAdminService(services);
       this.files = services.files = new FileService(services);
       this.workerTemplates = services.workerTemplates = new WorkerTemplateStore(services);
-      this.accounts = services.accounts = new AccountStore(services);
       this.accountUsage = services.accountUsage = new AccountUsageStore(services);
+      // The policy reads the same stored usage snapshots as the Accounts sheet (docs/accounts.md, "Usage").
+      this.accounts = services.accounts = new AccountStore(services, () => this.accountUsage.map());
       this.lifecycleLog = services.lifecycleLog = new AgentLifecycleLog(services);
       this.launcherQueue = services.launcherQueue = new LauncherQueue(services);
       this.projects = services.projects = new ProjectService(services);
