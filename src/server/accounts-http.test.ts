@@ -5,6 +5,7 @@ import path from "node:path";
 import { test, type TestContext } from "node:test";
 import { createApp } from "./app.ts";
 import { Hive } from "./hive.ts";
+import { insertRow } from "./test-fixtures.ts";
 import { ACCOUNT_LIMITS, type AccountSpec, type AgentAccount } from "../shared/accounts.ts";
 
 // Agent accounts (phase 1, #321): Human-only catalog over HTTP. In-process only: no server or socket is started.
@@ -115,8 +116,9 @@ test("409, 400 and the pinned refusal come through with the field or code, never
   assert.equal((await call("DELETE", `/api/ui/accounts/${work.json.id}`)).status, 400, "a revision is required");
   assert.equal((await call("DELETE", `/api/ui/accounts/${work.json.id}?revision=1`)).status, 409);
   const project = hive.projects.createProject(hive.identity.getAgent("human"), { name: "Alpha", slug: "alpha" });
-  hive.db.prepare("INSERT INTO worker_templates (id, project_id, slug, revision, spec, created_at, updated_at) VALUES (?, ?, ?, 1, ?, 1, 1)")
-    .run(crypto.randomUUID(), project.id, "codex-senior", JSON.stringify({ label: "Codex senior", accountId: work.json.id }));
+  // A raw row: the template spec gains accountId only in phase 2.
+  insertRow(hive, "worker_templates", { id: crypto.randomUUID(), project_id: project.id, slug: "codex-senior", revision: 1,
+    spec: JSON.stringify({ label: "Codex senior", accountId: work.json.id }), created_at: 1, updated_at: 1 });
   const pinned = await call("DELETE", `/api/ui/accounts/${work.json.id}?revision=2`);
   assert.equal(pinned.status, 409);
   assert.match(pinned.json.error, /^account_pinned: .*Codex senior/);

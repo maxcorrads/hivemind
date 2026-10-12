@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test, type TestContext } from "node:test";
 import { Hive } from "./hive.ts";
+import { insertRow } from "./test-fixtures.ts";
 import { HiveError } from "../shared/types.ts";
 import { ACCOUNT_LIMITS, type AccountPolicy, type AccountSpec } from "../shared/accounts.ts";
 
@@ -105,8 +106,9 @@ test("delete refuses an account a worker template pins, and names the template",
   const { hive, human } = fixture(t);
   const account = hive.accounts.create(human, spec());
   const project = hive.projects.createProject(human, { name: "Alpha", slug: "alpha" });
-  hive.db.prepare("INSERT INTO worker_templates (id, project_id, slug, revision, spec, created_at, updated_at) VALUES (?, ?, ?, 1, ?, 1, 1)")
-    .run(crypto.randomUUID(), project.id, "codex-senior", JSON.stringify({ label: "Codex senior", accountId: account.id }));
+  // A raw row: the template spec gains accountId only in phase 2.
+  insertRow(hive, "worker_templates", { id: crypto.randomUUID(), project_id: project.id, slug: "codex-senior", revision: 1,
+    spec: JSON.stringify({ label: "Codex senior", accountId: account.id }), created_at: 1, updated_at: 1 });
   assert.throws(() => hive.accounts.delete(human, account.id, 1), refused(409, /^account_pinned: .*Codex senior/));
   assert.equal(hive.accounts.list().accounts.length, 1);
 });
