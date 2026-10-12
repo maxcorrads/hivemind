@@ -3,6 +3,7 @@ import { HiveError, type Agent, type Project } from "../shared/types.ts";
 import { buildLaunchCommand, projectLaunchTools } from "../shared/launch-prompt.ts";
 import { terminalSessionName } from "../shared/terminal-session.ts";
 import type { WorkerTemplate } from "../shared/worker-templates.ts";
+import type { LaunchAccount } from "../shared/accounts.ts";
 import { launchContext } from "./bot-definitions.ts";
 import type { Core } from "./services/ports.ts";
 import { LauncherQueueCipher } from "./launcher-queue-crypto.ts";
@@ -21,9 +22,10 @@ export type LaunchRequestView = { id: string; projectId: string; brainId: string
   launchKind: "claim" | "resume";
   requestedAt: number; decidedBy: string | null; decidedAt: number | null; session: string | null;
   error: string | null; capBlocked: boolean };
+/** `account`: the template launch's resolved account; omitted when none, so the native journal's digest is unchanged. */
 export type LauncherCommand = { id: string; kind: "launch"; requestId: string; templateId: string;
   project: string; agent: string; title: string; session: string; command: string; cwd: string | null;
-  environment?: Record<string, string> } | { id: string; kind: "kill"; session: string };
+  environment?: Record<string, string>; account?: LaunchAccount } | { id: string; kind: "kill"; session: string };
 
 export type LauncherQueueDeps = Core & { readonly home: string;
   readonly identity: { getAgent(id: string): Agent; archiveTaskWorker(agentId: string): Agent; suspendSession(agentId: string): Agent;

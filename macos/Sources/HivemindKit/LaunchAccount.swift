@@ -93,14 +93,19 @@ public struct LaunchAccount: Codable, Equatable, Sendable {
   /// (compared canonically, as Swift compares strings: the page compares
   /// NFC forms, APFS ignores normalization and Claude hashes the NFC form).
   public func validate() throws(BrokerProtocolError) {
-    guard (1...Self.maxIDBytes).contains(id.utf8.count) else { throw .invalid("account.id", "must be 1–\(Self.maxIDBytes) bytes") }
+    try validate(field: "account")
+  }
+
+  /// validate(), naming the field as a launch carries it (`launches[0].account`).
+  func validate(field: String) throws(BrokerProtocolError) {
+    guard (1...Self.maxIDBytes).contains(id.utf8.count) else { throw .invalid("\(field).id", "must be 1–\(Self.maxIDBytes) bytes") }
     guard !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, label.utf16.count <= Self.maxLabelLength else {
-      throw .invalid("account.label", "must be 1–\(Self.maxLabelLength) characters")
+      throw .invalid("\(field).label", "must be 1–\(Self.maxLabelLength) characters")
     }
-    if let problem = Self.pathProblem(homePath) { throw .invalid("account.homePath", problem) }
-    if let problem = Self.pathProblem(shadowPath) { throw .invalid("account.shadowPath", problem) }
+    if let problem = Self.pathProblem(homePath) { throw .invalid("\(field).homePath", problem) }
+    if let problem = Self.pathProblem(shadowPath) { throw .invalid("\(field).shadowPath", problem) }
     if !shadowPath.isEmpty, shadowPath == (homePath.isEmpty ? driver.defaultHome : homePath) {
-      throw .invalid("account.shadowPath", "a shadow is its own directory, not the shared tree")
+      throw .invalid("\(field).shadowPath", "a shadow is its own directory, not the shared tree")
     }
   }
 
@@ -145,5 +150,12 @@ public struct LaunchAccount: Codable, Equatable, Sendable {
       let directory = shadowPath.isEmpty ? homePath : shadowPath
       return directory.isEmpty ? [] : [(driver.variable, expanded(directory))]
     }
+  }
+
+  /// Whether a variable needs the Mac's home: a path written `~/…`, or a
+  /// Codex shadow's default shared tree. With "~" standing in for the home,
+  /// what the broker would expand still starts with `~/`.
+  public var usesHome: Bool {
+    environment(home: "~").contains { $0.value.unicodeScalars.starts(with: "~/".unicodeScalars) }
   }
 }

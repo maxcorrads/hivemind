@@ -311,7 +311,7 @@ speaks. The broker answers with `min(client, broker)`, or with
 | `sessions.list` | none | `sessions` |
 | `sessions.subscribe` | none | `sessions` now, and again after each change |
 | `sessions.unsubscribe` | none | none |
-| `launch` | `launches`: 1–24 of `{project, agent, title, cwd, command, session?, secrets?, environment?}` | `launched` |
+| `launch` | `launches`: 1–24 of `{project, agent, title, cwd, command, session?, secrets?, environment?, account?}` | `launched` |
 | `attach` | `session` name, `cols` 2–1000, `rows` 1–500 | `attached`, then `output`… until `exit` |
 | `input` | `stream` int ≥1, `data` base64 (1 B–64 KiB decoded) | none |
 | `resize` | `stream`, `cols`, `rows` | none |
@@ -333,6 +333,7 @@ A launch is:
 | `session` | optional session name: the session this agent last reported (`agent.terminalSession`). When it is running and was launched for the same project and for no agent or this one, the launch reuses it, so an agent first launched as `hm-<project>-new-<n>` keeps that session on resume. Otherwise it is ignored: the broker never creates a session under a name the client picked. |
 | `secrets` | optional object of environment variables for the agent: `{"OPENCODE_API_KEY": "<key>"}`, the only name allowed. The value is 1–512 bytes of printable ASCII (`0x21`–`0x7E`: no space, tab, newline or NUL). Any other name, an empty object, a value that is not a string or breaks the rule refuses the whole frame with `bad-message`, and the error names the field, never the value. See [Launch secrets](#launch-secrets). |
 | `environment` | optional object of 1–32 environment variables for the agent, `{"NAME": "value", …}`: the Launch agent sheet's **Environment variables**. Each name matches `^[A-Za-z_][A-Za-z0-9_]{0,63}$` and is not on the [denylist](#launch-environment); each value is at most 8 KiB with no control character but tab (so no NUL, CR or LF), 32 KiB of `NAME=value` in all. Anything else refuses the whole frame with `bad-message`; the error names the field and, for a denied name, the variable, never a value. See [Launch environment](#launch-environment). |
+| `account` | optional object `{id, driver, label, homePath, shadowPath}`: the account the server resolved for this launch ([accounts](accounts.md)), every field a string. `driver` is `codex` or `claude`, `id` 1–64 bytes, `label` 1–80 characters and not blank; each path is `""` or follows the [path rules](accounts.md#an-account), and a `shadowPath` is not the shared tree. Paths travel as stored: the client never expands their `~/`. Anything else refuses the whole frame with `bad-message`, naming the field (`launches[0].account.homePath`). |
 
 ### Broker → client
 

@@ -351,7 +351,10 @@ Content-Length: 2
   broker takes, as Hivemind.app does on the Mac. A paired device can read
   any file as you through a terminal anyway, so this tells it nothing new.
   Without `home`, the app refuses such launches with a message instead of
-  guessing.
+  guessing. It refuses a launch whose [account](accounts.md) sets a variable
+  to a folder under `~/` the same way (`LaunchAccount.usesHome`; a Codex
+  shadow without a home path counts, since its `CODEX_SQLITE_HOME` is
+  `~/.codex`).
 
 - The app puts that cookie into the web view's `WKHTTPCookieStore` before
   loading `https://<host>:<port>/`, on the host that issued it (the cookie is

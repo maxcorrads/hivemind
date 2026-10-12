@@ -131,6 +131,7 @@ public enum RemoteTerminalPolicy {
 
   public static let terminalAppMessage = "Terminal.app is on your Mac. Open the session in Hivemind instead."
   public static let noHomeMessage = "This Hivemind Server does not tell the device your Mac's home folder, so a launch without a folder, or with one starting with ~, cannot start. Give the workspace an absolute path (/…), or update Hivemind Server."
+  public static let noHomeAccountMessage = "This Hivemind Server does not tell the device your Mac's home folder, so a launch with an account whose folder starts with ~ cannot start. Update Hivemind Server."
 
   /// `home` is the Mac user's home folder when the gateway sent it
   /// (RemoteDeviceSession.home).
@@ -139,6 +140,10 @@ public enum RemoteTerminalPolicy {
     case .terminalLaunch(let id, let launches, _):
       if home == nil, launches.contains(where: { launch in launch.cwd.map { $0 == "~" || $0.hasPrefix("~/") } ?? true }) {
         return .answer(.error(id: id, code: .badMessage, message: noHomeMessage, stream: nil))
+      }
+      // The same for an account's folders (LaunchAccount.usesHome).
+      if home == nil, launches.contains(where: { $0.account?.usesHome == true }) {
+        return .answer(.error(id: id, code: .badMessage, message: noHomeAccountMessage, stream: nil))
       }
       return .forward(.terminalLaunch(id: id, launches: launches, openInTerminal: false))
     case .terminalOpen:

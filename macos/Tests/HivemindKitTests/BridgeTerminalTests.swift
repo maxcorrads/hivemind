@@ -10,6 +10,11 @@ private func launchItem(_ extra: [String: Any] = [:]) -> [String: Any] {
   ["project": "acme", "agent": "Atlas", "title": "Acme - Atlas", "cwd": "~/acme", "command": "claude\n"].merging(extra) { $1 }
 }
 
+private func accountFields(_ extra: [String: Any] = [:]) -> [String: Any] {
+  ["id": "a1", "driver": "codex", "label": "Codex personal", "homePath": "", "shadowPath": "~/.codex_personal"].merging(extra) { $1 }
+}
+private let codexPersonal = LaunchAccount(id: "a1", driver: .codex, label: "Codex personal", homePath: "", shadowPath: "~/.codex_personal")
+
 private func launchMessage(_ launches: Any, open: Any = true, id: Any? = "r1") -> BridgeMessage? {
   var body: [String: Any] = ["type": "terminal-launch", "launches": launches, "openInTerminal": open]
   if let id { body["id"] = id }
@@ -33,6 +38,16 @@ struct BridgeTerminalMessageTests {
     #expect(launches[0].brokerLaunch(home: "/Users/me")?.session == SessionName("hm-acme-new-1"))
   }
 
+  @Test func passesTheAccountOnAsThePageSentIt() {
+    let parsed = launchMessage([launchItem(["account": accountFields()]), launchItem(["account": NSNull()]), launchItem()])
+    guard case .terminalLaunch(_, let launches, _) = parsed else { Issue.record("dropped"); return }
+    #expect(launches.map(\.account) == [codexPersonal, nil, nil])
+    let broker = launches[0].brokerLaunch(home: "/Users/me")
+    #expect(broker?.cwd == "/Users/me/acme")
+    #expect(broker?.account == codexPersonal, "the broker, not the app, expands the account's ~/")
+    #expect(launches[1].brokerLaunch(home: "/Users/me")?.account == nil)
+  }
+
   @Test func dropsTheWholeLaunchWhenAnythingIsOff() {
     let bad: [[String: Any]] = [
       launchItem(["project": "Acme"]),
@@ -48,6 +63,15 @@ struct BridgeTerminalMessageTests {
       launchItem(["title": String(repeating: "t", count: BrokerLimits.maxTitleCharacters + 1)]),
       launchItem(["session": "acme-atlas"]),
       launchItem(["session": 1]),
+      launchItem(["account": "a1"]),
+      launchItem(["account": [String: Any]()]),
+      launchItem(["account": accountFields(["driver": "opencode"])]),
+      launchItem(["account": accountFields(["homePath": NSNull()])]),
+      launchItem(["account": accountFields(["label": 1])]),
+      launchItem(["account": accountFields(["id": ""])]),
+      launchItem(["account": accountFields(["label": String(repeating: "x", count: LaunchAccount.maxLabelLength + 1)])]),
+      launchItem(["account": accountFields(["shadowPath": ".codex_personal"])]),
+      launchItem(["account": accountFields(["shadowPath": "~/.codex"])]),
     ]
     for item in bad {
       #expect(launchMessage([launchItem(), item]) == nil, "\(item)")

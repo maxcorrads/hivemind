@@ -7,10 +7,12 @@ private let commandID = "22222222-2222-4222-8222-222222222222"
 private let requestID = "33333333-3333-4333-8333-333333333333"
 private let workerSession = SessionName(project: "acme", agent: "forge-task")
 
-private func launchCommand() -> LauncherCommand {
+private let codexWork = LaunchAccount(id: "a1", driver: .codex, label: "Codex work", homePath: "~/.codex-work", shadowPath: "")
+
+private func launchCommand(account: LaunchAccount? = nil) -> LauncherCommand {
   LauncherCommand(id: commandID, kind: .launch, requestId: requestID, templateId: templateID,
                   project: "acme", agent: "forge-task", title: "Forge task", session: workerSession.rawValue,
-                  cwd: "/tmp/acme", command: "codex task\n", environment: ["MODE": "test"])
+                  cwd: "/tmp/acme", command: "codex task\n", environment: ["MODE": "test"], account: account)
 }
 
 @MainActor private final class JournalFake: LauncherJournaling {
@@ -142,6 +144,39 @@ private actor HTTPFake: LauncherHTTP {
     #expect(try await sut.execute(decoded) == first)
     #expect(broker.launches.count == 1, "saved result must not launch again")
     #expect(journal.writes.count == 2)
+  }
+
+  @Test func theAccountGoesToTheBrokerAndIntoTheDigestOnlyWhenSet() async throws {
+    let broker = BrokerFake(), journal = JournalFake()
+    let command = launchCommand(account: codexWork)
+    let wire = try JSONEncoder().encode(command)
+    #expect(try JSONDecoder().decode(LauncherCommand.self, from: wire) == command)
+    #expect(try await service(broker, journal).execute(command) == .launched(workerSession))
+    #expect(broker.launches.map(\.account) == [codexWork])
+    #expect(command.digest != launchCommand().digest)
+
+    // A command from before accounts: no key on the wire, and the digest its journal entry was written with.
+    let old = #"{"agent":"forge-task","command":"codex task\n","cwd":"/tmp/acme","environment":{"MODE":"test"},"id":"\#(commandID)","#
+      + #""kind":"launch","project":"acme","requestId":"\#(requestID)","session":"hm-acme-forge-task","templateId":"\#(templateID)","#
+      + #""title":"Forge task"}"#
+    let decoded = try JSONDecoder().decode(LauncherCommand.self, from: Data(old.utf8))
+    #expect(decoded == launchCommand())
+    #expect(!String(decoding: try JSONEncoder().encode(decoded), as: UTF8.self).contains("account"))
+    #expect(decoded.digest == "6aa761a0dccd83e1c77ebf79cdf080abb0117773f6ca127944bf8be7e2c4f455")
+    let fresh = BrokerFake(), saved = JournalFake()
+    let entry = #"{"digest":"6aa761a0dccd83e1c77ebf79cdf080abb0117773f6ca127944bf8be7e2c4f455","session":"hm-acme-forge-task","#
+      + #""kind":"launch","result":{"status":"launched","session":"hm-acme-forge-task"}}"#
+    saved.values[commandID] = try JSONDecoder().decode(LauncherJournalEntry.self, from: Data(entry.utf8))
+    #expect(try await service(fresh, saved).execute(decoded) == .launched(workerSession))
+    #expect(fresh.launches.isEmpty, "the saved result replays, never a second launch")
+  }
+
+  @Test func anAccountTheBrokerWouldRefuseLaunchesNothing() async throws {
+    let broker = BrokerFake(), journal = JournalFake()
+    let bad = LaunchAccount(id: "a1", driver: .codex, label: "Codex work", homePath: "codex-work", shadowPath: "")
+    #expect(try await service(broker, journal).execute(launchCommand(account: bad)) == .failed("invalid launcher launch fields"))
+    #expect(broker.launches.isEmpty)
+    #expect(journal.writes.isEmpty)
   }
 
   @Test func reconcilesIntentOnlyWithOwnedSessionAndNeverRelaunches() async throws {

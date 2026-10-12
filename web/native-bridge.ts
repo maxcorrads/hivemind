@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { terminalSessionName } from "../src/shared/terminal-session.ts";
 import { launchEnvironmentProblem } from "../src/shared/launch-environment.ts";
+import { accountPathProblem, accountSpecSchema, ACCOUNT_DRIVERS, ACCOUNT_LIMITS, type LaunchAccount } from "../src/shared/accounts.ts";
 import { workerSecretNameProblem } from "../src/shared/worker-templates.ts";
 import { hashFor, parseHash, type Sel } from "./selection.ts";
 
@@ -298,6 +299,11 @@ export type TerminalSessionLaunch = {
   environment?: Record<string, string>;
   /** The worker template launched: Hivemind Server adds the template's secrets from its Keychain (docs/terminal-broker.md#template-secrets). */
   template?: string;
+  /**
+   * The account the server resolved for this launch (docs/accounts.md), paths as stored: the broker expands their
+   * `~/`. Ignored when the launch reuses a running session, which keeps its account. Absent: no account.
+   */
+  account?: LaunchAccount;
 };
 
 /** Page → app. `id` is the page's own request id (1–64 chars), echoed on the answer. */
@@ -521,6 +527,24 @@ const PROJECT_SLUG = /^[a-z0-9][a-z0-9-]{0,31}$/;
 /** What Swift's CharacterSet.controlCharacters plus newlines refuse: Cc, Cf, line and paragraph separators. */
 const CONTROL = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
 
+/** Bytes of an account id, at most (HivemindKit LaunchAccount.maxIDBytes). */
+const ACCOUNT_ID_MAX_BYTES = 64;
+
+/** Why the app would refuse a launch's account (HivemindKit LaunchAccount.validate), or null. */
+function launchAccountProblem(value: unknown): string | null {
+  if (!isRecord(value)) return "Not a Codex or Claude account";
+  const { id, driver, label, homePath, shadowPath } = value;
+  if (typeof id !== "string" || !id || utf8Length(id) > ACCOUNT_ID_MAX_BYTES || typeof driver !== "string" ||
+      !(ACCOUNT_DRIVERS as readonly string[]).includes(driver) || typeof label !== "string" ||
+      typeof homePath !== "string" || typeof shadowPath !== "string") return "Not a Codex or Claude account";
+  // UTF-16 code units, as the app counts them.
+  if (!label.trim() || label.length > ACCOUNT_LIMITS.label) return `An account's label is 1–${ACCOUNT_LIMITS.label} characters`;
+  // The paths, then the catalog's own rule left: a shadow is not the shared tree.
+  const problem = accountPathProblem(homePath) ?? accountPathProblem(shadowPath) ??
+    accountSpecSchema.safeParse({ driver, label, homePath, shadowPath }).error?.issues[0]?.message;
+  return problem ? `The account ${label}: ${problem}` : null;
+}
+
 /** Why the app would refuse these session launches, or null when it takes them. */
 export function terminalSessionLaunchProblem(launches: readonly TerminalSessionLaunch[]): string | null {
   const limits = TERMINAL_BROKER_LIMITS;
@@ -553,6 +577,10 @@ export function terminalSessionLaunchProblem(launches: readonly TerminalSessionL
       if (problem) return problem;
     }
     if (launch.template !== undefined && !TEMPLATE_ID.test(launch.template)) return "Not a worker template";
+    if (launch.account !== undefined) {
+      const problem = launchAccountProblem(launch.account);
+      if (problem) return problem;
+    }
     const cwd = launch.cwd;
     if (cwd && (!(cwd.startsWith("/") || cwd === "~" || cwd.startsWith("~/")) || cwd.includes("\0") ||
         utf8Length(cwd) > limits.pathBytes)) {
@@ -569,7 +597,7 @@ export function terminalSessionLaunchProblem(launches: readonly TerminalSessionL
 
 /** The launches as a terminal-launch message carries them: absent fields left out. */
 export function terminalLaunchItems(launches: readonly TerminalSessionLaunch[]) {
-  return launches.map(({ project, agent, title, cwd, command, session, secrets, environment, template }) =>
+  return launches.map(({ project, agent, title, cwd, command, session, secrets, environment, template, account }) =>
     ({ project, agent, title, ...(cwd ? { cwd } : {}), command, ...(session ? { session } : {}), ...(secrets ? { secrets } : {}),
-      ...(environment ? { environment } : {}), ...(template ? { template } : {}) }));
+      ...(environment ? { environment } : {}), ...(template ? { template } : {}), ...(account ? { account } : {}) }));
 }

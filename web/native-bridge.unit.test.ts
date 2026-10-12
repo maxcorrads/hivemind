@@ -5,10 +5,11 @@ import { act, createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Agent, Channel, Message, Project } from "../src/shared/types.ts";
 import { launchBlockText, type LaunchContext } from "../src/shared/launch-prompt.ts";
+import { ACCOUNT_LIMITS, type LaunchAccount } from "../src/shared/accounts.ts";
 import type { DesktopNotifications } from "./desktop-notifications.ts";
 import {
   appLinks, badgeSync, inNativeApp, nativeBridge, notifyNative, postNative, reportedNativePlatform, resetNativePlatform, runNativeCommand,
-  startHivemindServer, useNativeBridge,
+  startHivemindServer, terminalLaunchItems, terminalSessionLaunchProblem, useNativeBridge,
   BROKER_UNAVAILABLE_HINT, NATIVE_EVENT, REMOTE_BROKER_UNAVAILABLE_HINT, REMOTE_TMUX_INSTALL_HINT, SERVER_UNVERIFIED_HINT, TERMINAL_EVENT,
   OPENCODE_API_KEY_PROBLEM, TMUX_INSTALL_HINT, type NativeCommandHandlers, type NativeMessage,
   type TerminalSessionLaunch,
@@ -771,4 +772,38 @@ test("the apps send the variables beside the command, never in it, and Resume gi
   await ready();
   await act(async () => { plain.button(/^Start in background$/)!.click(); });
   assert.ok(!("environment" in launchesPosted()[0]!.launches[0]!));
+});
+
+test("a launch's account is checked as the app checks it and goes beside the command, unchanged", () => {
+  const launch: TerminalSessionLaunch = { project: "acme", agent: "Atlas", title: "Acme - Atlas", cwd: "~/acme", command: "claude" };
+  const account: LaunchAccount = { id: "a1", driver: "claude", label: "Claude work", homePath: "", shadowPath: "~/.claude-work" };
+  const accounts: LaunchAccount[] = [account, { ...account, driver: "codex", homePath: "/Volumes/x/.codex", shadowPath: "" },
+    { ...account, label: "é".repeat(ACCOUNT_LIMITS.label), shadowPath: "" }, { ...account, id: "i".repeat(64) }];
+  for (const item of accounts) assert.equal(terminalSessionLaunchProblem([launch, { ...launch, account: item }]), null, JSON.stringify(item));
+
+  const refused: [unknown, RegExp][] = [
+    [null, /Not a Codex or Claude account/],
+    ["a1", /Not a Codex or Claude account/],
+    [{ ...account, driver: "opencode" }, /Not a Codex or Claude account/],
+    [{ ...account, id: "" }, /Not a Codex or Claude account/],
+    [{ ...account, id: "é".repeat(33) }, /Not a Codex or Claude account/],
+    [{ ...account, homePath: undefined }, /Not a Codex or Claude account/],
+    [{ ...account, shadowPath: null }, /Not a Codex or Claude account/],
+    [{ ...account, label: "  " }, /label is 1–80 characters/],
+    [{ ...account, label: "😀".repeat(ACCOUNT_LIMITS.label / 2 + 1) }, /label is 1–80 characters/],
+    [{ ...account, homePath: ".claude" }, /^The account Claude work: a path starts with \/ or ~\/$/],
+    [{ ...account, shadowPath: "~/.claude-work/" }, /^The account Claude work: a path cannot end with \/$/],
+    [{ ...account, shadowPath: "~/a/../b" }, /a \. or \.\. segment/],
+    [{ ...account, shadowPath: "~/.claude" }, /^The account Claude work: a shadow is its own directory, not the shared tree$/],
+    [{ ...account, driver: "codex", homePath: "/x/.codex", shadowPath: "/x/.codex" }, /a shadow is its own directory/],
+  ];
+  for (const [item, problem] of refused) {
+    assert.match(terminalSessionLaunchProblem([launch, { ...launch, account: item as LaunchAccount }]) ?? "", problem, JSON.stringify(item));
+  }
+
+  // As the server resolved it: the app, not the page, expands its "~/".
+  const [plain, withAccount] = terminalLaunchItems([launch, { ...launch, account }]);
+  assert.ok(!("account" in plain!));
+  assert.deepEqual(withAccount, { ...launch, account });
+  assert.deepEqual(JSON.parse(JSON.stringify(withAccount)).account, account);
 });
