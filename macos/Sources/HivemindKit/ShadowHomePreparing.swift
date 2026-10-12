@@ -1,11 +1,11 @@
 import Foundation
 
-// Builds an account's own directory before a session runs under it (a Codex
-// shadow, docs/accounts.md), and before its login when the Accounts sheet's
-// Prepare asks (account.prepare). FileShadowHomes builds a Codex shadow from
-// its shared home; Claude shadows come in phase 4. NoShadowHomes stays for the
-// broker's tests and for hosts that build no shadows: it refuses every shadow
-// and leaves a primary account alone.
+// Builds an account's own directory before a session runs under it (a Codex or
+// Claude shadow, docs/accounts.md), and before its login when the Accounts
+// sheet's Prepare asks (account.prepare). FileShadowHomes builds a shadow from
+// its shared home. NoShadowHomes stays for the broker's tests and for hosts
+// that build no shadows: it refuses every shadow and leaves a primary account
+// alone.
 
 /// What the broker asks before it starts a session under an account, or before Human logs it in.
 public protocol ShadowHomePreparing {
@@ -34,25 +34,22 @@ public struct AccountPreparation: Equatable, Sendable {
   public var ok: Bool { error == nil }
 }
 
-/// Checks a Codex shadow against its shared home and links it (docs/accounts.md,
-/// "Codex shadow"). A primary account is left alone. Before a launch it
-/// creates nothing itself: the shadow engine makes the links and the home
-/// folders, and a missing shadow or login is an error that names its fix.
-/// Prepare also creates the shadow's folder, so its login finds the links.
+/// Checks a Codex or Claude shadow against its shared home and links it
+/// (docs/accounts.md, "Codex shadow" and "Claude shadow"). A primary account is
+/// left alone. Before a launch it creates nothing itself: the shadow engine
+/// makes the links and the home folders, and a missing shadow or login is an
+/// error that names its fix. Prepare also creates the shadow's folder, so its
+/// login finds the links.
 public struct FileShadowHomes: ShadowHomePreparing {
   public init() {}
 
-  static let claudeShadows = "Claude shadow accounts arrive in phase 4"
-
   public func prepare(_ account: LaunchAccount, home: String) throws {
     guard !account.shadowPath.isEmpty else { return }
-    guard account.driver == .codex else {
-      throw BrokerProtocolError(.internal, Self.claudeShadows)
-    }
     let (shared, shadow) = Self.paths(account, home: home)
     do {
-      try Self.checkConfig(home: shared)
-      try ShadowHome().materialize(home: shared, shadow: shadow, layout: .codex, createShadow: false, requireLogin: true)
+      try Self.checkShadow(account.driver, shared: shared, shadow: shadow)
+      try ShadowHome().materialize(home: shared, shadow: shadow, layout: Self.layout(account.driver),
+                                   createShadow: false, requireLogin: true)
     } catch let error as ShadowHomeError {
       // The message names the fix; the broker reports it as this item's failure.
       throw BrokerProtocolError(.internal, error.message)
@@ -60,25 +57,73 @@ public struct FileShadowHomes: ShadowHomePreparing {
   }
 
   public func prepareForLogin(_ account: LaunchAccount, home: String) -> AccountPreparation {
-    guard account.driver == .codex else {
-      return AccountPreparation(loggedIn: false,
-                                error: account.shadowPath.isEmpty ? "Preparing Claude accounts arrives in phase 4" : Self.claudeShadows)
-    }
+    let layout = Self.layout(account.driver)
     let (shared, shadow) = Self.paths(account, home: home)
     // A primary logs in to the shared home itself: nothing to build, only its login to report.
     guard !account.shadowPath.isEmpty else {
-      return AccountPreparation(loggedIn: ShadowLayout.codex.isLoggedIn(URL(fileURLWithPath: shared)))
+      return AccountPreparation(loggedIn: layout.isLoggedIn(URL(fileURLWithPath: shared)))
     }
     var error: String?
     do {
-      try Self.checkConfig(home: shared)
-      try ShadowHome().materialize(home: shared, shadow: shadow, layout: .codex, createShadow: true, requireLogin: false)
+      try Self.checkShadow(account.driver, shared: shared, shadow: shadow)
+      try ShadowHome().materialize(home: shared, shadow: shadow, layout: layout, createShadow: true, requireLogin: false)
     } catch let failure as ShadowHomeError {
       error = failure.message
     } catch let failure {
       error = failure.localizedDescription
     }
-    return AccountPreparation(loggedIn: ShadowLayout.codex.isLoggedIn(URL(fileURLWithPath: shadow)), error: error)
+    return AccountPreparation(loggedIn: layout.isLoggedIn(URL(fileURLWithPath: shadow)), error: error)
+  }
+
+  private static func layout(_ driver: LaunchAccount.Driver) -> ShadowLayout {
+    switch driver {
+    case .codex: .codex
+    case .claude: .claude
+    }
+  }
+
+  /// The checks that run before `materialize`, for each driver's shadow.
+  private static func checkShadow(_ driver: LaunchAccount.Driver, shared: String, shadow: String) throws {
+    switch driver {
+    case .codex:
+      try checkConfig(home: shared)
+    case .claude:
+      try checkExactPath(shadow)
+      try checkRetention(home: shared, shadow: shadow)
+    }
+  }
+
+  /// Claude keys its keychain login to the exact `CLAUDE_CONFIG_DIR` string, so the shadow must be
+  /// written as its real path: no trailing `/`, and no symlink in it.
+  private static func checkExactPath(_ shadow: String) throws {
+    let real = URL(fileURLWithPath: shadow).resolvingSymlinksInPath().path
+    guard !shadow.hasSuffix("/"), shadow == real else {
+      throw ShadowHomeError(path: shadow, message: "Use the real path of `\(real)`: Claude keys its login to the exact folder name.")
+    }
+  }
+
+  /// A shadow and its home share one `projects/`, and each account's `cleanupPeriodDays` deletes
+  /// transcripts from it, so both must set the same value. Reads only that top-level key of each `settings.json`.
+  private static func checkRetention(home: String, shadow: String) throws {
+    let shadowDays = try cleanupPeriodDays(in: shadow + "/settings.json")
+    let homeDays = try cleanupPeriodDays(in: home + "/settings.json")
+    guard shadowDays == homeDays else {
+      throw ShadowHomeError(path: shadow + "/settings.json",
+                            message: "`\(shadow)/settings.json` has cleanupPeriodDays `\(shadowDays)` but `\(home)/settings.json` has `\(homeDays)`. "
+                              + "Set the same value: each account cleans the shared transcripts with its own value.")
+    }
+  }
+
+  /// The top-level `cleanupPeriodDays` of a settings file as text: "default" when the file or the key is missing.
+  /// A file that is not a JSON object is refused, since its value is unknown.
+  private static func cleanupPeriodDays(in path: String) throws -> String {
+    guard FileManager.default.fileExists(atPath: path) else { return "default" }
+    guard let data = FileManager.default.contents(atPath: path),
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+      throw ShadowHomeError(path: path, message: "`\(path)` is not a readable JSON object; fix it before launching a shadow account.")
+    }
+    guard let days = json["cleanupPeriodDays"], !(days is NSNull) else { return "default" }
+    return "\(days)"
   }
 
   /// The shared home (empty: the driver's default) and the shadow, each with a leading `~/` expanded.

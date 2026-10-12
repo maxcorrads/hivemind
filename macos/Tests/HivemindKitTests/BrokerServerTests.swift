@@ -793,6 +793,15 @@ struct BrokerAccountTests {
     return (root, codex)
   }
 
+  /// A fake Mac home at its real path (the temp dir sits behind a symlink, and a Claude shadow must be
+  /// given its real path): `~/` is `root`, and the shared Claude tree is `<root>/.claude`.
+  func fakeClaudeHome() throws -> (root: URL, claude: String) {
+    let root = try temporaryHome().resolvingSymlinksInPath()
+    let claude = root.appendingPathComponent(".claude").path
+    try FileManager.default.createDirectory(atPath: claude, withIntermediateDirectories: true)
+    return (root, claude)
+  }
+
   @Test func aCreatedCodexShadowGetsItsTwoVariablesAndUnsetsTheOtherControlledNames() async throws {
     let (h, store) = try harness()
     h.shadowHomes = FakeShadowHomes()
@@ -992,18 +1001,47 @@ struct BrokerAccountTests {
     #expect(!FileManager.default.fileExists(atPath: missing))
   }
 
-  @Test func aClaudeShadowIsRefusedUntilPhaseFour() async throws {
-    let (h, store) = try harness()
+  @Test func aClaudeShadowThatIsNotPreparedFailsItsItemWithTheShadowHomeErrorAndTheOtherStarts() async throws {
+    let (h, _) = try harness()
+    let (root, claude) = try fakeClaudeHome()
+    defer { try? FileManager.default.removeItem(at: root) }
+    h.home = root.path
     h.shadowHomes = FileShadowHomes()
     await h.start()
     let (transport, connection) = await h.client()
     let claudeShadow = LaunchAccount(id: "a5", driver: .claude, label: "Claude work", homePath: "", shadowPath: "~/.claude_work")
     await h.send(connection, .launch([try launch(claudeShadow), brokerLaunch(nil)]))
     let second = SessionName("hm-acme-new-1")!
+    let shadow = root.appendingPathComponent(".claude_work").path
+    let message = "`\(shadow)` does not exist yet. Prepare the account in the Accounts sheet, "
+      + "then log in with `\(ShadowLayout.claude.loginCommand(shadow, claude))`."
     #expect(transport.events().first == .launched(
       names: [nil, second], created: [second],
-      errors: [BrokerLaunchFailure(index: 0, code: .internal, message: "launches[0].account: Claude shadow accounts arrive in phase 4")]))
-    #expect(files(store).isEmpty)
+      errors: [BrokerLaunchFailure(index: 0, code: .internal, message: "launches[0].account: \(message)")]))
+    #expect(h.tmux.calls("new-session").count == 1)
+  }
+
+  @Test func aPreparedAndLoggedInClaudeShadowLaunchesUnderItsConfigDir() async throws {
+    let (h, store) = try harness()
+    let (root, claude) = try fakeClaudeHome()
+    defer { try? FileManager.default.removeItem(at: root) }
+    try Data("{}\n".utf8).write(to: URL(fileURLWithPath: "\(claude)/history.jsonl"))
+    let shadow = root.appendingPathComponent(".claude_work")
+    try FileManager.default.createDirectory(at: shadow, withIntermediateDirectories: true)
+    try Data("{}".utf8).write(to: shadow.appendingPathComponent(".credentials.json"))
+    h.home = root.path
+    h.shadowHomes = FileShadowHomes()
+    await h.start()
+    let (transport, connection) = await h.client()
+    let claudeShadow = LaunchAccount(id: "a5", driver: .claude, label: "Claude work", homePath: "", shadowPath: "~/.claude_work")
+    await h.send(connection, .launch([try launch(claudeShadow)]))
+    #expect(transport.events().first == .launched(names: [atlas], created: [atlas], errors: []))
+    #expect(tree(shadow.path) == [".credentials.json", "file-history -> \(claude)/file-history", "history.jsonl -> \(claude)/history.jsonl",
+                                  "paste-cache -> \(claude)/paste-cache", "plans -> \(claude)/plans", "projects -> \(claude)/projects",
+                                  "tasks -> \(claude)/tasks"])
+    let written = try #require(files(store).first)
+    #expect(files(store).count == 1)
+    #expect(try String(contentsOfFile: written, encoding: .utf8) == "CLAUDE_CONFIG_DIR=\(shadow.path)\n")
   }
 
   /// Every entry under `folder`, links shown with their target, so a test can tell nothing changed.
@@ -1103,19 +1141,39 @@ struct BrokerAccountTests {
     #expect(!FileManager.default.fileExists(atPath: missing))
   }
 
-  @Test func prepareRefusesClaudeUntilPhaseFourAndABrokerThatBuildsNoShadows() async throws {
+  @Test func prepareBuildsAClaudeShadowBeforeItsLoginThenReportsTheLoginAndTheLaunchStarts() async throws {
     let (h, _) = try harness()
+    let (root, claude) = try fakeClaudeHome()
+    defer { try? FileManager.default.removeItem(at: root) }
+    try Data("{}\n".utf8).write(to: URL(fileURLWithPath: "\(claude)/history.jsonl"))
+    try Data("{}".utf8).write(to: URL(fileURLWithPath: "\(claude)/.credentials.json"))
+    h.home = root.path
     h.shadowHomes = FileShadowHomes()
     await h.start()
     let (transport, connection) = await h.client()
-    await h.send(connection, .accountPrepare(account: LaunchAccount(id: "a5", driver: .claude, label: "Claude work", homePath: "",
-                                                                   shadowPath: "~/.claude_work")), id: "shadow")
-    await h.send(connection, .accountPrepare(account: claudePrimary), id: "primary")
-    #expect(transport.take() == [
-      BrokerEventFrame(id: "shadow", .accountPrepared(AccountPreparation(loggedIn: false, error: "Claude shadow accounts arrive in phase 4"))),
-      BrokerEventFrame(id: "primary", .accountPrepared(AccountPreparation(loggedIn: false, error: "Preparing Claude accounts arrives in phase 4"))),
-    ])
+    let claudeShadow = LaunchAccount(id: "a5", driver: .claude, label: "Claude work", homePath: "", shadowPath: "~/.claude_work")
+    await h.send(connection, .accountPrepare(account: claudeShadow), id: "p1")
+    #expect(transport.take() == [BrokerEventFrame(id: "p1", .accountPrepared(AccountPreparation(loggedIn: false)))],
+            "the primary's .credentials.json is not the shadow's login")
+    let shadow = root.appendingPathComponent(".claude_work").path
+    #expect(tree(shadow) == ["file-history -> \(claude)/file-history", "history.jsonl -> \(claude)/history.jsonl",
+                             "paste-cache -> \(claude)/paste-cache", "plans -> \(claude)/plans", "projects -> \(claude)/projects",
+                             "tasks -> \(claude)/tasks"])
+    #expect(h.tmux.calls("new-session").isEmpty)
 
+    try Data("{\"oauthAccount\":{}}".utf8).write(to: URL(fileURLWithPath: "\(shadow)/.claude.json"))
+    await h.send(connection, .accountPrepare(account: claudeShadow), id: "p2")
+    #expect(transport.take() == [BrokerEventFrame(id: "p2", .accountPrepared(AccountPreparation(loggedIn: true)))])
+    await h.send(connection, .launch([try launch(claudeShadow)]))
+    #expect(transport.events().first == .launched(names: [atlas], created: [atlas], errors: []))
+
+    // A Claude primary is only checked: its login is the shared home's `oauthAccount`.
+    try Data("{\"oauthAccount\":{}}".utf8).write(to: URL(fileURLWithPath: "\(claude)/.claude.json"))
+    await h.send(connection, .accountPrepare(account: claudePrimary), id: "primary")
+    #expect(transport.take() == [BrokerEventFrame(id: "primary", .accountPrepared(AccountPreparation(loggedIn: true)))])
+  }
+
+  @Test func aBrokerThatBuildsNoShadowsRefusesPrepare() async throws {
     let bare = BrokerHarness()
     await bare.start()
     let (other, client) = await bare.client()
