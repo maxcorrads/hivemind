@@ -605,11 +605,11 @@ it unsets all five Claude names.
 
 **Shadow accounts.** Before the session of a created launch starts, the broker
 prepares the account's own directory (`ShadowHomePreparing`). A failure refuses
-that item alone, with `internal` and `launches[<i>].account: <reason>`. Until
-shadow directories are built (phases 3 and 4 of
-[#319](https://github.com/maxcorrads/hivemind/issues/319)), `NoShadowHomes`
-refuses every shadow with "Shadow accounts are not supported yet". A primary
-account launches as above.
+that item alone, with `internal` and `launches[<i>].account: <reason>`. A Codex
+shadow is built from its shared home (`FileShadowHomes`); its messages and fixes
+are in [Codex shadow](accounts.md#codex-shadow). A Claude shadow is refused until
+phase 4 of [#319](https://github.com/maxcorrads/hivemind/issues/319) with "Claude
+shadow accounts arrive in phase 4". A primary account launches as above.
 
 **Reused sessions with an account.** A reused session is not checked against
 its account: nothing runs, nothing is written, and it keeps the account it
@@ -649,7 +649,7 @@ account's login command. It is answered at once (it runs no tmux) with `account.
 
 - a Codex shadow is checked and built as before a launch, except that its folder is created (0700) when missing and no
   login is required yet; `error` is the reason it is not ready, naming the fix, and `loggedIn` is whether the shadow's
-  `auth.json` is a regular file;
+  `auth.json` is a regular file ([Codex shadow](accounts.md#codex-shadow) has the rules and every message);
 - a primary account is only checked: nothing is created, and `loggedIn` says whether `<home>/auth.json` is a regular
   file;
 - a Claude account answers `ok: false` until phase 4, and a broker that builds no shadows answers `ok: false` with
