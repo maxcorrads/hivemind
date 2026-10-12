@@ -180,6 +180,11 @@ Settings → **Accounts** opens the sheet, after **Adaptive routing**. It has on
 - **Add account**, disabled at 8 accounts: label, home path and shadow path, with the path problem shown under the
   field. Once both paths are valid, the login command for them appears with a **Copy** button and the line "Log in
   once in a terminal; HiveMind never stores tokens." Editing an account does not show the command.
+- **Prepare**, in the apps only, on each account: Hivemind Server.app builds a shadow's folder and links before its
+  login, and only checks a primary's login
+  ([Preparing an account](terminal-broker.md#preparing-an-account)). The row then shows "Ready", "Not logged in" or
+  the error text, which names the fix. After a successful Prepare the row shows the account's login command with
+  **Copy**. Editing either path hides the status. In a browser the sheet says "Prepare needs the Mac app".
 
 A server error shows as text in the sheet. An `accounts` event refetches the list.
 
@@ -188,9 +193,8 @@ A server error shows as text in the sheet. An `accounts` event refetches the lis
 Each account logs in once, in a terminal on the Mac that launches; the commands are in [Logging in](#logging-in). The
 sheet shows the command for the paths typed in **Add account**, before a label is typed.
 
-In this phase HiveMind writes no files for an account: the sheet shows a shadow's command but does not prepare the
-shadow first, as [Logging in](#logging-in) describes, so the command's `mkdir -p` creates an empty folder. Preparing a
-shadow comes with [Codex shadow](#codex-shadow) (phase 3).
+For a Codex shadow, **Prepare** first, then run the command the row shows: the login then finds the links in place,
+as [Logging in](#logging-in) describes. Claude accounts are prepared from phase 4.
 
 ## Choosing an account
 

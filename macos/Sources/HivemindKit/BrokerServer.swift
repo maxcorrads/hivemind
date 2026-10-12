@@ -482,6 +482,8 @@ public final class BrokerConnection {
         try Self.vaultCall { () throws(BrokerFiles.Failure) in try vault.delete(name: name, for: template) }
         broker?.deps.log("[broker] template \(template): deleted \(name.map { "secret \($0)" } ?? "every secret")")
       }
+    case .accountPrepare(let account):
+      prepareAccount(account, id: id)
     case .sessionsList, .sessionsSubscribe, .sessionsUnsubscribe, .launch, .attach, .kill,
          .launcherApprove, .launcherReject:
       enqueue(frame)
@@ -503,6 +505,17 @@ public final class BrokerConnection {
       if error.code == .internal { broker?.deps.log("[broker] template \(template): \(error.message)") }
       send(.error(error), id: id)
     }
+  }
+
+  /// The Accounts sheet's Prepare, answered at once (it runs no tmux): the
+  /// account's directory is built before its login, and the answer says
+  /// whether it is logged in, or names what is wrong and its fix.
+  private func prepareAccount(_ account: LaunchAccount, id: String?) {
+    guard let broker else { return }
+    let preparation = broker.deps.shadowHomes.prepareForLogin(account, home: broker.deps.home)
+    let outcome = preparation.error ?? (preparation.loggedIn ? "ready" : "not logged in")
+    broker.deps.log("[broker] account \(account.id) (\(account.driver.rawValue)): prepare: \(outcome)")
+    send(.accountPrepared(preparation), id: id)
   }
 
   private static func vaultCall<T>(_ work: () throws(BrokerFiles.Failure) -> T) throws(BrokerProtocolError) -> T {
@@ -555,7 +568,7 @@ public final class BrokerConnection {
       await decide(requestId: requestId, templateId: templateId, approve: true, id: id)
     case .launcherReject(let requestId):
       await decide(requestId: requestId, templateId: nil, approve: false, id: id)
-    case .hello, .input, .resize, .detach, .secretsList, .secretsSet, .secretsDelete:
+    case .hello, .input, .resize, .detach, .secretsList, .secretsSet, .secretsDelete, .accountPrepare:
       break
     }
   }

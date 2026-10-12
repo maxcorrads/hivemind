@@ -62,6 +62,7 @@ struct BrokerRequestTests {
       .init(.resize(stream: 3, size: TerminalSize(columns: 2, rows: 1)!)),
       .init(.detach(stream: 3)),
       .init(id: "k", .kill(session: atlas)),
+      .init(id: "p", .accountPrepare(account: claudeWork)),
     ]
     for frame in frames {
       let line = try frame.line()
@@ -195,6 +196,33 @@ struct BrokerRequestTests {
     }
   }
 
+  @Test func anAccountPrepareCarriesItsAccountAsStoredAndIsCheckedAsALaunchsIs() throws {
+    let line = try BrokerRequestFrame(id: "p1", .accountPrepare(account: claudeWork)).line()
+    let object = try JSONSerialization.jsonObject(with: line) as? [String: Any]
+    #expect(object?["type"] as? String == "account.prepare")
+    #expect(object?["account"] as? [String: String]
+      == ["id": "a1", "driver": "claude", "label": "Claude work", "homePath": "", "shadowPath": "~/.claude-work"], "~/ is not expanded")
+    let account = #"{"id":"a1","driver":"codex","label":"Codex work","homePath":"","shadowPath":"%@"}"#
+    #expect(try request(#"{"type":"account.prepare","id":"p","account":"# + String(format: account, "~/.codex_work") + "}")
+      == .init(id: "p", .accountPrepare(account: LaunchAccount(id: "a1", driver: .codex, label: "Codex work", homePath: "", shadowPath: "~/.codex_work"))))
+    let bad: [(String, String)] = [
+      (#"{"type":"account.prepare"}"#, "account: is missing"),
+      (#"{"type":"account.prepare","account":null}"#, "account: is missing"),
+      (#"{"type":"account.prepare","account":"a1"}"#, "account: must be an object"),
+      (#"{"type":"account.prepare","account":{"id":"a1","driver":"opencode","label":"x","homePath":"","shadowPath":""}}"#,
+       "account: must be an object"),
+      (#"{"type":"account.prepare","account":"# + String(format: account, "codex_work") + "}", "account.shadowPath: a path starts with / or ~/"),
+      (#"{"type":"account.prepare","account":"# + String(format: account, "~/.codex") + "}",
+       "account.shadowPath: a shadow is its own directory, not the shared tree"),
+      (#"{"type":"account.prepare","account":{"id":"","driver":"codex","label":"x","homePath":"","shadowPath":""}}"#, "account.id"),
+    ]
+    for (json, reason) in bad {
+      let error = refusal(json)
+      #expect(error?.code == .badMessage, "\(json)")
+      #expect(error?.message.contains(reason) == true, "\(json): \(error?.message ?? "accepted")")
+    }
+  }
+
   @Test func acceptsTheLimitsExactly() throws {
     let command = String(repeating: "x", count: BrokerLimits.maxCommandBytes)
     let cwd = "/" + String(repeating: "c", count: BrokerLimits.maxCwdBytes - 1)
@@ -279,6 +307,8 @@ struct BrokerEventTests {
       .init(id: "k", .killed(session: atlas)),
       .init(id: "a", .error(code: .noSuchSession, message: "hm-acme-atlas is not running", stream: nil)),
       .init(.error(code: .noSuchStream, message: "no stream 4", stream: 4)),
+      .init(id: "p", .accountPrepared(AccountPreparation(loggedIn: false))),
+      .init(id: "p", .accountPrepared(AccountPreparation(loggedIn: true, error: "`/Users/me/.codex_work/sessions` is a real file"))),
     ]
     for frame in frames {
       let line = try frame.line()
@@ -306,6 +336,31 @@ struct BrokerEventTests {
     ] {
       #expect(eventRefusal(json) != nil, "\(json)")
     }
+  }
+
+  @Test func theAccountPreparedAnswerSaysOkExactlyWhenThereIsNoError() throws {
+    let ready = try JSONSerialization.jsonObject(
+      with: try BrokerEventFrame(id: "p", .accountPrepared(AccountPreparation(loggedIn: true))).line()) as? [String: Any]
+    #expect(ready?["type"] as? String == "account.prepared")
+    #expect(ready?["ok"] as? Bool == true)
+    #expect(ready?["loggedIn"] as? Bool == true)
+    #expect(ready?.keys.contains("error") == false, "no error key when ok")
+    let failed = try JSONSerialization.jsonObject(
+      with: try BrokerEventFrame(.accountPrepared(AccountPreparation(loggedIn: false, error: "Move it away."))).line()) as? [String: Any]
+    #expect(failed?["ok"] as? Bool == false)
+    #expect(failed?["loggedIn"] as? Bool == false)
+    #expect(failed?["error"] as? String == "Move it away.")
+    for json in [
+      #"{"type":"account.prepared","ok":true,"loggedIn":false,"error":"x"}"#,
+      #"{"type":"account.prepared","ok":false,"loggedIn":false}"#,
+      #"{"type":"account.prepared","ok":true}"#,
+      #"{"type":"account.prepared","ok":"yes","loggedIn":false}"#,
+      #"{"type":"account.prepared","ok":false,"loggedIn":false,"error":7}"#,
+    ] {
+      #expect(eventRefusal(json) != nil, "\(json)")
+    }
+    let long = try BrokerEventFrame.decode(Data(#"{"type":"account.prepared","ok":false,"loggedIn":false,"error":"\#(String(repeating: "e", count: 1200))"}"#.utf8))
+    #expect(long.event == .accountPrepared(AccountPreparation(loggedIn: false, error: String(repeating: "e", count: 1000))))
   }
 
   @Test func anUnknownErrorCodeStillReadsAsAnError() throws {

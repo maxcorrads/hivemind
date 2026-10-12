@@ -210,6 +210,9 @@ public final class TerminalBridgeRouter {
     case .launcherReject(let id, let requestId):
       begin()
       relay(.launcherReject(requestId: requestId), id: id)
+    case .accountPrepare(let id, let account):
+      begin()
+      relay(.accountPrepare(account: account), id: id)
     default:
       break
     }
@@ -354,7 +357,7 @@ public final class TerminalBridgeRouter {
     case .error(_, _, let stream):
       // Errors about a stream of ours; the rest answered nothing of the page's.
       guard let stream, streams.contains(stream) else { return }
-    case .welcome, .launched, .attached, .killed, .secrets, .launcherDecided:
+    case .welcome, .launched, .attached, .killed, .secrets, .launcherDecided, .accountPrepared:
       return
     }
     deliver(BridgeTerminalEvent(BrokerEventFrame(event)))

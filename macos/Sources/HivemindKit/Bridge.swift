@@ -65,6 +65,10 @@ public enum BridgeMessage: Equatable, Sendable {
   /// Server.app broker, which signs the HTTP request with its instance secret.
   case launcherApprove(id: String?, requestId: String, templateId: TemplateID?)
   case launcherReject(id: String?, requestId: String)
+  /// The Accounts sheet's Prepare (docs/accounts.md): the broker builds the
+  /// account's directory before its login; answered with account-prepared.
+  /// The account is checked as a launch's is, and its "~/" left to the broker.
+  case accountPrepare(id: String?, account: LaunchAccount)
 
   static let maxText = 4096
   /// The most sessions one terminal-kill may name (web TERMINAL_BROKER_LIMITS.kills).
@@ -164,6 +168,10 @@ public enum BridgeMessage: Equatable, Sendable {
       guard let id = Self.requestID(object["id"]), let requestId = object["requestId"] as? String,
             UUID(uuidString: requestId) != nil else { return nil }
       self = .launcherReject(id: id, requestId: requestId)
+    case "account-prepare":
+      guard let id = Self.requestID(object["id"]), let account = LaunchAccount(bridge: object["account"]),
+            (try? account.validate()) != nil else { return nil }
+      self = .accountPrepare(id: id, account: account)
     default:
       return nil
     }
@@ -334,14 +342,9 @@ public struct TerminalSessionLaunch: Equatable, Sendable {
     let account: LaunchAccount?
     switch object["account"] {
     case nil, is NSNull: account = nil
-    case let fields as [String: Any]:
-      guard let id = fields["id"] as? String,
-            let driver = (fields["driver"] as? String).flatMap(LaunchAccount.Driver.init(rawValue:)),
-            let label = fields["label"] as? String,
-            let homePath = fields["homePath"] as? String,
-            let shadowPath = fields["shadowPath"] as? String else { return nil }
-      account = LaunchAccount(id: id, driver: driver, label: label, homePath: homePath, shadowPath: shadowPath)
-    default: return nil
+    case let fields:
+      guard let parsed = LaunchAccount(bridge: fields) else { return nil }
+      account = parsed
     }
     self.init(project: project, agent: agent, title: title, cwd: cwd, command: command, session: session, secrets: secrets,
               environment: environment, template: template, account: account)
@@ -382,6 +385,20 @@ public struct TerminalSessionLaunch: Equatable, Sendable {
   }
 }
 
+extension LaunchAccount {
+  /// An account as the page sends it: an object whose five fields are strings,
+  /// with a known driver. Nil for anything else; the values are not checked here.
+  init?(bridge value: Any?) {
+    guard let fields = value as? [String: Any],
+          let id = fields["id"] as? String,
+          let driver = (fields["driver"] as? String).flatMap(Driver.init(rawValue:)),
+          let label = fields["label"] as? String,
+          let homePath = fields["homePath"] as? String,
+          let shadowPath = fields["shadowPath"] as? String else { return nil }
+    self.init(id: id, driver: driver, label: label, homePath: homePath, shadowPath: shadowPath)
+  }
+}
+
 /// Native → web terminal events, delivered like BridgeCommand by evaluating
 /// `javaScript`, as a "hivemind:terminal" CustomEvent whose detail is
 /// {type, …}. Binary data is base64.
@@ -403,6 +420,8 @@ public enum BridgeTerminalEvent: Equatable, Sendable {
   /// A template's secret names, answering a template-secrets-* message.
   case templateSecrets(id: String?, template: TemplateID, names: [String])
   case launcherDecided(id: String?, requestId: String, action: String)
+  /// The answer to account-prepare: `ok`, `loggedIn`, and `error` when not ok.
+  case accountPrepared(id: String?, AccountPreparation)
   case error(id: String?, code: BrokerErrorCode, message: String, stream: BrokerStreamID?)
 
   public enum TmuxStatus: String, Sendable, Equatable {
@@ -433,6 +452,7 @@ public enum BridgeTerminalEvent: Equatable, Sendable {
     case .killed, .killedMany: "terminal-killed"
     case .templateSecrets: "template-secrets"
     case .launcherDecided: "launcher-decided"
+    case .accountPrepared: "account-prepared"
     case .error: "terminal-error"
     }
   }
@@ -450,6 +470,7 @@ public enum BridgeTerminalEvent: Equatable, Sendable {
     case .killed(let session): self = .killed(id: id, session: session)
     case .secrets(let template, let names): self = .templateSecrets(id: id, template: template, names: names)
     case .launcherDecided(let requestId, let action): self = .launcherDecided(id: id, requestId: requestId, action: action)
+    case .accountPrepared(let preparation): self = .accountPrepared(id: id, preparation)
     case .error(let code, let message, let stream): self = .error(id: id, code: code, message: message, stream: stream)
     }
   }
@@ -497,6 +518,11 @@ public enum BridgeTerminalEvent: Equatable, Sendable {
       put("id", id)
       detail["requestId"] = requestId
       detail["action"] = action
+    case .accountPrepared(let id, let preparation):
+      put("id", id)
+      detail["ok"] = preparation.ok
+      detail["loggedIn"] = preparation.loggedIn
+      if let error = preparation.error { detail["error"] = error }
     case .error(let id, let code, let message, let stream):
       put("id", id)
       detail["code"] = code.rawValue

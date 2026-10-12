@@ -8,7 +8,7 @@ import { launchBlockText, type LaunchContext } from "../src/shared/launch-prompt
 import { ACCOUNT_LIMITS, type LaunchAccount } from "../src/shared/accounts.ts";
 import type { DesktopNotifications } from "./desktop-notifications.ts";
 import {
-  appLinks, badgeSync, inNativeApp, nativeBridge, notifyNative, postNative, reportedNativePlatform, resetNativePlatform, runNativeCommand,
+  appLinks, badgeSync, inNativeApp, nativeBridge, notifyNative, parseTerminalEvent, postNative, reportedNativePlatform, resetNativePlatform, runNativeCommand,
   startHivemindServer, terminalLaunchItems, terminalSessionLaunchProblem, useNativeBridge,
   BROKER_UNAVAILABLE_HINT, NATIVE_EVENT, REMOTE_BROKER_UNAVAILABLE_HINT, REMOTE_TMUX_INSTALL_HINT, SERVER_UNVERIFIED_HINT, TERMINAL_EVENT,
   OPENCODE_API_KEY_PROBLEM, TMUX_INSTALL_HINT, type NativeCommandHandlers, type NativeMessage,
@@ -24,7 +24,7 @@ const { useDesktopNotifications } = await import("./desktop-notifications.ts");
 const { SettingsMenu } = await import("./SettingsMenu.tsx");
 const { LaunchSheet } = await import("./LaunchSheet.tsx");
 const { api } = await import("./api.ts");
-const { resetTerminalHub } = await import("./use-terminal.ts");
+const { createTerminalHub, resetTerminalHub } = await import("./use-terminal.ts");
 after(() => window.happyDOM.close());
 
 type Win = typeof window & { webkit?: unknown; Notification?: unknown };
@@ -806,4 +806,53 @@ test("a launch's account is checked as the app checks it and goes beside the com
   assert.ok(!("account" in plain!));
   assert.deepEqual(withAccount, { ...launch, account });
   assert.deepEqual(JSON.parse(JSON.stringify(withAccount)).account, account);
+});
+
+test("Prepare sends the account as the app checks it, and the answer says ok exactly when it carries no error", async () => {
+  installBridge();
+  const hub = createTerminalHub(window as never, { request: 40 });
+  unmounts.push(() => hub.dispose());
+  const account: LaunchAccount = { id: "a1", driver: "codex", label: "Codex work", homePath: "", shadowPath: "~/.codex_work" };
+  const prepares = () => posted.filter((m): m is Extract<NativeMessage, { type: "account-prepare" }> => m.type === "account-prepare");
+
+  // Only the five fields go, paths as stored: the app expands their "~/".
+  const ready = hub.prepareAccount({ ...account, command: "codex", order: 0 } as LaunchAccount);
+  const [first] = prepares();
+  assert.deepEqual(first, { type: "account-prepare", id: first!.id, account });
+  await fromApp({ type: "account-prepared", id: first!.id, ok: true, loggedIn: false });
+  assert.deepEqual(await ready, { ok: true, loggedIn: false });
+
+  const conflict = hub.prepareAccount(account);
+  const error = "`/Users/me/.codex_work/sessions` is a real file; HiveMind shares it from `/Users/me/.codex`. Move it away, then launch again.";
+  await fromApp({ type: "account-prepared", id: prepares()[1]!.id, ok: false, loggedIn: true, error });
+  assert.deepEqual(await conflict, { ok: false, loggedIn: true, error });
+
+  // An app that predates Prepare answers unknown-type; nothing answers when the app is gone.
+  const old = assert.rejects(hub.prepareAccount(account), { name: "TerminalRequestError", code: "unknown-type" });
+  await fromApp({ type: "terminal-error", id: prepares()[2]!.id, code: "unknown-type", message: "unknown message type \"account.prepare\"", stream: null });
+  await old;
+  await assert.rejects(hub.prepareAccount(account), { code: "no-answer" });
+
+  // Refused before it is posted, as the app would drop it.
+  await assert.rejects(hub.prepareAccount({ ...account, shadowPath: "~/.codex" }),
+    { code: "bad-message", message: "The account Codex work: a shadow is its own directory, not the shared tree" });
+  await assert.rejects(hub.prepareAccount({ ...account, driver: "opencode" } as unknown as LaunchAccount), { code: "bad-message" });
+  assert.equal(prepares().length, 4);
+
+  assert.deepEqual(parseTerminalEvent({ type: "account-prepared", id: null, ok: true, loggedIn: true, error: null }),
+    { type: "account-prepared", id: null, ok: true, loggedIn: true });
+  for (const detail of [
+    { type: "account-prepared", id: "p1", ok: true, loggedIn: false, error: "x" },
+    { type: "account-prepared", id: "p1", ok: false, loggedIn: false },
+    { type: "account-prepared", id: "p1", ok: false, loggedIn: false, error: 7 },
+    { type: "account-prepared", id: "p1", ok: "yes", loggedIn: false },
+    { type: "account-prepared", id: "p1", ok: true },
+  ]) assert.equal(parseTerminalEvent(detail), null, JSON.stringify(detail));
+});
+
+test("in a browser Prepare is never posted", async () => {
+  const hub = createTerminalHub(window as never, { request: 40 });
+  unmounts.push(() => hub.dispose());
+  await assert.rejects(hub.prepareAccount({ id: "a1", driver: "codex", label: "Codex", homePath: "", shadowPath: "" }), { code: "not-sent" });
+  assert.deepEqual(posted, []);
 });

@@ -134,6 +134,11 @@ final class FakeShadowHomes: ShadowHomePreparing {
     prepared.append((account, home))
     if let failure { throw BrokerProtocolError(.internal, failure) }
   }
+
+  func prepareForLogin(_ account: LaunchAccount, home: String) -> AccountPreparation {
+    prepared.append((account, home))
+    return AccountPreparation(loggedIn: false, error: failure)
+  }
 }
 
 struct SpawnFailure: Error, LocalizedError {

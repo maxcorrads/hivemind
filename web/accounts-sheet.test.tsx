@@ -9,6 +9,8 @@ import { Hive } from "../src/server/hive.ts";
 import { createApp } from "../src/server/app.ts";
 import type { AccountSpec } from "../src/shared/accounts.ts";
 import { AccountsSheet } from "./AccountsSheet.tsx";
+import { TERMINAL_EVENT, type NativeMessage } from "./native-bridge.ts";
+import { resetTerminalHub } from "./use-terminal.ts";
 
 const window = new Window({ url: "http://localhost/" });
 Object.assign(globalThis, { window, document: window.document, HTMLElement: window.HTMLElement, IS_REACT_ACT_ENVIRONMENT: true });
@@ -186,4 +188,71 @@ test("an accounts event refreshes the open list", async t => {
   await f.render(1);
   assert.equal(f.reads(), 2);
   assert.match(f.section("Codex").textContent!, /Codex work[\s\S]*Codex home/);
+});
+
+test("in a browser the sheet says Prepare needs the Mac app and offers no Prepare", async t => {
+  const f = await fixture(t);
+  f.hive.accounts.create(f.human, spec({ shadowPath: "~/.codex_work" }));
+  await f.render();
+  assert.match(f.host.textContent!, /Prepare needs the Mac app/);
+  assert.equal(Array.from(f.host.querySelectorAll("button")).find(b => b.textContent?.includes("Prepare")), undefined);
+});
+
+test("in the app Prepare asks Hivemind Server for the row's account, shows its status, and the login command once it worked", async t => {
+  const posted: NativeMessage[] = [];
+  const bridged = window as unknown as { webkit?: unknown };
+  bridged.webkit = { messageHandlers: { hivemind: { postMessage: (message: NativeMessage) => { posted.push(structuredClone(message)); } } } };
+  t.after(() => { resetTerminalHub(); delete bridged.webkit; });
+  const copied: string[] = [];
+  Object.defineProperty(globalThis.navigator, "clipboard", { configurable: true, value: { writeText: async (text: string) => { copied.push(text); } } });
+  const f = await fixture(t);
+  const work = f.hive.accounts.create(f.human, spec({ shadowPath: "~/.codex_work" }));
+  const primary = f.hive.accounts.create(f.human, spec({ label: "Codex", homePath: "~/.codex-main" }));
+  await f.render();
+  assert.doesNotMatch(f.host.textContent!, /Prepare needs the Mac app/);
+  const row = (label: string) => Array.from(f.host.querySelectorAll<HTMLElement>(".accounts-list li"))
+    .find(li => li.querySelector("strong")?.textContent === label)!;
+  const status = (label: string) => row(label).querySelector('[role="status"]')?.textContent ?? null;
+  const prepares = () => posted.filter((m): m is Extract<NativeMessage, { type: "account-prepare" }> => m.type === "account-prepare");
+  const answer = (detail: object) => act(async () => {
+    window.dispatchEvent(new window.CustomEvent(TERMINAL_EVENT, { detail }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+  });
+  const login = "mkdir -p ~/.codex_work && CODEX_HOME=~/.codex_work CODEX_SQLITE_HOME=~/.codex codex -c cli_auth_credentials_store=file login";
+
+  await f.click("Prepare Codex work");
+  const [first] = prepares();
+  assert.deepEqual(first, { type: "account-prepare", id: first!.id,
+    account: { id: work.id, driver: "codex", label: "Codex work", homePath: "", shadowPath: "~/.codex_work" } });
+  assert.equal(status("Codex work"), "Preparing…");
+  assert.equal(row("Codex work").querySelector<HTMLButtonElement>('[aria-label="Prepare Codex work"]')!.disabled, true);
+  assert.equal(row("Codex work").querySelector(".launch-pre"), null, "no command before the shadow is ready");
+  await answer({ type: "account-prepared", id: first!.id, ok: true, loggedIn: false });
+  assert.equal(status("Codex work"), "Not logged in");
+  assert.equal(row("Codex work").querySelector(".launch-pre")!.textContent, login);
+  await f.click("Copy", row("Codex work"));
+  assert.deepEqual(copied, [login]);
+
+  await f.click("Prepare Codex work");
+  await answer({ type: "account-prepared", id: prepares()[1]!.id, ok: true, loggedIn: true });
+  assert.equal(status("Codex work"), "Ready");
+
+  // What went wrong shows as the row's status, with its fix, and no command; a refused request too.
+  const error = "`/Users/me/.codex-main` must be an existing folder, not a symlink.";
+  await f.click("Prepare Codex");
+  assert.deepEqual(prepares()[2]!.account, { id: primary.id, driver: "codex", label: "Codex", homePath: "~/.codex-main", shadowPath: "" });
+  await answer({ type: "account-prepared", id: prepares()[2]!.id, ok: false, loggedIn: false, error });
+  assert.equal(status("Codex"), error);
+  assert.equal(row("Codex").querySelector(".launch-pre"), null);
+  assert.equal(status("Codex work"), "Ready", "each row keeps its own status");
+  await f.click("Prepare Codex");
+  await answer({ type: "terminal-error", id: prepares()[3]!.id, code: "unknown-type", message: "unknown message type \"account.prepare\"", stream: null });
+  assert.equal(status("Codex"), "unknown message type \"account.prepare\"");
+
+  // A status is about the paths it ran with: a new shadow path hides it.
+  await f.click("Edit Codex work");
+  await f.type("Shadow path", "~/.codex_other");
+  await f.submit();
+  assert.equal(status("Codex work"), null);
+  assert.deepEqual(f.changes.map(change => change[0]), ["PUT"], "Prepare never goes to the server");
 });
