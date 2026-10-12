@@ -210,6 +210,8 @@ final class BrokerHarness {
   var home = "/Users/me"
   /// Builds shadow directories (NoShadowHomes unless a test says otherwise); set before the broker is first used.
   var shadowHomes: any ShadowHomePreparing = NoShadowHomes()
+  /// The start time of a process (none unless a test says otherwise, so no Claude session is live); set before the broker is first used.
+  var processStart: (Int32) -> String? = { _ in nil }
   nonisolated static let environment = ["PATH": "/usr/bin:/bin", "HOME": "/Users/me", "TMUX": "/private/tmp/tmux-501/default,1,0", "LANG": "it_IT.UTF-8"]
 
   lazy var broker: TerminalBroker = {
@@ -222,7 +224,7 @@ final class BrokerHarness {
         environment: Self.environment,
         secrets: secretStore,
         templateSecrets: templateSecrets,
-        home: home, shadowHomes: shadowHomes,
+        home: home, shadowHomes: shadowHomes, processStart: processStart,
         log: { [unowned self] in self.logs.append($0) }))
     broker.onChange = { [unowned self] in self.changes += 1 }
     return broker

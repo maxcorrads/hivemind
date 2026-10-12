@@ -155,7 +155,7 @@ public struct FileShadowHomes: ShadowHomePreparing {
 }
 
 /// `path` with a leading `~/` replaced by `home`, compared by scalar as LaunchAccount does.
-private func expandingHome(_ path: String, home: String) -> String {
+func expandingHome(_ path: String, home: String) -> String {
   guard path.unicodeScalars.starts(with: "~/".unicodeScalars) else { return path }
   return (home.hasSuffix("/") ? String(home.dropLast()) : home) + String(path.unicodeScalars.dropFirst())
 }

@@ -34,6 +34,9 @@ public final class TerminalBroker {
     /// Builds an account's own directory before a session runs under it;
     /// NoShadowHomes by default; Server.app gives FileShadowHomes (docs/accounts.md).
     public var shadowHomes: any ShadowHomePreparing
+    /// A process's start time as `TZ=UTC LC_ALL=C ps -o lstart=` prints it, which tells a live Claude session from a
+    /// reused pid (ClaudeLiveSessions.systemProcessStart unless a test says otherwise).
+    public var processStart: (Int32) -> String?
     /// Never given a secret or a variable's value: the broker logs names,
     /// counts and paths only.
     public var log: (String) -> Void
@@ -43,7 +46,8 @@ public final class TerminalBroker {
       locateTmux: @escaping () -> String?, isDirectory: @escaping (String) -> Bool,
       environment: [String: String], idlePollInterval: TimeInterval = 15, secrets: LaunchSecretStore? = nil,
       templateSecrets: (any TemplateSecretVault)? = nil, home: String = FileManager.default.homeDirectoryForCurrentUser.path,
-      shadowHomes: any ShadowHomePreparing = NoShadowHomes(), log: @escaping (String) -> Void = { _ in }
+      shadowHomes: any ShadowHomePreparing = NoShadowHomes(),
+      processStart: @escaping (Int32) -> String? = ClaudeLiveSessions.systemProcessStart, log: @escaping (String) -> Void = { _ in }
     ) {
       self.tmux = tmux
       self.terminals = terminals
@@ -56,6 +60,7 @@ public final class TerminalBroker {
       self.templateSecrets = templateSecrets
       self.home = home
       self.shadowHomes = shadowHomes
+      self.processStart = processStart
       self.log = log
     }
   }
@@ -86,6 +91,12 @@ public final class TerminalBroker {
   private var nextTaskID = 0
   /// The launch running now, which the next one waits for (`launching`).
   private var lastLaunch: Task<Void, Never>?
+  /// Every Claude account a launch or a Prepare named since the broker started, newest last, one per directory. The
+  /// broker never reads the catalog, so these are the shadows whose live sessions it can see (ClaudeLiveSessions); after
+  /// a restart an account counts again from its next launch or Prepare.
+  private(set) var claudeAccounts: [LaunchAccount] = []
+  /// More than the catalog holds (8 per driver), so an edited path keeps its old directory for a while.
+  static let maxClaudeAccounts = 32
 
   public init(token: BrokerToken, configPath: String, dependencies: Dependencies) {
     self.token = token
@@ -191,6 +202,15 @@ public final class TerminalBroker {
     lastLaunch = task
     await task.value
     if lastLaunch == task { lastLaunch = nil }
+  }
+
+  /// Remembers a Claude account's directory for the live-session check; any other account is ignored.
+  func noteClaudeAccount(_ account: LaunchAccount) {
+    guard account.driver == .claude else { return }
+    let directory = ClaudeLiveSessions.directory(of: account, home: deps.home)
+    claudeAccounts.removeAll { ClaudeLiveSessions.directory(of: $0, home: deps.home) == directory }
+    claudeAccounts.append(account)
+    if claudeAccounts.count > Self.maxClaudeAccounts { claudeAccounts.removeFirst(claudeAccounts.count - Self.maxClaudeAccounts) }
   }
 
   /// Deletes launch secret files no session read within LaunchSecretStore.maxAge.
@@ -512,6 +532,7 @@ public final class BrokerConnection {
   /// whether it is logged in, or names what is wrong and its fix.
   private func prepareAccount(_ account: LaunchAccount, id: String?) {
     guard let broker else { return }
+    broker.noteClaudeAccount(account)
     let preparation = broker.deps.shadowHomes.prepareForLogin(account, home: broker.deps.home)
     let outcome = preparation.error ?? (preparation.loggedIn ? "ready" : "not logged in")
     broker.deps.log("[broker] account \(account.id) (\(account.driver.rawValue)): prepare: \(outcome)")
@@ -645,6 +666,24 @@ public final class BrokerConnection {
           if try lock.isOpen(thread) {
             results.append(nil)
             let message = "Codex thread `\(thread)` is already open in another process. Close it there, or start a new session."
+            errors.append(BrokerLaunchFailure(index: index, code: .internal, message: "launches[\(index)].command: \(message)"))
+            continue
+          }
+        } catch {
+          results.append(nil)
+          errors.append(BrokerLaunchFailure(index: index, code: .internal, message: "launches[\(index)].command: \(error.localizedDescription)"))
+          continue
+        }
+      }
+      // Nor is a Claude transcript (docs/accounts.md, "Live sessions"). Claude keeps its live sessions per config
+      // directory, so every directory of the launch's shared tree the broker knows is read, this launch's own included.
+      if let account = launch.account { broker.noteClaudeAccount(account) }
+      if let resume = ClaudeLiveSessions.resumed(in: launch.command) {
+        do {
+          let directories = ClaudeLiveSessions.directories(for: launch.account, known: broker.claudeAccounts, home: broker.deps.home)
+          if let holder = try ClaudeLiveSessions(processStart: broker.deps.processStart).holder(of: resume, cwd: launch.cwd, in: directories) {
+            results.append(nil)
+            let message = "Claude session `\(holder.sessionID)` is already open in another process (account `\(holder.label)`)."
             errors.append(BrokerLaunchFailure(index: index, code: .internal, message: "launches[\(index)].command: \(message)"))
             continue
           }
