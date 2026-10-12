@@ -8,8 +8,9 @@ import { createApp } from "./app.ts";
 import { Hive } from "./hive.ts";
 import { LauncherVerifier, launcherSignature } from "./launcher-channel.ts";
 import { startServer } from "./serve.ts";
-import { findRow, readValue, setAgentPresence, updateRows } from "./test-fixtures.ts";
-import type { WorkerTemplateSpec } from "../shared/worker-templates.ts";
+import { deleteRows, findRow, readValue, setAgentPresence, updateRows } from "./test-fixtures.ts";
+import type { WorkerTemplate, WorkerTemplateSpec } from "../shared/worker-templates.ts";
+import { toLaunchAccount, type AccountUsage } from "../shared/accounts.ts";
 
 const SECRET = Buffer.alloc(32, 0x61);
 const spec = (cap = 2): WorkerTemplateSpec => ({ label: "Worker", description: "Task work", software: "codex2",
@@ -362,4 +363,91 @@ test("failed kill keeps project and command history until session closure is res
   f.hive.launcherQueue.result(retry.id, { status: "killed" });
   assert.equal(f.hive.launcherQueue.get(launched.id).error, null);
   f.hive.projects.deleteProject(f.human, f.project.slug);
+});
+
+/** A brain request for `template` that needs no approval, as the launcher channel sees it. */
+function queueLaunch(f: ReturnType<typeof fixture>, template: WorkerTemplate): string {
+  const { agent, ticket } = f.hive.identity.reserve(f.human, template, "task", false);
+  const requestId = randomUUID();
+  f.hive.launcherQueue.create({ requestId, brain: f.brain, template, agent, ticket, approval: false });
+  return requestId;
+}
+
+/** The next launch command, settled as launched so that the following call moves on to the next request. */
+function takeLaunch(f: ReturnType<typeof fixture>) {
+  const command = f.hive.launcherQueue.next("http://127.0.0.1:7520");
+  if (command?.kind !== "launch") throw new Error("Expected launch");
+  f.hive.launcherQueue.result(command.id, { status: "launched", session: command.session });
+  return command;
+}
+
+/** Phase 5 supplies usage; until then a test stands in for it through the account store's usage provider. */
+function supplyUsage(f: ReturnType<typeof fixture>, usage: Map<string, AccountUsage>) {
+  (f.hive.accounts as unknown as { usage: () => ReadonlyMap<string, AccountUsage> }).usage = () => usage;
+}
+
+const limited = (accountId: string, limitResetAt: number): AccountUsage => ({ accountId, snapshot: null, lastAttemptAt: null,
+  lastError: null, limitResetAt, limitErrorAt: null });
+
+/** A fresh snapshot whose only window is used up and gives no reset time. */
+const full = (accountId: string): AccountUsage => ({ accountId, snapshot: { accountId, capturedAt: Date.now(), source: "codex",
+  plan: "subscription", windows: [{ key: "five_hour", label: "5 h", usedPercent: 100, resetsAt: null }], error: null,
+  limitErrorAt: null }, lastAttemptAt: null, lastError: null, limitResetAt: null, limitErrorAt: null });
+
+test("a Codex template launch runs under the policy's account or its pin, and carries it on the command", async t => {
+  const f = fixture(t);
+  const worker = f.hive.workerTemplates.create(f.human, f.project.id, { slug: "codex-worker", spec: { ...spec(8), software: "codex" } });
+  queueLaunch(f, worker);
+  assert.equal("account" in takeLaunch(f), false, "no accounts, no field");
+
+  const work = f.hive.accounts.create(f.human, { driver: "codex", label: "Codex work", homePath: "~/.codex-work", shadowPath: "" });
+  const personal = f.hive.accounts.create(f.human, { driver: "codex", label: "Codex personal", homePath: "", shadowPath: "~/.codex-personal" });
+  queueLaunch(f, worker);
+  assert.deepEqual(takeLaunch(f).account, toLaunchAccount(work), "sequential takes the first account");
+  assert.notEqual(f.hive.accounts.get(work.id).lastSelectedAt, null, "the pick is recorded");
+
+  const pinned = f.hive.workerTemplates.create(f.human, f.project.id,
+    { slug: "codex-pinned", spec: { ...spec(8), software: "codex", accountId: personal.id } });
+  queueLaunch(f, pinned);
+  assert.deepEqual(takeLaunch(f).account, toLaunchAccount(personal), "the pin wins over the policy");
+});
+
+test("an exhausted pool keeps the launch queued until a reset passes, with the first reset in the message", async t => {
+  const f = fixture(t);
+  const soon = Date.now() + 3_600_000;
+  const work = f.hive.accounts.create(f.human, { driver: "codex", label: "Codex work", homePath: "~/.codex-work", shadowPath: "" });
+  const personal = f.hive.accounts.create(f.human, { driver: "codex", label: "Codex personal", homePath: "", shadowPath: "~/.codex-personal" });
+  const usage = new Map([[work.id, limited(work.id, soon)], [personal.id, limited(personal.id, soon + 3_600_000)]]);
+  supplyUsage(f, usage);
+  const worker = f.hive.workerTemplates.create(f.human, f.project.id, { slug: "codex-worker", spec: { ...spec(8), software: "codex" } });
+  const waiting = queueLaunch(f, worker);
+  assert.throws(() => takeLaunch(f), { message: `Every Codex account is used up until ${new Date(soon).toLocaleString()}` });
+  assert.equal(f.hive.launcherQueue.get(waiting).state, "approved", "the request stays queued");
+  usage.set(work.id, full(work.id)).set(personal.id, full(personal.id));
+  assert.throws(() => takeLaunch(f), { message: "Every Codex account is used up" }, "no known reset, no time");
+
+  usage.set(work.id, limited(work.id, Date.now() - 1));
+  const launch = takeLaunch(f);
+  assert.equal(launch.requestId, waiting);
+  assert.deepEqual(launch.account, toLaunchAccount(work));
+});
+
+test("a launch variable the chosen account manages fails the queued launch and names the variable", async t => {
+  const f = fixture(t);
+  // Created before any account exists, which the template store allows; the policy then picks an account for it.
+  const worker = f.hive.workerTemplates.create(f.human, f.project.id,
+    { slug: "codex-worker", spec: { ...spec(8), software: "codex", environment: { CODEX_HOME: "/elsewhere" } } });
+  f.hive.accounts.create(f.human, { driver: "codex", label: "Codex work", homePath: "~/.codex-work", shadowPath: "" });
+  queueLaunch(f, worker);
+  assert.throws(() => takeLaunch(f), { message: "CODEX_HOME is managed by the account Codex work; remove it." });
+});
+
+test("a pin to an account that was removed fails the queued launch", async t => {
+  const f = fixture(t);
+  const work = f.hive.accounts.create(f.human, { driver: "codex", label: "Codex work", homePath: "~/.codex-work", shadowPath: "" });
+  const pinned = f.hive.workerTemplates.create(f.human, f.project.id,
+    { slug: "codex-pinned", spec: { ...spec(8), software: "codex", accountId: work.id } });
+  deleteRows(f.hive, "agent_accounts", { id: work.id });
+  queueLaunch(f, pinned);
+  assert.throws(() => takeLaunch(f), { message: "The pinned account no longer exists" });
 });

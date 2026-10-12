@@ -423,6 +423,11 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     const body = await requestJson(c.req.raw);
     return c.json(hive.accounts.setPolicy(hive.identity.getAgent('human'), body.driver, body.policy));
   });
+  ui.post('/accounts/resolve', async c => {
+    const body = await requestJson(c.req.raw);
+    return c.json({ selection: hive.accounts.resolve(hive.identity.getAgent('human'),
+      { driver: body.driver, accountId: body.accountId, record: body.record }, Date.now()) });
+  });
   ui.put('/accounts/:id', async c => c.json(hive.accounts.update(hive.identity.getAgent('human'), c.req.param('id'), await requestJson(c.req.raw))));
   ui.delete('/accounts/:id', c => {
     hive.accounts.delete(hive.identity.getAgent('human'), c.req.param('id'), integerArgument(c.req.query('revision') ?? '', 1));

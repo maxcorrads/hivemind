@@ -3,7 +3,8 @@ import { HiveError, type Agent, type Project } from "../shared/types.ts";
 import { buildLaunchCommand, projectLaunchTools } from "../shared/launch-prompt.ts";
 import { terminalSessionName } from "../shared/terminal-session.ts";
 import type { WorkerTemplate } from "../shared/worker-templates.ts";
-import type { LaunchAccount } from "../shared/accounts.ts";
+import { accountDriverForSoftware, accountEnvironmentConflict, toLaunchAccount, type LaunchAccount } from "../shared/accounts.ts";
+import type { AccountStore } from "./accounts.ts";
 import { launchContext } from "./bot-definitions.ts";
 import type { Core } from "./services/ports.ts";
 import { LauncherQueueCipher } from "./launcher-queue-crypto.ts";
@@ -33,6 +34,7 @@ export type LauncherQueueDeps = Core & { readonly home: string;
     retargetReservation(actor: Agent, agentId: string, template: WorkerTemplate): Agent };
   readonly projects: { getProject(id: string): Project };
   readonly workerTemplates: { get(id: string): WorkerTemplate };
+  readonly accounts: Pick<AccountStore, "resolve">;
   readonly lifecycle: { expireReservation(agentId: string): void };
   readonly tasks: { get(actor: Agent, taskId: string): { workerId: string; jobId?: string | null };
     launchOutcome(taskId: string, requestId: string, workerId: string, state: "launched" | "failed" | "rejected" | "expired"): void;
@@ -349,6 +351,27 @@ export class LauncherQueue {
     this.db.prepare("DELETE FROM launch_requests WHERE project_id = ?").run(projectId);
   }
 
+  /**
+   * The account a template launch runs under, or undefined when Software has no driver or the driver has no accounts.
+   * Exhausted or a missing pin, or a variable the account manages, fails like a missing worktree: the command stays
+   * queued, so the next poll tries again.
+   */
+  private launchAccount(template: WorkerTemplate): LaunchAccount | undefined {
+    const driver = accountDriverForSoftware(template.spec.software);
+    if (!driver) return undefined;
+    const name = driver === "codex" ? "Codex" : "Claude";
+    const selection = this.deps.accounts.resolve(this.deps.identity.getAgent("human"),
+      { driver, accountId: template.spec.accountId ?? null, record: true }, Date.now());
+    if (selection.kind === "none") return undefined;
+    if (selection.kind === "exhausted") throw new HiveError(409, selection.earliestReset === null
+      ? `Every ${name} account is used up` : `Every ${name} account is used up until ${new Date(selection.earliestReset).toLocaleString()}`);
+    if (selection.kind === "unknown-pin") throw new HiveError(409, "The pinned account no longer exists");
+    const account = toLaunchAccount(selection.account);
+    const conflict = accountEnvironmentConflict(template.spec.environment, template.spec.secretNames, account);
+    if (conflict) throw new HiveError(409, conflict);
+    return account;
+  }
+
   /** Stable command ID and payload across polls/restarts. Native deduplicates by this ID and session. */
   next(serverUrl: string): LauncherCommand | null {
     return this.deps.storage.transaction(() => {
@@ -399,11 +422,13 @@ export class LauncherQueue {
           adoptUntrusted: true, claim: ticket, claimName: agent.name,
           resume: resuming, resumeName: resuming ? agent.name : undefined });
         if (!built.cwd) throw new HiveError(409, "Project needs a worktree before a worker can launch");
+        const account = this.launchAccount(template);
         const session = workerSession(project.slug, agent.name);
         payload = { id: command.id, kind: "launch", requestId: row.id, templateId: template.id,
           project: project.slug, agent: agent.name, title: template.spec.label,
           session, command: built.command, cwd: built.cwd,
-          ...(Object.keys(template.spec.environment).length ? { environment: template.spec.environment } : {}) };
+          ...(Object.keys(template.spec.environment).length ? { environment: template.spec.environment } : {}),
+          ...(account ? { account } : {}) };
         this.db.prepare("UPDATE launch_requests SET state = 'launching', session = ? WHERE id = ?").run(session, row.id);
         this.changed(row.id);
       }
