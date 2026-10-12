@@ -37,6 +37,7 @@ final class ServerAppDelegate: NSObject, NSApplicationDelegate {
     model.terminals.start()
     model.approvalNotifier.install()
     model.launcher.serverChanged()
+    model.usage.serverChanged()
     model.remote.startIfEnabled()
     #if DEBUG
     DebugPairingHook.install(model.remote)
@@ -62,6 +63,7 @@ final class ServerAppDelegate: NSObject, NSApplicationDelegate {
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
     model.remote.stop()
     model.launcher.stop()
+    model.usage.stop()
     model.terminals.stop()
     let controller = model.controller
     guard controller.hasChild else {

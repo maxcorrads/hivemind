@@ -226,6 +226,24 @@ struct ClaudeLiveSessionsBrokerTests {
     #expect(h.tmux.calls("new-session").count == 1)
   }
 
+  @Test func aShadowTheCatalogNamesIsSeenWithoutALaunchOrAPrepare() async throws {
+    let (h, root) = try harness()
+    defer { try? FileManager.default.removeItem(at: root) }
+    try writeRecord(in: root.path + "/.claude-personal")
+    await h.start()
+    let (transport, connection) = await h.client()
+    let resume = try BrokerLaunch(project: "acme", agent: "Atlas", title: "Acme - Atlas", cwd: "/Users/me/acme",
+                                  command: "claude --resume \(session)", account: primary)
+    await h.send(connection, .launch([resume]))
+    let atlas = SessionName("hm-acme-atlas")!
+    #expect(transport.events().first == .launched(names: [atlas], created: [atlas], errors: []), "after a restart the shadow is unknown")
+    // What the usage probe passes at start and on each refresh: the catalog's accounts, a Codex one among them.
+    h.broker.learnClaudeAccounts([LaunchAccount(id: "a3", driver: .codex, label: "Codex", homePath: "", shadowPath: "~/.codex-p"), personal])
+    await h.send(connection, .launch([try BrokerLaunch(project: "acme", agent: "Atlas 2", title: "Acme - Atlas 2", cwd: "/Users/me/acme",
+                                                       command: "claude --resume \(session)", account: primary)]))
+    #expect(transport.events().last == .launched(names: [nil], created: [], errors: [refusal("Claude personal")]))
+  }
+
   @Test func withoutAnAccountAResumeOfALiveSessionRunsAsBefore() async throws {
     let (h, root) = try harness()
     defer { try? FileManager.default.removeItem(at: root) }

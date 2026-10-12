@@ -451,8 +451,9 @@ refused when a live session has the launch's folder, compared by real path. New 
 Claude keeps live sessions in `sessions/<pid>.json` in each config folder, and sees only its own. Hivemind reads only the
 `pid`, `sessionId`, `procStart`, `pidDomain` and `cwd` of each `sessions/[0-9]*.json`, in the shared tree and in each shadow
 it knows, and never opens `sessions/*.key`. A record is live when `pidDomain` is `darwin`, `kill(pid, 0)` succeeds, and the
-process start time equals `procStart`. The broker never reads the catalog: it learns a shadow when an account of it
-launches or is prepared, so after Hivemind Server.app restarts a shadow counts again from its next launch or Prepare.
+process start time equals `procStart`. The broker never reads the catalog itself: it learns a shadow when an account of it
+launches or is prepared, and from the [usage probe](#usage-probe), which passes it the catalog's Claude accounts at start
+and every 5 minutes. After Hivemind Server.app restarts, a shadow counts again from the probe's first round.
 
 ### Parallel accounts
 
@@ -544,6 +545,41 @@ nothing anywhere else.
 `statusLine` (`.claude/settings.json`, `.claude/settings.local.json`) is not shown in these sessions. `disableAllHooks`,
 `allowManagedHooksOnly`, a managed `statusLine` or an untrusted workspace turn the tap off. A session that Hivemind did not
 launch with an account records nothing. A `rate_limit` stop is a suspected limit, not a proof: the windows decide.
+
+### Usage probe
+
+While its server runs, Hivemind Server.app reads every account's quota windows: once at start, then 5 minutes after each
+round (`UsageProbeService`). A round fetches the catalog from `GET /api/launcher/accounts`, reads the accounts one at a
+time in catalog order, then posts every snapshot in one `POST /api/launcher/usage`. Both requests are signed like the rest
+of the launcher channel, and a server that does not prove its secret is asked nothing. The round also gives the broker the
+catalog's Claude accounts, so the [open-transcript check](#one-writer-per-transcript) sees a shadow after a restart.
+
+**Codex.** A shadow is first prepared as before a launch (its links, no new folder, a login required). When that fails
+the snapshot says "Shadow not ready: use Prepare in the Accounts sheet" and nothing runs. Then `codex app-server` runs in
+the login shell the sessions run (`/bin/zsh -lic`, in the home folder), so it is the `codex` a session finds. After the
+startup files the shell sets only the account's [variables](#variables), unsets the other controlled names and execs
+`'codex' app-server`. The probe writes the requests of [Findings: Codex](#findings-codex) and keeps stdin open until
+the replies to requests 2 and 3 arrive, in either order, or 20 s pass. Then it closes stdin, and ends codex if it has not
+exited 2 s later. stderr is discarded, and stdout goes only to the parser. The errors are "Not logged in" and "Usage read
+failed"; an API-key login is plan `api-key` with no windows.
+
+**Claude.** Two files, neither of them a login:
+
+- the tap's `<id>/statusline.json`, as of its modification time;
+- `cachedUsageUtilization` in the account's `.claude.json`, as of its `fetchedAtMs`. The file is
+  `<shadowPath, else homePath>/.claude.json`, or `~/.claude.json` for a primary with neither. The cache counts only when
+  its `accountUuid` is the login's (`oauthAccount.accountUuid`) and it is under an hour old.
+
+The status line is used when it is newer than the account's last snapshot. Otherwise, and before the first snapshot, the
+newer of the two is used, as long as it is not older than that snapshot, so a round never goes back in time. The last
+snapshot is the last one the server took since Server.app started. When neither file has data, the snapshot says "No
+recent Claude usage data". That happens before a session's first API response, for an account with no Hivemind session
+and no recent cache, and for an API-key login. A good read's plan is `subscription`, since only a subscription has rate
+limits. The tap's `<id>/limit-error` sets `limitErrorAt`.
+
+**Snapshots.** A snapshot's time is when its windows were true, so an idle session's status line reads as old as it is,
+and is stale after `USAGE_STALE_MS`. An error snapshot carries one of the fixed messages above, never a command's output
+or a file's contents, and the server keeps the previous windows. A round that fails to post is read again in the next one.
 
 ## Findings: Claude
 

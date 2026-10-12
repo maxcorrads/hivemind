@@ -41,6 +41,25 @@ public enum CodexUsage {
   /// The limitId Codex itself files a bucket under when the bucket has none.
   static let defaultLimitId = "codex"
 
+  /// What a probe writes to `codex app-server`, one JSON object per line (docs/accounts.md, "Findings: Codex"):
+  /// `initialize`, `initialized`, then the two requests whose replies the parser reads.
+  public static let probeRequests = [
+    #"{"id":1,"method":"initialize","params":{"clientInfo":{"name":"hivemind_usage_probe","title":"HiveMind usage probe","version":"1"}}}"#,
+    #"{"method":"initialized"}"#,
+    #"{"id":2,"method":"account/read","params":{"refreshToken":false}}"#,
+    #"{"id":3,"method":"account/rateLimits/read","params":{"excludeResetCreditDetails":true}}"#,
+  ]
+
+  /// The replies a probe waits for before it closes stdin, in any order: spike 0.3's fixture answers `account/read` after
+  /// `account/rateLimits/read`, and on EOF codex drops a reply still pending.
+  public static let awaitedReplyIds: Set<Int> = [accountReplyId, rateLimitsReplyId]
+
+  /// The id of a reply line; nil for a notification, a request from the server or a line that is not JSON.
+  public static func replyId(_ line: String) -> Int? {
+    guard let header = try? JSONDecoder().decode(ReplyId.self, from: Data(line.utf8)), header.method == nil else { return nil }
+    return header.id
+  }
+
   /// The plan and windows of one probe, from its lines in any order; notifications and lines that are not JSON are ignored.
   /// The windows are the main bucket's primary and secondary, then each other bucket's in limitId order, at most 8 in all.
   /// `usedPercent` is used, not remaining, clamped to 0–100.

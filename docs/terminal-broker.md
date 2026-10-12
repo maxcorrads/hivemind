@@ -621,6 +621,12 @@ cannot be written is logged and the session starts without it. Server.app gives
 the broker `ClaudeStatusTap` (`TerminalBroker.Dependencies.claudeTap`); without
 one nothing changes. See [Claude status-line tap](accounts.md#claude-status-line-tap).
 
+**Known Claude accounts.** The open-transcript check reads every config folder
+of the launch's shared tree that the broker knows. It learns them from launches
+and `account.prepare`, and from Server.app's usage probe, which passes the
+catalog's Claude accounts at start and every 5 minutes
+(`TerminalBroker.learnClaudeAccounts`). See [Usage probe](accounts.md#usage-probe).
+
 **Reused sessions with an account.** A reused session is not checked against
 its account: nothing runs, nothing is written, and it keeps the account it
 started with.

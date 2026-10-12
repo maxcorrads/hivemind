@@ -14,14 +14,17 @@ final class ServerMenuModel: ObservableObject {
   let remote: RemoteAccessService
   let approvalNotifier = ServerApprovalNotifier()
   lazy var launcher = LauncherService(
-    server: { [weak self] in
-      guard let self, self.controller.state.pid != nil, case .running = self.controller.state,
-            let secret = self.controller.instanceSecret else { return nil }
-      return .init(endpoint: self.controller.endpoint, secret: secret)
-    },
+    server: { [weak self] in self?.launcherServer },
     broker: InProcessLauncherBroker(current: { [weak self] in self?.terminals.inProcessBroker }),
     journal: FileLauncherJournal(folder: controller.paths.appSupport.appendingPathComponent("launcher-journal")),
     notifier: approvalNotifier)
+  /// Every account's quota windows, read at start and every 5 minutes for the policy and the Accounts sheet
+  /// (docs/accounts.md, "Usage probe"). The catalog's Claude accounts also go to the broker's live-session check.
+  lazy var usage = UsageProbeService(
+    server: { [weak self] in self?.launcherServer },
+    codex: CodexAppServerProbe(),
+    tap: ClaudeStatusTap(folder: controller.paths.accounts),
+    onAccounts: { [weak self] in self?.terminals.inProcessBroker?.learnClaudeAccounts($0) })
   private let loginItem: any LoginItemControlling
   private let installer: CommandLineInstaller
 
@@ -53,6 +56,7 @@ final class ServerMenuModel: ObservableObject {
     controller.onStateChange = { [weak self] _ in
       self?.remote.serverChanged()
       self?.launcher.serverChanged()
+      self?.usage.serverChanged()
     }
     controller.onChange = { [weak self] in self?.objectWillChange.send() }
     terminals.onChange = { [weak self] in self?.objectWillChange.send() }
@@ -60,6 +64,12 @@ final class ServerMenuModel: ObservableObject {
   }
 
   private var paths: HivemindPaths { controller.paths }
+
+  /// The launcher channel's server: only the one this app runs, while it is up, with its secret.
+  private var launcherServer: LauncherService.Server? {
+    guard controller.state.pid != nil, case .running = controller.state, let secret = controller.instanceSecret else { return nil }
+    return .init(endpoint: controller.endpoint, secret: secret)
+  }
 
   var status: ServerAppStatus { controller.status }
   var terminalsStatus: BrokerStatus { terminals.status }

@@ -95,9 +95,10 @@ public final class TerminalBroker {
   private var nextTaskID = 0
   /// The launch running now, which the next one waits for (`launching`).
   private var lastLaunch: Task<Void, Never>?
-  /// Every Claude account a launch or a Prepare named since the broker started, newest last, one per directory. The
-  /// broker never reads the catalog, so these are the shadows whose live sessions it can see (ClaudeLiveSessions); after
-  /// a restart an account counts again from its next launch or Prepare.
+  /// Every Claude account a launch, a Prepare or the catalog (`learnClaudeAccounts`) named since the broker started,
+  /// newest last, one per directory. The broker never reads the catalog itself, so these are the shadows whose live
+  /// sessions it can see (ClaudeLiveSessions); after a restart an account counts again from the usage probe's first
+  /// read of the catalog, or its next launch or Prepare.
   private(set) var claudeAccounts: [LaunchAccount] = []
   /// More than the catalog holds (8 per driver), so an edited path keeps its old directory for a while.
   static let maxClaudeAccounts = 32
@@ -206,6 +207,12 @@ public final class TerminalBroker {
     lastLaunch = task
     await task.value
     if lastLaunch == task { lastLaunch = nil }
+  }
+
+  /// Remembers the catalog's Claude accounts for the live-session check, as a launch or a Prepare would: Hivemind
+  /// Server.app's usage probe passes them at start and on each refresh (UsageProbeService). Any other account is ignored.
+  public func learnClaudeAccounts(_ accounts: [LaunchAccount]) {
+    for account in accounts { noteClaudeAccount(account) }
   }
 
   /// Remembers a Claude account's directory for the live-session check; any other account is ignored.

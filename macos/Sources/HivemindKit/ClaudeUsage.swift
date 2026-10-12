@@ -40,13 +40,21 @@ public enum ClaudeUsage {
   /// equals the `oauthAccount.accountUuid` of the same file and it was fetched at most an hour before `now`. A null entry,
   /// a key that is not a quota window and an entry without a number are left out.
   public static func parseUsageCache(claudeJSON: Data, now: Date) -> [UsageWindow]? {
+    readUsageCache(claudeJSON: claudeJSON, now: now)?.windows
+  }
+
+  /// parseUsageCache, with the cache's `fetchedAtMs`: the time its windows were true, which the usage probe sends as the
+  /// snapshot's capture time so that the stale rule counts from it. Nil also for a `fetchedAtMs` before 1970 or past year
+  /// 33658.
+  public static func readUsageCache(claudeJSON: Data, now: Date) -> (fetchedAtMs: Int, windows: [UsageWindow])? {
     guard let root = try? JSONDecoder().decode(ClaudeJSON.self, from: claudeJSON), let cache = root.cachedUsageUtilization,
-          cache.accountUuid == root.oauthAccount?.accountUuid,
+          cache.accountUuid == root.oauthAccount?.accountUuid, (0...1e15).contains(cache.fetchedAtMs),
           now.timeIntervalSince1970 * 1000 - cache.fetchedAtMs <= maxCacheAgeMs else { return nil }
-    return cache.utilization.compactMap { key, entry -> UsageWindow? in
+    let windows = cache.utilization.compactMap { key, entry -> UsageWindow? in
       guard let label = windowLabel(key), let window = entry.value, let used = window.utilization else { return nil }
       return UsageWindow(key: key, label: label, usedPercent: clamped(used), resetsAt: window.resetsAt.flatMap(isoMilliseconds))
     }.sorted { $0.key < $1.key }
+    return (Int(cache.fetchedAtMs.rounded()), windows)
   }
 
   /// The label of a quota window key: "Session (5 h)", "Week", or "<Family> (week)" for `seven_day_<family>`. Nil for any
