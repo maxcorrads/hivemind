@@ -35,7 +35,7 @@ test("Human lists, adds, edits, reorders, sets the policy and removes accounts o
   const { call, events } = fixture(t);
   const empty = await call("GET", "/api/ui/accounts");
   assert.equal(empty.status, 200);
-  assert.deepEqual(empty.json, { accounts: [], policies: { codex: "sequential", claude: "sequential" } });
+  assert.deepEqual(empty.json, { accounts: [], policies: { codex: "sequential", claude: "sequential" }, usage: [] });
 
   const work = await call("POST", "/api/ui/accounts", spec());
   assert.equal(work.status, 201);
