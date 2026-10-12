@@ -26,7 +26,7 @@ test('agent_accounts keeps every row of a populated v40 hive and runs only step 
 
 test('agent_accounts creates both tables and their indexes, with the checks the store relies on', t => {
   const db = new DatabaseSync(':memory:'); t.after(() => db.close());
-  applyMigrations(db);
+  applyMigrations(db, { target: MIGRATIONS.find(m => m.name === 'agent_accounts')!.version });
   assert.deepEqual(accountObjects(db, 'table'), ['agent_account_policies', 'agent_accounts']);
   assert.deepEqual(accountObjects(db, 'index'), ['agent_accounts_driver_label', 'agent_accounts_driver_position', 'agent_accounts_shadow']);
 

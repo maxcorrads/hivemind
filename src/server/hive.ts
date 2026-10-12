@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { ROUTINE_BATCH_MS } from "../shared/notifications.ts";
 import { AccountStore } from "./accounts.ts";
+import { AccountUsageStore } from "./account-usage.ts";
 import { WorkerTemplateStore } from "./worker-templates.ts";
 import { LauncherQueue } from "./launcher-queue.ts";
 import { AgentActivityService } from './services/agent-activity.ts';
@@ -63,6 +64,7 @@ type ServiceRegistry = Core & {
   uploads: UploadBudget;
   workerTemplates: WorkerTemplateStore;
   accounts: AccountStore;
+  accountUsage: AccountUsageStore;
   launcherQueue: LauncherQueue;
   workerOrchestration: WorkerOrchestration;
   jobs: JobStore;
@@ -126,6 +128,7 @@ export class Hive {
   readonly routing!: RoutingStore;
   readonly workerTemplates!: WorkerTemplateStore;
   readonly accounts!: AccountStore;
+  readonly accountUsage!: AccountUsageStore;
   readonly launcherQueue!: LauncherQueue;
   readonly workerOrchestration!: WorkerOrchestration;
   readonly jobs!: JobStore;
@@ -161,6 +164,7 @@ export class Hive {
       this.files = services.files = new FileService(services);
       this.workerTemplates = services.workerTemplates = new WorkerTemplateStore(services);
       this.accounts = services.accounts = new AccountStore(services);
+      this.accountUsage = services.accountUsage = new AccountUsageStore(services);
       this.lifecycleLog = services.lifecycleLog = new AgentLifecycleLog(services);
       this.launcherQueue = services.launcherQueue = new LauncherQueue(services);
       this.projects = services.projects = new ProjectService(services);
