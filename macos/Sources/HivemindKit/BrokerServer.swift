@@ -32,7 +32,7 @@ public final class TerminalBroker {
     /// The Mac's home, which a launch's `~/` account paths are expanded with.
     public var home: String
     /// Builds an account's own directory before a session runs under it;
-    /// NoShadowHomes until shadow directories exist (docs/accounts.md).
+    /// NoShadowHomes by default; Server.app gives FileShadowHomes (docs/accounts.md).
     public var shadowHomes: any ShadowHomePreparing
     /// Never given a secret or a variable's value: the broker logs names,
     /// counts and paths only.

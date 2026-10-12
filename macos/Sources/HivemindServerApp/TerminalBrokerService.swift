@@ -60,6 +60,7 @@ final class TerminalBrokerService {
         environment: ProcessInfo.processInfo.environment,
         secrets: LaunchSecretStore(folder: paths.launchSecrets),
         templateSecrets: KeychainTemplateSecretVault(),
+        shadowHomes: FileShadowHomes(),
         log: { log.append($0) }))
     broker.onChange = { [weak self] in self?.onChange?() }
     broker.launcherDecision = { [weak self] requestId, templateId, approve in
