@@ -508,7 +508,7 @@ A launch that fails here refuses only its own item; the other items start. A sha
 ## Usage
 
 Each account's quota windows, as its provider reports them: per window the used percent and the reset time, and in the
-Accounts sheet a countdown to that reset. Nothing forecasts how fast the rest will be used. Hivemind Server.app reads
+Accounts sheet a countdown to that reset and a forecast at the pace so far ([In the Accounts sheet](#in-the-accounts-sheet)). Hivemind Server.app reads
 them on the Mac that launches ([Usage probe](#usage-probe)) and posts them to the server, which keeps the last good read
 of each account ([Stored usage](#stored-usage)). The [policy](#choosing-an-account) and the
 [Accounts sheet](#in-the-accounts-sheet) read that same stored snapshot, so they cannot disagree about which account is
@@ -658,7 +658,8 @@ Each account row of **Settings → Accounts** shows its usage under it (`web/Acc
   "<n>% left", and "Resets <local time> · in 2 h 14 min" ("in 3 d 4 h" for a week; "reset passed" once it is behind;
   "No reset time" when the provider gives none);
 - per window, a forecast: "At this pace it runs out <local time> · in 1 h 28 min", "At this pace it lasts until the
-  reset", or "Used up until the reset" (see below);
+  reset", "Used up until the reset", or "At this pace it is probably used up already" when a stale read's pace ran
+  the window out before now (see below);
 - "API key: no plan window" for an `api-key` plan, and "No quota window reported" for a good read without windows;
 - "Last read failed: <error>" while the last read failed, next to the previous windows;
 - " · Limit error at <local time>" next to the snapshot when the Claude tap saw a `rate_limit` stop, so a real limit can
