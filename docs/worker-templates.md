@@ -29,6 +29,7 @@ when the preview builds and the environment variables are valid; the server's re
 | `seniority`, `focus` | The worker's seniority (`junior`, `mid`, `senior`) and an optional focus label (at most 80 characters) |
 | `maxConcurrent` | How many workers of this template may run at once, 1–8 |
 | `enabled` | Whether brains may use it |
+| `accountId` | Optional: the [account](accounts.md) every launch of this template uses, an account of Software's driver (`codex` or `claude` exactly). Missing or `null` follows the driver's policy. Refused when the account is unknown, its driver differs from Software, or a launch variable or secret name would conflict with it (`account_unknown`, `account_driver_mismatch`, `account_env_conflict`) |
 
 A template is checked with the same launch builder the Launch sheet uses, so any template that saves can be launched.
 Every edit bumps its `revision`; edits and deletions must name the revision they started from. A project has at most

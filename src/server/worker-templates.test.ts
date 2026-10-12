@@ -103,3 +103,43 @@ test("only Human manages templates, and deleting a project deletes its templates
   hive.projects.deleteProject(human, other.slug);
   assert.deepEqual(hive.workerTemplates.list(other.id), []);
 });
+
+test("a pinned account must exist, match Software's driver and leave the template's variables and secrets clear", async t => {
+  const { hive, call, project } = fixture(t);
+  const human = hive.identity.getAgent("human");
+  const codex = hive.accounts.create(human, { driver: "codex", label: "Codex work", homePath: "~/.codex-work", shadowPath: "" });
+  const claude = hive.accounts.create(human, { driver: "claude", label: "Claude work", homePath: "~/.claude-work", shadowPath: "" });
+  const url = `/api/ui/projects/${project.slug}/worker-templates`;
+  const cases: Array<[WorkerTemplateSpec, RegExp]> = [
+    [spec({ software: "codex", accountId: "missing" }), /account_unknown: /],
+    [spec({ software: "codex", accountId: claude.id }), /account_driver_mismatch: Pin an account only when Software is exactly codex or claude\./],
+    [spec({ software: "codex2", accountId: codex.id }), /account_driver_mismatch/],
+    [spec({ software: "codex", environment: { CODEX_HOME: "/elsewhere" }, accountId: codex.id }),
+      /account_env_conflict: CODEX_HOME is managed by the account Codex work; remove it\./],
+    [spec({ software: "claude", model: "", effort: "", environment: {}, secretNames: ["anthropic_api_key"], accountId: claude.id }),
+      /account_env_conflict: anthropic_api_key is managed by the account Claude work/],
+  ];
+  for (const [template, message] of cases) {
+    const refused = await call("POST", url, { slug: "pinned", spec: template });
+    assert.equal(refused.status, 400, JSON.stringify(refused.json));
+    assert.match(refused.json.error, message);
+  }
+  const pinned = await call("POST", url, { slug: "pinned", spec: spec({ software: "codex", model: "", effort: "", environment: {}, accountId: codex.id }) });
+  assert.equal(pinned.status, 201, JSON.stringify(pinned.json));
+  assert.equal(pinned.json.spec.accountId, codex.id);
+});
+
+test("a template saved without accountId reads back unchanged, and a cleared pin is stored as null", async t => {
+  const { hive, call, project } = fixture(t);
+  const human = hive.identity.getAgent("human");
+  const codex = hive.accounts.create(human, { driver: "codex", label: "Codex work", homePath: "~/.codex-work", shadowPath: "" });
+  const created = hive.workerTemplates.create(human, project.id, { slug: "policy", spec: spec({ software: "codex", model: "", effort: "", environment: {} }) });
+  assert.deepEqual(hive.workerTemplates.get(created.id).spec, spec({ software: "codex", model: "", effort: "", environment: {} }));
+  const pinned = await call("PUT", `/api/ui/worker-templates/${created.id}`,
+    { expectedRevision: 1, spec: spec({ software: "codex", model: "", effort: "", environment: {}, accountId: codex.id }) });
+  assert.equal(pinned.status, 200, JSON.stringify(pinned.json));
+  const cleared = await call("PUT", `/api/ui/worker-templates/${created.id}`,
+    { expectedRevision: 2, spec: spec({ software: "codex", model: "", effort: "", environment: {}, accountId: null }) });
+  assert.equal(cleared.status, 200, JSON.stringify(cleared.json));
+  assert.equal(cleared.json.spec.accountId, null);
+});
