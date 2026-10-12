@@ -54,14 +54,18 @@ public struct LauncherCommand: Codable, Equatable, Sendable {
   public let cwd: String?
   public let command: String?
   public let environment: [String: String]?
+  /// The template launch's resolved account (BrokerLaunch.account). Absent
+  /// on the wire and in the digest when nil, so a journal entry written
+  /// before accounts still matches its command.
+  public let account: LaunchAccount?
 
   public init(id: String, kind: Kind, requestId: String? = nil, templateId: String? = nil,
               project: String? = nil, agent: String? = nil, title: String? = nil,
               session: String, cwd: String? = nil, command: String? = nil,
-              environment: [String: String]? = nil) {
+              environment: [String: String]? = nil, account: LaunchAccount? = nil) {
     self.id = id; self.kind = kind; self.requestId = requestId; self.templateId = templateId
     self.project = project; self.agent = agent; self.title = title; self.session = session
-    self.cwd = cwd; self.command = command; self.environment = environment
+    self.cwd = cwd; self.command = command; self.environment = environment; self.account = account
   }
 
   public var digest: String {
@@ -316,7 +320,7 @@ public struct LauncherApproval: Decodable, Equatable, Sendable {
         do {
           let environment = try command.environment.map { try LaunchEnvironment($0) }
           launch = try BrokerLaunch(project: project, agent: agent, title: title, cwd: cwd, command: text,
-                                    session: session, environment: environment, template: template)
+                                    session: session, environment: environment, template: template, account: command.account)
         } catch { return .failed("invalid launcher launch fields") }
         try Task.checkCancellation()
         try journal.write(.init(digest: digest, session: session.rawValue, kind: .launch), id: command.id)

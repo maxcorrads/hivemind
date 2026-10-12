@@ -243,14 +243,17 @@ public struct TerminalSessionLaunch: Equatable, Sendable {
   public let environment: LaunchEnvironment?
   /// The worker template launched (BrokerLaunch.template): the broker adds its secrets.
   public let template: TemplateID?
+  /// The account the server resolved (BrokerLaunch.account), passed on as
+  /// the page sent it: the broker, not the app, expands its "~/".
+  public let account: LaunchAccount?
 
   public init?(
     project: String, agent: String?, title: String, cwd: String?, command: String, session: SessionName? = nil,
-    secrets: LaunchSecrets? = nil, environment: LaunchEnvironment? = nil, template: TemplateID? = nil
+    secrets: LaunchSecrets? = nil, environment: LaunchEnvironment? = nil, template: TemplateID? = nil, account: LaunchAccount? = nil
   ) {
     // Validate with the home folder standing in for "~" and a missing folder.
     guard Self.launch(project: project, agent: agent, title: title, cwd: cwd, command: command, session: session, secrets: secrets,
-                      environment: environment, template: template, home: "/") != nil else { return nil }
+                      environment: environment, template: template, account: account, home: "/") != nil else { return nil }
     if let cwd {
       guard cwd.hasPrefix("/") || cwd == "~" || cwd.hasPrefix("~/"), cwd.utf8.count <= BrokerLimits.maxCwdBytes else { return nil }
     }
@@ -263,6 +266,7 @@ public struct TerminalSessionLaunch: Equatable, Sendable {
     self.secrets = secrets
     self.environment = environment
     self.template = template
+    self.account = account
   }
 
   init?(body: Any) {
@@ -326,8 +330,21 @@ public struct TerminalSessionLaunch: Equatable, Sendable {
       template = valid
     default: return nil
     }
+    // Every field a string and a known driver; the values are checked as the broker checks them.
+    let account: LaunchAccount?
+    switch object["account"] {
+    case nil, is NSNull: account = nil
+    case let fields as [String: Any]:
+      guard let id = fields["id"] as? String,
+            let driver = (fields["driver"] as? String).flatMap(LaunchAccount.Driver.init(rawValue:)),
+            let label = fields["label"] as? String,
+            let homePath = fields["homePath"] as? String,
+            let shadowPath = fields["shadowPath"] as? String else { return nil }
+      account = LaunchAccount(id: id, driver: driver, label: label, homePath: homePath, shadowPath: shadowPath)
+    default: return nil
+    }
     self.init(project: project, agent: agent, title: title, cwd: cwd, command: command, session: session, secrets: secrets,
-              environment: environment, template: template)
+              environment: environment, template: template, account: account)
   }
 
   /// All launches of a message, or nil when the list or any one is invalid.
@@ -341,16 +358,17 @@ public struct TerminalSessionLaunch: Equatable, Sendable {
     return launches
   }
 
-  /// The broker's launch: "~" expanded against `home`, no folder meaning
-  /// `home`. Nil only when the expanded folder breaks the broker's limits.
+  /// The broker's launch: the folder's "~" expanded against `home`, no
+  /// folder meaning `home`, the account unchanged. Nil only when the
+  /// expanded folder breaks the broker's limits.
   public func brokerLaunch(home: String) -> BrokerLaunch? {
     Self.launch(project: project, agent: agent, title: title, cwd: cwd, command: command, session: session, secrets: secrets,
-                environment: environment, template: template, home: home)
+                environment: environment, template: template, account: account, home: home)
   }
 
   private static func launch(
     project: String, agent: String?, title: String, cwd: String?, command: String, session: SessionName?, secrets: LaunchSecrets?,
-    environment: LaunchEnvironment?, template: TemplateID?, home: String
+    environment: LaunchEnvironment?, template: TemplateID?, account: LaunchAccount?, home: String
   ) -> BrokerLaunch? {
     let base = home.hasSuffix("/") && home.count > 1 ? String(home.dropLast()) : home
     let folder: String
@@ -360,7 +378,7 @@ public struct TerminalSessionLaunch: Equatable, Sendable {
     case let path?: folder = path
     }
     return try? BrokerLaunch(project: project, agent: agent, title: title, cwd: folder, command: command, session: session, secrets: secrets,
-                             environment: environment, template: template)
+                             environment: environment, template: template, account: account)
   }
 }
 

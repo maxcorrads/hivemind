@@ -31,9 +31,11 @@ private let atlas = SessionName("hm-acme-atlas")!
 private let size = TerminalSize(columns: 120, rows: 40)!
 
 private func launch(project: String = "acme", agent: String? = "Atlas", title: String = "Acme - Atlas",
-                    cwd: String = "/Users/me/acme", command: String = "claude") throws -> BrokerLaunch {
-  try BrokerLaunch(project: project, agent: agent, title: title, cwd: cwd, command: command)
+                    cwd: String = "/Users/me/acme", command: String = "claude", account: LaunchAccount? = nil) throws -> BrokerLaunch {
+  try BrokerLaunch(project: project, agent: agent, title: title, cwd: cwd, command: command, account: account)
 }
+
+private let claudeWork = LaunchAccount(id: "a1", driver: .claude, label: "Claude work", homePath: "", shadowPath: "~/.claude-work")
 
 struct BrokerVersionTests {
   @Test func negotiatesTheHighestCommonVersion() {
@@ -54,6 +56,7 @@ struct BrokerRequestTests {
       .init(.sessionsUnsubscribe),
       .init(id: "l", .launch([try launch(), try launch(agent: nil, title: "", command: "codex 'hi'\n")])),
       .init(id: "r", .launch([try BrokerLaunch(project: "acme", agent: "Atlas", title: "t", cwd: "/", command: "c", session: SessionName("hm-acme-new-1"))])),
+      .init(id: "w", .launch([try launch(account: claudeWork), try launch(agent: nil, command: "codex")])),
       .init(id: "a", .attach(session: atlas, size: size)),
       .init(.input(stream: 3, data: Data([0, 1, 2, 0xFF, 0x1B]))),
       .init(.resize(stream: 3, size: TerminalSize(columns: 2, rows: 1)!)),
@@ -146,6 +149,21 @@ struct BrokerRequestTests {
       (#"{"project":"acme","title":"t","cwd":"/x","command":"\#(String(repeating: "é", count: 4097))"}"#, "command: must be at most 8192 bytes"),
       (#"{"project":"acme","title":"\#(String(repeating: "t", count: 201))","cwd":"/x","command":"c"}"#, "launches[1].title"),
       (#"{"project":"acme","cwd":"/x","command":"c"}"#, "launches[1].title: is missing"),
+      (#"{"project":"acme","title":"t","cwd":"/x","command":"c","account":"a1"}"#, "launches[1].account: must be an object"),
+      (#"{"project":"acme","title":"t","cwd":"/x","command":"c","account":{"id":"a1","driver":"opencode","label":"x","homePath":"","shadowPath":""}}"#,
+       "launches[1].account: must be an object"),
+      (#"{"project":"acme","title":"t","cwd":"/x","command":"c","account":{"id":"a1","driver":"codex","label":"x","shadowPath":""}}"#,
+       "launches[1].account: must be an object"),
+      (#"{"project":"acme","title":"t","cwd":"/x","command":"c","account":{"id":"a1","driver":"codex","label":"x","homePath":null,"shadowPath":""}}"#,
+       "launches[1].account: must be an object"),
+      (#"{"project":"acme","title":"t","cwd":"/x","command":"c","account":{"id":"","driver":"codex","label":"x","homePath":"","shadowPath":""}}"#,
+       "launches[1].account.id: must be 1–64 bytes"),
+      (#"{"project":"acme","title":"t","cwd":"/x","command":"c","account":{"id":"a1","driver":"codex","label":" ","homePath":"","shadowPath":""}}"#,
+       "launches[1].account.label: must be 1–80 characters"),
+      (#"{"project":"acme","title":"t","cwd":"/x","command":"c","account":{"id":"a1","driver":"codex","label":"x","homePath":"~/.codex/","shadowPath":""}}"#,
+       "launches[1].account.homePath: a path cannot end with /"),
+      (#"{"project":"acme","title":"t","cwd":"/x","command":"c","account":{"id":"a1","driver":"claude","label":"x","homePath":"","shadowPath":"~/.claude"}}"#,
+       "launches[1].account.shadowPath: a shadow is its own directory, not the shared tree"),
     ]
     for (item, reason) in bad {
       let error = refusal(#"{"type":"launch","launches":[\#(good),\#(item)]}"#)
@@ -154,6 +172,27 @@ struct BrokerRequestTests {
     }
     let many = Array(repeating: good, count: BrokerLimits.maxLaunches + 1).joined(separator: ",")
     #expect(refusal(#"{"type":"launch","launches":[\#(many)]}"#)?.message.contains("1–24") == true)
+  }
+
+  @Test func aLaunchCarriesItsAccountAsStored() throws {
+    let frame = BrokerRequestFrame(id: "l", .launch([try launch(account: claudeWork), try launch()]))
+    let line = try frame.line()
+    let object = try JSONSerialization.jsonObject(with: line) as? [String: Any]
+    let items = object?["launches"] as? [[String: Any]]
+    #expect(items?[0]["account"] as? [String: String]
+      == ["id": "a1", "driver": "claude", "label": "Claude work", "homePath": "", "shadowPath": "~/.claude-work"], "~/ is not expanded")
+    #expect(items?[1].keys.contains("account") == false)
+    let decoded = try BrokerRequestFrame.decode(line.dropLast())
+    guard case .launch(let launches) = decoded.request else { Issue.record("not a launch"); return }
+    #expect(launches.map(\.account) == [claudeWork, nil])
+    // A frame from before accounts, and an explicit null, launch without one.
+    let item = #"{"project":"acme","agent":"Atlas","title":"Acme - Atlas","cwd":"/Users/me/acme","command":"claude"%@}"#
+    for extra in ["", #","account":null"#] {
+      #expect(try request(#"{"type":"launch","launches":["# + String(format: item, extra) + "]}") == .init(.launch([try launch()])))
+    }
+    #expect(throws: BrokerProtocolError.invalid("launch.account.shadowPath", "a path starts with / or ~/")) {
+      try launch(account: LaunchAccount(id: "a1", driver: .codex, label: "x", homePath: "", shadowPath: "codex"))
+    }
   }
 
   @Test func acceptsTheLimitsExactly() throws {

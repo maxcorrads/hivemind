@@ -131,6 +131,18 @@ struct TerminalBridgeRouterTests {
     #expect(recorder.delivered == [.launched(id: nil, names: [atlas], created: [atlas], errors: [])])
   }
 
+  @Test func launchesWithTheAccountAsThePageSentIt() {
+    let account = LaunchAccount(id: "a1", driver: .claude, label: "Claude work", homePath: "~/.claude-work", shadowPath: "")
+    let page = TerminalSessionLaunch(project: "acme", agent: "Atlas", title: "Acme - Atlas", cwd: "~/acme", command: "claude", account: account)!
+    router.handle(.terminalLaunch(id: "p1", launches: [page, launch(agent: nil)], openInTerminal: false))
+    #expect(client.sent == [.launch([
+      try! BrokerLaunch(project: "acme", agent: "Atlas", title: "Acme - Atlas", cwd: "/Users/me/acme", command: "claude", account: account),
+      try! BrokerLaunch(project: "acme", agent: nil, title: "Acme - Atlas", cwd: "/Users/me/acme", command: "claude"),
+    ])])
+    guard case .launch(let launches)? = client.sent.first else { return }
+    #expect(launches[0].account?.homePath == "~/.claude-work", "only the folder is expanded here")
+  }
+
   @Test func relaysALaunchErrorWithThePageID() {
     router.handle(.terminalLaunch(id: "p1", launches: [launch()], openInTerminal: true))
     client.answer(.error(code: .tmuxMissing, message: TmuxLocator.installHint, stream: nil))

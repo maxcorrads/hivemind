@@ -2,18 +2,19 @@ import { ChevronRight, Copy, Play, SquareTerminal, Terminal, X } from "lucide-re
 import { Modal } from "./Modal.tsx";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Agent, Project, Seniority } from "../src/shared/types.ts";
-import { api } from "./api.ts";
+import { api, type AccountsView } from "./api.ts";
 import { agentRuntime, verifiedStopSession } from './agent-runtime.ts';
 import { ModelSelect } from "./ModelSelect.tsx";
 import {
   inNativeApp, onMacDesktop, terminalSecretProblem, terminalSessionLaunchProblem, type TerminalLaunchSecrets, type TerminalSessionLaunch,
 } from "./native-bridge.ts";
 import { SessionsSheet } from "./SessionsSheet.tsx";
-import { TemplateLaunchSheet } from "./TemplateLaunch.tsx";
+import { accountOutcome, TemplateLaunchSheet, type AccountOutcome } from "./TemplateLaunch.tsx";
 import { TerminalNotice } from "./TerminalNotice.tsx";
 import { agentTerminalSession, terminalBlocker, terminalHub, useTerminalState, type TerminalLaunched } from "./use-terminal.ts";
 import { projectLaunchTools, type LaunchContext } from "../src/shared/launch-prompt.ts";
 import { parseLaunchEnvironment } from "../src/shared/launch-environment.ts";
+import { ACCOUNT_DRIVERS, accountDriverForSoftware, accountEnvironmentConflict, softwareAliasWarning, toLaunchAccount, type AccountDriver } from "../src/shared/accounts.ts";
 import {
   EFFORTS,
   buildLaunchCommand,
@@ -45,6 +46,8 @@ type Saved = {
   tunes: Record<string, { model: string; effort: string }>;
   /** The Environment variables field's text per software (the Software field, trimmed). */
   environments: Record<string, string>;
+  /** The Account select's pick per driver: an account id; absent follows the driver's policy. */
+  accountPins: Partial<Record<AccountDriver, string>>;
 };
 
 const defaults: Saved = {
@@ -64,6 +67,7 @@ const defaults: Saved = {
   allHives: false,
   tunes: {},
   environments: {},
+  accountPins: {},
 };
 
 /** Software names whose Environment variables are kept, and the characters of one field's text. */
@@ -113,6 +117,13 @@ function loadSaved(): Saved {
         }
       }
     }
+    const accountPins: Partial<Record<AccountDriver, string>> = {};
+    if (parsed.accountPins && typeof parsed.accountPins === "object") {
+      for (const driver of ACCOUNT_DRIVERS) {
+        const id = parsed.accountPins[driver];
+        if (typeof id === "string" && id.trim()) accountPins[driver] = id.trim();
+      }
+    }
     return {
       ...defaults,
       software: typeof parsed.software === "string" && parsed.software.trim() ? parsed.software.trim() : "codex",
@@ -131,6 +142,7 @@ function loadSaved(): Saved {
       allHives: parsed.allHives === true,
       tunes,
       environments,
+      accountPins,
     };
   } catch {
     return defaults;
@@ -207,6 +219,9 @@ export function LaunchSheet({
   const envCount = Object.keys(parsedEnv.environment).length;
   const envError = parsedEnv.errors.length ? "Fix the environment variables first" : null;
   const environment = !envError && envCount ? parsedEnv.environment : null;
+  const [accountPins, setAccountPins] = useState<Partial<Record<AccountDriver, string>>>(initial.accountPins);
+  const [accounts, setAccounts] = useState<AccountsView | null>(null);
+  const [accountNote, setAccountNote] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   // Pasted per launch and sent only to the app with the launch (docs/terminal-broker.md#launch-secrets): never saved,
   // never in the copied text, cleared after a launch that started and when the sheet closes.
@@ -235,6 +250,15 @@ export function LaunchSheet({
     }
     return () => { active = false; };
   }, [projects.map((p) => p.id + ":" + p.slug).join("|")]);
+
+  useEffect(() => {
+    let active = true;
+    // Without the list the sheet shows no Account select and launches as before, with no account.
+    api.accounts()
+      .then((view) => { if (active) setAccounts(view); })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => () => {
     if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
@@ -351,6 +375,7 @@ export function LaunchSheet({
       allHives: patch.allHives ?? allHives,
       tunes: patch.tunes ?? tunes,
       environments: patch.environments ?? environments,
+      accountPins: patch.accountPins ?? accountPins,
     };
     persist(next);
   };
@@ -446,9 +471,30 @@ export function LaunchSheet({
     : (canCopyOne && built.ok
       ? [{ project: project?.slug ?? projectSlug, agent: null, title: seatTitle(hiveName, `new ${role}`), ...built.launch, ...secrets,
           ...launchEnv }] : []);
+  // A hint only: an alias such as codex2 still launches, without an account (docs/accounts.md).
+  const aliasWarning = softwareAliasWarning(software, new Set<AccountDriver>(accounts?.accounts.map((account) => account.driver) ?? []));
+  // The Account select follows the driver of Software. An employee whose session still runs keeps its account, so
+  // nothing is resolved when every launch reuses a running session.
+  const accountDriver = accountDriverForSoftware(software);
+  const driverAccounts = accountDriver && accounts ? accounts.accounts.filter((account) => account.driver === accountDriver) : [];
+  const accountPin = accountDriver ? accountPins[accountDriver] ?? "" : "";
+  const runningAgents = resume ? roster.filter((agent) => agentRuntime(agent, { agents }, terminals).sessionState === "running") : [];
+  const accountKept = runningAgents.length > 0;
+  const accountNeeded = !resume || runningAgents.length < roster.length;
+  // The conflict depends on the driver only, so the pinned account (else the first) stands in for the policy's pick.
+  const accountForConflict = driverAccounts.find((account) => account.id === accountPin) ?? driverAccounts[0];
+  const accountConflict = native && accountForConflict && accountNeeded
+    ? accountEnvironmentConflict(environment ?? {}, Object.keys(secrets.secrets ?? {}), toLaunchAccount(accountForConflict)) : null;
+  /** On Launch: the account the new sessions start under (docs/accounts.md). A driver without accounts launches as before. */
+  const resolveLaunchAccount = async (): Promise<AccountOutcome> => {
+    if (!native || !accountDriver || driverAccounts.length === 0 || !accountNeeded) return { ok: true, account: null, text: null };
+    const { selection } = await api.resolveAccount({ driver: accountDriver, accountId: accountPin || null, record: true });
+    return accountOutcome(selection, accountDriver, Date.now());
+  };
+
   const terminalBlock = native ? terminalBlocker(terminals) : null;
   const terminalProblem = terminalBlock?.message ?? (terminalLaunches.length ? terminalSessionLaunchProblem(terminalLaunches) : null);
-  const canLaunchTerminal = native && terminalLaunches.length > 0 && !terminalProblem && !launching;
+  const canLaunchTerminal = native && terminalLaunches.length > 0 && !terminalProblem && !accountConflict && !launching;
   const many = terminalLaunches.length > 1;
   const terminalKey = resume ? "terminal-all" : "terminal-one";
   const backgroundKey = resume ? "background-all" : "background-one";
@@ -468,23 +514,37 @@ export function LaunchSheet({
   const onLaunchTerminal = (openInTerminal: boolean) => {
     const hub = terminalHub();
     if (!canLaunchTerminal || !hub) return;
-    const launches = terminalLaunches;
     setLaunching(true);
     setLaunchNote(null);
+    setAccountNote(null);
     rememberSoftware();
-    hub.launch(launches, openInTerminal)
-      .then((result) => {
-        const note = describeLaunch(launches, result);
-        setLaunchNote(note);
-        if (note?.error) return;
-        setOpencodeKey("");
-        if (!terminalApp) {
-          // One session opens in its terminal; several open the list, each a tap away.
-          const names = result.names.filter((name): name is string => name !== null);
-          setStarted({ session: names.length === 1 ? names[0]! : null });
+    resolveLaunchAccount()
+      .then((outcome) => {
+        if (!outcome.ok) {
+          setLaunchNote({ error: true, text: outcome.text });
           return;
         }
-        markCopied(openInTerminal ? terminalKey : backgroundKey);
+        const attached = outcome.account;
+        // Only new sessions take the account: a running employee's session keeps the one it started with.
+        const kept = new Set(runningAgents.map((agent) => agent.name));
+        const launches = attached
+          ? terminalLaunches.map((launch) => (kept.has(launch.agent ?? "") ? launch : { ...launch, account: attached }))
+          : terminalLaunches;
+        setAccountNote(outcome.text);
+        return hub.launch(launches, openInTerminal)
+          .then((result) => {
+            const note = describeLaunch(launches, result);
+            setLaunchNote(note);
+            if (note?.error) return;
+            setOpencodeKey("");
+            if (!terminalApp) {
+              // One session opens in its terminal; several open the list, each a tap away.
+              const names = result.names.filter((name): name is string => name !== null);
+              setStarted({ session: names.length === 1 ? names[0]! : null });
+              return;
+            }
+            markCopied(openInTerminal ? terminalKey : backgroundKey);
+          });
       })
       .catch((error: Error) => setLaunchNote({ error: true, text: error.message }))
       .finally(() => setLaunching(false));
@@ -591,6 +651,35 @@ export function LaunchSheet({
               <option key={name} value={name} />
             ))}
           </datalist>
+          {aliasWarning && <p className="help-p" role="status">{aliasWarning}</p>}
+          {accountDriver && driverAccounts.length > 0 && (native ? (
+            <>
+              <label>
+                Account
+                <select
+                  value={accountPin}
+                  onChange={(e) => {
+                    const next = { ...accountPins, [accountDriver]: e.target.value };
+                    setAccountPins(next);
+                    remember({ accountPins: next });
+                  }}
+                >
+                  <option value="">Auto ({accounts?.policies[accountDriver] === "balanced" ? "Balanced" : "Sequential"})</option>
+                  {driverAccounts.map((account) => (
+                    <option key={account.id} value={account.id}>{account.label}</option>
+                  ))}
+                  {accountPin && !driverAccounts.some((account) => account.id === accountPin) && (
+                    <option value={accountPin}>Removed account</option>
+                  )}
+                </select>
+              </label>
+              {accountKept && (
+                <p className="help-p">This session keeps the account it started with. Terminate it and launch again to switch.</p>
+              )}
+            </>
+          ) : (
+            <p className="help-p">Accounts apply to launches from the apps.</p>
+          ))}
           {showCodexEnvHint && (
             <p className="help-p launch-codex-env">
               Codex passes the session label and generated role to MCP servers only if its config lists them. Add{" "}
@@ -878,6 +967,8 @@ export function LaunchSheet({
             <p className="help-p">{built.error}</p>
           )}
           {native && terminalBlock && <TerminalNotice blocker={terminalBlock} compact />}
+          {native && accountConflict && <p className="err" role="alert">{accountConflict}</p>}
+          {native && accountNote && <p className="help-p launch-note" role="status">{accountNote}</p>}
           {native && launchNote && (
             <p className={launchNote.error ? "err launch-note" : "help-p launch-note"} role={launchNote.error ? "alert" : "status"}>{launchNote.text}</p>
           )}

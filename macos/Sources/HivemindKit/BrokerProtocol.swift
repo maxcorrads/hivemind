@@ -148,18 +148,23 @@ public struct BrokerLaunch: Equatable, Sendable {
   /// The worker template this launch starts: the broker adds the template's
   /// secrets from its vault to the launch file (docs/terminal-broker.md#template-secrets).
   public let template: TemplateID?
+  /// The account the server resolved for this launch (docs/accounts.md), its
+  /// paths as stored: a session the broker creates runs under it, and a
+  /// reused one keeps the account it started with.
+  public let account: LaunchAccount?
 
   public init(
     project: String, agent: String?, title: String, cwd: String, command: String, session: SessionName? = nil,
-    secrets: LaunchSecrets? = nil, environment: LaunchEnvironment? = nil, template: TemplateID? = nil
+    secrets: LaunchSecrets? = nil, environment: LaunchEnvironment? = nil, template: TemplateID? = nil, account: LaunchAccount? = nil
   ) throws(BrokerProtocolError) {
     try self.init(project: project, agent: agent, title: title, cwd: cwd, command: command, session: session, secrets: secrets,
-                  environment: environment, template: template, field: "launch")
+                  environment: environment, template: template, account: account, field: "launch")
   }
 
   init(
     project: String, agent: String?, title: String, cwd: String, command: String, session: SessionName?,
-    secrets: LaunchSecrets? = nil, environment: LaunchEnvironment? = nil, template: TemplateID? = nil, field: String
+    secrets: LaunchSecrets? = nil, environment: LaunchEnvironment? = nil, template: TemplateID? = nil, account: LaunchAccount? = nil,
+    field: String
   ) throws(BrokerProtocolError) {
     guard Self.isProjectSlug(project) else {
       throw .invalid("\(field).project", "must be a project slug (lowercase letters, digits and dashes, at most 32)")
@@ -182,6 +187,7 @@ public struct BrokerLaunch: Equatable, Sendable {
       throw .invalid("\(field).command", "must be at most \(BrokerLimits.maxCommandBytes) bytes")
     }
     guard !command.contains("\0") else { throw .invalid("\(field).command", "must not contain NUL") }
+    try account?.validate(field: "\(field).account")
     self.project = project
     self.agent = agent
     self.title = title
@@ -191,6 +197,7 @@ public struct BrokerLaunch: Equatable, Sendable {
     self.secrets = secrets
     self.environment = environment
     self.template = template
+    self.account = account
   }
 
   /// Whether the session gets a launch file: any secret or variable, or a template whose secrets may be kept.
@@ -350,7 +357,7 @@ extension BrokerRequestFrame: Codable {
   private enum Key: String, CodingKey {
     case type, id, version, token, client, launches, session, cols, rows, stream, data
     case project, agent, title, cwd, command, secrets, environment
-    case template, name, value, requestId, templateId
+    case template, account, name, value, requestId, templateId
   }
 
   public init(from decoder: any Decoder) throws {
@@ -398,6 +405,7 @@ extension BrokerRequestFrame: Codable {
           secrets: BrokerCoding.optionalSecrets(item, .secrets, field: "\(field).secrets"),
           environment: BrokerCoding.optionalEnvironment(item, .environment, field: "\(field).environment"),
           template: BrokerCoding.optionalTemplate(item, .template, field: "\(field).template"),
+          account: BrokerCoding.optionalAccount(item, .account, field: "\(field).account"),
           field: field))
       }
       request = .launch(launches)
@@ -465,6 +473,7 @@ extension BrokerRequestFrame: Codable {
         try item.encodeIfPresent(launch.secrets?.dictionary, forKey: .secrets)
         try item.encodeIfPresent(launch.environment?.dictionary, forKey: .environment)
         try item.encodeIfPresent(launch.template?.rawValue, forKey: .template)
+        try item.encodeIfPresent(launch.account, forKey: .account)
       }
     case .attach(let session, let size):
       try c.encode(session, forKey: .session)
@@ -822,6 +831,14 @@ enum BrokerCoding {
     }
     guard let values else { return nil }
     return try LaunchEnvironment(values, field: field)
+  }
+
+  /// Missing or null: nil. Anything else must be an object of the five
+  /// fields the page sends; BrokerLaunch validates their values.
+  static func optionalAccount<K: CodingKey>(_ c: KeyedDecodingContainer<K>, _ key: K, field: String) throws(BrokerProtocolError) -> LaunchAccount? {
+    do { return try c.decodeIfPresent(LaunchAccount.self, forKey: key) } catch {
+      throw .invalid(field, "must be an object with id, driver (codex or claude), label, homePath and shadowPath")
+    }
   }
 
   static func template<K: CodingKey>(_ c: KeyedDecodingContainer<K>, _ key: K) throws(BrokerProtocolError) -> TemplateID {

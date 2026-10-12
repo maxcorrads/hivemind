@@ -195,6 +195,7 @@ running, in which case it is reused and its command is not run again:
 ```text
 tmux … new-session -d -s <name> -n <window name> -e HIVEMIND_TMUX_SESSION=<name> \
   -- /bin/zsh -lic "[<one line loading the launch file>]
+[builtin unset -v <an account's other controlled names>]
 cd -- '<cwd>' || exit 1
 <command>
 
@@ -224,10 +225,13 @@ exec /bin/zsh -l" \
   server stores it and returns it as `agent.terminalSession` (see
   [The session label](#the-session-label)).
 - The two user options record the project and the agent for `sessions`.
-- A launch with [secrets](#launch-secrets) or
-  [environment variables](#launch-environment) starts its script with one line
-  that loads them from a private file and deletes the file. Only the file's
-  path is in the script; no value ever is.
+- A launch with [secrets](#launch-secrets),
+  [environment variables](#launch-environment) or an
+  [account](accounts.md#choosing-an-account) that sets a variable starts its
+  script with one line that loads them from a private file and deletes the
+  file. Only the file's path is in the script; no value ever is. A launch with
+  an account then unsets the account's controlled variables that it does not
+  set, before the `cd` ([Launch environment](#launch-environment)).
 
 The other calls:
 
@@ -311,7 +315,7 @@ speaks. The broker answers with `min(client, broker)`, or with
 | `sessions.list` | none | `sessions` |
 | `sessions.subscribe` | none | `sessions` now, and again after each change |
 | `sessions.unsubscribe` | none | none |
-| `launch` | `launches`: 1–24 of `{project, agent, title, cwd, command, session?, secrets?, environment?}` | `launched` |
+| `launch` | `launches`: 1–24 of `{project, agent, title, cwd, command, session?, secrets?, environment?, account?}` | `launched` |
 | `attach` | `session` name, `cols` 2–1000, `rows` 1–500 | `attached`, then `output`… until `exit` |
 | `input` | `stream` int ≥1, `data` base64 (1 B–64 KiB decoded) | none |
 | `resize` | `stream`, `cols`, `rows` | none |
@@ -333,6 +337,7 @@ A launch is:
 | `session` | optional session name: the session this agent last reported (`agent.terminalSession`). When it is running and was launched for the same project and for no agent or this one, the launch reuses it, so an agent first launched as `hm-<project>-new-<n>` keeps that session on resume. Otherwise it is ignored: the broker never creates a session under a name the client picked. |
 | `secrets` | optional object of environment variables for the agent: `{"OPENCODE_API_KEY": "<key>"}`, the only name allowed. The value is 1–512 bytes of printable ASCII (`0x21`–`0x7E`: no space, tab, newline or NUL). Any other name, an empty object, a value that is not a string or breaks the rule refuses the whole frame with `bad-message`, and the error names the field, never the value. See [Launch secrets](#launch-secrets). |
 | `environment` | optional object of 1–32 environment variables for the agent, `{"NAME": "value", …}`: the Launch agent sheet's **Environment variables**. Each name matches `^[A-Za-z_][A-Za-z0-9_]{0,63}$` and is not on the [denylist](#launch-environment); each value is at most 8 KiB with no control character but tab (so no NUL, CR or LF), 32 KiB of `NAME=value` in all. Anything else refuses the whole frame with `bad-message`; the error names the field and, for a denied name, the variable, never a value. See [Launch environment](#launch-environment). |
+| `account` | optional object `{id, driver, label, homePath, shadowPath}`: the account the server resolved for this launch ([accounts](accounts.md)), every field a string. `driver` is `codex` or `claude`, `id` 1–64 bytes, `label` 1–80 characters and not blank; each path is `""` or follows the [path rules](accounts.md#an-account), and a `shadowPath` is not the shared tree. Paths travel as stored: the client never expands their `~/`. Anything else refuses the whole frame with `bad-message`, naming the field (`launches[0].account.homePath`). |
 
 ### Broker → client
 
@@ -561,6 +566,52 @@ variables add nothing to a launch's `new-session` arguments beyond the loader
 line; the largest valid launch, with every field and variable at its limit,
 stays under `TmuxCommand.maxCommandLineBytes` (checked in
 `LaunchEnvironmentTests`).
+
+**The account variable.** A launch with an [account](accounts.md#choosing-an-account)
+(its `account` field, already chosen by the server) also gets that account's
+variables, listed under [Variables](accounts.md#variables): `CODEX_HOME` and
+`CODEX_SQLITE_HOME` for a Codex shadow, `CODEX_HOME` for a Codex primary with a
+home path, and `CLAUDE_CONFIG_DIR` for Claude when it has a path. They join the
+same launch file as the environment variables and secrets, and the rules above
+for that file apply. `HOME` is never set.
+
+**`~` in account paths.** The client sends an account's paths as stored and
+never expands them. The broker expands a leading `~/` with the Mac's home
+directory (`TerminalBroker.Dependencies.home`, through
+`LaunchAccount.environment(home:)`) before it writes the file, so
+`~/.codex-work` reaches the session as an absolute path. A path that does not
+start with `~/` is used as written.
+
+**The conflict rule.** An account controls these names: `CODEX_HOME`,
+`CODEX_SQLITE_HOME`, `CODEX_API_KEY` and `CODEX_ACCESS_TOKEN` for Codex;
+`CLAUDE_CONFIG_DIR`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
+`CLAUDE_CODE_OAUTH_TOKEN` and `CLAUDE_SECURESTORAGE_CONFIG_DIR` for Claude. A
+launch with an account may not carry one of them in its environment variables,
+its [secret](#launch-secrets) names or, for a template, its template secret
+names, compared without case, even when the account sets no variable. Such an
+item is refused alone: its `names` entry is `null`, and `errors` gets
+`{index, code: "bad-message", message: "launches[<i>].account: <NAME> is managed
+by the account <label>; remove it."}`. The message names the variable, never a
+value, and nothing runs for that item. Other items in the same `launch` go on.
+
+**The unset line.** After the launch file is loaded (first, when the launch
+has no file), the script runs `builtin unset -v` naming the account's
+controlled names that the account does not set, before the `cd`. A login
+shell's `~/.zshrc` could export one of them, and a token variable outranks the
+directory's login. A primary Claude account with no path sets no variable, so
+it unsets all five Claude names.
+
+**Shadow accounts.** Before the session of a created launch starts, the broker
+prepares the account's own directory (`ShadowHomePreparing`). A failure refuses
+that item alone, with `internal` and `launches[<i>].account: <reason>`. Until
+shadow directories are built (phases 3 and 4 of
+[#319](https://github.com/maxcorrads/hivemind/issues/319)), `NoShadowHomes`
+refuses every shadow with "Shadow accounts are not supported yet". A primary
+account launches as above.
+
+**Reused sessions with an account.** A reused session is not checked against
+its account: nothing runs, nothing is written, and it keeps the account it
+started with.
 
 ## Template secrets
 

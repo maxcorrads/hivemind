@@ -106,8 +106,12 @@ struct RemoteClientBridgeTests {
 struct RemoteTerminalPolicyTests {
   let session = SessionName("hm-acme-atlas")!
 
-  func launch(cwd: String?) -> TerminalSessionLaunch {
-    TerminalSessionLaunch(project: "acme", agent: "Atlas", title: "Acme - Atlas", cwd: cwd, command: "claude")!
+  func launch(cwd: String?, account: LaunchAccount? = nil) -> TerminalSessionLaunch {
+    TerminalSessionLaunch(project: "acme", agent: "Atlas", title: "Acme - Atlas", cwd: cwd, command: "claude", account: account)!
+  }
+
+  func account(_ driver: LaunchAccount.Driver, homePath: String = "", shadowPath: String = "") -> LaunchAccount {
+    LaunchAccount(id: "a1", driver: driver, label: "Work", homePath: homePath, shadowPath: shadowPath)
   }
 
   @Test func launchesNeverOpenTerminalApp() {
@@ -128,6 +132,36 @@ struct RemoteTerminalPolicyTests {
     for cwd in [nil, "~", "~/acme"] as [String?] {
       let decision = RemoteTerminalPolicy.decide(.terminalLaunch(id: "t2", launches: absolute + [launch(cwd: cwd)], openInTerminal: false), home: nil)
       #expect(decision == .answer(.error(id: "t2", code: .badMessage, message: RemoteTerminalPolicy.noHomeMessage, stream: nil)))
+    }
+  }
+
+  /// The broker expands an account's "~/" with the Mac's home: a Server
+  /// that does not send it refuses those, as it refuses such a folder.
+  @Test func withoutTheMacsHomeAnAccountUnderItDoesNotLaunch() {
+    let absolute = [
+      account(.codex), account(.claude), account(.codex, homePath: "/Volumes/w/.codex"),
+      account(.codex, homePath: "/Volumes/w/.codex", shadowPath: "/Volumes/w/.codex_personal"),
+      account(.claude, homePath: "~/.claude-unused", shadowPath: "/Volumes/w/.claude-personal"),
+    ]
+    let underHome = [
+      account(.codex, homePath: "~/.codex-work"), account(.claude, homePath: "~/.claude-work"),
+      account(.claude, shadowPath: "~/.claude-personal"),
+      account(.codex, homePath: "/Volumes/w/.codex", shadowPath: "~/.codex_personal"),
+      account(.codex, shadowPath: "/Volumes/w/.codex_personal"),  // CODEX_SQLITE_HOME is ~/.codex
+    ]
+    for item in absolute {
+      #expect(!item.usesHome, "\(item)")
+      let launches = [launch(cwd: "/Users/anna/acme", account: item)]
+      #expect(RemoteTerminalPolicy.decide(.terminalLaunch(id: "t3", launches: launches, openInTerminal: false), home: nil)
+        == .forward(.terminalLaunch(id: "t3", launches: launches, openInTerminal: false)))
+    }
+    for item in underHome {
+      #expect(item.usesHome, "\(item)")
+      let launches = [launch(cwd: "/Users/anna/acme"), launch(cwd: "/Users/anna/acme", account: item)]
+      #expect(RemoteTerminalPolicy.decide(.terminalLaunch(id: "t3", launches: launches, openInTerminal: false), home: nil)
+        == .answer(.error(id: "t3", code: .badMessage, message: RemoteTerminalPolicy.noHomeAccountMessage, stream: nil)))
+      #expect(RemoteTerminalPolicy.decide(.terminalLaunch(id: "t3", launches: launches, openInTerminal: true), home: "/Users/anna")
+        == .forward(.terminalLaunch(id: "t3", launches: launches, openInTerminal: false)))
     }
   }
 

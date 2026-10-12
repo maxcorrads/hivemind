@@ -46,6 +46,8 @@ const accountEnvelope = z.object({ driver: z.unknown().optional(), label: z.unkn
 const accountEditEnvelope = accountEnvelope.extend({ expectedRevision: z.unknown().optional() });
 const accountOrder = z.object({ driver: z.enum(ACCOUNT_DRIVERS), ids: z.array(z.string().min(1).max(64)).max(ACCOUNT_LIMITS.perDriver) }).strict();
 const accountPolicy = z.object({ driver: z.enum(ACCOUNT_DRIVERS), policy: z.enum(ACCOUNT_POLICIES) }).strict();
+const accountResolve = z.object({ driver: z.enum(ACCOUNT_DRIVERS), accountId: z.string().min(1).max(64).nullish(),
+  record: z.boolean().optional() }).strict();
 const launcherResult = z.object({ status: z.enum(["launched", "failed", "killed"]),
   session: z.string().max(82).optional(), error: z.string().max(500).optional() }).strict();
 
@@ -101,6 +103,7 @@ function schemaFor(path: string, method: string): z.ZodType | undefined {
   if (path === '/api/ui/accounts' && method === 'POST') return accountEnvelope;
   if (path === '/api/ui/accounts/order' && method === 'PUT') return accountOrder;
   if (path === '/api/ui/accounts/policy' && method === 'PUT') return accountPolicy;
+  if (path === '/api/ui/accounts/resolve' && method === 'POST') return accountResolve;
   if (/^\/api\/ui\/accounts\/[^/]+$/.test(path) && method === 'PUT') return accountEditEnvelope;
   if (/\/(?:ping|leave)$/.test(path) || /\/(?:retry|discard)$/.test(path)) return empty;
   // Bot/configuration/recovery schemas have their own narrower ingress readers.

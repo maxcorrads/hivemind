@@ -22,6 +22,16 @@ const vectors = JSON.parse(readFileSync(new URL("./account-paths.vectors.json", 
   environments: Array<{ account: Pick<LaunchAccount, "driver" | "homePath" | "shadowPath">; environment: Array<{ name: string; value: string }> }>;
 };
 
+// The conflict rule HivemindKit's LaunchAccount checks too (macos/Tests/HivemindKitTests/LaunchAccountTests.swift).
+const conflictVectors = JSON.parse(readFileSync(new URL("./account-environment.vectors.json", import.meta.url), "utf8")) as {
+  cases: Array<{
+    account: Pick<LaunchAccount, "driver" | "label" | "homePath" | "shadowPath">;
+    environment: Record<string, string>;
+    secretNames: string[];
+    message: string | null;
+  }>;
+};
+
 const launchAccount = (driver: AccountDriver, homePath = "", shadowPath = "", label = "Work"): LaunchAccount =>
   ({ id: "00000000-0000-4000-8000-000000000001", driver, label, homePath, shadowPath });
 
@@ -125,6 +135,19 @@ test("an account manages its driver's variables, in the environment or the secre
   assert.equal(accountEnvironmentConflict({ CODEX_HOME: "secret-value" }, [], null), null, "no account manages nothing");
   assert.equal(accountEnvironmentConflict({ CODEX_HOMES: "x", MY_CODEX_HOME: "x", HOME_DIR: "x" }, ["CLAUDE_API_KEY"], codex), null);
   assert.ok(!accountEnvironmentConflict({ CODEX_HOME: "V4LUE_MARKER" }, [], codex)!.includes("V4LUE_MARKER"), "never a value");
+});
+
+test("the conflicts follow the vectors the app shares, every controlled name among them", () => {
+  assert.ok(conflictVectors.cases.length >= 20);
+  for (const driver of ACCOUNT_DRIVERS) {
+    for (const name of ACCOUNT_CONTROLLED_ENV[driver]) {
+      assert.ok(conflictVectors.cases.some(item => item.account.driver === driver && (name in item.environment || item.secretNames.includes(name))), name);
+    }
+  }
+  for (const { account, environment, secretNames, message } of conflictVectors.cases) {
+    const launch = launchAccount(account.driver, account.homePath, account.shadowPath, account.label);
+    assert.equal(accountEnvironmentConflict(environment, secretNames, launch), message, JSON.stringify({ account, environment, secretNames }));
+  }
 });
 
 test("only exactly codex or claude takes an account; an alias of a driver with accounts warns", () => {

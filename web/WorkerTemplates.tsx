@@ -3,8 +3,9 @@ import { useEffect, useMemo, useState } from "react";
 import type { Project, Seniority } from "../src/shared/types.ts";
 import { buildLaunchCommand } from "../src/shared/launch-prompt.ts";
 import { launchEnvironmentPrefix, parseLaunchEnvironment } from "../src/shared/launch-environment.ts";
+import { accountDriverForSoftware, softwareAliasWarning, type AccountDriver } from "../src/shared/accounts.ts";
 import type { WorkerTemplate, WorkerTemplateSpec } from "../src/shared/worker-templates.ts";
-import { api } from "./api.ts";
+import { api, type AccountsView } from "./api.ts";
 import { Modal } from "./Modal.tsx";
 import { ModelSelect } from "./ModelSelect.tsx";
 import { templateSecretValueProblem } from "./native-bridge.ts";
@@ -273,10 +274,29 @@ function TemplateEditor({ project, editing, busy, onBusy, onCancel, onSaved }: {
   const [envText, setEnvText] = useState(() => environmentText(editing.spec.environment));
   const [secretsText, setSecretsText] = useState(() => editing.spec.secretNames.join("\n"));
   const [error, setError] = useState("");
+  const [accounts, setAccounts] = useState<AccountsView | null>(null);
   const parsedEnv = useMemo(() => parseLaunchEnvironment(envText), [envText]);
   const draft: WorkerTemplateSpec = { ...spec, environment: parsedEnv.environment, secretNames: secretNamesFrom(secretsText) };
   const preview = templateCommandPreview(draft, project);
   const set = (patch: Partial<WorkerTemplateSpec>) => setSpec(old => ({ ...old, ...patch }));
+  const driver = accountDriverForSoftware(spec.software);
+  // A driver without accounts shows no select: its launches run as they did before accounts.
+  const driverAccounts = driver ? accounts?.accounts.filter(account => account.driver === driver) ?? [] : [];
+  // A hint only: an alias such as codex2 still saves and launches, without an account (docs/accounts.md).
+  const aliasWarning = softwareAliasWarning(spec.software, new Set<AccountDriver>(accounts?.accounts.map(account => account.driver) ?? []));
+  useEffect(() => {
+    let active = true;
+    api.accounts()
+      .then(view => { if (active) setAccounts(view); })
+      .catch(failure => { if (active) setError(String((failure as Error).message || failure)); });
+    return () => { active = false; };
+  }, []);
+  // A pin follows Software only while the driver stays the pinned account's; otherwise the server would refuse the save.
+  const setSoftware = (software: string) => setSpec(old => {
+    const pinned = accounts?.accounts.find(account => account.id === old.accountId);
+    const moved = pinned !== undefined && accountDriverForSoftware(software) !== pinned.driver;
+    return { ...old, software, ...(moved ? { accountId: null } : {}) };
+  });
   const canSave = !busy && slug.trim() && spec.label.trim() && spec.description.trim() && parsedEnv.errors.length === 0 && preview.ok;
 
   const save = async () => {
@@ -312,9 +332,19 @@ function TemplateEditor({ project, editing, busy, onBusy, onCancel, onSaved }: {
       </label>
       <label>
         Software
-        <input className="mono" value={spec.software} onChange={event => set({ software: event.target.value })}
+        <input className="mono" value={spec.software} onChange={event => setSoftware(event.target.value)}
           placeholder="codex2, opencode-hm, claude…" autoComplete="off" spellCheck={false} />
       </label>
+      {aliasWarning && <p className="help-p" role="status">{aliasWarning}</p>}
+      {driver && accounts && driverAccounts.length > 0 && (
+        <label>
+          Account
+          <select value={spec.accountId ?? ""} onChange={event => set({ accountId: event.target.value || null })}>
+            <option value="">Follow the {accounts.policies[driver] === "balanced" ? "Balanced" : "Sequential"} policy</option>
+            {driverAccounts.map(account => <option key={account.id} value={account.id}>{account.label}</option>)}
+          </select>
+        </label>
+      )}
       <ModelSelect software={spec.software} model={spec.model} effort={spec.effort}
         onChange={next => set({ model: next.model, effort: next.effort as WorkerTemplateSpec["effort"] })} />
       <label>

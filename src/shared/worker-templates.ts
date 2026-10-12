@@ -45,6 +45,8 @@ export const workerTemplateSpecSchema = z.object({
   focus: z.string().trim().max(80),
   maxConcurrent: z.number().int().min(1).max(WORKER_TEMPLATE_LIMITS.maxConcurrent),
   enabled: z.boolean(),
+  /** The account a launch uses (docs/accounts.md); missing or null follows the driver's policy. */
+  accountId: z.string().min(1).max(64).nullable().optional(),
 }).strict().superRefine((spec, ctx) => {
   const variables = new Set(Object.keys(spec.environment).map(name => name.toUpperCase()));
   for (const name of spec.secretNames) {

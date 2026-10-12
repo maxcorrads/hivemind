@@ -128,3 +128,121 @@ test("the server's reason is shown and nothing is saved", async t => {
   assert.match(f.host.querySelector('[role="alert"]')!.textContent!, /secretNames: HIVEMIND_TOKEN/);
   assert.deepEqual(f.hive.workerTemplates.list(f.project.id), []);
 });
+
+test("the Account select follows Software: a pin saves, clears, and moves off when the driver changes", async t => {
+  const f = await fixture(t);
+  const human = f.hive.identity.getAgent("human");
+  const codex = f.hive.accounts.create(human, { driver: "codex", label: "Codex work", homePath: "~/.codex-work", shadowPath: "" });
+  f.hive.accounts.create(human, { driver: "codex", label: "Codex personal", homePath: "", shadowPath: "~/.codex-personal" });
+  f.hive.accounts.create(human, { driver: "claude", label: "Claude work", homePath: "~/.claude-work", shadowPath: "" });
+  const accountSelect = () => Array.from(f.host.querySelectorAll("label"))
+    .find(label => label.firstChild?.textContent?.trim() === "Account")?.querySelector("select") ?? null;
+  const until = async (check: () => boolean) => {
+    for (let i = 0; i < 50 && !check(); i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+    assert.ok(check());
+  };
+  const choose = async (value: string) => {
+    const select = accountSelect();
+    assert.ok(select, "the Account select");
+    await act(async () => {
+      select.value = value;
+      select.dispatchEvent(new window.Event("change", { bubbles: true }) as unknown as Event);
+    });
+  };
+
+  await f.click("New template");
+  await until(() => accountSelect() !== null);
+  assert.deepEqual(Array.from(accountSelect()!.options).map(option => option.textContent),
+    ["Follow the Sequential policy", "Codex work", "Codex personal"]);
+  await choose(codex.id);
+  await f.type("Name", "Codex pinned");
+  await f.type("Slug", "codex-pinned");
+  await f.type("When to use it", "Pinned to the work login.");
+  await f.submit();
+  const [saved] = f.hive.workerTemplates.list(f.project.id);
+  assert.equal(saved!.spec.accountId, codex.id);
+
+  await f.click("Edit Codex pinned");
+  await until(() => accountSelect() !== null);
+  assert.equal(accountSelect()!.value, codex.id, "the saved pin is shown");
+  await choose("");
+  await f.submit();
+  assert.equal(f.hive.workerTemplates.get(saved!.id).spec.accountId, null, "clearing the pin follows the policy");
+
+  await f.click("Edit Codex pinned");
+  await until(() => accountSelect() !== null);
+  await choose(codex.id);
+  await f.type("Software", "claude");
+  assert.equal(accountSelect()!.value, "", "the pin moves off when the driver changes");
+  assert.deepEqual(Array.from(accountSelect()!.options).map(option => option.textContent), ["Follow the Sequential policy", "Claude work"]);
+  await f.type("Software", "codex2");
+  assert.equal(accountSelect(), null, "an alias of a driver has no account select");
+});
+
+test("the Account select names the driver's policy and stays hidden for a driver without accounts", async t => {
+  const f = await fixture(t);
+  const human = f.hive.identity.getAgent("human");
+  f.hive.accounts.create(human, { driver: "codex", label: "Codex work", homePath: "~/.codex-work", shadowPath: "" });
+  f.hive.accounts.setPolicy(human, "codex", "balanced");
+  const accountSelect = () => Array.from(f.host.querySelectorAll("label"))
+    .find(label => label.firstChild?.textContent?.trim() === "Account")?.querySelector("select") ?? null;
+  const until = async (check: () => boolean) => {
+    for (let i = 0; i < 50 && !check(); i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+    assert.ok(check());
+  };
+
+  await f.click("New template");
+  await until(() => accountSelect() !== null);
+  assert.deepEqual(Array.from(accountSelect()!.options).map(option => option.textContent), ["Follow the Balanced policy", "Codex work"]);
+  await f.type("Software", "claude");
+  assert.equal(accountSelect(), null, "Claude has no accounts");
+  await f.type("Software", "codex");
+  assert.ok(accountSelect(), "the select comes back with Codex");
+});
+
+test("an alias of a driver with accounts shows a hint that never blocks Save", async t => {
+  const f = await fixture(t);
+  const human = f.hive.identity.getAgent("human");
+  f.hive.accounts.create(human, { driver: "codex", label: "Codex work", homePath: "~/.codex-work", shadowPath: "" });
+  const hint = "codex2 launches without a Codex account: accounts apply only when Software is exactly codex.";
+  const until = async (check: () => boolean) => {
+    for (let i = 0; i < 50 && !check(); i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+    assert.ok(check());
+  };
+
+  await f.click("New template");
+  await f.type("Name", "Codex alias");
+  await f.type("Slug", "codex-alias");
+  await f.type("When to use it", "Alias check.");
+  await f.type("Software", "codex2");
+  await until(() => f.host.textContent!.includes(hint));
+  assert.equal(f.button("Save template")!.disabled, false, "the hint does not disable Save");
+  await f.submit();
+  const [saved] = f.hive.workerTemplates.list(f.project.id);
+  assert.equal(saved?.spec.software, "codex2", "the template saves with the alias");
+
+  await f.click("Edit Codex alias");
+  await until(() => f.host.textContent!.includes(hint));
+  await f.type("Software", "codex");
+  assert.equal(f.host.textContent!.includes("launches without a Codex account"), false, "the exact command has no hint");
+});
+
+test("an alias hint names its own driver, and an alias of a driver without accounts shows none", async t => {
+  const f = await fixture(t);
+  const human = f.hive.identity.getAgent("human");
+  f.hive.accounts.create(human, { driver: "claude", label: "Claude work", homePath: "~/.claude-work", shadowPath: "" });
+  const accountSelect = () => Array.from(f.host.querySelectorAll("label"))
+    .find(label => label.firstChild?.textContent?.trim() === "Account")?.querySelector("select") ?? null;
+  const until = async (check: () => boolean) => {
+    for (let i = 0; i < 50 && !check(); i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+    assert.ok(check());
+  };
+
+  await f.click("New template");
+  await f.type("Software", "claude");
+  await until(() => accountSelect() !== null);
+  await f.type("Software", "codex2");
+  assert.equal(f.host.textContent!.includes("launches without"), false, "Codex has no accounts");
+  await f.type("Software", "claude-work");
+  assert.match(f.host.textContent!, /claude-work launches without a Claude account: accounts apply only when Software is exactly claude\./);
+});

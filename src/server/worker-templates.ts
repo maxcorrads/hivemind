@@ -1,10 +1,12 @@
 import type { z } from "zod";
 import { HiveError, type Agent } from "../shared/types.ts";
 import { buildLaunchCommand } from "../shared/launch-prompt.ts";
+import { ACCOUNT_ERRORS, accountDriverForSoftware, accountEnvironmentConflict, toLaunchAccount } from "../shared/accounts.ts";
 import {
   createWorkerTemplateSchema, updateWorkerTemplateSchema, WORKER_TEMPLATE_LIMITS,
   type WorkerTemplate, type WorkerTemplateSpec,
 } from "../shared/worker-templates.ts";
+import type { AccountStore } from "./accounts.ts";
 import type { Core } from "./services/ports.ts";
 
 type Row = { id: string; project_id: string; slug: string; revision: number; spec: string; created_at: number; updated_at: number };
@@ -12,6 +14,7 @@ type Row = { id: string; project_id: string; slug: string; revision: number; spe
 export type WorkerTemplateDeps = Core & {
   readonly identity: { templateWorkerCount(templateId: string): number };
   readonly launcherQueue: { hasActiveTemplateRequests(templateId: string): boolean };
+  readonly accounts: Pick<AccountStore, "list">;
 };
 
 /** Field paths and reasons, never values: a template's environment may hold anything Human typed. */
@@ -23,7 +26,7 @@ function parse<T>(schema: z.ZodType<T>, raw: unknown): T {
 }
 
 /** The launch builder must accept the template as it will when a brain launches it. */
-function assertLaunchable(spec: WorkerTemplateSpec): void {
+function assertLaunchable(spec: WorkerTemplateSpec, accounts: WorkerTemplateDeps["accounts"]): void {
   try {
     buildLaunchCommand({ software: spec.software, model: spec.model, effort: spec.effort, extraFlags: spec.extraFlags,
       workspacePath: null, cdWorktree: false, projectSlug: "project", passProject: true, role: "worker",
@@ -31,6 +34,19 @@ function assertLaunchable(spec: WorkerTemplateSpec): void {
   } catch (error) {
     throw new HiveError(400, `Invalid worker template: ${(error as Error).message}`);
   }
+  assertAccountFits(spec, accounts);
+}
+
+/** A pinned account must exist, belong to Software's driver, and keep the template's variables and secrets clear of it. */
+function assertAccountFits(spec: WorkerTemplateSpec, accounts: WorkerTemplateDeps["accounts"]): void {
+  if (!spec.accountId) return;
+  const account = accounts.list().accounts.find(candidate => candidate.id === spec.accountId);
+  if (!account) throw new HiveError(400, `${ACCOUNT_ERRORS.unknown}: the pinned account does not exist`);
+  if (accountDriverForSoftware(spec.software) !== account.driver) {
+    throw new HiveError(400, `${ACCOUNT_ERRORS.driverMismatch}: Pin an account only when Software is exactly codex or claude.`);
+  }
+  const conflict = accountEnvironmentConflict(spec.environment, spec.secretNames, toLaunchAccount(account));
+  if (conflict) throw new HiveError(400, `${ACCOUNT_ERRORS.conflict}: ${conflict}`);
 }
 
 /** Human-only CRUD of a project's worker templates, with revision checks. */
@@ -73,7 +89,7 @@ export class WorkerTemplateStore {
   create(actor: Agent, projectId: string, raw: unknown): WorkerTemplate {
     this.human(actor);
     const input = parse(createWorkerTemplateSchema, raw);
-    assertLaunchable(input.spec);
+    assertLaunchable(input.spec, this.deps.accounts);
     return this.deps.storage.transaction(() => {
       const count = Number((this.db.prepare("SELECT COUNT(*) AS n FROM worker_templates WHERE project_id = ?").get(projectId) as { n: number }).n);
       if (count >= WORKER_TEMPLATE_LIMITS.perProject) throw new HiveError(429, `A project has at most ${WORKER_TEMPLATE_LIMITS.perProject} worker templates`);
@@ -89,7 +105,7 @@ export class WorkerTemplateStore {
   update(actor: Agent, id: string, raw: unknown): WorkerTemplate {
     this.human(actor);
     const input = parse(updateWorkerTemplateSchema, raw);
-    assertLaunchable(input.spec);
+    assertLaunchable(input.spec, this.deps.accounts);
     return this.deps.storage.transaction(() => {
       const row = this.row(id);
       if (row.revision !== input.expectedRevision) throw new HiveError(409, "The worker template changed; reload it before saving");

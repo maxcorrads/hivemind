@@ -2,8 +2,9 @@ import { z } from "zod";
 import { HiveError, type Agent } from "../shared/types.ts";
 import {
   ACCOUNT_DRIVERS, ACCOUNT_ERRORS, ACCOUNT_LIMITS, ACCOUNT_POLICIES, accountSpecSchema,
-  type AccountDriver, type AccountPolicies, type AccountPolicy, type AccountSpec, type AgentAccount,
+  type AccountDriver, type AccountPolicies, type AccountPolicy, type AccountSpec, type AccountUsage, type AgentAccount,
 } from "../shared/accounts.ts";
+import { selectAccount, type AccountSelection } from "../shared/account-selection.ts";
 import type { Core } from "./services/ports.ts";
 
 type Row = {
@@ -35,7 +36,8 @@ function parse<T>(schema: z.ZodType<T>, raw: unknown): T {
  * checks. Paths are checked by accountSpecSchema, which applies accountPathProblem to both.
  */
 export class AccountStore {
-  constructor(private readonly deps: Core) {}
+  /** `usage` supplies each account's latest usage; until phase 5 there is none, so every account reads as unknown. */
+  constructor(private readonly deps: Core, private readonly usage: () => ReadonlyMap<string, AccountUsage> = () => new Map()) {}
 
   private get db() { return this.deps.storage.db; }
 
@@ -163,6 +165,19 @@ export class AccountStore {
       this.changed();
       return this.list();
     });
+  }
+
+  /**
+   * The account a launch of `driver` uses: the pin when one is given, else the driver's policy (docs/accounts.md). With
+   * `record`, the chosen account counts as selected, so balanced round-robin moves on to the next one.
+   */
+  resolve(actor: Agent, input: { driver: AccountDriver; accountId?: string | null; record?: boolean }, now: number): AccountSelection {
+    this.human(actor);
+    const catalog = this.list();
+    const selection = selectAccount({ accounts: catalog.accounts.filter(account => account.driver === input.driver),
+      policy: catalog.policies[input.driver], usage: this.usage(), now, pin: input.accountId ?? null });
+    if (input.record && selection.kind === "account") this.markSelected(selection.account.id, now);
+    return selection;
   }
 
   /** Internal: a launch picked this account. Emits no event, since Human did not change anything. */

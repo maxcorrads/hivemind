@@ -6,7 +6,7 @@ import { test, type TestContext } from "node:test";
 import { createApp } from "./app.ts";
 import { Hive } from "./hive.ts";
 import { insertRow } from "./test-fixtures.ts";
-import { ACCOUNT_LIMITS, type AccountSpec, type AgentAccount } from "../shared/accounts.ts";
+import { ACCOUNT_LIMITS, type AccountSpec, type AccountUsage, type AgentAccount } from "../shared/accounts.ts";
 
 // Agent accounts (phase 1, #321): Human-only catalog over HTTP. In-process only: no server or socket is started.
 
@@ -149,4 +149,45 @@ test("an agent or bot Authorization header is refused on the account routes, as 
   assert.equal((await call("DELETE", "/api/ui/accounts/missing?revision=1", undefined, bearer)).status, 403);
   assert.deepEqual(events, [], "a refused request changes nothing");
   assert.deepEqual(hive.accounts.list().accounts, []);
+});
+
+const limited = (accountId: string, limitResetAt: number): AccountUsage => ({ accountId, snapshot: null, lastAttemptAt: null,
+  lastError: null, limitResetAt, limitErrorAt: null });
+
+test("resolve answers the account a launch uses: policy, pin, exhaustion and record, and publishes nothing", async t => {
+  const { hive, call, events } = fixture(t);
+  const resolve = (body: Record<string, unknown>, headers: Record<string, string> = {}) =>
+    call("POST", "/api/ui/accounts/resolve", body, headers);
+  assert.deepEqual((await resolve({ driver: "codex" })).json, { selection: { kind: "none" } });
+
+  const work = await call("POST", "/api/ui/accounts", spec());
+  const personal = await call("POST", "/api/ui/accounts", spec({ label: "Codex personal", homePath: "", shadowPath: "~/.codex-personal" }));
+  const sequential = await resolve({ driver: "codex" });
+  assert.equal(sequential.status, 200);
+  assert.deepEqual(sequential.json, { selection: { kind: "account", account: work.json, reason: "sequential", stale: true, warning: null } });
+  assert.equal(hive.accounts.get(work.json.id).lastSelectedAt, null, "a probe without record changes nothing");
+
+  await resolve({ driver: "codex", record: true });
+  assert.notEqual(hive.accounts.get(work.json.id).lastSelectedAt, null, "a recorded pick is what balanced round-robin reads");
+  assert.equal(hive.accounts.get(personal.json.id).lastSelectedAt, null);
+
+  const pinned = await resolve({ driver: "codex", accountId: personal.json.id });
+  assert.deepEqual([pinned.json.selection.kind, pinned.json.selection.reason, pinned.json.selection.account.id],
+    ["account", "pin", personal.json.id]);
+  assert.deepEqual((await resolve({ driver: "codex", accountId: "missing" })).json, { selection: { kind: "unknown-pin", pin: "missing" } });
+
+  // Usage is phase 5's; here limit resets stand in for it through the store's usage provider.
+  const soon = Date.now() + 3_600_000, later = soon + 3_600_000;
+  const usage = new Map([[work.json.id, limited(work.json.id, soon)], [personal.json.id, limited(personal.json.id, later)]]);
+  (hive.accounts as unknown as { usage: () => ReadonlyMap<string, AccountUsage> }).usage = () => usage;
+  assert.deepEqual((await resolve({ driver: "codex" })).json, { selection: { kind: "exhausted", earliestReset: soon } });
+  const usedUp = await resolve({ driver: "codex", accountId: personal.json.id });
+  assert.equal(usedUp.json.selection.kind, "account");
+  assert.equal(usedUp.json.selection.warning, `Codex personal is used up until ${new Date(later).toISOString()}`);
+  usage.set(work.json.id, limited(work.json.id, Date.now() - 1));
+  assert.equal((await resolve({ driver: "codex" })).json.selection.account.id, work.json.id, "a past reset is not exhausted");
+
+  assert.equal((await resolve({ driver: "random" })).status, 400);
+  assert.equal((await resolve({ driver: "codex" }, { authorization: "Bearer not-a-human-token" })).status, 403);
+  assert.equal(events.length, 2, "only the two creates publish an event");
 });

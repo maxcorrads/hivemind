@@ -29,6 +29,7 @@ when the preview builds and the environment variables are valid; the server's re
 | `seniority`, `focus` | The worker's seniority (`junior`, `mid`, `senior`) and an optional focus label (at most 80 characters) |
 | `maxConcurrent` | How many workers of this template may run at once, 1–8 |
 | `enabled` | Whether brains may use it |
+| `accountId` | Optional: the [account](accounts.md) every launch of this template uses, an account of Software's driver (`codex` or `claude` exactly). Missing or `null` follows the driver's policy. Refused when the account is unknown, its driver differs from Software, or a launch variable or secret name would conflict with it (`account_unknown`, `account_driver_mismatch`, `account_env_conflict`) |
 
 A template is checked with the same launch builder the Launch sheet uses, so any template that saves can be launched.
 Every edit bumps its `revision`; edits and deletions must name the revision they started from. A project has at most
@@ -44,6 +45,15 @@ Hivemind Server adds the template's secrets from its Keychain to the launch file
 copies the command for a terminal; secrets are then not passed. The launch prompt joins with `claim=<ticket>` and tells
 the worker to create its own git worktree and branch when its task arrives. A template at its `maxConcurrent` limit
 cannot be launched; a reserved worker whose launch fails gives up after 30 minutes.
+
+A template with an **Account** (`accountId`) starts every worker under that account. Without one, a template whose
+Software is exactly `codex` or `claude` follows that driver's policy when it has accounts, as the Launch sheet's Auto
+does. **Start** and **Open in Terminal** choose the account before they reserve the worker, so a launch that cannot take
+one reserves nothing and the sheet says why: the pinned account was removed or every account is used up. A variable or
+secret name of the template that the account manages disables both and shows the conflict. A pin wins even when its
+account is used up: the worker starts and, on the Mac, the sheet shows the account's warning. **Reserve and copy**
+copies the command with no account. A brain's approved request chooses its account the same way; if none can take it,
+the request stays queued. See [Choosing an account](accounts.md#choosing-an-account).
 
 ## Secrets
 
