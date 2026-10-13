@@ -486,3 +486,26 @@ test("the channel page reports its first unread root, and mark-unread reopens ro
   const thread = await (await app.request(`/api/ui/channels/${f.room.id}/messages?threadId=${first.id}`)).json() as Record<string, unknown>;
   assert.equal("firstUnreadSeq" in thread, false, "a thread page has no channel divider");
 });
+
+test("an archived channel leaves the unread counts and For you, and comes back when it is unarchived", t => {
+  const f = fixture(t);
+  const side = f.hive.channels.createChannel(f.brain, { name: "side-task", type: "public" });
+  const mention = f.post("@Human done here", null, f.brain, side.id);
+  const before = f.hive.reads.readSnapshot(f.human);
+  assert.equal(before.unread[side.id], 1);
+  assert.ok(before.mentions.some((m) => m.id === mention.id));
+  f.hive.rooms.setArchived(f.human, side.id, true);
+  const archived = f.hive.reads.readSnapshot(f.human);
+  assert.equal(archived.unread[side.id] ?? 0, 0, "the sidebar keeps archived channels out of attention; so do the counts");
+  assert.ok(!archived.mentions.some((m) => m.id === mention.id));
+  assert.equal(archived.mentionCounts[f.first.slug], before.mentionCounts[f.first.slug]! - 1);
+  assert.equal(f.hive.reads.unreadCounts(f.human)[side.id] ?? 0, 0);
+  assert.ok(!f.hive.reads.mentionInbox(f.human).messages.some((m) => m.id === mention.id));
+  assert.ok(f.hive.reads.activity(f.human, { unreadOnly: false }).items.some((item) => item.message.id === mention.id),
+    "Activity's every-entry view still lists it");
+  f.hive.reads.markMentionsSeen(f.human);
+  f.hive.rooms.setArchived(f.human, side.id, false);
+  const back = f.hive.reads.readSnapshot(f.human);
+  assert.ok((back.unread[side.id] ?? 0) >= 1, "Mark all read left the archived channel's mail as it was");
+  assert.ok(back.mentions.some((m) => m.id === mention.id));
+});

@@ -18,6 +18,17 @@ export class ReadService {
 
   private get db() { return this.deps.storage.db; }
 
+  /**
+   * The channels whose unread messages count: the visible ones that are not archived. The sidebar already keeps
+   * archived channels out of a project's attention, and walking their unread made up most of every count once
+   * finished task channels piled up (docs/unread-navigation.md). Their history and Activity stay as they are.
+   */
+  private unreadChannels(actor: Agent): Channel[] {
+    const archived = new Set((this.db.prepare("SELECT channel_id FROM channel_archives").all() as { channel_id: string }[])
+      .map((row) => row.channel_id));
+    return this.deps.channels.listChannels(actor).filter((channel) => !archived.has(channel.id));
+  }
+
   markRead(actor: Agent, channelId: string, seq: number) {
     this.db.prepare(
       `INSERT INTO reads (agent_id, channel_id, last_read_seq) VALUES (?, ?, ?)
@@ -34,7 +45,7 @@ export class ReadService {
   }
 
   unreadCounts(actor: Agent): Record<string, number> {
-    return this.deps.readState.counts(actor.id, this.deps.channels.listChannels(actor).map((channel) => channel.id));
+    return this.deps.readState.counts(actor.id, this.unreadChannels(actor).map((channel) => channel.id));
   }
 
   /** Locate the newest unread root or reply without changing any receipt. */
@@ -95,12 +106,12 @@ export class ReadService {
   }
 
   markMentionsSeen(actor: Agent, projectId?: string) {
-    this.deps.readState.markMentions(actor.id, this.deps.channels.listChannels(actor).map((channel) => channel.id), projectId);
+    this.deps.readState.markMentions(actor.id, this.unreadChannels(actor).map((channel) => channel.id), projectId);
   }
 
   mentionInbox(actor: Agent, limit = 30, beforeSeq?: number, projectId?: string): MentionPage {
     return this.deps.readState.snapshot(() => {
-      const page = this.deps.readState.page(actor.id, this.deps.channels.listChannels(actor).map((channel) => channel.id), limit, beforeSeq, projectId);
+      const page = this.deps.readState.page(actor.id, this.unreadChannels(actor).map((channel) => channel.id), limit, beforeSeq, projectId);
       return { messages: this.deps.messageQueries.loadMessagesByIds(page.ids, actor.id), hasMore: page.hasMore, ...this.deps.readState.stamp() };
     });
   }
@@ -109,7 +120,9 @@ export class ReadService {
   activity(actor: Agent, options: Omit<FeedOptions, "messageId"> = {}): ActivityPage {
     return this.deps.readState.snapshot(() => {
       const channels = this.deps.channels.listChannels(actor);
-      const page = this.deps.readState.feed(actor.id, channels.map((channel) => channel.id), options);
+      // Only unread entries (the default) follow the Unread tab; every entry also lists archived channels.
+      const scope = options.unreadOnly === false ? channels : this.unreadChannels(actor);
+      const page = this.deps.readState.feed(actor.id, scope.map((channel) => channel.id), options);
       return { items: this.items(actor, channels, page.rows), hasMore: page.hasMore, ...this.deps.readState.stamp() };
     });
   }
@@ -142,7 +155,7 @@ export class ReadService {
   readSnapshot(actor: Agent): ReadSnapshot {
     return this.deps.readState.snapshot(() => {
       const channels = this.deps.channels.listChannels(actor);
-      const ids = channels.map((channel) => channel.id);
+      const ids = this.unreadChannels(actor).map((channel) => channel.id);
       const page = this.deps.readState.page(actor.id, ids);
       const counts = this.deps.readState.mentionCounts(actor.id, ids);
       return {
