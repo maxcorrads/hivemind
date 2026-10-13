@@ -181,6 +181,12 @@
  },
  {
   "type": "index",
+  "name": "idx_messages_unread_cover",
+  "tbl": "messages",
+  "sql": "CREATE INDEX idx_messages_unread_cover ON messages(channel_id, seq, author_id, thread_id, id, mentions, recipients)"
+ },
+ {
+  "type": "index",
   "name": "idx_room_events_channel_revision",
   "tbl": "room_events",
   "sql": "CREATE INDEX idx_room_events_channel_revision ON room_events(channel_id, revision)"

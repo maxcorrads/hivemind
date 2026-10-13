@@ -20,6 +20,7 @@ import { channelArchives } from './channel-archives.ts';
 import { agentAccounts } from './agent-accounts.ts';
 import { agentAccountUsage } from './agent-account-usage.ts';
 import { messageThreadAuthorIndex } from './message-thread-author-index.ts';
+import { messageUnreadCoverIndex } from './message-unread-cover-index.ts';
 import { schemaShape, validateCoreStorage, validateSchema, type SchemaShape } from "./validate.ts";
 
 /**
@@ -95,6 +96,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 41, name: "agent_accounts", up: agentAccounts },
   { version: 42, name: "agent_account_usage", up: agentAccountUsage },
   { version: 43, name: "message_thread_author_index", up: messageThreadAuthorIndex },
+  { version: 44, name: "message_unread_cover_index", up: messageUnreadCoverIndex },
 ];
 
 /** The last idempotent baseline migration; later migrations may assume its schema. */
