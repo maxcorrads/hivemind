@@ -302,6 +302,16 @@ does). Closing the window detaches it; the session keeps running.
 Processes in the sessions are started by Hivemind Server.app, so macOS privacy
 prompts (for example for the Documents folder) name **Hivemind Server**.
 
+An ad-hoc signed app is identified by its exact build, so a rebuilt Hivemind
+Server.app loses those grants. Agents then fail in a protected folder:
+`ls: .: Operation not permitted`, or brew's "The current working directory must
+be readable". Turn **Documents Folder** back on for Hivemind Server in System
+Settings → Privacy & Security → Files and Folders. If it is already on, run
+`tccutil reset SystemPolicyDocumentsFolder com.maxcorrads.hivemind.server` and
+allow the prompt on the next launch. To keep grants across rebuilds, build with
+`HIVEMIND_CODESIGN_IDENTITY` set to a signing identity from your keychain
+([Building from source](#building-from-source)).
+
 #### Security note
 
 By the user's choice there is **no confirmation dialog** for a launch: one click
@@ -506,6 +516,8 @@ You need Xcode (Swift 6) and the repo's normal Node.js/npm setup
 (`npm ci`). From the repo root:
 
 ```bash
+HIVEMIND_CODESIGN_IDENTITY="Developer ID Application: Name (TEAMID)" ./macos/build.sh
+                                # sign with a keychain identity, so privacy grants survive rebuilds
 ./macos/build.sh                # both apps into macos/dist/
 ./macos/build.sh --ui-only      # only Hivemind.app
 ./macos/build.sh --server-only  # only Hivemind Server.app
