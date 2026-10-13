@@ -4,6 +4,12 @@
 # ad-hoc signed. Nothing here starts a server or opens an app: the only
 # thing run from the bundle is `node bin/hivemind.mjs --help`.
 #
+# Set HIVEMIND_CODESIGN_IDENTITY to a signing identity in your keychain (see
+# `security find-identity -v -p codesigning`) to sign with it instead of
+# ad-hoc. macOS keys privacy grants (the Documents folder, Full Disk Access)
+# to an ad-hoc app's exact build, so every rebuild loses them; with a real
+# identity they survive rebuilds.
+#
 # Usage: macos/build.sh [--ui-only | --server-only] [--skip-node]
 #   --ui-only      build only Hivemind.app
 #   --server-only  build only Hivemind Server.app
@@ -235,16 +241,19 @@ assemble() {
   APP="$app"
 }
 
-# Ad-hoc signature: enough for Apple Silicon to run an unsigned build. Inner
-# code first, then the bundle, which seals everything else as resources.
+# Ad-hoc signature by default: enough for Apple Silicon to run an unsigned
+# build. HIVEMIND_CODESIGN_IDENTITY signs with that identity instead (no
+# hardened runtime, no notarization). Inner code first, then the bundle, which
+# seals everything else as resources.
+SIGN_IDENTITY="${HIVEMIND_CODESIGN_IDENTITY:--}"
 sign() {
   local app="$1"
   if [ -d "$app/Contents/Helpers" ]; then
-    find "$app/Contents/Helpers" -type f -perm -u+x -print0 | xargs -0 codesign --force --sign - --timestamp=none
+    find "$app/Contents/Helpers" -type f -perm -u+x -print0 | xargs -0 codesign --force --sign "$SIGN_IDENTITY" --timestamp=none
   fi
   find "$app/Contents/Resources" -type f \( -name '*.node' -o -name '*.dylib' \) -print0 \
-    | xargs -0 codesign --force --sign - --timestamp=none
-  codesign --force --sign - --timestamp=none "$app"
+    | xargs -0 codesign --force --sign "$SIGN_IDENTITY" --timestamp=none
+  codesign --force --sign "$SIGN_IDENTITY" --timestamp=none "$app"
   codesign --verify --strict "$app"
 }
 
