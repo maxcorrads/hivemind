@@ -6,6 +6,13 @@ import { api, type Snapshot } from "./api.ts";
 import { newerTelegramHealth, type TelegramHealth } from "./telegram-health.ts";
 
 /**
+ * The least time between two read-state refetches. Every message asks for the read state again, and with a long
+ * unread backlog one answer costs the server hundreds of milliseconds of synchronous SQLite: while agents post
+ * several messages a second, an unpaced refetch loop kept the one server thread busy and every agent call waited.
+ */
+const READ_REFRESH_GAP_MS = 2000;
+
+/**
  * The hive snapshot plus the read-state fence, refresh and receipt queues that
  * keep its unread counts consistent with what the Human has actually seen.
  */
@@ -45,11 +52,17 @@ export function useHiveSnapshot(setErr: (error: string) => void) {
       return () => window.clearTimeout(timer);
     };
     const onError = (error: unknown) => setErr(String(error));
+    // The first refetch after a quiet spell still starts at once; the next ones wait out READ_REFRESH_GAP_MS.
+    let lastRefresh = -Infinity;
+    const paced = (run: () => void) => {
+      const timer = window.setTimeout(() => { lastRefresh = Date.now(); run(); }, Math.max(16, lastRefresh + READ_REFRESH_GAP_MS - Date.now()));
+      return () => window.clearTimeout(timer);
+    };
     const refresh = createReadRefresh(async (signal) => {
       const ticket = readFence.current.ticket();
       const next = await api.readState(signal);
       if (!signal.aborted && !acceptRead(next, ticket) && readFence.current.current(ticket)) refresh.request();
-    }, later, onError);
+    }, paced, onError);
     const makeQueue = () => createReceiptQueue(async (scope, seqs, signal) => {
       const ticket = readFence.current.ticket();
       const next = await api.markMessagesSeen(scope.channelId, scope.threadId, seqs, signal);
