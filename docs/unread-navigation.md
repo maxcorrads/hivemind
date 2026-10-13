@@ -51,6 +51,14 @@ archived-channel disclosure remain intact.
 A jump also reveals Messages when Tasks or Contract was selected,
 without discarding the composer's draft. Those tabs remain selectable afterwards.
 
+Archived channels do not count. Their unread messages leave the per-channel
+counts, the For you badge, the Unread tab and its "Mark all read", as the
+sidebar already left them out of a project's attention. Their history stays
+readable, Activity's every-entry view still lists their For you messages, and
+unarchiving a channel brings its unread back. This keeps the counts' cost to
+the channels in use: on one hive, finished task channels held two thirds of
+every unread walk.
+
 ## Verification
 
 Regression coverage includes ordinary roots, old-thread replies, sparse and
