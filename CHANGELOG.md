@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.9.0](https://github.com/maxcorrads/hivemind/compare/v0.8.0...v0.9.0) (2026-10-14)
+
+
+### Features
+
+* **accounts:** account catalog, API and Accounts sheet ([#321](https://github.com/maxcorrads/hivemind/issues/321)) ([#327](https://github.com/maxcorrads/hivemind/issues/327)) ([a22a6dd](https://github.com/maxcorrads/hivemind/commit/a22a6dd4bf7b419be95e1964410208a684cc9eac))
+* **accounts:** Claude shadow homes sharing transcripts across logins ([#324](https://github.com/maxcorrads/hivemind/issues/324)) ([#330](https://github.com/maxcorrads/hivemind/issues/330)) ([45c6aab](https://github.com/maxcorrads/hivemind/commit/45c6aab7f9a6a3fdccb838bed186d1aacc81305e))
+* **accounts:** Codex shadow homes with Prepare before login ([#323](https://github.com/maxcorrads/hivemind/issues/323)) ([#329](https://github.com/maxcorrads/hivemind/issues/329)) ([9bcafa5](https://github.com/maxcorrads/hivemind/commit/9bcafa5eab22f3564dbde80af58c6f6ccb5de50a))
+* **accounts:** contracts for named Codex and Claude accounts ([#320](https://github.com/maxcorrads/hivemind/issues/320)) ([#326](https://github.com/maxcorrads/hivemind/issues/326)) ([9d8b3ff](https://github.com/maxcorrads/hivemind/commit/9d8b3ffa2dd5444b95e20d49dd9c67dfdb5922db))
+* **accounts:** forecast when each quota window runs out, and show what is left ([#319](https://github.com/maxcorrads/hivemind/issues/319)) ([#342](https://github.com/maxcorrads/hivemind/issues/342)) ([01e9d2f](https://github.com/maxcorrads/hivemind/commit/01e9d2f47a848e9f5f7fa25bf58ae4af3421207e))
+* **accounts:** pick an account per launch and start sessions under it ([#322](https://github.com/maxcorrads/hivemind/issues/322)) ([#328](https://github.com/maxcorrads/hivemind/issues/328)) ([66ec1ce](https://github.com/maxcorrads/hivemind/commit/66ec1ceb75b75a390fbdc8bd806defc7a1cccced))
+* **accounts:** usage probe and dashboard for every account ([#325](https://github.com/maxcorrads/hivemind/issues/325)) ([#331](https://github.com/maxcorrads/hivemind/issues/331)) ([5039740](https://github.com/maxcorrads/hivemind/commit/5039740e0def4707443404f6593ff9f1579c6b0d))
+* **launch:** each Resume card can choose its own software, and Haiku 5.5 for Claude ([#344](https://github.com/maxcorrads/hivemind/issues/344)) ([3e0e72d](https://github.com/maxcorrads/hivemind/commit/3e0e72d12d83aaa75f6e01b8b31765f26e19e3c8))
+* **launch:** resume each employee's own CLI conversation, found from local transcripts ([#349](https://github.com/maxcorrads/hivemind/issues/349)) ([9d3c503](https://github.com/maxcorrads/hivemind/commit/9d3c503d60974c37544ea24a96923339058cde27))
+
+
+### Bug Fixes
+
+* **accounts:** a stale read whose pace already ran the window out says so ([#319](https://github.com/maxcorrads/hivemind/issues/319)) ([#343](https://github.com/maxcorrads/hivemind/issues/343)) ([a82a8d4](https://github.com/maxcorrads/hivemind/commit/a82a8d419a10948dd1379fb584be026bc58c4bdc))
+* **deps:** patch proxy-addr, ip-address and fast-uri advisories ([#336](https://github.com/maxcorrads/hivemind/issues/336)) ([2f6769c](https://github.com/maxcorrads/hivemind/commit/2f6769cc865ead38172249de8f0dc0caf51d33c4))
+* **launch:** Resume leaves out archived employees, and task-bound workers get Resume… ([#351](https://github.com/maxcorrads/hivemind/issues/351)) ([55a36cc](https://github.com/maxcorrads/hivemind/commit/55a36cc0faf4e6022840b2b0f0c60d68643d64c8))
+* **mcp:** zero-token idle listening for Cursor through its stop hook ([#341](https://github.com/maxcorrads/hivemind/issues/341)) ([be92787](https://github.com/maxcorrads/hivemind/commit/be9278735028b0708d77cdbfd1d841965e03d13c))
+
+
+### Performance Improvements
+
+* **read-state:** index replies by thread and author, so the snapshot stops blocking the server ([#345](https://github.com/maxcorrads/hivemind/issues/345)) ([da0100c](https://github.com/maxcorrads/hivemind/commit/da0100c14ca499bd7c3f21993693d888f2e736f9))
+* **read-state:** leave archived channels out of the unread walk ([#347](https://github.com/maxcorrads/hivemind/issues/347)) ([f5ae013](https://github.com/maxcorrads/hivemind/commit/f5ae013e8487f78bc770f697fd086155e929843e))
+* **read-state:** pace read-state refetches and cover the unread walk, so agents stop timing out ([#346](https://github.com/maxcorrads/hivemind/issues/346)) ([b7ae649](https://github.com/maxcorrads/hivemind/commit/b7ae649411f41ffb2db2b1cf34b4717616478f29))
+
 ## [0.8.0](https://github.com/maxcorrads/hivemind/compare/v0.7.0...v0.8.0) (2026-09-29)
 
 
