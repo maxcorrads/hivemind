@@ -231,9 +231,10 @@ export function AgentPanel({ agentId, agents, projects, tick, onClose, onMessage
             {(stopSession || runtime?.sessionName && runtime.sessionState === 'reconnecting') &&
               <button type="button" className="btn" onClick={() => setTerminalSession(stopSession ?? runtime!.sessionName)}>Open terminal</button>}
             {active && agent.role === 'worker' && <button type="button" className="btn" onClick={() => onClear(agent)}>Clear context…</button>}
-            {fixed && <button type="button" className="btn" disabled={!active || Boolean(stopSession) || runtime?.sessionState === 'running'}
+            {/* A task-bound worker resumes the same way: it rejoins by name, with launch settings chosen afresh. */}
+            <button type="button" className="btn" disabled={!active || Boolean(stopSession) || runtime?.sessionState === 'running'}
               title={stopSession || runtime?.sessionState === 'running' ? 'A session is already running' : undefined}
-              onClick={() => onResume(agent, overview.resumeAliases)}>Resume…</button>}
+              onClick={() => onResume(agent, overview.resumeAliases)}>Resume…</button>
             {fixed && <button type="button" className="btn btn-danger" disabled={!active || !stopSession || Boolean(busy)}
               title={!stopSession ? 'A uniquely owned live session is required' : undefined}
               onClick={() => setStopConfirm(true)}>Stop session…</button>}
