@@ -117,7 +117,8 @@ test('aged receipt totals survive progress batching, mute, session replacement a
 
 test('upgrade adds routing storage without reclassifying legacy chat or losing an offered receipt', async t => {
   const f = fixture(t); const original = f.send('Legacy chat'); const before = await f.wait();
-  f.hive.db.exec('DROP TABLE notification_subscriptions; ALTER TABLE messages DROP COLUMN recipients'); // schema-level assertion
+  // A pre-routing hive has neither the column nor migration 44's index over it, which would block the drop.
+  f.hive.db.exec('DROP TABLE notification_subscriptions; DROP INDEX idx_messages_unread_cover; ALTER TABLE messages DROP COLUMN recipients'); // schema-level assertion
   markLegacyStorage(f.hive); f.reopen(); const replay = await f.wait();
   assert.equal(replay.delivery!.id, before.delivery!.id);
   assert.deepEqual(replay.delivery!.messageSeqs, [original.seq]);
