@@ -302,6 +302,9 @@ export function LaunchSheet({
     const slug = project?.slug ?? projectSlug;
     return agents
       .filter((a) => a.role === "brain" || a.role === "worker")
+      // An archived or removed employee stays in the page's roster from its live event until the next snapshot; the
+      // server refuses to resume it, so the sheet leaves it out instead of launching a session that only says so.
+      .filter((a) => a.archivedAt == null && a.removedAt == null)
       .filter((a) => !resumeAgentId || a.id === resumeAgentId)
       .filter((a) => allHives || a.project === slug)
       .slice()

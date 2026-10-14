@@ -316,3 +316,16 @@ test("Find last conversations fills each card with its conversation and CLI, and
   assert.match(launch.launches[0]!.command, /resume 01a13757-5872-7e90-8bde-22d6bdb43926/);
   assert.match(launch.launches[1]!.command, /claude2 --resume d82369bf-ae2a-4505-9cf8-a007d0ede585/);
 });
+
+test("Resume same employees leaves out employees archived since the last snapshot", async t => {
+  const f = await fixture(t, true, { accounts: [spec()], extraAgents: human => [
+    { ...human, id: "atlas", name: "Atlas", role: "worker", seniority: "mid", focus: "frontend", project: "acme" },
+    { ...human, id: "bea", name: "Bea", role: "worker", seniority: "mid", focus: "frontend", project: "acme", archivedAt: 1 }],
+    saved: { resume: true, software: "codex" } });
+  assert.ok(card(f.host, "Atlas"));
+  assert.equal(card(f.host, "Bea"), undefined, "an archived worker gets no card");
+  await f.click("Start in background");
+  const launch = f.launched();
+  assert.ok(launch && "launches" in launch);
+  assert.deepEqual(launch.launches.map(item => item.agent), ["Atlas"]);
+});

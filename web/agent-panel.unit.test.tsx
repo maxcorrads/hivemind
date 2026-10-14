@@ -203,3 +203,16 @@ test('targeted fixed resume selects exactly one agent and requires an explicit s
     await act(async () => root.unmount()); host.remove(); api.launchContext = originalContext;
   }
 });
+
+test('a task-bound worker without a running session offers Resume too', async () => {
+  const panel = await mount(() => overview({ profile: { type: 'task_bound', templateId: 't1', label: 'Builder', software: 'claude',
+    model: 'claude-opus-5-5', effort: 'xhigh', configurationSource: 'current_template' } }));
+  try {
+    assert.match(panel.host.textContent!, /Task-bound worker/);
+    const resume = Array.from(panel.host.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Resume…');
+    assert.ok(resume, 'Resume… is shown for a task-bound worker');
+    assert.equal(resume.disabled, false);
+    assert.equal(Array.from(panel.host.querySelectorAll('button')).some(button => button.textContent?.trim() === 'Stop session…'), false,
+      'Stop session stays for fixed agents');
+  } finally { await panel.cleanup(); }
+});
