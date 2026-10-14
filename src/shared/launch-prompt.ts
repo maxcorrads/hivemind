@@ -55,6 +55,8 @@ export type LaunchInput = {
   focus?: string | null;
   resume?: boolean;
   resumeName?: string;
+  /** A CLI conversation to continue, by its session or chat ID: Codex `resume <id>`, Claude and Cursor `--resume <id>`. */
+  conversation?: string | null;
   /** A reserved worker's single-use launch ticket: the worker joins with it (docs/identity-lifecycle.md#reserved-workers). */
   claim?: string;
   /** The reserved worker's name, for the prompt and Codex's /rename. */
@@ -94,6 +96,22 @@ export function sanitizeSoftware(raw: string): string {
     throw new Error("Software must be one command (letters, digits, . _ + - /)");
   }
   return software;
+}
+
+/** A CLI session or chat ID as a launch passes it: letters, digits and dashes, or "" for a new conversation. */
+export function sanitizeConversation(raw: string | null | undefined): string {
+  const id = (raw ?? "").trim();
+  if (!id) return "";
+  if (!/^[A-Za-z0-9][A-Za-z0-9-]{7,79}$/.test(id)) throw new Error("Conversation must be a session ID (letters, digits and -)");
+  return id;
+}
+
+/** The arguments that continue conversation `id` in `software`'s CLI. */
+export function conversationArgs(software: string, id: string): string {
+  const family = softwareFamily(software);
+  if (family === "codex") return `resume ${id}`;
+  if (family === "claude" || family === "cursor") return `--resume ${id}`;
+  throw new Error(`${effectiveSoftware(software)} cannot resume a conversation from here`);
 }
 
 export function sanitizeExtraFlags(raw: string): string {
@@ -329,11 +347,14 @@ export const CLAUDE_SETTINGS_FLAG = '${HIVEMIND_CLAUDE_SETTINGS:+--settings} ${H
 export function buildLaunchCommand(input: LaunchInput): { cwd: string | null; command: string } {
   if (input.role !== "brain" && input.role !== "worker") throw new Error("Launch role must be brain or worker");
   const software = sanitizeSoftware(input.software);
+  const conversation = sanitizeConversation(input.conversation);
   const flags = [
     // Accounts apply only to exactly `claude` (accountDriverForSoftware), so an alias never gets the tap.
     software === "claude" ? CLAUDE_SETTINGS_FLAG : "",
     buildModelFlags(software, input.model, input.effort),
     sanitizeExtraFlags(input.extraFlags ?? ""),
+    // Codex's `resume` is a subcommand: after the options, right before the prompt.
+    conversation ? conversationArgs(software, conversation) : "",
     input.hivemindMcp && softwareFamily(software) === "claude"
       // Request eager loading for this server only, retaining normal permissions
       // and the other servers' loading policy. Keep host tool discovery available

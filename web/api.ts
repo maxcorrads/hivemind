@@ -1,3 +1,4 @@
+import type { CliConversation } from "../src/shared/cli-conversations.ts";
 import type { JevCall, JevCallLogView } from '../src/shared/jev-calls.ts';
 import type { EvidenceCollectorHealth } from '../src/shared/evidence-health.ts';
 import type { RoutingRequest, RoutingSuggestions } from '../src/shared/routing.ts';
@@ -239,6 +240,7 @@ export const api = {
     `/api/ui/projects/${encodeURIComponent(projectId)}/bots`, { method: "POST", body: JSON.stringify({ name }) },
   ),
   snapshot: (signal?: AbortSignal) => req<Snapshot>("/api/ui/snapshot", { signal }),
+  agentConversations: () => req<{ conversations: Record<string, CliConversation> }>("/api/ui/agents/conversations"),
   readState: (signal?: AbortSignal) => req<ReadSnapshot>("/api/ui/read-state", { signal }),
   navStatus: (signal?: AbortSignal) => req<NavStatus>("/api/ui/nav-status", { signal }),
   markMessagesSeen: (channelId: string, threadId: string | null, messageSeqs: number[], signal?: AbortSignal) =>

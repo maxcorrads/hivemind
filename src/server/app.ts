@@ -1,3 +1,4 @@
+import os from "node:os";
 import { Readable } from "node:stream";
 import { z } from 'zod';
 import { botAccessSchema } from '../shared/bot-capabilities.ts';
@@ -20,6 +21,7 @@ import { ACTIVITY_REASONS, type ActivityReason } from "../shared/read-state.ts";
 import { installJevDiagnostics } from './adaptive-routing-diagnostics.ts';
 import { installInstanceProof } from "./instance-proof.ts";
 import { installLauncherChannel } from "./launcher-channel.ts";
+import { lastConversations } from "./cli-conversations.ts";
 import { adviseAfterWait, assignAdaptiveTask, mutateAdaptiveTask, mutateAdaptiveRoom, sendAdaptiveAgentMessage, setAdaptiveThreadStatus } from './adaptive-topology-actions.ts';
 
 export type AppHooks = {
@@ -227,6 +229,14 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
   });
   // Public Human-session projection; launch commands and claim tickets stay in the signed native channel.
   ui.get("/launch-requests", c => c.json({ requests: hive.launcherQueue.listPending() }));
+  // Resume same employees: each employee's last CLI conversation, from the transcripts on this Mac (docs/terminal-broker.md).
+  ui.get("/agents/conversations", async c => {
+    hive.identity.getAgent("human");
+    const agents = hive.identity.listAgents().filter(agent => agent.role === "brain" || agent.role === "worker")
+      .map(agent => ({ id: agent.id, name: agent.name,
+        worktree: agent.projectId ? hive.projects.getProject(agent.projectId).worktree ?? null : null }));
+    return c.json({ conversations: await lastConversations(process.env.HIVEMIND_CLI_HOME || os.homedir(), agents) });
+  });
   // Roster status lines, refreshed on task events.
   ui.get("/nav-status", c => c.json({ agentWork: hive.tasks.workStatus() }));
   ui.get("/read-state", c => c.json(hive.reads.readSnapshot(hive.identity.getAgent("human"))));
