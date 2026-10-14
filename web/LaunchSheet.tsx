@@ -31,8 +31,11 @@ import {
 
 const STORE = "hivemind-launch";
 
-/** One employee's Resume card: its software, model and effort, each empty to follow the sheet's. */
-type Tune = { software: string; model: string; effort: string };
+/**
+ * One employee's Resume card: its software, model and effort, each empty to follow the sheet's, and the CLI
+ * conversation to continue (empty starts a new one).
+ */
+type Tune = { software: string; model: string; effort: string; conversation: string };
 
 type Saved = {
   software: string;
@@ -120,7 +123,8 @@ function loadSaved(): Saved {
         const seatEffort =
           typeof raw.effort === "string" && (EFFORTS as readonly string[]).includes(raw.effort) ? raw.effort : "";
         const seatSoftware = typeof raw.software === "string" ? raw.software.trim() : "";
-        tunes[name] = { software: seatSoftware, model, effort: seatEffort };
+        const conversation = typeof raw.conversation === "string" ? raw.conversation.trim() : "";
+        tunes[name] = { software: seatSoftware, model, effort: seatEffort, conversation };
       }
     }
     const environments: Record<string, string> = {};
@@ -362,6 +366,7 @@ export function LaunchSheet({
           ...shared,
           software: seatSoftware,
           extraFlags: sameFamily ? extraFlags : "",
+          conversation: tunes[agent.name]?.conversation,
           ...projectLaunchTools(contexts[hive?.slug ?? ""], hive, agent.role),
           model: seat.model,
           effort: seat.effort,
@@ -418,10 +423,39 @@ export function LaunchSheet({
   const setTune = (name: string, patch: Partial<Tune>) => {
     const next = {
       ...tunes,
-      [name]: { software: tunes[name]?.software ?? "", model: tunes[name]?.model ?? "", effort: tunes[name]?.effort ?? "", ...patch },
+      [name]: { software: tunes[name]?.software ?? "", model: tunes[name]?.model ?? "", effort: tunes[name]?.effort ?? "",
+        conversation: tunes[name]?.conversation ?? "", ...patch },
     };
     setTunes(next);
     remember({ tunes: next });
+  };
+
+  // Resume cards: each employee's last CLI conversation, found in this Mac's transcripts, fills its card.
+  const [conversationNote, setConversationNote] = useState<string | null>(null);
+  const findConversations = () => {
+    setConversationNote("Looking for the last conversations…");
+    api.agentConversations()
+      .then(({ conversations }) => {
+        const above = software.trim() || "codex";
+        const next = { ...tunes };
+        let filled = 0;
+        for (const agent of roster) {
+          const found = conversations[agent.id];
+          const tune = next[agent.name] ?? { software: "", model: "", effort: "", conversation: "" };
+          if (!found) continue;
+          // A conversation lives in one CLI home, which its own command reaches (claude2, codex-tw, agent…).
+          const current = tune.software.trim() || above;
+          const seat = found.software === current ? tune.software.trim() : found.software === above ? "" : found.software;
+          // Another kind of CLI has other models: the card's model starts again from that CLI's default.
+          const sameKind = softwareFamily(found.software) === softwareFamily(current);
+          next[agent.name] = { ...tune, software: seat, conversation: found.id, ...(sameKind ? {} : { model: "", effort: "" }) };
+          filled++;
+        }
+        setTunes(next);
+        remember({ tunes: next });
+        setConversationNote(`Found the last conversation of ${filled} of ${roster.length} employees.`);
+      })
+      .catch((error: Error) => setConversationNote(`Cannot look for conversations: ${error.message}`));
   };
 
   const rememberSoftware = () => {
@@ -971,8 +1005,13 @@ export function LaunchSheet({
                 <p className="help-p">
                   {resumeAgentId ? `Resume ${roster[0]?.name} only. Choose software above; this agent's last CLI and model are not known.` : 'The software and model at the top (with effort in the name) apply to everyone. Override them on a card if that employee should differ: another CLI starts from its own default model, without the extra flags, with the environment variables kept for it.'}
                   Copy all pastes a zsh script that opens one macOS Terminal window per employee (title Hive - Name). macOS may ask to control Terminal the first time.
+                  {" "}Conversation continues that employee's last CLI conversation; empty starts a new one.
                   {native && " Open terminals starts each employee in its own tmux session instead (an employee whose session still runs keeps it) and opens a Terminal window on each."}
                 </p>
+                <div className="row">
+                  <button type="button" className="btn" onClick={findConversations}>Find last conversations</button>
+                  {conversationNote && <span className="help-p" role="status">{conversationNote}</span>}
+                </div>
                 {resumeBlocks.map((block) => (
                   <article key={block.agent.id} className="launch-card">
                     <div className="launch-card-h">
@@ -1015,6 +1054,17 @@ export function LaunchSheet({
                         />
                       </label>
                     )}
+                    <label>
+                      Conversation
+                      <input
+                        className="mono"
+                        value={tunes[block.agent.name]?.conversation ?? ""}
+                        placeholder="new conversation"
+                        onChange={(e) => setTune(block.agent.name, { conversation: e.target.value })}
+                        autoComplete="off"
+                        spellCheck={false}
+                      />
+                    </label>
                     {block.software !== software && softwareAliasWarning(block.software, driversWithAccounts) && (
                       <p className="help-p" role="status">{softwareAliasWarning(block.software, driversWithAccounts)}</p>
                     )}

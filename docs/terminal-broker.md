@@ -967,3 +967,30 @@ that terminals are off in this window and offers no button.
   output waits for the main queue, and again below 256 KiB (`PTYReadGate`), on
   top of the per-connection backpressure. A misbehaving client can slow only its
   own streams.
+
+## Resuming conversations
+
+A **Resume same employees** card has a **Conversation** field: the session or
+chat ID of the employee's CLI conversation to continue. Empty starts a new one.
+The launch adds it the CLI's way: `codex … resume <id> '<prompt>'`,
+`claude --resume <id>`, `agent --resume <id>` for Cursor. Other software cannot
+resume from here.
+
+**Find last conversations** fills every card from this Mac's transcripts
+(`GET /api/ui/agents/conversations`). It reads only the files written in the last
+7 days:
+
+- Claude: `~/.claude*/projects/*/<session>.jsonl`;
+- Codex: `~/.codex*/sessions/**/rollout-*.jsonl`. Homes that share one sessions
+  folder count it once, under the first home;
+- Cursor: `~/.cursor/chats/*/<chat>/store.db`.
+
+An agent's conversation is the newest transcript whose first agent name is its own
+and whose folder, when the transcript records one, is in the agent's project. The
+first name comes from the launch prompt (`resume=<name>`, "You are the Hivemind
+worker <name>") or from join's answer for an agent started by hand. A later name
+is one the agent talked about. The card also takes the command of the
+conversation's home, `claude2` for `~/.claude2` or `codex-tw` for `~/.codex-tw`,
+because only that home can continue it. Nothing else of a transcript is read or
+returned.
+

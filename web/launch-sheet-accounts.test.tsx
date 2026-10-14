@@ -33,6 +33,8 @@ type Options = {
   saved?: Record<string, unknown>;
   /** Employees beyond the project's own, built from Human's record. */
   extraAgents?: (human: Agent) => Agent[];
+  /** What the conversations endpoint answers, instead of reading this machine's transcripts. */
+  conversations?: Record<string, unknown>;
 };
 
 async function fixture(t: TestContext, native: boolean, options: Options = {}) {
@@ -50,6 +52,7 @@ async function fixture(t: TestContext, native: boolean, options: Options = {}) {
   Object.defineProperty(globalThis.navigator, "clipboard", { configurable: true, value: { writeText: async (text: string) => { copied = text; } } });
   t.mock.method(globalThis, "fetch", async (url: string, init?: RequestInit) => {
     if (url === "/api/ui/session") return Response.json({ ok: true }, { headers: { "cache-control": "no-store" } });
+    if (url === "/api/ui/agents/conversations") return Response.json({ conversations: options.conversations ?? {} });
     if (url === "/api/ui/accounts/resolve") {
       resolves.push(JSON.parse(String(init?.body)));
       if (options.resolution) return Response.json({ selection: options.resolution });
@@ -290,6 +293,26 @@ test("a card that changes to another kind of CLI starts its model again from the
   const bea = card(f.host, "Bea").textContent!;
   assert.match(bea, /HIVEMIND_ROLE='worker' claude /);
   assert.doesNotMatch(bea, /gpt-6-sol/, "Codex's model is dropped for Claude");
-  assert.deepEqual(JSON.parse(window.localStorage.getItem("hivemind-launch")!).tunes.Bea, { software: "claude", model: "", effort: "" });
+  assert.deepEqual(JSON.parse(window.localStorage.getItem("hivemind-launch")!).tunes.Bea, { software: "claude", model: "", effort: "", conversation: "" });
   assert.match(card(f.host, "Atlas").textContent!, /HIVEMIND_ROLE='worker' codex /, "the other cards keep the Software field's");
+});
+
+test("Find last conversations fills each card with its conversation and CLI, and the launch continues them", async t => {
+  const f = await fixture(t, true, { accounts: [spec()], extraAgents: workers, saved: { resume: true, software: "codex",
+    model: "gpt-6-astra", effort: "xhigh", tunes: { Bea: { software: "", model: "gpt-6-sol", effort: "high", conversation: "" } } },
+    conversations: {
+      atlas: { cli: "codex", software: "codex", id: "01a13757-5872-7e90-8bde-22d6bdb43926", cwd: "/Users/me/acme", at: 1 },
+      bea: { cli: "claude", software: "claude2", id: "d82369bf-ae2a-4505-9cf8-a007d0ede585", cwd: "/Users/me/acme", at: 2 },
+    } });
+  await f.click("Find last conversations");
+  assert.match(f.host.textContent!, /Found the last conversation of 2 of 2 employees\./);
+  assert.match(card(f.host, "Atlas").textContent!, /codex -m gpt-6-astra -c model_reasoning_effort=xhigh resume 01a13757-5872-7e90-8bde-22d6bdb43926 '/);
+  const bea = card(f.host, "Bea").textContent!;
+  assert.match(bea, /HIVEMIND_ROLE='worker' claude2 --resume d82369bf-ae2a-4505-9cf8-a007d0ede585 /, "Claude 2's home holds it");
+  assert.doesNotMatch(bea, /gpt-6-sol/, "a Codex model does not follow the card to Claude");
+  await f.click("Start 2 in background");
+  const launch = f.launched();
+  assert.ok(launch && "launches" in launch);
+  assert.match(launch.launches[0]!.command, /resume 01a13757-5872-7e90-8bde-22d6bdb43926/);
+  assert.match(launch.launches[1]!.command, /claude2 --resume d82369bf-ae2a-4505-9cf8-a007d0ede585/);
 });

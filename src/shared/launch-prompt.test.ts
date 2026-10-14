@@ -9,6 +9,7 @@ import { workerTemplateSpecSchema } from './worker-templates.ts';
 import {
   ADOPT_UNTRUSTED,
   buildLaunchBlock,
+  buildLaunchCommand,
   buildLaunchPrompt,
   buildRosterPaste,
   CLAUDE_SETTINGS_FLAG,
@@ -470,4 +471,18 @@ test("a reserved worker's launch joins with its ticket, not with a role it alrea
   assert.match(prompt, /first create your own git worktree and branch for it/);
   assert.throws(() => buildLaunchPrompt({ ...input, claim: "hmc_short" }), /launch ticket/);
   assert.throws(() => buildLaunchPrompt({ ...input, role: "brain" }), /launch ticket/);
+});
+
+test("a conversation continues the CLI's own session: Codex resume, Claude and Cursor --resume", () => {
+  const seat = { workspacePath: "/w", cdWorktree: false, projectSlug: "acme", passProject: false, role: "brain" as const,
+    adoptUntrusted: false, resume: true, resumeName: "Atlas" };
+  const codex = buildLaunchCommand({ ...seat, software: "codex2", model: "gpt-6-astra", effort: "xhigh", conversation: "01a13757-5872-7e90-8bde-22d6bdb43926" });
+  assert.match(codex.command, /^HIVEMIND_ROLE='brain' codex2 -m gpt-6-astra -c model_reasoning_effort=xhigh resume 01a13757-5872-7e90-8bde-22d6bdb43926 '/);
+  const claude = buildLaunchCommand({ ...seat, software: "claude-tw", conversation: "e84afbd9-e1ab-41b2-a0a9-cae661925a44" });
+  assert.match(claude.command, /^HIVEMIND_ROLE='brain' claude-tw --resume e84afbd9-e1ab-41b2-a0a9-cae661925a44 '/);
+  const cursor = buildLaunchCommand({ ...seat, software: "agent", conversation: "b14326cc-7c9d-455d-8960-ada07cb85589" });
+  assert.match(cursor.command, /^HIVEMIND_ROLE='brain' agent --resume b14326cc-7c9d-455d-8960-ada07cb85589 '/);
+  assert.doesNotMatch(buildLaunchCommand({ ...seat, software: "codex", conversation: "  " }).command, /resume /);
+  assert.throws(() => buildLaunchCommand({ ...seat, software: "codex", conversation: "abc; rm -rf ~" }), /Conversation must be a session ID/);
+  assert.throws(() => buildLaunchCommand({ ...seat, software: "opencode", conversation: "01a13757-5872-7e90" }), /cannot resume a conversation/);
 });
