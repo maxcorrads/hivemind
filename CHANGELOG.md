@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.1](https://github.com/maxcorrads/hivemind/compare/v0.9.0...v0.9.1) (2026-10-22)
+
+
+### Bug Fixes
+
+* **a11y:** name the rail projects and popover summaries by content, not aria-label ([#362](https://github.com/maxcorrads/hivemind/issues/362)) ([b043e2b](https://github.com/maxcorrads/hivemind/commit/b043e2b5a4481ec36588f593c921410de572f2a9))
+* **launch:** Find last conversations skips Codex subagent threads ([#358](https://github.com/maxcorrads/hivemind/issues/358)) ([5e8c2ef](https://github.com/maxcorrads/hivemind/commit/5e8c2ef285d8cf350eaa14dcc673cc208c0ee3d6))
+
 ## [0.9.0](https://github.com/maxcorrads/hivemind/compare/v0.8.0...v0.9.0) (2026-10-14)
 
 
