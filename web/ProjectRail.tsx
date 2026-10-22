@@ -32,7 +32,9 @@ export function ProjectRail({ snap, selectedProject, onSelect, onAllTasks, allTa
           const label = [project.name, alerts ? `${alerts} unread for you` : unread ? "unread messages" : ""].filter(Boolean).join(", ");
           return (
             <button key={project.id} type="button" className={`rail-project ${active ? "active" : ""} ${unread || alerts ? "unread" : ""}`}
-              aria-label={label} title={label} aria-current={active ? "page" : undefined} onClick={() => onSelect(project.slug)}>
+              title={label} aria-current={active ? "page" : undefined} onClick={() => onSelect(project.slug)}>
+              {/* The name is the content, not an aria-label: the visible initials are not part of it (WCAG 2.5.3). */}
+              <span className="sr-only">{label}</span>
               <span className="rail-initials" aria-hidden="true">{projectInitials(project.name)}</span>
               {alerts > 0
                 ? <em className="rail-badge" aria-hidden="true">{alerts > 99 ? "99+" : alerts}</em>

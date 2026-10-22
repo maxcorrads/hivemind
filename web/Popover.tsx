@@ -31,7 +31,8 @@ export function Popover({ className, label, summary, children }: {
     };
   }, [open]);
   return <details ref={ref} className={`popover ${className ?? ''}`} onToggle={event => setOpen(event.currentTarget.open)}>
-    <summary aria-label={label} title={label}>{summary}</summary>
+    {/* The label is the content, not an aria-label: the visible summary is not part of it (WCAG 2.5.3). */}
+    <summary title={label}><span aria-hidden="true">{summary}</span><span className="sr-only">{label}</span></summary>
     <div className="popover-body">{typeof children === 'function' ? children(close) : children}</div>
   </details>;
 }

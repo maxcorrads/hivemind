@@ -75,7 +75,7 @@ async function mount(t: TestContext, hive: Hive, hash: string, onFetch?: (url: s
   await settle();
   const sidebar = () => host.querySelector('aside.rail')!;
   const railButton = (name: RegExp) => [...host.querySelectorAll<HTMLButtonElement>('nav.project-rail button')]
-    .find(button => name.test(button.getAttribute('aria-label') ?? ''));
+    .find(button => name.test(button.getAttribute('aria-label') ?? button.querySelector('.sr-only')?.textContent ?? ''));
   const navButton = (text: RegExp) => [...sidebar().querySelectorAll<HTMLButtonElement>('button')].find(button => text.test(button.textContent ?? ''));
   return { host, sidebar, railButton, navButton };
 }
@@ -258,7 +258,7 @@ test('the page title counts what is waiting for the Human', async t => {
   await act(async () => { hive.messages.postMessage(brain, { channel: general.id, body: '@Human please look' }); });
   await settle();
   assert.equal(document.title, '(1) hivemind');
-  assert.match(view.railButton(new RegExp(home.name))!.getAttribute('aria-label')!, /1 unread for you/);
+  assert.match(view.railButton(new RegExp(home.name))!.querySelector('.sr-only')!.textContent!, /1 unread for you/);
 });
 
 test('the Settings menu switches to the single-sidebar layout, saved in this browser', async t => {

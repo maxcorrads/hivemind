@@ -39,7 +39,7 @@ test("the project rail holds Help, Settings and the Human only when it is given 
   const snap = { projects: [{ id: "p", slug: "example", name: "Example Place", worktree: null, createdAt: 0 }], channels: [], unread: {}, mentionCounts: {},
     archivedChannelIds: [] } as unknown as Snapshot;
   const bare = renderToStaticMarkup(<ProjectRail snap={snap} selectedProject="example" onSelect={noop} onNewProject={noop} />);
-  assert.match(bare, /class="rail-project active "[^>]*aria-label="Example Place"[^>]*aria-current="page"/);
+  assert.match(bare, /class="rail-project active "[^>]*aria-current="page"[^>]*><span class="sr-only">Example Place<\/span>/);
   assert.doesNotMatch(bare, /rail-tools|tools-menu/);
   const settings = { theme: "light", onToggleTheme: noop, layout: "rail", onLayout: noop, telegram: undefined, onTelegram: noop, onAdaptiveRouting: noop,
     onLaunch: noop, onHelp: noop, notifications: { supported: false, enabled: false, blocked: false, toggle: async () => {} } } as unknown as SettingsMenuProps;
