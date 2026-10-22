@@ -106,7 +106,10 @@ async function codex(home: string, since: number): Promise<Found[]> {
       let id: string | null = null, cwd: string | null = null;
       try {
         const meta = JSON.parse(text.slice(0, text.indexOf("\n") > 0 ? text.indexOf("\n") : undefined)) as
-          { payload?: { id?: unknown; cwd?: unknown } };
+          { payload?: { id?: unknown; cwd?: unknown; parent_thread_id?: unknown; source?: unknown } };
+        // A subagent thread (a guardian review, a spawned helper) repeats its parent's prompt, agent name included:
+        // it is not the agent's conversation, and resuming it starts the agent without its history.
+        if (meta.payload?.parent_thread_id || (meta.payload?.source !== undefined && typeof meta.payload.source !== "string")) continue;
         id = typeof meta.payload?.id === "string" ? meta.payload.id : null;
         cwd = typeof meta.payload?.cwd === "string" ? meta.payload.cwd : null;
       } catch { /* not a session_meta line */ }
