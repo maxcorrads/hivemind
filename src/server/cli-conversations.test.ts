@@ -34,6 +34,11 @@ test("each agent gets its newest conversation in its own CLI home, by the first 
     `{"type":"message","content":"You are the Hivemind worker Bea, reserved for one task."}\n`, NOW - 3 * HOUR);
   mkdirSync(path.join(home, ".codex2"));
   symlinkSync(path.join(home, ".codex/sessions"), path.join(home, ".codex2/sessions"));
+  // A newer guardian review thread of Bea repeats her prompt, but is a subagent: it never counts.
+  write(path.join(home, ".codex/sessions/2026/10/13/rollout-2026-10-13T23-00-00-01a16003-cd9d-7fa0-9b9e-652b67e9aa1b.jsonl"),
+    `{"type":"session_meta","payload":{"id":"01a16003-cd9d-7fa0-9b9e-652b67e9aa1b","cwd":"${repo}",` +
+    `"parent_thread_id":"01a13757-5872-7e90-8bde-22d6bdb43926","source":{"subagent":{"other":"guardian"}}}}\n` +
+    `{"type":"message","content":"You are the Hivemind worker Bea, reserved for one task."}\n`, NOW - HOUR);
   // An agent started by hand gets its name from join's answer.
   write(path.join(home, ".codex-tw/sessions/2026/10/13/rollout-x-01a134f5-af77-7400-8dbf-bff4550d64dd.jsonl"),
     `{"type":"session_meta","payload":{"id":"01a134f5-af77-7400-8dbf-bff4550d64dd","cwd":"${repo}"}}\n` +
