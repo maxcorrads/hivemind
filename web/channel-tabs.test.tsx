@@ -73,7 +73,7 @@ test('channel tabs, member stack and a mismatched thread link redirecting to its
   assert.equal(host.querySelector('main h1')!.textContent, '#engineering');
 
   const summary = host.querySelector('.member-stack summary')!;
-  assert.match(summary.getAttribute('aria-label')!, /^3 members: /);
+  assert.match(summary.querySelector('.sr-only')!.textContent!, /^3 members: /);
   assert.equal(summary.querySelectorAll('.avatar').length, 3);
   const tabs = () => [...host.querySelectorAll<HTMLButtonElement>('[role=tab]')];
   const tab = (name: string) => tabs().find(item => item.textContent?.startsWith(name))!;
