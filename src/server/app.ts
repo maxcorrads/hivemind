@@ -3,7 +3,7 @@ import { Readable } from "node:stream";
 import { z } from 'zod';
 import { botAccessSchema } from '../shared/bot-capabilities.ts';
 import { createBotSchema } from '../shared/bot-message.ts';
-import { Hono } from "hono";
+import { Hono, type Context, type ErrorHandler } from "hono";
 import { requestJson, validateRequest } from "./api-input.ts";
 import { integerArgument, threadResponseSchema, uploadLength } from "../shared/api-contract.ts";
 import { DEFAULT_WAIT_MS, HiveError, type Agent } from "../shared/types.ts";
@@ -56,6 +56,14 @@ function windowRoots(messages: readonly { id: string }[], threadId: string | nul
 }
 
 export function createApp(hive: Hive, hooks: AppHooks = {}) {
+  return createApps(hive, hooks).app;
+}
+
+/**
+ * The Human listener's app and the agent listener's (docs/remote-hosts.md#agent-listener).
+ * Both mount the same agent routes on the same Hive; the agent app has nothing else to route to.
+ */
+export function createApps(hive: Hive, hooks: AppHooks = {}) {
   // HTTP hosting supplies its actual bound address. Request-only apps retain their own origin.
   const serverOrigin = (requestUrl: string) => hooks.serverOrigin ? hooks.serverOrigin() : requestUrl;
   const parseBotInput = <T>(schema: z.ZodType<T>, input: unknown): T => {
@@ -63,16 +71,18 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     if (!parsed.success) throw new HiveError(400, 'Invalid bot request');
     return parsed.data;
   };
-  const app = new Hono();
-  app.onError((err, c) => {
+  const onError: ErrorHandler = (err, c) => {
     if (err instanceof HiveError) {
       if (err.status === 429) c.header("Retry-After", "1");
       return c.json({ error: err.message }, err.status as 400);
     }
     console.error("Unexpected Hivemind request failure");
     return c.json({ error: "Internal server error" }, 500);
-  });
-  app.get("/api/health", c => c.json({ ok: true, name: "hivemind" }));
+  };
+  const health = (c: Context) => c.json({ ok: true, name: "hivemind" });
+  const app = new Hono();
+  app.onError(onError);
+  app.get("/api/health", health);
   installInstanceProof(app, hooks.instanceSecret ?? null);
   installLauncherChannel(app, hive, hooks.instanceSecret ?? null);
   /** The channel and root of a thread id (a message or task id); null when the id is unknown. */
@@ -750,7 +760,13 @@ export function createApp(hive: Hive, hooks: AppHooks = {}) {
     return c.json({ file }, 201);
   });
   app.route('/api/bot', bot); app.route('/api/ui', ui); app.route('/api/agent', agent);
-  return app;
+  // What a remote host reaches: the agent API (join and claim included) and the health check `hivemind doctor` reads.
+  const agentApp = new Hono();
+  agentApp.onError(onError);
+  agentApp.notFound(c => c.json({ error: "Not found" }, 404));
+  agentApp.get("/api/health", health);
+  agentApp.route('/api/agent', agent);
+  return { app, agentApp };
 }
 declare module 'hono' {
   interface ContextVariableMap { me: import('../shared/types.ts').Agent; token: string; }

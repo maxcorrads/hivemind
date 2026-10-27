@@ -4,7 +4,7 @@ import { sendOperation } from "./client/send-operation.ts";
 import { resolve, basename, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import { DEFAULT_PORT, DEFAULT_WAIT_MS, MCP_HEARTBEAT_MS, MESSAGE_EVENT_TYPES, type MessageEventType } from "./shared/types.ts";
+import { DEFAULT_AGENT_PORT, DEFAULT_PORT, DEFAULT_WAIT_MS, MCP_HEARTBEAT_MS, MESSAGE_EVENT_TYPES, type MessageEventType } from "./shared/types.ts";
 import { guessMime } from "./shared/mime.ts";
 import {
   agentDownloadToFile,
@@ -23,7 +23,7 @@ import { attachablePath } from "./mcp/attach-guard.ts";
 function help() {
   console.log(`hivemind — local hive for Human, brains, and workers
 
-  hivemind serve [--port ${DEFAULT_PORT}]
+  hivemind serve [--port ${DEFAULT_PORT}] [--agent-port ${DEFAULT_AGENT_PORT}]
   hivemind join --as worker junior|mid|senior [--focus …] [--project slug] [--resume Name]
   hivemind join --as worker --seniority junior|mid|senior [--project slug]
   hivemind join --as brain [--focus …] [--project slug] [--resume Name]
@@ -90,6 +90,18 @@ export function argRest(args: string[], name: string): string | undefined {
 }
 
 /**
+ * `serve`'s listeners. The agent-only listener (docs/remote-hosts.md#agent-listener) runs
+ * only with an explicit `--agent-port`, which Hivemind Server.app passes while a remote
+ * host is configured; no environment variable turns it on.
+ */
+export function serveOptions(argv: string[], env: NodeJS.ProcessEnv = process.env): { port: number; agentPort: number | null } {
+  return {
+    port: integerArgument(String(arg(argv, "--port") ?? env.HIVEMIND_PORT ?? DEFAULT_PORT), 0, 65535),
+    agentPort: argv.includes("--agent-port") ? integerArgument(String(arg(argv, "--agent-port")), 0, 65535) : null,
+  };
+}
+
+/**
  * SIGTERM (the macOS server app's Stop/Quit, launchd, `kill`) and Ctrl+C
  * drain the server and release server.lock instead of dying mid-write. A
  * second signal takes Node's default and exits at once.
@@ -119,7 +131,7 @@ export async function runCli(argv: string[]): Promise<void> {
 
   if (cmd === "serve") {
     const { startServer } = await import("./server/serve.ts");
-    const running = startServer({ port: integerArgument(String(arg(argv, "--port") ?? process.env.HIVEMIND_PORT ?? DEFAULT_PORT), 0, 65535) });
+    const running = startServer(serveOptions(argv));
     stopOnSignals(running.shutdown);
     return;
   }

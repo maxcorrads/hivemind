@@ -53,6 +53,16 @@ function requestPath(target: string): string | null {
   }
 }
 
+/**
+ * The agent listener's allowlist (docs/remote-hosts.md#agent-listener): the agent API
+ * and the health check, classified by the same decoded path as the ingress gate.
+ * Checked before that gate, so no Human path (not even the session bootstrap) is handled there.
+ */
+export function isAgentListenerPath(target: string): boolean {
+  const pathname = requestPath(target);
+  return pathname === "/api/health" || pathname === "/api/agent" || pathname?.startsWith("/api/agent/") === true;
+}
+
 function isJson(headers: IncomingHttpHeaders): boolean {
   return single(headers["content-type"])?.split(";", 1)[0]?.trim().toLowerCase() === "application/json";
 }

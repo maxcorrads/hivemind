@@ -1,9 +1,11 @@
 # Remote hosts (design)
 
 > [!NOTE]
-> This is a design, not shipped behaviour. The [Plan](#plan) lists the changes
-> that build it and marks the ones that have shipped: so far only
-> [Attachments of any type](#attachments-of-any-type).
+> This is a design, mostly not shipped yet. The [Plan](#plan) lists the changes
+> that build it and marks the ones shipped; so far the
+> [agent listener](#agent-listener) (step 1) and
+> [Attachments of any type](#attachments-of-any-type) (step 6) exist, and nothing
+> turns the listener on yet.
 
 A **remote host** is a second Mac on the local network, reached with SSH, where
 Hivemind runs brains and workers. Everything else stays on the Mac that runs
@@ -97,20 +99,43 @@ ssh -N -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
 
 ## Agent listener
 
+> [!NOTE]
+> Shipped in the Node server (plan step 1). Server.app does not turn it on yet:
+> it passes `--agent-port` once hosts exist (step 2).
+
 Today any process that reaches `127.0.0.1:7420` can open a Human session. A plain
 forward of that port would give every process on the remote host the Human API.
 So the Node server gets a second listener, **agent-only**:
 
 - It binds `127.0.0.1:<agent port>` on the control Mac (default 7422), and only
-  while at least one host is configured.
-- It serves `/api/agent/*`, which needs an agent token, and the unauthenticated
-  join and claim routes an agent uses to get one. Nothing under `/api/ui/*`,
-  `/api/launcher/*`, `/ws` or the static UI is reachable through it: those answer 404.
+  while at least one host is configured: `hivemind serve --agent-port 7422` turns
+  it on, and Server.app passes that flag while `hosts.json` has a host. Without the
+  flag nothing else is bound, and no environment variable turns it on.
+- It serves `/api/agent/*`, which needs an agent token, including `POST
+  /api/agent/join`, the unauthenticated route an agent uses to get one by name,
+  resume or launch claim ticket. It also answers `GET /api/health`, the
+  session-independent check `hivemind doctor` reads. Nothing under `/api/ui/*`,
+  `/api/launcher/*`, `/api/bot/*`, `/api/health/instance`, `/ws` or the static UI is
+  reachable through it: those, and every other path, answer 404 with
+  `{"error":"Not found"}`.
+- Two layers keep it that way. The listener classifies the decoded path before the
+  ingress gate (`isAgentListenerPath` in `src/server/local-auth.ts`), so no Human
+  path is handled at all there, not even the session bootstrap; dot segments and
+  encoded slashes count as not allowed. Then its router (`createApps` in
+  `src/server/app.ts`) has only the agent routes and the health check mounted.
+  The agent routes are the same ones, on the same Hive, as on the Human listener.
+- Agent requests on it pass the same Host, Origin and Fetch Metadata checks as on
+  the Human listener, so a browser on the remote host cannot drive it either.
+- If the agent port is taken, `serve` fails to start (`EADDRINUSE`), as it does
+  for a taken Human port.
 - The host connection forwards the remote loopback port to it. On the remote
   host, agents use `HIVEMIND_URL=http://127.0.0.1:<remote agent port>`.
 
-The MCP's own checks (`localOrigin` refuses anything but loopback) stay as they
-are: on the remote host the origin is loopback too.
+The MCP needs no change: its client takes any `HIVEMIND_URL` that is a plain
+origin (`identityOrigin` in `src/client/identity.ts`), and on the remote host that
+origin is loopback too. Bots keep using the Human listener's origin: the server
+hands them that one (and checks it with `localOrigin`) even when a brain calls a
+bot tool through the agent listener.
 
 ## Remote runtime
 
@@ -257,10 +282,12 @@ inline (`INLINE_MIMES` in `src/shared/mime.ts`).
 
 ## Plan
 
-1. **Agent listener.** The agent-only listener in the Node server, behind a setting.
+1. **Agent listener** (shipped). The agent-only listener in the Node server, behind
+   `hivemind serve --agent-port`. Tests: `src/server/agent-listener.test.ts`.
 2. **Hosts and the host connection.** `hosts.json`, the supervised master
    connection with the agent forward and extra forwards, host status in the
-   Server.app menu, and the remote runtime install and update.
+   Server.app menu, and the remote runtime install and update. Server.app starts
+   `serve` with `--agent-port` while at least one host exists.
 3. **Launch on a host.** The Host field in Launch, Resume… and templates, the host
    on launch requests and the launcher channel, the remote launch steps (clone,
    shadow homes, launch file, tmux, tap), remote session listing and kill.

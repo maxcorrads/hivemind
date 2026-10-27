@@ -3,6 +3,8 @@ import type { AgentActivity } from './agent-activity.ts';
 
 export const PROTOCOL_VERSION = 3;
 export const DEFAULT_PORT = 7420;
+/** The agent-only listener's port (docs/remote-hosts.md#agent-listener), when one is enabled. */
+export const DEFAULT_AGENT_PORT = 7422;
 export const HUMAN_ID = "human";
 export const HUMAN_NAME = "Human";
 /** Server-side wait sleep. Long so agents do not burn a model turn every minute. */
