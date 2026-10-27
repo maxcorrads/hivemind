@@ -56,6 +56,9 @@ public enum BrokerLimits {
   public static let resumeOutboundBytes = 256 * 1024
   /// How often the broker runs `tmux list-sessions` to push changes.
   public static let sessionsPollInterval: TimeInterval = 2
+  /// A remote host's sessions are listed over SSH at most this often by the poll (docs/remote-hosts.md#limits), and
+  /// at once after a launch or a kill there.
+  public static let remoteSessionsPollInterval: TimeInterval = 5
   /// A connection that has not sent a valid `hello` by then is closed.
   public static let helloTimeout: TimeInterval = 5
   /// Connections the broker serves at once; more are closed on accept.
@@ -152,19 +155,23 @@ public struct BrokerLaunch: Equatable, Sendable {
   /// paths as stored: a session the broker creates runs under it, and a
   /// reused one keeps the account it started with.
   public let account: LaunchAccount?
+  /// The remote host to start the session on (docs/remote-hosts.md#launch), a host id from Server.app's hosts.json;
+  /// nil: this Mac, as before hosts. A launch that reuses a running session goes to that session wherever it runs.
+  public let host: String?
 
   public init(
     project: String, agent: String?, title: String, cwd: String, command: String, session: SessionName? = nil,
-    secrets: LaunchSecrets? = nil, environment: LaunchEnvironment? = nil, template: TemplateID? = nil, account: LaunchAccount? = nil
+    secrets: LaunchSecrets? = nil, environment: LaunchEnvironment? = nil, template: TemplateID? = nil, account: LaunchAccount? = nil,
+    host: String? = nil
   ) throws(BrokerProtocolError) {
     try self.init(project: project, agent: agent, title: title, cwd: cwd, command: command, session: session, secrets: secrets,
-                  environment: environment, template: template, account: account, field: "launch")
+                  environment: environment, template: template, account: account, host: host, field: "launch")
   }
 
   init(
     project: String, agent: String?, title: String, cwd: String, command: String, session: SessionName?,
     secrets: LaunchSecrets? = nil, environment: LaunchEnvironment? = nil, template: TemplateID? = nil, account: LaunchAccount? = nil,
-    field: String
+    host: String? = nil, field: String
   ) throws(BrokerProtocolError) {
     guard Self.isProjectSlug(project) else {
       throw .invalid("\(field).project", "must be a project slug (lowercase letters, digits and dashes, at most 32)")
@@ -188,6 +195,7 @@ public struct BrokerLaunch: Equatable, Sendable {
     }
     guard !command.contains("\0") else { throw .invalid("\(field).command", "must not contain NUL") }
     try account?.validate(field: "\(field).account")
+    if let host, !RemoteHost.isID(host) { throw .invalid("\(field).host", "must be a host id (a lowercase UUID)") }
     self.project = project
     self.agent = agent
     self.title = title
@@ -198,6 +206,7 @@ public struct BrokerLaunch: Equatable, Sendable {
     self.environment = environment
     self.template = template
     self.account = account
+    self.host = host
   }
 
   /// Whether the session gets a launch file: any secret or variable, or a template whose secrets may be kept.
@@ -250,14 +259,23 @@ public struct BrokerSession: Equatable, Sendable, Codable {
   public let attached: Int
   /// Unix time in milliseconds, like every Hivemind timestamp.
   public let createdAt: Int64
+  /// The remote host it runs on (docs/remote-hosts.md#sessions-and-terminals), a host id; nil (and absent on the wire)
+  /// on this Mac.
+  public let host: String?
 
-  public init(name: SessionName, project: String?, agent: String?, alive: Bool, attached: Int, createdAt: Int64) {
+  public init(name: SessionName, project: String?, agent: String?, alive: Bool, attached: Int, createdAt: Int64, host: String? = nil) {
     self.name = name
     self.project = project
     self.agent = agent
     self.alive = alive
     self.attached = attached
     self.createdAt = createdAt
+    self.host = host
+  }
+
+  /// This session as listed on the host `id`.
+  func on(host id: String) -> BrokerSession {
+    BrokerSession(name: name, project: project, agent: agent, alive: alive, attached: attached, createdAt: createdAt, host: id)
   }
 }
 
@@ -361,7 +379,7 @@ extension BrokerRequestFrame: Codable {
   private enum Key: String, CodingKey {
     case type, id, version, token, client, launches, session, cols, rows, stream, data
     case project, agent, title, cwd, command, secrets, environment
-    case template, account, name, value, requestId, templateId
+    case template, account, name, value, requestId, templateId, host
   }
 
   public init(from decoder: any Decoder) throws {
@@ -410,6 +428,7 @@ extension BrokerRequestFrame: Codable {
           environment: BrokerCoding.optionalEnvironment(item, .environment, field: "\(field).environment"),
           template: BrokerCoding.optionalTemplate(item, .template, field: "\(field).template"),
           account: BrokerCoding.optionalAccount(item, .account, field: "\(field).account"),
+          host: BrokerCoding.optionalString(item, .host, field: "\(field).host"),
           field: field))
       }
       request = .launch(launches)
@@ -484,6 +503,7 @@ extension BrokerRequestFrame: Codable {
         try item.encodeIfPresent(launch.environment?.dictionary, forKey: .environment)
         try item.encodeIfPresent(launch.template?.rawValue, forKey: .template)
         try item.encodeIfPresent(launch.account, forKey: .account)
+        try item.encodeIfPresent(launch.host, forKey: .host)
       }
     case .attach(let session, let size):
       try c.encode(session, forKey: .session)

@@ -11,6 +11,8 @@ final class TerminalBrokerService {
   let paths: HivemindPaths
   var onChange: (@MainActor () -> Void)?
   var launcherDecision: (@MainActor (String, TemplateID?, Bool) async -> Result<Void, BrokerProtocolError>)?
+  /// The remote hosts the broker launches on and lists (docs/remote-hosts.md#launch): HostsService, set before start.
+  var remoteHosts: (any BrokerRemoteHosts)?
 
   private var broker: TerminalBroker?
   var inProcessBroker: TerminalBroker? { broker }
@@ -62,6 +64,8 @@ final class TerminalBrokerService {
         templateSecrets: KeychainTemplateSecretVault(),
         shadowHomes: FileShadowHomes(),
         claudeTap: ClaudeStatusTap(folder: paths.accounts),
+        remoteHosts: remoteHosts,
+        originURL: { folder in await Self.origin(of: folder) },
         log: { log.append($0) }))
     broker.onChange = { [weak self] in self?.onChange?() }
     broker.launcherDecision = { [weak self] requestId, templateId, approve in
@@ -101,6 +105,28 @@ final class TerminalBrokerService {
       return
     }
     transport.start(connection)
+  }
+
+  /// `git remote get-url origin` in `folder` on this Mac, for a host that has no copy of the project to clone it from;
+  /// nil when the folder has no origin or git cannot tell.
+  private static func origin(of folder: String) async -> String? {
+    await withCheckedContinuation { continuation in
+      DispatchQueue.global(qos: .utility).async {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = ["-C", folder, "remote", "get-url", "origin"]
+        process.environment = ["PATH": "/usr/bin:/bin", "HOME": NSHomeDirectory(), "GIT_TERMINAL_PROMPT": "0"]
+        let out = Pipe()
+        process.standardOutput = out
+        process.standardError = FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
+        do { try process.run() } catch { return continuation.resume(returning: nil) }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let url = String(decoding: data.prefix(4096), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        continuation.resume(returning: process.terminationStatus == 0 && !url.isEmpty && !url.contains("\n") ? url : nil)
+      }
+    }
   }
 
   private func fail(_ message: String) {

@@ -163,8 +163,26 @@ public struct ClaudeLiveSessions {
     return Self.squeezed(started) == Self.squeezed(recorded)
   }
 
+  /// `holder(of:cwd:in:)` on a remote host's records (docs/remote-hosts.md#launch), which its perl read with the
+  /// folders resolved there and the start time of each record's process when it answers signal 0
+  /// (RemoteHostScripts.factsProgram). `cwd` is the launch's folder as the host resolved it.
+  public static func holder(of resume: Resume, cwd: String, in directories: [Directory], records: [RemoteFacts.ClaudeRecord]) -> Holder? {
+    for (index, directory) in directories.enumerated() {
+      for record in records where record.directory == index {
+        let held = switch resume {
+        case .session(let id): record.sessionId == id
+        case .latest: (record.cwdReal ?? record.cwd) == cwd
+        }
+        guard held, record.pidDomain == "darwin", record.pid > 1, let recorded = record.procStart, let started = record.started,
+              squeezed(started) == squeezed(recorded) else { continue }
+        return Holder(sessionID: record.sessionId, label: directory.label)
+      }
+    }
+    return nil
+  }
+
   /// `ps` pads the day of the month and the line; Claude keeps the padding.
-  private static func squeezed(_ text: String) -> String {
+  static func squeezed(_ text: String) -> String {
     text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
   }
 

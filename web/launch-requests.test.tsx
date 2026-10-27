@@ -29,7 +29,7 @@ const templates = [template("template-a", "Codex"), template("template-b", "Open
 const request = (patch: Partial<LaunchRequestView> = {}): LaunchRequestView => ({
   id: "request-1", projectId: project.id, brainId: brain.id, templateId: templates[0]!.id, templateLabel: "Codex",
   taskId: "task-1", jobId: null, agentId: worker.id, state: "awaiting_approval", reason: "Build the API",
-  requestedAt: Date.UTC(2026, 8, 27), decidedBy: null, decidedAt: null, session: null, error: null, capBlocked: false, ...patch,
+  requestedAt: Date.UTC(2026, 8, 27), decidedBy: null, decidedAt: null, session: null, error: null, capBlocked: false, hostId: null, hostWaiting: false, ...patch,
 });
 
 async function fixture(t: TestContext, native: boolean, initial: LaunchRequestView[] = [request()], platform: "macos" | "ios" = "macos") {
@@ -105,6 +105,15 @@ test("a missing current template keeps its saved label and cannot be approved un
     select.dispatchEvent(new window.Event("change", { bubbles: true }) as unknown as Event);
   });
   assert.equal(f.button("Approve")?.disabled, false);
+});
+
+test("a card for a worker on an offline host says it waits for the host; one for this Mac says nothing of hosts", async t => {
+  const waiting = await fixture(t, true, [request({ hostId: "20000000-0000-4000-8000-000000000001", hostWaiting: true })]);
+  await waiting.render();
+  assert.match(waiting.host.textContent!, /Its host is offline/);
+  const local = await fixture(t, true, [request()]);
+  await local.render();
+  assert.doesNotMatch(local.host.textContent!, /host/i);
 });
 
 test("native card waits at cap, then approves a different template through the bridge", async t => {

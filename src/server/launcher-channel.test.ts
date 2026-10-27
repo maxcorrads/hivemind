@@ -641,3 +641,35 @@ test("a host's launch context is its remote runtime on the agent forward, and na
   assert.ok(!JSON.stringify(remote.hivemindMcp).includes(f.hive.home), "nothing of this Mac's paths");
   assert.throws(() => remoteHivemindMcp("../x"), /cannot name a remote runtime/);
 });
+
+test("a resume goes back to the host its worker ran on, even after the template moved to another", async t => {
+  const f = fixture(t), target = "/api/launcher/next?timeoutMs=0";
+  const first = catalogHost(1, { online: true }), second = catalogHost(2, { online: true });
+  assert.equal((await f.signed("PUT", "/api/launcher/hosts", { hosts: [first, second] })).status, 200);
+  const template = f.hive.workerTemplates.create(f.human, f.project.id,
+    { slug: "remote", spec: { ...spec(), environment: {}, hostId: first.id } });
+  f.hive.identity.setLaunchMode(f.human, f.brain.name, "auto");
+  const brain = f.hive.identity.getAgent(f.brain.id);
+  const requested = f.hive.workerOrchestration.request(brain, { requestId: randomUUID(), template: template.slug,
+    contract: { objective: "Build a view", scope: [], nonGoals: [], acceptanceCriteria: ["View works"],
+      dependencies: [], evidenceSeqs: [] } });
+  const claim = (await (await f.signed("GET", target)).json() as { command: Record<string, unknown> }).command;
+  assert.equal(claim.host, first.id);
+  const ticket = /hmc_[0-9a-f]{48}/.exec(String(claim.command))?.[0];
+  assert.ok(ticket);
+  assert.equal((await f.signed("POST", `/api/launcher/${claim.id}/result`, { status: "launched", session: claim.session })).status, 200);
+  f.hive.identity.join({ role: "worker", claim: ticket });
+  f.hive.workerTemplates.update(f.human, template.id, { expectedRevision: template.revision, spec: { ...template.spec, hostId: second.id } });
+
+  const task = () => f.hive.tasks.get(f.human, requested.task.id);
+  const pause = f.hive.tasks.control(f.human, requested.task.id,
+    { requestId: randomUUID(), expectedRevision: task().revision, action: { type: "pause", mode: "hard" } });
+  f.hive.tasks.sweepHardPauses(pause.task.pause!.graceUntil!);
+  const kill = (await (await f.signed("GET", target)).json() as { command: Record<string, unknown> }).command;
+  assert.equal(kill.kind, "kill");
+  assert.equal((await f.signed("POST", `/api/launcher/${kill.id}/result`, { status: "killed" })).status, 200);
+  f.hive.tasks.control(f.human, requested.task.id, { requestId: randomUUID(), expectedRevision: task().revision, action: { type: "resume" } });
+  const resume = (await (await f.signed("GET", target)).json() as { command: Record<string, unknown> }).command;
+  assert.equal(resume.kind, "launch");
+  assert.equal(resume.host, first.id, "its conversation is on the first host");
+});

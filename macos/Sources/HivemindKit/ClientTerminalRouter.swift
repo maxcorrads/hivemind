@@ -250,13 +250,14 @@ public final class TerminalBridgeRouter {
       }
       brokerLaunches.append(brokerLaunch)
     }
-    let titles = launches.map(\.title)
+    // A host's session has no Terminal.app window here yet (docs/remote-hosts.md#plan, step 4): only this Mac's open.
+    let titles = launches.map { $0.host == nil ? $0.title : nil }
     let page = page
     client.send(.launch(brokerLaunches)) { [weak self] event in
       guard let self else { return }
       // Terminal.app opens even if the page moved on: the user asked for it.
       if openInTerminal, case .launched(let names, _, _) = event {
-        self.openTerminals(zip(names, titles).compactMap { name, title in name.map { ($0, title) } })
+        self.openTerminals(zip(names, titles).compactMap { name, title in title.flatMap { title in name.map { ($0, title) } } })
       }
       if self.page == page { self.deliver(BridgeTerminalEvent(BrokerEventFrame(event), id: id)) }
     }
@@ -270,7 +271,12 @@ public final class TerminalBridgeRouter {
       guard let self else { return }
       switch event {
       case .sessions(let items):
-        if items.contains(where: { $0.name == session }) {
+        if items.contains(where: { $0.name == session && $0.host != nil }) {
+          if self.page == page {
+            self.deliver(.error(id: nil, code: .internal, message: "\(session.rawValue) runs on a remote host; attach from a terminal there",
+                                stream: nil))
+          }
+        } else if items.contains(where: { $0.name == session }) {
           self.openTerminals([(session, session.rawValue)])
         } else if self.page == page {
           self.deliver(.error(id: nil, code: .noSuchSession, message: "\(session.rawValue) is not running", stream: nil))

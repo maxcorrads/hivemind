@@ -16,6 +16,18 @@ public protocol ShadowHomePreparing {
   /// its folder, asking no login yet) and says whether the account is logged
   /// in. A primary is only checked. Never throws: what went wrong is the answer's `error`.
   func prepareForLogin(_ account: LaunchAccount, home: String) -> AccountPreparation
+  /// `prepare` on a remote host's files (docs/remote-hosts.md#launch): `home` is the host's, and `files` its snapshot,
+  /// whose recorded writes the launch then applies there.
+  func prepare(_ account: LaunchAccount, home: String, files: any ShadowFiles) throws
+}
+
+extension ShadowHomePreparing {
+  /// A broker that builds no shadow on a host leaves a primary account alone there and refuses a shadow.
+  public func prepare(_ account: LaunchAccount, home: String, files: any ShadowFiles) throws {
+    guard account.shadowPath.isEmpty else {
+      throw BrokerProtocolError(.internal, "This broker cannot prepare shadow accounts on a host")
+    }
+  }
 }
 
 /// What Prepare found (account.prepared): whether the account is logged in,
@@ -44,12 +56,16 @@ public struct FileShadowHomes: ShadowHomePreparing {
   public init() {}
 
   public func prepare(_ account: LaunchAccount, home: String) throws {
+    try prepare(account, home: home, files: LocalShadowFiles())
+  }
+
+  public func prepare(_ account: LaunchAccount, home: String, files: any ShadowFiles) throws {
     guard !account.shadowPath.isEmpty else { return }
     let (shared, shadow) = Self.paths(account, home: home)
     do {
-      try Self.checkShadow(account.driver, shared: shared, shadow: shadow)
+      try Self.checkShadow(account.driver, shared: shared, shadow: shadow, files: files)
       try ShadowHome().materialize(home: shared, shadow: shadow, layout: Self.layout(account.driver),
-                                   createShadow: false, requireLogin: true)
+                                   createShadow: false, requireLogin: true, files: files)
     } catch let error as ShadowHomeError {
       // The message names the fix; the broker reports it as this item's failure.
       throw BrokerProtocolError(.internal, error.message)
@@ -70,7 +86,7 @@ public struct FileShadowHomes: ShadowHomePreparing {
     }
     var error: String?
     do {
-      try Self.checkShadow(account.driver, shared: shared, shadow: shadow, seedRetention: true)
+      try Self.checkShadow(account.driver, shared: shared, shadow: shadow, files: LocalShadowFiles(), seedRetention: true)
       try ShadowHome().materialize(home: shared, shadow: shadow, layout: layout, createShadow: true, requireLogin: false)
     } catch let failure as ShadowHomeError {
       error = failure.message
@@ -89,14 +105,15 @@ public struct FileShadowHomes: ShadowHomePreparing {
 
   /// The checks that run before `materialize`, for each driver's shadow. Prepare (`seedRetention`) first gives a new
   /// Claude shadow the home's `cleanupPeriodDays`, so its first check can pass.
-  private static func checkShadow(_ driver: LaunchAccount.Driver, shared: String, shadow: String, seedRetention: Bool = false) throws {
+  private static func checkShadow(_ driver: LaunchAccount.Driver, shared: String, shadow: String, files: any ShadowFiles,
+                                  seedRetention: Bool = false) throws {
     switch driver {
     case .codex:
-      try checkConfig(home: shared)
+      try checkConfig(home: shared, files: files)
     case .claude:
-      try checkExactPath(shadow)
+      try checkExactPath(shadow, files: files)
       if seedRetention { try Self.seedRetention(home: shared, shadow: shadow) }
-      try checkRetention(home: shared, shadow: shadow)
+      try checkRetention(home: shared, shadow: shadow, files: files)
     }
   }
 
@@ -119,8 +136,8 @@ public struct FileShadowHomes: ShadowHomePreparing {
 
   /// Claude keys its keychain login to the exact `CLAUDE_CONFIG_DIR` string, so the shadow must be
   /// written as its real path: no trailing `/`, and no symlink in it.
-  private static func checkExactPath(_ shadow: String) throws {
-    let real = URL(fileURLWithPath: shadow).resolvingSymlinksInPath().path
+  private static func checkExactPath(_ shadow: String, files: any ShadowFiles) throws {
+    let real = files.resolved(shadow)
     guard !shadow.hasSuffix("/"), shadow == real else {
       throw ShadowHomeError(path: shadow, message: "Use the real path of `\(real)`: Claude keys its login to the exact folder name.")
     }
@@ -128,26 +145,14 @@ public struct FileShadowHomes: ShadowHomePreparing {
 
   /// A shadow and its home share one `projects/`, and each account's `cleanupPeriodDays` deletes
   /// transcripts from it, so both must set the same value. Reads only that top-level key of each `settings.json`.
-  private static func checkRetention(home: String, shadow: String) throws {
-    let shadowDays = try cleanupPeriodDays(in: shadow + "/settings.json")
-    let homeDays = try cleanupPeriodDays(in: home + "/settings.json")
+  private static func checkRetention(home: String, shadow: String, files: any ShadowFiles) throws {
+    let shadowDays = try files.cleanupPeriodDays(in: shadow + "/settings.json")
+    let homeDays = try files.cleanupPeriodDays(in: home + "/settings.json")
     guard shadowDays == homeDays else {
       throw ShadowHomeError(path: shadow + "/settings.json",
                             message: "`\(shadow)/settings.json` has cleanupPeriodDays `\(shadowDays)` but `\(home)/settings.json` has `\(homeDays)`. "
                               + "Set the same value: each account cleans the shared transcripts with its own value.")
     }
-  }
-
-  /// The top-level `cleanupPeriodDays` of a settings file as text: "default" when the file or the key is missing.
-  /// A file that is not a JSON object is refused, since its value is unknown.
-  private static func cleanupPeriodDays(in path: String) throws -> String {
-    guard FileManager.default.fileExists(atPath: path) else { return "default" }
-    guard let data = FileManager.default.contents(atPath: path),
-          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-      throw ShadowHomeError(path: path, message: "`\(path)` is not a readable JSON object; fix it before launching a shadow account.")
-    }
-    guard let days = json["cleanupPeriodDays"], !(days is NSNull) else { return "default" }
-    return "\(days)"
   }
 
   /// The shared home (empty: the driver's default) and the shadow, each with a leading `~/` expanded.
@@ -159,21 +164,10 @@ public struct FileShadowHomes: ShadowHomePreparing {
   /// A shared config that keeps the login in the keyring, picks it automatically or keeps it
   /// in memory only cannot back a shadow, whose login is its own auth.json. Reads `<home>/config.toml` line by line
   /// up to its first table header and nothing else; a missing file sets nothing.
-  private static func checkConfig(home: String) throws {
-    let path = home + "/config.toml"
-    guard let file = fopen(path, "r") else { return }
-    defer { fclose(file) }
-    let setting = /^\s*cli_auth_credentials_store\s*=\s*["']?(keyring|auto|ephemeral)["']?/
-    var buffer: UnsafeMutablePointer<CChar>?
-    var capacity = 0
-    defer { free(buffer) }
-    while getline(&buffer, &capacity, file) > 0, let buffer {
-      let line = String(cString: buffer)
-      if line.drop(while: \.isWhitespace).first == "[" { return }
-      if let match = line.firstMatch(of: setting) {
-        throw ShadowHomeError(path: path,
-                              message: "`\(path)` sets cli_auth_credentials_store = `\(match.1)`; shadow accounts need `file` (or no setting).")
-      }
+  private static func checkConfig(home: String, files: any ShadowFiles) throws {
+    if let store = files.credentialStore(home: home) {
+      let path = home + "/config.toml"
+      throw ShadowHomeError(path: path, message: "`\(path)` sets cli_auth_credentials_store = `\(store)`; shadow accounts need `file` (or no setting).")
     }
   }
 }

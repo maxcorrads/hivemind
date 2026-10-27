@@ -171,6 +171,24 @@ private actor HTTPFake: LauncherHTTP {
     #expect(fresh.launches.isEmpty, "the saved result replays, never a second launch")
   }
 
+  @Test func theHostGoesToTheBrokerAndIntoTheDigestOnlyWhenSet() async throws {
+    let host = "20000000-0000-4000-8000-000000000001"
+    let base = launchCommand()
+    let command = LauncherCommand(id: base.id, kind: .launch, requestId: base.requestId, templateId: base.templateId,
+                                  project: base.project, agent: base.agent, title: base.title, session: base.session, cwd: base.cwd,
+                                  command: base.command, environment: base.environment, host: host)
+    #expect(try JSONDecoder().decode(LauncherCommand.self, from: JSONEncoder().encode(command)) == command)
+    #expect(command.digest != base.digest)
+    #expect(!String(decoding: try JSONEncoder().encode(base), as: UTF8.self).contains("host"), "no host, no key: the digest is as before")
+    let broker = BrokerFake(), journal = JournalFake()
+    #expect(try await service(broker, journal).execute(command) == .launched(workerSession))
+    #expect(broker.launches.map(\.host) == [host])
+    // The worker's session running on this Mac is not the host's launch.
+    let local = BrokerFake()
+    local.listed = [BrokerSession(name: workerSession, project: "acme", agent: "forge-task", alive: true, attached: 0, createdAt: 1)]
+    #expect(try await service(local, JournalFake()).execute(command) == .failed("session exists but does not belong to this worker"))
+  }
+
   @Test func anAccountTheBrokerWouldRefuseLaunchesNothing() async throws {
     let broker = BrokerFake(), journal = JournalFake()
     let bad = LaunchAccount(id: "a1", driver: .codex, label: "Codex work", homePath: "codex-work", shadowPath: "")

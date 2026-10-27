@@ -308,3 +308,21 @@ public final class HostsService {
     onChange?()
   }
 }
+
+// The broker's hosts (docs/remote-hosts.md#launch): each one ready while its master answers and its runtime is this
+// app's, and every script run over that master as a new channel, its stdin from the broker.
+extension HostsService: BrokerRemoteHosts {
+  public var brokerHosts: [BrokerRemoteHost] {
+    hosts.map { host in
+      BrokerRemoteHost(id: host.id, label: host.label, ready: connections[host.id]?.isReady == true,
+                       runtimeFolder: deps.installer.runtimeFolder)
+    }
+  }
+
+  public func run(onHost id: String, script: String, stdin: Data, timeout: TimeInterval) async -> SSHResult {
+    guard let host = hosts.first(where: { $0.id == id }) else {
+      return SSHResult(status: SSHResult.launchFailed, stderr: "This host is not configured")
+    }
+    return await deps.runner.run(deps.transport.commandSpec(host, command: RemoteRuntime.remote(script)), stdin: stdin, timeout: timeout)
+  }
+}

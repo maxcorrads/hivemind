@@ -48,6 +48,22 @@ struct BridgeTerminalMessageTests {
     #expect(launches[1].brokerLaunch(home: "/Users/me")?.account == nil)
   }
 
+  @Test func passesTheHostOnAndDropsALaunchWhoseHostIsNotAHostID() {
+    let host = "20000000-0000-4000-8000-000000000001"
+    let parsed = launchMessage([launchItem(["host": host]), launchItem(["host": NSNull()]), launchItem()])
+    guard case .terminalLaunch(_, let launches, _) = parsed else { Issue.record("dropped"); return }
+    #expect(launches.map(\.host) == [host, nil, nil])
+    #expect(launches[0].brokerLaunch(home: "/Users/me")?.host == host)
+    for bad: Any in ["Build Mac", "20000000-0000-4000-8000-00000000000A", 1] {
+      #expect(launchMessage([launchItem(["host": bad])]) == nil, "\(bad)")
+    }
+    // The page sees a host only on a host's session.
+    let local = BrokerSession(name: atlas, project: "acme", agent: "Atlas", alive: true, attached: 0, createdAt: 1)
+    let items = BridgeTerminalEvent.sessions([local, local.on(host: host)]).detail["items"] as? [[String: Any]]
+    #expect(items?[0].keys.contains("host") == false)
+    #expect(items?[1]["host"] as? String == host)
+  }
+
   @Test func dropsTheWholeLaunchWhenAnythingIsOff() {
     let bad: [[String: Any]] = [
       launchItem(["project": "Acme"]),

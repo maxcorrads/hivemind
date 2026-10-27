@@ -254,14 +254,17 @@ public struct TerminalSessionLaunch: Equatable, Sendable {
   /// The account the server resolved (BrokerLaunch.account), passed on as
   /// the page sent it: the broker, not the app, expands its "~/".
   public let account: LaunchAccount?
+  /// The remote host to start on (BrokerLaunch.host); nil: this Mac.
+  public let host: String?
 
   public init?(
     project: String, agent: String?, title: String, cwd: String?, command: String, session: SessionName? = nil,
-    secrets: LaunchSecrets? = nil, environment: LaunchEnvironment? = nil, template: TemplateID? = nil, account: LaunchAccount? = nil
+    secrets: LaunchSecrets? = nil, environment: LaunchEnvironment? = nil, template: TemplateID? = nil, account: LaunchAccount? = nil,
+    host: String? = nil
   ) {
     // Validate with the home folder standing in for "~" and a missing folder.
     guard Self.launch(project: project, agent: agent, title: title, cwd: cwd, command: command, session: session, secrets: secrets,
-                      environment: environment, template: template, account: account, home: "/") != nil else { return nil }
+                      environment: environment, template: template, account: account, host: host, home: "/") != nil else { return nil }
     if let cwd {
       guard cwd.hasPrefix("/") || cwd == "~" || cwd.hasPrefix("~/"), cwd.utf8.count <= BrokerLimits.maxCwdBytes else { return nil }
     }
@@ -275,6 +278,7 @@ public struct TerminalSessionLaunch: Equatable, Sendable {
     self.environment = environment
     self.template = template
     self.account = account
+    self.host = host
   }
 
   init?(body: Any) {
@@ -346,8 +350,16 @@ public struct TerminalSessionLaunch: Equatable, Sendable {
       guard let parsed = LaunchAccount(bridge: fields) else { return nil }
       account = parsed
     }
+    let host: String?
+    switch object["host"] {
+    case nil, is NSNull: host = nil
+    case let id as String:
+      guard RemoteHost.isID(id) else { return nil }
+      host = id
+    default: return nil
+    }
     self.init(project: project, agent: agent, title: title, cwd: cwd, command: command, session: session, secrets: secrets,
-              environment: environment, template: template, account: account)
+              environment: environment, template: template, account: account, host: host)
   }
 
   /// All launches of a message, or nil when the list or any one is invalid.
@@ -366,12 +378,12 @@ public struct TerminalSessionLaunch: Equatable, Sendable {
   /// expanded folder breaks the broker's limits.
   public func brokerLaunch(home: String) -> BrokerLaunch? {
     Self.launch(project: project, agent: agent, title: title, cwd: cwd, command: command, session: session, secrets: secrets,
-                environment: environment, template: template, account: account, home: home)
+                environment: environment, template: template, account: account, host: host, home: home)
   }
 
   private static func launch(
     project: String, agent: String?, title: String, cwd: String?, command: String, session: SessionName?, secrets: LaunchSecrets?,
-    environment: LaunchEnvironment?, template: TemplateID?, account: LaunchAccount?, home: String
+    environment: LaunchEnvironment?, template: TemplateID?, account: LaunchAccount?, host: String?, home: String
   ) -> BrokerLaunch? {
     let base = home.hasSuffix("/") && home.count > 1 ? String(home.dropLast()) : home
     let folder: String
@@ -381,7 +393,7 @@ public struct TerminalSessionLaunch: Equatable, Sendable {
     case let path?: folder = path
     }
     return try? BrokerLaunch(project: project, agent: agent, title: title, cwd: folder, command: command, session: session, secrets: secrets,
-                             environment: environment, template: template, account: account)
+                             environment: environment, template: template, account: account, host: host)
   }
 }
 
@@ -485,8 +497,11 @@ public enum BridgeTerminalEvent: Equatable, Sendable {
       detail["broker"] = broker.rawValue
     case .sessions(let items):
       detail["items"] = items.map { item -> [String: Any] in
-        ["name": item.name.rawValue, "project": item.project ?? NSNull(), "agent": item.agent ?? NSNull(),
-         "alive": item.alive, "attached": item.attached, "createdAt": item.createdAt]
+        var fields: [String: Any] = ["name": item.name.rawValue, "project": item.project ?? NSNull(), "agent": item.agent ?? NSNull(),
+                                     "alive": item.alive, "attached": item.attached, "createdAt": item.createdAt]
+        // Only a host's session has the key (docs/remote-hosts.md#sessions-and-terminals), so this Mac's read as before.
+        if let host = item.host { fields["host"] = host }
+        return fields
       }
     case .launched(let id, let names, let created, let errors):
       put("id", id)

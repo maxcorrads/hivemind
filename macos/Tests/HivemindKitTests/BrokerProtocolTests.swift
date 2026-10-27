@@ -196,6 +196,29 @@ struct BrokerRequestTests {
     }
   }
 
+  @Test func aLaunchNamesItsHostOnlyWhenItHasOneAndOnlyAsAHostID() throws {
+    let host = "20000000-0000-4000-8000-000000000001"
+    let onHost = try BrokerLaunch(project: "acme", agent: "Atlas", title: "Acme - Atlas", cwd: "/Users/me/acme", command: "claude", host: host)
+    let line = try BrokerRequestFrame(id: "l", .launch([onHost, try launch()])).line()
+    let items = (try JSONSerialization.jsonObject(with: line) as? [String: Any])?["launches"] as? [[String: Any]]
+    #expect(items?[0]["host"] as? String == host)
+    #expect(items?[1].keys.contains("host") == false, "this Mac's launch is as before hosts")
+    guard case .launch(let launches) = try BrokerRequestFrame.decode(line.dropLast()).request else { Issue.record("not a launch"); return }
+    #expect(launches.map(\.host) == [host, nil])
+    for bad in ["Build Mac", "20000000-0000-4000-8000-00000000000A", "user@mini.local"] {
+      #expect(throws: BrokerProtocolError.invalid("launch.host", "must be a host id (a lowercase UUID)")) {
+        try BrokerLaunch(project: "acme", agent: "Atlas", title: "Acme - Atlas", cwd: "/Users/me/acme", command: "claude", host: bad)
+      }
+    }
+    // A session of this Mac has no host key; a host's names its host.
+    let local = BrokerSession(name: SessionName("hm-acme-atlas")!, project: "acme", agent: "Atlas", alive: true, attached: 0, createdAt: 1)
+    let sessions = try BrokerEventFrame(id: nil, .sessions([local, local.on(host: host)])).line()
+    let listed = (try JSONSerialization.jsonObject(with: sessions) as? [String: Any])?["items"] as? [[String: Any]]
+    #expect(listed?[0].keys.contains("host") == false)
+    #expect(listed?[1]["host"] as? String == host)
+    #expect(try BrokerEventFrame.decode(sessions.dropLast()).event == .sessions([local, local.on(host: host)]))
+  }
+
   @Test func anAccountPrepareCarriesItsAccountAsStoredAndIsCheckedAsALaunchsIs() throws {
     let line = try BrokerRequestFrame(id: "p1", .accountPrepare(account: claudeWork)).line()
     let object = try JSONSerialization.jsonObject(with: line) as? [String: Any]

@@ -176,6 +176,8 @@ public struct RemoteRuntime: Equatable, Sendable {
 
   public static let unbundled = "This copy of Hivemind Server has no bundled runtime; build it with macos/build.sh"
 
+  public var runtimeFolder: String? { runtime?.remoteFolder }
+
   public init(runtime: @escaping @MainActor () -> RemoteRuntime?, transport: SSHTransport, runner: any SSHRunning,
               temporaryFolder: URL = FileManager.default.temporaryDirectory) {
     makeRuntime = runtime
