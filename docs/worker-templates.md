@@ -30,6 +30,7 @@ when the preview builds and the environment variables are valid; the server's re
 | `maxConcurrent` | How many workers of this template may run at once, 1–8 |
 | `enabled` | Whether brains may use it |
 | `accountId` | Optional: the [account](accounts.md) every launch of this template uses, an account of Software's driver (`codex` or `claude` exactly). Missing or `null` follows the driver's policy. Refused when the account is unknown, its driver differs from Software, or a launch variable or secret name would conflict with it (`account_unknown`, `account_driver_mismatch`, `account_env_conflict`) |
+| `hostId` | Optional: the [remote host](remote-hosts.md#launch) its workers run on, a host id from Hivemind Server.app's catalog. Missing or `null` is this Mac, as before hosts. A new pick must be in the catalog (`hostId: the host does not exist`); a template keeps the host it has when that host is gone, and its launches then wait for it |
 
 A template is checked with the same launch builder the Launch sheet uses, so any template that saves can be launched.
 Every edit bumps its `revision`; edits and deletions must name the revision they started from. A project has at most
@@ -55,6 +56,12 @@ account is used up: the worker starts and, on the Mac, the sheet shows the accou
 copies the command with no account. A brain's approved request chooses its account the same way; if none can take it,
 the request stays queued and is tried again on each poll, so it starts once the first reset has passed. See
 [Choosing an account](accounts.md#choosing-an-account).
+
+A template with a **Host** (`hostId`, shown only once Hivemind Server has a host) starts every worker on that host:
+**From a template…** sends the launch there with the host's MCP, and refuses while the host is offline. A brain's
+request records the host it was made for (`launch_requests.host_id`, migration 45) and waits, queued, while that host
+is offline, without holding up launches for this Mac or other hosts; its approval card says so. A resume goes back to
+the host the worker last ran on. See [Launch](remote-hosts.md#launch).
 
 "Used up" comes from the account's stored usage, which the Accounts sheet shows too ([Usage](accounts.md#usage)): an
 account without a read yet is never used up. A worker of a Claude template that runs under an account also feeds that

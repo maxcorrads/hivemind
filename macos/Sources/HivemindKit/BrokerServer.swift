@@ -40,6 +40,15 @@ public final class TerminalBroker {
     /// A process's start time as `TZ=UTC LC_ALL=C ps -o lstart=` prints it, which tells a live Claude session from a
     /// reused pid (ClaudeLiveSessions.systemProcessStart unless a test says otherwise).
     public var processStart: (Int32) -> String?
+    /// The remote hosts (docs/remote-hosts.md#launch): launches with a `host` go there, and their sessions are listed
+    /// and killed there. Nil by default: no host, and the broker does exactly what it did before hosts. Server.app
+    /// gives HostsService.
+    public var remoteHosts: (any BrokerRemoteHosts)?
+    /// The `origin` of a project folder on this Mac (`git remote get-url origin`), which a host that lacks the folder
+    /// clones; nil when it has none. Asked only for a launch on a host.
+    public var originURL: @MainActor (String) async -> String?
+    /// Where the host scripts look for tmux (RemoteTmuxLookup.standard; the tests give a fake).
+    public var remoteTmux: RemoteTmuxLookup
     /// Never given a secret or a variable's value: the broker logs names,
     /// counts and paths only.
     public var log: (String) -> Void
@@ -50,7 +59,9 @@ public final class TerminalBroker {
       environment: [String: String], idlePollInterval: TimeInterval = 15, secrets: LaunchSecretStore? = nil,
       templateSecrets: (any TemplateSecretVault)? = nil, home: String = HivemindPaths.userHome.path,
       shadowHomes: any ShadowHomePreparing = NoShadowHomes(), claudeTap: ClaudeStatusTap? = nil,
-      processStart: @escaping (Int32) -> String? = ClaudeLiveSessions.systemProcessStart, log: @escaping (String) -> Void = { _ in }
+      processStart: @escaping (Int32) -> String? = ClaudeLiveSessions.systemProcessStart,
+      remoteHosts: (any BrokerRemoteHosts)? = nil, originURL: @escaping @MainActor (String) async -> String? = { _ in nil },
+      remoteTmux: RemoteTmuxLookup = .standard, log: @escaping (String) -> Void = { _ in }
     ) {
       self.tmux = tmux
       self.terminals = terminals
@@ -65,6 +76,9 @@ public final class TerminalBroker {
       self.shadowHomes = shadowHomes
       self.claudeTap = claudeTap
       self.processStart = processStart
+      self.remoteHosts = remoteHosts
+      self.originURL = originURL
+      self.remoteTmux = remoteTmux
       self.log = log
     }
   }
@@ -102,6 +116,8 @@ public final class TerminalBroker {
   private(set) var claudeAccounts: [LaunchAccount] = []
   /// More than the catalog holds (8 per driver), so an edited path keeps its old directory for a while.
   static let maxClaudeAccounts = 32
+  /// Each remote host's last probe and sessions, by host id (BrokerRemote.swift).
+  var remoteListings: [String: RemoteListing] = [:]
 
   public init(token: BrokerToken, configPath: String, dependencies: Dependencies) {
     self.token = token
@@ -250,8 +266,17 @@ public final class TerminalBroker {
   // MARK: Sessions
 
   /// Every Hivemind session, or why tmux could not list them. No tmux server
-  /// yet means no sessions, and so does no tmux at all.
-  func listSessions() async -> Result<[BrokerSession], BrokerProtocolError> {
+  /// yet means no sessions, and so does no tmux at all. With remote hosts, each
+  /// ready host's sessions follow, listed again when `freshRemote` or once
+  /// their last list is `BrokerLimits.remoteSessionsPollInterval` old.
+  func listSessions(freshRemote: Bool = false) async -> Result<[BrokerSession], BrokerProtocolError> {
+    let local = await listLocalSessions()
+    guard deps.remoteHosts != nil, case .success(let sessions) = local else { return local }
+    return .success((sessions + (await remoteSessions(fresh: freshRemote))).sorted { $0.name < $1.name })
+  }
+
+  /// This Mac's sessions.
+  func listLocalSessions() async -> Result<[BrokerSession], BrokerProtocolError> {
     guard let tmux else { return .success([]) }
     let result = await run(tmux, tmux.listSessions())
     if result.succeeded { return .success(TmuxCommand.parseSessions(result.stdout)) }
@@ -649,19 +674,28 @@ public final class BrokerConnection {
   /// when it matches one of the account's controlled names without case, as environmentConflict matches a launch's own.
   static func projectOverride(of account: LaunchAccount, cwd: String) -> String? {
     guard account.driver == .claude else { return nil }
-    let controlled = Set(account.controlledNames)
-    for file in ["settings.json", "settings.local.json"] {
-      let path = (cwd.hasSuffix("/") ? String(cwd.dropLast()) : cwd) + "/.claude/" + file
+    let settings = projectSettingsFiles(cwd: cwd).compactMap { path -> RemoteFacts.ProjectSettings? in
       guard let data = FileManager.default.contents(atPath: path),
-            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
-      var key: String?
-      if let helper = json["apiKeyHelper"], !(helper is NSNull) {
-        key = "apiKeyHelper"
-      } else if let env = json["env"] as? [String: Any] {
-        key = env.keys.sorted().first { controlled.contains($0.uppercased()) }
-      }
-      if let key {
-        return "`\(path)` sets `\(key)`, which overrides the account `\(account.label)`. Remove it from that file."
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+      return RemoteFacts.ProjectSettings(path: path, apiKeyHelper: json["apiKeyHelper"].map { !($0 is NSNull) } ?? false,
+                                         env: (json["env"] as? [String: Any])?.keys.sorted() ?? [])
+    }
+    return projectOverride(of: account, settings: settings)
+  }
+
+  /// The project's Claude settings files, in the order they are checked.
+  static func projectSettingsFiles(cwd: String) -> [String] {
+    ["settings.json", "settings.local.json"].map { (cwd.hasSuffix("/") ? String(cwd.dropLast()) : cwd) + "/.claude/" + $0 }
+  }
+
+  /// The same check on what was read of each settings file that parses, here or on a remote host
+  /// (RemoteHostScripts.factsProgram): `apiKeyHelper` when it is set, else the first `env` name the account controls.
+  static func projectOverride(of account: LaunchAccount, settings: [RemoteFacts.ProjectSettings]) -> String? {
+    guard account.driver == .claude else { return nil }
+    let controlled = Set(account.controlledNames)
+    for file in settings {
+      if let key = file.apiKeyHelper ? "apiKeyHelper" : file.env.first(where: { controlled.contains($0.uppercased()) }) {
+        return "`\(file.path)` sets `\(key)`, which overrides the account `\(account.label)`. Remove it from that file."
       }
     }
     return nil
@@ -675,10 +709,13 @@ public final class BrokerConnection {
   /// One launch, never alongside another (TerminalBroker.launching).
   private func launchNow(_ launches: [BrokerLaunch], id: String?) async {
     guard isOpen, let broker else { return }
-    guard let tmux = broker.tmux else { return send(.error(Self.tmuxMissing), id: id) }
+    // Launches that all go to remote hosts need no tmux here (docs/remote-hosts.md#launch).
+    let localTmux = broker.tmux
+    guard localTmux != nil || launches.allSatisfy({ $0.host != nil }) else { return send(.error(Self.tmuxMissing), id: id) }
     let running: [BrokerSession]
-    switch await broker.listSessions() {
-    case .success(let list): running = list
+    // Names are unique across hosts: every host is listed now, and an offline one's last sessions still count.
+    switch await broker.listSessions(freshRemote: true) {
+    case .success(let list): running = list + broker.offlineRemoteSessions
     case .failure(let error): return send(.error(error), id: id)
     }
     broker.sweepSecrets()
@@ -689,8 +726,22 @@ public final class BrokerConnection {
     var errors: [BrokerLaunchFailure] = []
     for (index, (launch, name)) in zip(launches, names).enumerated() {
       if existing.contains(name) {
-        // Reused: nothing runs, so its secrets and variables (if any) are never written.
+        // Reused: nothing runs, so its secrets and variables (if any) are never written. A session on a host is
+        // reused where it runs, whatever host the launch named.
         results.append(name)
+        continue
+      }
+      if let host = launch.host {
+        let outcome = await broker.launchOnHost(host, launch, name: name, index: index)
+        results.append(outcome.started ? name : nil)
+        if outcome.started { existing.insert(name) }
+        if outcome.created { created.append(name) }
+        if let failure = outcome.failure { errors.append(failure) }
+        continue
+      }
+      guard let tmux = localTmux else {
+        results.append(nil)
+        errors.append(BrokerLaunchFailure(index: index, code: .tmuxMissing, message: TmuxLocator.installHint))
         continue
       }
       // With an account, a Codex thread another process has open is not resumed here (docs/accounts.md, "Live
@@ -858,6 +909,10 @@ public final class BrokerConnection {
 
   private func attach(_ session: SessionName, size: TerminalSize, id: String?) async {
     guard let broker else { return }
+    // Attaching to a host's session comes with the in-app terminals for hosts (docs/remote-hosts.md#plan, step 4).
+    if let host = broker.knownRemoteHost(of: session) {
+      return send(.error(code: .internal, message: "\(session) runs on \(host.label); attach from a terminal there", stream: nil), id: id)
+    }
     guard let tmux = broker.tmux else { return send(.error(Self.tmuxMissing), id: id) }
     guard streams.count < BrokerLimits.maxStreamsPerClient else { return send(.error(Self.tooManyStreams), id: id) }
     let check = await broker.run(tmux, tmux.hasSession(session))
@@ -889,8 +944,19 @@ public final class BrokerConnection {
 
   private func kill(_ session: SessionName, id: String?) async {
     guard let broker else { return }
+    // A host's session is killed on its host (docs/remote-hosts.md#sessions-and-terminals); with no host, as before.
+    if let host = await broker.remoteHost(of: session) {
+      guard let result = await broker.killOnHost(session, host: host) else {
+        return send(.error(code: .internal, message: "cannot reach \(host.label) to end \(session)", stream: nil), id: id)
+      }
+      return answerKill(session, result, id: id)
+    }
     guard let tmux = broker.tmux else { return send(.error(Self.tmuxMissing), id: id) }
-    let result = await broker.run(tmux, tmux.killSession(session))
+    answerKill(session, await broker.run(tmux, tmux.killSession(session)), id: id)
+  }
+
+  private func answerKill(_ session: SessionName, _ result: TmuxResult, id: String?) {
+    guard let broker else { return }
     if result.succeeded {
       broker.deps.log("[broker] killed \(session)")
       send(.killed(session: session), id: id)

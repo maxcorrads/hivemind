@@ -218,6 +218,12 @@ running, and with **Install tmux: `brew install tmux`** when tmux is missing.
 There is no launch outside tmux. **Copy** and **Copy all** work as before: the
 pasted text opens plain Terminal windows, not tmux.
 
+Once Hivemind Server has a [remote host](remote-hosts.md#launch), the sheet has a
+**Host** field: **This Mac** (the default) or a host. Every session the sheet
+starts goes to that host, with its MCP; **Open in Terminal** then starts it there
+without a Terminal.app window, and the Terminals sheet lists it "on <host>". With
+no host there is no field and nothing changes.
+
 When the software is OpenCode (`opencode`, or any name containing it), the sheet
 has an **OpenCode Go API key (optional)** field, a masked input. A key pasted
 there reaches the agents of this launch as `OPENCODE_API_KEY`, which OpenCode's

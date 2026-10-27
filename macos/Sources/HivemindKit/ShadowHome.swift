@@ -128,57 +128,56 @@ public struct ShadowHome {
   /// folders, the links, then the conflicts and the login. Only the shadow's
   /// links, the shadow folder (when `createShadow`) and the `ensureInHome`
   /// folders are ever written; a second run on a good shadow changes nothing.
+  /// `files` is this Mac's, or a remote host's snapshot (SnapshotShadowFiles).
   public func materialize(home: String, shadow: String, layout: ShadowLayout,
-                          createShadow: Bool, requireLogin: Bool) throws {
+                          createShadow: Bool, requireLogin: Bool, files: any ShadowFiles = LocalShadowFiles()) throws {
     let sharedPatterns = try Self.compile(layout.sharedPatterns)
     let homeOnlyPatterns = try Self.compile(layout.homeOnlyPatterns)
     let ignoredPatterns = try Self.compile(layout.ignoredPatterns)
 
     // 1. The home is an existing folder, not a symlink.
-    guard try Self.kind(of: home) == S_IFDIR else {
+    guard try files.kind(of: home) == S_IFDIR else {
       throw ShadowHomeError(path: home, message: "`\(home)` must be an existing folder, not a symlink.")
     }
 
     // 2. The shadow is a folder of its own, never the home. A login into a
     // missing one would create real files where the links belong, so the
     // refusal sends Human to Prepare first.
-    let shadowKind = try Self.kind(of: shadow)
+    let shadowKind = try files.kind(of: shadow)
     if shadowKind == nil {
       guard createShadow else {
         throw ShadowHomeError(path: shadow, message: "`\(shadow)` does not exist yet. Prepare the account in the Accounts sheet, "
                                 + "then log in with `\(layout.loginCommand(shadow, home))`.")
       }
-      try Self.makeFolder(shadow)
+      try files.makeFolder(shadow)
     } else if shadowKind != S_IFDIR {
       throw ShadowHomeError(path: shadow, message: "`\(shadow)` must be a folder, not a symlink or a file.")
     }
-    guard Self.canonical(shadow) != Self.canonical(home) else {
+    guard files.canonical(shadow) != files.canonical(home) else {
       throw ShadowHomeError(path: shadow, message: "`\(shadow)` is the shared home itself; a shadow needs a folder of its own.")
     }
 
     // 3. The folders the CLI needs in the home exist before anything links to them.
     for name in layout.ensureInHome {
       let path = Self.join(home, name)
-      if try Self.kind(of: path) == nil { try Self.makeFolder(path) }
+      if try files.kind(of: path) == nil { try files.makeFolder(path) }
     }
 
     // 4. Each shared name in the home is linked from the shadow; a correct link is kept.
-    let homeNames = try Self.names(in: home)
+    let homeNames = try files.names(in: home)
     for name in homeNames where layout.shared.contains(name) || Self.matches(name, sharedPatterns) {
       let link = Self.join(shadow, name)
       let target = Self.join(home, name)
-      let kind = try Self.kind(of: link)
+      let kind = try files.kind(of: link)
       if kind == nil {
-        guard symlink(target, link) == 0 else {
-          throw ShadowHomeError(path: link, message: "Cannot link `\(link)` to `\(target)`: \(String(cString: strerror(errno)))")
-        }
-      } else if kind != S_IFLNK || (try? FileManager.default.destinationOfSymbolicLink(atPath: link)) != target {
+        try files.link(link, to: target)
+      } else if kind != S_IFLNK || files.destination(of: link) != target {
         throw ShadowHomeError(path: link, message: "`\(link)` is a real file; HiveMind shares it from `\(home)`. Move it away, then launch again.")
       }
     }
 
     // 5. Codex's databases never live in the shadow.
-    let shadowNames = try Self.names(in: shadow)
+    let shadowNames = try files.names(in: shadow)
     if let name = shadowNames.first(where: { Self.matches($0, homeOnlyPatterns) }) {
       let path = Self.join(shadow, name)
       throw ShadowHomeError(path: path,
@@ -198,34 +197,8 @@ public struct ShadowHome {
     }
 
     // 7. A login is required only when asked for, and only checked, never read.
-    if requireLogin, !layout.isLoggedIn(URL(fileURLWithPath: shadow)) {
+    if requireLogin, !files.isLoggedIn(layout, shadow: shadow) {
       throw ShadowHomeError(path: shadow, message: "`\(shadow)` has no login yet. Run `\(layout.loginCommand(shadow, home))` to log in.")
-    }
-  }
-
-  /// The type of the entry at `path` (lstat: a symlink is never followed), or nil when nothing is there.
-  private static func kind(of path: String) throws -> mode_t? {
-    var info = stat()
-    guard lstat(path, &info) == 0 else {
-      if errno == ENOENT || errno == ENOTDIR { return nil }
-      throw ShadowHomeError(path: path, message: "Cannot read `\(path)`: \(String(cString: strerror(errno)))")
-    }
-    return info.st_mode & S_IFMT
-  }
-
-  /// A new folder at 0700; the caller has checked that nothing is there.
-  private static func makeFolder(_ path: String) throws {
-    guard mkdir(path, 0o700) == 0 else {
-      throw ShadowHomeError(path: path, message: "Cannot create `\(path)`: \(String(cString: strerror(errno)))")
-    }
-  }
-
-  /// Every entry of `folder` by name, hidden ones and dangling links included, sorted.
-  private static func names(in folder: String) throws -> [String] {
-    do {
-      return try FileManager.default.contentsOfDirectory(atPath: folder).sorted()
-    } catch {
-      throw ShadowHomeError(path: folder, message: "Cannot read `\(folder)`: \(error.localizedDescription)")
     }
   }
 
@@ -240,13 +213,6 @@ public struct ShadowHome {
 
   private static func join(_ folder: String, _ name: String) -> String {
     folder.hasSuffix("/") ? folder + name : folder + "/" + name
-  }
-
-  /// `path` with its symlinks resolved, so the shadow and the home compare as the same folder.
-  private static func canonical(_ path: String) -> String {
-    guard let resolved = realpath(path, nil) else { return path }
-    defer { free(resolved) }
-    return String(cString: resolved)
   }
 }
 

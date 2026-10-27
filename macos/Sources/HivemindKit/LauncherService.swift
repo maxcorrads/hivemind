@@ -86,14 +86,17 @@ public struct LauncherCommand: Codable, Equatable, Sendable {
   /// on the wire and in the digest when nil, so a journal entry written
   /// before accounts still matches its command.
   public let account: LaunchAccount?
+  /// The remote host the worker runs on (BrokerLaunch.host, docs/remote-hosts.md#launch). Absent when nil, like
+  /// `account`, so a journal entry written before hosts still matches its command.
+  public let host: String?
 
   public init(id: String, kind: Kind, requestId: String? = nil, templateId: String? = nil,
               project: String? = nil, agent: String? = nil, title: String? = nil,
               session: String, cwd: String? = nil, command: String? = nil,
-              environment: [String: String]? = nil, account: LaunchAccount? = nil) {
+              environment: [String: String]? = nil, account: LaunchAccount? = nil, host: String? = nil) {
     self.id = id; self.kind = kind; self.requestId = requestId; self.templateId = templateId
     self.project = project; self.agent = agent; self.title = title; self.session = session
-    self.cwd = cwd; self.command = command; self.environment = environment; self.account = account
+    self.cwd = cwd; self.command = command; self.environment = environment; self.account = account; self.host = host
   }
 
   public var digest: String {
@@ -309,7 +312,7 @@ public struct LauncherApproval: Decodable, Equatable, Sendable {
       let result: LauncherResult
       switch command.kind {
       case .launch:
-        result = exists && owner?.project == command.project && owner?.agent == command.agent
+        result = exists && owner?.project == command.project && owner?.agent == command.agent && owner?.host == command.host
           ? .launched(session) : .failed("launch outcome uncertain after restart")
       case .kill: result = exists ? .failed("kill outcome uncertain after restart") : .killed
       }
@@ -327,14 +330,15 @@ public struct LauncherApproval: Decodable, Equatable, Sendable {
         return .failed("invalid launcher launch fields")
       }
       if let existing {
-        result = existing.alive && existing.project == project && existing.agent == agent
+        result = existing.alive && existing.project == project && existing.agent == agent && existing.host == command.host
           ? .launched(session) : .failed("session exists but does not belong to this worker")
       } else {
         let launch: BrokerLaunch
         do {
           let environment = try command.environment.map { try LaunchEnvironment($0) }
           launch = try BrokerLaunch(project: project, agent: agent, title: title, cwd: cwd, command: text,
-                                    session: session, environment: environment, template: template, account: command.account)
+                                    session: session, environment: environment, template: template, account: command.account,
+                                    host: command.host)
         } catch { return .failed("invalid launcher launch fields") }
         try Task.checkCancellation()
         try journal.write(.init(digest: digest, session: session.rawValue, kind: .launch), id: command.id)

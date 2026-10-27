@@ -78,6 +78,9 @@ export type LaunchRequestView = {
   session: string | null;
   error: string | null;
   capBlocked: boolean;
+  /** The remote host the worker runs on (docs/remote-hosts.md#launch), null for this Mac; `hostWaiting` while it is offline. */
+  hostId: string | null;
+  hostWaiting: boolean;
 };
 
 export type ProjectBotsView = {
