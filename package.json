@@ -63,15 +63,15 @@
     "@xterm/xterm": "^6.0.0",
     "concurrently": "^10.0.6",
     "esbuild": "^0.28.2",
-    "happy-dom": "21.0.3",
-    "lucide-react": "^1.59.0",
+    "happy-dom": "21.0.4",
+    "lucide-react": "^1.61.0",
     "markdown-it": "^15.0.3",
-    "oxlint": "1.88.0",
+    "oxlint": "1.89.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "vite": "^8.3.4"
+    "vite": "^8.3.5"
   },
   "files": [
     "bin",
