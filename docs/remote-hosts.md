@@ -1,13 +1,13 @@
 # Remote hosts (design)
 
 > [!NOTE]
-> Partly shipped. The [agent listener](#agent-listener) (plan step 1),
+> Shipped, steps 1 to 6 of the [Plan](#plan): the [agent listener](#agent-listener),
 > [hosts](#hosts), the [host connection](#host-connection) and the
-> [remote runtime](#remote-runtime) (step 2), the [launch](#launch) on a host
-> with its session list and kill (step 3), and [accounts](#accounts), [usage](#usage)
-> and [conversations](#conversations) on hosts (step 5) are in the Node server, the
-> page and Hivemind Server.app; terminals on hosts (step 4) are still a design.
-> The [Plan](#plan) lists the changes that build it.
+> [remote runtime](#remote-runtime), the [launch](#launch) on a host,
+> [sessions and terminals](#sessions-and-terminals), [accounts](#accounts),
+> [usage](#usage) and [conversations](#conversations) on hosts, and
+> [attachments of any type](#attachments-of-any-type). The title still says
+> "design" because this page is also the threat model the code follows.
 
 A **remote host** is a second Mac on the local network, reached with SSH, where
 Hivemind runs brains and workers. Everything else stays on the Mac that runs
@@ -489,11 +489,11 @@ SVG file would run its script with the Human's powers.
    shadow homes, launch file, tmux, tap), remote session listing and kill. Tests:
    `macos/Tests/HivemindKitTests/RemoteHostLaunchTests.swift` (with the fake `ssh`),
    `src/server/launcher-channel.test.ts`, `web/launch-sheet-hosts.test.tsx`.
-4. **Terminals.** In-app attach and Open in Terminal for remote sessions.
+4. **Terminals** (*shipped*). In-app attach and Open in Terminal for remote sessions.
 5. **Accounts on hosts** (*shipped*). Home setup, the same-account check, the Accounts sheet's
    per-host status, remote usage reads, and Find last conversations per host. Tests:
    `macos/Tests/HivemindKitTests/RemoteHostAccountsTests.swift` (with the fake `ssh` and a fake `codex` on the host),
    `UsageProbeServiceTests`, `BridgeTerminalTests`, `src/server/cli-conversations.test.ts`, `web/accounts-sheet.test.tsx`,
    `web/launch-sheet-hosts.test.tsx`, `web/native-bridge.unit.test.ts`.
-6. **Attachments of any type.** The upload allowlist removed, the safe preview list,
+6. **Attachments of any type** (*shipped*). The upload allowlist removed, the safe preview list,
    and download headers for every other type.
