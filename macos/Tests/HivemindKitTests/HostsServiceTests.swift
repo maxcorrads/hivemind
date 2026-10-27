@@ -9,6 +9,11 @@ import Testing
 private actor HostsHTTPFake: LauncherHTTP {
   let secret: InstanceSecret
   var status = 200
+  /// Servers whose catalog put is refused with a 500.
+  var refusing: Set<Int> = []
+  /// While set, a catalog put waits for `release()`.
+  var holding = false
+  private var held: [CheckedContinuation<Void, Never>] = []
   var requests: [URLRequest] = []
 
   init(secret: InstanceSecret) { self.secret = secret }
@@ -20,12 +25,28 @@ private actor HostsHTTPFake: LauncherHTTP {
       let nonce = InstanceNonce(hex: URLComponents(url: url, resolvingAgainstBaseURL: false)!.queryItems!.first!.value!)!
       return (200, Data("{\"proof\":\"\(InstanceProof.proof(secret: secret, nonce: nonce, port: ServerPort(url.port!)!))\"}".utf8))
     }
-    if url.path == HostsService.catalogPath { return (status, Data("{\"ok\":true}".utf8)) }
+    if url.path == HostsService.catalogPath {
+      if holding { await withCheckedContinuation { held.append($0) } }
+      return (refusing.contains(url.port!) ? 500 : status, Data("{\"ok\":true}".utf8))
+    }
     return (404, Data())
   }
 
   func recorded() -> [URLRequest] { requests }
   func failNext(_ status: Int) { self.status = status }
+  func refuse(_ port: Int) { refusing.insert(port) }
+  func hold() { holding = true }
+  func release() {
+    holding = false
+    for continuation in held { continuation.resume() }
+    held = []
+  }
+  func catalogPorts() -> [Int?] { requests.filter { $0.url?.path == HostsService.catalogPath }.map { $0.url?.port } }
+
+  /// Waits until a catalog put is held.
+  func untilHeld() async {
+    for _ in 0..<400 where held.isEmpty { try? await Task.sleep(for: .milliseconds(10)) }
+  }
 
   /// The hosts of each catalog put, in order, decoded strictly: exactly `id`, `label` and `online`.
   func catalogs() throws -> [[HostCatalogEntry]] {
@@ -67,12 +88,12 @@ private actor HostsHTTPFake: LauncherHTTP {
     .init(endpoint: ServerEndpoint(port: ServerPort(port)!), secret: secret)
   }
 
-  private func service(server: Bool = true, box: ServerBox? = nil) -> HostsService {
+  private func service(server: Bool = true, box: ServerBox? = nil, log: (@MainActor (String) -> Void)? = nil) -> HostsService {
     let box = box ?? ServerBox(server ? self.server() : nil)
     let deps = HostsService.Dependencies(
       transport: SSHTransport(environment: [:], controlFolder: paths.hostSockets), launcher: launcher, runner: runner,
       scheduler: scheduler, installer: installer, http: http)
-    return HostsService(store: RemoteHostStore(paths: paths), server: { box.server }, dependencies: deps)
+    return HostsService(store: RemoteHostStore(paths: paths), server: { box.server }, dependencies: deps, log: log)
   }
 
   @Test func withNoHostThereIsNoConnectionNoAgentListenerAndNoCatalogRequest() async throws {
@@ -159,6 +180,39 @@ private actor HostsHTTPFake: LauncherHTTP {
     hosts.serverChanged()
     await hosts.settle()
     #expect(try await http.catalogs().count == 2, "no server, no post")
+  }
+
+  @Test func aServerThatComesUpWhileAFailingPostIsOutGetsTheCatalog() async throws {
+    try RemoteHostStore(paths: paths).save([fakeHost])
+    let box = ServerBox(server())
+    let hosts = service(box: box)
+    await http.refuse(7520)
+    await http.hold()
+    hosts.serverChanged()
+    await http.untilHeld()
+    #expect(await http.catalogPorts() == [7520], "the put to the old server is out")
+    box.server = server(7521)
+    hosts.serverChanged()
+    await http.release()
+    await hosts.settle()
+    #expect(await http.catalogPorts() == [7520, 7521], "the old server's failure does not drop the new one's catalog")
+  }
+
+  @Test func aNewServerEndsTheRetryWaitAtOnce() async throws {
+    try RemoteHostStore(paths: paths).save([fakeHost])
+    let box = ServerBox(server())
+    var lines: [String] = []
+    let hosts = service(box: box, log: { lines.append($0) })
+    await http.refuse(7520)
+    hosts.serverChanged()
+    #expect(await eventually { lines.contains { $0.contains("retrying") } }, "the post to the old server waits to retry")
+    let clock = ContinuousClock()
+    let started = clock.now
+    box.server = server(7521)
+    hosts.serverChanged()
+    await hosts.settle()
+    #expect(clock.now - started < .seconds(1.5), "the new server does not wait out the old one's 2 s backoff")
+    #expect(await http.catalogPorts() == [7520, 7521])
   }
 
   @Test func aRefusedCatalogIsAnErrorAndTheNextPostSendsItAgain() async throws {

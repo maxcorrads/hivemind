@@ -118,6 +118,8 @@ public final class HostsService {
   private var postedCatalog: [HostCatalogEntry]?
   private var posting: Task<Void, Never>?
   private var postAgain = false
+  /// The wait before a retry, and the server it retries: a new server ends it at once.
+  private var retryWait: (server: LauncherService.Server, task: Task<Void, Never>)?
 
   public init(store: RemoteHostStore, server: @escaping @MainActor () -> LauncherService.Server?, dependencies: Dependencies,
               agentPort: ServerPort = HostsService.defaultAgentPort, log: (@MainActor (String) -> Void)? = nil) {
@@ -185,6 +187,7 @@ public final class HostsService {
 
   /// The supervisor's state changed: a new server holds no catalog yet, so it gets the current one.
   public func serverChanged() {
+    if let retryWait, retryWait.server != server() { retryWait.task.cancel() }
     schedulePost()
   }
 
@@ -256,7 +259,8 @@ public final class HostsService {
   }
 
   /// One post at a time; a change while one is out sends again after it. A failed post is retried after 2 s,
-  /// doubling to a minute, while the server stays the same; a new server, or a stop, ends the retries.
+  /// doubling to a minute, while the server stays the same; a new server ends the retries and gets the catalog at
+  /// once, also when it comes up while a post to the old one is still out. A stop ends them too.
   private func schedulePost() {
     guard posting == nil else { postAgain = true; return }
     posting = Task { [weak self] in
@@ -264,19 +268,31 @@ public final class HostsService {
       while !Task.isCancelled {
         guard let self else { return }
         self.postAgain = false
-        let current = self.server()
+        guard let current = self.server() else { break }
         do {
           try await self.postCatalogOnce()
           if !self.postAgain { break }
         } catch {
-          guard current != nil, self.server() == current else { break }
+          if self.server() != current {
+            guard self.server() != nil else { break }
+            delay = .seconds(2)
+            continue
+          }
           self.log?("[hosts] the catalog did not reach the server (\(error.localizedDescription)); retrying")
-          try? await Task.sleep(for: delay)
-          delay = min(delay * 2, .seconds(60))
+          await self.waitToRetry(delay, server: current)
+          delay = self.server() == current ? min(delay * 2, .seconds(60)) : .seconds(2)
         }
       }
       self?.posting = nil
     }
+  }
+
+  /// Sleeps `delay` before a retry to `server`, cut short by a new server (serverChanged) or a stop.
+  private func waitToRetry(_ delay: Duration, server: LauncherService.Server) async {
+    let wait = Task<Void, Never> { try? await Task.sleep(for: delay) }
+    retryWait = (server, wait)
+    await withTaskCancellationHandler { await wait.value } onCancel: { wait.cancel() }
+    retryWait = nil
   }
 
   private func connection(for host: RemoteHost) -> HostConnection {

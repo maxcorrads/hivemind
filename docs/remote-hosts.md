@@ -84,7 +84,10 @@ the usage probe's posts), as the whole catalog, sent again when a host is added
 or removed, when one goes online or offline, and to every new server. The server
 holds it in memory (`hive.hosts`, src/server/host-catalog.ts): it is Server.app's
 state. A host is `online` when its connection is up and its remote runtime is
-this version's. With no host and none sent before, Server.app sends nothing.
+this version's. With no host and none sent before, Server.app sends nothing. A
+send that fails is retried after 2 s, doubling to a minute, while the server
+stays the same; a new server ends the wait and gets the catalog at once, also
+when it comes up while a send to the old one is still out.
 
 **Requirements on the host.** macOS, SSH key login without a password
 (`BatchMode=yes` must succeed), a known host key in the control Mac's
