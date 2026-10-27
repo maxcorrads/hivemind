@@ -36,9 +36,13 @@ cookies and agent bearer tokens:
   Approval may include a replacement `templateId` in the same project.
 - `GET /api/launcher/accounts` reads the [account](accounts.md) catalog as
   launches carry it, and `POST /api/launcher/usage` stores up to 16 usage
-  snapshots (a 64 KiB body; every other route takes at most 4 KiB). Both are
-  for Server.app's `UsageProbeService`, which asks a server only after its
-  instance proof; see [Usage](accounts.md#usage).
+  snapshots (a 64 KiB body; every other route but the next one takes at most
+  4 KiB). Both are for Server.app's `UsageProbeService`, which asks a server
+  only after its instance proof; see [Usage](accounts.md#usage).
+- `PUT /api/launcher/hosts` replaces the [remote host](remote-hosts.md#hosts)
+  catalog the server holds in memory: up to 16 `{id, label, online}` (a 16 KiB
+  body). Server.app's `HostsService` sends it, after the instance proof, only
+  once a host exists.
 
 Each request carries `X-Hivemind-Timestamp` (Unix seconds), a 32-byte lowercase
 hex `X-Hivemind-Nonce`, and `X-Hivemind-Signature`. The signature is the hex

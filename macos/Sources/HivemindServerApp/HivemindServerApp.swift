@@ -35,6 +35,7 @@ final class ServerAppDelegate: NSObject, NSApplicationDelegate {
     launched = true
     model.controller.launch()
     model.terminals.start()
+    model.hosts.start()
     model.approvalNotifier.install()
     model.launcher.serverChanged()
     model.usage.serverChanged()
@@ -59,9 +60,10 @@ final class ServerAppDelegate: NSObject, NSApplicationDelegate {
   /// Quit waits for the server to exit (SIGTERM, SIGKILL after the timeout)
   /// so no orphan keeps the data folder locked. The terminal broker hangs up
   /// its PTY children at once; tmux sessions (and the agents in them) keep
-  /// running.
+  /// running, on this Mac and on the hosts, whose SSH masters end at once.
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
     model.remote.stop()
+    model.hosts.stop()
     model.launcher.stop()
     model.usage.stop()
     model.terminals.stop()
@@ -98,6 +100,7 @@ private struct ServerMenu: View {
     if let detail = status.detail { Text(detail) }
     Text(model.terminalsStatus.title)
     if model.remote.isEnabled { Text(model.remote.status.title) }
+    if let hosts = model.hosts.summary { Text(hosts) }
     Divider()
     Button("Open Hivemind") { model.openHivemind() }
       .keyboardShortcut("o")
@@ -129,10 +132,39 @@ private struct ServerMenu: View {
       .disabled(!model.canInstallCommandLineTool)
     Divider()
     RemoteAccessMenu(model: model)
+    HostsMenu(model: model)
     Divider()
     Button("About Hivemind Server") { model.showAbout() }
     Button("Quit Hivemind Server") { model.quit() }
       .keyboardShortcut("q")
+  }
+}
+
+/// Remote hosts (docs/remote-hosts.md): each one's status, Reconnect and Remove, and Add Host.
+private struct HostsMenu: View {
+  // Observed like RemoteAccessMenu: HostsService reports changes through the model's objectWillChange.
+  @ObservedObject var model: ServerMenuModel
+
+  var body: some View {
+    let hosts = model.hosts
+    Menu("Hosts (\(hosts.hosts.count))") {
+      if let error = hosts.loadError { Text(error) }
+      ForEach(hosts.hosts) { host in
+        let status = hosts.status(of: host)
+        Menu(status?.title ?? host.label) {
+          if let detail = status?.detail { Text(detail) }
+          Text(host.ssh)
+          if !host.forwards.isEmpty { Text("Forwards: \(host.forwards.joined(separator: " "))") }
+          Divider()
+          Button("Reconnect") { hosts.reconnect(host.id) }
+          Button("Remove…") { model.removeHost(host) }
+        }
+      }
+      if !hosts.hosts.isEmpty { Divider() }
+      Button("Add Host…") { model.addHost() }
+        .disabled(!hosts.canAdd)
+      Button("Show Hosts Log") { model.showHostsLog() }
+    }
   }
 }
 

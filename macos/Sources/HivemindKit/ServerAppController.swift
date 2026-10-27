@@ -138,6 +138,9 @@ public final class ServerAppController {
 
   public var dataHome: URL { settings.launchSettings(paths: paths).dataHome }
 
+  /// The agent listener's port (ServerLaunchSettings.agentPort): HostsService's, set while a remote host exists.
+  public private(set) var agentPort: ServerPort?
+
   /// The secret the running child was started with (InstanceProof), in
   /// memory: the remote gateway checks the server with it before it
   /// forwards anything (docs/remote-access.md#verified-server). Nil while no
@@ -222,6 +225,19 @@ public final class ServerAppController {
     }
   }
 
+  /// The first host was added or the last one removed: a server that runs, or is starting, restarts with or without
+  /// its agent listener. One that is stopped, failed or waiting to restart takes it on its next start.
+  public func setAgentPort(_ port: ServerPort?) {
+    guard port != agentPort else { return }
+    agentPort = port
+    log.append("[app] agent listener: \(port.map { "port \($0)" } ?? "off")")
+    switch state {
+    case .starting, .running: restart()
+    case .stopped, .stopping, .waitingToRestart, .failed: break
+    }
+    changed()
+  }
+
   // MARK: A previous server of ours
 
   /// A server this app started before it crashed or was force-quit: it still
@@ -296,7 +312,8 @@ public final class ServerAppController {
   }
 
   private func nextLaunchSpec() -> LaunchSpec {
-    let launch = settings.launchSettings(paths: paths)
+    var launch = settings.launchSettings(paths: paths)
+    launch.agentPort = agentPort
     active = launch
     announcedPort = nil
     let secret = InstanceSecret.generate()
@@ -304,7 +321,8 @@ public final class ServerAppController {
     // Process refuses a missing working directory; the server would create it anyway.
     try? FileManager.default.createDirectory(
       at: launch.dataHome, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-    log.append("[app] starting hivemind serve on port \(launch.port), data folder \(launch.dataHome.path)")
+    log.append("[app] starting hivemind serve on port \(launch.port), data folder \(launch.dataHome.path)"
+      + (launch.agentPort.map { ", agent listener on port \($0)" } ?? ""))
     let bundled = server ?? BundledServer(contents: URL(fileURLWithPath: "/nonexistent/Contents"))
     var spec = launch.spec(server: bundled, baseEnvironment: deps.baseEnvironment, home: paths.home, secret: secret)
     // --port wins over it on the server; set anyway so anything the server
