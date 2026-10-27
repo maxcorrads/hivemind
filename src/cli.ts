@@ -4,6 +4,7 @@ import { sendOperation } from "./client/send-operation.ts";
 import { resolve, basename, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
+import os from "node:os";
 import { DEFAULT_AGENT_PORT, DEFAULT_PORT, DEFAULT_WAIT_MS, MCP_HEARTBEAT_MS, MESSAGE_EVENT_TYPES, type MessageEventType } from "./shared/types.ts";
 import { guessMime } from "./shared/mime.ts";
 import {
@@ -63,6 +64,7 @@ function help() {
   hivemind mcp
   hivemind mcp-config [--codex | --cursor | --cursor-hooks]
   hivemind cursor-stop-hook
+  hivemind conversations < agents.json
   hivemind bots add /absolute/hivemind-bot.json [--home /hive]
   hivemind bots list | remove ID [--home /hive]
   hivemind bots bind ID --project SLUG --config-home /existing/profile [--home /hive]
@@ -154,6 +156,16 @@ export async function runCli(argv: string[]): Promise<void> {
     let input = "";
     for await (const chunk of process.stdin) input += String(chunk);
     console.log(JSON.stringify(await cursorStopHookOutput(input)));
+    return;
+  }
+
+  if (cmd === "conversations") {
+    // Find last conversations on a remote host (docs/remote-hosts.md#conversations): Hivemind Server.app runs this with
+    // the host's runtime, the agents on stdin, and reads the answer of the server's own scan from stdout.
+    const { conversationsAnswer } = await import("./server/cli-conversations.ts");
+    let input = "";
+    for await (const chunk of process.stdin) input += String(chunk);
+    console.log(JSON.stringify(await conversationsAnswer(input, process.env.HIVEMIND_CLI_HOME || os.homedir())));
     return;
   }
 

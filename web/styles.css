@@ -198,6 +198,7 @@ html.dark {
 .account-usage-window { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 4px 0; font-size: 0.9em; }
 .account-usage-window progress { width: 120px; accent-color: var(--moss); }
 .account-usage-forecast { flex-basis: 100%; opacity: 0.8; }
+.account-hosts { list-style: none; margin: 4px 0; padding: 0 0 0 12px; border-left: 2px solid var(--line); }
 
 * { box-sizing: border-box; }
 html, body, #root {

@@ -19,6 +19,9 @@ public protocol ShadowHomePreparing {
   /// `prepare` on a remote host's files (docs/remote-hosts.md#launch): `home` is the host's, and `files` its snapshot,
   /// whose recorded writes the launch then applies there.
   func prepare(_ account: LaunchAccount, home: String, files: any ShadowFiles) throws
+  /// Prepare's steps on a remote host's files (docs/remote-hosts.md#accounts): a shadow's folder and links before its
+  /// login there, recorded on `files`. A primary has nothing to build. Throws what is wrong, naming the fix.
+  func prepareForLogin(_ account: LaunchAccount, home: String, files: any ShadowFiles) throws
 }
 
 extension ShadowHomePreparing {
@@ -27,6 +30,10 @@ extension ShadowHomePreparing {
     guard account.shadowPath.isEmpty else {
       throw BrokerProtocolError(.internal, "This broker cannot prepare shadow accounts on a host")
     }
+  }
+
+  public func prepareForLogin(_ account: LaunchAccount, home: String, files: any ShadowFiles) throws {
+    try prepare(account, home: home, files: files)
   }
 }
 
@@ -68,6 +75,18 @@ public struct FileShadowHomes: ShadowHomePreparing {
                                    createShadow: false, requireLogin: true, files: files)
     } catch let error as ShadowHomeError {
       // The message names the fix; the broker reports it as this item's failure.
+      throw BrokerProtocolError(.internal, error.message)
+    }
+  }
+
+  public func prepareForLogin(_ account: LaunchAccount, home: String, files: any ShadowFiles) throws {
+    guard !account.shadowPath.isEmpty else { return }
+    let (shared, shadow) = Self.paths(account, home: home)
+    do {
+      try Self.checkShadow(account.driver, shared: shared, shadow: shadow, files: files)
+      try ShadowHome().materialize(home: shared, shadow: shadow, layout: Self.layout(account.driver),
+                                   createShadow: true, requireLogin: false, files: files)
+    } catch let error as ShadowHomeError {
       throw BrokerProtocolError(.internal, error.message)
     }
   }

@@ -32,6 +32,8 @@ public enum BrokerLimits {
   public static let maxRequestBytes = 1 << 20
   /// One broker → client line, newline excluded.
   public static let maxEventBytes = 4 << 20
+  /// The most agents one conversations.find may name (Find last conversations on a host).
+  public static let maxConversationAgents = 1000
   /// Launches in one `launch` (the Launch agent sheet's own cap).
   public static let maxLaunches = 24
   public static let maxCommandBytes = 8 * 1024
@@ -328,7 +330,10 @@ public enum BrokerRequest: Equatable, Sendable {
   case launcherReject(requestId: String)
   /// The Accounts sheet's Prepare (docs/accounts.md): build the account's
   /// directory before its login, paths as stored; answered with `account.prepared`.
-  case accountPrepare(account: LaunchAccount)
+  /// With `host`, on that remote host (docs/remote-hosts.md#accounts).
+  case accountPrepare(account: LaunchAccount, host: String? = nil)
+  /// Find last conversations on a remote host (docs/remote-hosts.md#conversations); answered with `conversations`.
+  case conversationsFind(host: String, agents: [ConversationAgent])
 
   public var type: String {
     switch self {
@@ -349,6 +354,7 @@ public enum BrokerRequest: Equatable, Sendable {
     case .launcherApprove: "launcher.approve"
     case .launcherReject: "launcher.reject"
     case .accountPrepare: "account.prepare"
+    case .conversationsFind: "conversations.find"
     }
   }
 }
@@ -383,7 +389,7 @@ extension BrokerRequestFrame: Codable {
   private enum Key: String, CodingKey {
     case type, id, version, token, client, launches, session, cols, rows, stream, data
     case project, agent, title, cwd, command, secrets, environment
-    case template, account, name, value, requestId, templateId, host
+    case template, account, name, value, requestId, templateId, host, agents
   }
 
   public init(from decoder: any Decoder) throws {
@@ -477,7 +483,17 @@ extension BrokerRequestFrame: Codable {
         throw BrokerProtocolError.invalid("account", "is missing")
       }
       try account.validate()
-      request = .accountPrepare(account: account)
+      let host = try BrokerCoding.optionalString(c, .host, field: "host")
+      if let host, !RemoteHost.isID(host) { throw BrokerProtocolError.invalid("host", "must be a host id (a lowercase UUID)") }
+      request = .accountPrepare(account: account, host: host)
+    case "conversations.find":
+      let host = try BrokerCoding.string(c, .host)
+      guard RemoteHost.isID(host) else { throw BrokerProtocolError.invalid("host", "must be a host id (a lowercase UUID)") }
+      guard let agents = try? c.decode([ConversationAgent].self, forKey: .agents),
+            agents.count <= BrokerLimits.maxConversationAgents, agents.allSatisfy(\.isValid) else {
+        throw BrokerProtocolError.invalid("agents", "must be up to \(BrokerLimits.maxConversationAgents) agents of id, name and worktree")
+      }
+      request = .conversationsFind(host: host, agents: agents)
     default:
       throw BrokerProtocolError(.unknownType, "unknown message type \(BrokerText.quoted(type))")
     }
@@ -540,8 +556,12 @@ extension BrokerRequestFrame: Codable {
       try c.encodeIfPresent(templateId?.rawValue, forKey: .templateId)
     case .launcherReject(let requestId):
       try c.encode(requestId, forKey: .requestId)
-    case .accountPrepare(let account):
+    case .accountPrepare(let account, let host):
       try c.encode(account, forKey: .account)
+      try c.encodeIfPresent(host, forKey: .host)
+    case .conversationsFind(let host, let agents):
+      try c.encode(host, forKey: .host)
+      try c.encode(agents, forKey: .agents)
     }
   }
 }
@@ -575,6 +595,8 @@ public enum BrokerEvent: Equatable, Sendable {
   /// The answer to `account.prepare`: `ok` (no `error`) and `loggedIn` on the
   /// wire, `error` naming the fix when the account is not ready.
   case accountPrepared(AccountPreparation)
+  /// The answer to `conversations.find`: each agent's last conversation on the host, by agent id.
+  case conversations([String: BrokerConversation])
   /// `stream` is set when the error is about one stream.
   case error(code: BrokerErrorCode, message: String, stream: BrokerStreamID?)
 
@@ -591,6 +613,7 @@ public enum BrokerEvent: Equatable, Sendable {
     case .secrets: "secrets"
     case .launcherDecided: "launcher.decided"
     case .accountPrepared: "account.prepared"
+    case .conversations: "conversations"
     case .error: "error"
     }
   }
@@ -626,7 +649,7 @@ public struct BrokerEventFrame: Equatable, Sendable {
 extension BrokerEventFrame: Codable {
   private enum Key: String, CodingKey {
     case type, id, version, tmuxPath, items, names, created, errors, stream, session, data, status, code, message
-    case template, requestId, action, ok, loggedIn, error, command
+    case template, requestId, action, ok, loggedIn, error, command, conversations
   }
 
   public init(from decoder: any Decoder) throws {
@@ -694,6 +717,12 @@ extension BrokerEventFrame: Codable {
       let error = try BrokerCoding.optionalString(c, .error).map { String($0.prefix(1000)) }
       guard ok == (error == nil) else { throw BrokerProtocolError.invalid("error", "is set exactly when ok is false") }
       event = .accountPrepared(AccountPreparation(loggedIn: loggedIn, error: error))
+    case "conversations":
+      guard let found = try? c.decode([String: BrokerConversation].self, forKey: .conversations),
+            found.count <= BrokerLimits.maxConversationAgents, found.values.allSatisfy(\.isValid) else {
+        throw BrokerProtocolError.invalid("conversations", "must map agent ids to conversations")
+      }
+      event = .conversations(found)
     case "error":
       let code: BrokerErrorCode
       do { code = try c.decode(BrokerErrorCode.self, forKey: .code) } catch {
@@ -747,6 +776,8 @@ extension BrokerEventFrame: Codable {
       try c.encode(preparation.ok, forKey: .ok)
       try c.encode(preparation.loggedIn, forKey: .loggedIn)
       try c.encodeIfPresent(preparation.error, forKey: .error)
+    case .conversations(let found):
+      try c.encode(found, forKey: .conversations)
     case .error(let code, let message, let stream):
       try c.encode(code, forKey: .code)
       try c.encode(message, forKey: .message)

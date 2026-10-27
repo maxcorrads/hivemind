@@ -218,7 +218,7 @@ public struct ShadowHome {
 
 /// A path as the shell reads it: as written when it has no special characters, else single-quoted.
 /// The same plain characters as the page's `shellPath` (src/shared/accounts.ts), so both show one command.
-private func shellWord(_ path: String) -> String {
+func shellWord(_ path: String) -> String {
   let plain = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./+@,:-")
   guard !path.allSatisfy({ plain.contains($0) }) else { return path }
   return "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"

@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { lastConversations } from "./cli-conversations.ts";
+import { childEnv } from "../test-support/child-process.ts";
+import { conversationsAnswer, lastConversations } from "./cli-conversations.ts";
 
 const NOW = Date.UTC(2026, 9, 14, 0, 0);
 const HOUR = 3_600_000;
@@ -60,4 +62,38 @@ test("each agent gets its newest conversation in its own CLI home, by the first 
   });
   assert.equal(found.atlas!.cwd, repo);
   assert.equal(found.atlas!.at, NOW - 2 * HOUR);
+});
+
+test("hivemind conversations answers the same scan for the agents on stdin, and refuses anything else", async t => {
+  // What Hivemind Server.app runs on a remote host (docs/remote-hosts.md#conversations), with that host's home.
+  const home = mkdtempSync(path.join(os.tmpdir(), "hm-cli-conversations-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  write(path.join(home, ".claude/projects/-Users-me-acme/c1a2b3c4-0000-4000-8000-000000000001.jsonl"),
+    `{"type":"user","cwd":"/Users/me/acme","message":"resume=Atlas"}\n`, NOW - HOUR);
+  const input = JSON.stringify({ agents: [{ id: "a1", name: "Atlas", worktree: "/Users/me/acme" }, { id: "b1", name: "Bea", worktree: null }] });
+  const answer = await conversationsAnswer(input, home, NOW);
+  assert.deepEqual(answer, { conversations: { a1: { cli: "claude", software: "claude", id: "c1a2b3c4-0000-4000-8000-000000000001",
+    cwd: "/Users/me/acme", at: NOW - HOUR } } });
+  // The answer never names a host: the app adds the host it ran on.
+  assert.equal("host" in answer.conversations.a1!, false);
+  for (const bad of ["", "not json", "[]", JSON.stringify({ agents: [{ id: "a1", name: "Atlas" }] }),
+    JSON.stringify({ agents: [], extra: 1 }), JSON.stringify({ agents: [{ id: "", name: "Atlas", worktree: null }] })]) {
+    await assert.rejects(conversationsAnswer(bad, home, NOW), /conversations: stdin/);
+  }
+});
+
+test("the hivemind conversations command prints that answer as one JSON line", async t => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "hm-cli-conversations-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  write(path.join(home, ".claude/projects/-Users-me-acme/c1a2b3c4-0000-4000-8000-000000000001.jsonl"),
+    `{"type":"user","cwd":"/Users/me/acme","message":"resume=Atlas"}\n`, Date.now() - HOUR);
+  const run = (input: string) => spawnSync(process.execPath, ["--import", import.meta.resolve("tsx"), path.resolve("src/cli.ts"), "conversations"],
+    { input, encoding: "utf8", env: childEnv({ PATH: process.env.PATH ?? "", HIVEMIND_CLI_HOME: home, HIVEMIND_HOME: path.join(home, "hive") }) });
+  const ran = run(JSON.stringify({ agents: [{ id: "a1", name: "Atlas", worktree: null }] }));
+  assert.equal(ran.status, 0, ran.stderr);
+  const lines = ran.stdout.trim().split("\n");
+  assert.equal(lines.length, 1);
+  assert.equal((JSON.parse(lines[0]!) as { conversations: Record<string, { id: string }> }).conversations.a1!.id,
+    "c1a2b3c4-0000-4000-8000-000000000001");
+  assert.notEqual(run("{").status, 0);
 });

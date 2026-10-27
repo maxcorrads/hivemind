@@ -210,9 +210,12 @@ public final class TerminalBridgeRouter {
     case .launcherReject(let id, let requestId):
       begin()
       relay(.launcherReject(requestId: requestId), id: id)
-    case .accountPrepare(let id, let account):
+    case .accountPrepare(let id, let account, let host):
       begin()
-      relay(.accountPrepare(account: account), id: id)
+      relay(.accountPrepare(account: account, host: host), id: id)
+    case .conversationsFind(let id, let host, let agents):
+      begin()
+      relay(.conversationsFind(host: host, agents: agents), id: id)
     default:
       break
     }
@@ -382,7 +385,7 @@ public final class TerminalBridgeRouter {
     case .error(_, _, let stream):
       // Errors about a stream of ours; the rest answered nothing of the page's.
       guard let stream, streams.contains(stream) else { return }
-    case .welcome, .launched, .attached, .killed, .attachCommand, .secrets, .launcherDecided, .accountPrepared:
+    case .welcome, .launched, .attached, .killed, .attachCommand, .secrets, .launcherDecided, .accountPrepared, .conversations:
       return
     }
     deliver(BridgeTerminalEvent(BrokerEventFrame(event)))

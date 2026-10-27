@@ -66,6 +66,8 @@ final class TerminalBrokerService {
         claudeTap: ClaudeStatusTap(folder: paths.accounts),
         remoteHosts: remoteHosts,
         originURL: { folder in await Self.origin(of: folder) },
+        // The same-account check of a launch or a Prepare on a host (docs/remote-hosts.md#accounts).
+        accountIdentity: LocalAccountIdentity(codex: CodexAppServerProbe()),
         log: { log.append($0) }))
     broker.onChange = { [weak self] in self?.onChange?() }
     broker.launcherDecision = { [weak self] requestId, templateId, approve in

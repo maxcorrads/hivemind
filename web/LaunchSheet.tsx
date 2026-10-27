@@ -15,6 +15,7 @@ import { agentTerminalSession, terminalBlocker, terminalHub, useTerminalState, t
 import { projectLaunchTools, type LaunchContext } from "../src/shared/launch-prompt.ts";
 import { parseLaunchEnvironment } from "../src/shared/launch-environment.ts";
 import { HOST_ID_PATTERN, type HostCatalogEntry } from "../src/shared/hosts.ts";
+import type { CliConversation } from "../src/shared/cli-conversations.ts";
 import {
   ACCOUNT_DRIVERS, accountDriverForSoftware, accountEnvironmentConflict, softwareAliasWarning, toLaunchAccount, type AccountDriver,
   type LaunchAccount,
@@ -453,15 +454,31 @@ export function LaunchSheet({
     remember({ tunes: next });
   };
 
-  // Resume cards: each employee's last CLI conversation, found in this Mac's transcripts, fills its card.
+  // Resume cards: each employee's last CLI conversation, found in this Mac's transcripts and, in the apps, in each online
+  // host's (docs/remote-hosts.md#conversations), fills its card. The newest wins, and a host's carries that host.
   const [conversationNote, setConversationNote] = useState<string | null>(null);
   const findConversations = () => {
     setConversationNote("Looking for the last conversations…");
-    api.agentConversations()
-      .then(({ conversations }) => {
+    const hub = native ? terminalHub() : null;
+    const scanned = roster.map((agent) => ({ id: agent.id, name: agent.name,
+      worktree: projects.find((p) => p.slug === agent.project)?.worktree ?? null }));
+    const onHosts = hub ? hosts.filter((entry) => entry.online) : [];
+    const missed: string[] = [];
+    const fromHosts = onHosts.map((entry) => hub!.findConversations(entry.id, scanned)
+      .catch((error: Error) => { missed.push(`${entry.label} (${error.message})`); return {}; }));
+    Promise.all([api.agentConversations().then(({ conversations }) => conversations), ...fromHosts])
+      .then((lists) => {
+        const conversations: Record<string, CliConversation> = {};
+        for (const list of lists) {
+          for (const [id, found] of Object.entries(list)) {
+            if (!conversations[id] || found.at > conversations[id]!.at) conversations[id] = found;
+          }
+        }
         const above = software.trim() || "codex";
         const next = { ...tunes };
         let filled = 0;
+        // Employees whose conversation is on another host than the Host field's: resuming them here needs its files.
+        const elsewhere = new Map<string, string[]>();
         for (const agent of roster) {
           const found = conversations[agent.id];
           const tune = next[agent.name] ?? { software: "", model: "", effort: "", conversation: "" };
@@ -473,10 +490,19 @@ export function LaunchSheet({
           const sameKind = softwareFamily(found.software) === softwareFamily(current);
           next[agent.name] = { ...tune, software: seat, conversation: found.id, ...(sameKind ? {} : { model: "", effort: "" }) };
           filled++;
+          if ((found.host ?? null) !== hostId) {
+            const where = found.host ? hosts.find((entry) => entry.id === found.host)?.label ?? "another Mac" : "This Mac";
+            elsewhere.set(where, [...elsewhere.get(where) ?? [], agent.name]);
+          }
         }
         setTunes(next);
         remember({ tunes: next });
-        setConversationNote(`Found the last conversation of ${filled} of ${roster.length} employees.`);
+        const notes = [`Found the last conversation of ${filled} of ${roster.length} employees.`];
+        for (const [where, names] of elsewhere) {
+          notes.push(`${names.join(", ")} last talked on ${where}: pick that Host to resume there, or copy the conversation's files first.`);
+        }
+        if (missed.length) notes.push(`Could not look on ${missed.join(", ")}.`);
+        setConversationNote(notes.join(" "));
       })
       .catch((error: Error) => setConversationNote(`Cannot look for conversations: ${error.message}`));
   };
