@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { ROUTINE_BATCH_MS } from "../shared/notifications.ts";
 import { AccountStore } from "./accounts.ts";
 import { AccountUsageStore } from "./account-usage.ts";
+import { HostCatalog } from "./host-catalog.ts";
 import { WorkerTemplateStore } from "./worker-templates.ts";
 import { LauncherQueue } from "./launcher-queue.ts";
 import { AgentActivityService } from './services/agent-activity.ts';
@@ -108,6 +109,8 @@ export class Hive {
   readonly bus = new HiveBus();
   /** Bytes the agent API returned per brain/worker since start (Human snapshot). */
   readonly traffic = new AgentTraffic();
+  /** The remote hosts Server.app last reported (docs/remote-hosts.md#hosts); in memory, empty with no host. */
+  readonly hosts = new HostCatalog();
   readonly home: string;
 
   readonly telegramAdmin!: TelegramAdminService;

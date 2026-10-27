@@ -59,17 +59,22 @@ public enum ServerOutput {
 public struct ServerLaunchSettings: Equatable, Sendable {
   public var port: ServerPort
   public var dataHome: URL
+  /// The agent-only listener's port (docs/remote-hosts.md#agent-listener), passed as `--agent-port`: set only while
+  /// at least one remote host is configured. nil, as with no host, runs no agent listener.
+  public var agentPort: ServerPort?
 
-  public init(port: ServerPort, dataHome: URL) {
+  public init(port: ServerPort, dataHome: URL, agentPort: ServerPort? = nil) {
     self.port = port
     self.dataHome = dataHome
+    self.agentPort = agentPort
   }
 
   /// Environment variables never passed through: NODE_OPTIONS and friends
   /// could load code into the server; HIVEMIND_URL/TOKEN belong to CLI shells.
+  /// HIVEMIND_AGENT_PORT too: the agent listener runs only by `agentPort`.
   static let dropped: Set<String> = [
     "NODE_OPTIONS", "NODE_PATH", "NODE_EXTRA_CA_CERTS_FILE", "NODE_REPL_EXTERNAL_MODULE",
-    "HIVEMIND_URL", "HIVEMIND_TOKEN", "HIVEMIND_FROM_DIST", "HIVEMIND_PORT", "HIVEMIND_HOME",
+    "HIVEMIND_URL", "HIVEMIND_TOKEN", "HIVEMIND_FROM_DIST", "HIVEMIND_PORT", "HIVEMIND_HOME", "HIVEMIND_AGENT_PORT",
     InstanceProof.environmentKey,
   ]
 
@@ -95,7 +100,7 @@ public struct ServerLaunchSettings: Equatable, Sendable {
     environment["PATH"] = (preferred + inherited).filter { seen.insert($0).inserted }.joined(separator: ":")
     return LaunchSpec(
       executable: server.node,
-      arguments: [server.cli.path, "serve", "--port", port.description],
+      arguments: [server.cli.path, "serve", "--port", port.description] + (agentPort.map { ["--agent-port", $0.description] } ?? []),
       environment: environment,
       workingDirectory: dataHome)
   }
