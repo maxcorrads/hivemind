@@ -183,6 +183,16 @@ Shutdown terminates live subscriptions, removes bus listeners and waits for the
 network servers to close. Database ownership is unchanged: callers close their
 Hive after other integrations have drained.
 
+## Agent listener
+
+`hivemind serve --agent-port <port>` adds a second loopback listener for agents on
+a [remote host](remote-hosts.md#agent-listener). It is off unless that flag is
+given; without it nothing on this page changes. When it is on, it serves only
+`/api/agent/*` (join and claim included) and `GET /api/health`. Every other path,
+`/api/ui/session` among them, answers 404 before `LocalHumanAuth` runs, so it
+never issues a Human capability; it has no WebSocket server and no static UI. Its
+agent requests pass the same `LocalHumanAuth` checks as above.
+
 ## Regression and adversarial review map
 
 - `local-auth.test.ts`: strict authorities, Origin/Fetch Metadata, cookie entropy
@@ -192,6 +202,10 @@ Hive after other integrations have drained.
   and DM events, denied join/resume with unchanged identity/token hashes, native
   authorization, restart with database reopen, two Hivemind listeners, and actual
   Vite HTTP/WS proxying. These are transport tests, not browser-engine tests.
+- `agent-listener.test.ts`: the agent listener serves the agent API, join and claim,
+  answers 404 for every Human, launcher, bot, UI and WebSocket route (with a valid
+  Human session and signed launcher requests, and through dot-segment and encoded
+  path tricks), and binds nothing without `--agent-port`.
 - `web/human-session.test.ts`: concurrent/late responses, failed bootstrap and
   restart recovery, safe replay limits, cancellation/deadline cleanup and socket
   reconnect/disposal with deterministic mocks rather than sleeps.

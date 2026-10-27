@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createServer, request, type IncomingMessage, type IncomingHttpHeaders } from "node:http";
 import { once } from "node:events";
 import { test, type TestContext } from "node:test";
-import { LocalHumanAuth, cookieValue, isLoopbackHost, isTrustedBrowserOrigin } from "./local-auth.ts";
+import { LocalHumanAuth, cookieValue, isAgentListenerPath, isLoopbackHost, isTrustedBrowserOrigin } from "./local-auth.ts";
 
 function send(base: string, path: string, headers: IncomingHttpHeaders = {}, method = "GET", body?: string) {
   return new Promise<{ status: number; headers: IncomingHttpHeaders; body: string }>((resolve, reject) => {
@@ -58,6 +58,18 @@ test("strict loopback authority parsing does not normalize hostile Host forms", 
     "localhost#x", "localhost.", "localhost:0", "localhost:65536", "localhost:00080", "127.1", "2130706433",
     "0x7f000001", "127.0.0.1:7420, evil", "localhost:7420 ", "::1", "[::ffff:127.0.0.1]:7420"]) {
     assert.equal(isLoopbackHost(host), false, String(host));
+  }
+});
+
+test("the agent listener admits the agent API and health by the decoded path, nothing else", () => {
+  for (const target of ["/api/agent", "/api/agent/join", "/api/agent/me?orders=1", "/api/agent/files/abc", "/api/health"]) {
+    assert.equal(isAgentListenerPath(target), true, target);
+  }
+  for (const target of ["/", "/index.html", "/ws", "/api", "/api/", "/api/ui/session", "/api/ui/snapshot", "/api/launcher/next",
+    "/api/bot/channels/x/messages", "/api/health/instance", "/api/agentx", "/api/agents", "//api/agent/me", "api/agent/me",
+    "/api/agent/../ui/session", "/api/agent/%2e%2e/ui/session", "/api/agent/..%2Fui/session", "/api/agent%2F..%2Fui/session",
+    "/api/agent\\..\\ui", "/api/agent/%E0%A4%A", "/api/health/../ui/session", "http://127.0.0.1/api/agent/me"]) {
+    assert.equal(isAgentListenerPath(target), false, target);
   }
 });
 
