@@ -118,6 +118,9 @@ public final class TerminalBroker {
   static let maxClaudeAccounts = 32
   /// Each remote host's last probe and sessions, by host id (BrokerRemote.swift).
   var remoteListings: [String: RemoteListing] = [:]
+  /// Each remote host's list running now, by host id (`listInBackground`).
+  var remoteProbes: [String: RemoteProbeTask] = [:]
+  var nextRemoteProbe = 0
 
   public init(token: BrokerToken, configPath: String, dependencies: Dependencies) {
     self.token = token
@@ -267,12 +270,12 @@ public final class TerminalBroker {
 
   /// Every Hivemind session, or why tmux could not list them. No tmux server
   /// yet means no sessions, and so does no tmux at all. With remote hosts, each
-  /// ready host's sessions follow, listed again when `freshRemote` or once
-  /// their last list is `BrokerLimits.remoteSessionsPollInterval` old.
-  func listSessions(freshRemote: Bool = false) async -> Result<[BrokerSession], BrokerProtocolError> {
+  /// ready host's sessions follow, as current as `remote` asks (the poll's are
+  /// the last lists, so a slow host never holds up this Mac's).
+  func listSessions(remote: RemoteListingNeed = .cached) async -> Result<[BrokerSession], BrokerProtocolError> {
     let local = await listLocalSessions()
     guard deps.remoteHosts != nil, case .success(let sessions) = local else { return local }
-    return .success((sessions + (await remoteSessions(fresh: freshRemote))).sorted { $0.name < $1.name })
+    return .success((sessions + (await remoteSessions(remote))).sorted { $0.name < $1.name })
   }
 
   /// This Mac's sessions.
@@ -600,6 +603,8 @@ public final class BrokerConnection {
     let id = frame.id
     switch frame.request {
     case .sessionsList:
+      // A one-off list (the launcher's among them) waits for hosts whose last list is old; the poll never does.
+      if let broker, broker.deps.remoteHosts != nil { _ = await broker.remoteSessions(.due) }
       guard let result = await broker?.refresh() else { return }
       reply(result.map { .sessions($0) }, id: id)
     case .sessionsSubscribe:
@@ -713,8 +718,10 @@ public final class BrokerConnection {
     let localTmux = broker.tmux
     guard localTmux != nil || launches.allSatisfy({ $0.host != nil }) else { return send(.error(Self.tmuxMissing), id: id) }
     let running: [BrokerSession]
-    // Names are unique across hosts: every host is listed now, and an offline one's last sessions still count.
-    switch await broker.listSessions(freshRemote: true) {
+    // Names are unique across hosts, and an offline host's last sessions still count. Launches on a host list every
+    // host now; launches all on this Mac take the last lists (each host's own launches and kills are in them), so a
+    // slow host does not hold them up.
+    switch await broker.listSessions(remote: launches.contains { $0.host != nil } ? .fresh : .asked) {
     case .success(let list): running = list + broker.offlineRemoteSessions
     case .failure(let error): return send(.error(error), id: id)
     }
@@ -945,14 +952,29 @@ public final class BrokerConnection {
   private func kill(_ session: SessionName, id: String?) async {
     guard let broker else { return }
     // A host's session is killed on its host (docs/remote-hosts.md#sessions-and-terminals); with no host, as before.
-    if let host = await broker.remoteHost(of: session) {
-      guard let result = await broker.killOnHost(session, host: host) else {
-        return send(.error(code: .internal, message: "cannot reach \(host.label) to end \(session)", stream: nil), id: id)
-      }
-      return answerKill(session, result, id: id)
+    if let host = broker.knownRemoteHost(of: session) { return await kill(session, on: host, id: id) }
+    // A session no host's last list has is looked for on this Mac first, so this Mac's kills ask no host.
+    var local: TmuxResult?
+    if let tmux = broker.tmux { local = await broker.run(tmux, tmux.killSession(session)) }
+    if local.map(Self.noSuchSession) ?? true, let host = await broker.remoteHost(of: session) {
+      return await kill(session, on: host, id: id)
     }
-    guard let tmux = broker.tmux else { return send(.error(Self.tmuxMissing), id: id) }
-    answerKill(session, await broker.run(tmux, tmux.killSession(session)), id: id)
+    guard let local else { return send(.error(Self.tmuxMissing), id: id) }
+    answerKill(session, local, id: id)
+  }
+
+  private func kill(_ session: SessionName, on host: BrokerRemoteHost, id: String?) async {
+    guard let broker else { return }
+    guard let result = await broker.killOnHost(session, host: host) else {
+      return send(.error(code: .internal, message: "cannot reach \(host.label) to end \(session)", stream: nil), id: id)
+    }
+    answerKill(session, result, id: id)
+  }
+
+  /// tmux had no such session to kill.
+  private static func noSuchSession(_ result: TmuxResult) -> Bool {
+    !result.succeeded && result.status != TmuxResult.launchFailed
+      && (TmuxCommand.isNoServer(stderr: result.stderr) || result.stderr.contains("can't find session"))
   }
 
   private func answerKill(_ session: SessionName, _ result: TmuxResult, id: String?) {
@@ -961,8 +983,7 @@ public final class BrokerConnection {
       broker.deps.log("[broker] killed \(session)")
       send(.killed(session: session), id: id)
       broker.refreshSoon()
-    } else if result.status != TmuxResult.launchFailed,
-              TmuxCommand.isNoServer(stderr: result.stderr) || result.stderr.contains("can't find session") {
+    } else if Self.noSuchSession(result) {
       send(.error(code: .noSuchSession, message: "no session \(session)", stream: nil), id: id)
     } else {
       send(.error(code: .tmuxFailed, message: result.firstErrorLine, stream: nil), id: id)

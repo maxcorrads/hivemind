@@ -19,22 +19,66 @@ struct RemoteLaunchOutcome {
   var failure: BrokerLaunchFailure?
 }
 
+/// A host's list running now; `id` tells it from a later one.
+struct RemoteProbeTask {
+  let id: Int
+  let task: Task<Void, Never>
+}
+
+/// How current the hosts' sessions must be. A host is due a list once its last one, or its last failed one, is
+/// `BrokerLimits.remoteSessionsPollInterval` old; one is listed at most once at a time, and hosts are listed side by side.
+enum RemoteListingNeed {
+  /// The last lists, at once; hosts due a list are listed in the background, which publishes what changed (the poll).
+  case cached
+  /// The same, after a first list of each host never asked yet (a launch on this Mac picks its names from these).
+  case asked
+  /// No list older than the interval (a client's `sessions.list`, the launcher's among them).
+  case due
+  /// Every ready host listed now (a launch on a host, a kill of a session no list has).
+  case fresh
+}
+
 extension TerminalBroker {
   // MARK: Sessions
 
-  /// The sessions of every ready host, each listed again when `fresh` or when its last list is
-  /// `BrokerLimits.remoteSessionsPollInterval` old. A host whose list fails keeps its last one.
-  func remoteSessions(fresh: Bool) async -> [BrokerSession] {
+  /// The sessions of every ready host, as current as `need` asks. A host whose list fails keeps its last one.
+  func remoteSessions(_ need: RemoteListingNeed) async -> [BrokerSession] {
     guard let remoteHosts = deps.remoteHosts else { return [] }
-    var sessions: [BrokerSession] = []
+    let now = deps.scheduler.now()
+    var waits: [Task<Void, Never>] = []
     for host in remoteHosts.brokerHosts where host.ready {
       let listing = remoteListings[host.id]
-      if fresh || listing.map({ deps.scheduler.now().timeIntervalSince($0.listedAt) >= BrokerLimits.remoteSessionsPollInterval }) ?? true {
-        _ = await probe(host)
+      let due = listing.map { now.timeIntervalSince($0.listedAt) >= BrokerLimits.remoteSessionsPollInterval } ?? true
+      if need == .fresh {
+        waits.append(listInBackground(host, again: true))
+      } else if (need == .due && due) || (need == .asked && listing == nil) {
+        waits.append(listInBackground(host, again: false))
+      } else if due {
+        listInBackground(host, again: false)
       }
-      sessions += remoteListings[host.id]?.sessions ?? []
     }
-    return sessions
+    for wait in waits { await wait.value }
+    return remoteHosts.brokerHosts.filter(\.ready).flatMap { remoteListings[$0.id]?.sessions ?? [] }
+  }
+
+  /// Lists `host` in a task of its own and, when its sessions changed, publishes them. The list running now is joined,
+  /// or with `again` waited for and followed by a new one, which sees what happened since it began.
+  @discardableResult
+  func listInBackground(_ host: BrokerRemoteHost, again: Bool) -> Task<Void, Never> {
+    let running = remoteProbes[host.id]
+    if let running, !again { return running.task }
+    nextRemoteProbe += 1
+    let id = nextRemoteProbe
+    let task = track { [weak self] in
+      await running?.task.value
+      guard let self else { return }
+      let before = self.remoteListings[host.id]?.sessions
+      await self.probe(host)
+      if self.remoteProbes[host.id]?.id == id { self.remoteProbes[host.id] = nil }
+      if self.remoteListings[host.id]?.sessions != before { self.refreshSoon() }
+    }
+    remoteProbes[host.id] = RemoteProbeTask(id: id, task: task)
+    return task
   }
 
   /// The last sessions of hosts that are not ready now: not listed, but their names stay taken.
@@ -51,6 +95,8 @@ extension TerminalBroker {
     let result = await remoteHosts.run(onHost: host.id, script: scripts.probe, stdin: Data(), timeout: RemoteHostScripts.stepTimeout)
     guard result.succeeded, let probe = RemoteHostScripts.parseProbe(result.stdout, host: host.id) else {
       deps.log("[broker] \(host.label): list failed: \(result.reason ?? "status \(result.status)")")
+      // Asked again once the interval has passed, not on every poll; its last sessions stay.
+      remoteListings[host.id, default: RemoteListing(probe: nil, sessions: [], listedAt: .distantPast)].listedAt = deps.scheduler.now()
       return nil
     }
     var listing = remoteListings[host.id] ?? RemoteListing(probe: nil, sessions: [], listedAt: .distantPast)
@@ -74,7 +120,7 @@ extension TerminalBroker {
   func remoteHost(of session: SessionName) async -> BrokerRemoteHost? {
     guard deps.remoteHosts != nil else { return nil }
     if let host = knownRemoteHost(of: session) { return host }
-    _ = await remoteSessions(fresh: true)
+    _ = await remoteSessions(.fresh)
     return knownRemoteHost(of: session)
   }
 
@@ -89,7 +135,10 @@ extension TerminalBroker {
                                        timeout: RemoteHostScripts.stepTimeout)
     remoteListings[host.id]?.listedAt = .distantPast
     guard result.succeeded, let killed = RemoteHostScripts.parseKill(result.stdout) else { return nil }
-    if killed.succeeded { deps.log("[broker] \(host.label): killed \(session)") }
+    if killed.succeeded {
+      deps.log("[broker] \(host.label): killed \(session)")
+      remoteListings[host.id]?.sessions.removeAll { $0.name == session }
+    }
     return killed
   }
 
@@ -250,6 +299,12 @@ extension TerminalBroker {
     }
     if started.status != 0 { deps.log("[broker] \(name) on \(host.label): \(started.said ?? "status \(started.status)")") }
     deps.log("[broker] \(name): started on \(host.label)")
+    // In the host's last list until its next one, so a launch on this Mac meanwhile does not take the name.
+    if remoteListings[host.id]?.sessions.contains(where: { $0.name == name }) == false {
+      remoteListings[host.id]?.sessions.append(BrokerSession(
+        name: name, project: launch.project, agent: launch.agent, alive: true, attached: 0,
+        createdAt: Int64(deps.scheduler.now().timeIntervalSince1970 * 1000), host: host.id))
+    }
     return RemoteLaunchOutcome(started: true, created: !started.duplicate)
   }
 }

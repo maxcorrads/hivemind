@@ -370,6 +370,99 @@ struct RemoteHostLaunchTests {
     #expect(r.read(file) == "CLAUDE_CONFIG_DIR=\(r.home)/.claude-work\nHIVEMIND_CLAUDE_SETTINGS=\(settings)\n")
     #expect(!FileManager.default.fileExists(atPath: r.ssh.root.appendingPathComponent("this mac accounts").path), "nothing here")
   }
+  @Test func aKillOfASessionOnAHostThatWentOfflineIsNotTakenAsDone() async throws {
+    let r = try RemoteFixture()
+    defer { r.remove() }
+    let journal = r.ssh.root.appendingPathComponent("journal")
+    await r.h.start()
+    let adapter = InProcessLauncherBroker(current: { r.h.broker })
+    let service = LauncherService(server: { nil }, http: NoHTTP(), broker: adapter, journal: FileLauncherJournal(folder: journal))
+    #expect(try await adapter.launch(try r.launch()) == atlas)
+    // The connection drops between the launch and the hard-pause's kill: the session runs on, unlisted.
+    let online = r.hosts.hosts
+    r.hosts.hosts = online.map { BrokerRemoteHost(id: $0.id, label: $0.label, ready: false, runtimeFolder: $0.runtimeFolder) }
+    let kill = LauncherCommand(id: "44444444-4444-4444-8444-444444444444", kind: .kill, session: atlas.rawValue)
+    #expect(try await service.execute(kill) == .failed("broker kill failed"))
+    #expect(r.read(r.state + "/sessions")?.hasPrefix("hm-acme-atlas|") == true, "still running on the host")
+    // Back online, a new kill ends it there.
+    r.hosts.hosts = online
+    let again = LauncherCommand(id: "55555555-5555-4555-8555-555555555555", kind: .kill, session: atlas.rawValue)
+    #expect(try await service.execute(again) == .killed)
+    #expect(r.read(r.state + "/sessions") == "")
+    #expect(r.h.tmux.calls("kill-session").isEmpty, "never on this Mac")
+    await r.h.broker.settle()
+  }
+
+  @Test func aHungHostHoldsUpNeitherThisMacsListNorItsLaunchesAndKills() async throws {
+    let h = BrokerHarness()
+    let hosts = HungHosts()
+    h.remoteHosts = hosts
+    h.broker.start()
+    await until { h.broker.sessions != nil && hosts.pending.count == 1 }
+    #expect(h.broker.sessions == [], "this Mac's list is out while the host's list hangs")
+    #expect(hosts.pending.count == 1)
+    let transport = FakeTransport()
+    let connection = try #require(h.broker.accept(transport))
+    var asked = 0
+    func ask(_ request: BrokerRequest) async -> BrokerEvent? {
+      asked += 1
+      let id = "q\(asked)"
+      connection.received(try! BrokerRequestFrame(id: id, request).line())
+      await until { transport.frames.contains { $0.id == id } }
+      return transport.frames.first { $0.id == id }?.event
+    }
+    _ = await ask(.hello(version: 1, token: h.token.value, client: "test"))
+    _ = await ask(.sessionsSubscribe)
+    // The poll lists this Mac again and again; the host is asked once at a time.
+    for _ in 0..<3 {
+      let lists = h.tmux.calls("list-sessions").count
+      h.scheduler.advance(BrokerLimits.sessionsPollInterval)
+      await until { h.tmux.calls("list-sessions").count > lists && h.scheduler.pending.count == 1 }
+      #expect(h.tmux.calls("list-sessions").count > lists)
+    }
+    #expect(hosts.pending.count == 1)
+    // A list that fails waits the interval before the next one, like one that succeeds.
+    hosts.release(SSHResult(status: 255, stderr: "Connection timed out\n"))
+    await h.broker.settle()
+    h.scheduler.advance(BrokerLimits.sessionsPollInterval)
+    await h.broker.settle()
+    #expect(hosts.calls == 1)
+    h.scheduler.advance(BrokerLimits.remoteSessionsPollInterval)
+    await until { hosts.calls == 2 }
+    #expect(hosts.pending.count == 1)
+    // The host was asked once, so a launch and a kill on this Mac wait for no list of it, and ask it nothing.
+    #expect(await ask(.launch([brokerLaunch("Atlas")])) == .launched(names: [atlas], created: [atlas], errors: []))
+    #expect(await ask(.kill(session: atlas)) == .killed(session: atlas))
+    #expect(hosts.calls == 2)
+    hosts.release(SSHResult(status: 255, stderr: "Connection timed out\n"))
+    await h.broker.settle()
+  }
+}
+
+/// One ready host whose every command waits until the test releases it, as a host that stopped answering does.
+@MainActor
+private final class HungHosts: BrokerRemoteHosts {
+  var pending: [CheckedContinuation<SSHResult, Never>] = []
+  var calls = 0
+  var brokerHosts: [BrokerRemoteHost] {
+    [BrokerRemoteHost(id: fakeHost.id, label: fakeHost.label, ready: true, runtimeFolder: runtimeFolder)]
+  }
+
+  func run(onHost id: String, script: String, stdin: Data, timeout: TimeInterval) async -> SSHResult {
+    calls += 1
+    return await withCheckedContinuation { pending.append($0) }
+  }
+
+  func release(_ result: SSHResult) {
+    for continuation in pending { continuation.resume(returning: result) }
+    pending.removeAll()
+  }
+}
+
+/// Yields until `condition` holds, for work the test cannot settle because a hung host's task never ends.
+@MainActor
+private func until(_ condition: () -> Bool) async {
+  for _ in 0..<10_000 where !condition() { await Task.yield() }
 }
 
 /// A server that never answers: no catalog reaches anything in these tests.

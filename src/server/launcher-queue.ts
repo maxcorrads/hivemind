@@ -394,12 +394,13 @@ export class LauncherQueue {
   /** Stable command ID and payload across polls/restarts. Native deduplicates by this ID and session. */
   next(serverUrl: string): LauncherCommand | null {
     return this.deps.storage.transaction(() => {
-      // A launch for a remote host that cannot take it now (offline, or not reported yet) waits, queued, without
-      // holding up the commands behind it; a dispatched one is always handed out again.
+      // A launch or a kill for a remote host that cannot take it now (offline, or not reported yet) waits, queued,
+      // without holding up the commands behind it: Server.app cannot list that host, so it could not tell a running
+      // session from a gone one. A dispatched one is always handed out again.
       const command = (this.db.prepare(`SELECT c.*, r.host_id AS host_id FROM launcher_commands c LEFT JOIN launch_requests r ON r.id = c.request_id
         WHERE c.state = 'dispatched' OR (c.state = 'queued' AND (c.kind = 'kill' OR r.state = 'approved'))
         ORDER BY c.created_at, c.id`).all() as (CommandRow & { host_id: string | null })[])
-        .find(row => row.state === "dispatched" || row.kind === "kill" || this.hostReady(row.host_id));
+        .find(row => row.state === "dispatched" || this.hostReady(row.host_id));
       if (!command) return null;
       if (command.state === "dispatched") return this.cipher.open<LauncherCommand>(command.payload);
       let payload: LauncherCommand;

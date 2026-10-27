@@ -673,3 +673,29 @@ test("a resume goes back to the host its worker ran on, even after the template 
   assert.equal(resume.kind, "launch");
   assert.equal(resume.host, first.id, "its conversation is on the first host");
 });
+
+test("a kill of a worker on a host waits while the host is offline, without holding up this Mac's kills", async t => {
+  const f = fixture(t);
+  const put = (online: boolean) => f.signed("PUT", "/api/launcher/hosts", { hosts: [catalogHost(1, { online })] });
+  assert.equal((await put(true)).status, 200);
+  const remote = f.hive.workerTemplates.create(f.human, f.project.id,
+    { slug: "remote", spec: { ...spec(8), environment: {}, hostId: catalogHost(1).id } });
+  const local = f.hive.workerTemplates.create(f.human, f.project.id, { slug: "local", spec: spec(8) });
+  const remoteRequest = queueLaunch(f, remote);
+  const launched = takeLaunch(f);
+  assert.equal(launched.kind === "launch" && launched.host, catalogHost(1).id);
+  const localRequest = queueLaunch(f, local);
+  const localLaunch = takeLaunch(f);
+
+  // The host drops: Server.app cannot list it, so it could not tell its session from a gone one.
+  assert.equal((await put(false)).status, 200);
+  f.hive.launcherQueue.kill(remoteRequest);
+  f.hive.launcherQueue.kill(localRequest);
+  const first = f.hive.launcherQueue.next("http://127.0.0.1:7520");
+  assert.deepEqual([first?.kind, first?.session], ["kill", localLaunch.session], "this Mac's kill goes first");
+  f.hive.launcherQueue.result(first!.id, { status: "killed" });
+  assert.equal(f.hive.launcherQueue.next("http://127.0.0.1:7520"), null, "the host's kill waits, queued");
+  assert.equal((await put(true)).status, 200);
+  const second = f.hive.launcherQueue.next("http://127.0.0.1:7520");
+  assert.deepEqual(second, { id: second?.id, kind: "kill", session: launched.session }, "the same kill payload as before hosts");
+});
