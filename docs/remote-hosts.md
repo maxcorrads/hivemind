@@ -276,13 +276,16 @@ A launch on a host does what the broker does locally, over SSH:
   records it on the request (`launch_requests.host_id`, migration 45): the template's host when the request is made,
   the replacement template's on approval, and for a resume the host the worker last ran on. A request whose host is
   not online waits, queued (`hostWaiting` on the request), without holding up the commands behind it; a catalog put
-  wakes the launcher's long poll.
+  wakes the launcher's long poll. So does the kill of a request on a host (a stop, a cancel, a hard pause): Server.app
+  cannot list an offline host, so it could not tell its session from a gone one.
 - **The broker** (`BrokerRemote.swift`, `RemoteHostLaunch.swift`) runs each step as one `/bin/sh` script over the
   host's master (`HostsService` as `BrokerRemoteHosts`), built from quoted values only and read back from marker
   lines, so the host's shell startup files may print what they like. A launch takes three: a **probe** (the host's
   `$HOME`, its tmux, Homebrew's first, and its sessions), a **prepare** (the clone, then the host's facts) and a
-  **start**. The probe of each ready host runs before the names are chosen, and a host that is offline keeps its last
-  sessions' names taken. A launch that names a session running on any host reuses it where it runs.
+  **start**. When a launch goes to a host, the probe of each ready host runs before the names are chosen; launches all
+  on this Mac take the hosts' last lists (waiting only for a host's first), which hold each host's own launches and
+  kills, so a slow host does not hold them up. A host that is offline keeps its last sessions' names taken. A launch
+  that names a session running on any host reuses it where it runs.
 - **Clone.** The origin goes on the prepare's stdin, not on a command line (an origin URL may hold a token), and
   `git clone` runs with `GIT_TERMINAL_PROMPT=0` into the missing folder, its parent created. A folder missing with no
   origin here fails with `cwd-missing`.
@@ -314,11 +317,17 @@ A launch on a host does what the broker does locally, over SSH:
 - **Open in Terminal.** The `.command` file runs that `ssh -tt …` line.
 - **Stop and kill.** `kill-session` on the session's host.
 
-*Shipped:* the list and the kill (plan step 3). Each ready host is listed by the same probe, at most every 5 s while
-the broker polls (`BrokerLimits.remoteSessionsPollInterval`) and at once after a launch or a kill there; a host whose
-list fails keeps its last one, and an offline host's sessions are not listed. Each of a host's sessions carries `host`
-(a host id) in `sessions`, to the page too, which shows "on <label>" in the Terminals sheet. A `kill` (and the
-launcher's) goes to the host the session is on. Attaching is step 4: until then the broker answers `attach` on a
+*Shipped:* the list and the kill (plan step 3). Each ready host is listed by the same probe, at most every 5 s
+(`BrokerLimits.remoteSessionsPollInterval`, counted from its last list, failed or not) and again after a launch or a
+kill there. The hosts are listed side by side, each in a task of its own, never two at once for one host: the poll
+publishes this Mac's sessions with the hosts' last lists at once, and a host's list publishes when it lands, so a host
+that hangs (up to the 30 s step timeout) holds up neither this Mac's list nor its launches. A client's `sessions.list`
+(the launcher's among them) waits for the lists older than the interval. A host whose list fails keeps its last one,
+and an offline host's sessions are not listed. Each of a host's sessions carries `host` (a host id) in `sessions`, to
+the page too, which shows "on <label>" in the Terminals sheet. A `kill` (and the launcher's) goes to the host the
+session is on; one no host's last list has is tried on this Mac first, and the hosts are listed only when it is not
+there. The launcher takes an offline host's last sessions as still running, so its kill of one fails ("cannot reach")
+instead of reporting `killed`. Attaching is step 4: until then the broker answers `attach` on a
 host's session with `internal` ("runs on <label>; attach from a terminal there"), Hivemind.app opens no Terminal.app
 window for one, and the sheet disables **Open** and **Terminal.app** for it.
 

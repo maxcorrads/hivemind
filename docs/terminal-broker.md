@@ -42,9 +42,10 @@ cookies and agent bearer tokens:
 - `PUT /api/launcher/hosts` replaces the [remote host](remote-hosts.md#hosts)
   catalog the server holds in memory: up to 16 `{id, label, online}` (a 16 KiB
   body). Server.app's `HostsService` sends it, after the instance proof, only
-  once a host exists. A put wakes `next`: a launch command for a host waits,
-  queued, while that host is not online, and the commands behind it go first
-  ([Launch](remote-hosts.md#launch)). A command for a host carries `host`.
+  once a host exists. A put wakes `next`: a launch or kill command for a host
+  waits, queued, while that host is not online, and the commands behind it go
+  first ([Launch](remote-hosts.md#launch)). A launch for a host carries `host`;
+  a kill stays `{id, kind, session}`.
 
 Each request carries `X-Hivemind-Timestamp` (Unix seconds), a 32-byte lowercase
 hex `X-Hivemind-Nonce`, and `X-Hivemind-Signature`. The signature is the hex
