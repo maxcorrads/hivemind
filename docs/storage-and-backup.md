@@ -65,7 +65,7 @@ Any other value (negative, fractional, text) stops `serve` at startup with an er
 
 ## Files and attachments
 
-Messages can have 0–4 attachments (empty body is allowed). Caps: 512 MB per file, 60-second upload deadline, two active uploads per actor/four per hive, an 8 GiB attachment-and-reservation quota, allowlisted types, sha256 blob reuse under `~/.hivemind/files`. The quota counts each stored blob once: attachments with identical content share one file and one quota charge. Orphan uploads expire; the `serve` maintenance pass and `hivemind gc` sweep them.
+Messages can have 0–4 attachments (empty body is allowed). Caps: 512 MB per file, 60-second upload deadline, two active uploads per actor/four per hive, an 8 GiB attachment-and-reservation quota, sha256 blob reuse under `~/.hivemind/files`. Any type is accepted and stored with the sender's type. Only PNG, JPEG, WebP, GIF, PDF and plain text are served inline; every other type (HTML and SVG included) downloads as `application/octet-stream` with `Content-Disposition: attachment`, `nosniff` and a `sandbox` CSP, and carries its stored type in `X-File-Mime` ([details](remote-hosts.md#attachments-of-any-type)). The quota counts each stored blob once: attachments with identical content share one file and one quota charge. Orphan uploads expire; the `serve` maintenance pass and `hivemind gc` sweep them.
 
 MCP `attach` uploads from a local path. `fetch_file` writes into `<cwd>/.hivemind-inbox/` (gitignored) and, for images, also returns a small preview (not the original).
 

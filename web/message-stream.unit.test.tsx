@@ -89,6 +89,28 @@ test("markdown renders lists, quotes, emphasis, links and mentions, and never ra
   assert.match(renderMarkdown('[Task abc](#/c/channel-1/t/abc)'), /href="#\/c\/channel-1\/t\/abc" target="_self"/);
 });
 
+test("raster images preview, PDF and text open, and every other type is a chip with name, size and Download", async () => {
+  const file = (id: string, name: string, mime: string, bytes = 2048) => ({ id, name, mime, bytes });
+  const host = await mount(<Msg m={message({ attachments: [
+    file("png", "shot.png", "image/png"), file("svg", "logo.svg", "image/svg+xml"),
+    file("pdf", "report.pdf", "application/pdf"), file("html", "page.html", "text/html", 3 * 1024 * 1024),
+  ] })} replies={0} status={null} />);
+  const links = [...host.querySelectorAll<HTMLAnchorElement>(".atts > a")];
+  assert.deepEqual(links.map(a => a.getAttribute("href")), ["png", "svg", "pdf", "html"].map(id => `/api/ui/files/${id}`));
+  // Only the raster image renders inline; SVG, which can carry script, never does.
+  assert.deepEqual([...host.querySelectorAll("img.att-img")].map(img => img.getAttribute("alt")), ["shot.png"]);
+  const [, svg, pdf, html] = links;
+  assert.equal(pdf!.getAttribute("target"), "_blank");
+  assert.equal(pdf!.hasAttribute("download"), false);
+  assert.equal(pdf!.textContent, "report.pdf2 KB");
+  for (const [chip, name, size] of [[svg!, "logo.svg", "2 KB"], [html!, "page.html", "3.0 MB"]] as const) {
+    assert.equal(chip.className, "att-chip att-download");
+    assert.equal(chip.getAttribute("download"), name);
+    assert.equal(chip.hasAttribute("target"), false);
+    assert.equal(chip.textContent, `${name}${size}Download`);
+  }
+});
+
 test("system messages render as a centered line without the Human's name or avatar", () => {
   const html = renderToStaticMarkup(<Msg m={message({ kind: "system", authorId: "human", authorName: "Human", authorRole: "human",
     body: "Cipher created #design-review" })} replies={0} status={null} onReact={() => undefined} />);

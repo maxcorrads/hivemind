@@ -152,6 +152,11 @@ function fileNameFromDisposition(disp: string): string {
   return /filename="([^"]+)"/.exec(disp)?.[1] ?? "file";
 }
 
+/** The sender's type: a type outside the inline list downloads as octet-stream, with the real one in X-File-Mime. */
+function fileMime(res: Response): string {
+  return res.headers.get("x-file-mime") || res.headers.get("content-type") || "application/octet-stream";
+}
+
 /** Reap only old downloads whose owner is provably gone; a live/reused PID is always preserved. */
 export async function cleanupDownloadTemps(dir: string, nowMs = Date.now()): Promise<void> {
   const directory = await opendir(dir);
@@ -201,7 +206,7 @@ export async function agentDownloadToFile(
         (!/^\d+$/.test(declared) || Number(declared) !== bytes)) throw new Error("Incomplete download");
     signal?.throwIfAborted();
     await rename(tmp, dest);
-    return { path: dest, mime: res.headers.get("content-type") || "application/octet-stream", name, bytes };
+    return { path: dest, mime: fileMime(res), name, bytes };
   } finally { if (ownsTemp) await unlink(tmp).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; }); }
 }
 
@@ -226,6 +231,6 @@ export async function agentDownload(
     finally { reader.releaseLock(); }
   }
   const bytes = Buffer.concat(chunks, total);
-  const mime = res.headers.get("content-type") || "application/octet-stream";
+  const mime = fileMime(res);
   return { bytes, mime, name: fileNameFromDisposition(res.headers.get("content-disposition") ?? "") };
 }

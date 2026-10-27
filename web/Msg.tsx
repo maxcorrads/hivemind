@@ -1,5 +1,6 @@
-import { Check, CircleDot, Link, MessageSquareText, MessagesSquare, Paperclip, SmilePlus } from "lucide-react";
+import { Check, CircleDot, FileDown, Link, MessageSquareText, MessagesSquare, Paperclip, SmilePlus } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
+import { isInlineImageMime, isInlineMime } from "../src/shared/mime.ts";
 import type { Message, ThreadStatus } from "../src/shared/types.ts";
 import { EXTRA_REACTION_EMOJIS, REACTION_EMOJIS } from "../src/shared/types.ts";
 import { api } from "./api.ts";
@@ -14,6 +15,10 @@ import { TaskEventCard } from "./StreamCards.tsx";
 const LONG_PRESS_MS = 450;
 /** Thread status as a tone chip in the message header. */
 const STATUS_TONE: Record<ThreadStatus, string> = { open: "muted", in_progress: "warn", blocked: "bad", done: "ok" };
+/** Whole KB below 1 MiB, as before; MB above, since attachments go up to 512 MB. */
+function fileSize(bytes: number): string {
+  return bytes < 1024 ** 2 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+}
 
 /** A link that reopens the message: its thread (or the thread it starts) in its channel. */
 export function messageLink(m: Pick<Message, "id" | "channelId" | "threadId">): string {
@@ -126,15 +131,23 @@ export const Msg = memo(function Msg({
         {(m.attachments?.length ?? 0) > 0 && (
           <div className="atts">
             {m.attachments!.map((a) =>
-              a.mime.startsWith("image/") ? (
+              isInlineImageMime(a.mime) ? (
                 <a key={a.id} href={api.fileUrl(a.id)} target="_blank" rel="noreferrer">
                   <img className="att-img" src={api.fileUrl(a.id)} alt={a.name} />
                 </a>
-              ) : (
+              ) : isInlineMime(a.mime) ? (
                 <a key={a.id} className="att-chip" href={api.fileUrl(a.id)} target="_blank" rel="noreferrer">
                   <Paperclip size={14} aria-hidden="true" />
                   {a.name}
-                  <small>{Math.max(1, Math.round(a.bytes / 1024))} KB</small>
+                  <small>{fileSize(a.bytes)}</small>
+                </a>
+              ) : (
+                // No preview: the server sends it as a download, never inline (docs/remote-hosts.md).
+                <a key={a.id} className="att-chip att-download" href={api.fileUrl(a.id)} download={a.name}>
+                  <FileDown size={14} aria-hidden="true" />
+                  {a.name}
+                  <small>{fileSize(a.bytes)}</small>
+                  <span className="att-action">Download</span>
                 </a>
               ),
             )}

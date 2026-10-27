@@ -18,6 +18,7 @@ import { parseJoinArgs } from "./shared/join-args.ts";
 import { terminalSessionFields } from "./shared/terminal-session.ts";
 import { COMPILED_CLI, packageRoot, runningCompiled } from "./shared/package-root.ts";
 import { CURSOR_HOOK_TIMEOUT_SEC, CURSOR_STOP_HOOK_COMMAND } from "./mcp/cursor-idle.ts";
+import { attachablePath } from "./mcp/attach-guard.ts";
 
 function help() {
   console.log(`hivemind — local hive for Human, brains, and workers
@@ -335,17 +336,17 @@ export async function runCli(argv: string[]): Promise<void> {
     let channel = arg(argv, "--channel");
     // A legacy --execution-id from older scripts is ignored unread (#211, #218).
     validated(sendInputSchema, { body, threadId: thread, eventType, recipients, requestId: arg(argv, "--request-id") });
+    // Any type uploads; the same sensitive-file refusal as MCP attach applies, before contacting the hive.
+    const attached = file ? attachablePath(file) : undefined;
     if (to) {
       const dm = await agentRequest<{ channel: Channel }>("POST", "/api/agent/dms", { name: to }, token);
       channel = dm.channel.id;
     }
     if (!channel) throw new Error("send --channel NAME  or  --to NAME");
     const requestId = arg(argv, "--request-id") ?? randomUUID();
-    const mime = file ? guessMime(file) : undefined;
-    if (mime === "application/octet-stream") throw new Error("unsupported file type");
     console.error(`Send requestId: ${requestId}`);
     const result = await sendOperation({ channel, body, threadId: thread, eventType, recipients,
-      ...(file ? { file: { path: resolvePath(file), name: basename(file), mime: mime! } } : {}) }, token, requestId);
+      ...(file && attached ? { file: { path: attached, name: basename(file), mime: guessMime(file) } } : {}) }, token, requestId);
     console.log(`sent ${result.id} seq ${result.seq}`);
     return;
   }

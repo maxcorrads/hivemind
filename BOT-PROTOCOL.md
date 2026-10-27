@@ -156,7 +156,8 @@ Content-Type: application/octet-stream
 
 The 201 response contains `{ file: { id, name, mime, bytes } }`. Put its ID in
 `attachmentIds` when posting. A file-only message may omit body. Existing file rules apply:
-at most four attachments, 512 MiB per file and the existing MIME allowlist. An attachment
+at most four attachments and 512 MiB per file, of any type; a type outside the safe preview
+list reaches the Human UI only as a download ([details](docs/remote-hosts.md#attachments-of-any-type)). An attachment
 must belong to that bot and can be bound to one message; retry the original event rather
 than reusing its attachment under a new event ID. Failed binding rolls back both message
 and dedup record. Upload a separate attachment for another channel/message.
