@@ -246,3 +246,38 @@ test("an alias hint names its own driver, and an alias of a driver without accou
   await f.type("Software", "claude-work");
   assert.match(f.host.textContent!, /claude-work launches without a Claude account: accounts apply only when Software is exactly claude\./);
 });
+
+test("the Host select shows only with hosts, saves the host, and This Mac leaves a new template without the field", async t => {
+  const f = await fixture(t);
+  const hostSelect = () => Array.from(f.host.querySelectorAll("label"))
+    .find(label => label.firstChild?.textContent?.trim() === "Host")?.querySelector("select") ?? null;
+  const settle = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+  const fill = async (name: string) => {
+    await f.type("Name", name);
+    await f.type("Slug", name.toLowerCase().replace(/ /g, "-"));
+    await f.type("When to use it", "Work on a host.");
+  };
+
+  await f.click("New template");
+  await settle();
+  assert.equal(hostSelect(), null, "no host, no field");
+  await fill("Local worker");
+  await f.submit();
+  assert.equal("hostId" in f.hive.workerTemplates.list(f.project.id)[0]!.spec, false, "saved as before hosts");
+
+  const buildMac = { id: "20000000-0000-4000-8000-000000000001", label: "Build Mac", online: true };
+  f.hive.hosts.replace({ hosts: [buildMac] });
+  await f.click("New template");
+  await settle();
+  const select = hostSelect();
+  assert.ok(select, "the Host select");
+  assert.deepEqual(Array.from(select.options).map(option => option.textContent), ["This Mac", "Build Mac"]);
+  await act(async () => {
+    select.value = buildMac.id;
+    select.dispatchEvent(new window.Event("change", { bubbles: true }) as unknown as Event);
+  });
+  await fill("Remote worker");
+  await f.submit();
+  const remote = f.hive.workerTemplates.list(f.project.id).find(template => template.slug === "remote-worker");
+  assert.equal(remote?.spec.hostId, buildMac.id);
+});
