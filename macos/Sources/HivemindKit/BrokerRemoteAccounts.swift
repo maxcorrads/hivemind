@@ -31,10 +31,12 @@ extension TerminalBroker {
         ? await remoteHosts.run(onHost: host.id, script: script, stdin: Data(), timeout: RemoteAccountScripts.setupTimeout)
         : await remoteHosts.run(onHost: host.id, script: script, input: RemoteAccountScripts.archiveSpec(directory: local, entries: entries),
                                 timeout: RemoteAccountScripts.setupTimeout)
+      // The script's own refusal first: one that stops before reading the archive (a symlinked target, say) leaves
+      // `tar` here with no reader, and the runner then reports the archive, not why.
+      if let error = RemoteAccountScripts.parseSetup(ran.stdout)?.error { return failed("\(host.label): \(error)") }
       guard ran.succeeded, let result = RemoteAccountScripts.parseSetup(ran.stdout) else {
         return failed("\(host.label): \(ran.reason ?? "the setup did not answer")")
       }
-      if let error = result.error { return failed("\(host.label): \(error)") }
       deps.log("[broker] account \(account.id) on \(host.label): \(remote) copied \(result.copied), kept \(result.kept)"
                + (result.mcpWritten == true ? ", MCP block written" : ""))
     }
