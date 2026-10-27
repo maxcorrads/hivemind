@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -95,6 +95,22 @@ test("direct bot HTTP → real stdio MCP delivers deduplicated context/files, th
     const fetched = await call<{ path: string; mime: string }>("fetch_file", { id: file.id });
     assert.equal(path.dirname(realpathSync(fetched.path)), realpathSync(path.join(dir, ".hivemind-inbox")));
     assert.equal(readFileSync(fetched.path, "utf8"), "invented attachment contents");
+    // Any type attaches and fetches with the sender's type, and reaches the Human only as a sandboxed download.
+    const page = "<script>document.title = 'invented'</script>";
+    writeFileSync(path.join(dir, "page.html"), page);
+    const attached = await call<{ id: string }>("attach", { path: path.join(dir, "page.html"), channel: channel.id });
+    const html = hive.messageQueries.getMessageById(attached.id).attachments![0]!;
+    assert.equal(html.mime, "text/html");
+    const fetchedHtml = await call<{ path: string; mime: string }>("fetch_file", { id: html.id });
+    assert.equal(fetchedHtml.mime, "text/html");
+    assert.equal(readFileSync(fetchedHtml.path, "utf8"), page);
+    const served = await fetch(`${url}/api/ui/files/${html.id}`, { headers: { cookie, "sec-fetch-site": "same-origin" } });
+    assert.equal(served.status, 200);
+    assert.equal(served.headers.get("content-type"), "application/octet-stream");
+    assert.equal(served.headers.get("content-disposition"), 'attachment; filename="page.html"');
+    assert.equal(served.headers.get("x-content-type-options"), "nosniff");
+    assert.equal(served.headers.get("content-security-policy"), "sandbox; frame-ancestors 'none'");
+    assert.equal(await served.text(), page);
   } finally {
     await client.close();
     await transport.close();

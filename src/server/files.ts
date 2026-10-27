@@ -5,7 +5,8 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { streamToTemporaryFile } from "../shared/stream-file.ts";
-import { ALLOWED_MIMES, FILE_MAX_BYTES, HiveError } from "../shared/types.ts";
+import { isValidMime } from "../shared/mime.ts";
+import { FILE_MAX_BYTES, HiveError } from "../shared/types.ts";
 import { hiveHome } from "./paths.ts";
 
 export { imageDimensions, imagePreview } from "./image-preview.ts";
@@ -26,10 +27,9 @@ export function filePathForHash(sha256: string, home = hiveHome()): string {
   return path.join(filesDir(home), sha256);
 }
 
-export function assertAllowedMime(mime: string) {
-  if (!(ALLOWED_MIMES as readonly string[]).includes(mime)) {
-    throw new HiveError(400, `File type not allowed: ${mime}`);
-  }
+/** Any type is stored; only a malformed one is refused, since downloads echo it in a header (docs/remote-hosts.md). */
+export function assertValidMime(mime: string) {
+  if (typeof mime !== "string" || !isValidMime(mime)) throw new HiveError(400, "Invalid file type");
 }
 
 export function safeFileName(name: string): string {
@@ -55,7 +55,7 @@ export async function streamUpload(
   maxBytes = FILE_MAX_BYTES,
 ): Promise<{ tmp: string; bytes: number; sha256: string }> {
   if (!body) throw new HiveError(400, "Empty upload");
-  assertAllowedMime(mime);
+  assertValidMime(mime);
   signal?.throwIfAborted();
   const tmp = path.join(ensureFilesDir(home), uploadTempName());
   const hash = createHash("sha256");

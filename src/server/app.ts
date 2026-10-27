@@ -7,7 +7,7 @@ import { Hono, type Context, type ErrorHandler } from "hono";
 import { requestJson, validateRequest } from "./api-input.ts";
 import { integerArgument, threadResponseSchema, uploadLength } from "../shared/api-contract.ts";
 import { DEFAULT_WAIT_MS, HiveError, type Agent } from "../shared/types.ts";
-import { resolveUploadMime } from "../shared/mime.ts";
+import { isInlineMime, resolveUploadMime } from "../shared/mime.ts";
 import { standingOrders } from "../shared/standing-orders.ts";
 import { Hive, describeAgent } from "./hive.ts";
 import { safeFileName } from "./files.ts";
@@ -34,11 +34,20 @@ export type AppHooks = {
   /** Hivemind Server.app's per-start secret (instance-proof.ts); null or absent answers the challenge with 404. */
   instanceSecret?: Buffer | null;
 };
+/**
+ * Only the safe preview list (INLINE_MIMES) is served inline under its own type. Any other type, HTML
+ * and SVG included, is an opaque sandboxed download, so a browser or WebView saves it and never runs it
+ * on the Human UI's origin. `X-File-Mime` carries the sender's type for agents (fetch_file).
+ */
 function fileDownload(hive: Hive, actor: Agent, id: string) {
   const opened = hive.files.openAttachment(actor, id);
+  const { mime } = opened.meta, inline = isInlineMime(mime);
   return new Response(Readable.toWeb(opened.stream) as ReadableStream, {
-    headers: { "content-type": opened.meta.mime, "content-length": String(opened.meta.bytes),
-      "content-disposition": `inline; filename="${safeFileName(opened.meta.name)}"` },
+    headers: { "content-type": inline ? mime : "application/octet-stream", "content-length": String(opened.meta.bytes),
+      "content-disposition": `${inline ? "inline" : "attachment"}; filename="${safeFileName(opened.meta.name)}"`,
+      "x-content-type-options": "nosniff", "x-file-mime": mime,
+      // Not on inline types: Chromium's PDF viewer does not render a sandboxed document.
+      ...(inline ? {} : { "content-security-policy": "sandbox; frame-ancestors 'none'" }) },
   });
 }
 /** Thread roots a message page shows: its messages and the open thread; aggregates are scoped to them. */

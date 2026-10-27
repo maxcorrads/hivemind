@@ -56,3 +56,19 @@ test("download cleanup preserves active owners and reaps crash leftovers", async
   assert.equal(existsSync(dead), false);
   assert.equal(existsSync(live), true);
 });
+
+test("downloads report the sender's type from X-File-Mime, falling back to Content-Type for older servers", async (t) => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "hive-download-mime-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const replies: Array<[Record<string, string>, string]> = [
+    [{ "content-type": "application/octet-stream", "x-file-mime": "text/html" }, "text/html"],
+    [{ "content-type": "image/png", "x-file-mime": "image/png" }, "image/png"],
+    [{ "content-type": "image/png" }, "image/png"],
+  ];
+  for (const [headers, mime] of replies) {
+    const fetched = t.mock.method(globalThis, "fetch", async () => new Response("bytes", {
+      headers: { ...headers, "content-disposition": 'attachment; filename="page.html"', "content-length": "5" } }));
+    assert.equal((await agentDownloadToFile("/fixture", "fixture-token", dir, "prefix")).mime, mime);
+    fetched.mock.restore();
+  }
+});

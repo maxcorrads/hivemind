@@ -217,7 +217,6 @@ export function Composer({
           type="file"
           hidden
           multiple
-          accept="image/*,.pdf,.txt,.csv,.json,.zip"
           onChange={(e) => {
             if (e.target.files) addFiles(e.target.files);
             e.target.value = "";
