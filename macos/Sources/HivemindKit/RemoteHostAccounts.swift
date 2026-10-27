@@ -202,6 +202,15 @@ public struct ConversationAgent: Codable, Equatable, Sendable {
     self.worktree = worktree
   }
 
+  /// `worktree` is always written, `null` when there is none: the host's `hivemind conversations` requires the key
+  /// (src/server/cli-conversations.ts), and the synthesized encoding would leave it out.
+  public func encode(to encoder: any Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(id, forKey: .id)
+    try container.encode(name, forKey: .name)
+    try container.encode(worktree, forKey: .worktree)
+  }
+
   public var isValid: Bool {
     (1...64).contains(id.utf8.count) && (1...64).contains(name.utf8.count) && (worktree?.utf8.count ?? 0) <= 4096
       && !BrokerText.hasControlCharacters(id) && !BrokerText.hasControlCharacters(name)
@@ -369,10 +378,12 @@ public enum RemoteAccountScripts {
     return script + "echo hivemind-setup-done\n"
   }
 
-  /// Replaces `<mac home>/` with `<host home>/` in each file given, written through a temporary file and a rename; a
-  /// file without it is left alone.
+  /// Replaces `<mac home>/` with `<host home>/` in each file given, written through a temporary file (created as
+  /// `writerProgram` creates the launch file: exclusively, no link followed, 0600) and a rename; a file without it is
+  /// left alone.
   static let homeProgram = #"""
     use strict;
+    use Fcntl qw(O_WRONLY O_CREAT O_EXCL O_NOFOLLOW);
     my ($from, $to, @files) = @ARGV;
     exit 0 if $from eq $to;
     for my $file (@files) {
@@ -383,7 +394,7 @@ public enum RemoteAccountScripts {
       next unless defined $text && index($text, "$from/") >= 0;
       $text =~ s/\Q$from\E\//$to\//g;
       my $temporary = "$file.hivemind-$$";
-      open(my $out, '>', $temporary) or next;
+      sysopen(my $out, $temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600) or next;
       print {$out} $text;
       close($out) or do { unlink($temporary); next; };
       chmod((stat($file))[2] & 07777, $temporary);
@@ -392,9 +403,12 @@ public enum RemoteAccountScripts {
     """#
 
   /// Puts the block (second argument) into the config.toml (first) in place of every `[mcp_servers.hivemind]` table
-  /// and its sub-tables and of the marker line, at the end; a missing file is created (0600). Prints whether it wrote.
+  /// and its sub-tables and of the marker line, at the end; a missing file is created (0600). The new text goes to a
+  /// temporary file created exclusively, no link followed, at 0600 whatever the umask (a launch's start sets none, and
+  /// the file may hold an MCP server's token), and gets the file's mode only once written. Prints whether it wrote.
   static let codexBlockProgram = #"""
     use strict;
+    use Fcntl qw(O_WRONLY O_CREAT O_EXCL O_NOFOLLOW);
     my ($path, $block) = @ARGV;
     my $marker = (split(/\n/, $block))[0];
     my $old = '';
@@ -411,7 +425,7 @@ public enum RemoteAccountScripts {
     if ($new eq $old) { print "hivemind-mcp current\n"; exit 0; }
     my $mode = -e $path ? (stat($path))[2] & 07777 : 0600;
     my $temporary = "$path.hivemind-$$";
-    open(my $out, '>', $temporary) or exit 1;
+    sysopen(my $out, $temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600) or exit 1;
     print {$out} $new;
     close($out) or do { unlink($temporary); exit 1; };
     chmod($mode, $temporary);

@@ -89,6 +89,29 @@ struct RemoteHostAccountsTests {
     for secret in [fakeSecret, FakeAccountIdentity.email, "someone.else@example.com"] { #expect(!logged.contains(secret)) }
   }
 
+  @Test func aHostDirectoryThatIsALinkIsRefusedForItsOwnReasonHoweverLargeTheCopy() async throws {
+    let r = try RemoteFixture()
+    defer { r.remove() }
+    let mac = r.h.home + "/.codex"
+    try write("model = \"gpt-5\"\n", mac + "/config.toml")
+    // Far past a pipe's buffer: the setup refuses before reading it, and this Mac's `tar` is left with no reader.
+    try write(String(repeating: "x", count: 4 << 20), mac + "/skills/big/SKILL.md")
+    let dotfiles = r.home + "/dotfiles/codex"
+    try FileManager.default.createDirectory(atPath: dotfiles, withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(atPath: r.home + "/.codex", withDestinationPath: dotfiles)
+    await r.h.start()
+    let account = LaunchAccount(id: "codex-main", driver: .codex, label: "Codex", homePath: "", shadowPath: "")
+    let refused = BrokerEvent.accountPrepared(AccountPreparation(loggedIn: false, error:
+      "Build Mac: `\(r.home)/.codex` must be a folder, not a symlink or a file."))
+    #expect(await prepare(r, account) == refused)
+    #expect((try? FileManager.default.contentsOfDirectory(atPath: dotfiles)) == [], "nothing is written through the link")
+
+    // A file in its place: the same.
+    try FileManager.default.removeItem(atPath: r.home + "/.codex")
+    try write("", r.home + "/.codex")
+    #expect(await prepare(r, account) == refused)
+  }
+
   @Test func aClaudeShadowOnAHostGetsItsOwnSettingsAndItsLinksAndNoLogin() async throws {
     let r = try RemoteFixture()
     defer { r.remove() }
@@ -206,6 +229,9 @@ struct RemoteHostAccountsTests {
       printf '%s\\n' "$*" > "$HOME/.node-args"
       cat > "$HOME/.node-stdin"
       echo "node: a warning"
+      # As the real command's schema: every agent names its worktree, null when it has none.
+      /usr/bin/perl -MJSON::PP -e 'my $in = decode_json(do { local $/; <STDIN> }); exists $_->{worktree} or exit 1 for @{$in->{agents}}' \\
+        < "$HOME/.node-stdin" || { echo "Error: conversations: stdin must be {agents: [{id, name, worktree}]}"; exit 1; }
       if [ -f "$HOME/.node-fails" ]; then echo "Error: conversations: stdin is not JSON"; exit 1; fi
       echo '{"conversations":{"a1":{"cli":"claude","software":"claude2","id":"c1a2b3c4-0000-4000-8000-000000000001","cwd":"/Users/me/acme","at":1700000000000}}}'
       """, runtime + "/node")
@@ -219,6 +245,8 @@ struct RemoteHostAccountsTests {
     #expect(r.read(r.home + "/.node-args") == runtime + "/server/bin/hivemind.mjs conversations\n")
     let sent = try #require(r.read(r.home + "/.node-stdin"))
     #expect(try JSONDecoder().decode([String: [ConversationAgent]].self, from: Data(sent.utf8)) == ["agents": agents])
+    let written = try #require(JSONSerialization.jsonObject(with: Data(sent.utf8)) as? [String: [[String: Any]]])
+    #expect(written["agents"]?.last?["worktree"] is NSNull, "no worktree is written as null, not left out")
 
     try write("", r.home + "/.node-fails")
     await r.h.send(connection, .conversationsFind(host: fakeHost.id, agents: agents), id: "c2")
@@ -301,5 +329,22 @@ struct RemoteHostAccountsTests {
     #expect(mode(config) == 0o644, "the file keeps its mode")
     let written = try run()
     #expect(try run() == written, "a second run changes nothing")
+
+    // The temporary file is the user's alone until it is complete, whatever the umask (a launch's start sets none):
+    // a hook on chmod records its mode, and whether it is a link, just before it gets the file's.
+    let seen = root.appendingPathComponent("seen").path
+    let hook = #"BEGIN { *CORE::GLOBAL::chmod = sub { my ($m, @f) = @_; open(my $s, '>>', $ENV{SEEN}); "#
+      + #"printf {$s} "%o %d\n", (lstat($_))[2] & 07777, -l $_ ? 1 : 0 for @f; close($s); CORE::chmod($m, @f) } }"#
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/sh")
+    process.arguments = ["-c", "umask 000; exec /usr/bin/perl -e \"$1\" -e \"$2\" \"$3\" \"$4\"", "sh", hook,
+                         RemoteAccountScripts.codexBlockProgram, config, block + "# again\n"]
+    process.environment = ["SEEN": seen, "PATH": "/usr/bin:/bin"]
+    process.standardOutput = FileHandle.nullDevice
+    try process.run()
+    process.waitUntilExit()
+    #expect(process.terminationStatus == 0)
+    #expect(try String(contentsOfFile: seen, encoding: .utf8) == "600 0\n")
+    #expect(mode(config) == 0o644, "then the file's mode")
   }
 }

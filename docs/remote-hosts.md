@@ -371,14 +371,18 @@ details:
   `settings.json`, `CLAUDE.md`, `agents`, `commands`, `skills`, `plugins`, `hooks`, `output-styles` and
   `statusline-command.sh`. Never `auth.json`, `.credentials.json` or `.claude.json`, nor a transcript, a database or a
   cache. An entry the host already has is kept, so a host's own change survives the next Prepare (move it away there to
-  get this Mac's again). A copied `plugins/*.json` that names this Mac's home names the host's. A shadow is then built
+  get this Mac's again). A directory that is a symlink or a file on the host is refused ("`<path>` must be a folder,
+  not a symlink or a file."), whatever the size of the copy. A copied `plugins/*.json` that names this Mac's home names
+  the host's. A shadow is then built
   by the same steps as here on the host's files (`ShadowHomePreparing.prepareForLogin`), its writes applied there.
 - **The Codex MCP block.** A Codex home's `config.toml` on a host loses every `[mcp_servers.hivemind]` table (and its
   sub-tables) it had, this Mac's included, and gets the host's block at its end, under a marker comment: `command =
   "/bin/sh"` with the [remote runtime](#remote-runtime)'s script, `tool_timeout_sec`, `env_vars = ["HIVEMIND_TMUX_SESSION",
   "HIVEMIND_ROLE"]` and `HIVEMIND_URL = "http://127.0.0.1:7422"`. The block names the runtime's version, so each launch of
   a Codex account on a host puts this version's block back when the file differs (a failure is logged and the session
-  starts with what the file has). A Codex launch without an account on a host uses the host's `~/.codex` as it is.
+  starts with what the file has). Each write goes through a temporary file created exclusively, no link followed, at
+  0600 (the file may hold an MCP server's token), which gets the file's mode once complete and replaces it. A Codex
+  launch without an account on a host uses the host's `~/.codex` as it is.
 - **Same account check.** Prepare, and every launch of an account on a host, reads where its login lives there
   (`AccountLogin`: the shadow, else the home, else the default; for a Claude primary with neither path,
   `~/.claude.json`): the layout's login check, and for Claude the SHA-256 of `oauthAccount.accountUuid`, computed by the
@@ -422,7 +426,8 @@ host with each conversation. Resuming on another host than the conversation's
 needs a copy of its files first, like a copy between account homes today.
 
 *Shipped.* In the apps the Launch sheet asks the server for this Mac's conversations and, at the same time, the broker
-for each online host's (`conversations.find`, with the agents the server's scan takes: `{id, name, worktree}`). The broker
+for each online host's (`conversations.find`, with the agents the server's scan takes: `{id, name, worktree}`, a missing
+worktree written as `null`, which the command requires). The broker
 runs `hivemind conversations` there with the host's own [runtime](#remote-runtime), the agents on stdin: the server's
 own `lastConversations`, on the host's home. Each answer carries its `host`; the newest conversation of an agent wins.
 When an agent's conversation is on another Mac than the sheet's Host, the sheet says so ("Atlas last talked on Build
