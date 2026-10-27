@@ -13,6 +13,7 @@ import Foundation
 //   start     applies the shadow's links, installs the Claude status-line tap, writes the launch file from stdin
 //             (0600, O_EXCL, in the host's launch-secrets folder) and runs the same TmuxCommand there
 //   kill      tmux kill-session on the host
+//   attach    tmux has-session on the host, then `ssh -tt` to its attach-session in a stream's PTY or a Terminal window
 
 /// A configured host as the broker sees it.
 public struct BrokerRemoteHost: Equatable, Sendable {
@@ -38,6 +39,9 @@ public struct BrokerRemoteHost: Equatable, Sendable {
   var brokerHosts: [BrokerRemoteHost] { get }
   /// Runs `script` with /bin/sh on host `id` over its master, `stdin` on its standard input, for at most `timeout`.
   func run(onHost id: String, script: String, stdin: Data, timeout: TimeInterval) async -> SSHResult
+  /// What runs `command` on host `id` over its master in a terminal of its own (SSHTransport.terminalSpec): a stream's
+  /// PTY runs it, and so does a Terminal.app window. Nil when the host is not configured.
+  func terminalSpec(onHost id: String, command: String) -> LaunchSpec?
 }
 
 /// Where a host script looks for tmux: the Homebrew locations, then the PATH of the host's shell, as TmuxLocator does
@@ -233,15 +237,24 @@ public struct RemoteHostScripts: Sendable {
     return RemoteHostProbe(home: home, tmux: tmux, sessions: sessions)
   }
 
-  // MARK: kill
+  // MARK: kill and attach
 
-  public static func kill(_ name: SessionName, tmux: TmuxCommand) -> String {
-    let argv = ([tmux.executable] + tmux.killSession(name)).map(q).joined(separator: " ")
+  public static func kill(_ name: SessionName, tmux: TmuxCommand) -> String { status(of: tmux.killSession(name), tmux: tmux) }
+
+  /// Whether the session is there, before a terminal is attached to it.
+  public static func hasSession(_ name: SessionName, tmux: TmuxCommand) -> String { status(of: tmux.hasSession(name), tmux: tmux) }
+
+  /// What a terminal on the host runs: its tmux attach-session, as TmuxCommand.attachShellLine has it here.
+  public static func attach(_ name: SessionName, tmux: TmuxCommand) -> String { tmux.attachShellLine(name) }
+
+  /// Runs tmux with `arguments` and prints its status after a marker, then what it said.
+  private static func status(of arguments: [String], tmux: TmuxCommand) -> String {
+    let argv = ([tmux.executable] + arguments).map(q).joined(separator: " ")
     return "out=$(\(argv) 2>&1)\nprintf 'hivemind-status %s\\n' \"$?\"\nprintf '%s\\n' \"$out\"\n"
   }
 
-  /// A kill's tmux status and what tmux said, as a TmuxResult; nil when the script printed no status.
-  public static func parseKill(_ output: String) -> TmuxResult? {
+  /// A kill's or a has-session's tmux status and what tmux said, as a TmuxResult; nil when the script printed no status.
+  public static func parseStatus(_ output: String) -> TmuxResult? {
     let lines = output.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map(String.init)
     guard let marker = lines.lastIndex(where: { $0.hasPrefix("hivemind-status ") }),
           let status = Int32(lines[marker].dropFirst("hivemind-status ".count)) else { return nil }

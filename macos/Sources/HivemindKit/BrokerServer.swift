@@ -543,7 +543,7 @@ public final class BrokerConnection {
       }
     case .accountPrepare(let account):
       prepareAccount(account, id: id)
-    case .sessionsList, .sessionsSubscribe, .sessionsUnsubscribe, .launch, .attach, .kill,
+    case .sessionsList, .sessionsSubscribe, .sessionsUnsubscribe, .launch, .attach, .kill, .attachCommand,
          .launcherApprove, .launcherReject:
       enqueue(frame)
     }
@@ -626,6 +626,8 @@ public final class BrokerConnection {
       await attach(session, size: size, id: id)
     case .kill(let session):
       await kill(session, id: id)
+    case .attachCommand(let session):
+      await attachCommand(session, id: id)
     case .launcherApprove(let requestId, let templateId):
       await decide(requestId: requestId, templateId: templateId, approve: true, id: id)
     case .launcherReject(let requestId):
@@ -914,24 +916,61 @@ public final class BrokerConnection {
     if !created.isEmpty { broker.refreshSoon() }
   }
 
+  /// Where a session to attach to runs.
+  private enum Placement {
+    case here(TmuxCommand)
+    case host(BrokerRemoteHost)
+    case refused(BrokerProtocolError)
+  }
+
+  /// Where `session` runs: the host whose last list has it, else this Mac when its tmux has it, else the host a new
+  /// list finds it on (docs/remote-hosts.md#sessions-and-terminals). With no host, this Mac's checks exactly as before
+  /// hosts. `streamLimit` refuses a stream past the limit before this Mac's tmux is asked.
+  private func place(_ session: SessionName, on broker: TerminalBroker, streamLimit: Bool) async -> Placement {
+    if let host = broker.knownRemoteHost(of: session) { return .host(host) }
+    guard let tmux = broker.tmux else {
+      if let host = await broker.remoteHost(of: session) { return .host(host) }
+      return .refused(Self.tmuxMissing)
+    }
+    if streamLimit, streams.count >= BrokerLimits.maxStreamsPerClient { return .refused(Self.tooManyStreams) }
+    let check = await broker.run(tmux, tmux.hasSession(session))
+    guard check.succeeded else {
+      if check.status == TmuxResult.launchFailed { return .refused(BrokerProtocolError(.tmuxFailed, check.firstErrorLine)) }
+      if let host = await broker.remoteHost(of: session) { return .host(host) }
+      return .refused(BrokerProtocolError(.noSuchSession, "no session \(session)"))
+    }
+    return .here(tmux)
+  }
+
   private func attach(_ session: SessionName, size: TerminalSize, id: String?) async {
     guard let broker else { return }
-    // Attaching to a host's session comes with the in-app terminals for hosts (docs/remote-hosts.md#plan, step 4).
-    if let host = broker.knownRemoteHost(of: session) {
-      return send(.error(code: .internal, message: "\(session) runs on \(host.label); attach from a terminal there", stream: nil), id: id)
-    }
-    guard let tmux = broker.tmux else { return send(.error(Self.tmuxMissing), id: id) }
-    guard streams.count < BrokerLimits.maxStreamsPerClient else { return send(.error(Self.tooManyStreams), id: id) }
-    let check = await broker.run(tmux, tmux.hasSession(session))
+    let placement = await place(session, on: broker, streamLimit: true)
     guard isOpen else { return }
-    guard check.succeeded else {
-      if check.status == TmuxResult.launchFailed { return send(.error(code: .tmuxFailed, message: check.firstErrorLine, stream: nil), id: id) }
-      return send(.error(code: .noSuchSession, message: "no session \(session)", stream: nil), id: id)
+    switch placement {
+    case .refused(let error):
+      send(.error(error), id: id)
+    case .here(let tmux):
+      open(session, BrokerTerminalSpec(
+        executable: tmux.executable, arguments: tmux.attach(session), environment: broker.attachEnvironment, size: size), id: id)
+    case .host(let host):
+      // The same stream, its output and input frames unchanged: only what its PTY runs is ssh to the host's tmux.
+      guard streams.count < BrokerLimits.maxStreamsPerClient else { return send(.error(Self.tooManyStreams), id: id) }
+      let terminal = await broker.terminalOnHost(session, host: host)
+      guard isOpen else { return }
+      switch terminal {
+      case .failure(let error): send(.error(error), id: id)
+      case .success(let spec):
+        open(session, BrokerTerminalSpec(executable: spec.executable.path, arguments: spec.arguments,
+                                         environment: BrokerEnvironment.attach(from: spec.environment), size: size), id: id)
+      }
     }
+  }
+
+  /// A new stream of `session`, its PTY running `spec`.
+  private func open(_ session: SessionName, _ spec: BrokerTerminalSpec, id: String?) {
+    guard let broker else { return }
     guard streams.count < BrokerLimits.maxStreamsPerClient else { return send(.error(Self.tooManyStreams), id: id) }
     let stream = nextStream
-    let spec = BrokerTerminalSpec(
-      executable: tmux.executable, arguments: tmux.attach(session), environment: broker.attachEnvironment, size: size)
     let terminal: any BrokerTerminal
     do {
       terminal = try broker.deps.terminals.spawn(
@@ -947,6 +986,29 @@ public final class BrokerConnection {
     if output.paused { terminal.setReading(false) }
     send(.attached(stream: stream, session: session), id: id)
     broker.streamsChanged()
+  }
+
+  /// The line a Terminal.app window runs to attach to `session` where it runs: this Mac's tmux attach, or ssh to the
+  /// host's. Hivemind.app asks only for a host's session; this Mac's it builds from the welcome's tmux, as before hosts.
+  private func attachCommand(_ session: SessionName, id: String?) async {
+    guard let broker else { return }
+    let placement = await place(session, on: broker, streamLimit: false)
+    guard isOpen else { return }
+    switch placement {
+    case .refused(let error):
+      send(.error(error), id: id)
+    case .here(let tmux):
+      send(.attachCommand(session: session, command: tmux.attachShellLine(session)), id: id)
+    case .host(let host):
+      let terminal = await broker.terminalOnHost(session, host: host)
+      guard isOpen else { return }
+      switch terminal {
+      case .failure(let error): send(.error(error), id: id)
+      case .success(let spec):
+        let line = "exec " + ([spec.executable.path] + spec.arguments).map(TerminalScript.shellQuoted).joined(separator: " ")
+        send(.attachCommand(session: session, command: line), id: id)
+      }
+    }
   }
 
   private func kill(_ session: SessionName, id: String?) async {
@@ -971,8 +1033,8 @@ public final class BrokerConnection {
     answerKill(session, result, id: id)
   }
 
-  /// tmux had no such session to kill.
-  private static func noSuchSession(_ result: TmuxResult) -> Bool {
+  /// tmux had no such session (to kill, or to attach to).
+  static func noSuchSession(_ result: TmuxResult) -> Bool {
     !result.succeeded && result.status != TmuxResult.launchFailed
       && (TmuxCommand.isNoServer(stderr: result.stderr) || result.stderr.contains("can't find session"))
   }

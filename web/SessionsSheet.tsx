@@ -6,12 +6,11 @@ import { Avatar } from "./Avatar.tsx";
 import { focusFirstMenuItem, menuKeyDown } from "./menu-keys.ts";
 import { Modal } from "./Modal.tsx";
 import { onMacDesktop, type TerminalSessionInfo } from "./native-bridge.ts";
-import { api } from "./api.ts";
-import type { HostCatalogEntry } from "../src/shared/hosts.ts";
 import { RelativeTime } from "./RelativeTime.tsx";
 import { TerminalNotice } from "./TerminalNotice.tsx";
 import { TerminalPanel, type ScreenFactory } from "./TerminalView.tsx";
 import { agentTerminalSession, terminalBlocker, terminalHub, useTerminalState, type TerminalState } from "./use-terminal.ts";
+import { hostLabel, useHosts } from "./use-host-labels.ts";
 
 /** Who a session belongs to: the agent that reported it on join, else what the launch recorded. */
 export function sessionOwner(session: TerminalSessionInfo, agents: Agent[], projects: Project[], terminals?: TerminalState) {
@@ -89,12 +88,6 @@ export function SessionsSheet({ agents, projects, onClose, loadScreen, initialSe
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
-  const [hosts, setHosts] = useState<HostCatalogEntry[]>([]);
-  useEffect(() => {
-    let active = true;
-    api.hosts().then(view => { if (active) setHosts(view.hosts); }).catch(() => undefined);
-    return () => { active = false; };
-  }, []);
   const othersId = useId();
   const blocker = terminalBlocker(state);
   // Open in Terminal has no answer of its own: a failure (the session just ended, no tmux) arrives as an error.
@@ -108,6 +101,9 @@ export function SessionsSheet({ agents, projects, onClose, loadScreen, initialSe
   const reconnecting = state.sessions === null && state.lastKnownSessions != null && state.broker !== "unverified";
   const sessions = state.sessions ?? (reconnecting ? state.lastKnownSessions : null) ?? [];
   const known = state.sessions !== null || reconnecting;
+  // A host's session (docs/remote-hosts.md#sessions-and-terminals) shows its host; its label comes from the catalog.
+  const hosts = useHosts(sessions.some(item => item.host));
+  const hostOf = (name: string) => hostLabel(hosts, sessions.find(item => item.name === name)?.host);
 
   const ownerOf = (session: TerminalSessionInfo) => sessionOwner(session, agents, projects, state);
   const projectOf = (session: TerminalSessionInfo) => sessionProject(session, agents);
@@ -146,8 +142,10 @@ export function SessionsSheet({ agents, projects, onClose, loadScreen, initialSe
     setError(null);
     const clipboard = typeof navigator === "undefined" ? undefined : navigator.clipboard;
     if (!clipboard) { setError("Could not copy: no clipboard here."); return; }
+    // A host's session is attached from a terminal on that host: the page never knows how to reach it.
+    const host = hostOf(name);
     clipboard.writeText(attachCommand(name))
-      .then(() => setNotice(`Copied ${attachCommand(name)}`), () => setError("Could not copy the attach command."));
+      .then(() => setNotice(`Copied ${attachCommand(name)}${host ? `: run it on ${host}` : ""}`), () => setError("Could not copy the attach command."));
   };
   const terminate = async () => {
     if (!hub || !confirm) return;
@@ -186,10 +184,8 @@ export function SessionsSheet({ agents, projects, onClose, loadScreen, initialSe
   const row = (session: TerminalSessionInfo) => {
     const owner = ownerOf(session);
     const runtime = owner.agent ? agentRuntime(owner.agent, { agents }, state) : null;
-    // A host's session (docs/remote-hosts.md#sessions-and-terminals) shows its host; its label comes from the catalog.
-    const host = session.host ? hosts.find(item => item.id === session.host)?.label ?? "a remote host" : null;
     return (
-      <SessionRow key={session.name} session={session} agent={owner.agent} label={owner.label} host={host}
+      <SessionRow key={session.name} session={session} agent={owner.agent} label={owner.label} host={hostLabel(hosts, session.host)}
         status={sessionStatus(session, runtime?.sessionName === session.name, reconnecting)} current={session.name === current}
         terminalApp={terminalApp} onOpen={() => openHere(session.name)} onTerminal={() => openInTerminal(session.name)}
         onCopy={() => copyAttach(session.name)} onTerminate={() => { setError(null); setConfirm(session.name); }} />
@@ -198,6 +194,7 @@ export function SessionsSheet({ agents, projects, onClose, loadScreen, initialSe
 
   const viewing = open ? sessions.find(item => item.name === open) : undefined;
   const viewingOwner = viewing ? ownerOf(viewing) : null;
+  const viewingHost = open ? hostOf(open) : null;
   return (
     <Modal onClose={confirm || confirmAll ? undefined : onClose}>
       <div className="sheet sheet-wide sessions-sheet" role="dialog" aria-modal="true" aria-label="Terminals"
@@ -210,7 +207,7 @@ export function SessionsSheet({ agents, projects, onClose, loadScreen, initialSe
           ) : <span className="sheet-icon" aria-hidden="true"><SquareTerminal size={18} /></span>}
           <div>
             <h2>{open ? viewingOwner?.label ?? open : "Terminals"}</h2>
-            <p>{open ? <code>{open}</code>
+            <p>{open ? <><code>{open}</code>{viewingHost && ` on ${viewingHost}`}</>
               : `${title} · ${plural(mine.length, "session")} · closing a view keeps the agent running`}</p>
           </div>
           {open && terminalApp && (
@@ -331,14 +328,13 @@ function SessionRow({ session, agent, label, host, status, current, terminalApp,
           : session.attached > 0 ? ` · ${session.attached} attached` : ""}
       </span>
       <div className="term-actions">
-        {/* A host's session has no terminal here yet (docs/remote-hosts.md#plan, step 4): it is listed and terminated only. */}
-        <button type="button" className="btn btn-primary" disabled={ended || host !== null} onClick={onOpen} aria-label={`Open ${session.name}`}
-          title={host ? `Runs on ${host}: attach from a terminal there` : undefined}>
+        {/* A host's session opens as this Mac's: Hivemind Server attaches it over SSH (docs/remote-hosts.md#sessions-and-terminals). */}
+        <button type="button" className="btn btn-primary" disabled={ended} onClick={onOpen} aria-label={`Open ${session.name}`}>
           <SquareTerminal size={14} aria-hidden="true" /> Open
         </button>
         {terminalApp && (
-          <button type="button" className="btn" disabled={ended || status === "reconnecting" || host !== null} onClick={onTerminal}
-            aria-label={`Open ${session.name} in Terminal`} title={host ? `Runs on ${host}: attach from a terminal there` : "Open in Terminal.app"}>
+          <button type="button" className="btn" disabled={ended || status === "reconnecting"} onClick={onTerminal}
+            aria-label={`Open ${session.name} in Terminal`} title={host ? `Open in Terminal.app, over SSH to ${host}` : "Open in Terminal.app"}>
             <Monitor size={14} aria-hidden="true" /> Terminal.app
           </button>
         )}

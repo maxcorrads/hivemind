@@ -250,14 +250,20 @@ public final class TerminalBridgeRouter {
       }
       brokerLaunches.append(brokerLaunch)
     }
-    // A host's session has no Terminal.app window here yet (docs/remote-hosts.md#plan, step 4): only this Mac's open.
-    let titles = launches.map { $0.host == nil ? $0.title : nil }
+    let titles = launches.map(\.title)
+    let onHost = launches.map { $0.host != nil }
     let page = page
     client.send(.launch(brokerLaunches)) { [weak self] event in
       guard let self else { return }
-      // Terminal.app opens even if the page moved on: the user asked for it.
+      // Terminal.app opens even if the page moved on: the user asked for it. A launch on a host gets the broker's ssh
+      // line for its window (docs/remote-hosts.md#sessions-and-terminals); this Mac's open as before hosts.
       if openInTerminal, case .launched(let names, _, _) = event {
-        self.openTerminals(zip(names, titles).compactMap { name, title in title.flatMap { title in name.map { ($0, title) } } })
+        var here: [(name: SessionName, title: String)] = []
+        for (index, name) in names.enumerated() {
+          guard let name else { continue }
+          if onHost[index] { self.openRemoteTerminal(name, title: titles[index]) } else { here.append((name, titles[index])) }
+        }
+        self.openTerminals(here)
       }
       if self.page == page { self.deliver(BridgeTerminalEvent(BrokerEventFrame(event), id: id)) }
     }
@@ -272,10 +278,7 @@ public final class TerminalBridgeRouter {
       switch event {
       case .sessions(let items):
         if items.contains(where: { $0.name == session && $0.host != nil }) {
-          if self.page == page {
-            self.deliver(.error(id: nil, code: .internal, message: "\(session.rawValue) runs on a remote host; attach from a terminal there",
-                                stream: nil))
-          }
+          self.openRemoteTerminal(session, title: session.rawValue)
         } else if items.contains(where: { $0.name == session }) {
           self.openTerminals([(session, session.rawValue)])
         } else if self.page == page {
@@ -283,6 +286,22 @@ public final class TerminalBridgeRouter {
         }
       default:
         if self.page == page { self.deliver(BridgeTerminalEvent(BrokerEventFrame(event))) }
+      }
+    }
+  }
+
+  /// A Terminal.app window on a host's session. Only Hivemind Server knows the host's destination, master and tmux, so
+  /// the broker builds its line (`attach.command`: `exec ssh -tt … tmux … attach-session`); a failure, such as an
+  /// offline host, goes to the page as an error.
+  private func openRemoteTerminal(_ session: SessionName, title: String) {
+    let page = page
+    client.send(.attachCommand(session: session)) { [weak self] event in
+      guard let self else { return }
+      if case .attachCommand(let name, let command) = event, name == session,
+         let launch = TerminalLaunch(title: title, cwd: nil, command: command) {
+        self.environment.openTerminals([launch])
+      } else if self.page == page, let answer = BridgeTerminalEvent(BrokerEventFrame(event)) {
+        self.deliver(answer)
       }
     }
   }
@@ -363,7 +382,7 @@ public final class TerminalBridgeRouter {
     case .error(_, _, let stream):
       // Errors about a stream of ours; the rest answered nothing of the page's.
       guard let stream, streams.contains(stream) else { return }
-    case .welcome, .launched, .attached, .killed, .secrets, .launcherDecided, .accountPrepared:
+    case .welcome, .launched, .attached, .killed, .attachCommand, .secrets, .launcherDecided, .accountPrepared:
       return
     }
     deliver(BridgeTerminalEvent(BrokerEventFrame(event)))

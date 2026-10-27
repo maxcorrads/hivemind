@@ -12,6 +12,7 @@ import { SessionsSheet } from './SessionsSheet.tsx';
 import { TaskChip } from './TaskCard.tsx';
 import { workerTrafficLabel } from './task-views-model.ts';
 import { terminalHub, useTerminalState } from './use-terminal.ts';
+import { hostLabel, useHosts } from './use-host-labels.ts';
 
 type IdentityDraft = { name: string; focus: string; seniority: 'junior' | 'mid' | 'senior' | '' };
 type CapabilityDraft = { enabled: boolean; capabilities: string; modes: CapabilityCard['modes']; model: string;
@@ -99,6 +100,11 @@ export function AgentPanel({ agentId, agents, projects, tick, onClose, onMessage
   const fixed = overview?.profile.type === 'fixed';
   const runtime = agent ? agentRuntime(agent, { agents }, terminals, overview?.work ?? undefined) : null;
   const stopSession = agent ? verifiedStopSession(agent, agents, terminals, overview?.resumeAliases ?? []) : null;
+  // The session's host when it runs on one (docs/remote-hosts.md#sessions-and-terminals); Stop ends it there.
+  const sessionName = stopSession ?? runtime?.sessionName ?? null;
+  const sessionHostId = (terminals.sessions ?? terminals.lastKnownSessions)?.find(item => item.name === sessionName)?.host;
+  const hosts = useHosts(Boolean(sessionHostId));
+  const sessionHost = hostLabel(hosts, sessionHostId);
 
   const saveIdentity = async (event: FormEvent) => {
     event.preventDefault();
@@ -204,7 +210,8 @@ export function AgentPanel({ agentId, agents, projects, tick, onClose, onMessage
             <h3>Overview</h3>
             <p>{fixed ? 'Fixed agent' : 'Task-bound worker'} · {runtime?.statusLine ?? 'Status unknown'}
               {agent.activity?.hint ? ` · ${agent.activity.hint}` : ''}</p>
-            <p>Session: {stopSession ? 'running' : runtime?.sessionState ?? 'unknown'}{stopSession || runtime?.sessionName ? ` · ${stopSession ?? runtime?.sessionName}` : ''}</p>
+            <p>Session: {stopSession ? 'running' : runtime?.sessionState ?? 'unknown'}{sessionName ? ` · ${sessionName}` : ''}
+              {sessionHost ? ` on ${sessionHost}` : ''}</p>
             {agent.activity && <p>Activity since <RelativeTime at={agent.activity.since} /></p>}
             {fixed ? <p>Software and model: unknown. Choose launch settings when you resume this agent.</p> :
               <p>{overview.profile.type === 'task_bound' && 'configurationSource' in overview.profile && overview.profile.configurationSource === 'current_template'
@@ -240,7 +247,7 @@ export function AgentPanel({ agentId, agents, projects, tick, onClose, onMessage
               onClick={() => setStopConfirm(true)}>Stop session…</button>}
           </div>
           {stopConfirm && <div className="agent-panel-confirm" role="group" aria-label="Confirm session stop">
-            <p>Stop {stopSession}? The native broker will end this session.</p>
+            <p>Stop {stopSession}{sessionHost ? ` on ${sessionHost}` : ''}? The native broker will end this session.</p>
             <button type="button" className="btn" onClick={() => setStopConfirm(false)}>Keep running</button>
             <button type="button" className="btn btn-danger" disabled={!stopSession || Boolean(busy)} onClick={() => void stop()}>Confirm Stop</button>
           </div>}

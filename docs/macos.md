@@ -220,9 +220,11 @@ pasted text opens plain Terminal windows, not tmux.
 
 Once Hivemind Server has a [remote host](remote-hosts.md#launch), the sheet has a
 **Host** field: **This Mac** (the default) or a host. Every session the sheet
-starts goes to that host, with its MCP; **Open in Terminal** then starts it there
-without a Terminal.app window, and the Terminals sheet lists it "on <host>". With
-no host there is no field and nothing changes.
+starts goes to that host, with its MCP; **Open in Terminal** then opens a
+Terminal.app window attached to it over SSH, and the Terminals sheet lists it
+"on <host>" and opens it in the app like this Mac's
+([Sessions and terminals](remote-hosts.md#sessions-and-terminals)). With no host
+there is no field and nothing changes.
 
 When the software is OpenCode (`opencode`, or any name containing it), the sheet
 has an **OpenCode Go API key (optional)** field, a masked input. A key pasted
@@ -414,8 +416,8 @@ revocation, what the gateway rewrites and its limits are in
 ## Remote hosts
 
 A remote host is a second Mac on the local network, reached with SSH, where
-Hivemind will run brains and workers ([Remote hosts](remote-hosts.md); launches
-there come in a later step). **Hosts → Add Host…** takes a name, the SSH
+Hivemind runs brains and workers ([Remote hosts](remote-hosts.md)): launched,
+listed, attached and stopped from Hivemind.app as this Mac's are. **Hosts → Add Host…** takes a name, the SSH
 destination (`user@mini.local`, or a `Host` from `~/.ssh/config`) and optional
 extra forwards in `ssh` syntax (`-R 1080 -L 5432:db.internal:5432`). The host
 needs SSH key login without a password and a known host key: Hivemind never
