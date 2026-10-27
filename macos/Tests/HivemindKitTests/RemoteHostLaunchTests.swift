@@ -59,7 +59,7 @@ private let fakeTmuxScript = #"""
 /// The broker's hosts over the fake ssh: each script runs as HostsService runs it, `RemoteRuntime.remote` over the
 /// host's `commandSpec`, with SSHProcessRunner.
 @MainActor
-private final class ShellHosts: BrokerRemoteHosts {
+final class ShellHosts: BrokerRemoteHosts {
   let ssh: FakeSSH
   var hosts: [BrokerRemoteHost]
   var scripts: [String] = []
@@ -76,11 +76,17 @@ private final class ShellHosts: BrokerRemoteHosts {
     return await SSHProcessRunner().run(ssh.transport().commandSpec(fakeHost, command: RemoteRuntime.remote(script)),
                                         stdin: stdin, timeout: timeout)
   }
+
+  func run(onHost id: String, script: String, input: LaunchSpec, timeout: TimeInterval) async -> SSHResult {
+    scripts.append(script)
+    return await SSHProcessRunner().run(ssh.transport().commandSpec(fakeHost, command: RemoteRuntime.remote(script)),
+                                        input: input, timeout: timeout)
+  }
 }
 
 /// A broker with one host, Build Mac, whose home is FakeSSH's remote home, and a project folder there.
 @MainActor
-private struct RemoteFixture {
+struct RemoteFixture {
   let ssh: FakeSSH
   let hosts: ShellHosts
   let h = BrokerHarness()
@@ -97,6 +103,30 @@ private struct RemoteFixture {
     try FileManager.default.createDirectory(atPath: support, withIntermediateDirectories: true)
     h.remoteHosts = hosts
     h.remoteTmux = RemoteTmuxLookup(candidates: [tmuxPath], searchPath: false)
+    let codexPath = ssh.root.appendingPathComponent("bin/fake-codex").path
+    try Data(fakeCodexScript.utf8).write(to: URL(fileURLWithPath: codexPath))
+    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: codexPath)
+    h.remoteCodex = RemoteCodexLookup(shell: ["/bin/zsh", "-c"], codex: codexPath)
+    h.accountIdentity = identities
+    h.home = ssh.root.appendingPathComponent("this mac", isDirectory: true).path
+  }
+
+  let identities = FakeAccountIdentity()
+
+  /// Logs `directory` (under the host's home) in to Codex as `email`: an `auth.json`, and what the fake codex answers.
+  func logInCodex(_ directory: String, email: String = FakeAccountIdentity.email) throws {
+    let folder = home + "/" + directory
+    try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+    try Data("{}".utf8).write(to: URL(fileURLWithPath: folder + "/auth.json"))
+    try Data(codexAccountJSON(email: email).utf8).write(to: URL(fileURLWithPath: folder + "/fake-account"))
+  }
+
+  /// Logs `configFile` (under the host's home) in to Claude as `uuid`.
+  func logInClaude(_ configFile: String, uuid: String = FakeAccountIdentity.uuid) throws {
+    let file = URL(fileURLWithPath: home + "/" + configFile)
+    try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try JSONSerialization.data(withJSONObject: ["oauthAccount": ["accountUuid": uuid, "emailAddress": "user@example.com"],
+                                                "mcpServers": ["x": ["env": ["TOKEN": "fake-secret"]]]]).write(to: file)
   }
 
   var home: String { ssh.remoteHome.path }
@@ -291,6 +321,7 @@ struct RemoteHostLaunchTests {
     defer { close(fd) }
     try #require(flock(fd, LOCK_EX) == 0)
     let account = LaunchAccount(id: "codex-main", driver: .codex, label: "Codex", homePath: "", shadowPath: "")
+    try r.logInCodex(".codex")
     await r.h.start()
     let (transport, connection) = await r.h.client()
     await r.h.send(connection, .launch([try r.launch(command: "codex resume \(thread)", account: account)]))
@@ -341,7 +372,7 @@ struct RemoteHostLaunchTests {
       message: "launches[0].account: `\(shadow)` has no login yet. Run `mkdir -p '\(shadow)' && CODEX_HOME='\(shadow)' CODEX_SQLITE_HOME='\(shared)' codex -c cli_auth_credentials_store=file login` to log in.")]))
     #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: shadow + "/sessions")) == nil, "a refused shadow is not linked")
 
-    try Data("{}".utf8).write(to: URL(fileURLWithPath: shadow + "/auth.json"))
+    try r.logInCodex(".codex-work")
     await r.h.send(connection, .launch([try r.launch(account: account)]))
     #expect(transport.events().first == .launched(names: [atlas], created: [atlas], errors: []))
     for name in ["sessions", "config.toml", "thread-writer-locks"] {
@@ -357,6 +388,7 @@ struct RemoteHostLaunchTests {
     defer { r.remove() }
     r.h.claudeTap = ClaudeStatusTap(folder: r.ssh.root.appendingPathComponent("this mac accounts"))
     let account = LaunchAccount(id: "claude-work", driver: .claude, label: "Claude work", homePath: "~/.claude-work", shadowPath: "")
+    try r.logInClaude(".claude-work/.claude.json")
     await r.h.start()
     let (transport, connection) = await r.h.client()
     await r.h.send(connection, .launch([try r.launch(command: "claude", account: account)]))

@@ -24,6 +24,8 @@ final class ServerMenuModel: ObservableObject {
     server: { [weak self] in self?.launcherServer },
     codex: CodexAppServerProbe(),
     tap: ClaudeStatusTap(folder: controller.paths.accounts),
+    // A Claude session on a host taps there (docs/remote-hosts.md#usage); with no host this reads nothing.
+    remoteTaps: HostTaps(hosts: hosts),
     onAccounts: { [weak self] in self?.terminals.inProcessBroker?.learnClaudeAccounts($0) })
   /// Remote hosts (docs/remote-hosts.md): hosts.json, one SSH master per host for the life of the app, the runtime
   /// on each, and the host catalog the server holds. With no host it does nothing, and the server runs no agent listener.

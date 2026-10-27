@@ -63,6 +63,9 @@ struct BrokerRequestTests {
       .init(.detach(stream: 3)),
       .init(id: "k", .kill(session: atlas)),
       .init(id: "p", .accountPrepare(account: claudeWork)),
+      .init(id: "p", .accountPrepare(account: claudeWork, host: "20000000-0000-4000-8000-000000000001")),
+      .init(id: "c", .conversationsFind(host: "20000000-0000-4000-8000-000000000001",
+                                        agents: [ConversationAgent(id: "a1", name: "Atlas", worktree: "/Users/me/acme")])),
     ]
     for frame in frames {
       let line = try frame.line()
@@ -331,6 +334,8 @@ struct BrokerEventTests {
       .init(id: "a", .error(code: .noSuchSession, message: "hm-acme-atlas is not running", stream: nil)),
       .init(.error(code: .noSuchStream, message: "no stream 4", stream: 4)),
       .init(id: "p", .accountPrepared(AccountPreparation(loggedIn: false))),
+      .init(id: "c", .conversations(["a1": BrokerConversation(cli: "claude", software: "claude", id: "c1a2b3c4-0000-4000-8000-000000000001",
+                                                              cwd: "/Users/me/acme", at: 1_700_000_000_000, host: "20000000-0000-4000-8000-000000000001")])),
       .init(id: "p", .accountPrepared(AccountPreparation(loggedIn: true, error: "`/Users/me/.codex_work/sessions` is a real file"))),
     ]
     for frame in frames {

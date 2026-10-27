@@ -111,6 +111,10 @@ public struct UsageSnapshot: Encodable, Equatable, Sendable {
   private let home: String
   private let now: @Sendable () -> Date
   private let onAccounts: @MainActor ([LaunchAccount]) -> Void
+  /// The remote hosts' taps (docs/remote-hosts.md#usage); nil: this Mac's only.
+  private let remoteTaps: (any RemoteTapReading)?
+  /// The hosts' taps of the round running now.
+  private var hostTaps: [String: RemoteTap] = [:]
   /// The capture time of each account's last good snapshot the server took, so that a Claude source is news only when
   /// it is newer. Empty after a restart.
   private var lastCapturedAt: [String: Int] = [:]
@@ -124,9 +128,10 @@ public struct UsageSnapshot: Encodable, Equatable, Sendable {
               codex: any CodexProbeRunning, shadowHomes: any ShadowHomePreparing = FileShadowHomes(), tap: ClaudeStatusTap,
               home: String = HivemindPaths.userHome.path,
               now: @escaping @Sendable () -> Date = Date.init,
+              remoteTaps: (any RemoteTapReading)? = nil,
               onAccounts: @escaping @MainActor ([LaunchAccount]) -> Void = { _ in }) {
     self.server = server; self.http = http; self.codex = codex; self.shadowHomes = shadowHomes; self.tap = tap
-    self.home = home; self.now = now; self.onAccounts = onAccounts
+    self.home = home; self.now = now; self.remoteTaps = remoteTaps; self.onAccounts = onAccounts
   }
 
   public func start() {
@@ -163,6 +168,9 @@ public struct UsageSnapshot: Encodable, Equatable, Sendable {
     guard status == 200 else { throw BrokerFiles.Failure("usage accounts HTTP \(status)") }
     let accounts = try JSONDecoder().decode(Accounts.self, from: data).accounts.filter { (try? $0.validate()) != nil }
     onAccounts(accounts.filter { $0.driver == .claude })
+    // A Claude session on a host taps there: each host's files are read once a round, over its master.
+    let tapped = accounts.filter { $0.driver == .claude && tap.accountFolder($0.id) != nil }.map(\.id)
+    hostTaps = await remoteTaps?.taps(of: tapped) ?? [:]
     var snapshots: [UsageSnapshot] = []
     for account in accounts {
       try Task.checkCancellation()
@@ -240,11 +248,19 @@ public struct UsageSnapshot: Encodable, Equatable, Sendable {
                          windows: windows, limitErrorAt: limitErrorAt)
   }
 
-  /// The status line the tap saved for `account`, if it has `rate_limits`, as of its modification time.
+  /// The status line the tap saved for `account`, if it has `rate_limits`, as of its modification time: the newer of
+  /// this Mac's and the hosts' (docs/remote-hosts.md#usage).
   private func statusLine(of account: LaunchAccount, now: Int) -> Read? {
-    guard let file = tap.statusLineFile(account.id), let saved = Self.regularFile(file.path, max: Self.maxStatusLineBytes),
-          let windows = ClaudeUsage.parseStatusLine(saved.data) else { return nil }
-    return Read(windows: windows, capturedAt: max(0, min(saved.modified, now)))
+    var reads: [Read] = []
+    if let file = tap.statusLineFile(account.id), let saved = Self.regularFile(file.path, max: Self.maxStatusLineBytes),
+       let windows = ClaudeUsage.parseStatusLine(saved.data) {
+      reads.append(Read(windows: windows, capturedAt: max(0, min(saved.modified, now))))
+    }
+    if let remote = hostTaps[account.id], let data = remote.statusLine, let modified = remote.statusModified,
+       data.count <= Self.maxStatusLineBytes, let windows = ClaudeUsage.parseStatusLine(data) {
+      reads.append(Read(windows: windows, capturedAt: max(0, min(modified, now))))
+    }
+    return reads.max { $0.capturedAt < $1.capturedAt }
   }
 
   /// The usage cache of `account`'s `.claude.json`, if it is its login's and at most 8 days old, as of `fetchedAtMs`.
@@ -258,12 +274,15 @@ public struct UsageSnapshot: Encodable, Equatable, Sendable {
     return Read(windows: cache.windows, capturedAt: min(cache.fetchedAtMs, Self.milliseconds(now)))
   }
 
-  /// The tap's `limit-error` of `account`, Unix seconds on one line, in ms.
+  /// The tap's `limit-error` of `account`, Unix seconds on one line, in ms: the later of this Mac's and the hosts'.
   private func limitError(of account: LaunchAccount) -> Int? {
-    guard let file = tap.limitErrorFile(account.id), let saved = Self.regularFile(file.path, max: 64),
-          let seconds = Int(String(decoding: saved.data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)),
-          (0...1_000_000_000_000).contains(seconds) else { return nil }
-    return seconds * 1000
+    var seconds: [Int] = []
+    if let file = tap.limitErrorFile(account.id), let saved = Self.regularFile(file.path, max: 64),
+       let local = Int(String(decoding: saved.data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)) {
+      seconds.append(local)
+    }
+    if let remote = hostTaps[account.id]?.limitError { seconds.append(remote) }
+    return seconds.filter { (0...1_000_000_000_000).contains($0) }.max().map { $0 * 1000 }
   }
 
   /// The bytes and modification time (Unix ms) of a regular file, symlinks followed, of at most `max` bytes.
@@ -276,6 +295,18 @@ public struct UsageSnapshot: Encodable, Equatable, Sendable {
 
   private static func milliseconds(_ date: Date) -> Int {
     max(0, Int((date.timeIntervalSince1970 * 1000).rounded()))
+  }
+}
+
+/// The login shell's script that starts `codex app-server` under an account: here (CodexAppServerProbe) and on a host
+/// (RemoteAccountScripts.codexIdentity).
+public enum CodexAppServerScript {
+  /// `builtin`, because ~/.zshrc's aliases and functions apply in this shell; values and the command single-quoted, so
+  /// nothing in them is expanded and no alias replaces codex.
+  public static func script(codex: String, set: [(name: String, value: String)], unset: [String]) -> String {
+    let exports = set.map { "builtin export \($0.name)=\(TerminalScript.shellQuoted($0.value))\n" }.joined()
+    let unsets = unset.isEmpty ? "" : "builtin unset -v \(unset.joined(separator: " "))\n"
+    return exports + unsets + "exec \(TerminalScript.shellQuoted(codex)) app-server"
   }
 }
 
@@ -309,12 +340,9 @@ public struct CodexAppServerProbe: CodexProbeRunning {
     self.shell = shell; self.codex = codex; self.environment = environment; self.directory = directory; self.timeout = timeout
   }
 
-  /// `builtin`, because ~/.zshrc's aliases and functions apply in this shell; values and the command single-quoted, so
-  /// nothing in them is expanded and no alias replaces codex.
+  /// CodexAppServerScript.script, which a host's identity check runs too.
   public static func script(codex: String, set: [(name: String, value: String)], unset: [String]) -> String {
-    let exports = set.map { "builtin export \($0.name)=\(TerminalScript.shellQuoted($0.value))\n" }.joined()
-    let unsets = unset.isEmpty ? "" : "builtin unset -v \(unset.joined(separator: " "))\n"
-    return exports + unsets + "exec \(TerminalScript.shellQuoted(codex)) app-server"
+    CodexAppServerScript.script(codex: codex, set: set, unset: unset)
   }
 
   public func probe(set: [(name: String, value: String)], unset: [String]) async -> [String] {

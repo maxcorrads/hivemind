@@ -1,7 +1,8 @@
 import { ArrowDown, ArrowUp, Copy, FolderCog, Pencil, Plus, Trash2, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ACCOUNT_DRIVERS, ACCOUNT_LIMITS, ACCOUNT_POLICIES, accountLoginCommand, accountPathProblem, type AccountDriver,
   toLaunchAccount, type AccountPolicy, type AccountUsage as Usage, type AgentAccount } from "../src/shared/accounts.ts";
+import type { HostCatalogEntry } from "../src/shared/hosts.ts";
 import { api, type AccountsView } from "./api.ts";
 import { AccountUsage, useNow } from "./AccountUsage.tsx";
 import { Modal } from "./Modal.tsx";
@@ -17,8 +18,18 @@ const POLICY_LINES: Record<AccountPolicy, string> = {
 /** An account's editable fields. A path is stored exactly as typed; "" is the driver's default tree or no shadow. */
 type AccountFields = { label: string; homePath: string; shadowPath: string };
 
-/** A row's last Prepare, for the paths it ran with: null while the app works on it. */
-type Prepared = { homePath: string; shadowPath: string; result: AccountPreparation | null };
+/**
+ * A row's last Prepare, for the paths it ran with: null while the app works on it. `hosts` has one entry per remote
+ * host it ran on (docs/remote-hosts.md#accounts), "offline" for a host it could not.
+ */
+type Prepared = {
+  homePath: string;
+  shadowPath: string;
+  result: AccountPreparation | null;
+  hosts: { host: HostCatalogEntry; result: AccountPreparation | null | "offline" }[];
+  /** Which Prepare of the row this is: an answer to an older one is dropped. */
+  run: number;
+};
 
 const errorText = (failure: unknown) => String((failure as Error)?.message || failure);
 
@@ -41,7 +52,17 @@ export function AccountsSheet({ tick = 0, onClose }: { tick?: number; onClose: (
   const [reload, setReload] = useState(0);
   // By account id. Only the apps can prepare: Hivemind Server.app builds the shadow (docs/accounts.md#sheet).
   const [prepared, setPrepared] = useState<Record<string, Prepared>>({});
+  const runs = useRef(0);
   const hub = terminalHub();
+  // The remote hosts Hivemind Server reported (docs/remote-hosts.md#accounts): Prepare runs on each of them too. With
+  // none, or in a browser, Prepare is this Mac's only, as before hosts.
+  const [hosts, setHosts] = useState<HostCatalogEntry[]>([]);
+  useEffect(() => {
+    if (!hub) return;
+    let active = true;
+    api.hosts().then(view => { if (active) setHosts(view.hosts); }).catch(() => undefined);
+    return () => { active = false; };
+  }, [tick]);
   useEffect(() => {
     let active = true;
     setError("");
@@ -78,13 +99,26 @@ export function AccountsSheet({ tick = 0, onClose }: { tick?: number; onClose: (
     return last && last.homePath === account.homePath && last.shadowPath === account.shadowPath ? last : null;
   };
   // A shadow is built before Human runs its login command, which shows once Prepare succeeds; the row keeps the status.
+  // On this Mac and on each online host at once; each answer fills its own line.
   const prepare = (account: AgentAccount) => {
     if (!hub) return;
     const paths = { homePath: account.homePath, shadowPath: account.shadowPath };
-    setPrepared(old => ({ ...old, [account.id]: { ...paths, result: null } }));
-    hub.prepareAccount(toLaunchAccount(account))
-      .catch((failure): AccountPreparation => ({ ok: false, loggedIn: false, error: errorText(failure) }))
-      .then(result => setPrepared(old => ({ ...old, [account.id]: { ...paths, result } })));
+    const onHosts = hosts.map(host => ({ host, result: host.online ? null : "offline" as const }));
+    const run = ++runs.current;
+    setPrepared(old => ({ ...old, [account.id]: { ...paths, result: null, hosts: onHosts, run } }));
+    const failed = (failure: unknown): AccountPreparation => ({ ok: false, loggedIn: false, error: errorText(failure) });
+    // A later Prepare of the same row replaces this one's lines: an answer of an older one is dropped.
+    const current = (old: Record<string, Prepared>) => old[account.id]?.run === run;
+    hub.prepareAccount(toLaunchAccount(account)).catch(failed)
+      .then(result => setPrepared(old => current(old) ? { ...old, [account.id]: { ...old[account.id]!, result } } : old));
+    for (const { host } of onHosts.filter(entry => entry.result === null)) {
+      hub.prepareAccount(toLaunchAccount(account), host.id).catch(failed)
+        .then(result => setPrepared(old => {
+          if (!current(old)) return old;
+          const last = old[account.id]!;
+          return { ...old, [account.id]: { ...last, hosts: last.hosts.map(entry => entry.host.id === host.id ? { host, result } : entry) } };
+        }));
+    }
   };
 
   const remove = (account: AgentAccount) => {
@@ -162,7 +196,8 @@ export function AccountsSheet({ tick = 0, onClose }: { tick?: number; onClose: (
                             <ArrowDown size={13} aria-hidden="true" /> Down
                           </button>
                           {hub && (
-                            <button type="button" className="btn" disabled={busy || preparedFor(account)?.result === null}
+                            <button type="button" className="btn"
+                              disabled={busy || preparedFor(account)?.result === null || preparedFor(account)?.hosts.some(entry => entry.result === null)}
                               aria-label={`Prepare ${account.label}`} onClick={() => prepare(account)}>
                               <FolderCog size={13} aria-hidden="true" /> Prepare
                             </button>
@@ -287,6 +322,31 @@ function PreparedStatus({ account, prepared }: { account: AgentAccount; prepared
     <>
       <p className={result?.ok === false ? "err" : "help-p"} role="status">{status}</p>
       {result?.ok && <LoginCommand command={accountLoginCommand(account)} />}
+      {prepared.hosts.length > 0 && (
+        <ul className="account-hosts" aria-label={`${account.label} on other Macs`}>
+          {prepared.hosts.map(({ host, result: onHost }) => (
+            <li key={host.id}><HostStatus account={account} host={host} result={onHost} /></li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
+}
+
+/**
+ * One host's line of a Prepare (docs/remote-hosts.md#accounts): ready, what is wrong, or, for a home there that still
+ * needs its login, the command to run in a terminal on that host. The command is the same as here: its `~/` is the
+ * host's home.
+ */
+function HostStatus({ account, host, result }: { account: AgentAccount; host: HostCatalogEntry; result: AccountPreparation | null | "offline" }) {
+  if (result === "offline") return <p className="help-p">{host.label}: offline. Prepare again once it is online.</p>;
+  if (!result) return <p className="help-p" role="status">{host.label}: Preparing…</p>;
+  if (!result.ok) return <p className="err" role="status">{host.label}: {result.error ?? "Prepare failed"}</p>;
+  if (result.loggedIn) return <p className="help-p" role="status">{host.label}: Ready</p>;
+  return (
+    <>
+      <p className="help-p" role="status">{host.label}: not logged in. Run this in a terminal on {host.label}:</p>
+      <LoginCommand command={accountLoginCommand(account)} />
     </>
   );
 }

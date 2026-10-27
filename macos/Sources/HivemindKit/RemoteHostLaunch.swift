@@ -9,9 +9,11 @@ import Foundation
 //   probe     the host's home and tmux, and its Hivemind sessions (tmux -L hivemind list-sessions)
 //   prepare   clones a missing project folder from this Mac's origin (read from stdin), then reads the host's facts
 //             with its own perl: the folder, the Codex writer lock, Claude's live sessions, the project's Claude
-//             settings and the shadow account's files
-//   start     applies the shadow's links, installs the Claude status-line tap, writes the launch file from stdin
-//             (0600, O_EXCL, in the host's launch-secrets folder) and runs the same TmuxCommand there
+//             settings, the shadow account's files and the account's login (its check, and for Claude the digest
+//             of its account; RemoteHostAccounts.swift)
+//   start     applies the shadow's links, puts a Codex account's MCP block in its config.toml, installs the Claude
+//             status-line tap, writes the launch file from stdin (0600, O_EXCL, in the host's launch-secrets folder)
+//             and runs the same TmuxCommand there
 //   kill      tmux kill-session on the host
 
 /// A configured host as the broker sees it.
@@ -38,6 +40,15 @@ public struct BrokerRemoteHost: Equatable, Sendable {
   var brokerHosts: [BrokerRemoteHost] { get }
   /// Runs `script` with /bin/sh on host `id` over its master, `stdin` on its standard input, for at most `timeout`.
   func run(onHost id: String, script: String, stdin: Data, timeout: TimeInterval) async -> SSHResult
+  /// The same, with the output of the local command `input` on its standard input (a `tar` of this Mac's files).
+  func run(onHost id: String, script: String, input: LaunchSpec, timeout: TimeInterval) async -> SSHResult
+}
+
+extension BrokerRemoteHosts {
+  /// Hosts that cannot take a copy of this Mac's files refuse it.
+  public func run(onHost id: String, script: String, input: LaunchSpec, timeout: TimeInterval) async -> SSHResult {
+    SSHResult(status: SSHResult.launchFailed, stderr: "This host cannot take a copy of this Mac's files")
+  }
 }
 
 /// Where a host script looks for tmux: the Homebrew locations, then the PATH of the host's shell, as TmuxLocator does
@@ -81,19 +92,35 @@ public struct RemoteFactsRequest: Codable, Equatable, Sendable {
     public let driver: String
   }
 
+  /// Where an account's login lives on the host (AccountLogin): its login check, and for Claude its identity.
+  public struct Login: Codable, Equatable, Sendable {
+    public let driver: String
+    public let directory: String
+    public let configFile: String?
+
+    public init(_ login: AccountLogin, driver: LaunchAccount.Driver) {
+      self.driver = driver.rawValue
+      directory = login.directory
+      configFile = login.configFile
+    }
+  }
+
   public var cwd: String
   public var codexLock: CodexLock?
   public var claude: Claude?
   /// The project's Claude settings files whose `apiKeyHelper` and `env` names are read.
   public var projectSettings: [String]?
   public var shadow: Shadow?
+  public var login: Login?
 
-  public init(cwd: String, codexLock: CodexLock? = nil, claude: Claude? = nil, projectSettings: [String]? = nil, shadow: Shadow? = nil) {
+  public init(cwd: String, codexLock: CodexLock? = nil, claude: Claude? = nil, projectSettings: [String]? = nil, shadow: Shadow? = nil,
+              login: Login? = nil) {
     self.cwd = cwd
     self.codexLock = codexLock
     self.claude = claude
     self.projectSettings = projectSettings
     self.shadow = shadow
+    self.login = login
   }
 }
 
@@ -128,12 +155,21 @@ public struct RemoteFacts: Codable, Equatable, Sendable {
     public let env: [String]
   }
 
+  /// An account's login on the host: the layout's check, the login file's `dev:ino:size:mtime` (or `none`), and for
+  /// Claude the digest of `oauthAccount.accountUuid`. Never a login's contents.
+  public struct Login: Codable, Equatable, Sendable {
+    public let loggedIn: Bool
+    public let stamp: String
+    public let identity: String?
+  }
+
   public let cwd: Folder
   /// `open`, `free`, or `error:<reason>`.
   public let codexLock: String?
   public let claude: ClaudeSessions?
   public let projectSettings: [ProjectSettings]?
   public let shadow: ShadowFacts?
+  public let login: Login?
 }
 
 /// What a prepare script did.
@@ -157,6 +193,8 @@ public struct RemoteStarted: Equatable, Sendable {
   public let duplicate: Bool
   /// tmux's first line.
   public let said: String?
+  /// The Codex home's MCP block could not be written.
+  public var mcpFailed = false
 }
 
 /// The scripts, for one host's runtime.
@@ -305,6 +343,7 @@ public struct RemoteHostScripts: Sendable {
     use Fcntl qw(:flock :mode O_RDWR O_CREAT);
     use Cwd qw(realpath);
     use JSON::PP;
+    use Digest::SHA qw(sha256_hex);
     my $json = JSON::PP->new->canonical;
     my $text = do { local $/; <STDIN> };
     my $request = $json->decode(defined $text && length $text ? $text : '{}');
@@ -433,6 +472,22 @@ public struct RemoteHostScripts: Sendable {
       }
       $out{shadow} = \%facts;
     }
+    if (my $login = $request->{login}) {
+      my ($dir, $config) = ($login->{directory}, $login->{configFile});
+      my $file = $login->{driver} eq 'codex' ? "$dir/auth.json" : $config;
+      my @info = stat($file);
+      my %facts = (stamp => (@info ? "$info[0]:$info[1]:$info[7]:$info[9]" : 'none'), loggedIn => JSON::PP::false);
+      if ($login->{driver} eq 'codex') {
+        $facts{loggedIn} = kind($file) eq 'file' ? JSON::PP::true : JSON::PP::false;
+      } else {
+        my $data = kind($config) eq 'file' ? read_json($config) : undef;
+        my $signed = kind("$dir/.credentials.json") eq 'file' || (ref($data) && exists $data->{oauthAccount});
+        $facts{loggedIn} = $signed ? JSON::PP::true : JSON::PP::false;
+        my $uuid = ref($data) && ref($data->{oauthAccount}) eq 'HASH' ? $data->{oauthAccount}{accountUuid} : undef;
+        if (defined $uuid && !ref($uuid) && length $uuid) { my $text = "$uuid"; utf8::encode($text); $facts{identity} = sha256_hex($text); }
+      }
+      $out{login} = \%facts;
+    }
     print $json->encode(\%out), "\n";
     """#
 
@@ -453,18 +508,11 @@ public struct RemoteHostScripts: Sendable {
   /// launch file at `file` from stdin, then runs `arguments` with `tmux`. A launch file nobody will read (tmux failed,
   /// or the name was another launch's) is deleted at once; leftovers older than 10 minutes go before each launch.
   public static func start(actions: [SnapshotShadowFiles.Action], tapFiles: [PrivateFile], file: LaunchEnvironmentFile?,
-                           tmux: TmuxCommand, arguments: [String], name: SessionName) -> String {
-    var script = path + "fail() { printf 'hivemind-error %s\\n' \"$1\"; exit 0; }\n"
-    for action in actions {
-      switch action {
-      case .makeFolder(let folder):
-        script += "if [ -e \(q(folder)) ] || [ -L \(q(folder)) ]; then fail \(q("`\(folder)` appeared on the host meanwhile; launch again.")); fi\n"
-          + "mkdir -m 700 -- \(q(folder)) || fail \(q("Cannot create `\(folder)`"))\n"
-      case .link(let link, let target):
-        script += "if [ -e \(q(link)) ] || [ -L \(q(link)) ]; then fail \(q("`\(link)` appeared on the host meanwhile; launch again.")); fi\n"
-          + "ln -s -- \(q(target)) \(q(link)) || fail \(q("Cannot link `\(link)` to `\(target)`"))\n"
-      }
-    }
+                           tmux: TmuxCommand, arguments: [String], name: SessionName, codexConfig: (path: String, block: String)? = nil) -> String {
+    var script = path + "fail() { printf 'hivemind-error %s\\n' \"$1\"; exit 0; }\n" + RemoteAccountScripts.applying(actions, again: "launch again")
+    // A Codex account's home gets this runtime's MCP block back when it differs (docs/remote-hosts.md#accounts); a
+    // failure leaves the session to start with what the file has.
+    if let codexConfig { script += RemoteAccountScripts.ensureCodexBlock(config: codexConfig.path, block: codexConfig.block) }
     var tap = "1"
     if !tapFiles.isEmpty {
       script += "tap=1\n"
@@ -533,6 +581,7 @@ public struct RemoteHostScripts: Sendable {
     guard fields.count == 3, let status = Int32(fields[0]) else { return nil }
     let tap = lines.last { $0.hasPrefix("hivemind-tap ") }.map { $0 == "hivemind-tap 1" }
     let said = lines.last { $0.hasPrefix("hivemind-tmux-said ") }.map { String($0.dropFirst("hivemind-tmux-said ".count).prefix(200)) }
-    return RemoteStarted(error: nil, tap: tap, status: status, started: fields[1] == "1", duplicate: fields[2] == "1", said: said)
+    return RemoteStarted(error: nil, tap: tap, status: status, started: fields[1] == "1", duplicate: fields[2] == "1", said: said,
+                         mcpFailed: lines.contains("hivemind-mcp-failed"))
   }
 }

@@ -229,6 +229,8 @@ test("in the app Prepare asks Hivemind Server for the row's account, shows its s
   assert.equal(row("Codex work").querySelector(".launch-pre"), null, "no command before the shadow is ready");
   await answer({ type: "account-prepared", id: first!.id, ok: true, loggedIn: false });
   assert.equal(status("Codex work"), "Not logged in");
+  assert.equal(prepares().length, 1, "with no host, Prepare is this Mac's only, as before hosts");
+  assert.equal(row("Codex work").querySelector(".account-hosts"), null);
   assert.equal(row("Codex work").querySelector(".launch-pre")!.textContent, login);
   await f.click("Copy", row("Codex work"));
   assert.deepEqual(copied, [login]);
@@ -255,4 +257,51 @@ test("in the app Prepare asks Hivemind Server for the row's account, shows its s
   await f.submit();
   assert.equal(status("Codex work"), null);
   assert.deepEqual(f.changes.map(change => change[0]), ["PUT"], "Prepare never goes to the server");
+});
+
+test("with hosts, Prepare runs on this Mac and each online host, and lists the homes there that still need a login", async t => {
+  // docs/remote-hosts.md#accounts. A host's line names it; one that needs its login shows the command to run there.
+  const posted: NativeMessage[] = [];
+  const bridged = window as unknown as { webkit?: unknown };
+  bridged.webkit = { messageHandlers: { hivemind: { postMessage: (message: NativeMessage) => { posted.push(structuredClone(message)); } } } };
+  t.after(() => { resetTerminalHub(); delete bridged.webkit; });
+  const f = await fixture(t);
+  const buildMac = { id: "20000000-0000-4000-8000-000000000001", label: "Build Mac", online: true };
+  const sleepy = { id: "20000000-0000-4000-8000-000000000002", label: "Sleepy Mac", online: false };
+  f.hive.hosts.replace({ hosts: [buildMac, sleepy] });
+  f.hive.accounts.create(f.human, spec({ homePath: "~/.codex2" }));
+  await f.render();
+  const row = () => Array.from(f.host.querySelectorAll<HTMLElement>(".accounts-list li")).find(li => li.querySelector("strong")?.textContent === "Codex work")!;
+  const hostLines = () => Array.from(row().querySelectorAll(".account-hosts li")).map(li => li.querySelector("p")?.textContent);
+  const prepareButton = () => row().querySelector<HTMLButtonElement>('[aria-label="Prepare Codex work"]')!;
+  const prepares = () => posted.filter((m): m is Extract<NativeMessage, { type: "account-prepare" }> => m.type === "account-prepare");
+  const answer = (detail: object) => act(async () => {
+    window.dispatchEvent(new window.CustomEvent(TERMINAL_EVENT, { detail }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+  });
+
+  await f.click("Prepare Codex work");
+  const [here, there] = prepares();
+  assert.equal(prepares().length, 2, "the offline host is not asked");
+  assert.equal("host" in here!, false, "this Mac's Prepare is as before hosts");
+  assert.equal(there!.host, buildMac.id);
+  assert.deepEqual(there!.account, here!.account);
+  assert.deepEqual(hostLines(), ["Build Mac: Preparing…", "Sleepy Mac: offline. Prepare again once it is online."]);
+  assert.equal(prepareButton().disabled, true);
+  await answer({ type: "account-prepared", id: here!.id, ok: true, loggedIn: true });
+  assert.equal(prepareButton().disabled, true, "until every host answered");
+  await answer({ type: "account-prepared", id: there!.id, ok: true, loggedIn: false });
+  assert.equal(prepareButton().disabled, false);
+  assert.deepEqual(hostLines(), ["Build Mac: not logged in. Run this in a terminal on Build Mac:", "Sleepy Mac: offline. Prepare again once it is online."]);
+  assert.equal(row().querySelector(".account-hosts .launch-pre")!.textContent, "CODEX_HOME=~/.codex2 codex login");
+
+  await f.click("Prepare Codex work");
+  const mismatch = "`~/.codex2` on Build Mac is logged in to another account than Codex work on this Mac.";
+  await answer({ type: "account-prepared", id: prepares()[3]!.id, ok: false, loggedIn: true, error: mismatch });
+  assert.equal(hostLines()[0], `Build Mac: ${mismatch}`);
+  assert.equal(row().querySelector(".account-hosts .launch-pre"), null);
+  await answer({ type: "account-prepared", id: prepares()[2]!.id, ok: true, loggedIn: true });
+  await f.click("Prepare Codex work");
+  await answer({ type: "account-prepared", id: prepares()[5]!.id, ok: true, loggedIn: true });
+  assert.equal(hostLines()[0], "Build Mac: Ready");
 });

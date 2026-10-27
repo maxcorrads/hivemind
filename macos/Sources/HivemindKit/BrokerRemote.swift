@@ -179,6 +179,8 @@ extension TerminalBroker {
       request.shadow = .init(home: expandingHome(account.homePath.isEmpty ? account.driver.defaultHome : account.homePath, home: home),
                              shadow: expandingHome(account.shadowPath, home: home), driver: account.driver.rawValue)
     }
+    // The account's login there, for the same-account check below (docs/remote-hosts.md#accounts).
+    if let account = launch.account { request.login = .init(AccountLogin(account, home: home), driver: account.driver) }
     let origin = await deps.originURL(launch.cwd)
     let preparing = await remoteHosts.run(onHost: host.id, script: RemoteHostScripts.prepare(cwd: launch.cwd),
                                           stdin: RemoteHostScripts.prepareInput(origin: origin, request: request),
@@ -259,6 +261,7 @@ extension TerminalBroker {
     }
     var actions: [SnapshotShadowFiles.Action] = []
     var tapFiles: [RemoteHostScripts.PrivateFile] = []
+    var codexConfig: (path: String, block: String)?
     if let account = launch.account {
       if let message = account.environmentConflict(in: nil, secretNames: templateSecrets.keys.sorted()) {
         return failed(.badMessage, "account", message)
@@ -269,6 +272,14 @@ extension TerminalBroker {
         return failed(.internal, "account", error.localizedDescription)
       }
       actions = files.actions
+      // Logged in there to the same provider account as here, before anything is written there.
+      if let problem = await sameAccountProblem(account, on: host, login: facts.login, home: home, fresh: false) {
+        return failed(.internal, "account", problem)
+      }
+      if account.driver == .codex {
+        codexConfig = (expandingHome(Self.homeDirectory(of: account), home: home) + "/config.toml",
+                       RemoteAccountScripts.codexMcpBlock(runtimeFolder: folder))
+      }
       if let tap, let settings = tap.settings(for: account, home: home), let folder = tap.accountFolder(account.id) {
         let file = folder.appendingPathComponent("settings.json").path
         tapFiles = [.init(path: tap.script.path, contents: ClaudeStatusTap.scriptText),
@@ -285,7 +296,8 @@ extension TerminalBroker {
       : LaunchSecretStore.contents(environment: fileEnvironment, secrets: launch.secrets, templateSecrets: templateSecrets)
     let starting = await remoteHosts.run(
       onHost: host.id,
-      script: RemoteHostScripts.start(actions: actions, tapFiles: tapFiles, file: environmentFile, tmux: tmux, arguments: arguments, name: name),
+      script: RemoteHostScripts.start(actions: actions, tapFiles: tapFiles, file: environmentFile, tmux: tmux, arguments: arguments, name: name,
+                                      codexConfig: codexConfig),
       stdin: Data(contents), timeout: RemoteHostScripts.stepTimeout)
     remoteListings[host.id]?.listedAt = .distantPast
     guard starting.succeeded, let started = RemoteHostScripts.parseStart(starting.stdout) else {
@@ -293,6 +305,7 @@ extension TerminalBroker {
     }
     if let error = started.error { return failed(.internal, launch.account != nil && !actions.isEmpty ? "account" : "host", error) }
     if started.tap == false { deps.log("[broker] \(name): no Claude status-line tap on \(host.label): its files could not be written") }
+    if started.mcpFailed { deps.log("[broker] \(name): the Codex home on \(host.label) kept its MCP block: config.toml could not be written") }
     guard started.started else {
       let message = started.said ?? "tmux exited with status \(started.status)"
       return RemoteLaunchOutcome(failure: BrokerLaunchFailure(index: index, code: .tmuxFailed, message: message))

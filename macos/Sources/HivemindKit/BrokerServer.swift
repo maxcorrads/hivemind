@@ -49,6 +49,11 @@ public final class TerminalBroker {
     public var originURL: @MainActor (String) async -> String?
     /// Where the host scripts look for tmux (RemoteTmuxLookup.standard; the tests give a fake).
     public var remoteTmux: RemoteTmuxLookup
+    /// This Mac's side of the same-account check of a launch or a Prepare on a host (docs/remote-hosts.md#accounts);
+    /// nil: an account cannot launch on a host. Server.app gives LocalAccountIdentity.
+    public var accountIdentity: (any AccountIdentityReading)?
+    /// How a host runs `codex app-server` for that check (RemoteCodexLookup.standard; the tests give a fake).
+    public var remoteCodex: RemoteCodexLookup
     /// Never given a secret or a variable's value: the broker logs names,
     /// counts and paths only.
     public var log: (String) -> Void
@@ -61,7 +66,8 @@ public final class TerminalBroker {
       shadowHomes: any ShadowHomePreparing = NoShadowHomes(), claudeTap: ClaudeStatusTap? = nil,
       processStart: @escaping (Int32) -> String? = ClaudeLiveSessions.systemProcessStart,
       remoteHosts: (any BrokerRemoteHosts)? = nil, originURL: @escaping @MainActor (String) async -> String? = { _ in nil },
-      remoteTmux: RemoteTmuxLookup = .standard, log: @escaping (String) -> Void = { _ in }
+      remoteTmux: RemoteTmuxLookup = .standard, accountIdentity: (any AccountIdentityReading)? = nil,
+      remoteCodex: RemoteCodexLookup = .standard, log: @escaping (String) -> Void = { _ in }
     ) {
       self.tmux = tmux
       self.terminals = terminals
@@ -79,6 +85,8 @@ public final class TerminalBroker {
       self.remoteHosts = remoteHosts
       self.originURL = originURL
       self.remoteTmux = remoteTmux
+      self.accountIdentity = accountIdentity
+      self.remoteCodex = remoteCodex
       self.log = log
     }
   }
@@ -121,6 +129,9 @@ public final class TerminalBroker {
   /// Each remote host's list running now, by host id (`listInBackground`).
   var remoteProbes: [String: RemoteProbeTask] = [:]
   var nextRemoteProbe = 0
+  /// The Codex accounts found the same on a host and here, with the two login files' stamps then: a new login on
+  /// either side asks `account/read` again (docs/remote-hosts.md#accounts).
+  var matchedCodexLogins: [String: String] = [:]
 
   public init(token: BrokerToken, configPath: String, dependencies: Dependencies) {
     self.token = token
@@ -541,8 +552,22 @@ public final class BrokerConnection {
         try Self.vaultCall { () throws(BrokerFiles.Failure) in try vault.delete(name: name, for: template) }
         broker?.deps.log("[broker] template \(template): deleted \(name.map { "secret \($0)" } ?? "every secret")")
       }
-    case .accountPrepare(let account):
+    case .accountPrepare(let account, nil):
       prepareAccount(account, id: id)
+    case .accountPrepare(let account, let host?):
+      // Over SSH, maybe with a copy of plugins: in a task of its own, so this connection's other requests go on.
+      guard let broker else { return }
+      broker.track { [weak self, weak broker] in
+        guard let broker else { return }
+        let preparation = await broker.prepareOnHost(account, host: host)
+        self?.send(.accountPrepared(preparation), id: id)
+      }
+    case .conversationsFind(let host, let agents):
+      guard let broker else { return }
+      broker.track { [weak self, weak broker] in
+        guard let broker else { return }
+        self?.reply(await broker.conversationsOnHost(host, agents: agents).map { .conversations($0) }, id: id)
+      }
     case .sessionsList, .sessionsSubscribe, .sessionsUnsubscribe, .launch, .attach, .kill,
          .launcherApprove, .launcherReject:
       enqueue(frame)
@@ -630,7 +655,7 @@ public final class BrokerConnection {
       await decide(requestId: requestId, templateId: templateId, approve: true, id: id)
     case .launcherReject(let requestId):
       await decide(requestId: requestId, templateId: nil, approve: false, id: id)
-    case .hello, .input, .resize, .detach, .secretsList, .secretsSet, .secretsDelete, .accountPrepare:
+    case .hello, .input, .resize, .detach, .secretsList, .secretsSet, .secretsDelete, .accountPrepare, .conversationsFind:
       break
     }
   }

@@ -109,7 +109,9 @@ struct FakeSSH {
     """#
 
   init() throws {
-    root = try temporaryHome().resolvingSymlinksInPath()
+    // realpath, not resolvingSymlinksInPath (which gives /var for /private/var): a host's home is its real path.
+    let made = try temporaryHome()
+    root = realpath(made.path, nil).map { pointer in defer { free(pointer) }; return URL(fileURLWithPath: String(cString: pointer), isDirectory: true) } ?? made
     try FileManager.default.createDirectory(at: executable.deletingLastPathComponent(), withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: remoteHome, withIntermediateDirectories: true)
     try Data(Self.script.utf8).write(to: executable)
@@ -173,3 +175,40 @@ func localPlatform() -> String {
   }
   return condition()
 }
+
+/// This Mac's logins for the same-account check (docs/remote-hosts.md#accounts): every Codex account logged in to
+/// `codexEmail`, every Claude one to `claudeUuid`, unless `answers` says otherwise for an account id.
+@MainActor final class FakeAccountIdentity: AccountIdentityReading {
+  static let email = "user@example.com"
+  static let uuid = "0a1b2c3d-0000-4000-8000-00000000c1a0"
+  var answers: [String: Result<AccountIdentity, BrokerFiles.Failure>] = [:]
+  var asked: [String] = []
+
+  func identity(of account: LaunchAccount, home: String) async -> Result<AccountIdentity, BrokerFiles.Failure> {
+    asked.append(account.id)
+    if let answer = answers[account.id] { return answer }
+    switch account.driver {
+    case .codex: return .success(AccountIdentity.codex(type: "chatgpt", email: Self.email)!)
+    case .claude: return .success(.claude(accountUuid: Self.uuid))
+    }
+  }
+}
+
+/// A `codex app-server` for a fake host: it answers `account/read` with the account in `$CODEX_HOME/fake-account`
+/// (or `~/.codex/fake-account`), `null` when there is none, and logs each run in `~/.fake-codex-runs`.
+let fakeCodexScript = #"""
+  #!/bin/sh
+  home=${CODEX_HOME:-$HOME/.codex}
+  echo "$home" >> "$HOME/.fake-codex-runs"
+  account=null
+  [ -f "$home/fake-account" ] && account=$(cat "$home/fake-account")
+  echo "codex: warming up"
+  while IFS= read -r line; do
+    case $line in
+      *'"account/read"'*) printf '{"method":"account/updated","params":{}}\n{"id":2,"result":{"account":%s,"requiresOpenaiAuth":true}}\n' "$account" ;;
+    esac
+  done
+  """#
+
+/// What a fake host's Codex home answers `account/read` with: a ChatGPT login to `email`.
+func codexAccountJSON(email: String) -> String { #"{"type":"chatgpt","email":"\#(email)","planType":"plus"}"# }

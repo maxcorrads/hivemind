@@ -3,9 +3,10 @@
 > [!NOTE]
 > Partly shipped. The [agent listener](#agent-listener) (plan step 1),
 > [hosts](#hosts), the [host connection](#host-connection) and the
-> [remote runtime](#remote-runtime) (step 2), and the [launch](#launch) on a host
-> with its session list and kill (step 3) are in the Node server, the page and
-> Hivemind Server.app; terminals, accounts and usage on hosts are still a design.
+> [remote runtime](#remote-runtime) (step 2), the [launch](#launch) on a host
+> with its session list and kill (step 3), and [accounts](#accounts), [usage](#usage)
+> and [conversations](#conversations) on hosts (step 5) are in the Node server, the
+> page and Hivemind Server.app; terminals on hosts (step 4) are still a design.
 > The [Plan](#plan) lists the changes that build it.
 
 A **remote host** is a second Mac on the local network, reached with SSH, where
@@ -230,7 +231,8 @@ version under `$HOME` there and runs its `node` with `server/bin/hivemind.mjs mc
 `dist/node/cli.js`), with `HIVEMIND_HOME` set to `~/Library/Application Support/Hivemind/clients` on the host. Its
 environment is `HIVEMIND_URL=http://127.0.0.1:7422` (the remote agent port) and an empty `HIVEMIND_TOKEN`; nothing in
 it names a path of the control Mac. A host that is not in the catalog answers 404. As today only a Claude launch puts
-the MCP on its command line; a Codex home's `[mcp_servers.hivemind]` on a host comes with [Accounts](#accounts).
+the MCP on its command line; a Codex home's `[mcp_servers.hivemind]` on a host comes with [Accounts](#accounts)
+(shipped: the same script, written by Server.app into the home's `config.toml`).
 
 ## Launch
 
@@ -269,8 +271,8 @@ A launch on a host does what the broker does locally, over SSH:
   (`GET /api/ui/hosts`, `{hosts: [{id, label, online}]}`), an offline one as "(offline)", and shows only in the apps
   and only while the catalog has a host. The sheet remembers the pick in this browser with its other settings and
   falls back to This Mac when that host is gone. A launch on an offline host is refused there and says why. The
-  copied command is the host's too, for a terminal on that host. **Find last conversations** still reads this Mac's
-  transcripts (step 5).
+  copied command is the host's too, for a terminal on that host. **Find last conversations** reads each online host's
+  transcripts too ([Conversations](#conversations)).
 - **On the wire.** A `terminal-launch` item and a broker `launch` item carry `host`, a host id; a template's launcher
   command carries it as `host` (absent with none, so a journal entry from before hosts keeps its digest). The server
   records it on the request (`launch_requests.host_id`, migration 45): the template's host when the request is made,
@@ -354,6 +356,49 @@ account. Hivemind copies no login and stores no token.
 Sharing a refresh token between two machines would let each one invalidate the
 other's when it rotates, which is why logins happen on each host.
 
+*Shipped* (HivemindKit's `RemoteHostAccounts.swift` and `BrokerRemoteAccounts.swift`, the Accounts sheet), with these
+details:
+
+- **Prepare on a host.** In the apps, the Accounts sheet's **Prepare** runs on this Mac as before and, at the same time,
+  on each online host of the catalog (`account.prepare` with `host`, in a task of its own: a copy of plugins can take
+  minutes). Each host gets a line under the row: "<host>: Ready", what is wrong, "offline. Prepare again once it is
+  online", or "not logged in. Run this in a terminal on <host>:" with the account's login command and **Copy**. The
+  command is the one this Mac shows: its `~/` is the host's home there. With no host the row is as before hosts.
+- **What a host gets.** Each directory of the account is created there when missing (0700), at the same path, its
+  `~/` the host's home: the home, and for a Claude shadow the shadow too, whose settings, skills and plugins are its own.
+  Into it goes a `tar` of this Mac's configuration, links followed: for Codex `config.toml`, `<profile>.config.toml`,
+  `AGENTS.md`, `AGENTS.override.md`, `hooks.json`, `prompts`, `skills`, `rules` and `plugins`; for Claude
+  `settings.json`, `CLAUDE.md`, `agents`, `commands`, `skills`, `plugins`, `hooks`, `output-styles` and
+  `statusline-command.sh`. Never `auth.json`, `.credentials.json` or `.claude.json`, nor a transcript, a database or a
+  cache. An entry the host already has is kept, so a host's own change survives the next Prepare (move it away there to
+  get this Mac's again). A copied `plugins/*.json` that names this Mac's home names the host's. A shadow is then built
+  by the same steps as here on the host's files (`ShadowHomePreparing.prepareForLogin`), its writes applied there.
+- **The Codex MCP block.** A Codex home's `config.toml` on a host loses every `[mcp_servers.hivemind]` table (and its
+  sub-tables) it had, this Mac's included, and gets the host's block at its end, under a marker comment: `command =
+  "/bin/sh"` with the [remote runtime](#remote-runtime)'s script, `tool_timeout_sec`, `env_vars = ["HIVEMIND_TMUX_SESSION",
+  "HIVEMIND_ROLE"]` and `HIVEMIND_URL = "http://127.0.0.1:7422"`. The block names the runtime's version, so each launch of
+  a Codex account on a host puts this version's block back when the file differs (a failure is logged and the session
+  starts with what the file has). A Codex launch without an account on a host uses the host's `~/.codex` as it is.
+- **Same account check.** Prepare, and every launch of an account on a host, reads where its login lives there
+  (`AccountLogin`: the shadow, else the home, else the default; for a Claude primary with neither path,
+  `~/.claude.json`): the layout's login check, and for Claude the SHA-256 of `oauthAccount.accountUuid`, computed by the
+  host's perl. For Codex the host runs `codex app-server` in its login shell with the account's variables, as its
+  sessions would, and asks only `account/read`; its perl hashes `chatgpt:<email>` (an API key login is `api-key`) and
+  prints the digest, so the email never leaves the host. This Mac's side is the same (`LocalAccountIdentity`: the
+  `.claude.json`, or the usage probe's `codex app-server`). Only digests are compared, and none is logged. A Codex match
+  is kept while both `auth.json` files keep their `dev:ino:size:mtime`, so a launch asks `account/read` again only after
+  a new login on either side; Prepare always asks. The refusals (`launches[i].account`, `internal`), each naming the
+  host, the home and the account:
+  - "`~/.codex2` on Build Mac has no login of Codex work yet. Run `CODEX_HOME=~/.codex2 codex login` in a terminal on
+    Build Mac, then Prepare the account in the Accounts sheet."
+  - "`~/.codex2` on Build Mac is logged in to another account than Codex work on this Mac. Log in there again with
+    `CODEX_HOME=~/.codex2 codex login`, then Prepare the account in the Accounts sheet."
+  - "Codex work is not logged in on this Mac, so its login on Build Mac cannot be checked. Log in here first with
+    `CODEX_HOME=~/.codex2 codex login`."
+  - "Cannot tell which account … is logged in to: <reason>", when `codex app-server` does not answer on either side.
+  Prepare answers the same: not logged in there is "not logged in" with the command, the others its error. The check
+  runs after a shadow's own steps, so a shadow with no login there keeps its [own message](accounts.md#errors-and-fixes).
+
 ## Usage
 
 - **Codex.** Unchanged: the same account reports the same windows on every host,
@@ -362,12 +407,27 @@ other's when it rotates, which is why logins happen on each host.
   reads each host's `statusline.json` and `limit-error` over the master connection
   and keeps the newest per account.
 
+*Shipped* (`HostTaps`, `UsageProbeService`). Each round reads every ready host once, one host after another, before the
+accounts: one script whose perl prints each Claude account's `statusline.json` (at most 1 MiB, base64, with its
+modification time) and `limit-error` under the host's `~/Library/Application Support/Hivemind/accounts/<id>/`. The
+status line used is the newest of this Mac's and the hosts', by modification time, under the [same
+rules](accounts.md#usage-probe) as before; the limit error is the latest. A host that fails or is offline is skipped
+for the round. With no host nothing is read.
+
 ## Conversations
 
 **Find last conversations** scans each host's transcripts as it scans the control
 Mac's (docs/terminal-broker.md#resuming-conversations), over SSH, and returns the
 host with each conversation. Resuming on another host than the conversation's
 needs a copy of its files first, like a copy between account homes today.
+
+*Shipped.* In the apps the Launch sheet asks the server for this Mac's conversations and, at the same time, the broker
+for each online host's (`conversations.find`, with the agents the server's scan takes: `{id, name, worktree}`). The broker
+runs `hivemind conversations` there with the host's own [runtime](#remote-runtime), the agents on stdin: the server's
+own `lastConversations`, on the host's home. Each answer carries its `host`; the newest conversation of an agent wins.
+When an agent's conversation is on another Mac than the sheet's Host, the sheet says so ("Atlas last talked on Build
+Mac: pick that Host to resume there, or copy the conversation's files first."), and a host it could not ask is named
+too. Copying a conversation between hosts is not built. With no host the sheet asks the server only, as before.
 
 ## Security
 
@@ -425,7 +485,10 @@ SVG file would run its script with the Human's powers.
    `macos/Tests/HivemindKitTests/RemoteHostLaunchTests.swift` (with the fake `ssh`),
    `src/server/launcher-channel.test.ts`, `web/launch-sheet-hosts.test.tsx`.
 4. **Terminals.** In-app attach and Open in Terminal for remote sessions.
-5. **Accounts on hosts.** Home setup, the same-account check, the Accounts sheet's
-   per-host status, remote usage reads, and Find last conversations per host.
+5. **Accounts on hosts** (*shipped*). Home setup, the same-account check, the Accounts sheet's
+   per-host status, remote usage reads, and Find last conversations per host. Tests:
+   `macos/Tests/HivemindKitTests/RemoteHostAccountsTests.swift` (with the fake `ssh` and a fake `codex` on the host),
+   `UsageProbeServiceTests`, `BridgeTerminalTests`, `src/server/cli-conversations.test.ts`, `web/accounts-sheet.test.tsx`,
+   `web/launch-sheet-hosts.test.tsx`, `web/native-bridge.unit.test.ts`.
 6. **Attachments of any type.** The upload allowlist removed, the safe preview list,
    and download headers for every other type.

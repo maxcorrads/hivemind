@@ -339,7 +339,8 @@ speaks. The broker answers with `min(client, broker)`, or with
 | `secrets.list` | `template` id | `secrets` |
 | `secrets.set` | `template` id, `name`, `value` | `secrets` |
 | `secrets.delete` | `template` id, `name`? (absent or null: every secret of the template) | `secrets` |
-| `account.prepare` | `account`: as a launch's `account` below, required | `account.prepared` |
+| `account.prepare` | `account`: as a launch's `account` below, required; `host`?: a [remote host](remote-hosts.md#accounts) id | `account.prepared` |
+| `conversations.find` | `host`: a remote host id; `agents`: up to 1000 of `{id, name, worktree}` ([Find last conversations on a host](remote-hosts.md#conversations)) | `conversations` |
 
 A launch is:
 
@@ -369,6 +370,7 @@ A launch is:
 | `killed` | `session` |
 | `secrets` | `template`, `names`: the template's secret names after the request, sorted; never a value |
 | `account.prepared` | `ok` boolean, `loggedIn` boolean, `error` string exactly when `ok` is false. See [Preparing an account](#preparing-an-account). |
+| `conversations` | `conversations`: `{<agent id>: {cli, software, id, cwd, at, host}}`, each agent's last conversation on the host |
 | `error` | `code`, `message`, `stream`? |
 
 Error codes (`BrokerErrorCode`):
@@ -687,6 +689,11 @@ account's login command. It is answered at once (it runs no tmux) with `account.
 - a primary account is only checked: nothing is created, and `loggedIn` is the same login check on its home;
 - a broker that builds no shadows answers `ok: false` with "this broker cannot prepare accounts".
 
+With a `host`, the same Prepare runs on that [remote host](remote-hosts.md#accounts) over its connection, in a task of its
+own (it may copy plugins), so the connection's other requests are not held up: the account's directories there get this
+Mac's configuration, a shadow its folder and links, and a login there is compared with this Mac's. Without one, Prepare
+is this Mac's, as before hosts.
+
 For Codex the only file read is the shared `config.toml`, up to its first table. For Claude only the top-level
 `cleanupPeriodDays` of each `settings.json` is read, and whether `.claude.json` has a top-level `oauthAccount` key.
 `error` never holds a token or file contents.
@@ -785,7 +792,8 @@ Page → app (`window.webkit.messageHandlers.hivemind.postMessage`):
 | `terminal-kill` (batch) | `id`?, `sessions`: 1–24 names | **Terminate all**, after its confirm modal. Instead of `session`, never with it; every name must be a Hivemind session name or the message is dropped, and repeats are dropped. The app sends the broker one `kill` after another (a failure does not stop the rest) and answers once. The batch counts as one request against the kill throttle; the page sends more than 24 in batches a second apart (`TerminalHub.killAll`). |
 | `sessions-subscribe` / `sessions-unsubscribe` | none | Subscribing also sends `terminal-status` |
 | `template-secrets-list` / `-set` / `-delete` | `id`?, `template`, and `name`, `value` / `name`? as the broker's `secrets.*` | [Template secrets](#template-secrets); answered with `template-secrets`. A page of an unverified server is answered `unauthorized`. |
-| `account-prepare` | `id`?, `account`: `{id, driver, label, homePath, shadowPath}` | [Preparing an account](#preparing-an-account); answered with `account-prepared`. The account is checked as a launch's and its paths go as stored. A page of an unverified server is answered `unauthorized`. |
+| `account-prepare` | `id`?, `account`: `{id, driver, label, homePath, shadowPath}`, `host`? | [Preparing an account](#preparing-an-account); answered with `account-prepared`. The account is checked as a launch's and its paths go as stored. `host`, a host id, prepares it on that [remote host](remote-hosts.md#accounts). A page of an unverified server is answered `unauthorized`. |
+| `conversations-find` | `id`?, `host`, `agents`: `[{id, name, worktree}]` | [Find last conversations](remote-hosts.md#conversations) on a remote host; answered with `conversations-found`. A page of an unverified server is answered `unauthorized`. |
 
 App → page: `window.dispatchEvent(new CustomEvent("hivemind:terminal", {detail}))`
 (`TERMINAL_EVENT`; `parseTerminalEvent` reads the detail):
@@ -801,6 +809,7 @@ App → page: `window.dispatchEvent(new CustomEvent("hivemind:terminal", {detail
 | `terminal-killed` | `id`, `session`; or, answering a batch `terminal-kill`, `id`, `sessions` (the names that ended, in order) and `errors`: `[{session, code, message}]` (`no-such-session` for one that had already ended) |
 | `template-secrets` | `id`, `template`, `names` |
 | `account-prepared` | `id`, `ok`, `loggedIn`, and `error` when `ok` is false |
+| `conversations-found` | `id`, `conversations`: by agent id, each `{cli, software, id, cwd, at, host}` |
 | `terminal-error` | `id`, `code`, `message`, `stream` |
 
 `terminal-status` is sent on every `sessions-subscribe`, and then on every
@@ -985,7 +994,8 @@ The launch adds it the CLI's way: `codex … resume <id> '<prompt>'`,
 resume from here.
 
 **Find last conversations** fills every card from this Mac's transcripts
-(`GET /api/ui/agents/conversations`). It reads only the files written in the last
+(`GET /api/ui/agents/conversations`) and, in the apps, each online remote host's
+([Conversations](remote-hosts.md#conversations)). It reads only the files written in the last
 7 days:
 
 - Claude: `~/.claude*/projects/*/<session>.jsonl`;

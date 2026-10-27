@@ -180,6 +180,53 @@ struct BridgeTerminalMessageTests {
     }
   }
 
+  @Test func anAccountPrepareMayNameAHostAndConversationsFindNamesOne() {
+    // docs/remote-hosts.md#accounts and #conversations.
+    #expect(BridgeMessage(body: ["type": "account-prepare", "id": "p1", "account": accountFields(), "host": fakeHost.id])
+      == .accountPrepare(id: "p1", account: codexPersonal, host: fakeHost.id))
+    #expect(BridgeMessage(body: ["type": "account-prepare", "id": "p1", "account": accountFields(), "host": NSNull()])
+      == .accountPrepare(id: "p1", account: codexPersonal))
+    let agents: [[String: Any]] = [["id": "a1", "name": "Atlas", "worktree": "/Users/me/acme"], ["id": "b1", "name": "Bea", "worktree": NSNull()]]
+    #expect(BridgeMessage(body: ["type": "conversations-find", "id": "c1", "host": fakeHost.id, "agents": agents])
+      == .conversationsFind(id: "c1", host: fakeHost.id, agents: [ConversationAgent(id: "a1", name: "Atlas", worktree: "/Users/me/acme"),
+                                                                   ConversationAgent(id: "b1", name: "Bea", worktree: nil)]))
+    let bad: [[String: Any]] = [
+      ["type": "account-prepare", "id": "p1", "account": accountFields(), "host": "Build Mac"],
+      ["type": "account-prepare", "id": "p1", "account": accountFields(), "host": "20000000-0000-4000-8000-00000000000A"],
+      ["type": "account-prepare", "id": "p1", "account": accountFields(), "host": 5],
+      ["type": "conversations-find", "id": "c1", "agents": agents],
+      ["type": "conversations-find", "id": "c1", "host": "x", "agents": agents],
+      ["type": "conversations-find", "id": "c1", "host": fakeHost.id],
+      ["type": "conversations-find", "id": "c1", "host": fakeHost.id, "agents": [["id": "a1", "name": "Atlas", "worktree": 5]]],
+      ["type": "conversations-find", "id": "c1", "host": fakeHost.id, "agents": [["id": "", "name": "Atlas", "worktree": NSNull()]]],
+      ["type": "conversations-find", "id": "c1", "host": fakeHost.id, "agents": [["id": "a1", "name": "At\nlas", "worktree": NSNull()]]],
+    ]
+    for body in bad { #expect(BridgeMessage(body: body) == nil, "\(body)") }
+  }
+
+  @Test @MainActor func aHostsPrepareAndItsConversationsGoToTheBrokerAndTheirAnswersToThePage() throws {
+    let client = FakeBrokerClient()
+    let recorder = RouterRecorder()
+    let router = TerminalBridgeRouter(client: client, environment: .init(
+      home: "/Users/me", tmuxConfigPath: "/tmp/tmux.conf", now: { recorder.clock },
+      deliver: { recorder.delivered.append($0) }, openTerminals: { recorder.opened.append($0) }, scheduler: FakeScheduler()))
+    router.handle(.accountPrepare(id: "p1", account: codexPersonal, host: fakeHost.id))
+    #expect(client.sent == [.accountPrepare(account: codexPersonal, host: fakeHost.id)])
+    client.answer(.accountPrepared(AccountPreparation(loggedIn: false)))
+    let agents = [ConversationAgent(id: "a1", name: "Atlas", worktree: nil)]
+    router.handle(.conversationsFind(id: "c1", host: fakeHost.id, agents: agents))
+    #expect(client.sent.last == .conversationsFind(host: fakeHost.id, agents: agents))
+    let found = BrokerConversation(cli: "codex", software: "codex2", id: "01a13757-5872-7e90-8bde-22d6bdb43926", cwd: nil, at: 1, host: fakeHost.id)
+    client.answer(.conversations(["a1": found]))
+    #expect(recorder.delivered == [.accountPrepared(id: "p1", AccountPreparation(loggedIn: false)), .conversationsFound(id: "c1", ["a1": found])])
+    let detail = BridgeTerminalEvent.conversationsFound(id: "c1", ["a1": found]).detail
+    #expect(detail["type"] as? String == "conversations-found")
+    let item = try #require((detail["conversations"] as? [String: [String: Any]])?["a1"])
+    #expect(item["host"] as? String == fakeHost.id && item["software"] as? String == "codex2" && item["cwd"] is NSNull)
+    #expect(TerminalTrustGate.refusal(.conversationsFind(id: "c1", host: fakeHost.id, agents: agents))
+      == .answer(.error(id: "c1", code: .unauthorized, message: TerminalTrustGate.unverifiedMessage, stream: nil)))
+  }
+
   @Test @MainActor func anAccountPrepareGoesToTheBrokerAndOnlyItsPageHearsTheAnswer() {
     let client = FakeBrokerClient()
     let recorder = RouterRecorder()
