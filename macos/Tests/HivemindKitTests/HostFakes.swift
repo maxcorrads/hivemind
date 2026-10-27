@@ -82,10 +82,10 @@ struct FakeSSH {
     while [ $# -gt 0 ]; do
       case "$1" in
         -N) master=1; shift ;;
-        -T) shift ;;
+        -T|-tt) shift ;;
         -S) control=$2; shift 2 ;;
         -O) op=$2; shift 2 ;;
-        -o|-R|-L|-D) shift 2 ;;
+        -o|-R|-L|-D|-e) shift 2 ;;
         -*) echo "fake ssh: unexpected option $1" >&2; exit 255 ;;
         *) break ;;
       esac

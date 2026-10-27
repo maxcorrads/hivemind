@@ -134,12 +134,44 @@ extension TerminalBroker {
     let result = await remoteHosts.run(onHost: host.id, script: RemoteHostScripts.kill(session, tmux: tmux), stdin: Data(),
                                        timeout: RemoteHostScripts.stepTimeout)
     remoteListings[host.id]?.listedAt = .distantPast
-    guard result.succeeded, let killed = RemoteHostScripts.parseKill(result.stdout) else { return nil }
+    guard result.succeeded, let killed = RemoteHostScripts.parseStatus(result.stdout) else { return nil }
     if killed.succeeded {
       deps.log("[broker] \(host.label): killed \(session)")
       remoteListings[host.id]?.sessions.removeAll { $0.name == session }
     }
     return killed
+  }
+
+  // MARK: Terminals
+
+  /// What runs a terminal attached to `session` on `host` (docs/remote-hosts.md#sessions-and-terminals): `ssh -tt` over
+  /// the host's master to its tmux attach-session, once the host said the session is there, as `tmux has-session` does
+  /// here first. A failure is the error the client gets.
+  func terminalOnHost(_ session: SessionName, host: BrokerRemoteHost) async -> Result<LaunchSpec, BrokerProtocolError> {
+    guard let remoteHosts = deps.remoteHosts, host.ready, let folder = host.runtimeFolder else {
+      return .failure(BrokerProtocolError(.internal, "\(session) runs on \(host.label), which is offline; it keeps running there"))
+    }
+    let unreachable = BrokerProtocolError(.internal, "cannot reach \(host.label) to attach to \(session)")
+    let scripts = RemoteHostScripts(runtimeFolder: folder, tmux: deps.remoteTmux)
+    var found = remoteListings[host.id]?.probe
+    if found?.tmux == nil { found = await probe(host) }
+    guard let probe = found else { return .failure(unreachable) }
+    guard let tmux = scripts.tmuxCommand(probe) else {
+      return .failure(BrokerProtocolError(.tmuxMissing, "\(host.label) has no tmux. \(TmuxLocator.installHint) there"))
+    }
+    let result = await remoteHosts.run(onHost: host.id, script: RemoteHostScripts.hasSession(session, tmux: tmux), stdin: Data(),
+                                       timeout: RemoteHostScripts.stepTimeout)
+    guard result.succeeded, let check = RemoteHostScripts.parseStatus(result.stdout) else { return .failure(unreachable) }
+    guard check.succeeded else {
+      guard BrokerConnection.noSuchSession(check) else { return .failure(BrokerProtocolError(.tmuxFailed, check.firstErrorLine)) }
+      // Gone since the last list: the next one is due now.
+      remoteListings[host.id]?.sessions.removeAll { $0.name == session }
+      remoteListings[host.id]?.listedAt = .distantPast
+      return .failure(BrokerProtocolError(.noSuchSession, "no session \(session)"))
+    }
+    let command = RemoteRuntime.remote(RemoteHostScripts.attach(session, tmux: tmux))
+    guard let spec = remoteHosts.terminalSpec(onHost: host.id, command: command) else { return .failure(unreachable) }
+    return .success(spec)
   }
 
   // MARK: Launch

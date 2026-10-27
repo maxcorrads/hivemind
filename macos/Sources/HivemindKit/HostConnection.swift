@@ -111,6 +111,14 @@ public struct SSHTransport: Equatable, Sendable {
     spec(common(host) + ["-o", "ControlMaster=no", "-T", host.ssh, command])
   }
 
+  /// `command` on the host over the master in a terminal of its own (docs/remote-hosts.md#sessions-and-terminals): what a
+  /// broker stream's PTY runs, and a Terminal.app window. `-tt` asks for the host's PTY whatever ssh's stdin is, `-e
+  /// none` passes every byte typed (a `~.` too) on to the session as tmux attach does here, and `LogLevel=ERROR` keeps
+  /// "Shared connection … closed." off the screen when the session ends or is detached.
+  public func terminalSpec(_ host: RemoteHost, command: String) -> LaunchSpec {
+    spec(common(host) + ["-o", "ControlMaster=no", "-o", "LogLevel=ERROR", "-e", "none", "-tt", host.ssh, command])
+  }
+
   /// The last of `lines` worth showing as the reason a connection failed, at most 200 characters: not empty, not a
   /// debug or banner line.
   static func reason(in lines: [String]) -> String? {

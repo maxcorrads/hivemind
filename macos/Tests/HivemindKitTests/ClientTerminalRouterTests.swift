@@ -182,6 +182,41 @@ struct TerminalBridgeRouterTests {
     #expect(recorder.delivered.last == .error(id: nil, code: .noSuchSession, message: "hm-acme-atlas is not running", stream: nil))
   }
 
+  @Test func opensAHostsSessionWithTheBrokersSSHLine() {
+    // docs/remote-hosts.md#sessions-and-terminals: the line is the broker's, since only it knows the host.
+    let host = "20000000-0000-4000-8000-000000000001"
+    let line = "exec '/usr/bin/ssh' '-tt' 'user@mini.local' '/bin/sh -c '\\''exec tmux attach'\\'''"
+    client.status = BrokerClientStatus(connection: .connected, tmuxPath: nil)
+    router.handle(.terminalOpen(session: atlas))
+    client.answer(.sessions([BrokerSession(name: atlas, project: "acme", agent: "Atlas", alive: true, attached: 0, createdAt: 1, host: host)]))
+    #expect(client.sent == [.sessionsList, .attachCommand(session: atlas)])
+    #expect(recorder.opened.isEmpty)
+    client.answer(.attachCommand(session: atlas, command: line))
+    #expect(recorder.opened == [[TerminalLaunch(title: "hm-acme-atlas", cwd: nil, command: line)!]], "no tmux needed here")
+    #expect(recorder.delivered.isEmpty)
+    // The broker's refusal (the host went offline) reaches the page; nothing opens.
+    tick()
+    router.handle(.terminalOpen(session: atlas))
+    client.answer(.sessions([BrokerSession(name: atlas, project: "acme", agent: "Atlas", alive: true, attached: 0, createdAt: 1, host: host)]))
+    client.answer(.error(code: .internal, message: "hm-acme-atlas runs on Build Mac, which is offline; it keeps running there", stream: nil))
+    #expect(recorder.opened.count == 1)
+    #expect(recorder.delivered == [.error(id: nil, code: .internal,
+                                          message: "hm-acme-atlas runs on Build Mac, which is offline; it keeps running there", stream: nil)])
+  }
+
+  @Test func aLaunchOnAHostOpensItsWindowWithTheBrokersLineAndThisMacsAsBefore() {
+    let host = "20000000-0000-4000-8000-000000000001"
+    let other = SessionName("hm-acme-new-1")!
+    let remote = TerminalSessionLaunch(project: "acme", agent: "Atlas", title: "Acme - Atlas", cwd: "~/acme", command: "claude", host: host)!
+    router.handle(.terminalLaunch(id: "p1", launches: [remote, launch(agent: nil)], openInTerminal: true))
+    client.answer(.launched(names: [atlas, other], created: [atlas, other], errors: []))
+    let command = TmuxCommand(executable: tmux, configPath: conf)
+    #expect(recorder.opened == [[TerminalLaunch(title: "Acme - Atlas", cwd: nil, command: command.attachShellLine(other))!]])
+    #expect(client.sent.last == .attachCommand(session: atlas))
+    client.answer(.attachCommand(session: atlas, command: "exec '/usr/bin/ssh' '-tt' 'user@mini.local' 'tmux'"))
+    #expect(recorder.opened.last == [TerminalLaunch(title: "Acme - Atlas", cwd: nil, command: "exec '/usr/bin/ssh' '-tt' 'user@mini.local' 'tmux'")!])
+  }
+
   @Test func doesNotOpenTerminalWithoutTmux() {
     client.status = BrokerClientStatus(connection: .connected, tmuxPath: nil)
     router.handle(.terminalOpen(session: atlas))

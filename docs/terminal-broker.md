@@ -257,6 +257,7 @@ The other calls:
 | Kill | `kill-session -t =<name>` |
 | Attach (in a PTY, one per stream) | `attach-session -t =<name>`, with `TERM=xterm-256color` |
 | Terminal.app | a self-deleting `.command` file containing `exec '<tmux>' '-u' '-L' 'hivemind' '-f' '<conf>' 'attach-session' '-t' '=<name>'` (`TmuxCommand.attachShellLine`) |
+| On a [remote host](remote-hosts.md#sessions-and-terminals) | the stream's PTY and the Terminal.app line run `ssh … -tt <host> /bin/sh -c 'exec <host's tmux> … attach-session -t =<name>'` over the host's master; kill and the check before an attach run there too |
 
 The list parser skips lines that are not Hivemind sessions. The agent field
 comes last, so an agent name containing `|` still reads back whole. When the
@@ -336,6 +337,7 @@ speaks. The broker answers with `min(client, broker)`, or with
 | `resize` | `stream`, `cols`, `rows` | none |
 | `detach` | `stream` | `exit` |
 | `kill` | `session` name | `killed` |
+| `attach.command` | `session` name | `attach.command`: the line a Terminal.app window runs to attach to the session wherever it runs. Hivemind.app asks only for a [remote host](remote-hosts.md#sessions-and-terminals)'s session. Refused as `attach` is, with the same codes. |
 | `secrets.list` | `template` id | `secrets` |
 | `secrets.set` | `template` id, `name`, `value` | `secrets` |
 | `secrets.delete` | `template` id, `name`? (absent or null: every secret of the template) | `secrets` |
@@ -367,6 +369,7 @@ A launch is:
 | `output` | `stream`, `data` base64 (1 B–64 KiB decoded) |
 | `exit` | `stream`, `status` int or null. The stream is over: detached, the session ended, or its tmux client exited. |
 | `killed` | `session` |
+| `attach.command` | `session`, `command`: shell text for a `.command` file, 1 B–8 KiB, no NUL: `exec '<tmux>' … 'attach-session' '-t' '=<name>'` for this Mac's session, `exec '/usr/bin/ssh' … '-tt' '<ssh>' '/bin/sh -c …'` for a host's |
 | `secrets` | `template`, `names`: the template's secret names after the request, sorted; never a value |
 | `account.prepared` | `ok` boolean, `loggedIn` boolean, `error` string exactly when `ok` is false. See [Preparing an account](#preparing-an-account). |
 | `error` | `code`, `message`, `stream`? |
@@ -400,7 +403,7 @@ Error codes (`BrokerErrorCode`):
 | Connections at once | 32 |
 | `hello` deadline | 5 s |
 | Session list poll | every 2 s (`tmux list-sessions`) while any connection subscribes, every 15 s otherwise (for the menu's count), and at once after a launch, kill or stream change; `sessions` is pushed only when the list changed |
-| Waiting requests | `sessions.list`, `sessions.subscribe`, `sessions.unsubscribe`, `launch`, `attach` and `kill` run one at a time per connection, in order, at most 64 waiting; more get `error internal`. `launch`es also run one at a time across all connections. `input`, `resize` and `detach` never wait behind them. |
+| Waiting requests | `sessions.list`, `sessions.subscribe`, `sessions.unsubscribe`, `launch`, `attach`, `attach.command` and `kill` run one at a time per connection, in order, at most 64 waiting; more get `error internal`. `launch`es also run one at a time across all connections. `input`, `resize` and `detach` never wait behind them. |
 | Output batching | PTY output is gathered for about 16 ms, then sent in `output` messages of at most 64 KiB |
 | Backpressure | When a connection's unsent bytes exceed 1 MiB, the broker stops reading that connection's PTYs, and resumes below 256 KiB. tmux keeps the session's scrollback meanwhile, so nothing the agent prints is lost. A client with more than about 9 MiB unsent (1 MiB plus two maximal lines) is closed. |
 | Input | A PTY queues at most 1 MiB of input it has not read yet; `input` beyond that gets `error internal` with its `stream`. |
@@ -708,7 +711,7 @@ which sends the placeholder token the gateway replaces.
   subscribes to sessions, when the app becomes active, and when the page asks
   to start Hivemind Server. While the last `welcome` said tmux was missing,
   those also reconnect, so a newly installed tmux is found.
-- `sessions.list`, `launch`, `attach` and `kill` carry ids (`c1`, `c2`, …) and
+- `sessions.list`, `launch`, `attach`, `attach.command` and `kill` carry ids (`c1`, `c2`, …) and
   their answers are matched by id; everything else is sent without one, and
   events without a matching id are pushes. Requests made while connecting are
   held (at most 64) and sent after `welcome`.
@@ -774,8 +777,8 @@ Page → app (`window.webkit.messageHandlers.hivemind.postMessage`):
 
 | type | fields | notes |
 | --- | --- | --- |
-| `terminal-launch` | `id`?, `launches`: `[{project, agent, title, cwd?, command, session?, secrets?, environment?, template?, account?, host?}]`, `openInTerminal` boolean | `agent` is null for a new agent; `host` is a remote host's id ([Launch](remote-hosts.md#launch)), and a launch on a host opens no Terminal.app window yet; `session` is the agent's `terminalSession` on resume. `secrets` is `{OPENCODE_API_KEY}` only ([Launch secrets](#launch-secrets)); `environment` follows the broker's rules ([Launch environment](#launch-environment)), and a message with anything off in either is dropped whole. `cwd` may be `~` or `~/…`, or absent for home; the app expands it. With `openInTerminal`, the app then opens a Terminal.app window attached to each session the broker returned, even if the page has moved on. At most 1 per second per window. |
-| `terminal-open` | `session` | Opens Terminal.app attached to a running session (the app checks with `sessions.list` first). No answer on success. At most 1 per second per window. |
+| `terminal-launch` | `id`?, `launches`: `[{project, agent, title, cwd?, command, session?, secrets?, environment?, template?, account?, host?}]`, `openInTerminal` boolean | `agent` is null for a new agent; `host` is a remote host's id ([Launch](remote-hosts.md#launch)), and with `openInTerminal` a launch on a host opens its window with the broker's `attach.command` line; `session` is the agent's `terminalSession` on resume. `secrets` is `{OPENCODE_API_KEY}` only ([Launch secrets](#launch-secrets)); `environment` follows the broker's rules ([Launch environment](#launch-environment)), and a message with anything off in either is dropped whole. `cwd` may be `~` or `~/…`, or absent for home; the app expands it. With `openInTerminal`, the app then opens a Terminal.app window attached to each session the broker returned, even if the page has moved on. At most 1 per second per window. |
+| `terminal-open` | `session` | Opens Terminal.app attached to a running session (the app checks with `sessions.list` first; a [remote host](remote-hosts.md#sessions-and-terminals)'s session runs the broker's `attach.command` line). No answer on success. At most 1 per second per window. |
 | `terminal-attach` | `id`?, `session`, `cols`, `rows` | Until `terminal-attached`, the page holds the viewer's resizes (the latest size) and keys (in order, at most 64 KiB, the oldest dropped beyond), and sends them once attached; held keys are discarded if the attach fails or the viewer leaves first |
 | `terminal-input` | `stream`, `data` base64 ≤64 KiB | `encodeTerminalInput` splits a paste into chunks |
 | `terminal-resize` | `stream`, `cols`, `rows` | |

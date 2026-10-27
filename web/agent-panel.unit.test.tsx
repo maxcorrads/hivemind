@@ -22,6 +22,7 @@ beforeEach(() => { document.body.innerHTML = ''; resetTerminalHub(); });
 
 const agent: Agent = { id: 'a1', name: 'Atlas', role: 'brain', seniority: 'senior', focus: 'coord', online: true,
   lastSeenAt: 0, createdAt: 0, projectId: 'p1', project: 'acme', identityRevision: 2 };
+const buildMac = '20000000-0000-4000-8000-000000000001';
 const overview = (patch: Partial<AgentOverview> = {}): AgentOverview => ({ agent, identityRevision: 2, resumeAliases: [], profile: { type: 'fixed' },
   work: { task: null, assigned: 0, delegated: 0, toReview: 0 }, currentTask: null,
   inbox: { queued: { atLeast: 2, exact: true }, awaitingReceipt: 1, acknowledgedMessages: 5, lastAcknowledgedAt: null },
@@ -49,6 +50,7 @@ async function mount(response: () => AgentOverview = overview, native = false) {
       impactToken: 'a'.repeat(64) });
     if (path.endsWith('/remove')) return Response.json({ agent: response().agent });
     if (path.endsWith('/runtime-event')) return Response.json({ event: { kind: (body as { kind: string }).kind } });
+    if (path === '/api/ui/hosts') return Response.json({ hosts: [{ id: buildMac, label: 'Build Mac', online: true }] });
     return Response.json({ error: 'unexpected ' + path }, { status: 404 });
   };
   const host = document.createElement('div'); document.body.append(host);
@@ -171,6 +173,27 @@ test('fixed Stop waits for native kill acknowledgement before logging the observ
     assert.deepEqual(f.calls.filter(call => call.path.endsWith('/runtime-event')).map(call => call.body),
       [{ kind: 'stop_requested', session: 'hm-acme-atlas' }, { kind: 'stop_observed', session: 'hm-acme-atlas' }]);
     assert.match(f.host.textContent!, /closed by the native broker/);
+  } finally { await f.cleanup(); }
+});
+
+test('a session on a remote host shows its host, and Stop ends it through the same native kill', async () => {
+  const withSession = { ...agent, terminalSession: 'hm-acme-atlas' };
+  const f = await mount(() => overview({ agent: withSession }), true);
+  try {
+    await f.fromApp({ type: 'terminal-status', tmux: 'available', broker: 'connected', platform: 'macos' });
+    await f.fromApp({ type: 'sessions', items: [{ name: 'hm-acme-atlas', project: 'acme', agent: 'Atlas',
+      alive: true, attached: 0, createdAt: 0 }] });
+    assert.match(f.host.textContent!, /Session: running · hm-acme-atlas(?! on)/);
+    assert.equal(f.calls.some(call => call.path === '/api/ui/hosts'), false, 'no host, no catalog asked for, as before hosts');
+    await f.fromApp({ type: 'sessions', items: [{ name: 'hm-acme-atlas', project: 'acme', agent: 'Atlas',
+      alive: true, attached: 0, createdAt: 0, host: buildMac }] });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 5)); });
+    assert.match(f.host.textContent!, /Session: running · hm-acme-atlas on Build Mac/);
+    await f.click('Stop session…');
+    assert.match(f.host.textContent!, /Stop hm-acme-atlas on Build Mac\? The native broker will end this session/);
+    await f.click('Confirm Stop');
+    const kill = f.posted.find(message => message.type === 'terminal-kill');
+    assert.ok(kill && 'session' in kill && kill.session === 'hm-acme-atlas', 'the broker kills it on its host');
   } finally { await f.cleanup(); }
 });
 

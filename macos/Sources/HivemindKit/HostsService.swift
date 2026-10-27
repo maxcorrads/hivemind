@@ -325,4 +325,8 @@ extension HostsService: BrokerRemoteHosts {
     }
     return await deps.runner.run(deps.transport.commandSpec(host, command: RemoteRuntime.remote(script)), stdin: stdin, timeout: timeout)
   }
+
+  public func terminalSpec(onHost id: String, command: String) -> LaunchSpec? {
+    hosts.first { $0.id == id }.map { deps.transport.terminalSpec($0, command: command) }
+  }
 }

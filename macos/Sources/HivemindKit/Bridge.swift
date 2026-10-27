@@ -470,10 +470,11 @@ public enum BridgeTerminalEvent: Equatable, Sendable {
   }
 
   /// The page's event for a broker event, with the page's request id. Nil
-  /// for welcome, which becomes a status once the app knows the broker's tmux.
+  /// for welcome, which becomes a status once the app knows the broker's tmux,
+  /// and for attach.command, a line only the app's Terminal.app windows run.
   public init?(_ frame: BrokerEventFrame, id: String? = nil) {
     switch frame.event {
-    case .welcome: return nil
+    case .welcome, .attachCommand: return nil
     case .sessions(let items): self = .sessions(items)
     case .launched(let names, let created, let errors): self = .launched(id: id, names: names, created: created, errors: errors)
     case .attached(let stream, let session): self = .attached(id: id, stream: stream, session: session)
