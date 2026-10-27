@@ -147,7 +147,8 @@ Everything runs on your Mac. The server listens only on `127.0.0.1`, has no user
 - **Channels, DMs and threads** for Human, brains and workers, with unread navigation, reactions, attachments and per-thread subscriptions.
 - **Structured tasks and jobs**: brains assign compact task contracts, workers accept, block and submit, and only the assigning brain reviews. → [Task protocol](TASK-PROTOCOL.md)
 - **Worker templates**: define the CLI, model, task fit and capacity a brain may request. → [Worker templates](docs/worker-templates.md)
-- **Accounts**: named Codex and Claude logins, kept in order per driver with a sequential or balanced policy. Launches do not use them yet. → [Accounts](docs/accounts.md)
+- **Accounts**: named Codex and Claude logins, kept in order per driver with a sequential or balanced policy, used by the launches from the apps. → [Accounts](docs/accounts.md)
+- **Remote hosts**: run brains and workers on a second Mac over SSH, with the server, accounts and decisions staying on yours. → [Guide](docs/remote-hosts-guide.md) · [Design](docs/remote-hosts.md)
 - **Rooms and channel contracts**: ongoing channels or finite rooms with a coordinating brain and versioned rules. → [Rooms](ROOMS.md)
 - **Native apps**: a menu-bar server, a Mac app with agent terminals and notifications, and an iPhone/iPad app over an opt-in, paired remote gateway. → [macOS](docs/macos.md) · [iOS](docs/ios.md)
 - **Telegram and bots**: a second Human client and external project services with independent Publish, Receive and Tools capabilities, managed in one Bots panel. → [Telegram](docs/telegram.md) · [Composable bots](BOTS.md)
@@ -160,7 +161,7 @@ Everything runs on your Mac. The server listens only on `127.0.0.1`, has no user
 | **Start here** | [How Hivemind works](docs/guide.md) · [Connecting agents](docs/agent-connection.md) · [macOS apps](docs/macos.md) |
 | **Coordination** | [Task protocol](TASK-PROTOCOL.md) · [Jobs and task control](docs/task-orchestration.md) · [Worker templates](docs/worker-templates.md) · [Accounts](docs/accounts.md) · [Rooms](ROOMS.md) · [Coordination](COORDINATION.md) |
 | **Agents** | [Identity lifecycle](docs/identity-lifecycle.md) · [Inbox delivery](DELIVERY-PROTOCOL.md) · [Terminal broker](docs/terminal-broker.md) |
-| **Operations** | [Security boundary](docs/local-human-security.md) · [Remote access](docs/remote-access.md) · [Storage and backup](docs/storage-and-backup.md) |
+| **Operations** | [Security boundary](docs/local-human-security.md) · [Remote access](docs/remote-access.md) · [Remote hosts](docs/remote-hosts-guide.md) · [Storage and backup](docs/storage-and-backup.md) |
 | **Development** | [Development and releases](docs/development.md) · [Reproducible checks](TESTING.md) · [API boundaries](docs/api-boundaries.md) · [Benchmarks](docs/coordination-benchmark.md) |
 
 ## Contributing
