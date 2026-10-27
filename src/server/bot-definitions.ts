@@ -16,7 +16,8 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { hiveHome } from "./paths.ts";
 import { shSingleQuote, type LaunchContext } from "../shared/launch-prompt.ts";
-import { cliLaunchArgs } from "../shared/package-root.ts";
+import { cliLaunchArgs, packageVersion } from "../shared/package-root.ts";
+import { remoteHivemindMcp } from "../shared/hosts.ts";
 import {
   emptySettings,
   settingsSchema,
@@ -602,10 +603,16 @@ export function connectProjectBot(home: string, project: Project, origin: string
   });
 }
 
+/**
+ * What a launch of `project` needs from this server: its Hivemind MCP and its bots. With `host` (a remote host's id,
+ * docs/remote-hosts.md#launch), the MCP is the host's remote runtime of this version, on the remote agent port; the
+ * bots stay here, called through the hive as from any agent.
+ */
 export function launchContext(
   home: string,
   url: string,
   project?: Pick<Project, "id" | "slug">,
+  host?: string | null,
 ): LaunchContext {
   const origin = localOrigin(url);
   // Connection metadata does not depend on installed bot definitions or profiles.
@@ -613,7 +620,7 @@ export function launchContext(
     project,
     botDefinitions: [],
     botInstructions: "",
-    hivemindMcp: {
+    hivemindMcp: host ? remoteHivemindMcp(packageVersion()) : {
       command: process.execPath,
       args: cliLaunchArgs(["mcp"]),
       env: {

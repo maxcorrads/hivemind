@@ -6,6 +6,8 @@ import { Avatar } from "./Avatar.tsx";
 import { focusFirstMenuItem, menuKeyDown } from "./menu-keys.ts";
 import { Modal } from "./Modal.tsx";
 import { onMacDesktop, type TerminalSessionInfo } from "./native-bridge.ts";
+import { api } from "./api.ts";
+import type { HostCatalogEntry } from "../src/shared/hosts.ts";
 import { RelativeTime } from "./RelativeTime.tsx";
 import { TerminalNotice } from "./TerminalNotice.tsx";
 import { TerminalPanel, type ScreenFactory } from "./TerminalView.tsx";
@@ -87,6 +89,12 @@ export function SessionsSheet({ agents, projects, onClose, loadScreen, initialSe
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
+  const [hosts, setHosts] = useState<HostCatalogEntry[]>([]);
+  useEffect(() => {
+    let active = true;
+    api.hosts().then(view => { if (active) setHosts(view.hosts); }).catch(() => undefined);
+    return () => { active = false; };
+  }, []);
   const othersId = useId();
   const blocker = terminalBlocker(state);
   // Open in Terminal has no answer of its own: a failure (the session just ended, no tmux) arrives as an error.
@@ -178,8 +186,10 @@ export function SessionsSheet({ agents, projects, onClose, loadScreen, initialSe
   const row = (session: TerminalSessionInfo) => {
     const owner = ownerOf(session);
     const runtime = owner.agent ? agentRuntime(owner.agent, { agents }, state) : null;
+    // A host's session (docs/remote-hosts.md#sessions-and-terminals) shows its host; its label comes from the catalog.
+    const host = session.host ? hosts.find(item => item.id === session.host)?.label ?? "a remote host" : null;
     return (
-      <SessionRow key={session.name} session={session} agent={owner.agent} label={owner.label}
+      <SessionRow key={session.name} session={session} agent={owner.agent} label={owner.label} host={host}
         status={sessionStatus(session, runtime?.sessionName === session.name, reconnecting)} current={session.name === current}
         terminalApp={terminalApp} onOpen={() => openHere(session.name)} onTerminal={() => openInTerminal(session.name)}
         onCopy={() => copyAttach(session.name)} onTerminate={() => { setError(null); setConfirm(session.name); }} />
@@ -285,10 +295,12 @@ export function SessionsSheet({ agents, projects, onClose, loadScreen, initialSe
   );
 }
 
-function SessionRow({ session, agent, label, status, current, terminalApp, onOpen, onTerminal, onCopy, onTerminate }: {
+function SessionRow({ session, agent, label, host, status, current, terminalApp, onOpen, onTerminal, onCopy, onTerminate }: {
   session: TerminalSessionInfo;
   agent: Agent | null;
   label: string;
+  /** The remote host's label for a session there, else null. */
+  host: string | null;
   status: SessionStatus;
   current: boolean;
   terminalApp: boolean;
@@ -312,19 +324,21 @@ function SessionRow({ session, agent, label, status, current, terminalApp, onOpe
       </div>
       <span className={`tone-chip ${tone}`}>{statusLabel}</span>
       <span className="term-meta">
-        started <RelativeTime at={session.createdAt} />
+        {host && `on ${host} · `}started <RelativeTime at={session.createdAt} />
         {status === "reconnecting" ? " · the agent keeps running"
           : ended ? " · ended"
           : status === "waiting" ? session.attached > 0 ? ` · ${session.attached} attached · not joined yet` : " · not joined yet"
           : session.attached > 0 ? ` · ${session.attached} attached` : ""}
       </span>
       <div className="term-actions">
-        <button type="button" className="btn btn-primary" disabled={ended} onClick={onOpen} aria-label={`Open ${session.name}`}>
+        {/* A host's session has no terminal here yet (docs/remote-hosts.md#plan, step 4): it is listed and terminated only. */}
+        <button type="button" className="btn btn-primary" disabled={ended || host !== null} onClick={onOpen} aria-label={`Open ${session.name}`}
+          title={host ? `Runs on ${host}: attach from a terminal there` : undefined}>
           <SquareTerminal size={14} aria-hidden="true" /> Open
         </button>
         {terminalApp && (
-          <button type="button" className="btn" disabled={ended || status === "reconnecting"} onClick={onTerminal}
-            aria-label={`Open ${session.name} in Terminal`} title="Open in Terminal.app">
+          <button type="button" className="btn" disabled={ended || status === "reconnecting" || host !== null} onClick={onTerminal}
+            aria-label={`Open ${session.name} in Terminal`} title={host ? `Runs on ${host}: attach from a terminal there` : "Open in Terminal.app"}>
             <Monitor size={14} aria-hidden="true" /> Terminal.app
           </button>
         )}

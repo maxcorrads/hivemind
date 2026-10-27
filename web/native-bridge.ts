@@ -3,6 +3,7 @@ import { terminalSessionName } from "../src/shared/terminal-session.ts";
 import { launchEnvironmentProblem } from "../src/shared/launch-environment.ts";
 import { accountPathProblem, accountSpecSchema, ACCOUNT_DRIVERS, ACCOUNT_LIMITS, type LaunchAccount } from "../src/shared/accounts.ts";
 import { workerSecretNameProblem } from "../src/shared/worker-templates.ts";
+import { HOST_ID_PATTERN } from "../src/shared/hosts.ts";
 import { hashFor, parseHash, type Sel } from "./selection.ts";
 
 // Hivemind.app on the Mac (macos/) and the iPhone/iPad app (ios/) load this UI
@@ -304,6 +305,11 @@ export type TerminalSessionLaunch = {
    * `~/`. Ignored when the launch reuses a running session, which keeps its account. Absent: no account.
    */
   account?: LaunchAccount;
+  /**
+   * The remote host to run on (docs/remote-hosts.md#launch), a host id from the server's catalog. Absent: this Mac,
+   * as before hosts. A launch that reuses a running session goes to the session's own host.
+   */
+  host?: string;
 };
 
 /** Page → app. `id` is the page's own request id (1–64 chars), echoed on the answer. */
@@ -358,6 +364,8 @@ export type TerminalSessionInfo = {
   attached: number;
   /** Unix ms. */
   createdAt: number;
+  /** The remote host the session runs on (docs/remote-hosts.md#sessions-and-terminals); absent on this Mac. */
+  host?: string;
 };
 
 export type TerminalLaunchFailure = { index: number; code: string; message: string };
@@ -401,7 +409,9 @@ function sessionInfo(value: unknown): TerminalSessionInfo | null {
   if (!name || project === undefined || agent === undefined || typeof value.alive !== "boolean" ||
       !Number.isInteger(value.attached) || (value.attached as number) < 0 || typeof value.createdAt !== "number" ||
       !Number.isFinite(value.createdAt)) return null;
-  return { name, project, agent, alive: value.alive, attached: value.attached as number, createdAt: value.createdAt };
+  if (value.host !== undefined && value.host !== null && (typeof value.host !== "string" || !HOST_ID_PATTERN.test(value.host))) return null;
+  return { name, project, agent, alive: value.alive, attached: value.attached as number, createdAt: value.createdAt,
+    ...(typeof value.host === "string" ? { host: value.host } : {}) };
 }
 
 /** A worker template's id as the server issues it (crypto.randomUUID). */
@@ -590,6 +600,7 @@ export function terminalSessionLaunchProblem(launches: readonly TerminalSessionL
       if (problem) return problem;
     }
     if (launch.template !== undefined && !TEMPLATE_ID.test(launch.template)) return "Not a worker template";
+    if (launch.host !== undefined && !HOST_ID_PATTERN.test(launch.host)) return "Not a host";
     if (launch.account !== undefined) {
       const problem = launchAccountProblem(launch.account);
       if (problem) return problem;
@@ -610,7 +621,8 @@ export function terminalSessionLaunchProblem(launches: readonly TerminalSessionL
 
 /** The launches as a terminal-launch message carries them: absent fields left out. */
 export function terminalLaunchItems(launches: readonly TerminalSessionLaunch[]) {
-  return launches.map(({ project, agent, title, cwd, command, session, secrets, environment, template, account }) =>
+  return launches.map(({ project, agent, title, cwd, command, session, secrets, environment, template, account, host }) =>
     ({ project, agent, title, ...(cwd ? { cwd } : {}), command, ...(session ? { session } : {}), ...(secrets ? { secrets } : {}),
-      ...(environment ? { environment } : {}), ...(template ? { template } : {}), ...(account ? { account } : {}) }));
+      ...(environment ? { environment } : {}), ...(template ? { template } : {}), ...(account ? { account } : {}),
+      ...(host ? { host } : {}) }));
 }

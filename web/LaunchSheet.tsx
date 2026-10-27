@@ -14,6 +14,7 @@ import { TerminalNotice } from "./TerminalNotice.tsx";
 import { agentTerminalSession, terminalBlocker, terminalHub, useTerminalState, type TerminalLaunched } from "./use-terminal.ts";
 import { projectLaunchTools, type LaunchContext } from "../src/shared/launch-prompt.ts";
 import { parseLaunchEnvironment } from "../src/shared/launch-environment.ts";
+import { HOST_ID_PATTERN, type HostCatalogEntry } from "../src/shared/hosts.ts";
 import {
   ACCOUNT_DRIVERS, accountDriverForSoftware, accountEnvironmentConflict, softwareAliasWarning, toLaunchAccount, type AccountDriver,
   type LaunchAccount,
@@ -58,6 +59,8 @@ type Saved = {
   environments: Record<string, string>;
   /** The Account select's pick per driver: an account id; absent follows the driver's policy. */
   accountPins: Partial<Record<AccountDriver, string>>;
+  /** The Host select's pick (docs/remote-hosts.md#launch): a host id, or "" for this Mac. */
+  host: string;
 };
 
 const defaults: Saved = {
@@ -78,6 +81,7 @@ const defaults: Saved = {
   tunes: {},
   environments: {},
   accountPins: {},
+  host: "",
 };
 
 /** Software names whose Environment variables are kept, and the characters of one field's text. */
@@ -162,6 +166,7 @@ function loadSaved(): Saved {
       tunes,
       environments,
       accountPins,
+      host: typeof parsed.host === "string" && HOST_ID_PATTERN.test(parsed.host) ? parsed.host : "",
     };
   } catch {
     return defaults;
@@ -241,6 +246,10 @@ export function LaunchSheet({
   const [accountPins, setAccountPins] = useState<Partial<Record<AccountDriver, string>>>(initial.accountPins);
   const [accounts, setAccounts] = useState<AccountsView | null>(null);
   const [accountNote, setAccountNote] = useState<string | null>(null);
+  // The remote hosts Hivemind Server reported (docs/remote-hosts.md#launch). With none the sheet shows no Host field and
+  // launches on this Mac, as before hosts.
+  const [hosts, setHosts] = useState<HostCatalogEntry[]>([]);
+  const [hostPick, setHostPick] = useState(initial.host);
   const [copied, setCopied] = useState<string | null>(null);
   // Pasted per launch and sent only to the app with the launch (docs/terminal-broker.md#launch-secrets): never saved,
   // never in the copied text, cleared after a launch that started and when the sheet closes.
@@ -256,6 +265,9 @@ export function LaunchSheet({
   const copiedTimer = useRef<number | null>(null);
   // A Resume card's Software as it was when focused, so leaving it can tell a change of CLI.
   const cardSoftwareAtFocus = useRef("");
+  // Only the apps launch on a host; a pick of a host that is gone falls back to this Mac.
+  const host = native ? hosts.find((entry) => entry.id === hostPick) ?? null : null;
+  const hostId = host?.id ?? null;
   const [contexts, setContexts] = useState<Record<string, LaunchContext>>({});
   const [contextErrors, setContextErrors] = useState<Record<string, string>>({});
   const launchContext = contexts[projectSlug];
@@ -264,13 +276,14 @@ export function LaunchSheet({
     let active = true;
     setContexts({});
     setContextErrors({});
+    // A host's launches get its own MCP, so the contexts follow the Host field.
     for (const project of projects) {
-      api.launchContext(project.slug)
+      api.launchContext(project.slug, hostId)
         .then((context) => { if (active) setContexts((old) => ({ ...old, [project.slug]: context })); })
         .catch((error) => { if (active) setContextErrors((old) => ({ ...old, [project.slug]: String(error.message || error) })); });
     }
     return () => { active = false; };
-  }, [projects.map((p) => p.id + ":" + p.slug).join("|")]);
+  }, [projects.map((p) => p.id + ":" + p.slug).join("|"), hostId]);
 
   useEffect(() => {
     let active = true;
@@ -278,6 +291,12 @@ export function LaunchSheet({
     api.accounts()
       .then((view) => { if (active) setAccounts(view); })
       .catch(() => undefined);
+    // Without it, no Host field: every launch is this Mac's.
+    if (native) {
+      api.hosts()
+        .then((view) => { if (active) setHosts(view.hosts); })
+        .catch(() => undefined);
+    }
     return () => { active = false; };
   }, []);
 
@@ -409,6 +428,7 @@ export function LaunchSheet({
       tunes: patch.tunes ?? tunes,
       environments: patch.environments ?? environments,
       accountPins: patch.accountPins ?? accountPins,
+      host: patch.host ?? hostPick,
     };
     persist(next);
   };
@@ -524,6 +544,9 @@ export function LaunchSheet({
     (!resumeAgentId || Boolean(software.trim()) && targetSession !== 'running');
   const canCopyResumeCard = !resumeAgentId || Boolean(software.trim()) && targetSession !== 'running';
 
+  // Every launch of the sheet goes to the Host field's host; none for this Mac, so the launch is as before hosts.
+  const onHost: { host?: string } = hostId ? { host: hostId } : {};
+  const hostProblem = host && !host.online ? `${host.label} is offline. Launch when Hivemind Server is connected to it again.` : null;
   const runningAgents = resume ? roster.filter((agent) => agentRuntime(agent, { agents }, terminals).sessionState === "running") : [];
   const running = new Set(runningAgents.map((agent) => agent.id));
   // Hivemind.app only: the same launches as the copied text, each in its own tmux session (reused when that
@@ -538,10 +561,11 @@ export function LaunchSheet({
         ...(softwareFamily(b.software) === "opencode" ? secrets : {}),
         // Beside the command, never in it: the app hands them to the session through its private launch file.
         ...(b.environment ? { environment: b.environment } : {}),
+        ...onHost,
       } }] : []) : [])
     : (canCopyOne && built.ok
       ? [{ software, kept: false, launch: { project: project?.slug ?? projectSlug, agent: null, title: seatTitle(hiveName, `new ${role}`),
-          ...built.launch, ...secrets, ...launchEnv } }] : []);
+          ...built.launch, ...secrets, ...launchEnv, ...onHost } }] : []);
   const terminalLaunches = seats.map((seat) => seat.launch);
   const driversWithAccounts = new Set<AccountDriver>(accounts?.accounts.map((account) => account.driver) ?? []);
   // A hint only: an alias such as codex2 still launches, without an account (docs/accounts.md).
@@ -584,7 +608,8 @@ export function LaunchSheet({
   };
 
   const terminalBlock = native ? terminalBlocker(terminals) : null;
-  const terminalProblem = terminalBlock?.message ?? (terminalLaunches.length ? terminalSessionLaunchProblem(terminalLaunches) : null);
+  const terminalProblem = terminalBlock?.message ?? hostProblem ??
+    (terminalLaunches.length ? terminalSessionLaunchProblem(terminalLaunches) : null);
   const canLaunchTerminal = native && terminalLaunches.length > 0 && !terminalProblem && !accountConflict && !launching;
   const many = terminalLaunches.length > 1;
   const terminalKey = resume ? "terminal-all" : "terminal-one";
@@ -707,6 +732,29 @@ export function LaunchSheet({
               ))}
             </select>
           </label>
+          {native && hosts.length > 0 && (
+            <>
+              <label>
+                Host
+                <select
+                  value={hostId ?? ""}
+                  onChange={(e) => {
+                    setHostPick(e.target.value);
+                    remember({ host: e.target.value });
+                  }}
+                >
+                  <option value="">This Mac</option>
+                  {hosts.map((entry) => (
+                    <option key={entry.id} value={entry.id}>{entry.online ? entry.label : `${entry.label} (offline)`}</option>
+                  ))}
+                </select>
+              </label>
+              {hostProblem && <p className="err" role="alert">{hostProblem}</p>}
+              {host && resume && runningAgents.length > 0 && (
+                <p className="help-p">A running employee keeps its session where it runs; only the others start on {host.label}.</p>
+              )}
+            </>
+          )}
           {!resume && (
             <fieldset className="launch-seg">
               <legend>Role</legend>

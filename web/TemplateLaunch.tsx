@@ -6,6 +6,7 @@ import type { WorkerTemplate } from "../src/shared/worker-templates.ts";
 import { accountDriverForSoftware, accountEnvironmentConflict, toLaunchAccount, type AccountDriver, type AgentAccount,
   type LaunchAccount } from "../src/shared/accounts.ts";
 import type { AccountSelection } from "../src/shared/account-selection.ts";
+import type { HostCatalogEntry } from "../src/shared/hosts.ts";
 import { api } from "./api.ts";
 import { Modal } from "./Modal.tsx";
 import { inNativeApp, onMacDesktop, terminalSessionLaunchProblem } from "./native-bridge.ts";
@@ -81,11 +82,13 @@ export function TemplateLaunchSheet({ projects, agents, defaultProject, onBack, 
   const [notice, setNotice] = useState("");
   const [started, setStarted] = useState<string | null | undefined>(undefined);
   const [catalog, setCatalog] = useState<AgentAccount[]>([]);
+  const [hosts, setHosts] = useState<HostCatalogEntry[]>([]);
 
   useEffect(() => {
     let active = true;
     // Only the conflict check reads the catalog; the server still resolves the account when Start is pressed.
     api.accounts().then(view => { if (active) setCatalog(view.accounts); }).catch(() => undefined);
+    api.hosts().then(view => { if (active) setHosts(view.hosts); }).catch(() => undefined);
     return () => { active = false; };
   }, []);
 
@@ -102,12 +105,24 @@ export function TemplateLaunchSheet({ projects, agents, defaultProject, onBack, 
       setTemplates(usable);
       setTemplateId(old => usable.some(item => item.id === old) ? old : usable[0]?.id ?? "");
     }).catch(failure => { if (active) setError(String(failure.message || failure)); });
-    api.launchContext(project.slug).then(next => { if (active) setContext(next); })
-      .catch(failure => { if (active) setError(String(failure.message || failure)); });
     return () => { active = false; };
   }, [project?.id]);
 
   const template = templates?.find(item => item.id === templateId);
+  // A template on a remote host (docs/remote-hosts.md#launch) starts there, with that host's MCP; none: this Mac.
+  const hostId = template?.spec.hostId ?? null;
+  const host = hostId ? hosts.find(entry => entry.id === hostId) : undefined;
+  const hostProblem = native && hostId
+    ? !host ? "This template's host is not connected to Hivemind Server." : !host.online ? `${host.label} is offline.` : null
+    : null;
+  useEffect(() => {
+    if (!project) return;
+    let active = true;
+    setContext(undefined);
+    api.launchContext(project.slug, hostId).then(next => { if (active) setContext(next); })
+      .catch(failure => { if (active) setError(String(failure.message || failure)); });
+    return () => { active = false; };
+  }, [project?.id, hostId]);
   const running = template ? agents.filter(agent => agent.templateId === template.id && agent.removedAt === undefined).length : 0;
   const full = template ? running >= template.spec.maxConcurrent : false;
   const preview = useMemo(() => {
@@ -120,7 +135,7 @@ export function TemplateLaunchSheet({ projects, agents, defaultProject, onBack, 
     }
   }, [template, project, context, workspacePath]);
   const blocker = native ? terminalBlocker(terminals) : null;
-  const canStart = Boolean(template && project && preview?.ok && !full && !busy && (!native || !blocker));
+  const canStart = Boolean(template && project && preview?.ok && !full && !busy && (!native || !blocker) && !hostProblem);
   // The conflict depends on the driver only, so the pinned account (else the first) stands in for the policy's pick.
   const templateDriver = template ? accountDriverForSoftware(template.spec.software) : null;
   const driverAccounts = templateDriver ? catalog.filter(account => account.driver === templateDriver) : [];
@@ -154,7 +169,8 @@ export function TemplateLaunchSheet({ projects, agents, defaultProject, onBack, 
       }
       const hub = terminalHub();
       const item = { project: project.slug, agent: agent.name, title: codexSessionTitle(project.name, agent.name) || agent.name, ...launch,
-        ...(environment ? { environment } : {}), template: template.id, ...(account.account ? { account: account.account } : {}) };
+        ...(environment ? { environment } : {}), template: template.id, ...(account.account ? { account: account.account } : {}),
+        ...(hostId ? { host: hostId } : {}) };
       const problem = terminalSessionLaunchProblem([item]);
       if (!hub || problem) throw new Error(problem ?? "Terminals are available only in Hivemind.app");
       const result = await hub.launch([item], openInTerminal);
@@ -208,8 +224,10 @@ export function TemplateLaunchSheet({ projects, agents, defaultProject, onBack, 
             <p className="help-p">
               {template.spec.description} {running} of at most {template.spec.maxConcurrent} running.
               {full ? " Wait for one to finish, or raise the limit in the template." : ""}
+              {host ? ` Runs on ${host.label}.` : ""}
             </p>
           )}
+          {hostProblem && <p className="err" role="alert">{hostProblem}</p>}
           <label>
             Task
             <input value={label} maxLength={200} onChange={event => setLabel(event.target.value)}

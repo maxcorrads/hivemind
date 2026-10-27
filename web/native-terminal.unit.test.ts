@@ -168,3 +168,15 @@ test("a launch's environment variables are checked as the app checks them, never
   assert.equal(terminalSessionLaunchProblem(many(12, '"')), null);
   assert.match(terminalSessionLaunchProblem(many(TERMINAL_BROKER_LIMITS.launches, '"'))!, /Too much to launch at once/);
 });
+
+test("a session on a host carries its host id, and a launch names a host only as a host id", () => {
+  const host = "20000000-0000-4000-8000-000000000001";
+  assert.deepEqual(parseTerminalEvent({ type: "sessions", items: [{ ...session, host }] }), { type: "sessions", items: [{ ...session, host }] });
+  assert.deepEqual(parseTerminalEvent({ type: "sessions", items: [{ ...session, host: null }] }), { type: "sessions", items: [session] });
+  for (const bad of ["Build Mac", "20000000-0000-4000-8000-00000000000A", 1]) {
+    assert.equal(parseTerminalEvent({ type: "sessions", items: [{ ...session, host: bad }] }), null, String(bad));
+  }
+  const good: TerminalSessionLaunch = { project: "acme", agent: "Atlas", title: "Acme - Atlas", cwd: "~/acme", command: "codex" };
+  assert.equal(terminalSessionLaunchProblem([{ ...good, host }]), null);
+  assert.equal(terminalSessionLaunchProblem([{ ...good, host: "user@mini.local" }]), "Not a host");
+});
