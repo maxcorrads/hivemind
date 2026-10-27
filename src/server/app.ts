@@ -201,7 +201,15 @@ export function createApps(hive: Hive, hooks: AppHooks = {}) {
   });
   ui.get("/launch-context", c => {
     const slug = c.req.query("project");
-    return c.json(launchContext(hive.home, serverOrigin(c.req.url), slug ? hive.projects.getProjectBySlug(slug) : undefined));
+    // A launch on a remote host (docs/remote-hosts.md#launch) gets that host's MCP; the host must be in the catalog.
+    const host = c.req.query("host") || null;
+    if (host !== null && !hive.hosts.get(host)) throw new HiveError(404, "Host not found");
+    return c.json(launchContext(hive.home, serverOrigin(c.req.url), slug ? hive.projects.getProjectBySlug(slug) : undefined, host));
+  });
+  // The remote hosts Server.app reported (docs/remote-hosts.md#hosts): id, label and online only; empty with no host.
+  ui.get("/hosts", c => {
+    hive.identity.getAgent("human");
+    return c.json({ hosts: hive.hosts.list() });
   });
   ui.get("/adaptive-routing", c => {
     hive.identity.getAgent("human");

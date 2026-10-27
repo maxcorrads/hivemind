@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { EFFORTS, sanitizeExtraFlags, sanitizeModel, sanitizeSoftware } from "./launch-prompt.ts";
 import { launchEnvironmentNameProblem, launchEnvironmentProblem } from "./launch-environment.ts";
+import { hostIdSchema } from "./hosts.ts";
 
 /**
  * Worker templates (docs/agent-management-roadmap.md, Phase A1): the workers Human allows brains of a project to
@@ -47,6 +48,8 @@ export const workerTemplateSpecSchema = z.object({
   enabled: z.boolean(),
   /** The account a launch uses (docs/accounts.md); missing or null follows the driver's policy. */
   accountId: z.string().min(1).max(64).nullable().optional(),
+  /** The remote host its workers run on (docs/remote-hosts.md#launch); missing or null: this Mac, as before hosts. */
+  hostId: hostIdSchema.nullable().optional(),
 }).strict().superRefine((spec, ctx) => {
   const variables = new Set(Object.keys(spec.environment).map(name => name.toUpperCase()));
   for (const name of spec.secretNames) {

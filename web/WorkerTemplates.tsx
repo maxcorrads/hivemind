@@ -5,6 +5,7 @@ import { buildLaunchCommand } from "../src/shared/launch-prompt.ts";
 import { launchEnvironmentPrefix, parseLaunchEnvironment } from "../src/shared/launch-environment.ts";
 import { accountDriverForSoftware, softwareAliasWarning, type AccountDriver } from "../src/shared/accounts.ts";
 import type { WorkerTemplate, WorkerTemplateSpec } from "../src/shared/worker-templates.ts";
+import type { HostCatalogEntry } from "../src/shared/hosts.ts";
 import { api, type AccountsView } from "./api.ts";
 import { Modal } from "./Modal.tsx";
 import { ModelSelect } from "./ModelSelect.tsx";
@@ -275,6 +276,7 @@ function TemplateEditor({ project, editing, busy, onBusy, onCancel, onSaved }: {
   const [secretsText, setSecretsText] = useState(() => editing.spec.secretNames.join("\n"));
   const [error, setError] = useState("");
   const [accounts, setAccounts] = useState<AccountsView | null>(null);
+  const [hosts, setHosts] = useState<HostCatalogEntry[]>([]);
   const parsedEnv = useMemo(() => parseLaunchEnvironment(envText), [envText]);
   const draft: WorkerTemplateSpec = { ...spec, environment: parsedEnv.environment, secretNames: secretNamesFrom(secretsText) };
   const preview = templateCommandPreview(draft, project);
@@ -289,8 +291,15 @@ function TemplateEditor({ project, editing, busy, onBusy, onCancel, onSaved }: {
     api.accounts()
       .then(view => { if (active) setAccounts(view); })
       .catch(failure => { if (active) setError(String((failure as Error).message || failure)); });
+    // Without the list, no Host field: the template's workers run on this Mac, as before hosts.
+    api.hosts().then(view => { if (active) setHosts(view.hosts); }).catch(() => undefined);
     return () => { active = false; };
   }, []);
+  // This Mac leaves the field out of a template that never had one, so it saves as it did before hosts.
+  const setHost = (hostId: string) => setSpec(old => {
+    const { hostId: _previous, ...rest } = old;
+    return hostId ? { ...rest, hostId } : editing.spec.hostId === undefined ? rest : { ...rest, hostId: null };
+  });
   // A pin follows Software only while the driver stays the pinned account's; otherwise the server would refuse the save.
   const setSoftware = (software: string) => setSpec(old => {
     const pinned = accounts?.accounts.find(account => account.id === old.accountId);
@@ -342,6 +351,16 @@ function TemplateEditor({ project, editing, busy, onBusy, onCancel, onSaved }: {
           <select value={spec.accountId ?? ""} onChange={event => set({ accountId: event.target.value || null })}>
             <option value="">Follow the {accounts.policies[driver] === "balanced" ? "Balanced" : "Sequential"} policy</option>
             {driverAccounts.map(account => <option key={account.id} value={account.id}>{account.label}</option>)}
+          </select>
+        </label>
+      )}
+      {(hosts.length > 0 || spec.hostId) && (
+        <label>
+          Host
+          <select value={spec.hostId ?? ""} onChange={event => setHost(event.target.value)}>
+            <option value="">This Mac</option>
+            {hosts.map(host => <option key={host.id} value={host.id}>{host.label}</option>)}
+            {spec.hostId && !hosts.some(host => host.id === spec.hostId) && <option value={spec.hostId}>Removed host</option>}
           </select>
         </label>
       )}

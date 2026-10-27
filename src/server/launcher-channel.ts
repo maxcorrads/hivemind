@@ -140,6 +140,8 @@ export function installLauncherChannel(app: Hono, hive: Hive, secret: Buffer | n
   // The whole host catalog (docs/remote-hosts.md#hosts), which replaces the one the server held.
   app.put(HOSTS_PATH, async c => {
     hive.hosts.replace(await readLimitedJson(c.req.raw, HOSTS_BODY));
+    // A host that came online may take the launches that waited for it.
+    hive.bus.emit("launcher-queue");
     return c.json({ ok: true });
   });
   app.post("/api/launcher/:id/result", async c => {
