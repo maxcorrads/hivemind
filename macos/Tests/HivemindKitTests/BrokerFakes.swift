@@ -219,6 +219,10 @@ final class BrokerHarness {
   var remoteHosts: (any BrokerRemoteHosts)?
   var remoteTmux = RemoteTmuxLookup(candidates: [], searchPath: false)
   var origins: [String: String] = [:]
+  /// This Mac's side of the same-account check on a host, and how a host runs codex for it (none and nothing unless a
+  /// test says otherwise); set before the broker is first used.
+  var accountIdentity: (any AccountIdentityReading)?
+  var remoteCodex = RemoteCodexLookup(shell: ["/bin/sh", "-c"], codex: "/nonexistent/codex")
   nonisolated static let environment = ["PATH": "/usr/bin:/bin", "HOME": "/Users/me", "TMUX": "/private/tmp/tmux-501/default,1,0", "LANG": "it_IT.UTF-8"]
 
   lazy var broker: TerminalBroker = {
@@ -233,6 +237,7 @@ final class BrokerHarness {
         templateSecrets: templateSecrets,
         home: home, shadowHomes: shadowHomes, claudeTap: claudeTap, processStart: processStart,
         remoteHosts: remoteHosts, originURL: { [unowned self] in self.origins[$0] }, remoteTmux: remoteTmux,
+        accountIdentity: accountIdentity, remoteCodex: remoteCodex,
         log: { [unowned self] in self.logs.append($0) }))
     broker.onChange = { [unowned self] in self.changes += 1 }
     return broker

@@ -329,4 +329,11 @@ extension HostsService: BrokerRemoteHosts {
   public func terminalSpec(onHost id: String, command: String) -> LaunchSpec? {
     hosts.first { $0.id == id }.map { deps.transport.terminalSpec($0, command: command) }
   }
+
+  public func run(onHost id: String, script: String, input: LaunchSpec, timeout: TimeInterval) async -> SSHResult {
+    guard let host = hosts.first(where: { $0.id == id }) else {
+      return SSHResult(status: SSHResult.launchFailed, stderr: "This host is not configured")
+    }
+    return await deps.runner.run(deps.transport.commandSpec(host, command: RemoteRuntime.remote(script)), input: input, timeout: timeout)
+  }
 }

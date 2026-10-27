@@ -189,6 +189,8 @@ Settings → **Accounts** opens the sheet, after **Adaptive routing**. It has on
   ([Preparing an account](terminal-broker.md#preparing-an-account)). The row then shows "Ready", "Not logged in" or
   the error text, which names the fix. After a successful Prepare the row shows the account's login command with
   **Copy**. Editing either path hides the status. In a browser the sheet says "Prepare needs the Mac app".
+  With [remote hosts](remote-hosts.md#accounts), Prepare runs on each online host too, and the row lists each host's
+  status: ready, what is wrong, or the login command to run in a terminal there.
 - Under each account, its quota windows and the age of their read ([In the Accounts sheet](#in-the-accounts-sheet)).
 
 A server error shows as text in the sheet. An `accounts` event refetches the list.
@@ -594,7 +596,8 @@ failed"; an API-key login is plan `api-key` with no windows.
 
 **Claude.** Two files, neither of them a login:
 
-- the tap's `<id>/statusline.json`, as of its modification time;
+- the tap's `<id>/statusline.json`, as of its modification time: the newest of this Mac's and each
+  [remote host's](remote-hosts.md#usage);
 - `cachedUsageUtilization` in the account's `.claude.json`, as of its `fetchedAtMs`. The file is
   `<shadowPath, else homePath>/.claude.json`, or `~/.claude.json` for a primary with neither. The cache counts only when
   its `accountUuid` is the login's (`oauthAccount.accountUuid`) and it is at most 8 days old. Claude refreshes it rarely,

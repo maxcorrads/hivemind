@@ -7,4 +7,6 @@ export type CliConversation = {
   cwd: string | null;
   /** The transcript's last write, in ms. */
   at: number;
+  /** The remote host whose transcripts hold it (docs/remote-hosts.md#conversations); absent for this Mac's. */
+  host?: string;
 };

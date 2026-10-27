@@ -856,3 +856,34 @@ test("in a browser Prepare is never posted", async () => {
   await assert.rejects(hub.prepareAccount({ id: "a1", driver: "codex", label: "Codex", homePath: "", shadowPath: "" }), { code: "not-sent" });
   assert.deepEqual(posted, []);
 });
+
+test("on a host, Prepare names it, and Find last conversations asks it and takes only conversations that carry a host", async () => {
+  // docs/remote-hosts.md#accounts and #conversations.
+  installBridge();
+  const hub = createTerminalHub(window as never, { request: 40 });
+  unmounts.push(() => hub.dispose());
+  const host = "20000000-0000-4000-8000-000000000001";
+  const account: LaunchAccount = { id: "a1", driver: "codex", label: "Codex work", homePath: "~/.codex2", shadowPath: "" };
+  const prepared = hub.prepareAccount(account, host);
+  const prepare = posted.find((m): m is Extract<NativeMessage, { type: "account-prepare" }> => m.type === "account-prepare")!;
+  assert.deepEqual(prepare, { type: "account-prepare", id: prepare.id, account, host });
+  await fromApp({ type: "account-prepared", id: prepare.id, ok: true, loggedIn: false });
+  assert.deepEqual(await prepared, { ok: true, loggedIn: false });
+
+  const agents = [{ id: "atlas", name: "Atlas", worktree: "/Users/me/acme" }];
+  const found = hub.findConversations(host, agents);
+  const find = posted.find((m): m is Extract<NativeMessage, { type: "conversations-find" }> => m.type === "conversations-find")!;
+  assert.deepEqual(find, { type: "conversations-find", id: find.id, host, agents });
+  const conversation = { cli: "codex", software: "codex2", id: "01a13757-5872-7e90-8bde-22d6bdb43926", cwd: null, at: 5, host };
+  await fromApp({ type: "conversations-found", id: find.id, conversations: { atlas: conversation } });
+  assert.deepEqual(await found, { atlas: conversation });
+
+  for (const bad of [
+    { atlas: { ...conversation, host: undefined } },
+    { atlas: { ...conversation, host: "Build Mac" } },
+    { atlas: { ...conversation, cli: "opencode" } },
+    { atlas: { ...conversation, at: "5" } },
+    { atlas: { ...conversation, cwd: 3 } },
+  ]) assert.equal(parseTerminalEvent({ type: "conversations-found", id: "c1", conversations: bad }), null, JSON.stringify(bad));
+  assert.equal(parseTerminalEvent({ type: "conversations-found", id: "c1", conversations: [] }), null);
+});

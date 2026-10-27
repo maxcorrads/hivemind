@@ -1,13 +1,14 @@
 import { useSyncExternalStore } from "react";
 import type { Agent } from "../src/shared/types.ts";
 import type { LaunchAccount } from "../src/shared/accounts.ts";
+import type { CliConversation } from "../src/shared/cli-conversations.ts";
 import { terminalSessionName } from "../src/shared/terminal-session.ts";
 import { agentSessionLabel, recordedAgentSession } from "./agent-runtime.ts";
 import {
   TERMINAL_EVENT, brokerUnavailableHint, decodeTerminalData, encodeTerminalInput, inNativeApp, onMacDesktop, onNativePlatform,
   launchAccountProblem, parseTerminalEvent, postNative, reportedNativePlatform, serverUnverifiedHint, terminalDataLength, terminalLaunchItems,
   templateSecretNameProblem, templateSecretValueProblem, terminalSessionLaunchProblem, terminalSize, tmuxInstallHint,
-  TERMINAL_BROKER_LIMITS, type NativePlatform, type TerminalEvent,
+  TERMINAL_BROKER_LIMITS, type ConversationAgent, type NativePlatform, type TerminalEvent,
   type TerminalKillFailure, type TerminalMessage, type TerminalSessionInfo, type TerminalSessionLaunch,
 } from "./native-bridge.ts";
 
@@ -93,6 +94,8 @@ type Pending =
   | { kind: "kill-many"; resolve: (result: TerminalKilledMany) => void; reject: (error: TerminalRequestError) => void; timer: number }
   | { kind: "secrets"; resolve: (names: string[]) => void; reject: (error: TerminalRequestError) => void; timer: number }
   | { kind: "account"; resolve: (result: AccountPreparation) => void; reject: (error: TerminalRequestError) => void; timer: number }
+  | { kind: "conversations"; resolve: (found: Record<string, CliConversation>) => void; reject: (error: TerminalRequestError) => void;
+      timer: number }
   | { kind: "attach"; stream: StreamEntry };
 type StreamEntry = {
   handlers: TerminalStreamHandlers;
@@ -112,6 +115,9 @@ export const HELD_INPUT_BYTES = 64 * 1024;
 const BROWSER_STATE: TerminalState = { native: false, platform: null, tmux: null, broker: null, sessions: null,
   lastKnownSessions: null, lastError: null };
 const NO_ANSWER = "Hivemind did not answer. Is Hivemind Server running?";
+/** How long a Prepare on a host may take (a copy of plugins over SSH), and a scan of a host's transcripts. */
+const HOST_PREPARE_TIMEOUT = 16 * 60_000;
+const HOST_SCAN_TIMEOUT = 60_000;
 
 export type TerminalHub = ReturnType<typeof createTerminalHub>;
 
@@ -254,6 +260,14 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
         request.resolve({ ok: detail.ok, loggedIn: detail.loggedIn, ...(detail.error === undefined ? {} : { error: detail.error }) });
         return;
       }
+      case "conversations-found": {
+        const request = detail.id ? pending.get(detail.id) : undefined;
+        if (request?.kind !== "conversations") return;
+        pending.delete(detail.id!);
+        win.clearTimeout(request.timer);
+        request.resolve(detail.conversations);
+        return;
+      }
       case "terminal-attached": {
         const request = detail.id ? pending.get(detail.id) : undefined;
         if (request?.kind !== "attach") return;
@@ -331,7 +345,7 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
     }, linger);
   };
 
-  function request<T>(kind: "launch" | "kill" | "kill-many" | "secrets" | "account", message: TerminalMessage & { id?: string },
+  function request<T>(kind: "launch" | "kill" | "kill-many" | "secrets" | "account" | "conversations", message: TerminalMessage & { id?: string },
     timeout = requestTimeout) {
     return new Promise<T>((resolve, reject) => {
       const id = message.id!;
@@ -417,12 +431,19 @@ export function createTerminalHub(win: Win, timeouts: { request?: number; attach
      * checked). The account is checked here as the app checks it and sent with its five fields only. An older app
      * answers unknown-type.
      */
-    prepareAccount(account: LaunchAccount): Promise<AccountPreparation> {
+    prepareAccount(account: LaunchAccount, host?: string): Promise<AccountPreparation> {
       const problem = launchAccountProblem(account);
       if (problem) return Promise.reject(new TerminalRequestError("bad-message", problem));
       const { driver, label, homePath, shadowPath } = account;
+      // On a host (docs/remote-hosts.md#accounts) Prepare copies this Mac's configuration over SSH: it may take minutes.
       return request<AccountPreparation>("account",
-        { type: "account-prepare", id: newId(), account: { id: account.id, driver, label, homePath, shadowPath } });
+        { type: "account-prepare", id: newId(), account: { id: account.id, driver, label, homePath, shadowPath }, ...(host ? { host } : {}) },
+        host ? HOST_PREPARE_TIMEOUT : requestTimeout);
+    },
+    /** Find last conversations on a remote host (docs/remote-hosts.md#conversations); each one carries the host. */
+    findConversations(host: string, agents: ConversationAgent[]): Promise<Record<string, CliConversation>> {
+      return request<Record<string, CliConversation>>("conversations", { type: "conversations-find", id: newId(), host, agents },
+        HOST_SCAN_TIMEOUT);
     },
     attach(session: string, cols: number, rows: number, handlers: TerminalStreamHandlers): TerminalAttachment {
       const entry: StreamEntry = {

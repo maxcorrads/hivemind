@@ -1,5 +1,6 @@
 import { open, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
+import { z } from "zod";
 import type { CliConversation } from "../shared/cli-conversations.ts";
 
 /**
@@ -174,4 +175,25 @@ export async function lastConversations(
     if (best) out[agent.id] = { cli: best.cli, software: best.software, id: best.id, cwd: best.cwd, at: Math.round(best.at) };
   }
   return out;
+}
+
+/** What `hivemind conversations` reads on stdin: the agents to look for, as the server's route passes them. */
+const conversationsInputSchema = z.object({
+  agents: z.array(z.object({
+    id: z.string().min(1).max(64),
+    name: z.string().min(1).max(64),
+    worktree: z.string().max(4096).nullable(),
+  }).strict()).max(1000),
+}).strict();
+
+/**
+ * `hivemind conversations` (docs/remote-hosts.md#conversations): the scan of `lastConversations` on the host this runs on,
+ * for the agents in `input` (JSON). Hivemind Server.app runs it there with the host's runtime and adds the host itself.
+ */
+export async function conversationsAnswer(input: string, home: string, now = Date.now()): Promise<{ conversations: Record<string, CliConversation> }> {
+  let parsed: unknown;
+  try { parsed = JSON.parse(input || "{}"); } catch { throw new Error("conversations: stdin is not JSON"); }
+  const request = conversationsInputSchema.safeParse(parsed);
+  if (!request.success) throw new Error("conversations: stdin must be {agents: [{id, name, worktree}]}");
+  return { conversations: await lastConversations(home, request.data.agents, now) };
 }

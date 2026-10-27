@@ -68,7 +68,10 @@ public enum BridgeMessage: Equatable, Sendable {
   /// The Accounts sheet's Prepare (docs/accounts.md): the broker builds the
   /// account's directory before its login; answered with account-prepared.
   /// The account is checked as a launch's is, and its "~/" left to the broker.
-  case accountPrepare(id: String?, account: LaunchAccount)
+  /// With `host`, on that remote host (docs/remote-hosts.md#accounts).
+  case accountPrepare(id: String?, account: LaunchAccount, host: String? = nil)
+  /// Find last conversations on a remote host (docs/remote-hosts.md#conversations); answered with conversations-found.
+  case conversationsFind(id: String?, host: String, agents: [ConversationAgent])
 
   static let maxText = 4096
   /// The most sessions one terminal-kill may name (web TERMINAL_BROKER_LIMITS.kills).
@@ -170,10 +173,36 @@ public enum BridgeMessage: Equatable, Sendable {
       self = .launcherReject(id: id, requestId: requestId)
     case "account-prepare":
       guard let id = Self.requestID(object["id"]), let account = LaunchAccount(bridge: object["account"]),
-            (try? account.validate()) != nil else { return nil }
-      self = .accountPrepare(id: id, account: account)
+            (try? account.validate()) != nil, let host = Self.host(object["host"]) else { return nil }
+      self = .accountPrepare(id: id, account: account, host: host)
+    case "conversations-find":
+      guard let id = Self.requestID(object["id"]), let host = object["host"] as? String, RemoteHost.isID(host),
+            let items = object["agents"] as? [Any], items.count <= BrokerLimits.maxConversationAgents else { return nil }
+      var agents: [ConversationAgent] = []
+      for item in items {
+        guard let fields = item as? [String: Any], let agentID = fields["id"] as? String, let name = fields["name"] as? String else { return nil }
+        let worktree: String?
+        switch fields["worktree"] {
+        case nil, is NSNull: worktree = nil
+        case let path as String: worktree = path
+        default: return nil
+        }
+        let agent = ConversationAgent(id: agentID, name: name, worktree: worktree)
+        guard agent.isValid else { return nil }
+        agents.append(agent)
+      }
+      self = .conversationsFind(id: id, host: host, agents: agents)
     default:
       return nil
+    }
+  }
+
+  /// Missing or null: `.some(nil)`, this Mac. A host id: that host. Anything else: nil, which drops the message.
+  private static func host(_ value: Any?) -> String?? {
+    switch value {
+    case nil, is NSNull: return .some(nil)
+    case let id as String where RemoteHost.isID(id): return .some(id)
+    default: return nil
     }
   }
 
@@ -434,6 +463,8 @@ public enum BridgeTerminalEvent: Equatable, Sendable {
   case launcherDecided(id: String?, requestId: String, action: String)
   /// The answer to account-prepare: `ok`, `loggedIn`, and `error` when not ok.
   case accountPrepared(id: String?, AccountPreparation)
+  /// The answer to conversations-find: each agent's last conversation on the host, by agent id.
+  case conversationsFound(id: String?, [String: BrokerConversation])
   case error(id: String?, code: BrokerErrorCode, message: String, stream: BrokerStreamID?)
 
   public enum TmuxStatus: String, Sendable, Equatable {
@@ -465,6 +496,7 @@ public enum BridgeTerminalEvent: Equatable, Sendable {
     case .templateSecrets: "template-secrets"
     case .launcherDecided: "launcher-decided"
     case .accountPrepared: "account-prepared"
+    case .conversationsFound: "conversations-found"
     case .error: "terminal-error"
     }
   }
@@ -484,6 +516,7 @@ public enum BridgeTerminalEvent: Equatable, Sendable {
     case .secrets(let template, let names): self = .templateSecrets(id: id, template: template, names: names)
     case .launcherDecided(let requestId, let action): self = .launcherDecided(id: id, requestId: requestId, action: action)
     case .accountPrepared(let preparation): self = .accountPrepared(id: id, preparation)
+    case .conversations(let found): self = .conversationsFound(id: id, found)
     case .error(let code, let message, let stream): self = .error(id: id, code: code, message: message, stream: stream)
     }
   }
@@ -539,6 +572,13 @@ public enum BridgeTerminalEvent: Equatable, Sendable {
       detail["ok"] = preparation.ok
       detail["loggedIn"] = preparation.loggedIn
       if let error = preparation.error { detail["error"] = error }
+    case .conversationsFound(let id, let found):
+      put("id", id)
+      detail["conversations"] = found.mapValues { item -> [String: Any] in
+        var fields: [String: Any] = ["cli": item.cli, "software": item.software, "id": item.id, "cwd": item.cwd ?? NSNull(), "at": item.at]
+        if let host = item.host { fields["host"] = host }
+        return fields
+      }
     case .error(let id, let code, let message, let stream):
       put("id", id)
       detail["code"] = code.rawValue

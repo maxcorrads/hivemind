@@ -4,6 +4,7 @@ import { launchEnvironmentProblem } from "../src/shared/launch-environment.ts";
 import { accountPathProblem, accountSpecSchema, ACCOUNT_DRIVERS, ACCOUNT_LIMITS, type LaunchAccount } from "../src/shared/accounts.ts";
 import { workerSecretNameProblem } from "../src/shared/worker-templates.ts";
 import { HOST_ID_PATTERN } from "../src/shared/hosts.ts";
+import type { CliConversation } from "../src/shared/cli-conversations.ts";
 import { hashFor, parseHash, type Sel } from "./selection.ts";
 
 // Hivemind.app on the Mac (macos/) and the iPhone/iPad app (ios/) load this UI
@@ -351,8 +352,15 @@ export type TerminalMessage =
   /**
    * The Accounts sheet's Prepare (docs/accounts.md#sheet): Hivemind Server.app builds a shadow's folder and links before
    * its login, and checks a primary's login. Paths as stored: the app expands their `~/`. Answered with account-prepared.
+   * With `host`, on that remote host (docs/remote-hosts.md#accounts): its directories get this Mac's configuration, and
+   * its login there is checked against this Mac's.
    */
-  | { type: "account-prepare"; id: string; account: LaunchAccount };
+  | { type: "account-prepare"; id: string; account: LaunchAccount; host?: string }
+  /** Find last conversations on a remote host (docs/remote-hosts.md#conversations); answered with conversations-found. */
+  | { type: "conversations-find"; id: string; host: string; agents: ConversationAgent[] };
+
+/** An agent Find last conversations looks for: the server's `lastConversations` input. */
+export type ConversationAgent = { id: string; name: string; worktree: string | null };
 
 export type TerminalSessionInfo = {
   name: string;
@@ -393,6 +401,8 @@ export type TerminalEvent =
   | { type: "launcher-decided"; id: string; requestId: string; action: "approve" | "reject" }
   /** The answer to account-prepare: `error` (never a token or file contents) exactly when not `ok`. */
   | { type: "account-prepared"; id: string | null; ok: boolean; loggedIn: boolean; error?: string }
+  /** The answer to conversations-find: each agent's last conversation on the host, by agent id, carrying the host. */
+  | { type: "conversations-found"; id: string | null; conversations: Record<string, CliConversation> }
   /** `code` is a BrokerErrorCode (bad-message, no-such-session, tmux-missing, …). */
   | { type: "terminal-error"; id: string | null; code: string; message: string; stream: number | null };
 
@@ -412,6 +422,18 @@ function sessionInfo(value: unknown): TerminalSessionInfo | null {
   if (value.host !== undefined && value.host !== null && (typeof value.host !== "string" || !HOST_ID_PATTERN.test(value.host))) return null;
   return { name, project, agent, alive: value.alive, attached: value.attached as number, createdAt: value.createdAt,
     ...(typeof value.host === "string" ? { host: value.host } : {}) };
+}
+
+const CLIS = new Set(["claude", "codex", "cursor"]);
+
+/** A host's conversation as the app relays it (HivemindKit BrokerConversation), or null. */
+function hostConversation(value: unknown): CliConversation | null {
+  if (!isRecord(value)) return null;
+  const { cli, software, id, cwd, at, host } = value;
+  if (typeof cli !== "string" || !CLIS.has(cli) || typeof software !== "string" || !software || typeof id !== "string" || !id) return null;
+  if (!(cwd === null || typeof cwd === "string") || typeof at !== "number" || !Number.isFinite(at)) return null;
+  if (typeof host !== "string" || !HOST_ID_PATTERN.test(host)) return null;
+  return { cli: cli as CliConversation["cli"], software, id, cwd, at, host };
 }
 
 /** A worker template's id as the server issues it (crypto.randomUUID). */
@@ -490,6 +512,12 @@ export function parseTerminalEvent(detail: unknown): TerminalEvent | null {
       if (typeof ok !== "boolean" || typeof loggedIn !== "boolean") return null;
       if (ok) return error === undefined || error === null ? { type: "account-prepared", id, ok, loggedIn } : null;
       return typeof error === "string" ? { type: "account-prepared", id, ok, loggedIn, error } : null;
+    }
+    case "conversations-found": {
+      if (!isRecord(detail.conversations)) return null;
+      const entries = Object.entries(detail.conversations).map(([agent, value]) => [agent, hostConversation(value)] as const);
+      if (!entries.every(([, value]) => value !== null)) return null;
+      return { type: "conversations-found", id, conversations: Object.fromEntries(entries) as Record<string, CliConversation> };
     }
     case "terminal-error": {
       const stream = nullableStream(detail.stream);

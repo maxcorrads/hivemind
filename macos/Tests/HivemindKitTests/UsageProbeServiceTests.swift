@@ -112,6 +112,17 @@ private actor UsageHTTPFake: LauncherHTTP {
   }
 }
 
+/// The hosts' taps, as HostTaps reads them over each master.
+@MainActor private final class RemoteTapsFake: RemoteTapReading {
+  var taps: [String: RemoteTap] = [:]
+  var asked: [[String]] = []
+
+  func taps(of ids: [String]) async -> [String: RemoteTap] {
+    asked.append(ids)
+    return taps.filter { ids.contains($0.key) }
+  }
+}
+
 /// What the service tells the broker.
 @MainActor private final class AccountsRecorder {
   var calls: [[LaunchAccount]] = []
@@ -165,10 +176,33 @@ private func snapshot(_ account: LaunchAccount, at capturedAt: Int = nowMs, plan
   let secret = InstanceSecret.generate()
 
   private func service(_ mac: FakeMac, http: UsageHTTPFake, codex: CodexProbeFake, shadowHomes: FakeShadowHomes = FakeShadowHomes(),
+                       remoteTaps: (any RemoteTapReading)? = nil,
                        onAccounts: @escaping @MainActor ([LaunchAccount]) -> Void = { _ in }) -> UsageProbeService {
     UsageProbeService(server: { [secret] in .init(endpoint: ServerEndpoint(port: ServerPort(7520)!), secret: secret) },
                       http: http, codex: codex, shadowHomes: shadowHomes, tap: mac.tap, home: mac.home, now: { now },
-                      onAccounts: onAccounts)
+                      remoteTaps: remoteTaps, onAccounts: onAccounts)
+  }
+
+  @Test func aClaudeSessionOnAHostReportsThroughThatHostsTap() async throws {
+    // docs/remote-hosts.md#usage: the newer status line of this Mac's and the hosts' taps wins, and the later limit error.
+    try await withFakeMac { mac in
+      let http = UsageHTTPFake(secret: secret, accounts: [claudeShadow, claudePrimary])
+      let hosts = RemoteTapsFake()
+      let hostStatus = #"{"rate_limits":{"five_hour":{"used_percentage":64,"resets_at":1791820800}}}"#
+      hosts.taps = [claudeShadow.id: RemoteTap(statusLine: Data(hostStatus.utf8), statusModified: nowMs - 30_000, limitError: 1_791_801_500),
+                    claudePrimary.id: RemoteTap(statusLine: Data(hostStatus.utf8), statusModified: nowMs - 600_000, limitError: nil)]
+      try mac.write(statusLine, at: mac.tapFile(claudeShadow, "statusline.json"), modified: now.addingTimeInterval(-60))
+      try mac.write("1791801000\n", at: mac.tapFile(claudeShadow, "limit-error"))
+      try mac.write(statusLine, at: mac.tapFile(claudePrimary, "statusline.json"), modified: now.addingTimeInterval(-60))
+      try await service(mac, http: http, codex: CodexProbeFake([]), remoteTaps: hosts).refreshOnce()
+      let windows: [[String: Any]] = [
+        ["key": "five_hour", "label": "Session (5 h)", "usedPercent": 64, "resetsAt": 1_791_820_800_000, "windowMs": 18_000_000]]
+      #expect(try await posts(http).first == [
+        snapshot(claudeShadow, at: nowMs - 30_000, windows: windows, limitErrorAt: 1_791_801_500_000),
+        snapshot(claudePrimary, at: nowMs - 60_000, windows: statusWindows),
+      ] as NSArray)
+      #expect(hosts.asked == [[claudeShadow.id, claudePrimary.id]], "one read of the hosts per round, Claude accounts only")
+    }
   }
 
   @Test func aRoundReadsEveryAccountInCatalogOrderAndPostsTheirSnapshotsSigned() async throws {
