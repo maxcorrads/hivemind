@@ -39,18 +39,6 @@ export function isReactionEmoji(emoji: string): boolean {
   return (REACTION_EMOJIS as readonly string[]).includes(emoji) || (EXTRA_REACTION_EMOJIS as readonly string[]).includes(emoji);
 }
 
-export const ALLOWED_MIMES = [
-  "image/png",
-  "image/jpeg",
-  "image/webp",
-  "image/gif",
-  "application/pdf",
-  "text/plain",
-  "text/csv",
-  "application/json",
-  "application/zip",
-] as const;
-
 export type Role = "human" | "brain" | "worker" | "bot";
 export type Seniority = "junior" | "mid" | "senior";
 export type ChannelType = "public" | "brains" | "private" | "dm";

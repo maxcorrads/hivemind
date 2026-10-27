@@ -2,8 +2,10 @@
 
 > [!NOTE]
 > This is a design, mostly not shipped yet. The [Plan](#plan) lists the changes
-> that build it and marks the ones shipped; so far only the
-> [agent listener](#agent-listener) (step 1) exists, and nothing turns it on yet.
+> that build it and marks the ones shipped; so far the
+> [agent listener](#agent-listener) (step 1) and
+> [Attachments of any type](#attachments-of-any-type) (step 6) exist, and nothing
+> turns the listener on yet.
 
 A **remote host** is a second Mac on the local network, reached with SSH, where
 Hivemind runs brains and workers. Everything else stays on the Mac that runs
@@ -250,23 +252,33 @@ needs a copy of its files first, like a copy between account homes today.
 
 ## Attachments of any type
 
-Shipped with the same work, independent of hosts. Today an attachment must be one
-of nine types (`ALLOWED_MIMES`: PNG, JPEG, WebP, GIF, PDF, plain text, CSV, JSON,
-ZIP), because files are served inline from the Human UI's origin, where an HTML or
-SVG file would run its script with the Human's powers.
+**Shipped**, independent of hosts. An attachment used to be one of nine types
+(PNG, JPEG, WebP, GIF, PDF, plain text, CSV, JSON, ZIP), because files were served
+inline from the Human UI's origin, where an HTML or SVG file would run its script
+with the Human's powers. Now any type is stored and only a safe list is served
+inline (`INLINE_MIMES` in `src/shared/mime.ts`).
 
 - **Upload.** Any type is accepted, with the current limits (512 MB per file, the
   8 GiB quota, at most 4 per message) and `attach`'s refusal of sensitive files
-  (keys, `.env*`, `~/.ssh`, …).
-- **Preview.** Only a safe list renders inline: raster images (not SVG), PDF and
-  plain text. Everything else shows as a file with its name, size and Download.
+  (keys, `.env*`, `~/.ssh`, …). The stored type is the sender's `X-File-Mime` when
+  it is a well-formed `type/subtype` (lowercased, parameters dropped), otherwise a
+  guess from the file name, otherwise `application/octet-stream`. Telegram
+  documents of any type are accepted the same way.
+- **Preview.** Only a safe list renders inline: PNG, JPEG, WebP and GIF (not SVG),
+  PDF and plain text. In the Human UI raster images show as images, PDF and text as
+  a chip that opens them, and everything else as a chip with its name, size and
+  Download.
 - **Download.** A type outside the safe list is served as
   `application/octet-stream` with `Content-Disposition: attachment`,
-  `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox`, so a
-  browser or WebView saves it and never runs it. The stored type stays the
-  sender's, for the agent that fetches it.
-- **Agents.** `attach` and `fetch_file` take any type, with the same sensitive-file
-  filter.
+  `X-Content-Type-Options: nosniff` and
+  `Content-Security-Policy: sandbox; frame-ancestors 'none'`, so a browser or
+  WebView saves it and never runs it. Safe types are served as before, inline under
+  their own type and without the sandbox (Chromium's PDF viewer does not render a
+  sandboxed PDF). Every download carries the stored type in `X-File-Mime`, and the
+  message API reports it, so agents still see the sender's type.
+- **Agents.** `attach`, `fetch_file` and `hivemind send --file` take any type, with
+  the same sensitive-file filter (`hivemind send --file` used to refuse unknown
+  extensions and now applies `attach`'s filter instead).
 
 ## Plan
 
@@ -282,5 +294,5 @@ SVG file would run its script with the Human's powers.
 4. **Terminals.** In-app attach and Open in Terminal for remote sessions.
 5. **Accounts on hosts.** Home setup, the same-account check, the Accounts sheet's
    per-host status, remote usage reads, and Find last conversations per host.
-6. **Attachments of any type.** The upload allowlist removed, the safe preview list,
-   and download headers for every other type.
+6. **Attachments of any type** (shipped). The upload allowlist removed, the safe
+   preview list, and download headers for every other type.

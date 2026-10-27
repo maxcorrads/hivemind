@@ -294,3 +294,24 @@ test("file download HTTP 429 retains its Retry-After deadline and releases the e
   assert.equal(cancelled, 2);
   assert.ok(f.hive.messageQueries.listMessages(f.hive.identity.getAgent("human"), "general").messages.some(m => m.body.endsWith("later valid message")));
 });
+
+test("a document of any type is ingested with its sender's type instead of being quarantined", async t => {
+  const f = fixture(t);
+  let polls = 0;
+  const documents = [["page.html", "text/html"], ["blob", undefined]] as const;
+  t.mock.method(globalThis, "fetch", async (url: unknown, init?: RequestInit) => {
+    if (String(url).endsWith("getUpdates")) {
+      if (++polls === 1) return Response.json({ ok: true, result: documents.map(([file_name, mime_type], i) => ({ update_id: 20 + i,
+        message: { message_id: 120 + i, chat: { id: -1001 }, from: { id: 1 }, document: { file_id: file_name, file_name, mime_type } } })) });
+      return blocked(init?.signal);
+    }
+    if (String(url).endsWith("getFile")) return Response.json({ ok: true, result: { file_path: "a", file_size: 5 } });
+    return new Response("bytes");
+  });
+  f.bridge = new TelegramBridge(f.hive, config); f.bridge.start();
+  const human = f.hive.identity.getAgent("human");
+  const files = () => f.hive.messageQueries.listMessages(human, "general").messages.flatMap(m => m.attachments ?? []);
+  await until(() => files().length === 2);
+  assert.deepEqual(files().map(file => [file.name, file.mime]).sort(), [["blob", "application/octet-stream"], ["page.html", "text/html"]]);
+  assert.equal(f.hive.telegramAdmin.quarantine().length, 0);
+});

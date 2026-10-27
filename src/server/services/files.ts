@@ -1,5 +1,5 @@
 import { HiveError, type Agent, type AttachmentMeta } from "../../shared/types.ts";
-import { assertAllowedMime, commitUpload, openBlob, removeOrphanBlobs, removeUploadTemp, streamUpload } from "../files.ts";
+import { assertValidMime, commitUpload, openBlob, removeOrphanBlobs, removeUploadTemp, streamUpload } from "../files.ts";
 import type { UploadBudget } from "../upload-budget.ts";
 import type { ChannelAccess, Core, MessageReader } from "./ports.ts";
 import { now } from "./rows.ts";
@@ -25,7 +25,7 @@ export class FileService {
     input: { name: string; mime: string; body: ReadableStream<Uint8Array> | null; signal?: AbortSignal; declaredBytes?: number; authorize?: () => Agent },
   ): Promise<AttachmentMeta> {
     const { home, uploads, storage } = this.deps;
-    assertAllowedMime(input.mime);
+    assertValidMime(input.mime);
     if (typeof input.name !== "string" || !input.name.length || input.name.length > 180) throw new HiveError(400, "Invalid file name");
     input.signal?.throwIfAborted();
     const lease = uploads.acquire(actor.id, input.declaredBytes);

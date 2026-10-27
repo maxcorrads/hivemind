@@ -13,7 +13,7 @@ import path from "node:path";
 import { BODY_MAX, FILE_MAX_BYTES, HiveError, HUMAN_ID, REACTION_EMOJIS, type Channel, type Message } from "../shared/types.ts";
 import { parseProjectSlug } from "../shared/project.ts";
 import { isDirectRecipient } from '../shared/message-target.ts';
-import { resolveUploadMime } from "../shared/mime.ts";
+import { isInlineImageMime, resolveUploadMime } from "../shared/mime.ts";
 import { Hive, channelLabel } from "./hive.ts";
 import { hiveHome } from "./paths.ts";
 import { filePathForHash, safeFileName } from "./files.ts";
@@ -1274,9 +1274,10 @@ export class TelegramBridge {
     form.set("caption", caption.slice(0, 1024));
     form.set("disable_notification", silent ? "true" : "false");
     const blob = await openAsBlob(filePath, { type: mime });
-    const field = mime.startsWith("image/") ? "photo" : "document";
+    // Only raster images go as photos; SVG and other image types as documents, like any other file.
+    const photo = isInlineImageMime(mime), field = photo ? "photo" : "document";
     form.set(field, blob, safeFileName(name));
-    const method = mime.startsWith("image/") ? "sendPhoto" : "sendDocument";
+    const method = photo ? "sendPhoto" : "sendDocument";
     const res = await fetch(`https://api.telegram.org/bot${this.cfg.botToken}/${method}`, {
       method: "POST",
       body: form,
@@ -1301,7 +1302,6 @@ export class TelegramBridge {
       if (message.document) {
         const name = message.document.file_name ?? "file";
         const mime = resolveUploadMime(message.document.mime_type, name);
-        if (mime === "application/octet-stream") throw new TelegramPermanentUpdateError("Unsupported Telegram attachment type");
         out.push(await this.ingestTelegramFile(message.document.file_id, name, mime));
       }
       return out;

@@ -33,6 +33,7 @@ type Reply = unknown | Response | ((call: Call) => unknown | Response);
 /** Mocks fetch (answering calls in order, the last reply repeating) and captures console output. */
 function harness(t: TestContext, ...replies: Reply[]) {
   const calls: Call[] = [];
+  const sentHeaders: Headers[] = [];
   const out: string[] = [];
   const err: string[] = [];
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request, init?: RequestInit) => {
@@ -40,14 +41,14 @@ function harness(t: TestContext, ...replies: Reply[]) {
     const headers = new Headers(init?.headers);
     const body = typeof init?.body === "string" ? JSON.parse(init.body) : init?.body ?? undefined;
     const call = { method: init?.method ?? "GET", path: url.pathname + url.search, body, auth: headers.get("authorization") };
-    calls.push(call);
+    calls.push(call); sentHeaders.push(headers);
     let reply: unknown = replies[Math.min(calls.length - 1, replies.length - 1)] ?? {};
     if (typeof reply === "function") reply = (reply as (call: Call) => unknown)(call);
     return reply instanceof Response ? reply : Response.json(reply);
   });
   t.mock.method(console, "log", (...args: unknown[]) => { out.push(args.join(" ")); });
   t.mock.method(console, "error", (...args: unknown[]) => { err.push(args.join(" ")); });
-  return { calls, out, err };
+  return { calls, out, err, sentHeaders };
 }
 
 test("arg and argRest read flag values", () => {
@@ -387,24 +388,43 @@ test("send --to opens the DM first; a legacy --execution-id is accepted and not 
   assert.match(err[0]!, new RegExp(`^Send requestId: ${body.requestId}$`));
 });
 
-test("send uploads an attached file before posting", async (t) => {
-  const file = path.join(home, "note.txt");
-  const attachment = "22222222-2222-4222-8222-222222222222";
-  writeFileSync(file, "attached");
-  const { calls } = harness(t, { file: { id: attachment } }, sent);
-  await runCli(["send", "--channel", "general", "--file", file]);
-  assert.deepEqual(calls.map(call => call.path), ["/api/agent/files", "/api/agent/channels/general/messages"]);
-  assert.deepEqual((calls[1]!.body as { attachmentIds: string[]; body: string }).attachmentIds, [attachment]);
-  assert.equal((calls[1]!.body as { body: string }).body, "");
+/** A project folder outside HIVEMIND_HOME, whose files `attach` may upload. */
+function workDir(t: TestContext) {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "hivemind-cli-work-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+test("send uploads an attached file of any type before posting", async (t) => {
+  const work = workDir(t);
+  for (const [name, mime] of [["note.txt", "text/plain"], ["page.html", "text/html"], ["blob.bin", "application/octet-stream"]]) {
+    const file = path.join(work, name);
+    const attachment = "22222222-2222-4222-8222-222222222222";
+    writeFileSync(file, `attached ${name}`);
+    const { calls, sentHeaders } = harness(t, { file: { id: attachment } }, sent);
+    await runCli(["send", "--channel", "general", "--file", file]);
+    assert.deepEqual(calls.map(call => call.path), ["/api/agent/files", "/api/agent/channels/general/messages"]);
+    assert.equal(sentHeaders[0]!.get("x-file-name"), name);
+    assert.equal(sentHeaders[0]!.get("x-file-mime"), mime);
+    assert.deepEqual((calls[1]!.body as { attachmentIds: string[]; body: string }).attachmentIds, [attachment]);
+    assert.equal((calls[1]!.body as { body: string }).body, "");
+    t.mock.restoreAll();
+  }
 });
 
 test("send validates its flags before contacting the hive", async (t) => {
   const { calls } = harness(t);
+  const work = workDir(t);
+  writeFileSync(path.join(work, ".env"), "SECRET=fixture");
+  writeFileSync(path.join(home, "inside.txt"), "hive data");
   await assert.rejects(runCli(["send", "--channel", "general", "--body", "x", "--event-type", "gossip"]), /Unknown --event-type/);
   await assert.rejects(runCli(["send", "--channel", "general"]), /send --body TEXT {2}and\/or {2}--file PATH/);
   await assert.rejects(runCli(["send", "--body", "x"]), /send --channel NAME {2}or {2}--to NAME/);
   await assert.rejects(runCli(["send", "--channel", "general", "--body", "x", "--thread", "not-a-uuid"]));
-  await assert.rejects(runCli(["send", "--channel", "general", "--file", path.join(home, "blob.bin")]), /unsupported file type/);
+  await assert.rejects(runCli(["send", "--channel", "general", "--file", path.join(work, "missing.bin")]), /File not found/);
+  // The same sensitive-file refusal as MCP attach, now that any type uploads.
+  await assert.rejects(runCli(["send", "--to", "Ada", "--file", path.join(work, ".env")]), /attach refused .*looks like a secret/);
+  await assert.rejects(runCli(["send", "--channel", "general", "--file", path.join(home, "inside.txt")]), /Hivemind data directory/);
   assert.equal(calls.length, 0);
 });
 
