@@ -166,6 +166,12 @@ git config --global http.https://gitlab.example.com/.proxy socks5h://127.0.0.1:1
 #   HTTPS_PROXY=socks5h://127.0.0.1:1080 exec /opt/homebrew/bin/glab "$@"
 ```
 
+Put `~/.local/bin` first in the PATH of every shell, not only interactive ones:
+agents run their commands in login shells that do not read `~/.zshrc`. Add
+`export PATH="$HOME/.local/bin:$PATH"` to `~/.zshenv` and at the end of
+`~/.zprofile` (after Homebrew's `shellenv`, which would otherwise come first).
+Check with `zsh -lc 'command -v glab'`.
+
 Everything else keeps its direct route. It works while the control Mac is on its
 network (and its VPN) with the host online. Check your organisation's policy before
 sharing a VPN connection with another machine this way.
@@ -180,6 +186,7 @@ sharing a VPN connection with another machine this way.
 | An agent says its Hivemind tools are missing | It started while the MCP was still connecting: tell it to call `join` again, or resume it. |
 | Cursor: "Your macOS login keychain is locked" | `security unlock-keychain` on the remote Mac, then retry. |
 | Git or a CLI cannot reach an internal server | It needs the [SOCKS forward](#6-reach-private-networks-through-the-control-mac) and the control Mac on its VPN. |
+| It works in your SSH session but an agent gets an HTML `403 Forbidden` | The agent's login shell finds the CLI itself instead of the proxied wrapper: put `~/.local/bin` first in `~/.zshenv` and `~/.zprofile` too. |
 
 ## Limits
 
