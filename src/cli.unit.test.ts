@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, beforeEach, test, type TestContext } from "node:test";
-import { arg, argRest, codexMcpConfig, isCliEntrypoint, MCP_TOOL_TIMEOUT_SEC, mcpLauncher, runCli, stopOnSignals } from "./cli.ts";
+import { arg, argRest, codexMcpConfig, isCliEntrypoint, MCP_TOOL_TIMEOUT_SEC, mcpLauncher, runCli, serveOptions, stopOnSignals } from "./cli.ts";
 import { BODY_MAX } from "./shared/types.ts";
 
 // Every command runs in-process against a mocked fetch; HIVEMIND_HOME is a
@@ -57,6 +57,17 @@ test("arg and argRest read flag values", () => {
   assert.equal(argRest(["--body", "hello", "big", "world", "--to", "X"], "--body"), "hello big world");
   assert.equal(argRest(["--body", "--to", "X"], "--body"), undefined);
   assert.equal(argRest(["send"], "--body"), undefined);
+});
+
+test("serve binds the agent listener only with an explicit --agent-port", () => {
+  assert.deepEqual(serveOptions(["serve"], {}), { port: 7420, agentPort: null });
+  // No environment variable turns it on: without hosts, serve is exactly as before.
+  assert.deepEqual(serveOptions(["serve"], { HIVEMIND_PORT: "7520", HIVEMIND_AGENT_PORT: "7522" }), { port: 7520, agentPort: null });
+  assert.deepEqual(serveOptions(["serve", "--port", "7520", "--agent-port", "7422"], {}), { port: 7520, agentPort: 7422 });
+  assert.deepEqual(serveOptions(["serve", "--agent-port", "0"], {}), { port: 7420, agentPort: 0 });
+  for (const argv of [["serve", "--agent-port"], ["serve", "--agent-port", "--port"], ["serve", "--agent-port", "x"], ["serve", "--agent-port", "65536"]]) {
+    assert.throws(() => serveOptions(argv, {}), argv.join(" "));
+  }
 });
 
 test("isCliEntrypoint only matches this module as the process entry", () => {

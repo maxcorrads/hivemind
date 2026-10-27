@@ -1,6 +1,6 @@
 import { REQUEST_BODY_MS, REQUEST_HEADER_MS, integerArgument } from "../shared/api-contract.ts";
 import { randomUUID } from "node:crypto";
-import { createServer } from "node:http";
+import { createServer, type Server, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
 import path from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -9,9 +9,9 @@ import { DEFAULT_PORT, HiveError, type Message } from "../shared/types.ts";
 import { createRealtimeStream } from "../shared/realtime-client.ts";
 import { Hive } from "./hive.ts";
 import type { HiveEvents } from "./hive-events.ts";
-import { createApp } from "./app.ts";
+import { createApps } from "./app.ts";
 import { startTelegram } from "./telegram.ts";
-import { LocalHumanAuth } from "./local-auth.ts";
+import { LocalHumanAuth, isAgentListenerPath } from "./local-auth.ts";
 import { acquireInstanceLock } from "./instance-lock.ts";
 import { hiveHome } from "./paths.ts";
 import { createStaticWeb } from "./static-web.ts";
@@ -28,10 +28,21 @@ const FORWARDED_EVENTS = [
 ] as const satisfies ReadonlyArray<keyof HiveEvents>;
 type ForwardedEvent = (typeof FORWARDED_EVENTS)[number];
 
-export function startServer(opts: { port?: number; hive?: Hive; telegram?: boolean; shutdownGraceMs?: number; retentionDays?: number } = {}) {
+/** A JSON answer from the Node handler itself, before any gate or router runs. */
+function refuse(res: ServerResponse, status: number, error: string, headers: Record<string, string> = {}) {
+  res.writeHead(status, { ...headers, "Content-Type": "application/json" });
+  res.end(JSON.stringify({ error }));
+}
+
+/**
+ * `agentPort` turns on the agent-only listener (docs/remote-hosts.md#agent-listener).
+ * Absent or null, only the Human listener is bound, as before remote hosts.
+ */
+export function startServer(opts: { port?: number; agentPort?: number | null; hive?: Hive; telegram?: boolean; shutdownGraceMs?: number; retentionDays?: number } = {}) {
   // First, before anything can spawn a child that would inherit it.
   const instanceSecret = takeInstanceSecret();
   const port = integerArgument(String(opts.port ?? process.env.HIVEMIND_PORT ?? DEFAULT_PORT), 0, 65535);
+  const agentPort = opts.agentPort == null ? null : integerArgument(String(opts.agentPort), 0, 65535);
   const retention = opts.retentionDays ?? retentionDays();
   // Fail fast, before migrating the database or polling Telegram, if this home is already served.
   const lock = acquireInstanceLock(opts.hive?.home ?? hiveHome());
@@ -43,11 +54,12 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
     throw error;
   }
   const telegram = startTelegram(hive, opts.telegram !== false);
-  const app = createApp(hive, {
+  const { app, agentApp } = createApps(hive, {
     serverOrigin: () => {
       const address = server.address();
       if (!address || typeof address === 'string') throw new HiveError(503, 'Server is not listening');
       // The listener is loopback-only. The actual port also covers port:0 in embedded/test servers.
+      // Always the Human listener's: bot settings and local MCP clients use it, also for agent-listener calls.
       return `http://127.0.0.1:${address.port}`;
     },
     telegramRunning: () => telegram.running(),
@@ -62,19 +74,27 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
   const sockets = new Set<Socket>();
   const listener = getRequestListener(app.fetch);
   const server = createServer((req, res) => {
-    if (closing) {
-      res.writeHead(503, { "Connection": "close", "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Server is shutting down" }));
-      return;
-    }
+    if (closing) { refuse(res, 503, "Server is shutting down", { "Connection": "close" }); return; }
     if (!humanAuth.handleHttp(req, res)) return;
     const url = req.url ?? "/";
     if (url.startsWith("/api") || url.startsWith("/ws")) { listener(req, res); return; }
     if (serveWeb(res, url)) return;
     listener(req, res);
   });
+  // What a remote host's forward reaches. No static UI and no WebSocket server; its app
+  // routes the agent API only, and the path allowlist answers 404 before the ingress gate,
+  // so not even the Human session bootstrap is handled here.
+  const agentListener = getRequestListener(agentApp.fetch);
+  const agentServer = agentPort === null ? null : createServer((req, res) => {
+    if (closing) { refuse(res, 503, "Server is shutting down", { "Connection": "close" }); return; }
+    if (!isAgentListenerPath(req.url ?? "/")) { refuse(res, 404, "Not found", { "Cache-Control": "no-store" }); req.resume(); return; }
+    // The same Host, Origin and Fetch Metadata checks as the agent API on the Human listener.
+    if (!humanAuth.handleHttp(req, res)) return;
+    agentListener(req, res);
+  });
+  const listeners = agentServer ? [server, agentServer] : [server];
 
-  server.on("connection", socket => {
+  for (const target of listeners) target.on("connection", socket => {
     if (closing) { socket.destroy(); return; }
     sockets.add(socket);
     socket.on("close", () => sockets.delete(socket));
@@ -116,37 +136,50 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
   }] as const);
   for (const [type, forward] of forwarders) hive.bus.on(type, forward);
 
-  server.requestTimeout = REQUEST_BODY_MS;
-  server.headersTimeout = REQUEST_HEADER_MS;
-  server.maxHeadersCount = 100;
-  server.timeout = 0;
+  for (const target of listeners) {
+    target.requestTimeout = REQUEST_BODY_MS;
+    target.headersTimeout = REQUEST_HEADER_MS;
+    target.maxHeadersCount = 100;
+    target.timeout = 0;
+  }
   const sweep = setInterval(() => { hive.identity.sweepPresence(); hive.launcherQueue.sweepExpired(); hive.tasks.sweepHardPauses(); hive.activity.sweep(); }, 15_000);
   sweep.unref();
   const heartbeat = setInterval(() => heartbeatClients(clients, responsive), WS_HEARTBEAT_MS);
   heartbeat.unref();
   const stopMaintenance = startMaintenance(hive, { retentionDays: retention });
-  const ready = new Promise<number>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(port, "127.0.0.1", () => {
-      const addr = server.address();
-      const actual = typeof addr === "object" && addr ? addr.port : port;
-      console.error(`hivemind on http://127.0.0.1:${actual}`);
+  const listen = (target: Server, wanted: number, announce: (actual: number) => void) => new Promise<number>((resolve, reject) => {
+    target.once("error", reject);
+    target.listen(wanted, "127.0.0.1", () => {
+      const addr = target.address();
+      const actual = typeof addr === "object" && addr ? addr.port : wanted;
+      announce(actual);
       resolve(actual);
     });
   });
+  // Server.app takes this stderr line as "ready" (ServerOutput.listeningPort).
+  const humanReady = listen(server, port, actual => console.error(`hivemind on http://127.0.0.1:${actual}`));
+  // On stdout: Server.app would show any other stderr line as the server's last error.
+  const agentReady = agentServer && agentPort !== null
+    ? listen(agentServer, agentPort, actual => console.log(`hivemind agent listener on http://127.0.0.1:${actual}`))
+    : Promise.resolve(null);
+  // An enabled agent listener that cannot bind fails the start, as a taken Human port does.
+  const ready = Promise.all([humanReady, agentReady]).then(([actual]) => actual);
 
   let shutdownTask: Promise<void> | null = null;
   const shutdown = () => {
     if (shutdownTask) return shutdownTask;
     closing = true;
-    const closeHttp = () => new Promise<void>((resolve, reject) => {
-      server.close(error => {
+    const closeHttp = (target: Server) => new Promise<void>((resolve, reject) => {
+      target.close(error => {
         if (error && (error as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING") reject(error);
         else resolve();
       });
-      server.closeIdleConnections();
+      target.closeIdleConnections();
     });
-    const httpClosed = server.listening ? closeHttp() : ready.then(closeHttp, () => undefined);
+    const closeListening = (target: Server, listening: Promise<unknown>) =>
+      target.listening ? closeHttp(target) : listening.then(() => closeHttp(target), () => undefined);
+    const httpClosed = Promise.all([closeListening(server, humanReady),
+      ...(agentServer ? [closeListening(agentServer, agentReady)] : [])]);
     clearInterval(sweep);
     clearInterval(heartbeat);
     stopMaintenance();
@@ -175,5 +208,5 @@ export function startServer(opts: { port?: number; hive?: Hive; telegram?: boole
     shutdownTask = Promise.race([drained, deadline]).finally(() => { clearTimeout(timer); lock.release(); });
     return shutdownTask;
   };
-  return { server, hive, port, shutdown, ready };
+  return { server, agentServer, hive, port, agentPort, shutdown, ready, agentReady };
 }
