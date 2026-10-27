@@ -3,9 +3,10 @@
 > [!NOTE]
 > Partly shipped. The [agent listener](#agent-listener) (plan step 1),
 > [hosts](#hosts), the [host connection](#host-connection) and the
-> [remote runtime](#remote-runtime) (step 2), and the [launch](#launch) on a host
-> with its session list and kill (step 3) are in the Node server, the page and
-> Hivemind Server.app; terminals, accounts and usage on hosts are still a design.
+> [remote runtime](#remote-runtime) (step 2), the [launch](#launch) on a host
+> with its session list and kill (step 3), and its
+> [terminals](#sessions-and-terminals) (step 4) are in the Node server, the page
+> and the apps; accounts and usage on hosts are still a design.
 > The [Plan](#plan) lists the changes that build it.
 
 A **remote host** is a second Mac on the local network, reached with SSH, where
@@ -327,9 +328,33 @@ and an offline host's sessions are not listed. Each of a host's sessions carries
 the page too, which shows "on <label>" in the Terminals sheet. A `kill` (and the launcher's) goes to the host the
 session is on; one no host's last list has is tried on this Mac first, and the hosts are listed only when it is not
 there. The launcher takes an offline host's last sessions as still running, so its kill of one fails ("cannot reach")
-instead of reporting `killed`. Attaching is step 4: until then the broker answers `attach` on a
-host's session with `internal` ("runs on <label>; attach from a terminal there"), Hivemind.app opens no Terminal.app
-window for one, and the sheet disables **Open** and **Terminal.app** for it.
+instead of reporting `killed`.
+
+*Shipped:* the terminals (plan step 4), with these details:
+
+- **Where.** An `attach` finds the session as a `kill` does: the host whose last list has it, else this Mac when its
+  tmux has it, else the host a new list finds it on. Before a terminal opens, the host is asked `tmux has-session` over
+  the master (as this Mac's tmux is asked here), so a session that ended there since its last list is `no-such-session`
+  and a host whose tmux is gone is `tmux-missing`. An offline host's session is refused with `internal` ("runs on
+  <label>, which is offline; it keeps running there"), with nothing run over SSH.
+- **The line.** The stream's PTY runs `SSHTransport.terminalSpec`: `ssh -o BatchMode=yes -o StrictHostKeyChecking=yes
+  -S <socket> -o ControlMaster=no -o LogLevel=ERROR -e none -tt <ssh> /bin/sh -c 'exec <tmux> -u -L hivemind -f
+  <tmux.conf> attach-session -t =<name>'`, with the host's tmux (as the probe found it) and its runtime's `tmux.conf`,
+  and the stream's `TERM=xterm-256color`, which ssh hands to the host's PTY. `-e none` passes every byte typed (a `~.`
+  too) on to the session, and `LogLevel=ERROR` keeps "Shared connection … closed." off the screen. Resizes reach the
+  host as ssh's window changes; a detach ends ssh, which ends the host's tmux client; the session keeps running.
+- **Open in Terminal.** Only Server.app knows the host's destination, socket and tmux, so Hivemind.app asks the
+  broker for the line (`attach.command`, [Protocol](terminal-broker.md#protocol)) for a host's session, from
+  **Terminal.app** in the Terminals sheet and after a launch on a host with **Open in Terminal**, and writes it into
+  the same self-deleting `.command` file: `exec '/usr/bin/ssh' … '-tt' '<ssh>' '/bin/sh -c …'`. A refusal (an offline
+  host, an ended session) reaches the page as an error. This Mac's sessions open as before, from the welcome's tmux.
+  The iPhone/iPad app has no Terminal.app, as before.
+- **The page.** The Terminals sheet opens a host's session in the app and in Terminal.app like this Mac's, shows
+  "on <label>" in its row and in its header once open, and its **Copy attach command** says to run the copied
+  `tmux -L hivemind attach -t <name>` on that host (the page never learns how to reach it). The agent panel shows the
+  host after the session's name, and its **Stop** names it; the stop goes to the broker's `kill`, which ends the
+  session on its host. Both ask the server's catalog (`GET /api/ui/hosts`) for the labels only once a session has a
+  host, so a hive without hosts asks for nothing.
 
 ## Accounts
 
@@ -424,7 +449,10 @@ SVG file would run its script with the Human's powers.
    shadow homes, launch file, tmux, tap), remote session listing and kill. Tests:
    `macos/Tests/HivemindKitTests/RemoteHostLaunchTests.swift` (with the fake `ssh`),
    `src/server/launcher-channel.test.ts`, `web/launch-sheet-hosts.test.tsx`.
-4. **Terminals.** In-app attach and Open in Terminal for remote sessions.
+4. **Terminals** (*shipped*). In-app attach and Open in Terminal for remote sessions, the host's label in the
+   Terminals sheet and the agent panel. Tests: `macos/Tests/HivemindKitTests/RemoteHostLaunchTests.swift` (the fake
+   `ssh` runs the stream's line and the `.command`'s), `ClientTerminalRouterTests.swift`, `web/terminal.unit.test.tsx`,
+   `web/agent-panel.unit.test.tsx`.
 5. **Accounts on hosts.** Home setup, the same-account check, the Accounts sheet's
    per-host status, remote usage reads, and Find last conversations per host.
 6. **Attachments of any type.** The upload allowlist removed, the safe preview list,

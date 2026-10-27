@@ -930,6 +930,54 @@ test("the row menu copies the attach command and works from the keyboard", async
   assert.equal(view.host.querySelector(".term-copied")?.textContent, "Copied tmux -L hivemind attach -t hm-acme-atlas");
 });
 
+test("a session on a remote host shows its host and opens here, in Terminal.app and by copy as this Mac's do", async () => {
+  installBridge();
+  const buildMac = "20000000-0000-4000-8000-000000000001";
+  const originalHosts = api.hosts;
+  let asked = 0;
+  api.hosts = async () => { asked++; return { hosts: [{ id: buildMac, label: "Build Mac", online: true }] }; };
+  const copies: string[] = [];
+  const nav = globalThis.navigator as unknown as { clipboard?: unknown };
+  const original = Object.getOwnPropertyDescriptor(globalThis.navigator, "clipboard");
+  Object.defineProperty(globalThis.navigator, "clipboard", { configurable: true,
+    value: { writeText: async (text: string) => { copies.push(text); } } });
+  unmounts.push(() => {
+    api.hosts = originalHosts;
+    if (original) Object.defineProperty(globalThis.navigator, "clipboard", original); else delete nav.clipboard;
+  });
+  const fake = fakeScreen();
+  const view = await mount(() => <SessionsSheet agents={[]} projects={[project]} project="acme" onClose={() => {}} loadScreen={fake.load} />);
+  await fromApp(connected);
+  await fromApp({ type: "sessions", items: [session("hm-acme-new-1")] });
+  await flush();
+  assert.equal(asked, 0, "no session on a host: no catalog asked for, as before hosts");
+  assert.doesNotMatch(rowsOf(view.host)[0]!.textContent ?? "", / on /);
+
+  await fromApp({ type: "sessions", items: [session("hm-acme-atlas", { host: buildMac }), session("hm-acme-new-1")] });
+  await flush();
+  assert.equal(asked, 1);
+  const [remote, local] = rowsOf(view.host);
+  assert.match(remote!.textContent ?? "", /on Build Mac · started 2m ago/);
+  assert.doesNotMatch(local!.textContent ?? "", /Build Mac/);
+  const button = (label: string) => byLabel(view.host, label);
+  assert.equal(button("Open hm-acme-atlas").disabled, false);
+  assert.equal(button("Open hm-acme-atlas in Terminal").disabled, false);
+  assert.equal(button("Open hm-acme-atlas in Terminal").title, "Open in Terminal.app, over SSH to Build Mac");
+  await act(async () => { button("Open hm-acme-atlas in Terminal").click(); });
+  assert.deepEqual(sent("terminal-open"), [{ type: "terminal-open", session: "hm-acme-atlas" }], "the app asks Hivemind Server for the line");
+
+  await act(async () => { button("More actions for hm-acme-atlas").click(); });
+  await act(async () => { byText(view.host.querySelector("[role=menu]")!, "Copy attach command").click(); });
+  await flush();
+  assert.deepEqual(copies, ["tmux -L hivemind attach -t hm-acme-atlas"]);
+  assert.equal(view.host.querySelector(".term-copied")?.textContent, "Copied tmux -L hivemind attach -t hm-acme-atlas: run it on Build Mac");
+
+  await act(async () => { button("Open hm-acme-atlas").click(); });
+  await flush();
+  assert.equal(sent("terminal-attach")[0]?.session, "hm-acme-atlas", "attached as this Mac's: the broker runs ssh");
+  assert.equal(view.host.querySelector(".sheet-head p")?.textContent, "hm-acme-atlas on Build Mac");
+});
+
 test("the roster marks agents running in a live session, inside the app only", async () => {
   const agents = [agent("a1", "Atlas", { terminalSession: "hm-acme-atlas" }), agent("a2", "Bea", { role: "worker", seniority: "mid" }),
     agent("a3", "Cleo", { terminalSession: "hm-acme-cleo" })];

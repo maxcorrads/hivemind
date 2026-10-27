@@ -11,7 +11,8 @@ private let thread = "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0"
 private let runtimeFolder = "Library/Application Support/Hivemind/remote/9.9.9"
 
 /// A tmux in the fake host's files: its sessions in `~/.fake-tmux/sessions` (list-sessions' lines), the script each
-/// new session would run in `~/.fake-tmux/script-<name>`, and every call in `~/.fake-tmux/calls`.
+/// new session would run in `~/.fake-tmux/script-<name>`, and every call in `~/.fake-tmux/calls`. Its attach-session
+/// prints the session and TERM, then echoes one line typed into it.
 private let fakeTmuxScript = #"""
   #!/bin/sh
   state="$HOME/.fake-tmux"
@@ -30,6 +31,12 @@ private let fakeTmuxScript = #"""
       name=$(target "$@")
       grep -q "^$name|" "$state/sessions" 2>/dev/null && exit 0
       echo "can't find session: $name" >&2; exit 1 ;;
+    attach-session)
+      name=$(target "$@")
+      grep -q "^$name|" "$state/sessions" 2>/dev/null || { echo "can't find session: $name" >&2; exit 1; }
+      printf 'attached %s TERM=%s\n' "$name" "$TERM"
+      IFS= read -r line && printf 'typed %s\n' "$line"
+      exit 0 ;;
     kill-session)
       name=$(target "$@")
       if grep -q "^$name|" "$state/sessions" 2>/dev/null; then
@@ -75,6 +82,10 @@ private final class ShellHosts: BrokerRemoteHosts {
     scripts.append(script)
     return await SSHProcessRunner().run(ssh.transport().commandSpec(fakeHost, command: RemoteRuntime.remote(script)),
                                         stdin: stdin, timeout: timeout)
+  }
+
+  func terminalSpec(onHost id: String, command: String) -> LaunchSpec? {
+    hosts.contains { $0.id == id } ? ssh.transport().terminalSpec(fakeHost, command: command) : nil
   }
 }
 
@@ -222,7 +233,7 @@ struct RemoteHostLaunchTests {
     #expect(!r.hosts.scripts.joined().contains(origin))
   }
 
-  @Test func aHostSessionIsKilledThereAndHasNoTerminalHereYet() async throws {
+  @Test func aHostSessionAttachesInAStreamOverTheMasterAndIsKilledThere() async throws {
     let r = try RemoteFixture()
     defer { r.remove() }
     try r.seed(["hm-acme-atlas|1700000000|0|0|acme|Atlas"])
@@ -230,16 +241,114 @@ struct RemoteHostLaunchTests {
     let (transport, connection) = await r.h.client()
     await r.h.send(connection, .sessionsList)
     _ = transport.take()
-    await r.h.send(connection, .attach(session: atlas, size: TerminalSize(columns: 80, rows: 24)!), id: "a")
-    #expect(transport.take().first == BrokerEventFrame(id: "a", .error(
-      code: .internal, message: "hm-acme-atlas runs on Build Mac; attach from a terminal there", stream: nil)))
-    #expect(r.h.spawner.terminals.isEmpty)
+    await r.h.send(connection, .attach(session: atlas, size: TerminalSize(columns: 120, rows: 40)!), id: "a")
+    #expect(transport.take() == [BrokerEventFrame(id: "a", .attached(stream: 1, session: atlas))])
+    let terminal = try #require(r.h.spawner.terminals.first)
+    let spec = terminal.spec
+    // The PTY runs ssh -tt over the host's master to the host's tmux and its runtime's tmux.conf.
+    let tmux = TmuxCommand(executable: r.tmuxPath, configPath: "\(r.home)/\(runtimeFolder)/tmux.conf")
+    let remote = RemoteRuntime.remote(tmux.attachShellLine(atlas))
+    #expect(spec.executable == r.ssh.executable.path)
+    #expect(spec.arguments == r.ssh.transport().terminalSpec(fakeHost, command: remote).arguments)
+    #expect(Array(spec.arguments.suffix(7)) == ["-o", "LogLevel=ERROR", "-e", "none", "-tt", "user@mini.local", remote])
+    #expect(spec.size == TerminalSize(columns: 120, rows: 40))
+    #expect(spec.environment["TERM"] == "xterm-256color")
+    #expect(spec.environment["TMUX"] == nil)
+    #expect(r.h.tmux.calls("has-session").isEmpty, "this Mac's tmux is never asked")
+    #expect(r.read(r.state + "/calls")?.contains("has-session -t =hm-acme-atlas") == true, "the host is, first")
+
+    // Its frames are a local stream's: output batched, input passed through as typed.
+    terminal.print("hello from the host")
+    await r.h.advance(BrokerLimits.outputBatchInterval)
+    #expect(transport.events() == [.output(stream: 1, data: Data("hello from the host".utf8))])
+    await r.h.send(connection, .input(stream: 1, data: Data("~.\r".utf8)))
+    #expect(terminal.input == [Data("~.\r".utf8)])
+
+    // What the PTY runs reaches the host's attach-session, through the fake ssh.
+    let ran = await SSHProcessRunner().run(LaunchSpec(executable: URL(fileURLWithPath: spec.executable), arguments: spec.arguments,
+                                                      environment: spec.environment), stdin: Data("whoami\n".utf8), timeout: 20)
+    #expect(ran.status == 0)
+    #expect(ran.stdout == "attached hm-acme-atlas TERM=xterm-256color\ntyped whoami\n")
+    #expect(r.read(r.state + "/calls")?.contains("-u -L hivemind -f \(r.home)/\(runtimeFolder)/tmux.conf attach-session -t =hm-acme-atlas") == true)
+    #expect(r.ssh.calls().last?.contains("-o LogLevel=ERROR -e none -tt user@mini.local") == true)
+
+    // Detaching ends ssh, as it ends tmux attach here; the session runs on, and a kill ends it on its host.
+    await r.h.send(connection, .detach(stream: 1), id: "d")
+    #expect(terminal.terminated == 1)
+    #expect(transport.take() == [BrokerEventFrame(id: "d", .exit(stream: 1, status: nil))])
     await r.h.send(connection, .kill(session: atlas), id: "k")
     #expect(transport.take().first == BrokerEventFrame(id: "k", .killed(session: atlas)))
     #expect(r.read(r.state + "/sessions") == "", "killed on the host")
     #expect(r.h.tmux.calls("kill-session").isEmpty, "never on this Mac")
     await r.h.send(connection, .kill(session: atlas), id: "again")
     #expect(transport.take().first.map { errorCode($0.event) } == .noSuchSession)
+  }
+
+  @Test func aHostSessionNotListedYetIsFoundThereAndOneThatEndedIsNoSuchSession() async throws {
+    let r = try RemoteFixture()
+    defer { r.remove() }
+    await r.h.start()
+    let (transport, connection) = await r.h.client()
+    // Started on the host since its last list: this Mac's tmux has no such session, so the hosts are listed again and
+    // it is found there.
+    try r.seed(["hm-acme-atlas|1700000000|0|0|acme|Atlas"])
+    await r.h.send(connection, .attach(session: atlas, size: TerminalSize(columns: 80, rows: 24)!), id: "a")
+    #expect(transport.take() == [BrokerEventFrame(id: "a", .attached(stream: 1, session: atlas))])
+    #expect(r.h.tmux.calls("has-session").count == 1, "this Mac first")
+    // Ended on the host since its last list: refused as here, and nothing spawned.
+    try r.seed(["hm-acme-bea|1700000000|0|0|acme|Bea"])
+    await r.h.send(connection, .attach(session: atlas, size: TerminalSize(columns: 80, rows: 24)!), id: "b")
+    #expect(transport.take() == [BrokerEventFrame(id: "b", .error(code: .noSuchSession, message: "no session hm-acme-atlas", stream: nil))])
+    #expect(r.h.spawner.terminals.count == 1)
+    await r.h.send(connection, .attachCommand(session: atlas), id: "c")
+    #expect(errorCode(transport.take().first?.event) == .noSuchSession)
+  }
+
+  @Test func anOfflineHostsSessionIsNotAttachedAndSaysWhy() async throws {
+    let r = try RemoteFixture()
+    defer { r.remove() }
+    try r.seed(["hm-acme-atlas|1700000000|0|0|acme|Atlas"])
+    await r.h.start()
+    let (transport, connection) = await r.h.client()
+    await r.h.send(connection, .sessionsList)
+    _ = transport.take()
+    r.hosts.hosts = [BrokerRemoteHost(id: fakeHost.id, label: fakeHost.label, ready: false, runtimeFolder: runtimeFolder)]
+    let scripts = r.hosts.scripts.count
+    let offline = BrokerEvent.error(code: .internal, message: "hm-acme-atlas runs on Build Mac, which is offline; it keeps running there",
+                                    stream: nil)
+    await r.h.send(connection, .attach(session: atlas, size: TerminalSize(columns: 80, rows: 24)!), id: "a")
+    await r.h.send(connection, .attachCommand(session: atlas), id: "c")
+    #expect(transport.take() == [BrokerEventFrame(id: "a", offline), BrokerEventFrame(id: "c", offline)])
+    #expect(r.h.spawner.terminals.isEmpty)
+    #expect(r.hosts.scripts.count == scripts, "nothing ran over ssh")
+  }
+
+  @Test func openInTerminalGetsTheSSHLineForAHostsSessionAndTmuxAttachForThisMacs() async throws {
+    let r = try RemoteFixture()
+    defer { r.remove() }
+    try r.seed(["hm-acme-atlas|1700000000|0|0|acme|Atlas"])
+    r.h.tmux.add("hm-acme-bea")
+    await r.h.start()
+    let (transport, connection) = await r.h.client()
+    await r.h.send(connection, .sessionsList)
+    _ = transport.take()
+    await r.h.send(connection, .attachCommand(session: atlas), id: "c")
+    let tmux = TmuxCommand(executable: r.tmuxPath, configPath: "\(r.home)/\(runtimeFolder)/tmux.conf")
+    let spec = r.ssh.transport().terminalSpec(fakeHost, command: RemoteRuntime.remote(tmux.attachShellLine(atlas)))
+    let line = "exec " + ([spec.executable.path] + spec.arguments).map(TerminalScript.shellQuoted).joined(separator: " ")
+    #expect(transport.take() == [BrokerEventFrame(id: "c", .attachCommand(session: atlas, command: line))])
+    #expect(TerminalLaunch(title: "hm-acme-atlas", cwd: nil, command: line) != nil, "fits a .command file")
+    #expect(r.h.spawner.terminals.isEmpty, "no stream here: the window runs it")
+    // The .command's login shell runs the line, which reaches the host's attach-session through the fake ssh.
+    let ran = await SSHProcessRunner().run(LaunchSpec(executable: URL(fileURLWithPath: "/bin/sh"), arguments: ["-c", line],
+                                                      environment: r.ssh.transport().environment), stdin: Data("pwd\n".utf8), timeout: 20)
+    #expect(ran.stdout.hasPrefix("attached hm-acme-atlas TERM="))
+    #expect(ran.stdout.hasSuffix("\ntyped pwd\n"))
+    // This Mac's session: tmux attach, as Hivemind.app builds it from the welcome.
+    await r.h.send(connection, .attachCommand(session: SessionName("hm-acme-bea")!), id: "here")
+    #expect(transport.take() == [BrokerEventFrame(id: "here", .attachCommand(
+      session: SessionName("hm-acme-bea")!, command: TmuxCommand(executable: "/opt/homebrew/bin/tmux", configPath: BrokerHarness.config)
+        .attachShellLine(SessionName("hm-acme-bea")!)))])
   }
 
   @Test func anOfflineHostRefusesItsLaunchAndIsNotListed() async throws {
@@ -271,11 +380,18 @@ struct RemoteHostLaunchTests {
       await h.send(connection, .launch([brokerLaunch("Atlas"), brokerLaunch(nil)]), id: "go")
       await h.send(connection, .sessionsList, id: "list")
       await h.send(connection, .attach(session: atlas, size: TerminalSize(columns: 80, rows: 24)!), id: "attach")
+      await h.send(connection, .attachCommand(session: atlas), id: "line")
       await h.send(connection, .kill(session: atlas), id: "kill")
       answers.append(transport.take().filter { $0.id != nil })
     }
     #expect(answers[0] == answers[1])
-    #expect(answers[0].count == 4)
+    #expect(answers[0].count == 5)
+    // This Mac's terminals, exactly as before hosts: tmux attach in the stream's PTY and in the Terminal.app line.
+    let local = TmuxCommand(executable: "/opt/homebrew/bin/tmux", configPath: BrokerHarness.config)
+    #expect(answers[0].contains(BrokerEventFrame(id: "attach", .attached(stream: 1, session: atlas))))
+    #expect(answers[0].contains(BrokerEventFrame(id: "line", .attachCommand(session: atlas, command: local.attachShellLine(atlas)))))
+    #expect(r.h.spawner.terminals.map(\.spec) == plain.spawner.terminals.map(\.spec))
+    #expect(r.h.spawner.terminals.first?.spec.executable == "/opt/homebrew/bin/tmux")
     #expect(r.h.tmux.calls == plain.tmux.calls)
     #expect(r.h.logs == plain.logs)
     #expect(r.hosts.scripts.isEmpty)
@@ -453,6 +569,8 @@ private final class HungHosts: BrokerRemoteHosts {
     return await withCheckedContinuation { pending.append($0) }
   }
 
+  func terminalSpec(onHost id: String, command: String) -> LaunchSpec? { nil }
+
   func release(_ result: SSHResult) {
     for continuation in pending { continuation.resume(returning: result) }
     pending.removeAll()
@@ -506,5 +624,11 @@ struct RemoteHostScriptTests {
     #expect(runner.stdins.last == Data("secret\n".utf8))
     let unknown = await service.run(onHost: "20000000-0000-4000-8000-0000000000ff", script: "echo hi", stdin: Data(), timeout: 5)
     #expect(unknown.status == SSHResult.launchFailed)
+    // A terminal on the host goes over the same master, with a PTY there and every byte passed on.
+    #expect(service.terminalSpec(onHost: fakeHost.id, command: "tmux") == transport.terminalSpec(fakeHost, command: "tmux"))
+    #expect(transport.terminalSpec(fakeHost, command: "tmux").arguments == [
+      "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-S", transport.controlPath(for: fakeHost).path,
+      "-o", "ControlMaster=no", "-o", "LogLevel=ERROR", "-e", "none", "-tt", "user@mini.local", "tmux"])
+    #expect(service.terminalSpec(onHost: "20000000-0000-4000-8000-0000000000ff", command: "tmux") == nil)
   }
 }

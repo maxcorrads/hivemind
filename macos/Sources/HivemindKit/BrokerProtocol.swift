@@ -315,6 +315,9 @@ public enum BrokerRequest: Equatable, Sendable {
   case detach(stream: BrokerStreamID)
   /// Kill a session and everything in it; answered with `killed`.
   case kill(session: SessionName)
+  /// The shell line that attaches a Terminal.app window to a running session, wherever it runs (docs/remote-hosts.md#sessions-and-terminals);
+  /// answered with `attach.command`.
+  case attachCommand(session: SessionName)
   /// A worker template's secret names; answered with `secrets`. Values are never sent back.
   case secretsList(template: TemplateID)
   /// Add or replace a template secret in the app's vault; answered with `secrets`.
@@ -339,6 +342,7 @@ public enum BrokerRequest: Equatable, Sendable {
     case .resize: "resize"
     case .detach: "detach"
     case .kill: "kill"
+    case .attachCommand: "attach.command"
     case .secretsList: "secrets.list"
     case .secretsSet: "secrets.set"
     case .secretsDelete: "secrets.delete"
@@ -446,6 +450,8 @@ extension BrokerRequestFrame: Codable {
       request = .detach(stream: try BrokerCoding.stream(c, .stream))
     case "kill":
       request = .kill(session: try BrokerCoding.session(c, .session))
+    case "attach.command":
+      request = .attachCommand(session: try BrokerCoding.session(c, .session))
     case "secrets.list":
       request = .secretsList(template: try BrokerCoding.template(c, .template))
     case "secrets.set":
@@ -518,7 +524,7 @@ extension BrokerRequestFrame: Codable {
       try c.encode(size.rows, forKey: .rows)
     case .detach(let stream):
       try c.encode(stream, forKey: .stream)
-    case .kill(let session):
+    case .kill(let session), .attachCommand(let session):
       try c.encode(session, forKey: .session)
     case .secretsList(let template):
       try c.encode(template.rawValue, forKey: .template)
@@ -560,6 +566,9 @@ public enum BrokerEvent: Equatable, Sendable {
   /// exited. `status` is the attach process's exit status when there was one.
   case exit(stream: BrokerStreamID, status: Int?)
   case killed(session: SessionName)
+  /// The answer to `attach.command`: `command` is shell text for a .command file, `exec tmux … attach-session` for
+  /// this Mac's session, `exec ssh -tt … tmux … attach-session` for a host's.
+  case attachCommand(session: SessionName, command: String)
   /// The template's secret names after a secrets.list, .set or .delete, sorted. Never a value.
   case secrets(template: TemplateID, names: [String])
   case launcherDecided(requestId: String, action: String)
@@ -578,6 +587,7 @@ public enum BrokerEvent: Equatable, Sendable {
     case .output: "output"
     case .exit: "exit"
     case .killed: "killed"
+    case .attachCommand: "attach.command"
     case .secrets: "secrets"
     case .launcherDecided: "launcher.decided"
     case .accountPrepared: "account.prepared"
@@ -616,7 +626,7 @@ public struct BrokerEventFrame: Equatable, Sendable {
 extension BrokerEventFrame: Codable {
   private enum Key: String, CodingKey {
     case type, id, version, tmuxPath, items, names, created, errors, stream, session, data, status, code, message
-    case template, requestId, action, ok, loggedIn, error
+    case template, requestId, action, ok, loggedIn, error, command
   }
 
   public init(from decoder: any Decoder) throws {
@@ -652,6 +662,12 @@ extension BrokerEventFrame: Codable {
       event = .exit(stream: try BrokerCoding.stream(c, .stream), status: try BrokerCoding.optionalInt(c, .status))
     case "killed":
       event = .killed(session: try BrokerCoding.session(c, .session))
+    case "attach.command":
+      let command = try BrokerCoding.string(c, .command)
+      guard !command.isEmpty, command.utf8.count <= TerminalLaunch.maxCommandBytes, !command.contains("\0") else {
+        throw BrokerProtocolError.invalid("command", "must be 1–\(TerminalLaunch.maxCommandBytes) bytes, no NUL")
+      }
+      event = .attachCommand(session: try BrokerCoding.session(c, .session), command: command)
     case "secrets":
       let template = try BrokerCoding.template(c, .template)
       guard let names = try? c.decode([String].self, forKey: .names), names.count <= TemplateSecrets.maxNames,
@@ -718,6 +734,9 @@ extension BrokerEventFrame: Codable {
       try c.encode(status, forKey: .status)
     case .killed(let session):
       try c.encode(session, forKey: .session)
+    case .attachCommand(let session, let command):
+      try c.encode(session, forKey: .session)
+      try c.encode(command, forKey: .command)
     case .secrets(let template, let names):
       try c.encode(template.rawValue, forKey: .template)
       try c.encode(names, forKey: .names)

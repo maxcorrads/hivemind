@@ -62,6 +62,7 @@ struct BrokerRequestTests {
       .init(.resize(stream: 3, size: TerminalSize(columns: 2, rows: 1)!)),
       .init(.detach(stream: 3)),
       .init(id: "k", .kill(session: atlas)),
+      .init(id: "c", .attachCommand(session: atlas)),
       .init(id: "p", .accountPrepare(account: claudeWork)),
     ]
     for frame in frames {
@@ -328,6 +329,7 @@ struct BrokerEventTests {
       .init(.exit(stream: 1, status: 0)),
       .init(.exit(stream: 1, status: nil)),
       .init(id: "k", .killed(session: atlas)),
+      .init(id: "c", .attachCommand(session: atlas, command: "exec '/usr/bin/ssh' '-tt' 'user@mini.local' 'tmux attach'")),
       .init(id: "a", .error(code: .noSuchSession, message: "hm-acme-atlas is not running", stream: nil)),
       .init(.error(code: .noSuchStream, message: "no stream 4", stream: 4)),
       .init(id: "p", .accountPrepared(AccountPreparation(loggedIn: false))),
@@ -356,6 +358,11 @@ struct BrokerEventTests {
       #"{"type":"launched","names":["hm-a"]}"#,
       #"{"type":"welcome"}"#,
       #"{"type":"surprise"}"#,
+      #"{"type":"attach.command","session":"hm-acme-atlas"}"#,
+      #"{"type":"attach.command","session":"hm-acme-atlas","command":""}"#,
+      #"{"type":"attach.command","session":"hm-acme-atlas","command":"exec\u0000tmux"}"#,
+      #"{"type":"attach.command","session":"hm-acme-atlas","command":""# + String(repeating: "x", count: TerminalLaunch.maxCommandBytes + 1) + #""}"#,
+      #"{"type":"attach.command","command":"exec tmux"}"#,
     ] {
       #expect(eventRefusal(json) != nil, "\(json)")
     }
