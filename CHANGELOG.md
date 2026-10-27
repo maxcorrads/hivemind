@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.10.0](https://github.com/maxcorrads/hivemind/compare/v0.9.1...v0.10.0) (2026-10-27)
+
+
+### Features
+
+* **files:** attachments of any type, served inline only from a safe list ([#367](https://github.com/maxcorrads/hivemind/issues/367)) ([fefdd86](https://github.com/maxcorrads/hivemind/commit/fefdd86d64a3fbafde2e859ca7fdd86b5c7c7f39))
+* **remote-hosts:** accounts on hosts (plan step 5) ([#378](https://github.com/maxcorrads/hivemind/issues/378)) ([9fea193](https://github.com/maxcorrads/hivemind/commit/9fea19332d0294a980105b7246477390a8eec10e))
+* **remote-hosts:** attach a host's session in the app and in Terminal.app ([#377](https://github.com/maxcorrads/hivemind/issues/377)) ([d758a87](https://github.com/maxcorrads/hivemind/commit/d758a872268ac58d58dddfb8edfe6266d5809e42))
+* **remote-hosts:** hosts, host connection and remote runtime (plan step 2) ([#368](https://github.com/maxcorrads/hivemind/issues/368)) ([36bdddd](https://github.com/maxcorrads/hivemind/commit/36bddddbcd27f8e70954ea36ab82e35c9e2bc88d))
+* **remote-hosts:** launch on a host (plan step 3) ([#376](https://github.com/maxcorrads/hivemind/issues/376)) ([685b9ee](https://github.com/maxcorrads/hivemind/commit/685b9ee520cdd90e313dcd25727165a3434b261a))
+* **server:** agent-only listener for remote hosts ([#366](https://github.com/maxcorrads/hivemind/issues/366)) ([68fd0f5](https://github.com/maxcorrads/hivemind/commit/68fd0f520b5782993c62b9479a6d6a3d165d80c1))
+
+
+### Bug Fixes
+
+* **deps:** bump body-parser and fast-uri to clear npm audit ([#374](https://github.com/maxcorrads/hivemind/issues/374)) ([5be46eb](https://github.com/maxcorrads/hivemind/commit/5be46ebd22018c66427b0220661b454eab4fbbcc))
+
+
+### Documentation
+
+* a step-by-step guide to running agents on a second Mac ([#380](https://github.com/maxcorrads/hivemind/issues/380)) ([9c498e3](https://github.com/maxcorrads/hivemind/commit/9c498e3842bbf16c38890e8daac4750bba6195d3))
+* **remote-hosts:** all six plan steps are shipped ([#379](https://github.com/maxcorrads/hivemind/issues/379)) ([5b51230](https://github.com/maxcorrads/hivemind/commit/5b5123075c81ea887cc0135130b14f34ab3b3ced))
+* **remote-hosts:** design for running agents on a second Mac over SSH, and attachments of any type ([#365](https://github.com/maxcorrads/hivemind/issues/365)) ([c719327](https://github.com/maxcorrads/hivemind/commit/c719327562be55337fe7b131990a46619d05f34e))
+
 ## [0.9.1](https://github.com/maxcorrads/hivemind/compare/v0.9.0...v0.9.1) (2026-10-22)
 
 
