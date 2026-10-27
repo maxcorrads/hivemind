@@ -12,8 +12,10 @@ export const LAUNCHER_CONTEXT = "hivemind-launcher-v1";
 const HEX = /^[0-9a-f]{64}$/;
 const MAX_BODY = 4096;
 const USAGE_PATH = "/api/launcher/usage";
-/** Only the usage post may be larger: up to 16 snapshots, each a few kilobytes at most. */
+const HOSTS_PATH = "/api/launcher/hosts";
+/** Only the usage post and the host catalog may be larger: up to 16 snapshots, each a few kilobytes at most, and 16 hosts. */
 const USAGE_BODY = 64 * 1024;
+const HOSTS_BODY = 16 * 1024;
 const SKEW_SECONDS = 60;
 const usageInput = z.object({ snapshots: z.array(usageSnapshotSchema).max(16) }).strict();
 
@@ -72,7 +74,8 @@ export class LauncherVerifier {
     const at = Number(timestamp), now = Math.floor(this.now() / 1000);
     if (!Number.isSafeInteger(at) || Math.abs(now - at) > SKEW_SECONDS) throw new HiveError(401, "Invalid launcher proof");
     const url = new URL(request.url), pathAndQuery = url.pathname + url.search;
-    const body = await boundedBody(request.clone(), url.pathname === USAGE_PATH ? USAGE_BODY : MAX_BODY);
+    const body = await boundedBody(request.clone(), url.pathname === USAGE_PATH ? USAGE_BODY
+      : url.pathname === HOSTS_PATH ? HOSTS_BODY : MAX_BODY);
     if (request.method === "GET" && body.byteLength !== 0) throw new HiveError(400, "GET launcher request has a body");
     const expected = launcherSignature(this.secret, request.method, pathAndQuery, timestamp, nonce, body);
     if (!timingSafeEqual(Buffer.from(signature, "hex"), Buffer.from(expected, "hex")))
@@ -132,6 +135,11 @@ export function installLauncherChannel(app: Hono, hive: Hive, secret: Buffer | n
     const { snapshots } = validated(usageInput, await readLimitedJson(c.req.raw, USAGE_BODY));
     // One transaction: an unknown account refuses the whole post, so a batch is never half kept.
     hive.storage.transaction(() => { for (const snapshot of snapshots) hive.accountUsage.record(snapshot); });
+    return c.json({ ok: true });
+  });
+  // The whole host catalog (docs/remote-hosts.md#hosts), which replaces the one the server held.
+  app.put(HOSTS_PATH, async c => {
+    hive.hosts.replace(await readLimitedJson(c.req.raw, HOSTS_BODY));
     return c.json({ ok: true });
   });
   app.post("/api/launcher/:id/result", async c => {

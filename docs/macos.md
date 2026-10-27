@@ -40,6 +40,9 @@ listens on, and the last error line when there is one. From the menu you can:
 - **Remote Access**, **Pair a Device…**, **Devices (N)…** and **Remote Access
   Settings** (Port…, Show Remote Access Log, Reset Identity…): see
   [Remote access](#remote-access).
+- **Hosts (N)**: each remote host with its status, **Reconnect** and
+  **Remove…**, then **Add Host…** and **Show Hosts Log**: see
+  [Remote hosts](#remote-hosts).
 
 A second status line, **Terminals: …**, shows the [terminal broker](terminal-broker.md):
 how many Hivemind tmux sessions run and how many are open in Hivemind.app, or
@@ -402,6 +405,31 @@ broker token itself. The protocol, network scope, certificate pinning, tokens,
 revocation, what the gateway rewrites and its limits are in
 [Remote access](remote-access.md).
 
+## Remote hosts
+
+A remote host is a second Mac on the local network, reached with SSH, where
+Hivemind will run brains and workers ([Remote hosts](remote-hosts.md); launches
+there come in a later step). **Hosts → Add Host…** takes a name, the SSH
+destination (`user@mini.local`, or a `Host` from `~/.ssh/config`) and optional
+extra forwards in `ssh` syntax (`-R 1080 -L 5432:db.internal:5432`). The host
+needs SSH key login without a password and a known host key: Hivemind never
+prompts.
+
+For each host the app keeps one SSH connection for as long as it runs,
+reconnects it with backoff (2 s doubling to a minute, forever) when it drops,
+and installs its own Node.js and server package on the host over that connection
+when the host does not have this version yet. The menu shows each host as
+online, connecting, offline (with ssh's reason and the next retry), or online
+with the runtime being checked, copied or failed. **Reconnect** opens a new
+connection at once; **Remove…** closes it and forgets the host, leaving
+anything running there alone.
+
+While at least one host exists, the server runs a second, agent-only listener
+on `127.0.0.1:7422` (`--agent-port`), which each host's connection forwards to.
+Adding the first host and removing the last one restart the server once for it.
+With no host there is no listener, no SSH connection and nothing sent to the
+server about hosts.
+
 ## Files and locations
 
 | What | Where |
@@ -418,6 +446,10 @@ revocation, what the gateway rewrites and its limits are in
 | Remote gateway identity | The login Keychain: a self-signed certificate and its P-256 private key, labelled "Hivemind Server remote access" |
 | Remote gateway log | `~/Library/Logs/Hivemind/gateway.log` (**Show Remote Access Log**) |
 | Remote access settings | `remoteAccess` and `remoteAccessPort` in `com.maxcorrads.hivemind.server`'s preferences |
+| Remote hosts ([remote hosts](remote-hosts.md#hosts)) | `~/Library/Application Support/Hivemind/hosts.json` (`0600`) |
+| Host connections' control sockets | `~/Library/Application Support/Hivemind/ssh/` (`0700`), or `/tmp/hivemind-ssh-<uid>/` when that path is too long for a socket |
+| Host connections log | `~/Library/Logs/Hivemind/hosts.log` (**Show Hosts Log**) |
+| Remote runtime, on each host | `~/Library/Application Support/Hivemind/remote/<version>/` there (`0700`) |
 
 Backup and restore of the data folder work the same as for any other server:
 see [Storage, backup and restore](storage-and-backup.md). Stop the server from

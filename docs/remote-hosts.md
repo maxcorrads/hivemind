@@ -1,11 +1,11 @@
 # Remote hosts (design)
 
 > [!NOTE]
-> This is a design, mostly not shipped yet. The [Plan](#plan) lists the changes
-> that build it and marks the ones shipped; so far the
-> [agent listener](#agent-listener) (step 1) and
-> [Attachments of any type](#attachments-of-any-type) (step 6) exist, and nothing
-> turns the listener on yet.
+> Partly shipped. The [agent listener](#agent-listener) (step 1), [hosts](#hosts),
+> the [host connection](#host-connection) and the [remote runtime](#remote-runtime)
+> (step 2) are in Hivemind Server.app, and [Attachments of any type](#attachments-of-any-type)
+> (step 6) are in the server; the rest is still a design, and no launch goes to a
+> host yet. The [Plan](#plan) lists the changes that build it.
 
 A **remote host** is a second Mac on the local network, reached with SSH, where
 Hivemind runs brains and workers. Everything else stays on the Mac that runs
@@ -69,8 +69,26 @@ It never reaches the repository, the server database or the page beyond its labe
 | `ssh` | The SSH destination as `ssh` takes it: `user@host.local`, or a `Host` alias from `~/.ssh/config`. |
 | `forwards` | Extra forwards added to the host connection, in `ssh` syntax (`-R 1080`, `-L 5432:db.internal:5432`). Hivemind does not interpret them. |
 
-The control Mac's server knows hosts by `id` and `label` only. They come from
-Server.app's launcher channel, the same way the account catalog reaches it today.
+*Shipped.* The file is `{"hosts": [...]}`, written whole on every change. The
+Server.app menu's **Hosts → Add Host…** takes the label, the destination and the
+forwards (separated by spaces or new lines, `-R 1080` or `-R1080`), and
+**Remove…** forgets a host. The `id` is a lowercase UUID; the label is 1–80
+characters; the destination is one word that does not start with `-`, since `ssh`
+would read it as an option; each forward is stored as its flag (`-L`, `-R` or
+`-D`, nothing else) and one spec, at most 16 per host, and is passed to `ssh` as
+those two arguments. At most 16 hosts. A `hosts.json` that cannot be read is
+never overwritten: the menu says to move it away.
+
+The control Mac's server knows hosts by `id`, `label` and `online` only. They come
+from Server.app over the launcher channel (`PUT /api/launcher/hosts`, signed like
+the usage probe's posts), as the whole catalog, sent again when a host is added
+or removed, when one goes online or offline, and to every new server. The server
+holds it in memory (`hive.hosts`, src/server/host-catalog.ts): it is Server.app's
+state. A host is `online` when its connection is up and its remote runtime is
+this version's. With no host and none sent before, Server.app sends nothing. A
+send that fails is retried after 2 s, doubling to a minute, while the server
+stays the same; a new server ends the wait and gets the catalog at once, also
+when it comes up while a send to the old one is still out.
 
 **Requirements on the host.** macOS, SSH key login without a password
 (`BatchMode=yes` must succeed), a known host key in the control Mac's
@@ -80,22 +98,55 @@ by `sshd` are otherwise refused there.
 
 ## Host connection
 
-Server.app keeps one SSH connection per host while the server runs:
+Server.app keeps one SSH connection per host for as long as it runs:
 
 ```text
-ssh -N -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
-    -o ExitOnForwardFailure=yes -o ControlMaster=yes -o ControlPath=<private socket> \
+ssh -N -o BatchMode=yes -o StrictHostKeyChecking=yes -S <private socket> \
+    -o ControlMaster=yes -o ControlPersist=no \
+    -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o ConnectTimeout=10 \
+    -o ExitOnForwardFailure=yes \
     -R 127.0.0.1:<remote agent port>:127.0.0.1:<agent port> <forwards…> <ssh>
 ```
 
 - **One master.** Every other SSH action (launch, list, attach, kill, file copies)
-  reuses it through `ControlPath`, so each one is a new channel, not a new login.
+  reuses it through its control socket, so each one is a new channel, not a new login.
 - **Supervised.** If it exits, Server.app opens it again with backoff and marks the
   host offline meanwhile. Launches to an offline host are refused with that reason.
   Running agents keep running in the remote tmux. Their MCP reconnects when the
   forward is back, as it does today after a server restart.
 - **`ExitOnForwardFailure`**: if the remote port is taken, the connection fails
   loudly instead of running without its forward.
+
+*Shipped* (HivemindKit's `SSHTransport` and `HostConnection`), with these
+details:
+
+- **Socket.** `-S` names the control socket as one argument (an `-o ControlPath=`
+  value would split at the space in `Application Support`). It lives in
+  `~/Library/Application Support/Hivemind/ssh/` (0700), named by the first 16 hex
+  digits of the host id's SHA-256; when that path would not fit in a Unix socket
+  address, in `/tmp/hivemind-ssh-<uid>/` (0700, refused if another user made it).
+- **`ControlPersist=no`** keeps a `~/.ssh/config` default from sending the master
+  to the background, out of Server.app's supervision.
+- **`StrictHostKeyChecking=yes`** makes the "no prompt" rule hold whatever
+  `~/.ssh/config` says: an unknown or changed host key fails the connection.
+- **Up.** The master prints nothing when it is up, so Server.app asks it with
+  `ssh -O check` every 0.5 s; the host is online once it answers. A master that
+  does not answer within 30 s is ended and counts as a failed connection.
+- **A crashed app's master.** Before each connection Server.app sends `ssh -O
+  exit` on the socket, so a master an earlier run left behind gives back the
+  agent forward's remote port.
+- **Backoff.** 2 s, doubling to a minute, and never giving up: a host that sleeps
+  or leaves the network comes back on its own. A connection that stayed up 30 s
+  resets it. The menu shows ssh's last line (`Permission denied (publickey).`,
+  `remote port forwarding failed …`) and the next retry; `hosts.log` has the rest.
+- **Ports.** The agent port and the remote agent port are both 7422.
+- **Other commands** reuse the master: `ssh -S <socket> -o ControlMaster=no -T
+  <ssh> <command>`, in BatchMode too.
+- **For the life of the app**, not only while the server runs, like the terminal
+  broker: agents on a host keep running whatever the server does, and the
+  later broker steps (list, attach, kill) need the master without the server.
+  While the server is stopped the forward only refuses connections, as
+  `127.0.0.1:7420` does for agents here.
 
 ## Agent listener
 
@@ -137,6 +188,12 @@ origin is loopback too. Bots keep using the Human listener's origin: the server
 hands them that one (and checks it with `localOrigin`) even when a brain calls a
 bot tool through the agent listener.
 
+*Shipped on the Server.app side.* While at least one host is configured,
+Server.app starts `hivemind serve` with `--agent-port 7422`; with none it passes
+nothing and drops an inherited `HIVEMIND_AGENT_PORT`, so the server runs no agent
+listener. Adding the first host or removing the last one restarts a running
+server once for it.
+
 ## Remote runtime
 
 Server.app installs what the MCP needs on each host, in
@@ -145,6 +202,22 @@ Node.js and the server package, the same files as its own `Contents`. It checks 
 version at every connection and replaces it when the control Mac updates, so the
 MCP on a host always matches the server. The copy goes over the master connection
 (`tar` on stdin). A host needs no Node.js or Hivemind install of its own.
+
+*Shipped* (HivemindKit's `RemoteRuntime` and `RemoteRuntimeInstaller`). The
+folder holds `node` (Contents/Helpers/node), `server/` (Contents/Resources/server),
+`tmux.conf` (the one the broker writes here) and `runtime.stamp`. The stamp is the
+version and a digest of the copied files' names and sizes (the server package
+without `node_modules`, whose `package-lock.json` is hashed instead), so a rebuild
+with the same version is copied again. Each connection runs one check over the
+master, which prints `uname -s` and `uname -m` and the stamp, each after a marker
+so that what the host's shell startup files print does not matter: a host that is not
+`Darwin arm64` gets no copy and shows why, a missing or different stamp starts the
+copy. The copy extracts into a private folder next to the target, checks that its
+`node --version` runs, writes the stamp last and only then moves the folder into
+place, so a copy cut short never looks finished. The app-support folder and the
+runtime folders are 0700. Of the other versions only the newest is kept, for
+agents still running its MCP. A copy of Server.app with no bundled runtime
+(`swift run`) shows that instead.
 
 The `hivemindMcp` of a launch context gains a per-host variant: the remote runtime's
 `node` and `cli.js mcp`, with the remote `HIVEMIND_URL`.
@@ -282,12 +355,12 @@ inline (`INLINE_MIMES` in `src/shared/mime.ts`).
 
 ## Plan
 
-1. **Agent listener** (shipped). The agent-only listener in the Node server, behind
+1. **Agent listener** (*shipped*). The agent-only listener in the Node server, behind
    `hivemind serve --agent-port`. Tests: `src/server/agent-listener.test.ts`.
-2. **Hosts and the host connection.** `hosts.json`, the supervised master
-   connection with the agent forward and extra forwards, host status in the
-   Server.app menu, and the remote runtime install and update. Server.app starts
-   `serve` with `--agent-port` while at least one host exists.
+2. **Hosts and the host connection** (*shipped*). `hosts.json`, the supervised
+   master connection with the agent forward and extra forwards, host status in the
+   Server.app menu, the agent listener turned on while a host exists, the remote
+   runtime install and update, and the host catalog on the server.
 3. **Launch on a host.** The Host field in Launch, Resume… and templates, the host
    on launch requests and the launcher channel, the remote launch steps (clone,
    shadow homes, launch file, tmux, tap), remote session listing and kill.

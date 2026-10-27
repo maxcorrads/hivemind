@@ -62,6 +62,34 @@ enum Dialogs {
     }
   }
 
+  /// What was typed in Add Host (name, SSH destination, extra forwards), or nil on Cancel; the caller validates it.
+  static func askHost(label: String, ssh: String, forwards: String, info: String) -> (label: String, ssh: String, forwards: String)? {
+    activate()
+    let alert = NSAlert()
+    alert.messageText = "Add a Host"
+    alert.informativeText = info
+    let fields = [
+      ("Name", label, "Build Mac"),
+      ("SSH destination", ssh, "user@mini.local"),
+      ("Extra forwards", forwards, "-R 1080 -L 5432:db.internal:5432 (optional)"),
+    ].map { title, value, placeholder in
+      let field = NSTextField(string: value)
+      field.placeholderString = placeholder
+      return (NSTextField(labelWithString: title), field)
+    }
+    let grid = NSGridView(views: fields.map { [$0.0, $0.1] })
+    grid.column(at: 0).xPlacement = .trailing
+    grid.rowSpacing = 8
+    for (_, field) in fields { field.widthAnchor.constraint(equalToConstant: 300).isActive = true }
+    grid.frame = NSRect(x: 0, y: 0, width: 430, height: 90)
+    alert.accessoryView = grid
+    alert.addButton(withTitle: "Add")
+    alert.addButton(withTitle: "Cancel")
+    alert.window.initialFirstResponder = fields[0].1
+    guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+    return (fields[0].1.stringValue, fields[1].1.stringValue, fields[2].1.stringValue)
+  }
+
   static func chooseFolder(starting: URL, message: String) -> URL? {
     activate()
     let panel = NSOpenPanel()

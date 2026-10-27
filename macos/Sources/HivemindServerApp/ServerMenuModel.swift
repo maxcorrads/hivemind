@@ -25,6 +25,15 @@ final class ServerMenuModel: ObservableObject {
     codex: CodexAppServerProbe(),
     tap: ClaudeStatusTap(folder: controller.paths.accounts),
     onAccounts: { [weak self] in self?.terminals.inProcessBroker?.learnClaudeAccounts($0) })
+  /// Remote hosts (docs/remote-hosts.md): hosts.json, one SSH master per host for the life of the app, the runtime
+  /// on each, and the host catalog the server holds. With no host it does nothing, and the server runs no agent listener.
+  lazy var hosts: HostsService = {
+    let log = RotatingLog(file: paths.hostsLog)
+    return HostsService(
+      store: RemoteHostStore(paths: paths), server: { [weak self] in self?.launcherServer },
+      dependencies: .live(paths: paths, server: controller.server),
+      log: { log.append($0) })
+  }()
   private let loginItem: any LoginItemControlling
   private let installer: CommandLineInstaller
 
@@ -57,10 +66,18 @@ final class ServerMenuModel: ObservableObject {
       self?.remote.serverChanged()
       self?.launcher.serverChanged()
       self?.usage.serverChanged()
+      self?.hosts.serverChanged()
     }
     controller.onChange = { [weak self] in self?.objectWillChange.send() }
     terminals.onChange = { [weak self] in self?.objectWillChange.send() }
     remote.onChange = { [weak self] in self?.objectWillChange.send() }
+    hosts.onChange = { [weak self] in self?.objectWillChange.send() }
+    // The first host turns the agent listener on, and the last one off; the server restarts for it.
+    hosts.onAgentPortChange = { [weak self] in
+      guard let self else { return }
+      self.controller.setAgentPort(self.hosts.agentPort)
+    }
+    controller.setAgentPort(hosts.agentPort)
   }
 
   private var paths: HivemindPaths { controller.paths }
@@ -162,6 +179,49 @@ final class ServerMenuModel: ObservableObject {
       Dialogs.error("Could not change Launch at Login", message)
     }
     objectWillChange.send()
+  }
+
+  // MARK: Hosts
+
+  func addHost() {
+    var entered = (label: "", ssh: "", forwards: "")
+    var problem: String?
+    while true {
+      var info = """
+        A Mac on your network that Hivemind reaches with SSH, to run brains and workers there. It needs SSH key login \
+        without a password and a known host key in ~/.ssh/known_hosts. A host can run anything as you, and so can \
+        whoever controls it: add only Macs you own.
+        """
+      if hosts.hosts.isEmpty { info += "\n\nThe server restarts once to open its agent listener for hosts." }
+      guard let answer = Dialogs.askHost(label: entered.label, ssh: entered.ssh, forwards: entered.forwards,
+                                         info: problem.map { "\($0)\n\n\(info)" } ?? info) else { return }
+      entered = answer
+      do {
+        try hosts.add(RemoteHost.entered(label: answer.label, ssh: answer.ssh, forwards: answer.forwards))
+        return
+      } catch {
+        problem = error.message
+      }
+    }
+  }
+
+  func removeHost(_ host: RemoteHost) {
+    let last = hosts.hosts.count == 1 ? " It is the last host: the server restarts to close its agent listener." : ""
+    guard Dialogs.confirm(
+      "Remove \(host.label)?",
+      "Hivemind closes its connection to \(host.ssh). Agents running there keep running in its tmux, and the runtime stays installed there.\(last)",
+      action: "Remove") else { return }
+    do { try hosts.remove(host.id) } catch { Dialogs.error("Could not remove \(host.label)", error.message) }
+  }
+
+  func showHostsLog() {
+    let log = paths.hostsLog
+    let fm = FileManager.default
+    if !fm.fileExists(atPath: log.path) {
+      try? fm.createDirectory(at: log.deletingLastPathComponent(), withIntermediateDirectories: true)
+      fm.createFile(atPath: log.path, contents: nil, attributes: [.posixPermissions: 0o600])
+    }
+    NSWorkspace.shared.open(log)
   }
 
   // MARK: Command-line tool

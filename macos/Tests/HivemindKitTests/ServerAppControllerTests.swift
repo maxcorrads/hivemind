@@ -93,6 +93,45 @@ struct ServerAppControllerTests {
     #expect(sut.status.title == "Starting on port 7420…")
   }
 
+  // MARK: Agent listener (docs/remote-hosts.md#agent-listener)
+
+  @Test func withNoHostTheServerRunsNoAgentListenerEvenIfTheEnvironmentAsksForOne() throws {
+    let sut = controller()
+    sut.setAgentPort(nil)
+    sut.launch()
+    let spec = try #require(launcher.specs.first)
+    #expect(spec.arguments == ["/Apps/Hivemind Server.app/Contents/Resources/server/bin/hivemind.mjs", "serve", "--port", "7420"])
+    let inherited = ServerLaunchSettings(port: .default, dataHome: home).spec(
+      server: server, baseEnvironment: ["HIVEMIND_AGENT_PORT": "7422"], home: home)
+    #expect(inherited.environment["HIVEMIND_AGENT_PORT"] == nil, "an inherited HIVEMIND_AGENT_PORT is never passed on")
+    #expect(!inherited.arguments.contains("--agent-port"))
+    #expect(try !logText().contains("agent listener"))
+  }
+
+  @Test func theFirstHostRestartsARunningServerWithItsAgentListenerAndTheLastOneWithout() throws {
+    let sut = controller()
+    sut.launch()
+    ready()
+    sut.setAgentPort(ServerPort(7422)!)
+    #expect(launcher.specs.count == 2, "a running server restarts for it")
+    #expect(launcher.specs[1].arguments.suffix(4) == ["--port", "7420", "--agent-port", "7422"])
+    ready()
+    sut.setAgentPort(ServerPort(7422)!)
+    #expect(launcher.specs.count == 2, "the same port does not restart")
+    sut.setAgentPort(nil)
+    #expect(launcher.specs.count == 3)
+    #expect(launcher.specs[2].arguments.last == "7420")
+    #expect(try logText().contains("agent listener on port 7422"))
+  }
+
+  @Test func aStoppedServerTakesTheAgentPortOnItsNextStart() throws {
+    let sut = controller()
+    sut.setAgentPort(ServerPort(7422)!)
+    #expect(launcher.specs.isEmpty)
+    sut.launch()
+    #expect(launcher.specs.first?.arguments.suffix(2) == ["--agent-port", "7422"])
+  }
+
   @Test func publishesDiscoveryWhileRunningAndWithdrawsOnStop() throws {
     let sut = controller()
     sut.launch()

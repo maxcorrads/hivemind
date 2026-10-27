@@ -512,3 +512,55 @@ test("signed usage post stores snapshots, refuses unknown keys, sizes and accoun
   assert.equal((await f.signed("POST", "/api/launcher/requests/none/reject", { padding: "x".repeat(5000) })).status, 413,
     "the 4 KiB limit still applies to the other launcher routes");
 });
+
+/** A host as Server.app's catalog sends it (HivemindKit HostCatalogEntry). */
+const catalogHost = (n: number, overrides: Record<string, unknown> = {}) => ({
+  id: `20000000-0000-4000-8000-${String(n).padStart(12, "0")}`, label: `Build Mac ${n}`, online: false, ...overrides });
+
+test("with no host the server holds an empty catalog, and an unsigned catalog put is refused like /next", async t => {
+  const f = fixture(t);
+  assert.deepEqual(f.hive.hosts.list(), [], "a hive without hosts has none, as before hosts");
+  const next = await f.app.request("/api/launcher/next?timeoutMs=0");
+  const put = await f.app.request("/api/launcher/hosts", { method: "PUT", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ hosts: [catalogHost(1)] }) });
+  assert.equal(put.status, 401);
+  assert.deepEqual(await put.json(), await next.json());
+  assert.equal((await createApp(f.hive).request("/api/launcher/hosts", { method: "PUT", body: "{}" })).status, 404);
+  assert.deepEqual(f.hive.hosts.list(), []);
+});
+
+test("a signed catalog put replaces the hosts whole and refuses anything but id, label and online", async t => {
+  const f = fixture(t);
+  const put = (body: unknown) => f.signed("PUT", "/api/launcher/hosts", body);
+  const first = [catalogHost(1), catalogHost(2, { online: true })];
+  assert.equal((await put({ hosts: first })).status, 200);
+  assert.deepEqual(f.hive.hosts.list(), first);
+  assert.deepEqual(f.hive.hosts.get(first[1]!.id), first[1]);
+  assert.equal((await put({ hosts: [catalogHost(2)] })).status, 200);
+  assert.deepEqual(f.hive.hosts.list(), [catalogHost(2)], "the catalog is replaced, not merged");
+
+  const refused = async (body: unknown) => {
+    const response = await put(body);
+    assert.equal(response.status, 400, JSON.stringify(body).slice(0, 80));
+    return (await response.json() as { error: string }).error;
+  };
+  const leak = await refused({ hosts: [catalogHost(3, { ssh: "user@mini.local" })] });
+  assert.ok(!leak.includes("mini.local"), "a refusal names fields, never values");
+  await refused({ hosts: [catalogHost(3, { id: "20000000-0000-4000-8000-00000000000A" })] });
+  await refused({ hosts: [catalogHost(3, { label: " " })] });
+  await refused({ hosts: [catalogHost(3, { label: "Build\nMac" })] });
+  await refused({ hosts: [catalogHost(3, { label: "x".repeat(81) })] });
+  await refused({ hosts: [catalogHost(3, { online: "yes" })] });
+  await refused({ hosts: [catalogHost(3), catalogHost(3)] });
+  await refused({ hosts: Array.from({ length: 17 }, (_, n) => catalogHost(n)) });
+  await refused({ hosts: [], extra: true });
+  assert.deepEqual(f.hive.hosts.list(), [catalogHost(2)], "a refused catalog changes nothing");
+
+  const sixteen = { hosts: Array.from({ length: 16 }, (_, n) => catalogHost(n, { label: "日".repeat(80) })) };
+  assert.ok(Buffer.byteLength(JSON.stringify(sixteen)) > 4096, "sixteen long labels pass the 4 KiB launcher limit");
+  assert.equal((await put(sixteen)).status, 200);
+  assert.equal(f.hive.hosts.list().length, 16);
+  assert.equal((await put({ hosts: [], padding: "x".repeat(16 * 1024) })).status, 413);
+  assert.equal((await put({ hosts: [] })).status, 200);
+  assert.deepEqual(f.hive.hosts.list(), [], "the last host removed clears the catalog");
+});
