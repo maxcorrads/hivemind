@@ -72,6 +72,8 @@ final class ServerMenuModel: ObservableObject {
     terminals.onChange = { [weak self] in self?.objectWillChange.send() }
     remote.onChange = { [weak self] in self?.objectWillChange.send() }
     hosts.onChange = { [weak self] in self?.objectWillChange.send() }
+    // Launches on a host, and its sessions, go over its connection (docs/remote-hosts.md#launch).
+    terminals.remoteHosts = hosts
     // The first host turns the agent listener on, and the last one off; the server restarts for it.
     hosts.onAgentPortChange = { [weak self] in
       guard let self else { return }

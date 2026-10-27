@@ -1,11 +1,12 @@
 # Remote hosts (design)
 
 > [!NOTE]
-> Partly shipped. The [agent listener](#agent-listener) (step 1), [hosts](#hosts),
-> the [host connection](#host-connection) and the [remote runtime](#remote-runtime)
-> (step 2) are in Hivemind Server.app, and [Attachments of any type](#attachments-of-any-type)
-> (step 6) are in the server; the rest is still a design, and no launch goes to a
-> host yet. The [Plan](#plan) lists the changes that build it.
+> Partly shipped. The [agent listener](#agent-listener) (plan step 1),
+> [hosts](#hosts), the [host connection](#host-connection) and the
+> [remote runtime](#remote-runtime) (step 2), and the [launch](#launch) on a host
+> with its session list and kill (step 3) are in the Node server, the page and
+> Hivemind Server.app; terminals, accounts and usage on hosts are still a design.
+> The [Plan](#plan) lists the changes that build it.
 
 A **remote host** is a second Mac on the local network, reached with SSH, where
 Hivemind runs brains and workers. Everything else stays on the Mac that runs
@@ -94,7 +95,9 @@ when it comes up while a send to the old one is still out.
 (`BatchMode=yes` must succeed), a known host key in the control Mac's
 `~/.ssh/known_hosts`, and Full Disk Access for Remote Login when projects live in
 a protected folder (`~/Documents`, `~/Desktop`, `~/Downloads`): processes started
-by `sshd` are otherwise refused there.
+by `sshd` are otherwise refused there. For launches, tmux (`brew install tmux`) and
+git (for a clone) on the host; the launch steps also use the `/usr/bin/perl` that
+macOS ships.
 
 ## Host connection
 
@@ -151,8 +154,7 @@ details:
 ## Agent listener
 
 > [!NOTE]
-> Shipped in the Node server (plan step 1). Server.app does not turn it on yet:
-> it passes `--agent-port` once hosts exist (step 2).
+> Shipped (plan step 1), and turned on by Server.app while a host exists (step 2).
 
 Today any process that reaches `127.0.0.1:7420` can open a Human session. A plain
 forward of that port would give every process on the remote host the Human API.
@@ -222,6 +224,14 @@ agents still running its MCP. A copy of Server.app with no bundled runtime
 The `hivemindMcp` of a launch context gains a per-host variant: the remote runtime's
 `node` and `cli.js mcp`, with the remote `HIVEMIND_URL`.
 
+*Shipped* (`remoteHivemindMcp` in src/shared/hosts.ts, `GET /api/ui/launch-context?project=…&host=<id>`). The
+server does not know a host's home, so the MCP is `/bin/sh -c` with one line that finds the runtime of the server's own
+version under `$HOME` there and runs its `node` with `server/bin/hivemind.mjs mcp` (the bundle's entry, which runs
+`dist/node/cli.js`), with `HIVEMIND_HOME` set to `~/Library/Application Support/Hivemind/clients` on the host. Its
+environment is `HIVEMIND_URL=http://127.0.0.1:7422` (the remote agent port) and an empty `HIVEMIND_TOKEN`; nothing in
+it names a path of the control Mac. A host that is not in the catalog answers 404. As today only a Claude launch puts
+the MCP on its command line; a Codex home's `[mcp_servers.hivemind]` on a host comes with [Accounts](#accounts).
+
 ## Launch
 
 The Launch sheet, Resume… and worker templates get a **Host** field: this Mac
@@ -251,6 +261,50 @@ A launch on a host does what the broker does locally, over SSH:
 6. **Claude status-line tap.** Installed on the host. Its `statusline.json` and
    `limit-error` are read back over SSH by the usage probe (see [Usage](#usage)).
 
+*Shipped* (steps 1–6; reading the tap back is [Usage](#usage), plan step 5), with these details:
+
+- **Where the Host field is.** The Launch sheet (Launch agent and **Resume same employees**, one field for the
+  sheet), **From a template…** (the template's host) and the template editor (`hostId`, see
+  [Worker templates](worker-templates.md)). It lists **This Mac** and each host of the server's catalog
+  (`GET /api/ui/hosts`, `{hosts: [{id, label, online}]}`), an offline one as "(offline)", and shows only in the apps
+  and only while the catalog has a host. The sheet remembers the pick in this browser with its other settings and
+  falls back to This Mac when that host is gone. A launch on an offline host is refused there and says why. The
+  copied command is the host's too, for a terminal on that host. **Find last conversations** still reads this Mac's
+  transcripts (step 5).
+- **On the wire.** A `terminal-launch` item and a broker `launch` item carry `host`, a host id; a template's launcher
+  command carries it as `host` (absent with none, so a journal entry from before hosts keeps its digest). The server
+  records it on the request (`launch_requests.host_id`, migration 45): the template's host when the request is made,
+  the replacement template's on approval, and for a resume the host the worker last ran on. A request whose host is
+  not online waits, queued (`hostWaiting` on the request), without holding up the commands behind it; a catalog put
+  wakes the launcher's long poll. So does the kill of a request on a host (a stop, a cancel, a hard pause): Server.app
+  cannot list an offline host, so it could not tell its session from a gone one.
+- **The broker** (`BrokerRemote.swift`, `RemoteHostLaunch.swift`) runs each step as one `/bin/sh` script over the
+  host's master (`HostsService` as `BrokerRemoteHosts`), built from quoted values only and read back from marker
+  lines, so the host's shell startup files may print what they like. A launch takes three: a **probe** (the host's
+  `$HOME`, its tmux, Homebrew's first, and its sessions), a **prepare** (the clone, then the host's facts) and a
+  **start**. When a launch goes to a host, the probe of each ready host runs before the names are chosen; launches all
+  on this Mac take the hosts' last lists (waiting only for a host's first), which hold each host's own launches and
+  kills, so a slow host does not hold them up. A host that is offline keeps its last sessions' names taken. A launch
+  that names a session running on any host reuses it where it runs.
+- **Clone.** The origin goes on the prepare's stdin, not on a command line (an origin URL may hold a token), and
+  `git clone` runs with `GIT_TERMINAL_PROMPT=0` into the missing folder, its parent created. A folder missing with no
+  origin here fails with `cwd-missing`.
+- **Facts.** The host's own `/usr/bin/perl` (part of macOS, with its `JSON::PP`) reads what the local checks read and
+  nothing more: the folder; the Codex writer lock with the same `flock`s; the five keys of each Claude session record,
+  its folder resolved and its process's `ps -o lstart=` while it answers signal 0; `apiKeyHelper` and the `env` names
+  of the project's `.claude/settings*.json`; and for a shadow, the entries of the shadow and its shared home, their two
+  `cleanupPeriodDays`, the config's credential store line and whether the shadow is logged in (never a login's
+  contents). The checks then run here on those facts with the same code (`ShadowFiles`: the shadow engine runs on a
+  `SnapshotShadowFiles`, whose recorded `mkdir`s and links the start applies on the host first, each refused if
+  something appeared there meanwhile). An account's `~/` paths expand with the host's home.
+- **Launch file.** The start's stdin, written by perl with `O_CREAT | O_EXCL | O_NOFOLLOW` at 0600 in the host's
+  `launch-secrets` folder (0700, refused unless it is a real folder of the user's); leftovers older than 10 minutes go
+  first, and a file whose session never started is deleted at once. The script has only its path.
+- **tmux** on the host is `TmuxCommand` with the host's tmux and `~/Library/Application Support/Hivemind/remote/<version>/tmux.conf`.
+- **The tap** is written by the start (0600 files through a rename, 0700 folders) under the host's
+  `~/Library/Application Support/Hivemind/accounts/`; if it cannot be, its variable is left out of the launch file and
+  the session starts without it, as here.
+
 ## Sessions and terminals
 
 - **List.** The broker polls `tmux -L hivemind list-sessions` on each online host
@@ -262,6 +316,20 @@ A launch on a host does what the broker does locally, over SSH:
   it does today.
 - **Open in Terminal.** The `.command` file runs that `ssh -tt …` line.
 - **Stop and kill.** `kill-session` on the session's host.
+
+*Shipped:* the list and the kill (plan step 3). Each ready host is listed by the same probe, at most every 5 s
+(`BrokerLimits.remoteSessionsPollInterval`, counted from its last list, failed or not) and again after a launch or a
+kill there. The hosts are listed side by side, each in a task of its own, never two at once for one host: the poll
+publishes this Mac's sessions with the hosts' last lists at once, and a host's list publishes when it lands, so a host
+that hangs (up to the 30 s step timeout) holds up neither this Mac's list nor its launches. A client's `sessions.list`
+(the launcher's among them) waits for the lists older than the interval. A host whose list fails keeps its last one,
+and an offline host's sessions are not listed. Each of a host's sessions carries `host` (a host id) in `sessions`, to
+the page too, which shows "on <label>" in the Terminals sheet. A `kill` (and the launcher's) goes to the host the
+session is on; one no host's last list has is tried on this Mac first, and the hosts are listed only when it is not
+there. The launcher takes an offline host's last sessions as still running, so its kill of one fails ("cannot reach")
+instead of reporting `killed`. Attaching is step 4: until then the broker answers `attach` on a
+host's session with `internal` ("runs on <label>; attach from a terminal there"), Hivemind.app opens no Terminal.app
+window for one, and the sheet disables **Open** and **Terminal.app** for it.
 
 ## Accounts
 
@@ -325,47 +393,39 @@ needs a copy of its files first, like a copy between account homes today.
 
 ## Attachments of any type
 
-**Shipped**, independent of hosts. An attachment used to be one of nine types
-(PNG, JPEG, WebP, GIF, PDF, plain text, CSV, JSON, ZIP), because files were served
-inline from the Human UI's origin, where an HTML or SVG file would run its script
-with the Human's powers. Now any type is stored and only a safe list is served
-inline (`INLINE_MIMES` in `src/shared/mime.ts`).
+Shipped with the same work, independent of hosts. Today an attachment must be one
+of nine types (`ALLOWED_MIMES`: PNG, JPEG, WebP, GIF, PDF, plain text, CSV, JSON,
+ZIP), because files are served inline from the Human UI's origin, where an HTML or
+SVG file would run its script with the Human's powers.
 
 - **Upload.** Any type is accepted, with the current limits (512 MB per file, the
   8 GiB quota, at most 4 per message) and `attach`'s refusal of sensitive files
-  (keys, `.env*`, `~/.ssh`, …). The stored type is the sender's `X-File-Mime` when
-  it is a well-formed `type/subtype` (lowercased, parameters dropped), otherwise a
-  guess from the file name, otherwise `application/octet-stream`. Telegram
-  documents of any type are accepted the same way.
-- **Preview.** Only a safe list renders inline: PNG, JPEG, WebP and GIF (not SVG),
-  PDF and plain text. In the Human UI raster images show as images, PDF and text as
-  a chip that opens them, and everything else as a chip with its name, size and
-  Download.
+  (keys, `.env*`, `~/.ssh`, …).
+- **Preview.** Only a safe list renders inline: raster images (not SVG), PDF and
+  plain text. Everything else shows as a file with its name, size and Download.
 - **Download.** A type outside the safe list is served as
   `application/octet-stream` with `Content-Disposition: attachment`,
-  `X-Content-Type-Options: nosniff` and
-  `Content-Security-Policy: sandbox; frame-ancestors 'none'`, so a browser or
-  WebView saves it and never runs it. Safe types are served as before, inline under
-  their own type and without the sandbox (Chromium's PDF viewer does not render a
-  sandboxed PDF). Every download carries the stored type in `X-File-Mime`, and the
-  message API reports it, so agents still see the sender's type.
-- **Agents.** `attach`, `fetch_file` and `hivemind send --file` take any type, with
-  the same sensitive-file filter (`hivemind send --file` used to refuse unknown
-  extensions and now applies `attach`'s filter instead).
+  `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox`, so a
+  browser or WebView saves it and never runs it. The stored type stays the
+  sender's, for the agent that fetches it.
+- **Agents.** `attach` and `fetch_file` take any type, with the same sensitive-file
+  filter.
 
 ## Plan
 
-1. **Agent listener** (*shipped*). The agent-only listener in the Node server, behind
-   `hivemind serve --agent-port`. Tests: `src/server/agent-listener.test.ts`.
+1. **Agent listener** (*shipped*). The agent-only listener in the Node server,
+   behind `hivemind serve --agent-port`. Tests: `src/server/agent-listener.test.ts`.
 2. **Hosts and the host connection** (*shipped*). `hosts.json`, the supervised
    master connection with the agent forward and extra forwards, host status in the
-   Server.app menu, the agent listener turned on while a host exists, the remote
-   runtime install and update, and the host catalog on the server.
-3. **Launch on a host.** The Host field in Launch, Resume… and templates, the host
+   Server.app menu, `serve` started with `--agent-port` while a host exists, the
+   remote runtime install and update, and the host catalog on the server.
+3. **Launch on a host** (*shipped*). The Host field in Launch, Resume… and templates, the host
    on launch requests and the launcher channel, the remote launch steps (clone,
-   shadow homes, launch file, tmux, tap), remote session listing and kill.
+   shadow homes, launch file, tmux, tap), remote session listing and kill. Tests:
+   `macos/Tests/HivemindKitTests/RemoteHostLaunchTests.swift` (with the fake `ssh`),
+   `src/server/launcher-channel.test.ts`, `web/launch-sheet-hosts.test.tsx`.
 4. **Terminals.** In-app attach and Open in Terminal for remote sessions.
 5. **Accounts on hosts.** Home setup, the same-account check, the Accounts sheet's
    per-host status, remote usage reads, and Find last conversations per host.
-6. **Attachments of any type** (shipped). The upload allowlist removed, the safe
-   preview list, and download headers for every other type.
+6. **Attachments of any type.** The upload allowlist removed, the safe preview list,
+   and download headers for every other type.

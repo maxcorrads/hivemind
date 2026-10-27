@@ -14,7 +14,15 @@ public struct SSHProcessRunner: SSHRunning {
   public func run(_ spec: LaunchSpec, input: LaunchSpec?, timeout: TimeInterval) async -> SSHResult {
     await withCheckedContinuation { continuation in
       DispatchQueue.global(qos: .utility).async {
-        continuation.resume(returning: Self.runBlocking(spec, input: input, timeout: timeout))
+        continuation.resume(returning: Self.runBlocking(spec, input: input, stdin: nil, timeout: timeout))
+      }
+    }
+  }
+
+  public func run(_ spec: LaunchSpec, stdin: Data, timeout: TimeInterval) async -> SSHResult {
+    await withCheckedContinuation { continuation in
+      DispatchQueue.global(qos: .utility).async {
+        continuation.resume(returning: Self.runBlocking(spec, input: nil, stdin: stdin, timeout: timeout))
       }
     }
   }
@@ -28,7 +36,7 @@ public struct SSHProcessRunner: SSHRunning {
     return process
   }
 
-  nonisolated private static func runBlocking(_ spec: LaunchSpec, input: LaunchSpec?, timeout: TimeInterval) -> SSHResult {
+  nonisolated private static func runBlocking(_ spec: LaunchSpec, input: LaunchSpec?, stdin: Data?, timeout: TimeInterval) -> SSHResult {
     let command = process(spec)
     let out = Pipe(), err = Pipe()
     command.standardOutput = out
@@ -41,6 +49,8 @@ public struct SSHProcessRunner: SSHRunning {
       source.standardError = FileHandle.nullDevice
       command.standardInput = stream
       feeder = source
+    } else if stdin != nil {
+      command.standardInput = stream
     } else {
       command.standardInput = FileHandle.nullDevice
     }
@@ -48,6 +58,17 @@ public struct SSHProcessRunner: SSHRunning {
       try command.run()
     } catch {
       return SSHResult(status: SSHResult.launchFailed, stderr: "cannot run \(spec.executable.path): \(error.localizedDescription)")
+    }
+    // The bytes go from a queue of their own, so a command that does not read them all cannot block this one; the
+    // write end closes after them (or once the command is gone), which is the command's end of input.
+    if let stdin {
+      let writer = stream.fileHandleForWriting
+      // An ssh that exits before reading everything gets EPIPE here, not the app a SIGPIPE.
+      _ = fcntl(writer.fileDescriptor, F_SETNOSIGPIPE, 1)
+      DispatchQueue.global(qos: .utility).async {
+        try? writer.write(contentsOf: stdin)
+        try? writer.close()
+      }
     }
     // The command first: an input started with no reader could block on a full pipe forever.
     if let feeder {

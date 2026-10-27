@@ -7,6 +7,7 @@ import {
   type WorkerTemplate, type WorkerTemplateSpec,
 } from "../shared/worker-templates.ts";
 import type { AccountStore } from "./accounts.ts";
+import type { HostCatalog } from "./host-catalog.ts";
 import type { Core } from "./services/ports.ts";
 
 type Row = { id: string; project_id: string; slug: string; revision: number; spec: string; created_at: number; updated_at: number };
@@ -15,6 +16,7 @@ export type WorkerTemplateDeps = Core & {
   readonly identity: { templateWorkerCount(templateId: string): number };
   readonly launcherQueue: { hasActiveTemplateRequests(templateId: string): boolean };
   readonly accounts: Pick<AccountStore, "list">;
+  readonly hosts: Pick<HostCatalog, "get">;
 };
 
 /** Field paths and reasons, never values: a template's environment may hold anything Human typed. */
@@ -47,6 +49,15 @@ function assertAccountFits(spec: WorkerTemplateSpec, accounts: WorkerTemplateDep
   }
   const conflict = accountEnvironmentConflict(spec.environment, spec.secretNames, toLaunchAccount(account));
   if (conflict) throw new HiveError(400, `${ACCOUNT_ERRORS.conflict}: ${conflict}`);
+}
+
+/**
+ * A host chosen for the template must be one Server.app reported (docs/remote-hosts.md#launch). A template that keeps
+ * the host it had saves as before even when that host is gone: its launches then wait and name the host.
+ */
+function assertHostKnown(spec: WorkerTemplateSpec, hosts: WorkerTemplateDeps["hosts"], previous?: string | null): void {
+  if (!spec.hostId || spec.hostId === previous) return;
+  if (!hosts.get(spec.hostId)) throw new HiveError(400, "Invalid worker template: hostId: the host does not exist");
 }
 
 /** Human-only CRUD of a project's worker templates, with revision checks. */
@@ -90,6 +101,7 @@ export class WorkerTemplateStore {
     this.human(actor);
     const input = parse(createWorkerTemplateSchema, raw);
     assertLaunchable(input.spec, this.deps.accounts);
+    assertHostKnown(input.spec, this.deps.hosts);
     return this.deps.storage.transaction(() => {
       const count = Number((this.db.prepare("SELECT COUNT(*) AS n FROM worker_templates WHERE project_id = ?").get(projectId) as { n: number }).n);
       if (count >= WORKER_TEMPLATE_LIMITS.perProject) throw new HiveError(429, `A project has at most ${WORKER_TEMPLATE_LIMITS.perProject} worker templates`);
@@ -109,6 +121,7 @@ export class WorkerTemplateStore {
     return this.deps.storage.transaction(() => {
       const row = this.row(id);
       if (row.revision !== input.expectedRevision) throw new HiveError(409, "The worker template changed; reload it before saving");
+      assertHostKnown(input.spec, this.deps.hosts, (JSON.parse(row.spec) as WorkerTemplateSpec).hostId);
       const slug = input.slug ?? row.slug;
       if (this.slugTaken(row.project_id, slug, id)) throw new HiveError(409, `A worker template named ${slug} already exists`);
       this.db.prepare("UPDATE worker_templates SET slug = ?, spec = ?, revision = revision + 1, updated_at = ? WHERE id = ?")

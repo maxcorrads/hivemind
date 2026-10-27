@@ -11,6 +11,9 @@ import { startServer } from "./serve.ts";
 import { deleteRows, findRow, readValue, setAgentPresence, updateRows } from "./test-fixtures.ts";
 import type { WorkerTemplate, WorkerTemplateSpec } from "../shared/worker-templates.ts";
 import { toLaunchAccount, type AccountUsage } from "../shared/accounts.ts";
+import { remoteHivemindMcp } from "../shared/hosts.ts";
+import type { LaunchContext } from "../shared/launch-prompt.ts";
+import { packageVersion } from "../shared/package-root.ts";
 
 const SECRET = Buffer.alloc(32, 0x61);
 const spec = (cap = 2): WorkerTemplateSpec => ({ label: "Worker", description: "Task work", software: "codex2",
@@ -563,4 +566,136 @@ test("a signed catalog put replaces the hosts whole and refuses anything but id,
   assert.equal((await put({ hosts: [], padding: "x".repeat(16 * 1024) })).status, 413);
   assert.equal((await put({ hosts: [] })).status, 200);
   assert.deepEqual(f.hive.hosts.list(), [], "the last host removed clears the catalog");
+});
+
+test("with no host a template launch carries no host and this Mac's MCP, exactly as before hosts", async t => {
+  const f = fixture(t);
+  const claude = f.hive.workerTemplates.create(f.human, f.project.id, { slug: "claude-worker", spec: { ...spec(8), software: "claude" } });
+  const requestId = queueLaunch(f, claude);
+  assert.equal(f.hive.launcherQueue.get(requestId).hostId, null);
+  assert.equal(f.hive.launcherQueue.get(requestId).hostWaiting, false);
+  const command = takeLaunch(f);
+  assert.equal("host" in command, false, "no host, no field: the native journal's digest is unchanged");
+  assert.ok(command.kind === "launch" && command.command.includes(process.execPath), "the MCP is this Mac's node");
+  assert.ok(command.kind === "launch" && !command.command.includes("Hivemind/remote"));
+  assert.deepEqual(await (await f.app.request("/api/ui/hosts")).json(), { hosts: [] });
+});
+
+test("a template on a host waits while the host is offline, without holding up the launches behind it", async t => {
+  const f = fixture(t);
+  const hostId = catalogHost(1).id;
+  const put = (online: boolean) => f.signed("PUT", "/api/launcher/hosts", { hosts: [catalogHost(1, { online })] });
+  assert.throws(() => f.hive.workerTemplates.create(f.human, f.project.id,
+    { slug: "remote", spec: { ...spec(8), software: "claude", hostId } }), /hostId: the host does not exist/);
+  assert.equal((await put(false)).status, 200);
+  assert.deepEqual(await (await f.app.request("/api/ui/hosts")).json(), { hosts: [catalogHost(1)] });
+  const remote = f.hive.workerTemplates.create(f.human, f.project.id,
+    { slug: "remote", spec: { ...spec(8), software: "claude", hostId } });
+  const local = f.hive.workerTemplates.create(f.human, f.project.id, { slug: "local", spec: spec(8) });
+  const waiting = queueLaunch(f, remote);
+  assert.equal(f.hive.launcherQueue.get(waiting).hostId, hostId);
+  assert.equal(f.hive.launcherQueue.get(waiting).hostWaiting, true);
+  queueLaunch(f, local);
+  const first = takeLaunch(f);
+  assert.equal(first.kind === "launch" && first.templateId, local.id, "the local launch goes first while the host is offline");
+  assert.equal(f.hive.launcherQueue.next("http://127.0.0.1:7520"), null, "the remote launch waits");
+
+  // The host coming online wakes a waiting long poll; its launch is then handed out (again, if the wake-up answered
+  // null for the request's change, as every launch's long poll does).
+  const polled = f.signed("GET", "/api/launcher/next?timeoutMs=5000");
+  await new Promise(resolve => setTimeout(resolve, 50));
+  const putAt = Date.now();
+  assert.equal((await put(true)).status, 200);
+  assert.equal((await polled).status, 200);
+  assert.ok(Date.now() - putAt < 2000, "the poll did not wait out its timeout");
+  const command = (await (await f.signed("GET", "/api/launcher/next?timeoutMs=0")).json() as { command: Record<string, unknown> }).command;
+  assert.equal(command.kind, "launch");
+  assert.equal(command.host, hostId);
+  assert.equal(command.templateId, remote.id);
+  const text = String(command.command);
+  assert.match(text, /"command":"\/bin\/sh"/, "Claude's MCP runs through /bin/sh on the host");
+  assert.ok(text.includes(`$support/remote/${packageVersion()}`), "the remote runtime of this version");
+  assert.ok(text.includes("http://127.0.0.1:7422"), "the MCP talks to the agent forward");
+  assert.ok(!text.includes(process.execPath), "never this Mac's node");
+  assert.equal(f.hive.launcherQueue.get(waiting).hostWaiting, false);
+
+  // Saving the template again keeps its host once the host is gone; a new pick must be in the catalog.
+  assert.equal((await f.signed("PUT", "/api/launcher/hosts", { hosts: [] })).status, 200);
+  const kept = f.hive.workerTemplates.update(f.human, remote.id, { expectedRevision: remote.revision, spec: { ...remote.spec, label: "Renamed" } });
+  assert.equal(kept.spec.hostId, hostId);
+  assert.throws(() => f.hive.workerTemplates.update(f.human, local.id,
+    { expectedRevision: local.revision, spec: { ...local.spec, hostId } }), /the host does not exist/);
+});
+
+test("a host's launch context is its remote runtime on the agent forward, and names no path of this Mac", async t => {
+  const f = fixture(t);
+  assert.equal((await f.app.request(`/api/ui/launch-context?project=project&host=${catalogHost(1).id}`)).status, 404);
+  const local = await (await f.app.request("/api/ui/launch-context?project=project")).json() as LaunchContext;
+  assert.equal(local.hivemindMcp.command, process.execPath, "no host: this Mac's MCP, as before hosts");
+  assert.equal((await f.signed("PUT", "/api/launcher/hosts", { hosts: [catalogHost(1)] })).status, 200);
+  const remote = await (await f.app.request(`/api/ui/launch-context?project=project&host=${catalogHost(1).id}`)).json() as LaunchContext;
+  assert.equal(remote.hivemindMcp.command, "/bin/sh");
+  assert.deepEqual(remote.hivemindMcp.env, { HIVEMIND_URL: "http://127.0.0.1:7422", HIVEMIND_TOKEN: "" });
+  assert.equal(remote.hivemindMcp.args[0], "-c");
+  assert.ok(remote.hivemindMcp.args[1]!.endsWith(`"$support/remote/${packageVersion()}"/server/bin/hivemind.mjs mcp`));
+  assert.ok(!JSON.stringify(remote.hivemindMcp).includes(f.hive.home), "nothing of this Mac's paths");
+  assert.throws(() => remoteHivemindMcp("../x"), /cannot name a remote runtime/);
+});
+
+test("a resume goes back to the host its worker ran on, even after the template moved to another", async t => {
+  const f = fixture(t), target = "/api/launcher/next?timeoutMs=0";
+  const first = catalogHost(1, { online: true }), second = catalogHost(2, { online: true });
+  assert.equal((await f.signed("PUT", "/api/launcher/hosts", { hosts: [first, second] })).status, 200);
+  const template = f.hive.workerTemplates.create(f.human, f.project.id,
+    { slug: "remote", spec: { ...spec(), environment: {}, hostId: first.id } });
+  f.hive.identity.setLaunchMode(f.human, f.brain.name, "auto");
+  const brain = f.hive.identity.getAgent(f.brain.id);
+  const requested = f.hive.workerOrchestration.request(brain, { requestId: randomUUID(), template: template.slug,
+    contract: { objective: "Build a view", scope: [], nonGoals: [], acceptanceCriteria: ["View works"],
+      dependencies: [], evidenceSeqs: [] } });
+  const claim = (await (await f.signed("GET", target)).json() as { command: Record<string, unknown> }).command;
+  assert.equal(claim.host, first.id);
+  const ticket = /hmc_[0-9a-f]{48}/.exec(String(claim.command))?.[0];
+  assert.ok(ticket);
+  assert.equal((await f.signed("POST", `/api/launcher/${claim.id}/result`, { status: "launched", session: claim.session })).status, 200);
+  f.hive.identity.join({ role: "worker", claim: ticket });
+  f.hive.workerTemplates.update(f.human, template.id, { expectedRevision: template.revision, spec: { ...template.spec, hostId: second.id } });
+
+  const task = () => f.hive.tasks.get(f.human, requested.task.id);
+  const pause = f.hive.tasks.control(f.human, requested.task.id,
+    { requestId: randomUUID(), expectedRevision: task().revision, action: { type: "pause", mode: "hard" } });
+  f.hive.tasks.sweepHardPauses(pause.task.pause!.graceUntil!);
+  const kill = (await (await f.signed("GET", target)).json() as { command: Record<string, unknown> }).command;
+  assert.equal(kill.kind, "kill");
+  assert.equal((await f.signed("POST", `/api/launcher/${kill.id}/result`, { status: "killed" })).status, 200);
+  f.hive.tasks.control(f.human, requested.task.id, { requestId: randomUUID(), expectedRevision: task().revision, action: { type: "resume" } });
+  const resume = (await (await f.signed("GET", target)).json() as { command: Record<string, unknown> }).command;
+  assert.equal(resume.kind, "launch");
+  assert.equal(resume.host, first.id, "its conversation is on the first host");
+});
+
+test("a kill of a worker on a host waits while the host is offline, without holding up this Mac's kills", async t => {
+  const f = fixture(t);
+  const put = (online: boolean) => f.signed("PUT", "/api/launcher/hosts", { hosts: [catalogHost(1, { online })] });
+  assert.equal((await put(true)).status, 200);
+  const remote = f.hive.workerTemplates.create(f.human, f.project.id,
+    { slug: "remote", spec: { ...spec(8), environment: {}, hostId: catalogHost(1).id } });
+  const local = f.hive.workerTemplates.create(f.human, f.project.id, { slug: "local", spec: spec(8) });
+  const remoteRequest = queueLaunch(f, remote);
+  const launched = takeLaunch(f);
+  assert.equal(launched.kind === "launch" && launched.host, catalogHost(1).id);
+  const localRequest = queueLaunch(f, local);
+  const localLaunch = takeLaunch(f);
+
+  // The host drops: Server.app cannot list it, so it could not tell its session from a gone one.
+  assert.equal((await put(false)).status, 200);
+  f.hive.launcherQueue.kill(remoteRequest);
+  f.hive.launcherQueue.kill(localRequest);
+  const first = f.hive.launcherQueue.next("http://127.0.0.1:7520");
+  assert.deepEqual([first?.kind, first?.session], ["kill", localLaunch.session], "this Mac's kill goes first");
+  f.hive.launcherQueue.result(first!.id, { status: "killed" });
+  assert.equal(f.hive.launcherQueue.next("http://127.0.0.1:7520"), null, "the host's kill waits, queued");
+  assert.equal((await put(true)).status, 200);
+  const second = f.hive.launcherQueue.next("http://127.0.0.1:7520");
+  assert.deepEqual(second, { id: second?.id, kind: "kill", session: launched.session }, "the same kill payload as before hosts");
 });

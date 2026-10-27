@@ -214,6 +214,11 @@ final class BrokerHarness {
   var claudeTap: ClaudeStatusTap?
   /// The start time of a process (none unless a test says otherwise, so no Claude session is live); set before the broker is first used.
   var processStart: (Int32) -> String? = { _ in nil }
+  /// The remote hosts (none unless a test says otherwise), their tmux lookup and this Mac's origins; set before the
+  /// broker is first used.
+  var remoteHosts: (any BrokerRemoteHosts)?
+  var remoteTmux = RemoteTmuxLookup(candidates: [], searchPath: false)
+  var origins: [String: String] = [:]
   nonisolated static let environment = ["PATH": "/usr/bin:/bin", "HOME": "/Users/me", "TMUX": "/private/tmp/tmux-501/default,1,0", "LANG": "it_IT.UTF-8"]
 
   lazy var broker: TerminalBroker = {
@@ -227,6 +232,7 @@ final class BrokerHarness {
         secrets: secretStore,
         templateSecrets: templateSecrets,
         home: home, shadowHomes: shadowHomes, claudeTap: claudeTap, processStart: processStart,
+        remoteHosts: remoteHosts, originURL: { [unowned self] in self.origins[$0] }, remoteTmux: remoteTmux,
         log: { [unowned self] in self.logs.append($0) }))
     broker.onChange = { [unowned self] in self.changes += 1 }
     return broker

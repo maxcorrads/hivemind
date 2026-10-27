@@ -67,6 +67,7 @@ type ServiceRegistry = Core & {
   accounts: AccountStore;
   accountUsage: AccountUsageStore;
   launcherQueue: LauncherQueue;
+  hosts: HostCatalog;
   workerOrchestration: WorkerOrchestration;
   jobs: JobStore;
   taskViews: TaskViews;
@@ -151,7 +152,7 @@ export class Hive {
     this.db = new DatabaseSync(dbPath);
     this.storage = Storage.for(this.db);
     this.bus.bindStorage(this.storage);
-    const partial: Partial<ServiceRegistry> = { storage: this.storage, bus: this.bus, home: this.home, traffic: this.traffic, waiters: new Waiters() };
+    const partial: Partial<ServiceRegistry> = { storage: this.storage, bus: this.bus, home: this.home, traffic: this.traffic, waiters: new Waiters(), hosts: this.hosts };
     const services = partial as ServiceRegistry;
     try {
       // Refuse a newer or unknown schema before anything (even the journal mode) writes to the file.

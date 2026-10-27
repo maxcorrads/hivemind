@@ -179,6 +179,7 @@ function LaunchRequestCard({ request, project, brain, worker, templates, templat
     {!native && <p className="launch-request-template-name">Template: {templates?.find(item => item.id === request.templateId)?.spec.label ?? request.templateLabel}</p>}
     {templateError && <p className="err" role="alert">Templates could not be loaded: {templateError}</p>}
     {atCap && <p className="launch-request-wait" role="status">At this template's concurrent worker limit. Choose another template or wait for a worker to finish.</p>}
+    {request.hostWaiting && <p className="launch-request-wait" role="status">Its host is offline: the worker starts once Hivemind Server is connected to it again.</p>}
     {error && <p className="err" role="alert">{error}</p>}
     {done && <p role="status">Decision recorded.</p>}
     {native && <div className="launch-request-actions">

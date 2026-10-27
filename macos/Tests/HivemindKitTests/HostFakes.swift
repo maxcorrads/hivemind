@@ -32,6 +32,16 @@ let fakeHost = RemoteHost(id: "20000000-0000-4000-8000-000000000001", label: "Bu
     return command
   }
 
+  /// What each stdin call got.
+  var stdins: [Data] = []
+
+  func run(_ spec: LaunchSpec, stdin: Data, timeout: TimeInterval) async -> SSHResult {
+    calls.append(spec)
+    inputs.append(nil)
+    stdins.append(stdin)
+    return command
+  }
+
   /// What each call was: `exit`, `check` or `command`.
   var kinds: [String] {
     calls.map { spec in spec.arguments.contains("-O") ? (spec.arguments.contains("check") ? "check" : "exit") : "command" }
@@ -43,6 +53,7 @@ let fakeHost = RemoteHost(id: "20000000-0000-4000-8000-000000000001", label: "Bu
   var outcome: Result<Void, BrokerFiles.Failure> = .success(())
   var installs = false
   var ensured: [String] = []
+  var runtimeFolder: String? = "Library/Application Support/Hivemind/remote/9.9.9"
 
   func ensure(on host: RemoteHost, installing: @escaping @MainActor () -> Void) async -> Result<Void, BrokerFiles.Failure> {
     ensured.append(host.id)

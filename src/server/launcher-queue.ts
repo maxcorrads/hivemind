@@ -6,6 +6,7 @@ import type { WorkerTemplate } from "../shared/worker-templates.ts";
 import { accountDriverForSoftware, accountEnvironmentConflict, toLaunchAccount, type LaunchAccount } from "../shared/accounts.ts";
 import type { AccountStore } from "./accounts.ts";
 import { launchContext } from "./bot-definitions.ts";
+import type { HostCatalog } from "./host-catalog.ts";
 import type { Core } from "./services/ports.ts";
 import { LauncherQueueCipher } from "./launcher-queue-crypto.ts";
 
@@ -13,7 +14,7 @@ type RequestState = "awaiting_approval" | "approved" | "launching" | "launched" 
 type RequestRow = { id: string; project_id: string; brain_id: string; template_id: string | null; template_snapshot: string; task_id: string | null;
   job_id: string | null; agent_id: string; ticket_hash: string; state: RequestState; reason: string | null;
   requested_at: number; decided_by: string | null; decided_at: number | null; session: string | null; error: string | null;
-  launch_kind: "claim" | "resume" };
+  launch_kind: "claim" | "resume"; host_id: string | null };
 type CommandRow = { id: string; request_id: string | null; kind: "launch" | "kill";
   state: "queued" | "dispatched" | "done" | "failed" | "cancelled"; payload: string;
   created_at: number; updated_at: number; error: string | null };
@@ -22,11 +23,16 @@ export type LaunchRequestView = { id: string; projectId: string; brainId: string
   taskId: string | null; jobId: string | null; agentId: string; state: RequestState; reason: string | null;
   launchKind: "claim" | "resume";
   requestedAt: number; decidedBy: string | null; decidedAt: number | null; session: string | null;
-  error: string | null; capBlocked: boolean };
-/** `account`: the template launch's resolved account; omitted when none, so the native journal's digest is unchanged. */
+  error: string | null; capBlocked: boolean;
+  /** The remote host the worker runs on (docs/remote-hosts.md#launch), null for this Mac; `hostWaiting` while it cannot take the launch. */
+  hostId: string | null; hostWaiting: boolean };
+/**
+ * `account`: the template launch's resolved account; `host`: the remote host it runs on. Each is omitted when none, so
+ * the native journal's digest of a command without them is unchanged.
+ */
 export type LauncherCommand = { id: string; kind: "launch"; requestId: string; templateId: string;
   project: string; agent: string; title: string; session: string; command: string; cwd: string | null;
-  environment?: Record<string, string>; account?: LaunchAccount } | { id: string; kind: "kill"; session: string };
+  environment?: Record<string, string>; account?: LaunchAccount; host?: string } | { id: string; kind: "kill"; session: string };
 
 export type LauncherQueueDeps = Core & { readonly home: string;
   readonly identity: { getAgent(id: string): Agent; archiveTaskWorker(agentId: string): Agent; suspendSession(agentId: string): Agent;
@@ -35,6 +41,7 @@ export type LauncherQueueDeps = Core & { readonly home: string;
   readonly projects: { getProject(id: string): Project };
   readonly workerTemplates: { get(id: string): WorkerTemplate };
   readonly accounts: Pick<AccountStore, "resolve">;
+  readonly hosts: Pick<HostCatalog, "get">;
   readonly lifecycle: { expireReservation(agentId: string): void };
   readonly tasks: { get(actor: Agent, taskId: string): { workerId: string; jobId?: string | null };
     launchOutcome(taskId: string, requestId: string, workerId: string, state: "launched" | "failed" | "rejected" | "expired"): void;
@@ -88,7 +95,13 @@ export class LauncherQueue {
       taskId: row.task_id, jobId: row.job_id, agentId: row.agent_id, state: row.state, reason: row.reason,
       launchKind: row.launch_kind,
       requestedAt: row.requested_at, decidedBy: row.decided_by, decidedAt: row.decided_at, session: row.session,
-      error: row.error, capBlocked };
+      error: row.error, capBlocked, hostId: row.host_id,
+      hostWaiting: (row.state === "awaiting_approval" || row.state === "approved") && !this.hostReady(row.host_id) };
+  }
+
+  /** This Mac always can; a remote host only while Server.app reports it online (docs/remote-hosts.md#launch). */
+  private hostReady(host: string | null): boolean {
+    return host === null || this.deps.hosts.get(host)?.online === true;
   }
 
   private changed(id: string): void {
@@ -175,10 +188,10 @@ export class LauncherQueue {
       }
       const at = Date.now(), hash = createHash("sha256").update(input.ticket).digest("hex");
       this.db.prepare(`INSERT INTO launch_requests (id, project_id, brain_id, template_id, template_snapshot, task_id, job_id, agent_id,
-        ticket_hash, state, reason, requested_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        ticket_hash, state, reason, requested_at, host_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         input.requestId, input.template.projectId, input.brain.id, input.template.id,
         JSON.stringify({ id: input.template.id, label: input.template.spec.label }), input.taskId ?? null,
-        input.jobId ?? null, input.agent.id, hash, state, input.reason ?? null, at);
+        input.jobId ?? null, input.agent.id, hash, state, input.reason ?? null, at, input.template.spec.hostId ?? null);
       // The ticket is escrowed with a private per-home key, then scrubbed when the command settles.
       this.db.prepare("INSERT INTO launcher_commands (id, request_id, kind, state, payload, created_at, updated_at) VALUES (?, ?, 'launch', 'queued', ?, ?, ?)")
         .run(randomUUID(), input.requestId, this.cipher.seal({ ticket: input.ticket }), at, at);
@@ -215,11 +228,15 @@ export class LauncherQueue {
       const task = this.deps.tasks.get(input.brain, input.taskId);
       if (task.workerId !== input.agent.id) throw new HiveError(409, "Resume requires the same assigned task");
       const at = Date.now();
+      // The conversation lives where the worker last ran (docs/remote-hosts.md#launch), whatever the template says now.
+      const last = this.db.prepare("SELECT host_id FROM launch_requests WHERE agent_id=? ORDER BY requested_at DESC, rowid DESC LIMIT 1")
+        .get(input.agent.id) as { host_id: string | null } | undefined;
+      const host = last ? last.host_id : template.spec.hostId ?? null;
       this.db.prepare(`INSERT INTO launch_requests (id,project_id,brain_id,template_id,template_snapshot,task_id,job_id,
-        agent_id,ticket_hash,state,reason,requested_at,launch_kind) VALUES (?,?,?,?,?,?,?,?,'',?,?,?,'resume')`).run(
+        agent_id,ticket_hash,state,reason,requested_at,launch_kind,host_id) VALUES (?,?,?,?,?,?,?,?,'',?,?,?,'resume',?)`).run(
         input.requestId, template.projectId, input.brain.id, template.id,
         JSON.stringify({ id: template.id, label: template.spec.label }), input.taskId, task.jobId ?? null, input.agent.id,
-        state, "Resume hard-paused task", at);
+        state, "Resume hard-paused task", at, host);
       this.db.prepare("INSERT INTO launcher_commands (id,request_id,kind,state,payload,created_at,updated_at) VALUES (?,?,'launch','queued',?,?,?)")
         .run(randomUUID(), input.requestId, this.cipher.seal({ resume: true }), at, at);
       this.changed(input.requestId);
@@ -261,8 +278,10 @@ export class LauncherQueue {
       const cap = this.capacity(target);
       if (cap.used >= cap.max) throw new HiveError(409, "Worker template is at its concurrent instance cap");
       if (target !== row.template_id) this.deps.identity.retargetReservation(actor, row.agent_id, template);
-      this.db.prepare("UPDATE launch_requests SET template_id = ?, template_snapshot = ?, state = 'approved', decided_by = ?, decided_at = ? WHERE id = ?")
-        .run(target, JSON.stringify({ id: template.id, label: template.spec.label }), actor.id, Date.now(), id);
+      // A replacement template brings its own host; a resume stays where its conversation is.
+      const host = target !== row.template_id ? template.spec.hostId ?? null : row.host_id;
+      this.db.prepare("UPDATE launch_requests SET template_id = ?, template_snapshot = ?, state = 'approved', decided_by = ?, decided_at = ?, host_id = ? WHERE id = ?")
+        .run(target, JSON.stringify({ id: template.id, label: template.spec.label }), actor.id, Date.now(), host, id);
       this.changed(id);
       return this.get(id);
     });
@@ -375,9 +394,13 @@ export class LauncherQueue {
   /** Stable command ID and payload across polls/restarts. Native deduplicates by this ID and session. */
   next(serverUrl: string): LauncherCommand | null {
     return this.deps.storage.transaction(() => {
-      const command = this.db.prepare(`SELECT c.* FROM launcher_commands c LEFT JOIN launch_requests r ON r.id = c.request_id
+      // A launch or a kill for a remote host that cannot take it now (offline, or not reported yet) waits, queued,
+      // without holding up the commands behind it: Server.app cannot list that host, so it could not tell a running
+      // session from a gone one. A dispatched one is always handed out again.
+      const command = (this.db.prepare(`SELECT c.*, r.host_id AS host_id FROM launcher_commands c LEFT JOIN launch_requests r ON r.id = c.request_id
         WHERE c.state = 'dispatched' OR (c.state = 'queued' AND (c.kind = 'kill' OR r.state = 'approved'))
-        ORDER BY c.created_at, c.id LIMIT 1`).get() as CommandRow | undefined;
+        ORDER BY c.created_at, c.id`).all() as (CommandRow & { host_id: string | null })[])
+        .find(row => row.state === "dispatched" || this.hostReady(row.host_id));
       if (!command) return null;
       if (command.state === "dispatched") return this.cipher.open<LauncherCommand>(command.payload);
       let payload: LauncherCommand;
@@ -412,7 +435,7 @@ export class LauncherQueue {
         const ticket = resuming ? undefined : this.cipher.open<{ ticket: string }>(command.payload).ticket;
         if (!resuming && createHash("sha256").update(ticket!).digest("hex") !== row.ticket_hash)
           throw new HiveError(500, "Launch ticket integrity failed");
-        const context = launchContext(this.deps.home, serverUrl, project);
+        const context = launchContext(this.deps.home, serverUrl, project, row.host_id);
         if (context.botError) throw new HiveError(503, "Project launch context is unavailable");
         const built = buildLaunchCommand({ software: template.spec.software, model: template.spec.model,
           effort: template.spec.effort, extraFlags: template.spec.extraFlags,
@@ -428,7 +451,7 @@ export class LauncherQueue {
           project: project.slug, agent: agent.name, title: template.spec.label,
           session, command: built.command, cwd: built.cwd,
           ...(Object.keys(template.spec.environment).length ? { environment: template.spec.environment } : {}),
-          ...(account ? { account } : {}) };
+          ...(account ? { account } : {}), ...(row.host_id ? { host: row.host_id } : {}) };
         this.db.prepare("UPDATE launch_requests SET state = 'launching', session = ? WHERE id = ?").run(session, row.id);
         this.changed(row.id);
       }

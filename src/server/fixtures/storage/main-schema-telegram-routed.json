@@ -501,7 +501,7 @@
   "type": "table",
   "name": "launch_requests",
   "tbl": "launch_requests",
-  "sql": "CREATE TABLE launch_requests ( id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, brain_id TEXT NOT NULL REFERENCES agents(id), template_id TEXT REFERENCES worker_templates(id) ON DELETE SET NULL, template_snapshot TEXT NOT NULL, task_id TEXT, job_id TEXT, agent_id TEXT NOT NULL REFERENCES agents(id), ticket_hash TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('awaiting_approval','approved','launching','launched','failed','rejected','cancelled','expired')), reason TEXT, requested_at INTEGER NOT NULL, decided_by TEXT, decided_at INTEGER, session TEXT, error TEXT , request_hash TEXT, launch_kind TEXT NOT NULL DEFAULT 'claim' CHECK(launch_kind IN ('claim','resume')))"
+  "sql": "CREATE TABLE launch_requests ( id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, brain_id TEXT NOT NULL REFERENCES agents(id), template_id TEXT REFERENCES worker_templates(id) ON DELETE SET NULL, template_snapshot TEXT NOT NULL, task_id TEXT, job_id TEXT, agent_id TEXT NOT NULL REFERENCES agents(id), ticket_hash TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('awaiting_approval','approved','launching','launched','failed','rejected','cancelled','expired')), reason TEXT, requested_at INTEGER NOT NULL, decided_by TEXT, decided_at INTEGER, session TEXT, error TEXT , request_hash TEXT, launch_kind TEXT NOT NULL DEFAULT 'claim' CHECK(launch_kind IN ('claim','resume')), host_id TEXT)"
  },
  {
   "type": "table",

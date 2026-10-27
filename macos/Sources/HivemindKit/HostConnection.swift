@@ -31,6 +31,9 @@ public struct SSHResult: Equatable, Sendable {
   /// Runs `spec` until it exits or `timeout` passes, then ends it. With `input`, that local command runs alongside and
   /// its stdout is `spec`'s stdin (the runtime's `tar`); a failed `input` fails the run. Without it, stdin is empty.
   func run(_ spec: LaunchSpec, input: LaunchSpec?, timeout: TimeInterval) async -> SSHResult
+  /// Runs `spec` the same way with `stdin` as its standard input: a launch's private file, which never goes on a command
+  /// line (docs/remote-hosts.md#launch), or a request for the host's facts.
+  func run(_ spec: LaunchSpec, stdin: Data, timeout: TimeInterval) async -> SSHResult
 }
 
 /// The `ssh` command lines of a host connection. Every one runs with `BatchMode=yes` (a password or passphrase prompt
@@ -144,6 +147,8 @@ public enum RemoteRuntimeState: Equatable, Sendable {
 @MainActor public protocol RemoteRuntimeInstalling {
   /// Called once per connection, when the master answers. `installing` runs before a copy starts.
   func ensure(on host: RemoteHost, installing: @escaping @MainActor () -> Void) async -> Result<Void, BrokerFiles.Failure>
+  /// The runtime's folder on a host, relative to its home (RemoteRuntime.remoteFolder); nil with no bundled runtime.
+  var runtimeFolder: String? { get }
 }
 
 /// One host's supervised master (docs/remote-hosts.md#host-connection). `start` clears a master a previous run left on

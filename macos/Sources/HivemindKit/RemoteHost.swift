@@ -43,9 +43,14 @@ public struct RemoteHost: Codable, Equatable, Sendable, Identifiable {
     return host
   }
 
+  /// Whether `value` is a host id: a lowercase UUID, as the server's catalog and a launch's `host` carry it.
+  public static func isID(_ value: String) -> Bool {
+    value.utf8.count == 36 && UUID(uuidString: value) != nil && value == value.lowercased()
+  }
+
   /// Why this host cannot be saved or connected, as the Add Host dialog shows it.
   public func validate() throws(BrokerFiles.Failure) {
-    guard UUID(uuidString: id) != nil, id == id.lowercased() else { throw .init("The host id is not a lowercase UUID") }
+    guard Self.isID(id) else { throw .init("The host id is not a lowercase UUID") }
     guard !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, label.utf16.count <= Self.maxLabelLength,
           !Self.hasControl(label) else {
       throw .init("A host’s name is 1–\(Self.maxLabelLength) characters")

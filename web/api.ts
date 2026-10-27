@@ -10,6 +10,7 @@ import type { Agent, AgentTrafficView, BotCredentialView, AttachmentMeta, Channe
 import type { ActivityPage, ActivityReason, MentionPage, ReadSnapshot } from "../src/shared/read-state.ts";
 import { resolveUploadMime } from "../src/shared/mime.ts";
 import type { LaunchContext } from "../src/shared/launch-prompt.ts";
+import type { HostCatalogEntry } from "../src/shared/hosts.ts";
 import type { ProjectBotConfiguration, SettingsValues } from "../src/shared/bot-settings.ts";
 import type { BotAccess } from '../src/shared/bot-capabilities.ts';
 import { humanSession, connectHumanWs } from "./human-session.ts";
@@ -77,6 +78,9 @@ export type LaunchRequestView = {
   session: string | null;
   error: string | null;
   capBlocked: boolean;
+  /** The remote host the worker runs on (docs/remote-hosts.md#launch), null for this Mac; `hostWaiting` while it is offline. */
+  hostId: string | null;
+  hostWaiting: boolean;
 };
 
 export type ProjectBotsView = {
@@ -201,7 +205,11 @@ export const api = {
     req<{ enabled: boolean; archived: number }>('/api/ui/settings/auto-archive-task-channels', { method: enabled ? 'POST' : 'DELETE' }),
   setChannelArchived: (channel: string, archived: boolean) =>
     req<{ archived: boolean }>(`/api/ui/channels/${encodeURIComponent(channel)}/archive`, { method: archived ? 'POST' : 'DELETE' }),
-  launchContext: (project: string) => req<LaunchContext>(`/api/ui/launch-context?project=${encodeURIComponent(project)}`),
+  /** With `host`, the context of a launch on that remote host (docs/remote-hosts.md#launch): its MCP is the host's. */
+  launchContext: (project: string, host?: string | null) =>
+    req<LaunchContext>(`/api/ui/launch-context?project=${encodeURIComponent(project)}${host ? `&host=${encodeURIComponent(host)}` : ""}`),
+  /** The remote hosts Hivemind Server reported (docs/remote-hosts.md#hosts); empty with none. */
+  hosts: () => req<{ hosts: HostCatalogEntry[] }>("/api/ui/hosts"),
   projectBotConfigurations: (slug: string) => req<{ configurations: ProjectBotConfiguration[] }>(`/api/ui/projects/${encodeURIComponent(slug)}/bots/catalog`),
   setBotAvailability: (slug: string, id: string, body: { enabled: boolean; expectedRevision: number }) =>
     req<{ configuration: ProjectBotConfiguration }>(`/api/ui/projects/${encodeURIComponent(slug)}/bots/catalog/${encodeURIComponent(id)}`,

@@ -11,7 +11,11 @@ import Foundation
   public func sessions() async throws -> [BrokerSession] {
     let event = try await request(.sessionsList)
     guard case .sessions(let sessions) = event else { throw failure(event) }
-    return sessions
+    // A host that is offline now is not listed, but its sessions may still run there (docs/remote-hosts.md#sessions-and-terminals):
+    // their last list stands in, so a kill of one is tried, and fails while the host cannot be reached, instead of
+    // being taken as done. With no host there are none.
+    let offline = current()?.offlineRemoteSessions.filter { session in !sessions.contains { $0.name == session.name } } ?? []
+    return sessions + offline
   }
 
   public func launch(_ launch: BrokerLaunch) async throws -> SessionName {

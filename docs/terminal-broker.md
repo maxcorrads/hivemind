@@ -42,7 +42,10 @@ cookies and agent bearer tokens:
 - `PUT /api/launcher/hosts` replaces the [remote host](remote-hosts.md#hosts)
   catalog the server holds in memory: up to 16 `{id, label, online}` (a 16 KiB
   body). Server.app's `HostsService` sends it, after the instance proof, only
-  once a host exists.
+  once a host exists. A put wakes `next`: a launch or kill command for a host
+  waits, queued, while that host is not online, and the commands behind it go
+  first ([Launch](remote-hosts.md#launch)). A launch for a host carries `host`;
+  a kill stays `{id, kind, session}`.
 
 Each request carries `X-Hivemind-Timestamp` (Unix seconds), a 32-byte lowercase
 hex `X-Hivemind-Nonce`, and `X-Hivemind-Signature`. The signature is the hex
@@ -327,7 +330,7 @@ speaks. The broker answers with `min(client, broker)`, or with
 | `sessions.list` | none | `sessions` |
 | `sessions.subscribe` | none | `sessions` now, and again after each change |
 | `sessions.unsubscribe` | none | none |
-| `launch` | `launches`: 1–24 of `{project, agent, title, cwd, command, session?, secrets?, environment?, account?}` | `launched` |
+| `launch` | `launches`: 1–24 of `{project, agent, title, cwd, command, session?, secrets?, environment?, account?, host?}` | `launched` |
 | `attach` | `session` name, `cols` 2–1000, `rows` 1–500 | `attached`, then `output`… until `exit` |
 | `input` | `stream` int ≥1, `data` base64 (1 B–64 KiB decoded) | none |
 | `resize` | `stream`, `cols`, `rows` | none |
@@ -351,13 +354,14 @@ A launch is:
 | `secrets` | optional object of environment variables for the agent: `{"OPENCODE_API_KEY": "<key>"}`, the only name allowed. The value is 1–512 bytes of printable ASCII (`0x21`–`0x7E`: no space, tab, newline or NUL). Any other name, an empty object, a value that is not a string or breaks the rule refuses the whole frame with `bad-message`, and the error names the field, never the value. See [Launch secrets](#launch-secrets). |
 | `environment` | optional object of 1–32 environment variables for the agent, `{"NAME": "value", …}`: the Launch agent sheet's **Environment variables**. Each name matches `^[A-Za-z_][A-Za-z0-9_]{0,63}$` and is not on the [denylist](#launch-environment); each value is at most 8 KiB with no control character but tab (so no NUL, CR or LF), 32 KiB of `NAME=value` in all. Anything else refuses the whole frame with `bad-message`; the error names the field and, for a denied name, the variable, never a value. See [Launch environment](#launch-environment). |
 | `account` | optional object `{id, driver, label, homePath, shadowPath}`: the account the server resolved for this launch ([accounts](accounts.md)), every field a string. `driver` is `codex` or `claude`, `id` 1–64 bytes, `label` 1–80 characters and not blank; each path is `""` or follows the [path rules](accounts.md#an-account), and a `shadowPath` is not the shared tree. Paths travel as stored: the client never expands their `~/`. Anything else refuses the whole frame with `bad-message`, naming the field (`launches[0].account.homePath`). |
+| `host` | optional [remote host](remote-hosts.md#launch) id, a lowercase UUID from Server.app's hosts: the session starts on that host, over its connection. Absent or null: this Mac, as before hosts. Anything else refuses the whole frame with `bad-message` (`launches[0].host`). A host that is not configured or not ready fails that item alone (`internal`, `launches[i].host: … is offline`). |
 
 ### Broker → client
 
 | type | fields |
 | --- | --- |
 | `welcome` | `version` int, `tmuxPath` string or null |
-| `sessions` | `items`: `[{name, project?, agent?, alive, attached, createdAt}]`, sorted by name. `project` and `agent` are what the launch recorded, or absent. `alive` is false when the pane is dead. `attached` counts clients (Terminal.app windows and streams). `createdAt` is Unix milliseconds. |
+| `sessions` | `items`: `[{name, project?, agent?, alive, attached, createdAt, host?}]`, sorted by name. `project` and `agent` are what the launch recorded, or absent. `alive` is false when the pane is dead. `attached` counts clients (Terminal.app windows and streams). `createdAt` is Unix milliseconds. `host` is present only on a [remote host](remote-hosts.md#sessions-and-terminals)'s session: its host id. |
 | `launched` | `names`: one per launch, the session name or null when that launch failed. `created`: the sessions this launch started; the others were reused. `errors`: `[{index, code, message}]`. |
 | `attached` | `stream` int, `session` |
 | `output` | `stream`, `data` base64 (1 B–64 KiB decoded) |
@@ -770,7 +774,7 @@ Page → app (`window.webkit.messageHandlers.hivemind.postMessage`):
 
 | type | fields | notes |
 | --- | --- | --- |
-| `terminal-launch` | `id`?, `launches`: `[{project, agent, title, cwd?, command, session?, secrets?, environment?}]`, `openInTerminal` boolean | `agent` is null for a new agent; `session` is the agent's `terminalSession` on resume. `secrets` is `{OPENCODE_API_KEY}` only ([Launch secrets](#launch-secrets)); `environment` follows the broker's rules ([Launch environment](#launch-environment)), and a message with anything off in either is dropped whole. `cwd` may be `~` or `~/…`, or absent for home; the app expands it. With `openInTerminal`, the app then opens a Terminal.app window attached to each session the broker returned, even if the page has moved on. At most 1 per second per window. |
+| `terminal-launch` | `id`?, `launches`: `[{project, agent, title, cwd?, command, session?, secrets?, environment?, template?, account?, host?}]`, `openInTerminal` boolean | `agent` is null for a new agent; `host` is a remote host's id ([Launch](remote-hosts.md#launch)), and a launch on a host opens no Terminal.app window yet; `session` is the agent's `terminalSession` on resume. `secrets` is `{OPENCODE_API_KEY}` only ([Launch secrets](#launch-secrets)); `environment` follows the broker's rules ([Launch environment](#launch-environment)), and a message with anything off in either is dropped whole. `cwd` may be `~` or `~/…`, or absent for home; the app expands it. With `openInTerminal`, the app then opens a Terminal.app window attached to each session the broker returned, even if the page has moved on. At most 1 per second per window. |
 | `terminal-open` | `session` | Opens Terminal.app attached to a running session (the app checks with `sessions.list` first). No answer on success. At most 1 per second per window. |
 | `terminal-attach` | `id`?, `session`, `cols`, `rows` | Until `terminal-attached`, the page holds the viewer's resizes (the latest size) and keys (in order, at most 64 KiB, the oldest dropped beyond), and sends them once attached; held keys are discarded if the attach fails or the viewer leaves first |
 | `terminal-input` | `stream`, `data` base64 ≤64 KiB | `encodeTerminalInput` splits a paste into chunks |
@@ -789,7 +793,7 @@ App → page: `window.dispatchEvent(new CustomEvent("hivemind:terminal", {detail
 | type | fields |
 | --- | --- |
 | `terminal-status` | `tmux`: `available` \| `missing` \| `unknown`; `broker`: `connected` \| `connecting` \| `unavailable` \| `unverified`; `platform`?: `ios` from the iPhone/iPad app, absent from Hivemind.app (read as `macos`) |
-| `sessions` | `items` as the broker sends them, with `null` for a missing project or agent |
+| `sessions` | `items` as the broker sends them, with `null` for a missing project or agent, and `host` only on a host's session |
 | `terminal-launched` | `id`, `names`, `created`, `errors` |
 | `terminal-attached` | `id`, `stream`, `session` |
 | `terminal-output` | `stream`, `data` base64 |
