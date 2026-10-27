@@ -416,7 +416,8 @@ revocation, what the gateway rewrites and its limits are in
 ## Remote hosts
 
 A remote host is a second Mac on the local network, reached with SSH, where
-Hivemind runs brains and workers ([Remote hosts](remote-hosts.md)): launched,
+Hivemind runs brains and workers ([Remote hosts](remote-hosts.md); step by step in
+[Running agents on a second Mac](remote-hosts-guide.md)): launched,
 listed, attached and stopped from Hivemind.app as this Mac's are. **Hosts → Add Host…** takes a name, the SSH
 destination (`user@mini.local`, or a `Host` from `~/.ssh/config`) and optional
 extra forwards in `ssh` syntax (`-R 1080 -L 5432:db.internal:5432`). The host

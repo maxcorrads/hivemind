@@ -7,7 +7,8 @@
 > [sessions and terminals](#sessions-and-terminals), [accounts](#accounts),
 > [usage](#usage) and [conversations](#conversations) on hosts, and
 > [attachments of any type](#attachments-of-any-type). The title still says
-> "design" because this page is also the threat model the code follows.
+> "design" because this page is also the threat model the code follows. For
+> setting one up, see [Running agents on a second Mac](remote-hosts-guide.md).
 
 A **remote host** is a second Mac on the local network, reached with SSH, where
 Hivemind runs brains and workers. Everything else stays on the Mac that runs
