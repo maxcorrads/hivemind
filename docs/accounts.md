@@ -663,8 +663,8 @@ Each account row of **Settings → Accounts** shows its usage under it (`web/Acc
   "<n>% left", and "Resets <local time> · in 2 h 14 min" ("in 3 d 4 h" for a week; "reset passed" once it is behind;
   "No reset time" when the provider gives none);
 - per window, a forecast: "At this pace it runs out <local time> · in 1 h 28 min", "At this pace it lasts until the
-  reset", "Used up until the reset", or "At this pace it is probably used up already" when a stale read's pace ran
-  the window out before now (see below);
+  reset", "Used up until the reset", or "At this pace it is probably used up already · data from <age>" when an old
+  read's pace ran the window out by now (see below);
 - "API key: no plan window" for an `api-key` plan, and "No quota window reported" for a good read without windows;
 - "Last read failed: <error>" while the last read failed, next to the previous windows;
 - " · Limit error at <local time>" next to the snapshot when the Claude tap saw a `rate_limit` stop, so a real limit can
@@ -677,7 +677,9 @@ Ages and countdowns are drawn again every 30 s; an `accounts` event refetches th
 The forecast (`src/shared/usage-forecast.ts`) is a straight line: the window's average pace from its start (its reset
 minus its length, `windowMs`, which Codex reports and Claude's keys imply) to the read's time, carried on to 100%. It
 knows nothing of bursts or quiet hours. It is left out while less than 5% of the window, or 10 minutes, has passed, when
-the window's length or reset is unknown, and when the read is older than the window.
+the window's length or reset is unknown, when the read is older than the window, and once the reset is behind the
+current time. The function takes the current time as an argument and compares the projected time with it: a time at or
+behind it is reported as "probably used up" with the read's age, so the sheet never shows a run-out time in the past.
 
 ### What never appears
 

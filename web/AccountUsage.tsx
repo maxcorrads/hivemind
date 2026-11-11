@@ -72,7 +72,7 @@ export function AccountUsage({ usage, now, driver }: { usage: Usage | undefined;
 function UsageWindowRow({ quota, now, capturedAt }: { quota: UsageWindow; now: number; capturedAt: number }) {
   const { label, usedPercent, resetsAt } = quota;
   const left = Math.max(0, 100 - usedPercent);
-  const forecast = resetsAt !== null && resetsAt > now ? usageForecast(quota, capturedAt) : null;
+  const forecast = usageForecast(quota, capturedAt, now);
   return (
     <div className="account-usage-window">
       <span>{label}</span>
@@ -86,8 +86,8 @@ function UsageWindowRow({ quota, now, capturedAt }: { quota: UsageWindow; now: n
         <span className="account-usage-forecast">
           {forecast.kind === "usedUp" ? "Used up until the reset"
             : forecast.kind === "lasts" ? "At this pace it lasts until the reset"
-            // An old read can lead to a time already behind us: at that pace the window is gone by now.
-            : forecast.at <= now ? "At this pace it is probably used up already"
+            // An old read's pace led to a time already behind us: say how old the read is, never that time.
+            : forecast.kind === "probablyUsedUp" ? `At this pace it is probably used up already · data from ${relativeTime(capturedAt, now)}`
             : <>At this pace it runs out <time dateTime={new Date(forecast.at).toISOString()}>{localTime(forecast.at)}</time> · {countdown(forecast.at, now)}</>}
         </span>
       )}
