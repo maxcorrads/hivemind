@@ -227,12 +227,20 @@ test("generated commands carry their known role for new, resume and claimed work
   assert.throws(() => buildLaunchBlock({ ...base, role: 'human' as never }), /Launch role must be brain or worker/);
 });
 
-test("launch prompt requires a real join result and stops if tools are unavailable", () => {
+test("launch prompt requires a real join result, waits for a slow MCP start and stops if tools stay unavailable", () => {
   for (const resume of [false, true]) {
     const prompt = buildLaunchPrompt({ ...base, resume, resumeName: "Fixture" });
     assert.match(prompt, /Use a real tool call; never simulate a tool result or invent an agent name/);
     assert.match(prompt, /use the host's available tool discovery to load Hivemind's tools first/);
-    assert.match(prompt, /If join is unavailable or fails, report the startup failure and stop/);
+    assert.match(prompt, /pause about 15 seconds and check again, for up to about 2 minutes/);
+    assert.match(prompt, /If join is still unavailable after that, or fails, report the startup failure and stop; never stop silently\./);
+  }
+  // Every family and both roles get the same instruction: any CLI can start its first turn before the MCP server is ready.
+  for (const software of ["codex", "claude", "agent", "opencode"]) {
+    for (const role of ["brain", "worker"] as const) {
+      const prompt = buildLaunchPrompt({ ...base, software, role, seniority: "mid" });
+      assert.match(prompt, /pause about 15 seconds and check again, for up to about 2 minutes/, `${software} ${role}`);
+    }
   }
 });
 

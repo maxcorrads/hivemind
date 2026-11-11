@@ -306,7 +306,9 @@ export function buildLaunchPrompt(input: LaunchInput): string {
   const call = `Call the hivemind MCP tool join with ${joinArgs(input)}. ` +
     "Use a real tool call; never simulate a tool result or invent an agent name. " +
     "If join is not visible yet, use the host's available tool discovery to load Hivemind's tools first. " +
-    "If join is unavailable or fails, report the startup failure and stop.";
+    // The MCP server can still be starting when the first turn begins, above all when many agents start at once.
+    "If join is still missing, Hivemind's MCP server may still be starting: pause about 15 seconds and check again, for up to about 2 minutes. " +
+    "If join is still unavailable after that, or fails, report the startup failure and stop; never stop silently.";
   const hive = hiveLine(input);
   const isolation = [
     input.passProject ? "" : "Join from the project worktree.",

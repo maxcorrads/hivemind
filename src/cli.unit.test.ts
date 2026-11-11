@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, beforeEach, test, type TestContext } from "node:test";
-import { arg, argRest, codexMcpConfig, isCliEntrypoint, MCP_TOOL_TIMEOUT_SEC, mcpLauncher, runCli, serveOptions, stopOnSignals } from "./cli.ts";
+import { arg, argRest, codexMcpConfig, isCliEntrypoint, MCP_STARTUP_TIMEOUT_SEC, MCP_TOOL_TIMEOUT_SEC, mcpLauncher, runCli, serveOptions, stopOnSignals } from "./cli.ts";
 import { BODY_MAX } from "./shared/types.ts";
 
 // Every command runs in-process against a mocked fetch; HIVEMIND_HOME is a
@@ -123,11 +123,14 @@ test("mcp-config --codex prints a Codex TOML block that passes the session and g
   const args = JSON.parse(lines.find(line => line.startsWith("args = "))!.slice("args = ".length)) as string[];
   assert.deepEqual(args, mcpLauncher().args, "the same launcher as the JSON output");
   assert.equal(args.at(-1), "mcp");
+  assert.equal(MCP_STARTUP_TIMEOUT_SEC, 60);
+  assert.ok(lines.includes("startup_timeout_sec = 60"), "Codex waits a minute for a slow start, not its 10 s default");
   assert.ok(lines.includes(`tool_timeout_sec = ${MCP_TOOL_TIMEOUT_SEC}`));
   assert.ok(lines.includes('env_vars = ["HIVEMIND_TMUX_SESSION", "HIVEMIND_ROLE"]'));
   assert.ok(lines.includes("[mcp_servers.hivemind.env]"));
   assert.ok(lines.includes('HIVEMIND_URL = "http://127.0.0.1:7999"'));
-  // env_vars belongs to the server table, before the env sub-table starts.
+  // The timeouts and env_vars belong to the server table, before the env sub-table starts.
+  assert.ok(lines.indexOf("startup_timeout_sec = 60") < lines.indexOf("[mcp_servers.hivemind.env]"));
   assert.ok(lines.indexOf('env_vars = ["HIVEMIND_TMUX_SESSION", "HIVEMIND_ROLE"]') < lines.indexOf("[mcp_servers.hivemind.env]"));
   assert.equal(lines.some(line => line.startsWith('HIVEMIND_ROLE = ')), false,
     'manual hosts without a generated role must retain the unrestricted tool list');
@@ -140,6 +143,7 @@ test("the Codex block uses the compiled launcher without cwd for an installed pa
   assert.ok(installed.includes('command = "node"'));
   assert.ok(installed.includes(`args = [${JSON.stringify(path.resolve("/pkg", "dist/node/cli.js"))}, "mcp"]`));
   assert.ok(!installed.some(line => line.startsWith("cwd = ")));
+  assert.ok(installed.includes(`startup_timeout_sec = ${MCP_STARTUP_TIMEOUT_SEC}`));
   assert.ok(installed.includes(`tool_timeout_sec = ${MCP_TOOL_TIMEOUT_SEC}`));
   assert.ok(installed.includes('env_vars = ["HIVEMIND_TMUX_SESSION", "HIVEMIND_ROLE"]'));
   const checkout = codexMcpConfig("http://127.0.0.1:7420", false, '/Users/me/my "hive"').split("\n");

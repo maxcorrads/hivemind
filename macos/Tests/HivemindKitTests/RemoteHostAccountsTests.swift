@@ -312,6 +312,8 @@ struct RemoteHostAccountsTests {
     defer { try? FileManager.default.removeItem(at: root) }
     let config = root.appendingPathComponent("config.toml").path
     let block = RemoteAccountScripts.codexMcpBlock(runtimeFolder: runtimeFolder)
+    #expect(block.contains("\nstartup_timeout_sec = 60\ntool_timeout_sec = 28800\n"),
+            "Codex waits a minute for the MCP server to start, not its 10 s default")
     func run() throws -> String {
       let process = Process()
       process.executableURL = URL(fileURLWithPath: "/bin/sh")
