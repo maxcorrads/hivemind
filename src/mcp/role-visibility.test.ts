@@ -20,6 +20,8 @@ const BRAIN_ONLY = [
 
 const names = async (client: Client) => (await client.listTools()).tools.map(tool => tool.name).sort();
 const without = (all: string[], visible: string[]) => all.filter(name => !visible.includes(name));
+/** UTF-8 bytes of a value as tools/list carries it. */
+const bytes = (value: unknown) => value === undefined ? 0 : Buffer.byteLength(JSON.stringify(value));
 
 test('role hint is exact and a preloaded credential falls back to all tools', () => {
   assert.equal(configuredToolRole({}), null);
@@ -73,6 +75,17 @@ test('real SDK tools/list is static per role; unknown credentials keep server au
   const hiddenBrainTool = await worker.callTool({ name: 'worker_templates', arguments: {} });
   assert.equal(hiddenBrainTool.isError, true);
   assert.match(JSON.stringify(hiddenBrainTool.content), /disabled/);
+
+  // What tools/list costs each role: every agent carries it in its context. Reported, with no budget yet.
+  for (const [role, client] of [['no role', fallback], ['brain', brain], ['worker', worker]] as const) {
+    const { tools } = await client.listTools();
+    const rows = tools.map(tool => ({ name: tool.name, description: bytes(tool.description), schema: bytes(tool.inputSchema), total: bytes(tool) }))
+      .sort((a, b) => b.total - a.total);
+    const sum = (key: 'description' | 'schema') => rows.reduce((all, row) => all + row[key], 0);
+    t.diagnostic(`tools/list size, ${role}: ${bytes(tools)} bytes in ${tools.length} tools (descriptions ${sum('description')}, schemas ${sum('schema')})`);
+    if (role !== 'no role') continue;
+    for (const row of rows) t.diagnostic(`tools/list size, tool ${row.name}: ${row.total} bytes (description ${row.description}, schema ${row.schema})`);
+  }
 
   const prior = hive.identity.listAgents().length;
   const mismatch = await worker.callTool({ name: 'join', arguments: { role: 'brain' } });
