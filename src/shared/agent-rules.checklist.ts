@@ -19,7 +19,7 @@ export const AGENT_RULES = [
   { id: "session.desk", roles: both, rule: "Closing the session takes you offline; work waits for you." },
   { id: "session.project-scope", roles: both, rule: "Work only in your project; other projects are invisible; Human is the only bridge between projects." },
   { id: "session.join-location", roles: both, rule: "Join from the project worktree or pass project." },
-  { id: "session.real-join", roles: both, rule: "Join with a real tool call; never simulate results or invent a name; load tools via host discovery; report and stop if join fails." },
+  { id: "session.real-join", roles: both, rule: "Join with a real tool call; never simulate results or invent a name; load tools via host discovery; allow about 2 minutes for a slow MCP start; report and stop if join stays unavailable or fails." },
   { id: "session.read-orders", roles: both, rule: "After join, read and follow the standing orders (join result or whoami with orders=true)." },
   { id: "session.identity-fixed", roles: both, rule: "Role and project stay fixed; only Human may edit name, focus or seniority. Human and the worker may edit the worker's capability card. After notice, reread whoami/orders and the card." },
   { id: "session.resume-by-name", roles: both, rule: "Resume with join resume=<name>, no credentials; the newest join with a name supersedes the older session." },

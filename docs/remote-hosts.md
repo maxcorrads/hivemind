@@ -378,7 +378,8 @@ details:
   by the same steps as here on the host's files (`ShadowHomePreparing.prepareForLogin`), its writes applied there.
 - **The Codex MCP block.** A Codex home's `config.toml` on a host loses every `[mcp_servers.hivemind]` table (and its
   sub-tables) it had, this Mac's included, and gets the host's block at its end, under a marker comment: `command =
-  "/bin/sh"` with the [remote runtime](#remote-runtime)'s script, `tool_timeout_sec`, `env_vars = ["HIVEMIND_TMUX_SESSION",
+  "/bin/sh"` with the [remote runtime](#remote-runtime)'s script, `startup_timeout_sec = 60` (a minute for the MCP
+  server to start, in place of Codex's 10 seconds), `tool_timeout_sec`, `env_vars = ["HIVEMIND_TMUX_SESSION",
   "HIVEMIND_ROLE"]` and `HIVEMIND_URL = "http://127.0.0.1:7422"`. The block names the runtime's version, so each launch of
   a Codex account on a host puts this version's block back when the file differs (a failure is logged and the session
   starts with what the file has). Each write goes through a temporary file created exclusively, no link followed, at

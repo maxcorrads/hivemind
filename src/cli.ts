@@ -556,6 +556,12 @@ export function mcpLauncher(compiled = runningCompiled, root = packageRoot()): {
 export const MCP_TOOL_TIMEOUT_SEC = 28800;
 
 /**
+ * How long Codex waits for the Hivemind MCP server to start, in place of its 10 s default: a checkout starts it
+ * through tsx, which is slow while many agents start at once (docs/agent-connection.md).
+ */
+export const MCP_STARTUP_TIMEOUT_SEC = 60;
+
+/**
  * `mcp-config --codex`: the `[mcp_servers.hivemind]` block for Codex's config.toml. Codex hands a stdio MCP server
  * only a fixed set of variables, so `env_vars` must list the session label and generated launch role.
  */
@@ -569,6 +575,7 @@ export function codexMcpConfig(url = hiveUrl(), compiled = runningCompiled, root
     `args = [${args.map(str).join(", ")}]`,
     // A checkout runs tsx from its own devDependencies.
     ...(compiled ? [] : [`cwd = ${str(resolve(root))}`]),
+    `startup_timeout_sec = ${MCP_STARTUP_TIMEOUT_SEC}`,
     `tool_timeout_sec = ${MCP_TOOL_TIMEOUT_SEC}`,
     "# Passes the generated agent role and native session label to the MCP process when present.",
     `env_vars = ["HIVEMIND_TMUX_SESSION", "HIVEMIND_ROLE"]`,

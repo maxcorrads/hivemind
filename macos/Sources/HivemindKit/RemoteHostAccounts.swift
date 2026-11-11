@@ -320,6 +320,7 @@ public enum RemoteAccountScripts {
       [mcp_servers.hivemind]
       command = "/bin/sh"
       args = ["-c", \(toml(script))]
+      startup_timeout_sec = \(codexStartupTimeoutSeconds)
       tool_timeout_sec = 28800
       env_vars = ["HIVEMIND_TMUX_SESSION", "HIVEMIND_ROLE"]
 
@@ -329,6 +330,10 @@ public enum RemoteAccountScripts {
 
       """
   }
+
+  /// How long Codex waits for the Hivemind MCP server to start, in place of its 10 s default: after a restart every
+  /// agent on the host starts at once. The same value as MCP_STARTUP_TIMEOUT_SEC (src/cli.ts).
+  static let codexStartupTimeoutSeconds = 60
 
   /// The comment above the block, which a later write replaces with it.
   static let codexMarker = "# Hivemind on this host (written by Hivemind Server; docs/remote-hosts.md#accounts)"

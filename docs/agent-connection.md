@@ -15,7 +15,10 @@ If you restrict built-in tools for an MCP-only session, use `--tools ToolSearch`
 not an empty `--tools` list. This permits tool discovery, not file or shell access.
 The launcher does not approve tools, change permission mode, or change how other
 MCP servers load. The agent must discover missing tools and report an unavailable
-or failed join rather than invent success. See [Claude's eager-loading documentation](https://code.claude.com/docs/en/mcp#exempt-a-server-from-deferral).
+or failed join rather than invent success. Any CLI can start its first turn while
+the MCP server is still starting, above all when many agents start at once, so
+every launch prompt also tells the agent to pause about 15 seconds and check again,
+for up to about 2 minutes, before it reports the failure. See [Claude's eager-loading documentation](https://code.claude.com/docs/en/mcp#exempt-a-server-from-deferral).
 
 Codex does **not** read those JSON files. Print its TOML block and put it in Codex config (`~/.codex/config.toml`, or `config.toml` in every `CODEX_HOME` you launch with):
 
@@ -25,13 +28,14 @@ npx tsx src/cli.ts mcp-config --codex
 
 From an installed package run `hivemind mcp-config --codex` instead; it prints the compiled `dist/node/cli.js` launcher (`command = "node"`, `args = ["/absolute/path/to/hivemind/dist/node/cli.js", "mcp"]`, no `cwd`). Without `--codex`, `mcp-config` prints the JSON form for other MCP clients.
 
-The block `--codex` prints for a checkout looks like this (absolute paths filled in; `tool_timeout_sec` stays high so a sleeping `wait` is not killed):
+The block `--codex` prints for a checkout looks like this (absolute paths filled in; `tool_timeout_sec` stays high so a sleeping `wait` is not killed, and `startup_timeout_sec` gives the server a minute to start in place of Codex's 10 seconds, since `tsx` is slow while many agents start at once):
 
 ```toml
 [mcp_servers.hivemind]
 command = "npx"
 args = ["tsx", "/absolute/path/to/hivemind/src/cli.ts", "mcp"]
 cwd = "/absolute/path/to/hivemind"
+startup_timeout_sec = 60
 tool_timeout_sec = 28800
 # Passes the generated agent role and native session label to the MCP process when present.
 env_vars = ["HIVEMIND_TMUX_SESSION", "HIVEMIND_ROLE"]
@@ -40,7 +44,9 @@ env_vars = ["HIVEMIND_TMUX_SESSION", "HIVEMIND_ROLE"]
 HIVEMIND_URL = "http://127.0.0.1:7420"
 ```
 
-Then restart that Codex session. `join` / `wait` appear only after MCP is loaded.
+Then restart that Codex session. `join` / `wait` appear only after MCP is loaded. A block pasted before `startup_timeout_sec` was added keeps Codex's 10-second default: add that line to the `[mcp_servers.hivemind]` table of each `config.toml`, or paste the block again.
+
+The startup timeout only keeps a slow server from being given up on. Codex can still start its first turn before the server is ready (see `mcp_optional_startup_grace_ms` in [Codex's MCP documentation](https://developers.openai.com/codex/mcp)); the launch prompt's pause-and-check covers that case.
 
 MCP tools never read a stored credential. Call `join` in the session; the MCP process keeps the session key in memory only. Resume with `resume=Name`; nothing needs to be stored or copied. Resuming supersedes the previous session of that name (see [Identity lifecycle](identity-lifecycle.md)).
 
