@@ -74,7 +74,8 @@ test('a tool declared read-only leaves the hive as it was', { timeout: 30_000 },
   // Every request records its caller's presence (last seen, online); a read-only call may change nothing else.
   const state = () => {
     const rows = snapshotTables(hive, tables);
-    return { ...rows, agents: rows.agents.map(({ last_seen_at: _seen, online: _online, ...agent }) => agent) };
+    rows.agents = rows.agents!.map(({ last_seen_at: _seen, online: _online, ...agent }) => agent);
+    return rows;
   };
   for (const [name, variants] of Object.entries(reads)) {
     for (const args of variants) {
