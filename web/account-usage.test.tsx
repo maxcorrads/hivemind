@@ -94,8 +94,22 @@ test("a stale read whose pace has already run the window out says so instead of 
   await f.render();
   const text = f.row("Codex work").textContent!;
   assert.match(text, /stale/);
-  assert.match(text, /At this pace it is probably used up already/);
+  assert.ok(text.includes("At this pace it is probably used up already · data from 1d ago"), "the forecast names the read's age");
   assert.doesNotMatch(text, /runs out/);
+});
+
+test("a window whose reset is behind now shows no forecast", async t => {
+  const f = await fixture(t);
+  const work = f.hive.accounts.create(f.human, spec());
+  // Read 2 h ago, 1 h before the reset of a 5 h window at 40%: the reset passed an hour ago.
+  const read = NOW - 120 * MINUTE;
+  f.hive.accountUsage.record(usageSnapshot(work.id, { capturedAt: read, windows: [
+    { key: "codex.primary", label: "5 h", usedPercent: 40, resetsAt: read + 60 * MINUTE, windowMs: 5 * 60 * MINUTE },
+  ] }));
+  await f.render();
+  const row = f.row("Codex work");
+  assert.match(row.textContent!, /reset passed/);
+  assert.equal(row.querySelector(".account-usage-forecast"), null);
 });
 
 test("an account with no read yet says how its numbers come, and only a real failure shows as an error", async t => {
