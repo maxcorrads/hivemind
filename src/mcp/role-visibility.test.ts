@@ -10,6 +10,7 @@ import { Hive } from '../server/hive.ts';
 import { startServer } from '../server/serve.ts';
 import { childEnv } from '../test-support/child-process.ts';
 import { configuredToolRole } from './index.ts';
+import { leanSchema } from './lean-schema.ts';
 
 const BRAIN_ONLY = [
   'bot_tools', 'call_bot_tool',
@@ -23,24 +24,12 @@ const without = (all: string[], visible: string[]) => all.filter(name => !visibl
 /** UTF-8 bytes of a value as tools/list carries it. */
 const bytes = (value: unknown) => value === undefined ? 0 : Buffer.byteLength(JSON.stringify(value));
 
-/** JSON Schema keywords that tell a model nothing it needs to form a call; the server's zod schemas validate either way. */
-type Strip = { dialect?: boolean; formatPatterns?: boolean; closedObjects?: boolean };
-/** A copy of a JSON schema without those keywords: `$schema`, a `pattern` next to a `format`, `additionalProperties: false`. */
-function stripped(node: unknown, strip: Strip, fieldMap = false): unknown {
-  if (Array.isArray(node)) return node.map(item => stripped(item, strip));
-  if (!node || typeof node !== 'object') return node;
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(node)) {
-    // The keys of a `properties` map are field names, not keywords.
-    if (!fieldMap) {
-      if (strip.dialect && key === '$schema') continue;
-      if (strip.formatPatterns && key === 'pattern' && 'format' in node) continue;
-      if (strip.closedObjects && key === 'additionalProperties' && value === false) continue;
-    }
-    out[key] = stripped(value, strip, !fieldMap && key === 'properties');
-  }
-  return out;
-}
+/**
+ * The most tools/list may weigh for each role, in bytes (docs/agent-connection.md, "Size of the tool list"): every
+ * agent carries it in its context. About 3% above the size when it was set (38 215, 36 910 and 26 095), so a new tool
+ * or a longer definition raises it on purpose, not unnoticed.
+ */
+const BUDGET = { 'no role': 39_500, brain: 38_000, worker: 27_000 } as const;
 
 test('role hint is exact and a preloaded credential falls back to all tools', () => {
   assert.equal(configuredToolRole({}), null);
@@ -95,22 +84,20 @@ test('real SDK tools/list is static per role; unknown credentials keep server au
   assert.equal(hiddenBrainTool.isError, true);
   assert.match(JSON.stringify(hiddenBrainTool.content), /disabled/);
 
-  // What tools/list costs each role: every agent carries it in its context. Reported, with no budget yet.
+  // What tools/list costs each role: every agent carries it in its context. Its schemas are sent lean, within a budget.
   for (const [role, client] of [['no role', fallback], ['brain', brain], ['worker', worker]] as const) {
     const { tools } = await client.listTools();
-    const rows = tools.map(tool => ({ name: tool.name, description: bytes(tool.description), schema: bytes(tool.inputSchema), total: bytes(tool) }))
-      .sort((a, b) => b.total - a.total);
-    const sum = (key: 'description' | 'schema') => rows.reduce((total, row) => total + row[key], 0);
-    t.diagnostic(`tools/list size, ${role}: ${bytes(tools)} bytes in ${tools.length} tools (descriptions ${sum('description')}, schemas ${sum('schema')})`);
-    // What the same list would weigh without the keywords a model does not need.
-    const weight = (strip: Strip) => bytes(tools.map(tool => ({ ...tool, inputSchema: stripped(tool.inputSchema, strip) })));
-    const lean = weight({ dialect: true, formatPatterns: true, closedObjects: true });
-    t.diagnostic(`tools/list what-if, ${role}: without $schema ${weight({ dialect: true })}, without format patterns ${weight({ formatPatterns: true })}, ` +
-      `without additionalProperties:false ${weight({ closedObjects: true })}, without all three ${lean} (${Math.round((1 - lean / bytes(tools)) * 100)}% less)`);
-    if (role !== 'no role') continue;
-    for (const row of rows) t.diagnostic(`tools/list size, tool ${row.name}: ${row.total} bytes (description ${row.description}, schema ${row.schema})`);
-    // One small schema as it is sent, to check what the keywords look like.
-    t.diagnostic(`tools/list sample, ack_delivery: ${JSON.stringify(tools.find(tool => tool.name === 'ack_delivery')?.inputSchema)}`);
+    const sum = (part: 'description' | 'inputSchema') => tools.reduce((total, tool) => total + bytes(tool[part]), 0);
+    const size = bytes(tools);
+    t.diagnostic(`tools/list size, ${role}: ${size} bytes in ${tools.length} tools (descriptions ${sum('description')}, schemas ${sum('inputSchema')})`);
+    assert.ok(size <= BUDGET[role],
+      `tools/list for ${role} is ${size} bytes, over its budget of ${BUDGET[role]}: shorten a definition, or raise the budget on purpose`);
+    for (const tool of tools) {
+      assert.deepEqual(leanSchema(tool.inputSchema), tool.inputSchema, `${tool.name} is sent without $schema or a pattern next to a format`);
+    }
+    // A UUID keeps its format, which says what its regex said.
+    assert.deepEqual(tools.find(tool => tool.name === 'ack_delivery')!.inputSchema,
+      { type: 'object', properties: { deliveryId: { type: 'string', format: 'uuid' } }, required: ['deliveryId'] });
   }
 
   const prior = hive.identity.listAgents().length;

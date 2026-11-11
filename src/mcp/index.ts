@@ -25,6 +25,7 @@ import { roomEventSchema } from '../shared/rooms.ts';
 import { subscriptionSchema } from '../shared/notifications.ts';
 import { packageVersion } from "../shared/package-root.ts";
 import { attachablePath } from "./attach-guard.ts";
+import { leanToolList } from "./lean-schema.ts";
 import { MESSAGE_EVENT_TYPES } from "../shared/types.ts";
 import { terminalSessionFields } from "../shared/terminal-session.ts";
 import { JOIN_SESSION, PARAM_DESCRIPTIONS, SEARCH_NEXT, TOOL_DESCRIPTIONS, joinNext } from "./tool-text.ts";
@@ -598,6 +599,9 @@ export async function startMcp() {
   const previousClose = server.server.onclose;
   server.server.onclose = () => { if (heartbeat) clearInterval(heartbeat); idleServer?.close(); previousClose?.(); };
   const transport = new StdioServerTransport();
+  // Every agent carries tools/list in its context: send its schemas without the keywords a model does not need.
+  const send = transport.send.bind(transport);
+  transport.send = message => send(leanToolList(message));
   await server.connect(transport);
 }
 
