@@ -310,7 +310,8 @@ agent that must cancel tasks or release workers with nobody to ask needs one of 
 
 Every agent carries the answer to `tools/list` in its context for the whole session: each tool's description and input
 schema. The schemas are about three quarters of it. The sizes below count each definition without its annotations,
-which are for the client; the same test reports their bytes apart. Measured on 2026-11-11 with the MCP SDK's own client
+which are for the client; the same test reports their bytes apart (3 183 with no role, 3 077 for a brain, 1 901 for a
+worker). Whether a host shows them to its model was not checked. Measured on 2026-11-11 with the MCP SDK's own client
 (`src/mcp/role-visibility.test.ts` reports the sizes on every run):
 
 | MCP process | Tools | Before | Now |
