@@ -53,7 +53,7 @@ test("a retained expired operation fails visibly instead of silently choosing a 
 });
 
 
-test("a send carries no topology mode or lock: only its content identifies an uncertain retry (#211)", async () => {
+test("a send carries no routing mode or lock: only its content identifies an uncertain retry (#211)", async () => {
   const keys: string[] = [], arities: number[] = [];
   const run = createSendOperations(async () => ({ id: "unused" }),
     async (...args: [string, string, string | null, string[], string]) => {

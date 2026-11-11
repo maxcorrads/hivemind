@@ -856,20 +856,17 @@ export class TelegramBridge {
       return;
     }
     const replyUnavailable = Boolean(replyId && !threadId);
-    const routingText = replyUnavailable ? `[Original reply unavailable] ${text}`.slice(0, 3900) : text;
-    const body = inboundPostBody(message.from?.first_name, routingText, attachmentIds.length > 0);
+    const received = replyUnavailable ? `[Original reply unavailable] ${text}`.slice(0, 3900) : text;
+    const body = inboundPostBody(message.from?.first_name, received, attachmentIds.length > 0);
     const human = this.hive.identity.getAgent(HUMAN_ID);
     const persistReceipt = (posted: Message) => {
       this.store.saveInboundMapping(chatId, message.message_id, posted.seq, posted.channelId, posted.threadId, telegramConfigKey(this.cfg));
     };
-    let posted: Message;
     try {
-      posted = this.hive.messages.postMessage(human, {
+      this.hive.messages.postMessage(human, {
         channel: channelId, body, threadId, source: "telegram", attachmentIds,
       }, persistReceipt);
     } catch (error) { this.discardUnboundAttachments(attachmentIds); throw error; }
-    // Same as the Human UI: posted first, then Jev advises the owning brain in the background (#214).
-    this.hive.adaptiveTopology.humanMessagePosted(human, posted, routingText);
   }
 
   private async onTelegramReaction(update: TelegramReaction) {

@@ -15,7 +15,7 @@ function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-terminal-session-"));
   const hive = new Hive(path.join(dir, "hive.db"));
   const app = createApp(hive);
-  t.after(async () => { await hive.adaptiveTopology.stop(); hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
+  t.after(async () => { hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
   const events: Agent[] = [];
   hive.bus.on("agent", agent => events.push(agent));
   const call = async (method: string, url: string, body?: unknown, token?: string) => {

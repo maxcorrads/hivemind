@@ -10,18 +10,16 @@ Status reconciled on 2026-09-22 against `dc9323c650530e4d58be6dc15f2fbf7816c3aca
 | Task/claim/worker coordination | #26/#85, #28/#92, #30/#94, #31/#95 | Workload-specific benefit belongs in #29. |
 | Causal timeline/replay | #32/#101 and follow-ups; #32 closed | Do not describe it as an unimplemented feature. |
 | Collaboration rooms | #33/#85; selected as a Phase 2 option | Compare room versus DM where direct peer clarification is genuinely necessary. Human already chose to retain rooms as an optional mode. |
-| Jev Phase 1/2 | #120/#126 and #128/#129 | Live provider integration smoke, per-attempt overhead, matched quality/cost/latency and confidence calibration. |
+| Routing advice (Jev) Phase 1/2 | #120/#126 and #128/#129 | Removed, with its evidence collection and study tools. Nothing is left to measure. |
 | Stable release | #73 (0.2.0), draft | Publication requires a separate explicit Human decision. |
 
 Issue references are in [the Hivemind repository](https://github.com/maxcorrads/hivemind/issues). #35 is the live roadmap index; it stays open while chosen evidence work remains active.
 
 ## Work that can proceed without credentials or Human trials
 
-1. Preserve bounded, privacy-safe evidence for every classifier attempt, including failures, capacity retries and stale decisions discarded before applying policy. Separate attempts from accepted evaluations and actual transitions.
-2. Export a versioned report without request text, credentials, worker names, project paths or provider response bodies. Make missing history and unknown usage explicit.
-3. Prepare deterministic, offline Auto-versus-fixed experiment manifests and validators. Require complete matched cohorts and compatible pinned versions. Fixtures are software tests, not measured provider performance.
-4. Add regression coverage for the selected 0.90 policy, direct jumps, Human locks, safe drains, provider failure and evidence isolation. Do not alter agreed thresholds to make evaluation easier. (Superseded by #211: Jev is advisory-only, so there is no applied policy, lock or drain left to cover; see [Jev advice](adaptive-routing.md).)
-5. Review concrete remaining gaps and record focused issues with reproduction/evidence and acceptance criteria, avoiding duplicates of #29/#33/#34.
+Review concrete remaining gaps and record focused issues with reproduction/evidence and acceptance criteria, avoiding duplicates of #29/#33/#34.
+
+The other items of this list covered evidence, reports, experiment manifests and regression coverage for the routing advice. They went away with it.
 
 No live request, paid agent run, release, or merge is implicitly authorized by this plan.
 
@@ -35,15 +33,7 @@ The single baseline receives the complete information set. This tests room-vs-DM
 
 ## Future live execution checklist (not executed by this document)
 
-### Integration smoke before economic claims
-
-Human configures the TypeSafe key in **Adaptive routing** on their own instance. Never paste it into an issue, command transcript, fixture or commit. Jev stays optional: the toggle is under Human control, and with it off nothing calls TypeSafe.
-
-Use disposable local workspaces and synthetic non-sensitive requests first. Check a simple request, a parallel request, a request needing shared decisions, and a provider-unavailable case. Confirm that the Human send is posted at once, the advice appears in the Routing log, and the owning brain receives `jevAdvice` with its next action on the request; nothing is applied (#211, #214). Record the exact Hivemind revision, resolved provider/model, policy/contract version, worker capacity and whether the result is a fake fixture or live observation.
-
-A failed smoke is a test result, not a reason to silently rewrite or drop the trial. Do not turn on broad live experiments until the simple contract works with the actual configured provider.
-
-### Existing fixed-topology clarification experiment
+### Existing fixed-workflow clarification experiment
 
 Before the live execution step, stop the normal local Hivemind server and confirm that port **7420** is free. The executor starts an isolated server on that fixed port; a collision is recorded as a harness failure. Attempted trials, including harness failures, are skipped on resume. If a collision has already affected a cohort, preserve it and prepare a new output directory after freeing the port. See the [real-agent executor runbook](coordination-real-agent.md#optional-codex--opencode-cohort-executor) for the remaining prerequisites.
 
@@ -66,20 +56,14 @@ Check the selected installed host/provider configuration before running. No prov
 
 ### Matched Phase 2 comparison
 
-> **Not runnable on this build.** The comparison needs server-enforced fixed topologies, which were removed when Jev became advisory-only (#211); the paired-study runner (#136) was removed in #214. Use a Hivemind release before #211 to execute the #132 manifest.
-
-The design: run the same reviewed workload set with `auto`, `single`, `brain_one_worker`, `brain_multi_dm`, and `brain_multi_room` in randomized repeated order, with fixed versions and equivalent initial capacity. Fixed-mode conditions disable Jev for a clean no-router overhead baseline. Do not use the fixed-workflow executor above for this comparison.
-
-Compare acceptance and independent defects first, then net provider tokens and elapsed wall time. Do not add summed Jev call latency to wall time already measured end-to-end. Keep workload-model tokens and Jev tokens separate; add them only where both are complete and the comparison is meaningful. Unknown monetary cost remains null; no current vendor price is hard-coded.
-
-Preserve workload failures, transport/harness failures, missing measurements, interrupted runs and review status. `Auto selected Single` is not automatically an under-orchestration error: it requires reviewed evidence that Single missed the quality target and a comparable orchestrated run succeeded. A controller recommendation alone cannot label that outcome.
+> **Not runnable on this build.** The comparison needed server-enforced fixed workflows and an automatic mode chosen by the routing advice. Both were removed (#211, #214, and the removal of the advice itself). Use a Hivemind release before #211 to execute the #132 manifest.
 
 ## Human-dependent work intentionally deferred
 
 #34's 16-trial Human comparison remains optional and deferred. It measures actual Human response time and context errors; an agent replay is not a substitute participant. This does not block use of the delivered queue.
 
-The TypeSafe key is not yet configured in Human's instance. Engineering work and fake-provider CI proceed without it. Credential setup/live evidence and release approval are the only external boundaries in this plan; Jev is advisory-only and optional (#211, #214): there are no topology, de-escalation or lock decisions left to agree.
+Release approval is the only external boundary left in this plan.
 
 ## Release readiness is separate from measurement readiness
 
-A green implementation CI verifies contracts, not real-world savings. Keep #73 draft. Complete the live integration smoke and inspect its retained evidence before requesting a release decision; missing calibration must be disclosed rather than presented as a tested performance claim.
+A green implementation CI verifies contracts, not real-world savings. Keep #73 draft. Inspect the retained evidence before requesting a release decision; missing calibration must be disclosed rather than presented as a tested performance claim.

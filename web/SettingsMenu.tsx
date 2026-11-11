@@ -14,7 +14,6 @@ export type SettingsMenuProps = {
   notifications: DesktopNotifications;
   telegram: Snapshot["telegram"];
   onTelegram: () => void;
-  onAdaptiveRouting: () => void;
   onAccounts: () => void;
   onLaunch: () => void;
   onHelp: () => void;
@@ -31,7 +30,7 @@ const LAYOUTS: Array<[Layout, string]> = [["rail", "Project rail"], ["unified", 
 let reopenAfterSwitch = 0;
 
 /** The Settings and tools menu: theme, layout, notifications, integrations, launch and help. */
-export function SettingsMenu({ theme, onToggleTheme, layout, onLayout, notifications, telegram, onTelegram, onAdaptiveRouting,
+export function SettingsMenu({ theme, onToggleTheme, layout, onLayout, notifications, telegram, onTelegram,
   onAccounts, onLaunch, onHelp, autoArchive, openRequest, iconOnly }: SettingsMenuProps & { iconOnly?: boolean }) {
   const menu = useRef<HTMLDetailsElement>(null);
   const layoutLabel = useId();
@@ -115,9 +114,6 @@ export function SettingsMenu({ theme, onToggleTheme, layout, onLayout, notificat
           onClick={onTelegram}
         >
           Telegram{degraded ? " · Needs attention" : ""}
-        </button>
-        <button type="button" className="tool-action" title="Adaptive routing" onClick={onAdaptiveRouting}>
-          Adaptive routing
         </button>
         <button type="button" className="tool-action" title="Accounts" onClick={onAccounts}>
           Accounts

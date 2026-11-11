@@ -13,7 +13,6 @@ export type AgentLifecycleDeps = Core & {
   readonly files: { deleteUnsentBy(agentId: string): void; collectUnusedBlobs(): number };
   readonly waiters: { evict(agentId: string): void };
   readonly tasks: { closeForRemovedAgent(agent: Agent): { cancelled: number; unreviewed: number } };
-  readonly adaptiveTopology: { closeBrainExecutions(brain: Agent): void };
   readonly launcherQueue: { kill(requestId: string): void; expireReservationRequest(requestId: string): void };
   readonly lifecycleLog?: { record(input: { agentId: string; projectId: string | null; actorId: string | null;
     kind: 'removed'; summary: string; source: 'server' }): unknown };
@@ -27,7 +26,7 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
  *
  * - Removal keeps a tombstone: the agent row stays (marked `removed_at`) so its messages, tasks and routing outcomes
  *   keep their author. The agent can no longer authenticate, join, resume, receive mail or be assigned; its open work
- *   is closed: tasks assigned to it are cancelled and its Jev executions completed. Tasks it assigned stay open so
+ *   is closed: tasks assigned to it are cancelled. Tasks it assigned stay open so
  *   their workers can still report and submit.
  * - Project deletion purges: the project's agents are deleted along with everything else the project scoped.
  */
@@ -60,7 +59,7 @@ export class AgentLifecycle {
 
   /** Inside a transaction: tombstones the agent, closes its work and posts `note` (plus what happened to its tasks). */
   private retire(target: Agent, note: string, actorId: string | null = null, expired = false): Agent {
-    const { identity, tasks, adaptiveTopology, channels, messages, bus, storage } = this.deps;
+    const { identity, tasks, channels, messages, bus, storage } = this.deps;
     this.detach(target.id);
     // Tombstone first, so the task views published below already label the agent as removed.
     identity.markRemoved(target.id, now());
@@ -76,7 +75,6 @@ export class AgentLifecycle {
       kind: 'removed', summary: target.pending ? 'Pending agent reservation was withdrawn.' :
         'Agent was removed from the hive.', source: 'server' });
     const work = tasks.closeForRemovedAgent(target);
-    if (target.role === "brain") adaptiveTopology.closeBrainExecutions(target);
     const general = target.projectId ? channels.generalChannelId(target.projectId) : null;
     if (general) {
       const notes = [

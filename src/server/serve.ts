@@ -24,7 +24,7 @@ import { takeInstanceSecret } from "./instance-proof.ts";
 /** Hive events forwarded verbatim to every web UI socket; Telegram wake signals stay server-side. */
 const FORWARDED_EVENTS = [
   "message", "activity", "agent", "channel", "thread", "reaction", "queued", "project", "telegram-health",
-  "task", "job", "agent-work", "room", "adaptive-routing", "jev-call", "evidence-health", "worker-templates", "accounts", "launch-requests",
+  "task", "job", "agent-work", "room", "worker-templates", "accounts", "launch-requests",
 ] as const satisfies ReadonlyArray<keyof HiveEvents>;
 type ForwardedEvent = (typeof FORWARDED_EVENTS)[number];
 
@@ -188,9 +188,6 @@ export function startServer(opts: { port?: number; agentPort?: number | null; hi
     for (const ws of clients) ws.close(1001, "server shutdown");
     const wsClosed = new Promise<void>(resolve => wss.close(() => resolve()));
     const bridgeStopped = telegram.stop();
-    // An injected Hive belongs to its caller and may be reused by another server.
-    // An owned Hive must cancel and drain classifier/capacity work before closing SQLite.
-    const routingStopped = opts.hive ? Promise.resolve() : hive.adaptiveTopology.stop();
     const grace = Math.min(30_000, Math.max(50, opts.shutdownGraceMs ?? 5_000));
     let timer: ReturnType<typeof setTimeout>;
     const deadline = new Promise<never>((_resolve, reject) => {
@@ -200,7 +197,8 @@ export function startServer(opts: { port?: number; agentPort?: number | null; hi
         reject(new Error("Shutdown drain deadline exceeded; connections terminated"));
       }, grace);
     });
-    const drained = Promise.allSettled([bridgeStopped, routingStopped, httpClosed, wsClosed]).then(results => {
+    const drained = Promise.allSettled([bridgeStopped, httpClosed, wsClosed]).then(results => {
+      // An injected Hive belongs to its caller and may be reused by another server.
       if (!opts.hive) hive.close();
       const failed = results.find(result => result.status === "rejected");
       if (failed?.status === "rejected") throw failed.reason;

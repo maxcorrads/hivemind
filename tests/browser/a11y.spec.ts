@@ -54,7 +54,6 @@ async function install(page: Page, fixture: Partial<Fixture> = {}): Promise<Fixt
     unmanagedBots: [] };
   await page.route("**/api/ui/channels/*/room", route => json(route, room));
   await page.route("**/api/ui/channels/*/tasks", route => json(route, { items: [], hasMore: false }));
-  await page.route("**/api/ui/adaptive-routing*", route => json(route, { executions: [], events: [], state: null }));
   await page.route("**/api/ui/channels/*/messages*", async route => {
     const id = decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-2) ?? "");
     if (state.failMessages) return json(route, { error: "Fixture load failure" }, 500);

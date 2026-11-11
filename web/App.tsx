@@ -2,8 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import type { Agent } from "../src/shared/types.ts";
 import type { TaskOverview } from "../src/shared/task-views.ts";
 import { AccountsSheet } from "./AccountsSheet.tsx";
-import { AdaptiveRoutingPanel } from "./AdaptiveRoutingPanel.tsx";
-import { AdaptiveRoutingSettings } from "./AdaptiveRoutingSettings.tsx";
 import { api } from "./api.ts";
 import { ChannelDesk } from "./ChannelDesk.tsx";
 import { CreateChannelSheet, InviteSheet } from "./ChannelSheets.tsx";
@@ -11,8 +9,6 @@ import { useDesktopNotifications } from "./desktop-notifications.ts";
 import { AgentConfirmSheet, HelpSheet } from "./HiveSheets.tsx";
 import { AgentPanel } from './AgentPanel.tsx';
 import { Inbox } from "./Inbox.tsx";
-import { JevLog } from "./JevLog.tsx";
-import { channelTitle } from "./labels.ts";
 import { LaunchSheet } from "./LaunchSheet.tsx";
 import { LaunchRequests, useLaunchRequests } from "./LaunchRequests.tsx";
 import { channelBack, mobileScreen, mobileTab, tabTarget, useMobile } from "./mobile-nav.ts";
@@ -33,7 +29,6 @@ import { TaskViews } from "./TaskViews.tsx";
 import { ThreadAside } from "./ThreadAside.tsx";
 import { ThreadResizer } from "./ThreadResizer.tsx";
 import { TopBar } from "./TopBar.tsx";
-import { useAdaptiveRouting } from "./use-adaptive-routing.ts";
 import { useChannelPane } from "./use-channel-pane.ts";
 import { useConversationLoads } from "./use-conversation-loads.ts";
 import { useDmNav } from "./use-dm-nav.ts";
@@ -59,12 +54,6 @@ export function App() {
   const { sel, threadId, setThreadId, selRef } = selection;
   const hive = useHiveSnapshot(setErr);
   const { snap, setSnap, refreshSnap, latestTelegramHealth } = hive;
-  // Jev advises on every Human message addressed to a brain, so any channel with a brain has advice state.
-  const routingChannelId = sel.kind === "channel" && snap?.channels.some(channel => channel.id === sel.id &&
-    channel.memberIds.some(id => snap.agents.some(agent => agent.id === id && agent.role === "brain"))) ? sel.id : null;
-  const { view: routingView, refresh: refreshRoutingView,
-    onEvent: onRoutingEvent } = useAdaptiveRouting(routingChannelId);
-  const [routingPanelOpen, setRoutingPanelOpen] = useState(false);
   const channelPane = useChannelPane(selRef, selection.unreadLookup);
   const threadState = useThreadPane(selection, setErr);
   const { pane } = channelPane;
@@ -74,10 +63,6 @@ export function App() {
   const channels = snap?.channels ?? [];
   const projects = snap?.projects ?? [];
   const activeChannel = sel.kind === "channel" ? channels.find((c) => c.id === sel.id) : undefined;
-  const activeBrainChannel = Boolean(activeChannel?.memberIds.some(
-    id => snap?.agents.some(agent => agent.id === id && agent.role === "brain"),
-  ));
-  const brainNames = Object.fromEntries((snap?.agents ?? []).filter(agent => agent.role === "brain").map(agent => [agent.id, agent.name]));
   const storedProject = loadSelectedProject();
   const selectedProject = sel.kind !== "channel" ? sel.project ?? projects.find(p => p.slug === storedProject)?.slug ?? projects[0]?.slug ?? ""
     : (activeChannel?.project ?? projects.find(p => p.slug === storedProject)?.slug ?? projects[0]?.slug ?? "");
@@ -105,9 +90,9 @@ export function App() {
     taskRefreshTimer.current = window.setTimeout(() => { taskRefreshTimer.current = null; setTaskTick(value => value + 1); }, 80);
   };
   useEffect(() => () => { if (taskRefreshTimer.current !== null) window.clearTimeout(taskRefreshTimer.current); }, []);
-  const { live, roomTick, jevTick, subscribeJev, accountsTick } = useRealtime({
+  const { live, roomTick, accountsTick } = useRealtime({
     selection, hive, channel: channelPane, thread: threadState, inboxLoad: inbox.inboxLoad, changeSelection,
-    reopenDm: dms.reopenDm, onActivity: inbox.receive, refreshRoutingView, onRoutingEvent, setErr,
+    reopenDm: dms.reopenDm, onActivity: inbox.receive, setErr,
     onLiveEvent: event => {
       notifications.onLiveEvent(event); launchRequests.onLiveEvent(event);
       if (event.type === 'task' || event.type === 'job' || event.type === 'launch-requests' ||
@@ -142,9 +127,7 @@ export function App() {
     threadStream: threadState.threadStream, pane, threadPane, selectedChannelId, threadId });
   const { openUnread, target: unreadTarget } = useUnreadJump({ selection, channel: channelPane, thread: threadState, go,
     clearSearch: () => search.setQuery(''), refreshSnap, setErr });
-  useEffect(() => { setRoutingPanelOpen(false); }, [activeChannel?.id]);
-  const compose = useSend({ sel, selection, channel: channelPane, thread: threadState, activeBrainChannel,
-    refreshRoutingView, setErr });
+  const compose = useSend({ sel, selection, channel: channelPane, thread: threadState, setErr });
 
   const telegramSheet = useTelegramSheet(setErr);
   const agentConfirm = useAgentConfirm(refreshSnap, setErr);
@@ -152,7 +135,6 @@ export function App() {
   const [credentialBot, setCredentialBot] = useState<Agent | null>(null);
   const [templatesProject, setTemplatesProject] = useState<string | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
-  const [adaptiveRoutingOpen, setAdaptiveRoutingOpen] = useState(false);
   const [accountsOpen, setAccountsOpen] = useState(false);
   const [launchOpen, setLaunchOpen] = useState(false);
   const [agentPanelId, setAgentPanelId] = useState<string | null>(null);
@@ -264,7 +246,7 @@ export function App() {
   const settings = {
     theme, onToggleTheme: toggleTheme, layout, onLayout: setLayout, notifications, openRequest: settingsRequest,
     telegram: snap.telegram, onTelegram: () => telegramSheet.openTelegram(snap?.projects ?? []),
-    onAdaptiveRouting: () => setAdaptiveRoutingOpen(true), onAccounts: () => setAccountsOpen(true),
+    onAccounts: () => setAccountsOpen(true),
     onLaunch: () => openLaunch(), onHelp: () => setHelpOpen(true),
     autoArchive: snap.autoArchiveTaskChannels === undefined ? undefined : {
       enabled: snap.autoArchiveTaskChannels,
@@ -333,12 +315,6 @@ export function App() {
             onOlder={search.loadOlderHits}
             onClear={() => search.setQuery("")}
           />
-        ) : sel.kind === "jev" ? (
-          <JevLog project={sel.project} tick={jevTick} subscribe={subscribeJev}
-            projectId={projects.find(p => p.slug === sel.project || p.id === sel.project)?.id}
-            channelLabel={id => { const channel = channels.find(item => item.id === id); return channel ? channelTitle(channel) : "Deleted channel"; }}
-            agentName={id => snap.agents.find(agent => agent.id === id)?.name ?? "Removed brain"}
-            onOpenChannel={id => go({ kind: "channel", id })} />
         ) : sel.kind === "tasks" ? (
           <TaskViews project={sel.project} projects={projects} agents={snap.agents} traffic={snap.agentTraffic ?? {}}
             tick={taskTick} onProject={slug => navigate({ kind: 'tasks', project: slug })}
@@ -382,10 +358,9 @@ export function App() {
           <ChannelDesk channelId={sel.id} activeChannel={activeChannel} archived={snap.archivedChannelIds?.includes(sel.id) ?? false} agents={snap.agents} roomAgents={roomAgents}
             unreadTarget={unreadTarget}
             channel={channelPane} threadPaneId={threadPane?.threadId} stickBottom={stickBottom}
-            threadOpenAnchor={threadOpenAnchor} go={go} roomTick={roomTick} routingView={routingView}
+            threadOpenAnchor={threadOpenAnchor} go={go} roomTick={roomTick}
             onReopenThread={threadState.refreshThread}
-            activeBrainChannel={activeBrainChannel} brainNames={brainNames}
-            onOpenRouting={() => setRoutingPanelOpen(true)} onInvite={() => channelSheets.setInviteOpen(true)}
+            onInvite={() => channelSheets.setInviteOpen(true)}
             compose={compose} draftInsert={taskDraft?.channelId === sel.id ? taskDraft : null}
             onDraftInserted={token => setTaskDraft(current => current?.token === token ? null : current)}
             setErr={setErr} onMarkUnread={async (channelId, seq) => {
@@ -463,23 +438,7 @@ export function App() {
           onCreated={slug => navigate({ kind: "inbox", project: slug })} />
       )}
 
-      {adaptiveRoutingOpen && (
-        <AdaptiveRoutingSettings onClose={() => setAdaptiveRoutingOpen(false)} onSaved={(settings) => {
-          setSnap((s) => (s ? { ...s, jev: { enabled: settings.enabled } } : s));
-          refreshRoutingView();
-        }} />
-      )}
-
       {accountsOpen && <AccountsSheet tick={accountsTick} onClose={() => setAccountsOpen(false)} />}
-
-      {routingPanelOpen && activeChannel && routingView && (
-        <AdaptiveRoutingPanel
-          channelId={activeChannel.id}
-          view={routingView}
-          brainNames={brainNames}
-          onClose={() => setRoutingPanelOpen(false)}
-        />
-      )}
 
       {telegramSheet.telegramOpen && telegramSheet.telegram && (
         <TelegramSheet form={telegramSheet} telegram={telegramSheet.telegram} projects={projects}

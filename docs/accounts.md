@@ -174,7 +174,7 @@ ninth account in one driver; `403` for an `Authorization` header.
 
 ### Sheet
 
-Settings → **Accounts** opens the sheet, after **Adaptive routing**. It has one section per driver:
+Settings → **Accounts** opens the sheet, after **Telegram**. It has one section per driver:
 
 - **Policy**: a Sequential / Balanced control. Each policy has one line saying what it does, as in
   [An account](#an-account).

@@ -12,8 +12,8 @@ import type { ToolName } from "./tool-text.ts";
  * - Destructive: the call can end, cancel or discard something that is not the caller's own to set again: another
  *   session, a worker's terminal, open tasks, a worker's task memory.
  * - Repeatable: the same call again succeeds, answers the same and changes nothing more.
- * - Outside: the call reaches a system of the agent's choosing outside the hive. Mirrors the Human set up (Telegram,
- *   Jev advice) relay hive content to services the Human chose and do not count.
+ * - Outside: the call reaches a system of the agent's choosing outside the hive. The Telegram mirror the Human set up
+ *   relays hive content to a group the Human chose and does not count.
  */
 const READS: ToolAnnotations = { readOnlyHint: true, openWorldHint: false };
 const writes = ({ destructive = false, repeatable = false, outside = false } = {}): ToolAnnotations =>
@@ -55,15 +55,14 @@ export const TOOL_ANNOTATIONS: Record<ToolName, ToolAnnotations> = {
   get_task: READS,
   get_task_timeline: READS,
   preview_task_claim: READS,
-  // An accepted review archives a task-bound worker and closes its terminal; revise can move the task to another worker.
+  // An accepted review archives a task-bound worker and closes its terminal.
   task_event: writes({ destructive: true, repeatable: true }),
   // Offers mail: it records the delivery and moves the inbox on.
   wait: writes(),
   ack_delivery: writes({ repeatable: true }),
   // The same name is refused the second time.
   create_channel: writes(),
-  // With Jev on, every call other than done asks for advice again.
-  set_thread_status: writes(),
+  set_thread_status: writes({ repeatable: true }),
   // Every call posts another "invited" line.
   invite: writes(),
   // Tells a worker to discard its task memory; every call sends the order again.

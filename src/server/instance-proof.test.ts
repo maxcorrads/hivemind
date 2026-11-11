@@ -102,7 +102,7 @@ function appFixture(t: TestContext, instanceSecret?: Buffer | null) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-instance-proof-"));
   const hive = new Hive(path.join(dir, "hive.db"));
   const app = createApp(hive, instanceSecret === undefined ? {} : { instanceSecret });
-  t.after(async () => { await hive.adaptiveTopology.stop(); hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
+  t.after(async () => { hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
   return app;
 }
 

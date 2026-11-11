@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { Hive } from "../hive.ts";
 import { applyMigrations, LATEST_VERSION, schemaVersion } from "./index.ts";
 import { hasColumn } from "./schema.ts";
-import { countRows, findRow, readValue } from "../test-fixtures.ts";
+import { countRows, findRow } from "../test-fixtures.ts";
 
 // #215 against a realistic existing hive: the populated fixture (every table has rows) is brought to the previous
 // release's schema by the previous migrations, copied online (VACUUM INTO while the source stays open, as a backup of
@@ -58,15 +58,12 @@ test("agent_tombstones migrates an online backup of a populated previous-release
   assert.equal(schemaVersion(hive.db), LATEST_VERSION);
   const human = hive.identity.getAgent("human");
   const brain = hive.identity.listAgents().find(agent => agent.role === "brain")!;
-  const history = ["messages", "task_records", "routing_outcomes", "reactions", "adaptive_topology_events", "jev_calls"];
+  const history = ["messages", "task_records", "routing_outcomes", "reactions"];
   const count = () => Object.fromEntries(history.map(table => [table, countRows(hive, table)]));
   const kept = count();
   assert.ok(countRows(hive, "messages", { author_id: brain.id }) > 0);
   hive.identity.removeAgent(human, brain.name);
-  assert.deepEqual(count(), { ...kept, messages: kept.messages! + 1, adaptive_topology_events: kept.adaptive_topology_events! + 1 },
-    "nothing is deleted; the removal notice and the audit of the closed Jev request are added");
-  const execution = String(readValue(hive, "adaptive_topology_executions", "snapshot", { brain_id: brain.id }));
-  assert.equal(typeof (JSON.parse(execution) as { completedAt?: number }).completedAt, "number");
+  assert.deepEqual(count(), { ...kept, messages: kept.messages! + 1 }, "nothing is deleted; the removal notice is added");
   const authored = Number(findRow(hive, "messages", { author_id: brain.id }, "seq")!.seq);
   assert.equal(hive.messageQueries.getMessageBySeq(authored).authorName, `${brain.name} (removed)`);
   assert.equal(hive.identity.getAgent(brain.id).name, brain.name);

@@ -12,7 +12,6 @@ import {
   type Thread,
   type ThreadStatus,
 } from "../../shared/types.ts";
-import type { AdaptiveTopologyRuntime } from "../adaptive-topology.ts";
 import type { RoomStore } from "../rooms.ts";
 import type { SendRequests } from "../send-requests.ts";
 import type { TaskStore } from "../tasks.ts";
@@ -35,7 +34,6 @@ export type MessageServiceDeps = Core & {
   readonly rooms: Pick<RoomStore, "archived">;
   readonly tasks: Pick<TaskStore, "has">;
   readonly timeline: Pick<TimelineStore, "prepare" | "recordMessage" | "source">;
-  readonly adaptiveTopology: Pick<AdaptiveTopologyRuntime, "threadStatusChange">;
   readonly lifecycleLog?: { record(input: { agentId: string; projectId: string | null; actorId: string | null;
     kind: 'context_cleared'; summary: string; source: 'server' }): unknown };
 };
@@ -215,11 +213,10 @@ export class MessageService implements MessagePoster {
     const ch = this.deps.channels.getChannel(row.channel_id);
     if (!this.deps.channels.canSeeChannel(actor, ch)) throw new HiveError(403, "Cannot access thread");
     return this.deps.storage.transaction(() => {
-      const routingChanged = this.deps.adaptiveTopology?.threadStatusChange(actor, threadId, status);
       this.db.prepare(`INSERT INTO threads (id, channel_id, status) VALUES (?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET status = excluded.status`).run(threadId, row.channel_id, status);
       const thread = this.db.prepare('SELECT id, channel_id AS channelId, status FROM threads WHERE id=?').get(threadId) as Thread;
-      this.deps.storage.afterCommit(() => { this.deps.bus.emit('thread', thread); routingChanged?.(); });
+      this.deps.storage.afterCommit(() => this.deps.bus.emit('thread', thread));
       return thread;
     });
   }

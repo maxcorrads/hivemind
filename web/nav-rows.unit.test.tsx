@@ -41,7 +41,7 @@ test("the project rail holds Help, Settings and the Human only when it is given 
   const bare = renderToStaticMarkup(<ProjectRail snap={snap} selectedProject="example" onSelect={noop} onNewProject={noop} />);
   assert.match(bare, /class="rail-project active "[^>]*aria-current="page"[^>]*><span class="sr-only">Example Place<\/span>/);
   assert.doesNotMatch(bare, /rail-tools|tools-menu/);
-  const settings = { theme: "light", onToggleTheme: noop, layout: "rail", onLayout: noop, telegram: undefined, onTelegram: noop, onAdaptiveRouting: noop,
+  const settings = { theme: "light", onToggleTheme: noop, layout: "rail", onLayout: noop, telegram: undefined, onTelegram: noop,
     onLaunch: noop, onHelp: noop, notifications: { supported: false, enabled: false, blocked: false, toggle: async () => {} } } as unknown as SettingsMenuProps;
   const full = renderToStaticMarkup(<ProjectRail snap={snap} selectedProject="example" onSelect={noop} onNewProject={noop} settings={settings} live />);
   assert.match(full, /class="rail-tools"><button type="button" class="icon-btn" title="How to join" aria-label="Help">/);
@@ -50,7 +50,7 @@ test("the project rail holds Help, Settings and the Human only when it is given 
 });
 
 test("the settings menu shows the auto-archive toggle with its state once the snapshot knows it", () => {
-  const base = { theme: "light", onToggleTheme: noop, layout: "rail", onLayout: noop, telegram: undefined, onTelegram: noop, onAdaptiveRouting: noop,
+  const base = { theme: "light", onToggleTheme: noop, layout: "rail", onLayout: noop, telegram: undefined, onTelegram: noop,
     onLaunch: noop, onHelp: noop, notifications: { supported: false, enabled: false, blocked: false, toggle: async () => {} } } as unknown as SettingsMenuProps;
   assert.doesNotMatch(renderToStaticMarkup(<SettingsMenu {...base} />), /Auto-archive/);
   const on = renderToStaticMarkup(<SettingsMenu {...base} autoArchive={{ enabled: true, onToggle: noop }} />);
