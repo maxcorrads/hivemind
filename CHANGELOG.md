@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.11.0](https://github.com/maxcorrads/hivemind/compare/v0.10.0...v0.11.0) (2026-11-11)
+
+
+### Features
+
+* **mcp:** declare annotations for every tool ([#395](https://github.com/maxcorrads/hivemind/issues/395)) ([54cd201](https://github.com/maxcorrads/hivemind/commit/54cd2015883e55c278ad89c37452217ee7ad9fe4)), closes [#394](https://github.com/maxcorrads/hivemind/issues/394)
+
+
+### Bug Fixes
+
+* **accounts:** the usage forecast takes now and names the age of an old read ([#386](https://github.com/maxcorrads/hivemind/issues/386)) ([#387](https://github.com/maxcorrads/hivemind/issues/387)) ([b618177](https://github.com/maxcorrads/hivemind/commit/b6181771b9b5ecfeebaf697ea42ab4571e5e416e))
+* **mcp:** give the MCP server a minute to start, and have agents check again before giving up ([#388](https://github.com/maxcorrads/hivemind/issues/388)) ([#389](https://github.com/maxcorrads/hivemind/issues/389)) ([157ab48](https://github.com/maxcorrads/hivemind/commit/157ab480b551c24c92dc5280f986b8e97231427b))
+
+
+### Performance Improvements
+
+* **mcp:** send tools/list without $schema and the regex beside each UUID format ([#391](https://github.com/maxcorrads/hivemind/issues/391)) ([#392](https://github.com/maxcorrads/hivemind/issues/392)) ([990a27d](https://github.com/maxcorrads/hivemind/commit/990a27dd41647475df792f76e30190f28f54c03e))
+
 ## [0.10.0](https://github.com/maxcorrads/hivemind/compare/v0.9.1...v0.10.0) (2026-10-27)
 
 
