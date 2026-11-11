@@ -10,7 +10,7 @@ import { HiveError } from '../shared/types.ts';
 test('lifecycle history is durable, isolated by agent, keyset-paged, and pruned in batches', t => {
   const home = mkdtempSync(path.join(os.tmpdir(), 'hive-agent-lifecycle-log-'));
   const hive = new Hive(path.join(home, 'hive.db'), { routineBatchMs: 0 });
-  t.after(async () => { await hive.adaptiveTopology.stop(); hive.close(); rmSync(home, { recursive: true, force: true }); });
+  t.after(async () => { hive.close(); rmSync(home, { recursive: true, force: true }); });
   const human = hive.identity.getAgent('human');
   const project = hive.projects.listProjects()[0] ??
     hive.projects.createProject(human, { name: 'Acme', slug: 'acme', worktree: home });
@@ -46,7 +46,7 @@ test('lifecycle history is durable, isolated by agent, keyset-paged, and pruned 
 test('lifecycle log validates bounds and rolls back with the enclosing mutation', t => {
   const home = mkdtempSync(path.join(os.tmpdir(), 'hive-agent-lifecycle-log-'));
   const hive = new Hive(path.join(home, 'hive.db'), { routineBatchMs: 0 });
-  t.after(async () => { await hive.adaptiveTopology.stop(); hive.close(); rmSync(home, { recursive: true, force: true }); });
+  t.after(async () => { hive.close(); rmSync(home, { recursive: true, force: true }); });
   const human = hive.identity.getAgent('human');
   const log = new AgentLifecycleLog({ storage: hive.storage, bus: hive.bus });
   const input = { agentId: human.id, projectId: null, actorId: human.id, kind: 'identity_edited' as const,

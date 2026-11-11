@@ -45,7 +45,7 @@ function plantHomes(dir: string) {
 function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-account-redaction-"));
   const hive = new Hive(path.join(dir, "hive.db"));
-  t.after(async () => { await hive.adaptiveTopology.stop(); hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
+  t.after(async () => { hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
   // Every line the server logs while the test runs.
   const logs: string[] = [];
   t.mock.method(console, "log", (...args: unknown[]) => { logs.push(format(...args)); });

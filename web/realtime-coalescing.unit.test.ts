@@ -1,11 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { JevCallLogView, JevCallSummary } from '../src/shared/jev-calls.ts';
 import { LIVE_MESSAGE_WINDOW } from '../src/shared/realtime.ts';
 import type { Message } from '../src/shared/types.ts';
 import type { ChannelPayload } from './api.ts';
 import { createThrottle, createUpdateBatch, type Timers } from './coalesce.ts';
-import { mergeLiveCall, mergeRefreshedPage } from './jev-log-view.ts';
 import { boundLivePane, HELD_MESSAGE_WINDOW } from './pane-window.ts';
 
 function fakeTimers() {
@@ -74,38 +72,6 @@ test('an update batch applies a burst of updaters in order with one setState', (
   batch.cancel();
   clock.advance(100);
   assert.equal(state.queued, -1, 'cancel drops queued updates superseded by a fresh snapshot');
-});
-
-function call(id: string, executionId: string, createdAt: number, patch: Partial<JevCallSummary> = {}): JevCallSummary {
-  return { id, routeId: `route-${id}`, projectId: 'p', channelId: 'dm', executionId, brainId: 'brain', createdAt,
-    phase: 'initial', trigger: { kind: 'human_request', eventType: null }, request: `Request ${executionId}`, status: 'ok',
-    targetTopology: 'single', targetWorkers: 0, confidence: 0.9, reason: 'single_sufficient', error: null,
-    model: 'jev', latencyMs: 1, inputTokens: 1, outputTokens: 1, outcome: null, ...patch };
-}
-function group(executionId: string, calls: JevCallSummary[]) {
-  return { executionId, channelId: 'dm', brainId: 'brain', request: `Request ${executionId}`, firstAt: calls[0]!.createdAt,
-    lastAt: calls.at(-1)!.createdAt, callCount: calls.length, calls };
-}
-
-test('a live Jev call joins, settles or opens its request group in page order without a refetch', () => {
-  const older = group('exec-old', [call('o1', 'exec-old', 100)]);
-  const recent = group('exec-recent', [call('r1', 'exec-recent', 200)]);
-  const view: JevCallLogView = { requests: [recent, older], hasMore: true, nextCursor: 'cursor' };
-  const joined = mergeLiveCall(view, call('o2', 'exec-old', 300));
-  assert.deepEqual(joined.requests.map(g => g.executionId), ['exec-old', 'exec-recent'], 'new activity moves the request first');
-  assert.equal(joined.requests[0]!.callCount, 2);
-  assert.equal(joined.requests[0]!.lastAt, 300);
-  assert.deepEqual(joined.requests[0]!.calls.map(c => c.id), ['o1', 'o2']);
-  assert.equal(joined.nextCursor, 'cursor', 'the older-page cursor is untouched');
-  const settled = mergeLiveCall(joined, call('o2', 'exec-old', 300, { status: 'unavailable', error: 'timeout' }));
-  assert.equal(settled.requests[0]!.callCount, 2, 'a settled call replaces its entry');
-  assert.equal(settled.requests[0]!.calls[1]!.status, 'unavailable');
-  const opened = mergeLiveCall(settled, call('n1', 'exec-new', 400));
-  assert.deepEqual(opened.requests.map(g => g.executionId), ['exec-new', 'exec-old', 'exec-recent']);
-  assert.deepEqual(opened.requests[0], group('exec-new', [call('n1', 'exec-new', 400)]));
-  // A later refetch of the newest page reconciles with the merged view without duplicates.
-  const refreshed = mergeRefreshedPage(opened, { requests: [opened.requests[0]!, opened.requests[1]!], hasMore: true, nextCursor: 'c2' });
-  assert.deepEqual(refreshed.requests.map(g => g.executionId), ['exec-new', 'exec-old', 'exec-recent']);
 });
 
 function row(seq: number): Message {

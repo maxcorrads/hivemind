@@ -40,8 +40,6 @@ async function fixture(t: TestContext) {
   const pending = (await hive.delivery.wait(b, 1, undefined, { sessionId: sessionB, compact: true })).delivery!;
   insertRows(hive, 'inbox_deliveries', [{ id: 'superseded', agent_id: b.id, session_id: sessionB, through_seq: 0, seqs: '[1]', attempts: 1,
     offered_at: 1, lease_until: 2, acknowledged_at: null, superseded_by: pending.id }]);
-  insertRows(hive, 'jev_calls', [{ id: 'jev-old', route_id: 'route-old', project_id: room.projectId, channel_id: room.id,
-    execution_id: 'execution', created_at: 1, summary: '{}' }]);
   const receipts = () => [a, b].map(worker => [worker.name, hive.inbox.receiptState(worker.id, answered.seq)] as const);
   assert.deepEqual(new Map(receipts()).get(a.name), 'acknowledged');
   // Everything is older than the window.
@@ -52,7 +50,7 @@ async function fixture(t: TestContext) {
   return { hive, human, a, b, room, contracted, task, answered, pending, receipts, dir };
 }
 
-test('retention prunes only finished inbox deliveries and Jev calls; messages, tasks and contracts stay', async t => {
+test('retention prunes only finished inbox deliveries; messages, tasks and contracts stay', async t => {
   const f = await fixture(t);
   const durable = countTables(f.hive, DURABLE), receipts = f.receipts(), room = f.hive.rooms.view(f.human, f.contracted.id);
   const history = f.hive.rooms.history(f.human, f.contracted.id), task = f.hive.tasks.get(f.human, f.task.id);
@@ -60,11 +58,9 @@ test('retention prunes only finished inbox deliveries and Jev calls; messages, t
   const deliveries = countRows(f.hive, 'inbox_deliveries');
   const result = runMaintenance(f.hive, { retentionDays: 30 });
   assert.equal(result.inboxDeliveries, deliveries - 1, 'acknowledged and superseded deliveries are pruned');
-  assert.equal(result.jevCalls, 1);
   assert.deepEqual(countTables(f.hive, DURABLE), durable);
   assert.equal(countRows(f.hive, 'inbox_deliveries'), 1);
   assert.equal(readValue(f.hive, 'inbox_deliveries', 'id'), f.pending.id, 'the live delivery is never pruned');
-  assert.equal(countRows(f.hive, 'jev_calls'), 0);
   // Receipts survive the ledger: per-recipient delivery stages and the Human views are unchanged.
   assert.deepEqual(f.receipts(), receipts);
   assert.deepEqual(f.hive.rooms.view(f.human, f.contracted.id), room);
@@ -78,17 +74,16 @@ test('retention prunes only finished inbox deliveries and Jev calls; messages, t
 
 test('retention respects the window and is disabled at 0', async t => {
   const f = await fixture(t);
-  const before = countTables(f.hive, ['inbox_deliveries', 'jev_calls', ...DURABLE]);
+  const before = countTables(f.hive, ['inbox_deliveries', ...DURABLE]);
   const disabled = runMaintenance(f.hive, { retentionDays: 0 });
-  assert.deepEqual({ cutoff: disabled.cutoff, inboxDeliveries: disabled.inboxDeliveries, jevCalls: disabled.jevCalls },
-    { cutoff: null, inboxDeliveries: 0, jevCalls: 0 });
-  assert.deepEqual(countTables(f.hive, ['inbox_deliveries', 'jev_calls', ...DURABLE]), before);
+  assert.deepEqual({ cutoff: disabled.cutoff, inboxDeliveries: disabled.inboxDeliveries }, { cutoff: null, inboxDeliveries: 0 });
+  assert.deepEqual(countTables(f.hive, ['inbox_deliveries', ...DURABLE]), before);
   // Rows are at the epoch: a window reaching back before them keeps everything.
   const wide = runMaintenance(f.hive, { retentionDays: 30, now: 10 * DAY });
   assert.equal(wide.cutoff, -20 * DAY);
-  assert.deepEqual(countTables(f.hive, ['inbox_deliveries', 'jev_calls', ...DURABLE]), before);
+  assert.deepEqual(countTables(f.hive, ['inbox_deliveries', ...DURABLE]), before);
   const narrow = runMaintenance(f.hive, { retentionDays: 1, now: 2 * DAY });
-  assert.ok(narrow.inboxDeliveries > 0 && narrow.jevCalls === 1);
+  assert.ok(narrow.inboxDeliveries > 0);
   assert.deepEqual(countTables(f.hive, DURABLE), Object.fromEntries(DURABLE.map(table => [table, before[table]])));
 });
 
@@ -127,7 +122,7 @@ test('the serve maintenance schedule runs a first pass and repeats until stopped
   while (results.length < 2 && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 5));
   stop();
   assert.ok(results.length >= 2, 'first run and at least one interval run');
-  assert.equal(results[0]!.jevCalls, 1);
+  assert.ok(results[0]!.inboxDeliveries > 0, 'the first pass prunes the finished deliveries');
   const settled = results.length;
   await new Promise(resolve => setTimeout(resolve, 30));
   assert.equal(results.length, settled, 'no pass after stop');

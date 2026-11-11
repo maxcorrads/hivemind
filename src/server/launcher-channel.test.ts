@@ -23,7 +23,7 @@ const spec = (cap = 2): WorkerTemplateSpec => ({ label: "Worker", description: "
 function fixture(t: TestContext, cap = 2) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-launcher-channel-"));
   const file = path.join(dir, "hive.db"), hive = new Hive(file);
-  t.after(async () => { await hive.adaptiveTopology.stop(); hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
+  t.after(async () => { hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
   const human = hive.identity.getAgent("human");
   const project = hive.projects.createProject(human, { name: "Project", slug: "project", worktree: dir });
   const brain = hive.identity.join({ role: "brain", project: project.slug }).agent;
@@ -125,7 +125,7 @@ test("approval queues once, encrypted claim survives restart, result scrubs payl
   assert.equal(command.cwd, realpathSync(f.dir));
   assert.match(command.session, /^hm-project-/);
   const other = new Hive(f.file);
-  t.after(async () => { await other.adaptiveTopology.stop(); other.db.close(); });
+  t.after(async () => { other.db.close(); });
   assert.deepEqual(other.launcherQueue.next("http://127.0.0.1:7520"), command);
   const result = await f.signed("POST", `/api/launcher/${command.id}/result`, { status: "launched", session: command.session });
   assert.equal(result.status, 200);

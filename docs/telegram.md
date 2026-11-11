@@ -24,8 +24,6 @@ One forum group per project. Same bot, one long poll. `chat.id` selects the proj
 
 Hive bodies may be up to 20,000 characters, above Telegram's 4,096-character message limit. A body that fits one Telegram message is mirrored as `Author` + newline + body, as before. A longer body is mirrored in full as numbered parts `Author (i/n)`, each at most 4,096 UTF-16 units, split at a line break or space where possible and never inside a surrogate pair. Parts are sent strictly in order; each is checkpointed before the next, so a retry resumes at the first unsent part without duplicating earlier ones. Replies and reactions on any part map to the original hive message. Inbound Telegram text (at most 4,096 characters) always fits a hive body, so the `[Firstname]` prefix no longer clips it.
 
-Human messages from Telegram addressed to a brain go through the same adaptive routing (Jev) policy as the web UI; see [adaptive orchestration routing](adaptive-routing.md).
-
 Do not give workers their own bot. Do not commit `telegram.json` or print the token.
 
 When the bridge needs attention, the **Settings → Telegram** entry shows **Needs attention** with the number of outbound failures, quarantined and retrying items.

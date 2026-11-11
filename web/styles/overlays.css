@@ -1,5 +1,5 @@
-/* Overlays: dialogs and sheets (web/Modal.tsx and every *Sheet), popovers, the quick switcher, For you, search
-   results and the Routing log. Builds on the tokens and primitives of web/styles.css and overrides its older rules. */
+/* Overlays: dialogs and sheets (web/Modal.tsx and every *Sheet), popovers, the quick switcher, For you and search
+   results. Builds on the tokens and primitives of web/styles.css and overrides its older rules. */
 
 /* ---- Dialogs and sheets -------------------------------------------------------------------------------------------
    One sheet: a 14px card on --raised over --overlay. An optional .sheet-head (icon tile, title, one-line description,
@@ -226,27 +226,6 @@
 .inbox-item:has(> .search-hit-open) { border-bottom: 1px solid var(--line); }
 .search-hit-open .msg:hover { background: transparent; }
 .open-link { font-size: 12.5px; color: var(--accent); }
-
-/* ---- Routing log ----------------------------------------------------------------------------------------------------- */
-.jev-request { border-radius: 8px; background: var(--surface); }
-.jev-request > header { background: var(--sunk); }
-.jev-request-text { font-size: 13.5px; }
-.jev-badge.tone-chip { padding: 2px 8px; border: 0; font-size: 11.5px; font-weight: 600; }
-.jev-call { font-size: 12.5px; }
-.jev-call:hover { background: var(--hover); }
-.jev-call.active { background: color-mix(in oklch, var(--accent) 10%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
-.jev-call-answer.unavailable { color: var(--bad-ink); }
-/* .jev-badge takes its colour from its .tone-chip variant, which stays readable on the --sunk header. */
-.jev-call-outcome.applied, .jev-outcome.applied { color: var(--ok-ink); }
-.jev-call-outcome.warning, .jev-outcome.warning { color: var(--warn-ink); }
-.jev-call-detail h2 { font-size: 17px; font-weight: 600; letter-spacing: -0.015em; }
-.jev-call-detail h3 { font-size: 12px; font-weight: 600; text-transform: none; letter-spacing: 0; }
-.jev-request-full { border-left: 2px solid var(--accent); background: var(--sunk); border-radius: 0 8px 8px 0; }
-.jev-context { font-size: 13px; }
-.jev-answers { font-size: 13px; }
-.jev-meter { background: var(--active); }
-.jev-meter > span { background: var(--accent); }
-.jev-call-detail pre { background: var(--sunk); border: 1px solid var(--line); font-size: 11.5px; }
 
 /* ---- Narrow screens: #223 keeps its one-screen layout, only the spacing tightens ---------------------------------------- */
 @media (max-width: 960px) {

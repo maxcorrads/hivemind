@@ -170,17 +170,17 @@ test("keyboard focus stays visible on every control and main input", () => {
   assert.match(css, /\.composer-box:has\(textarea:focus-visible\) \{ outline: 2px solid/);
 });
 
-test("no dead rules for the removed hive column or Jev enforcement remain", () => {
+test("no dead rules for the removed hive column or the removed Jev views remain", () => {
   assert.doesNotMatch(css, /\.hive\b/);
-  assert.doesNotMatch(css, /\.routing-summary span/);
-  assert.doesNotMatch(css, /\.routing-event\.warning/);
+  for (const source of [css, overlaysCss, channelCss])
+    assert.doesNotMatch(source, /\.jev-|\.routing-(?:strip|sheet|summary|warning|events?|executions)\b/);
 });
 
 test("status chips stay readable on their tint over every surface they sit on, a hovered row included", () => {
   const text = declaration(".tone-chip:is(.accent, .ok, .warn, .bad, .muted)", "color");
   const tint = declaration(".tone-chip", "background");
   for (const scope of THEMES) {
-    // The Routing log header is --sunk; stream cards are --raised; a message row gains --hover under the pointer.
+    // Stream cards are --raised; a message row gains --hover under the pointer.
     const grounds = [["--surface"], ["--raised"], ["--sunk"], ["--app"], ["--surface", "--hover"]].map(layers => layers.map(name => token(scope, name)));
     for (const variant of ["accent", "ok", "warn", "bad", "muted"]) {
       const local = variant === "accent" ? { "--tone": "var(--accent)", "--tone-ink": "var(--accent)" }
@@ -191,18 +191,12 @@ test("status chips stay readable on their tint over every surface they sit on, a
       }
     }
   }
-  // The Routing log badge takes its colour from its chip variant, not an outcome rule of its own.
-  for (const source of [css, overlaysCss]) assert.doesNotMatch(source, /\.jev-badge\.(applied|warning|kept|idle)\b/);
 });
 
-test("muted captions stay readable on the highlighted switcher option and the Jev strip's warning tint", () => {
+test("muted captions stay readable on the highlighted switcher option", () => {
   const hint = declaration(".switcher-options li.active .switcher-hint, .switcher-options li.active .switcher-enter", "color");
-  const caption = declaration(".routing-strip.warning span", "color", channelCss);
-  const strip = declaration(".routing-strip.warning", "background", channelCss);
   for (const scope of THEMES) {
     const onOption = contrast(paint(resolve(scope, hint)), paint(token(scope, "--raised"), token(scope, "--active")));
     assert.ok(onOption >= 4.5, `${scope} switcher hint on the active option is only ${onOption.toFixed(2)}:1`);
-    const onStrip = contrast(paint(resolve(scope, caption)), paint(resolve(scope, strip)));
-    assert.ok(onStrip >= 4.5, `${scope} Jev strip caption on its warning tint is only ${onStrip.toFixed(2)}:1`);
   }
 });

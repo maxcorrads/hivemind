@@ -15,19 +15,15 @@ import { telegramDestinationForSeq, loadTelegramConfig, telegramConfigKey, publi
 import { parseProjectSlug } from "../shared/project.ts";
 import { launchContext, projectBotConfigurations, saveProjectBotConfiguration, setProjectBotAvailability, botErrorMessage, callProjectBot, connectProjectBot } from "./bot-definitions.ts";
 import { BotIngressBudget, readLimitedJson, assertLocalHumanRequest, BOT_JSON_BYTES, BOT_CONFIGURATION_REQUEST_BYTES, CREDENTIAL_JSON_BYTES } from "./ingress.ts";
-import { adaptiveRoutingPublic, saveAdaptiveRouting } from "./adaptive-config.ts";
-import { decodeJevCallCursor } from "../shared/jev-calls.ts";
 import { ACTIVITY_REASONS, type ActivityReason } from "../shared/read-state.ts";
-import { installJevDiagnostics } from './adaptive-routing-diagnostics.ts';
 import { installInstanceProof } from "./instance-proof.ts";
 import { installLauncherChannel } from "./launcher-channel.ts";
 import { lastConversations } from "./cli-conversations.ts";
-import { adviseAfterWait, assignAdaptiveTask, mutateAdaptiveTask, mutateAdaptiveRoom, sendAdaptiveAgentMessage, setAdaptiveThreadStatus } from './adaptive-topology-actions.ts';
+import { sendAgentMessage } from './agent-send.ts';
 
 export type AppHooks = {
   /** Trusted listener origin for local bot processes and MCP clients, never proxy/request headers. */
   serverOrigin?: () => string;
-  jevDiagnosticFetch?: typeof fetch;
   telegramRunning?: () => boolean;
   reloadTelegram?: () => boolean | Promise<boolean>;
   configureTelegram?: (input: TelegramFileInput) => Promise<boolean>;
@@ -100,7 +96,6 @@ export function createApps(hive: Hive, hooks: AppHooks = {}) {
     await validateRequest(c.req.raw);
     await next();
   });
-  const jevDiagnostics = installJevDiagnostics(ui, hive, hooks.jevDiagnosticFetch);
   // Register the static catalog before identity routes: a definition may be named "access".
   ui.get("/projects/:slug/bots/catalog", c => c.json({ configurations: projectBotConfigurations(hive.home, hive.projects.getProjectBySlug(c.req.param("slug"))) }));
   ui.patch("/projects/:slug/bots/catalog/:id", async c => {
@@ -220,28 +215,7 @@ export function createApps(hive: Hive, hooks: AppHooks = {}) {
     hive.identity.getAgent("human");
     return c.json({ hosts: hive.hosts.list() });
   });
-  ui.get("/adaptive-routing", c => {
-    hive.identity.getAgent("human");
-    return c.json(adaptiveRoutingPublic(hive.home));
-  });
-  ui.put("/adaptive-routing", async c => {
-    hive.identity.getAgent("human");
-    const saved = saveAdaptiveRouting(hive.home, await readLimitedJson(c.req.raw, CREDENTIAL_JSON_BYTES));
-    jevDiagnostics.settingsChanged();
-    return c.json(saved);
-  });
-  // Human-only history of every Jev exchange, grouped by the request that caused it.
   const projectRef = (ref: string) => { try { return hive.projects.getProjectBySlug(ref); } catch { return hive.projects.getProject(ref); } };
-  ui.get('/projects/:id/jev-calls', c => {
-    const cursor = decodeJevCallCursor(c.req.query('cursor') ?? c.req.query('before'));
-    return c.json(hive.adaptiveTopology.observations.jevCalls.view(projectRef(c.req.param('id')).id, cursor));
-  });
-  ui.get('/adaptive-routing/evidence-health', c => {
-    hive.identity.getAgent('human');
-    return c.json(hive.adaptiveTopology.observations.collectorHealth());
-  });
-  ui.get('/projects/:id/jev-calls/:callId', c => c.json({ call: hive.adaptiveTopology.observations.jevCalls.get(projectRef(c.req.param('id')).id, c.req.param('callId')) }));
-  ui.get("/channels/:id/adaptive-routing", c => c.json(hive.adaptiveTopology.view(hive.identity.getAgent("human"), c.req.param("id"))));
   ui.get("/snapshot", c => {
     const human = hive.identity.getAgent("human");
     const channels = hive.channels.listChannels(human);
@@ -252,7 +226,7 @@ export function createApps(hive: Hive, hooks: AppHooks = {}) {
       archivedChannelIds: hive.rooms.archivedChannelIds(channels), autoArchiveTaskChannels: hive.rooms.autoArchiveTaskChannels(),
       ...hive.reads.readSnapshot(human), ...queue, agentWork: hive.tasks.workStatus(),
       telegram: { running: Boolean(hooks.telegramRunning?.()), configured: publicTelegramView(hive.home).configured, ...hive.telegramAdmin.health() },
-      jev: { enabled: adaptiveRoutingPublic(hive.home).enabled }, launcherAvailable: Boolean(hooks.instanceSecret) });
+      launcherAvailable: Boolean(hooks.instanceSecret) });
   });
   // Public Human-session projection; launch commands and claim tickets stay in the signed native channel.
   ui.get("/launch-requests", c => c.json({ requests: hive.launcherQueue.listPending() }));
@@ -489,12 +463,7 @@ export function createApps(hive: Hive, hooks: AppHooks = {}) {
     const messageInput = { channel: channel.id, body: originalBody, requestId: body.requestId, threadId,
       eventType: body.eventType, traceId: body.traceId, causeMessageId: body.causeMessageId, recipients: body.recipients,
       attachmentIds: Array.isArray(body.attachmentIds) ? body.attachmentIds.map(String) : undefined };
-    if (hive.messages.hasActiveSendRequest(human, channel.id, body.requestId))
-      return c.json({ message: hive.messages.postMessage(human, messageInput) });
-    const message = hive.messages.postMessage(human, messageInput);
-    // Committed and broadcast first; Jev advises the owning brain in the background and never delays the send (#214).
-    hive.adaptiveTopology.humanMessagePosted(human, message);
-    return c.json({ message });
+    return c.json({ message: hive.messages.postMessage(human, messageInput) });
   });
   ui.post('/files', async c => {
     const human = hive.identity.getAgent('human'), name = c.req.header('x-file-name') || 'paste.png';
@@ -656,14 +625,14 @@ export function createApps(hive: Hive, hooks: AppHooks = {}) {
     const body = await requestJson(c.req.raw);
     return c.json({ channel: hive.channels.createChannel(c.get('me'), { name: String(body.name ?? ''), type: body.type ?? 'public', topic: body.topic, memberNames: body.memberNames }) });
   });
-  agent.post('/channels/:id/messages', async c => c.json(await sendAdaptiveAgentMessage(
+  agent.post('/channels/:id/messages', async c => c.json(sendAgentMessage(
     hive, c.get('me'), c.req.param('id'), await requestJson(c.req.raw))));
   agent.get('/messages/:seq', c => c.json({ message: hive.messageQueries.getVisibleMessage(c.get('me'), Number(c.req.param('seq'))) }));
   agent.post('/messages/expand', async c => c.json(hive.messageQueries.expandDigest(c.get('me'), await requestJson(c.req.raw))));
-  agent.post('/tasks', async c => c.json(await assignAdaptiveTask(hive, c.get('me'), await requestJson(c.req.raw))));
+  agent.post('/tasks', async c => c.json(hive.tasks.assign(c.get('me'), await requestJson(c.req.raw))));
   agent.get('/channels/:id/room', c => c.json(hive.rooms.view(c.get('me'), c.req.param('id'), c.req.query('beforeTask'))));
   agent.get('/channels/:id/room/history', c => c.json({ history: hive.rooms.history(c.get('me'), c.req.param('id'), Number(c.req.query('before') ?? Number.MAX_SAFE_INTEGER)) }));
-  agent.post('/channels/:id/room', async c => c.json(await mutateAdaptiveRoom(hive, c.get('me'), c.req.param('id'), await requestJson(c.req.raw))));
+  agent.post('/channels/:id/room', async c => c.json(hive.rooms.event(c.get('me'), c.req.param('id'), await requestJson(c.req.raw))));
   agent.get('/workers/:id/capabilities', c => c.json({ capability: hive.routing.get(c.get('me'), c.req.param('id')) }));
   agent.post('/capabilities', async c => c.json({ capability: hive.routing.set(c.get('me'), await requestJson(c.req.raw)) }));
   agent.post('/tasks/:id/routing', async c => c.json(hive.routing.suggest(c.get('me'), c.req.param('id'), await requestJson(c.req.raw))));
@@ -675,7 +644,7 @@ export function createApps(hive: Hive, hooks: AppHooks = {}) {
   agent.get('/tasks/:id/timeline', c => c.json({ timeline: hive.timeline.traceForTask(c.get('me'), c.req.param('id')) }));
   agent.get('/tasks/:id/timeline/export', c => c.json({ fixture: hive.timeline.exportTask(c.get('me'), c.req.param('id')) }));
   agent.get('/tasks/:id', c => c.json({ task: hive.tasks.view(c.get('me'), c.req.param('id')) }));
-  agent.post('/tasks/:id/events', async c => c.json(await mutateAdaptiveTask(hive, c.get('me'), c.req.param('id'), await requestJson(c.req.raw))));
+  agent.post('/tasks/:id/events', async c => c.json(hive.tasks.event(c.get('me'), c.req.param('id'), await requestJson(c.req.raw))));
   agent.post('/files', async c => {
     const name = c.req.header('x-file-name') || 'file';
     const file = await hive.files.createFile(c.get('me'), { authorize: () => hive.identity.agentByToken(c.get('token')), name,
@@ -695,8 +664,7 @@ export function createApps(hive: Hive, hooks: AppHooks = {}) {
   });
   agent.post('/threads/:id/status', async c => {
     const body = await requestJson(c.req.raw);
-    const { thread, ...advice } = await setAdaptiveThreadStatus(hive, c.get('me'), c.req.param('id'), body.status ?? null);
-    return c.json({ thread: threadResponseSchema.parse(thread), ...advice });
+    return c.json({ thread: threadResponseSchema.parse(hive.messages.setThreadStatus(c.get('me'), c.req.param('id'), body.status ?? null)) });
   });
   agent.post('/channels/:id/invite', async c => {
     const body = await requestJson(c.req.raw);
@@ -711,8 +679,7 @@ export function createApps(hive: Hive, hooks: AppHooks = {}) {
     const me = c.get('me'), body = await requestJson(c.req.raw);
     if (body?.sessionId == null) throw new HiveError(409, 'HTTP 409: Inbox delivery protocol changed. Restart the Hivemind MCP client and rejoin. HTTP/CLI clients must open an inbox session and include sessionId in wait. Do not retry this wait unchanged.');
     if (typeof body.sessionId !== 'string') throw new HiveError(400, 'Expected sessionId');
-    const result = await hive.delivery.wait(me, Number(body.timeoutMs ?? DEFAULT_WAIT_MS), c.req.raw.signal, { compact: Boolean(body.compact), sessionId: body.sessionId });
-    return c.json({ ...result, ...adviseAfterWait(hive, me, result) });
+    return c.json(await hive.delivery.wait(me, Number(body.timeoutMs ?? DEFAULT_WAIT_MS), c.req.raw.signal, { compact: Boolean(body.compact), sessionId: body.sessionId }));
   });
   agent.post('/inbox/session', async c => {
     const body = await requestJson(c.req.raw);

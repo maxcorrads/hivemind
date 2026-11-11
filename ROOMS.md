@@ -73,7 +73,7 @@ changes only on configuration, staffing and unarchive; `revision` changes on eve
 
 `room_event` takes `channel`, stable `requestId`, `expectedRevision` and an `action`
 (`executionId` is no longer part of the schema; the server drops one sent by an older
-client, see [Jev advice](#jev-advice)).
+client).
 Retries with the same ID and payload do not repeat effects. A changed payload or stale
 revision conflicts; reread before deciding what to retry.
 
@@ -213,18 +213,6 @@ adopt this extension before Hivemind can request/observe their suspension.
 Unarchive requests `running` for this channel's links. A bot owns retry/backfill policy and must not
 silently discard provider events rejected while archived. Hivemind does not promise
 exactly-once external effects; use stable bot event IDs and task action keys.
-
-## Jev advice
-
-With Jev enabled, a brain's `room_event` (like every other brain action) returns
-`jevAdvice`, Jev's suggestion for the Human request the brain serves, for example to
-keep the work in a room or to use separate DMs, and how many workers to involve. It is
-advisory only: nothing about room staffing or room work is checked against it, the
-brain decides, and Human instructions always take precedence. Room rules, the
-coordinator, Human instructions for `configure` and participants are
-enforced exactly as described above. Workers never trigger Jev. Since #211 no
-`executionId` is needed and since #218 no schema lists it; one sent by an older client is ignored. See
-[Jev advice](docs/adaptive-routing.md).
 
 ## Bounds and persistence
 

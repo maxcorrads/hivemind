@@ -1,4 +1,4 @@
-/* Channel area: the conversation header (channel and DM), message rows, stream cards, the Jev strip and the
+/* Channel area: the conversation header (channel and DM), message rows, stream cards and the
    composer. Loaded after styles.css, so these rules win over the older ones they replace. */
 
 /* Header: 52px, title and muted topic, segmented tabs on --sunk, members and Invite on the right. */
@@ -118,17 +118,6 @@
 .emoji-picker { top: calc(100% + 4px); grid-template-columns: repeat(6, 30px); gap: 2px; padding: 6px; border-radius: 10px; background: var(--raised); }
 .emoji-picker .react-pick-btn { width: 30px; height: 30px; }
 
-/* Jev strip: advisory, on --sunk, just above the composer. */
-.routing-strip { margin: 0 20px 8px; padding: 6px 10px; gap: 10px; border: 0; border-radius: 8px; background: var(--sunk); font-size: 12.5px; }
-.routing-strip.warning { background: color-mix(in oklch, var(--warn) 14%, var(--sunk)); }
-.routing-strip button { font-size: inherit; flex: none; display: inline-flex; align-items: center; gap: 10px; padding: 0; border-radius: 4px; color: var(--ink2); }
-.routing-strip button > .lucide { color: var(--accent); }
-.routing-strip button > strong { font-weight: 600; color: var(--ink); }
-.routing-strip button:hover > strong { text-decoration: underline; }
-.routing-strip span { margin-left: auto; color: var(--mute); }
-/* --mute on the warn tint is under 4.5:1: the caption leans toward --ink2 there. */
-.routing-strip.warning span { color: color-mix(in oklch, var(--mute) 70%, var(--ink2)); }
-
 /* Composer: a 12px bordered box, the draft above a bar of attach, @, emoji, the key hint and Send. */
 .composer { padding: 0 20px 18px; }
 .composer-box { flex-direction: column; align-items: stretch; gap: 0; padding: 0; border: 1px solid var(--line); border-radius: 12px;
@@ -164,7 +153,6 @@
   .msg, .msg.sys { padding-inline: 12px; }
   .stream-divider { margin-inline: 12px; }
   .msg-tools { right: 8px; }
-  .routing-strip { margin-inline: 12px; }
   .composer { padding: 0 12px 12px; }
   .composer .hints, .composer-emoji { left: 12px; }
 }
@@ -172,5 +160,4 @@
   .channel-h-title > p { display: none; }
   .composer-hint { display: none; }
   .composer .send { margin-left: auto; }
-  .routing-strip span { display: none; }
 }

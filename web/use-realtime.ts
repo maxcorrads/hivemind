@@ -1,7 +1,4 @@
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
-import type { AdaptiveExecutionState, AdaptiveRoutingEvent } from "../src/shared/adaptive-topology.ts";
-import type { EvidenceCollectorHealth } from "../src/shared/evidence-health.ts";
-import type { JevCallSummary } from "../src/shared/jev-calls.ts";
 import type { createRequestGate } from "../src/shared/read-client.ts";
 import type { ActivityItem } from "../src/shared/read-state.ts";
 import type { AgentWork, TaskSnapshot } from '../src/shared/tasks.ts';
@@ -19,10 +16,6 @@ import type { HiveSnapshot } from "./use-hive-snapshot.ts";
 import type { Selection } from "./use-selection.ts";
 import type { ThreadPane } from "./use-thread-pane.ts";
 
-/** Realtime Routing log updates, merged by the open log instead of refetching it. */
-export type JevLiveEvent = { type: "call"; call: JevCallSummary } | { type: "health"; health: EvidenceCollectorHealth };
-export type JevLiveSubscribe = (listener: (event: JevLiveEvent) => void) => () => void;
-
 /** Roster/queue/health updates are applied at most once per this window. */
 const SNAP_BATCH_MS = 50;
 /** Refetch ticks (room panel, channel tasks) run at most once per this window. */
@@ -35,7 +28,7 @@ const TICK_MS = 250;
  * of roster events and refetch ticks are coalesced (leading and trailing edge).
  */
 export function useRealtime({ selection, hive, channel, thread, inboxLoad, changeSelection, reopenDm, onActivity,
-  refreshRoutingView, onRoutingEvent, onLiveEvent, setErr }: {
+  onLiveEvent, setErr }: {
   selection: Pick<Selection, "selRef" | "threadIdRef" | "viewingThread">;
   hive: HiveSnapshot;
   channel: ChannelPane;
@@ -44,8 +37,6 @@ export function useRealtime({ selection, hive, channel, thread, inboxLoad, chang
   changeSelection: (next: Sel) => void;
   reopenDm: (channelId: string) => void;
   onActivity: (item: ActivityItem) => void;
-  refreshRoutingView: (baseline?: boolean) => void;
-  onRoutingEvent: (payload: { channelId: string; event: AdaptiveRoutingEvent; state: AdaptiveExecutionState | null }) => void;
   /** Sees every live event first (badges, notifications); it must not change the snapshot or panes. */
   onLiveEvent?: (event: { type: string; payload: unknown }) => void;
   setErr: (error: string) => void;
@@ -57,18 +48,11 @@ export function useRealtime({ selection, hive, channel, thread, inboxLoad, chang
   const { setThreadView, setThreadPane, threadLoad, loadThread, onThreadMessage } = thread;
   const [live, setLive] = useState(false);
   const [roomTick, setRoomTick] = useState(0);
-  const [jevTick, setJevTick] = useState(0);
   const [accountsTick, setAccountsTick] = useState(0);
-  const jevListeners = useRef(new Set<(event: JevLiveEvent) => void>());
-  const subscribeJev = useCallback<JevLiveSubscribe>((listener) => {
-    jevListeners.current.add(listener);
-    return () => { jevListeners.current.delete(listener); };
-  }, []);
   const tap = useRef(onLiveEvent);
   tap.current = onLiveEvent;
 
   const resetReadConnection = useCallback(() => {
-    refreshRoutingView(true);
     readFence.current.reset();
     channelLoad.current.cancel();
     channelJournal.current = null;
@@ -78,14 +62,13 @@ export function useRealtime({ selection, hive, channel, thread, inboxLoad, chang
     threadReads.current?.reset();
     setReconnectTick((value) => value + 1);
     refreshSnap().catch((error) => { if (error?.name !== "AbortError") setErr(String(error)); });
-  }, [refreshSnap, refreshRoutingView]);
+  }, [refreshSnap]);
 
   useEffect(() => {
     refreshSnap().catch((e) => { if (e?.name !== "AbortError") setErr(String(e.message || e)); });
     const snapUpdates = createUpdateBatch<Snapshot | null>(setSnap, SNAP_BATCH_MS);
     const roomTicks = createThrottle(() => setRoomTick(t => t + 1), TICK_MS);
     const accountTicks = createThrottle(() => setAccountsTick(t => t + 1), TICK_MS);
-    const jev = (event: JevLiveEvent) => { for (const listener of jevListeners.current) listener(event); };
     const off = connectWs((ev) => {
       tap.current?.(ev);
       if (ev.type === "hello") {
@@ -95,27 +78,12 @@ export function useRealtime({ selection, hive, channel, thread, inboxLoad, chang
         roomTicks.request();
         // An open Accounts sheet may have missed `accounts` events while disconnected.
         accountTicks.request();
-        if (selRef.current.kind === "jev") setJevTick(t => t + 1);
         return;
       }
       if (ev.type === "telegram-health") {
         const health = newerTelegramHealth(latestTelegramHealth.current, ev.payload as TelegramHealth);
         latestTelegramHealth.current = health;
         snapUpdates.push((current) => current ? { ...current, telegram: { running: false, configured: false, ...current.telegram, ...health } } : current);
-        return;
-      }
-      if (ev.type === "evidence-health") {
-        // Collector health is carried by the routing view and shown in the Routing log.
-        refreshRoutingView();
-        jev({ type: "health", health: ev.payload as EvidenceCollectorHealth });
-        return;
-      }
-      if (ev.type === "jev-call") {
-        jev({ type: "call", call: ev.payload as JevCallSummary });
-        return;
-      }
-      if (ev.type === "adaptive-routing") {
-        onRoutingEvent(ev.payload as { channelId: string; event: AdaptiveRoutingEvent; state: AdaptiveExecutionState | null });
         return;
       }
       if (ev.type === "accounts") {
@@ -235,5 +203,5 @@ export function useRealtime({ selection, hive, channel, thread, inboxLoad, chang
     };
   }, [loadChannel, refreshSnap, refreshArchivedChannels, setArchivedChannel, resetReadConnection, changeSelection, onThreadMessage, viewingThread, loadThread, setThreadPane]);
 
-  return { live, roomTick, setRoomTick, jevTick, subscribeJev, accountsTick };
+  return { live, roomTick, setRoomTick, accountsTick };
 }

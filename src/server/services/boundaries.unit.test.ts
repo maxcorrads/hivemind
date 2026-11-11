@@ -61,8 +61,9 @@ const OWNERSHIP: Record<string, { modules: string[]; tables: string[] }> = {
     tables: ["worker_templates", "launch_requests", "launcher_commands", "jobs", "job_events", "agent_accounts", "agent_account_policies",
       "agent_account_usage"] },
   notifications: { modules: ["notifications.ts"], tables: ["notification_subscriptions"] },
-  adaptive: {
-    modules: ["adaptive-topology-store.ts", "adaptive-evidence.ts", "jev-call-log.ts"],
+  // The removed Jev advice: shipped migrations still create these tables and migration 46 drops them. No module owns them.
+  removed: {
+    modules: [],
     tables: ["adaptive_topology_executions", "adaptive_topology_locks", "adaptive_topology_events", "adaptive_topology_evaluated",
       "adaptive_topology_tasks", "adaptive_topology_messages", "adaptive_evidence_runs", "adaptive_evidence_attempts", "jev_calls"],
   },
@@ -80,8 +81,6 @@ const CROSS_DOMAIN_EXCEPTIONS: Record<string, string> = {
   "inbox-reader.ts task_events": "task flag and bounded envelope of delivered task messages",
   // The For you predicate classifies addressed task events in the statement it pages and counts with.
   "read-state.ts task_events": "For you: structured task events addressed to the reader",
-  // The evidence store also runs standalone (evidence export); it guards the channel foreign key itself.
-  "adaptive-evidence.ts channels": "existence guard before recording gap evidence for a deleted channel",
 };
 
 const SQL_TABLE = /\b(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+([a-z_][a-z0-9_]*)\b/g;
@@ -110,9 +109,7 @@ test("services never import hive.ts, not even for types", () => {
 });
 
 test("services and stores are not typed against the Hive facade", () => {
-  const stores = Object.values(OWNERSHIP).flatMap(domain => domain.modules)
-    .concat(["adaptive-topology.ts", "adaptive-topology-actions.ts", "adaptive-topology-admission.ts",
-      "adaptive-topology-capacity.ts", "adaptive-evidence-observer.ts", "adaptive-routing-diagnostics.ts"]);
+  const stores = Object.values(OWNERSHIP).flatMap(domain => domain.modules).concat(["agent-send.ts"]);
   const offenders = [
     ...services.map(([name, source]) => [`services/${name}`, source] as const),
     ...serverModules.filter(([name]) => stores.includes(name)),
@@ -166,8 +163,8 @@ test("the table check sees SQL table references, not prose", () => {
 
 test("outside storage and the stores, nothing reaches the hive database handle", () => {
   // Storage modules: the facade (construction and close), the unit of work, the stores
-  // (ownership map), the services layer, and the adaptive observer that opens its stores.
-  const storage = new Set(["hive.ts", "storage.ts", "adaptive-evidence-observer.ts", "test-fixtures.ts",
+  // (ownership map) and the services layer.
+  const storage = new Set(["hive.ts", "storage.ts", "test-fixtures.ts",
     ...Object.values(OWNERSHIP).flatMap(domain => domain.modules)]);
   const handle = /\.db\b(?!["'`])/;
   const offenders = serverModules

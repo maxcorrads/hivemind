@@ -1009,8 +1009,8 @@ test("a DM with an agent whose session runs has a Terminal tab, inside the app o
   const ref = <T,>(current: T) => ({ current });
   const render = () => <ChannelDesk channelId="dm1" activeChannel={dm} agents={[human, atlas]} roomAgents={[human, atlas]}
     channel={{ pane: null, setPane() {}, channelStream: ref(null), channelJournal: ref(new Map()), loadChannel: async () => {} } as never}
-    threadPaneId={null} stickBottom={ref(true)} threadOpenAnchor={ref(null)} go={() => {}} roomTick={0} routingView={null}
-    activeBrainChannel={false} brainNames={{}} onOpenRouting={() => {}} onInvite={() => {}}
+    threadPaneId={null} stickBottom={ref(true)} threadOpenAnchor={ref(null)} go={() => {}} roomTick={0}
+    onInvite={() => {}}
     compose={{ sendChannel: async () => true } as never} onMarkUnread={async () => {}} setErr={() => {}} onBack={() => {}} />;
   const tabs = (host: HTMLElement) => Array.from(host.querySelectorAll("[role=tab]")).map(tab => tab.textContent);
 

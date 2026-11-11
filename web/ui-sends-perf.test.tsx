@@ -2,17 +2,13 @@ import assert from 'node:assert/strict';
 import { after, test, type TestContext } from 'node:test';
 import { Window } from 'happy-dom';
 import { act, useRef, useState, type ReactElement } from 'react';
-import { HEALTHY_EVIDENCE_COLLECTOR } from '../src/shared/evidence-health.ts';
-import type { JevCallLogView, JevCallSummary } from '../src/shared/jev-calls.ts';
 import type { Agent, Channel, Message } from '../src/shared/types.ts';
 import { api, type ChannelPayload } from './api.ts';
 import { ChannelDesk } from './ChannelDesk.tsx';
 import { Composer } from './Composer.tsx';
-import { JevLog } from './JevLog.tsx';
 import { renderBody } from './markdown.tsx';
 import type { Sel } from './selection.ts';
 import type { ChannelPane } from './use-channel-pane.ts';
-import type { JevLiveEvent, JevLiveSubscribe } from './use-realtime.ts';
 import { useSearch } from './use-search.ts';
 import { useSend } from './use-send.ts';
 import type { ThreadPane } from './use-thread-pane.ts';
@@ -79,7 +75,7 @@ function SendHarness({ errors }: { errors: string[] }) {
     loadChannel: async () => {} } as unknown as ChannelPane;
   const thread = { threadPane: null, threadStream: useRef(null), onThreadMessage: () => {}, loadThread: async () => {} } as unknown as ThreadPane;
   const { sendChannel } = useSend({ sel, selection: { selRef, threadIdRef }, channel: channelPane, thread,
-    activeBrainChannel: false, refreshRoutingView: () => {}, setErr: error => errors.push(error) });
+    setErr: error => errors.push(error) });
   return <>
     <ul className="sent">{pane?.messages.map(m => <li key={m.id}>{m.body}</li>)}</ul>
     <Composer agents={[]} onSend={sendChannel} placeholder="Message" />
@@ -243,8 +239,8 @@ test('typing re-renders only the composer; a live update re-renders only the cha
     const channelPane = { pane, setPane, channelStream: useRef(null), channelJournal: useRef(null),
       loadChannel: async () => {} } as unknown as ChannelPane;
     return <ChannelDesk channelId={channel.id} activeChannel={channel} agents={[]} roomAgents={[]} channel={channelPane}
-      threadPaneId={null} stickBottom={useRef(true)} threadOpenAnchor={useRef(null)} go={go} roomTick={0} routingView={null}
-      activeBrainChannel={false} brainNames={{}} onOpenRouting={go} onInvite={go} onBack={go} compose={compose} setErr={go} onMarkUnread={async () => {}} />;
+      threadPaneId={null} stickBottom={useRef(true)} threadOpenAnchor={useRef(null)} go={go} roomTick={0}
+      onInvite={go} onBack={go} compose={compose} setErr={go} onMarkUnread={async () => {}} />;
   }
   await f.render(<Desk />);
   assert.equal(f.host.querySelectorAll('article.msg').length, 50);
@@ -258,40 +254,6 @@ test('typing re-renders only the composer; a live update re-renders only the cha
   await act(async () => update(pane => pane && ({ ...pane,
     messages: pane.messages.map(m => m.id === 'm-7' ? { ...m, reactions: [{ emoji: '👍', count: 1, mine: true }] } : m) })));
   assert.equal(rendered, perRender, 'only the reacted message re-rendered');
-});
-
-test('the Routing log merges live calls and collector health without refetching', async t => {
-  const summary = (id: string, executionId: string, createdAt: number, projectId = 'p'): JevCallSummary => ({ id, routeId: id,
-    projectId, channelId: 'dm', executionId, brainId: 'brain', createdAt, phase: 'initial',
-    trigger: { kind: 'human_request', eventType: null }, request: `Request ${executionId}`, status: 'ok', targetTopology: 'single',
-    targetWorkers: 0, confidence: 0.9, reason: 'single_sufficient', error: null, model: 'jev', latencyMs: 1, inputTokens: 1,
-    outputTokens: 1, outcome: null });
-  const first = summary('c1', 'exec-1', 1_000);
-  const page = deferred<JevCallLogView>();
-  let loads = 0, healthReads = 0;
-  t.mock.method(api, 'jevCalls', () => { loads++; return page.promise; });
-  t.mock.method(api, 'evidenceHealth', async () => { healthReads++; return HEALTHY_EVIDENCE_COLLECTOR; });
-  let emit!: (event: JevLiveEvent) => void;
-  const subscribe: JevLiveSubscribe = listener => { emit = listener; return () => {}; };
-  const f = mount(t);
-  await f.render(<JevLog project="alpha" projectId="p" tick={0} subscribe={subscribe} channelLabel={() => 'dm'}
-    agentName={() => 'Atlas'} onOpenChannel={() => {}} />);
-  // A call recorded while the first page is still loading is replayed onto it.
-  await act(async () => emit({ type: 'call', call: summary('c2', 'exec-2', 2_000) }));
-  await act(async () => page.resolve({ requests: [{ executionId: 'exec-1', channelId: 'dm', brainId: 'brain', request: 'Request exec-1',
-    firstAt: 1_000, lastAt: 1_000, callCount: 1, calls: [first] }], hasMore: false, nextCursor: null }));
-  const requests = () => [...f.host.querySelectorAll('.jev-request-text')].map(node => node.textContent);
-  assert.deepEqual(requests(), ['Request exec-2', 'Request exec-1']);
-  await act(async () => emit({ type: 'call', call: summary('c3', 'exec-1', 3_000) }));
-  await act(async () => emit({ type: 'call', call: summary('other', 'exec-9', 4_000, 'other-project') }));
-  assert.deepEqual(requests(), ['Request exec-1', 'Request exec-2'], 'new activity moves its request first; other projects are ignored');
-  assert.equal(f.host.querySelectorAll('.jev-request')[0]!.querySelectorAll('button.jev-call').length, 2);
-  await act(async () => emit({ type: 'health', health: { ...HEALTHY_EVIDENCE_COLLECTOR, status: 'degraded',
-    failures: { begin: 1, finish: 0, marker: 0 }, lastFailureAt: 5_000 } }));
-  assert.match(f.host.querySelector('.jev-requests .routing-warning')?.textContent ?? '', /failing to save/,
-    'collector health updates in place');
-  assert.equal(loads, 1, 'no refetch of the Routing log');
-  assert.equal(healthReads, 1);
 });
 
 test('rendered markdown is parsed once per body', () => {

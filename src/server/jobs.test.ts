@@ -10,7 +10,7 @@ import { HiveError } from '../shared/types.ts';
 function fixture(t: TestContext) {
   const home = mkdtempSync(path.join(os.tmpdir(), 'hive-jobs-'));
   const hive = new Hive(path.join(home, 'hive.db'));
-  t.after(async () => { await hive.adaptiveTopology.stop(); hive.close(); rmSync(home, { recursive: true, force: true }); });
+  t.after(async () => { hive.close(); rmSync(home, { recursive: true, force: true }); });
   const human = hive.identity.getAgent('human');
   const project = hive.projects.createProject(human, { name: 'Jobs', slug: 'jobs' });
   const brainSession = hive.identity.join({ role: 'brain', project: project.slug });

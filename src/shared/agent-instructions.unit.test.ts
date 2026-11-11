@@ -195,9 +195,6 @@ const COVERAGE: Record<AgentRuleId, readonly Evidence[]> = {
     { where: "set_thread_status", phrase: "Set an optional status on a free-form thread" }],
   "brain.clear-context": [{ where: "orders", phrase: "Send clear_context only to a worker stuck in a long session, never automatically at done or after a report." }],
   "brain.human-admin": [{ where: "orders", phrase: "Human (admin) sees every conversation; treat DMs as private from workers' point of view." }],
-  "jev.advice": [{ where: "orders", phrase: "When Jev is enabled it advises you on the Human requests you own, after they are posted: your next action in the request's thread or channel (send, attach, assign_task, task_event, room_event, set_thread_status), or a wait delivering its mail, carries the suggestion as jevAdvice. Otherwise the field is absent. Workers never get Jev advice." }],
-  "jev.advisory": [{ where: "orders", phrase: "jevAdvice is advisory only: decide the plan yourself from the task. Human instructions always override it, and Hivemind never blocks or reshapes an action because of it." }],
-  "jev.not-enforced": [{ where: "orders", phrase: "SINGLE, BRAIN+1, MULTI-DM and ROOM are suggestions, not enforced modes: there is no worker budget, lock or executionId. Treat an uncertain, incoherent, unavailable or rejected jevAdvice as no advice." }],
   "task.optional": [{ where: "orders", phrase: "Tasks are optional; free-form chat never changes task state." },
     { where: "set_thread_status", phrase: "Structured tasks change state only through task_event." }],
   "task.revision": [{ where: "orders", phrase: "get_task is authoritative: pass its revision as expectedRevision." },
@@ -331,7 +328,7 @@ test("every registered MCP tool takes its description and annotations from their
 test("brain launch prompts let the brain do the work itself and nothing forbids implementing (#149, #211)", () => {
   for (const prompt of launch.brain) {
     assert.match(prompt, /or do the work yourself when that serves the request better: you decide/);
-    assert.doesNotMatch(prompt, /executionId|adaptive topology directive/);
+    assert.doesNotMatch(prompt, /executionId|jevAdvice|\bJev\b/);
   }
   for (const text of [...launch.brain, ...launch.worker, orders.brain, orders.worker, ...Object.values(TOOL_DESCRIPTIONS), ...params, WAIT_NEXT]) {
     assert.doesNotMatch(text, /do not implement|don't implement|never implement/i);
@@ -350,14 +347,16 @@ test("action tool descriptions list every action type of their schema", async ()
   for (const mode of SUBSCRIPTION_MODES) assert.ok(TOOL_DESCRIPTIONS.subscriptions.includes(`{mode:"${mode}"`), `subscriptions lacks ${mode}`);
 });
 
-test("merged tools keep one name per concept and capability matching never reads as Jev routing (#218)", () => {
+test("merged tools keep one name per concept, and no agent text mentions the removed Jev advice (#218)", () => {
   const names = Object.keys(TOOL_DESCRIPTIONS);
   for (const gone of ["standing_orders", "get_handoff", "export_task_timeline", "get_decision", "get_task_decisions",
     "set_subscription", "reset_subscription", "suggest_workers", "record_routing_outcome", "record_routing_override"])
     assert.ok(!names.includes(gone), `${gone} should be merged or renamed`);
   for (const name of names.filter(name => name.startsWith("worker_match_")))
-    assert.match(TOOL_DESCRIPTIONS[name as ToolName], /^Capability matching \((?:unrelated to|not) Jev/);
+    assert.match(TOOL_DESCRIPTIONS[name as ToolName], /^Capability matching[.:]/);
   const texts = [...launch.brain, ...launch.worker, orders.brain, orders.worker, ...Object.values(TOOL_DESCRIPTIONS), ...joinTexts, WAIT_NEXT];
+  // Jev advice was removed: brains decide the plan from the task.
+  for (const text of texts) assert.doesNotMatch(text, /\bJev\b|jevAdvice/);
   for (const text of texts) assert.doesNotMatch(text, /\b(?:standing_orders|get_handoff|export_task_timeline|get_task_decisions|set_subscription|reset_subscription|suggest_workers|record_routing_\w+)\b/);
   // The Human decision queue was removed: brains ask Human in chat.
   for (const gone of ["request_human_decision", "get_decisions", "decision_event"]) assert.ok(!names.includes(gone), `${gone} was removed`);

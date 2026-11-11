@@ -1,7 +1,6 @@
 import type { Agent, Channel, ControlAction, Message, Project } from "../../shared/types.ts";
 import type { HiveBus } from "../hive-events.ts";
 import type { Storage } from "../storage.ts";
-import type { AdaptiveTopologyRuntime } from "../adaptive-topology.ts";
 import type { RoomStore } from "../rooms.ts";
 import type { TaskStore } from "../tasks.ts";
 import type { NotificationStore } from "../notifications.ts";
@@ -103,10 +102,6 @@ type ChannelScopes<K extends "channelIdsIn" | "memberChannelIds" = "channelIdsIn
 };
 
 export type TaskCoordinationDeps = Core & Channels & ChannelScopes;
-/** Worker capacity Jev sees for one brain: the project roster and unfinished structured work. */
-export type CapacityDeps = Agents<"listAgents"> & {
-  readonly tasks: Pick<TaskStore, "capacityWork" | "completedAmong">;
-};
 /** Coordination records insert their own message (and thread root) inside their transaction. */
 type CoordinationWriter<K extends "insertCoordinationMessage" | "ensureThread"> = { readonly messages: Pick<MessageService, K> };
 
@@ -144,24 +139,8 @@ export type TimelineDeps = Core & Channels<"getChannel" | "canSeeChannel"> & Mes
   readonly rooms: Pick<RoomStore, "peek">;
   readonly tasks: Pick<TaskStore, "get" | "unfinished">;
 };
-export type DiagnosticsDeps = { readonly home: string } & Agents<"getAgent">;
 
-/** What the Jev advisor reads and writes outside its own tables. */
-export type AdaptiveRuntimeDeps = Core & CapacityDeps & {
-  readonly home: string;
-  readonly identity: AgentDirectory;
-  readonly projects: Pick<ProjectDirectory, "getProject">;
-  readonly channels: ChannelAccess;
-  readonly messageQueries: Pick<MessageReader, "getMessageById">;
-  readonly rooms: Pick<RoomStore, "peek">;
-  readonly tasks: Pick<TaskStore, "get" | "has">;
-};
-
-/** Agent coordination actions; a brain's actions also return Jev's advice (adaptive-topology-actions.ts). */
-export type AdaptiveActionDeps = Channels & Agents & {
-  readonly adaptiveTopology: Pick<AdaptiveTopologyRuntime, "adviseBrainAction" | "latestAdvice">;
-  readonly messageQueries: Pick<MessageReader, "getMessageById">;
-  readonly messages: Pick<MessageService, "postMessage" | "hasActiveSendRequest" | "setThreadStatus">;
-  readonly rooms: Pick<RoomStore, "peek" | "view" | "event" | "hasRequest">;
-  readonly tasks: Pick<TaskStore, "assign" | "event" | "get" | "has" | "hasRequest">;
+/** An agent's send: validated, answered from its requestId when retried, then posted (agent-send.ts). */
+export type AgentSendDeps = Channels & Messages<"getMessageById"> & {
+  readonly messages: Pick<MessageService, "postMessage" | "hasActiveSendRequest">;
 };

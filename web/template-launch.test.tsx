@@ -68,7 +68,7 @@ async function fixture(t: TestContext, native: boolean, options: Options = {}) {
   const root = createRoot(host as unknown as Element);
   t.after(async () => {
     await act(async () => root.unmount()); host.remove(); resetTerminalHub(); delete win.webkit;
-    await hive.adaptiveTopology.stop(); hive.db.close(); rmSync(dir, { recursive: true, force: true });
+hive.db.close(); rmSync(dir, { recursive: true, force: true });
   });
   const settle = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 5)); });
   await act(async () => root.render(<TemplateLaunchSheet projects={[project]} agents={hive.identity.listAgents()} defaultProject={project.slug}

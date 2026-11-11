@@ -27,7 +27,7 @@ function hiveDir(t: TestContext, stop: () => Promise<unknown> = async () => {}) 
   hive.projects.createProject(hive.identity.getAgent("human"), { name: "Project", slug: "project", worktree: dir });
   let stopping = stop;
   t.after(async () => {
-    try { await stopping(); } finally { await hive.adaptiveTopology.stop(); hive.db.close(); rmSync(dir, { recursive: true, force: true }); }
+    try { await stopping(); } finally { hive.db.close(); rmSync(dir, { recursive: true, force: true }); }
   });
   return { hive, onStop: (next: () => Promise<unknown>) => { stopping = next; } };
 }

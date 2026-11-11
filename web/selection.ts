@@ -6,8 +6,6 @@ export type Sel =
   | { kind: "inbox"; project: string; box?: InboxBox }
   /** Project tasks or all projects when `project` is null. */
   | { kind: "tasks"; project: string | null }
-  /** Routing log: every Jev exchange of a project. Hash `#/routing-log/<project>`; `#/jev/<project>` is an alias. */
-  | { kind: "jev"; project: string }
   /** Mobile list screens (#223): a project's channels (`#/home/<project>`) and its direct messages (`#/dms/<project>`). */
   | { kind: "home"; project: string }
   | { kind: "dms"; project: string }
@@ -24,10 +22,10 @@ export function parseHash(hash: string = location.hash): Sel {
     };
   }
   if (parts[0] === "tasks") return { kind: "tasks", project: parts[1] ? decodeURIComponent(parts[1]) : null };
-  // The Decisions view was removed: its old links open the project's For you.
-  if (parts[0] === "decisions") return { kind: "inbox", project: parts[1] ? decodeURIComponent(parts[1]) : "", box: "unread" };
+  // The Decisions view and the Routing log were removed: their old links open the project's For you.
+  if (parts[0] === "decisions" || parts[0] === "routing-log" || parts[0] === "jev")
+    return { kind: "inbox", project: parts[1] ? decodeURIComponent(parts[1]) : "", box: "unread" };
   if (parts[0] === "home" || parts[0] === "dms") return { kind: parts[0], project: parts[1] ? decodeURIComponent(parts[1]) : "" };
-  if (parts[0] === "routing-log" || parts[0] === "jev") return { kind: "jev", project: parts[1] ? decodeURIComponent(parts[1]) : "" };
   if (parts[1]) {
     const thread = parts[2] === "t" && parts[3] ? decodeURIComponent(parts[3]) : undefined;
     return { kind: "channel", id: decodeURIComponent(parts[1]), thread };
@@ -41,7 +39,7 @@ export function hashFor(sel: Sel): string {
     ? `${sel.project ? `/inbox/${encodeURIComponent(sel.project)}` : "/inbox"}${sel.box === "all" ? "/all" : ""}`
     : sel.kind === "tasks" ? `/tasks${sel.project ? `/${encodeURIComponent(sel.project)}` : ""}`
     : sel.kind !== "channel"
-      ? `/${sel.kind === "jev" ? "routing-log" : sel.kind}${sel.project ? `/${encodeURIComponent(sel.project)}` : ""}`
+      ? `/${sel.kind}${sel.project ? `/${encodeURIComponent(sel.project)}` : ""}`
       : `/c/${encodeURIComponent(sel.id)}${sel.thread ? `/t/${encodeURIComponent(sel.thread)}` : ""}`;
 }
 
@@ -53,13 +51,8 @@ export function setHash(sel: Sel) {
  * A valid replacement when `sel` points at a project or channel the snapshot no longer has; null when it is fine.
  * Replacements land in `preferred` (the project last shown in this browser) while it exists, else the first project.
  */
-export function repairSel(sel: Sel, snap: Pick<Snapshot, "projects" | "channels" | "jev">, preferred?: string | null): Sel | null {
+export function repairSel(sel: Sel, snap: Pick<Snapshot, "projects" | "channels">, preferred?: string | null): Sel | null {
   const fallback = snap.projects.find((p) => p.slug === preferred) ?? snap.projects[0];
-  // The Routing log exists only while Jev is on: its link then opens the project's For you.
-  if (sel.kind === "jev" && !snap.jev?.enabled) {
-    const project = snap.projects.find((p) => p.slug === sel.project) ?? fallback;
-    return { kind: "inbox", project: project?.slug ?? "" };
-  }
   if (sel.kind === "tasks" && sel.project === null) return null;
   if (sel.kind !== "channel") {
     if (!sel.project) return fallback ? { ...sel, project: fallback.slug } : null;
