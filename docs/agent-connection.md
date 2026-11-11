@@ -242,3 +242,31 @@ No real host or installed native app was launched, restarted or reconfigured dur
 production setup must stay untouched. Protocol fixtures use MCP SDK 1.30.0 and check initial tool discovery, the
 unconfigured fallback and role mismatch. These tests are not real-host version qualification. Human can verify each
 installed host's initial tool list after the later upgrade without relying on dynamic notifications.
+
+## Size of the tool list
+
+Every agent carries the answer to `tools/list` in its context for the whole session: each tool's description and input
+schema. The schemas are about three quarters of it. Measured on 2026-11-11 with the MCP SDK's own client
+(`src/mcp/role-visibility.test.ts` reports the sizes on every run):
+
+| MCP process | Tools | Before | Now |
+| --- | --- | --- | --- |
+| No role | 37 | 46 658 bytes | 38 215 bytes |
+| Brain | 36 | 45 301 bytes | 36 910 bytes |
+| Worker | 23 | 31 535 bytes | 26 095 bytes |
+
+The MCP process sends each input schema without two JSON Schema keywords that tell a model nothing it needs to form a
+call (`src/mcp/lean-schema.ts`):
+
+- `$schema`, the dialect, which was on every tool;
+- a `pattern` next to a `format`: every UUID field carried a regex of about 170 bytes beside `format: "uuid"`. The
+  format stays.
+
+Everything else is sent as before: types, required fields, enums, the variants of `action`, `additionalProperties:
+false` and a `pattern` that stands alone. Nothing changes in validation: the MCP process and the server check every
+call against the same zod schemas. A client that validated a UUID against the regex before sending now learns of a bad
+one from the server's answer.
+
+The same test holds a budget per role, about 3% above these sizes. A new tool or a longer definition that passes it
+fails the test, so the list grows on purpose and not unnoticed. Most of what remains is `task_event` (about 10 KB):
+its `action` lists every shape, which models need to form the call.
