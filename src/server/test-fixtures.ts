@@ -90,6 +90,12 @@ export function listRows(owner: DbOwner, table: string, options: ListOptions = {
     .all(...clause.args).map(row => ({ ...row }));
 }
 
+/** The name of every table of the hive, for a before/after comparison of the whole database. */
+export function tableNames(owner: DbOwner): string[] {
+  return dbOf(owner).prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+    .all().map(row => String(row.name));
+}
+
 /** Every row of every listed table, for before/after atomicity comparisons. */
 export function snapshotTables(owner: DbOwner, tables: readonly string[]): Record<string, Row[]> {
   return Object.fromEntries(tables.map(table => [table, listRows(owner, table)]));

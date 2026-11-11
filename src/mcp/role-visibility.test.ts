@@ -11,6 +11,8 @@ import { startServer } from '../server/serve.ts';
 import { childEnv } from '../test-support/child-process.ts';
 import { configuredToolRole } from './index.ts';
 import { leanSchema } from './lean-schema.ts';
+import { TOOL_ANNOTATIONS } from './tool-annotations.ts';
+import type { ToolName } from './tool-text.ts';
 
 const BRAIN_ONLY = [
   'bot_tools', 'call_bot_tool',
@@ -25,9 +27,9 @@ const without = (all: string[], visible: string[]) => all.filter(name => !visibl
 const bytes = (value: unknown) => value === undefined ? 0 : Buffer.byteLength(JSON.stringify(value));
 
 /**
- * The most tools/list may weigh for each role, in bytes (docs/agent-connection.md, "Size of the tool list"): every
- * agent carries it in its context. About 3% above the size when it was set (38 215, 36 910 and 26 095), so a new tool
- * or a longer definition raises it on purpose, not unnoticed.
+ * The most tools/list may weigh for each role, in bytes and without annotations (docs/agent-connection.md, "Size of
+ * the tool list"): every agent carries it in its context. About 3% above the size when it was set (38 215, 36 910 and
+ * 26 095), so a new tool or a longer definition raises it on purpose, not unnoticed.
  */
 const BUDGET = { 'no role': 39_500, brain: 38_000, worker: 27_000 } as const;
 
@@ -87,13 +89,16 @@ test('real SDK tools/list is static per role; unknown credentials keep server au
   // What tools/list costs each role: every agent carries it in its context. Its schemas are sent lean, within a budget.
   for (const [role, client] of [['no role', fallback], ['brain', brain], ['worker', worker]] as const) {
     const { tools } = await client.listTools();
-    const sum = (part: 'description' | 'inputSchema') => tools.reduce((total, tool) => total + bytes(tool[part]), 0);
-    const size = bytes(tools);
-    t.diagnostic(`tools/list size, ${role}: ${size} bytes in ${tools.length} tools (descriptions ${sum('description')}, schemas ${sum('inputSchema')})`);
+    const sum = (part: 'description' | 'inputSchema' | 'annotations') => tools.reduce((total, tool) => total + bytes(tool[part]), 0);
+    // The budget counts each definition without its annotations: those are for the client, and are reported apart.
+    const size = bytes(tools.map(({ annotations: _annotations, ...definition }) => definition));
+    t.diagnostic(`tools/list size, ${role}: ${size} bytes in ${tools.length} tools (descriptions ${sum('description')}, schemas ${sum('inputSchema')}), plus ${bytes(tools) - size} bytes of annotations`);
     assert.ok(size <= BUDGET[role],
       `tools/list for ${role} is ${size} bytes, over its budget of ${BUDGET[role]}: shorten a definition, or raise the budget on purpose`);
     for (const tool of tools) {
       assert.deepEqual(leanSchema(tool.inputSchema), tool.inputSchema, `${tool.name} is sent without $schema or a pattern next to a format`);
+      assert.deepEqual(tool.annotations, TOOL_ANNOTATIONS[tool.name as ToolName], `${tool.name} is sent with its declared annotations`);
+      assert.equal(tool.title, undefined, `${tool.name} is known by its name alone`);
     }
     // A UUID keeps its format, which says what its regex said.
     assert.deepEqual(tools.find(tool => tool.name === 'ack_delivery')!.inputSchema,

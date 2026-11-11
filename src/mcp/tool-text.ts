@@ -1,8 +1,11 @@
 /**
  * Agent-facing MCP text. A tool description says what the tool does, its
  * required fields, and at most one pointer to the standing orders, which are
- * the single home of behavioural rules. Budget: 400 characters per tool
- * (asserted in src/shared/agent-instructions.test.ts).
+ * the single home of behavioural rules. Budget: 400 characters per tool,
+ * except the three that list their shapes (task_event, room_event and
+ * subscriptions); src/shared/agent-instructions.unit.test.ts asserts it and
+ * names the reason for each exception. What a client may assume about a
+ * call (read-only, repeatable, destructive) is in ./tool-annotations.ts.
  */
 export const TOOL_DESCRIPTIONS = {
   join: "Register this terminal as a brain or worker (workers also set seniority) in one project: join from its worktree or pass project. resume=<your name> returns to your identity without credentials, superseding its older session. Repeated join keeps this process's identity; another identity needs a new MCP process.",

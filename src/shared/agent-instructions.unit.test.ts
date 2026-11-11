@@ -317,10 +317,13 @@ test("tool and parameter descriptions stay within their length budgets", () => {
   assert.ok(WAIT_NEXT_REPEAT.length <= 350, "later wakes keep a shorter continuity reminder");
 });
 
-test("every registered MCP tool takes its description from TOOL_DESCRIPTIONS", () => {
+test("every registered MCP tool takes its description and annotations from their single homes", () => {
   const source = readFileSync(new URL("../mcp/index.ts", import.meta.url), "utf8");
-  const registered = [...source.matchAll(/server\.tool\(\s*"(\w+)",\s*TOOL_DESCRIPTIONS\.(\w+)\b/g)];
-  assert.equal(registered.length, source.match(/server\.tool\(/g)!.length, "no inline tool descriptions");
+  // declared(name) is TOOL_DESCRIPTIONS[name] and TOOL_ANNOTATIONS[name]; a registration adds only its input schema.
+  const registered = [...source.matchAll(/server\.registerTool\(\s*"(\w+)",\s*(?:\{ \.\.\.)?declared\("(\w+)"\)/g)];
+  assert.equal(registered.length, source.match(/server\.registerTool\(/g)!.length, "no inline tool descriptions or annotations");
+  assert.equal(source.match(/server\.tool\(/g), null, "the SDK's deprecated server.tool is not used");
+  assert.equal(source.match(/\b(?:description|annotations|title):/g)!.length, 2, "only declared() names a description or annotations");
   for (const [, name, key] of registered) assert.equal(name, key);
   assert.deepEqual(registered.map(match => match[1]).sort(), Object.keys(TOOL_DESCRIPTIONS).sort());
 });
