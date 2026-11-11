@@ -243,10 +243,75 @@ production setup must stay untouched. Protocol fixtures use MCP SDK 1.30.0 and c
 unconfigured fallback and role mismatch. These tests are not real-host version qualification. Human can verify each
 installed host's initial tool list after the later upgrade without relying on dynamic notifications.
 
+## Tool annotations
+
+Every tool is sent with MCP annotations: what a client may assume about a call before it runs it. They are hints for
+the client, not for the model, and they are not access control: the server authorizes every call whatever they say.
+Each one states what the server does. They live in `src/mcp/tool-annotations.ts`, one entry per tool, next to the
+descriptions in `src/mcp/tool-text.ts`; a registration in `src/mcp/index.ts` adds only its input schema.
+
+| Hint | A tool has it when |
+| --- | --- |
+| `readOnlyHint` | The call changes nothing in the hive, on disk or anywhere else. |
+| `destructiveHint` | The call can end, cancel or discard something that is not the caller's own to set again: another session, a worker's terminal, open tasks, a worker's task memory. |
+| `idempotentHint` | The same call again succeeds, answers the same and changes nothing more. A repeat that is refused does not count. |
+| `openWorldHint` | The call reaches a system of the agent's choosing outside the hive. |
+
+The protocol's defaults are the pessimistic ones (not read-only, destructive, open world), so no hint is left to them:
+a read-only tool states `readOnlyHint` and `openWorldHint`, every other tool states all four. No tool has a `title`:
+orders and docs name tools by their `name`.
+
+| Tools | Read-only | Destructive | Repeatable | Outside |
+| --- | --- | --- | --- | --- |
+| `whoami`, `agents`, `bot_tools`, `channels`, `search`, `history`, `expand_digest`, `get_room`, `worker_templates`, `get_worker_capabilities`, `worker_match_suggest`, `get_handoffs`, `get_task`, `get_task_timeline`, `preview_task_claim` | yes | | | no |
+| `send`, `set_capabilities`, `wait`, `create_channel`, `set_thread_status`, `invite`, `attach` | no | no | no | no |
+| `subscriptions`, `assign_task`, `job_event`, `request_worker`, `worker_match_outcome`, `worker_match_override`, `ack_delivery`, `fetch_file`, `react` | no | no | yes | no |
+| `join`, `clear_context` | no | yes | no | no |
+| `room_event`, `release_worker`, `task_event` | no | yes | yes | no |
+| `call_bot_tool` | no | yes | no | yes |
+
+Why the six destructive ones: `join` with `resume` cuts off the earlier session of that name; `clear_context` tells a
+worker to discard its task memory; `room_event` can archive a channel, which cancels its open tasks; `release_worker`
+archives a worker and closes its terminal; `task_event` can cancel a task, and an accepted review archives a
+task-bound worker; `call_bot_tool` runs a project bot's executable, and what that does is the bot's own.
+
+Two things are left out on purpose:
+
+- **Bookkeeping.** Every request records its caller's presence (`last_seen_at`, `online`) and its activity and traffic
+  counters, which live in memory. A read-only tool does that and nothing else.
+  `src/mcp/tool-annotations.test.ts` calls every read-only tool against a real server and compares the whole database
+  before and after.
+- **Mirrors the Human set up.** A message can be relayed to a project's Telegram group, and a brain with adaptive
+  routing sends context to the advice service. Both go to services the Human chose, with hive content only, so they
+  are not "open world". Only `call_bot_tool` reaches a system of the agent's choosing.
+
+Adding a tool means adding its entry: `ToolName` is the key type, `src/mcp/tool-annotations.unit.test.ts` names the
+destructive and open-world tools, and `src/mcp/role-visibility.test.ts` checks the annotations as a client receives
+them.
+
+### What hosts do with them
+
+Checked on 2026-11-11 in the sources below. NOT RUN against an installed host: the active setup must stay untouched.
+
+| Host | Use of the hints |
+| --- | --- |
+| Codex | In the default approval mode of an MCP server (`auto`), a call needs approval unless the tool is read-only, or is neither destructive nor open world; a missing hint counts as its pessimistic default ([`codex-rs/core/src/mcp_tool_call.rs`](https://github.com/openai/codex/blob/main/codex-rs/core/src/mcp_tool_call.rs)). Without annotations every Hivemind tool needed approval in that mode; with them, the six destructive ones do. |
+| Claude Code | A read-only call may run side by side with other read-only calls, and plan mode goes by the same hint ([MCP docs](https://code.claude.com/docs/en/mcp)). |
+| Cursor | No documented use ([MCP docs](https://cursor.com/docs/mcp)); approval follows its own allowlist. |
+
+The annotations can only remove a question: no call that ran unasked before needs approval now.
+
+Hivemind does not approve tools for a host: the Human decides. In Codex that is
+`mcp_servers.hivemind.default_tools_approval_mode` (`auto`, `prompt`, `writes` or `approve`) and, for one tool,
+`mcp_servers.hivemind.tools.<tool>.approval_mode` ([Codex MCP docs](https://developers.openai.com/codex/mcp)). A Codex
+agent that must cancel tasks or release workers with nobody to ask needs one of those settings, as it did before.
+
 ## Size of the tool list
 
 Every agent carries the answer to `tools/list` in its context for the whole session: each tool's description and input
-schema. The schemas are about three quarters of it. Measured on 2026-11-11 with the MCP SDK's own client
+schema. The schemas are about three quarters of it. The sizes below count each definition without its annotations,
+which are for the client; the same test reports their bytes apart (3 183 with no role, 3 077 for a brain, 1 901 for a
+worker). Whether a host shows them to its model was not checked. Measured on 2026-11-11 with the MCP SDK's own client
 (`src/mcp/role-visibility.test.ts` reports the sizes on every run):
 
 | MCP process | Tools | Before | Now |
