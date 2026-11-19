@@ -22,7 +22,7 @@ when the preview builds and the environment variables are valid; the server's re
 | `label` | 1–80 characters, shown to Human and brains |
 | `description` | 1–500 characters: when a brain should use this worker |
 | `software` | The agent command, as in the Launch sheet (`codex2`, `opencode-hm`, `claude`…): one command, no shell metacharacters |
-| `model`, `effort` | As in the Launch sheet; empty for the CLI's default. `effort` is one of `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
+| `model`, `effort` | As in the Launch sheet; empty for the CLI's default. `effort` is one of `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra` (`ultra` only for Codex, on the models that take it) |
 | `extraFlags` | CLI flags, at most 1,000 characters, no shell metacharacters |
 | `environment` | Non-secret environment variables, with the [launch environment](terminal-broker.md#launch-environment) rules |
 | `secretNames` | Up to 8 names of secret environment variables (for example `OPENCODE_API_KEY`); never the values |

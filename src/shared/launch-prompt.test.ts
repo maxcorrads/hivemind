@@ -9,6 +9,7 @@ import { workerTemplateSpecSchema } from './worker-templates.ts';
 import {
   ADOPT_UNTRUSTED,
   buildLaunchBlock,
+  buildModelFlags,
   buildLaunchCommand,
   buildLaunchPrompt,
   buildRosterPaste,
@@ -493,4 +494,13 @@ test("a conversation continues the CLI's own session: Codex resume, Claude and C
   assert.doesNotMatch(buildLaunchCommand({ ...seat, software: "codex", conversation: "  " }).command, /resume /);
   assert.throws(() => buildLaunchCommand({ ...seat, software: "codex", conversation: "abc; rm -rf ~" }), /Conversation must be a session ID/);
   assert.throws(() => buildLaunchCommand({ ...seat, software: "opencode", conversation: "01a13757-5872-7e90" }), /cannot resume a conversation/);
+});
+
+test("ultra effort reaches Codex and is refused for other CLIs", () => {
+  assert.equal(buildModelFlags("codex2", "gpt-6.2-sol", "ultra"), "-m gpt-6.2-sol -c model_reasoning_effort=ultra");
+  assert.equal(buildModelFlags("claude", "claude-fable-5-2", "xhigh"), "--model claude-fable-5-2 --effort xhigh");
+  assert.throws(() => buildModelFlags("claude-tw", "claude-fable-5-2", "ultra"), /only for Codex/);
+  assert.throws(() => buildModelFlags("opencode", "opencode/muse-spark-1.3-contributor-free", "ultra"), /only for Codex/);
+  assert.equal(buildModelFlags("agent", "gpt-5.5-high", "ultra"), "--model gpt-5.5-high");
+  assert.equal(workerTemplateSpecSchema.shape.effort.safeParse("ultra").success, true);
 });

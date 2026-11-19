@@ -3,6 +3,9 @@ import { softwareFamily } from "./launch-prompt.ts";
 export type ModelGroup = { label: string; models: string[] };
 
 const CODEX = [
+  "gpt-6.2-sol",
+  "gpt-6.2-astra",
+  "gpt-6.1-terra",
   "gpt-6.1-sol",
   "gpt-6-sol",
   "gpt-6-luna",
@@ -26,8 +29,9 @@ const CLAUDE = [
   "opus",
   "sonnet",
   "haiku",
-  "claude-fable-5",
+  "claude-fable-5-2",
   "claude-fable-5-1",
+  "claude-fable-5",
   "claude-opus-5-5",
   "claude-opus-5",
   "claude-opus-4-8",
@@ -284,6 +288,22 @@ const OPENCODE = [
 
 const PICK_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 
+/** Codex models that also take the `ultra` effort, as the Codex CLI's model catalog lists it. */
+const CODEX_ULTRA = new Set([
+  "gpt-6.2-sol",
+  "gpt-6.2-astra",
+  "gpt-6.1-terra",
+  "gpt-6.1-sol",
+  "gpt-6-sol",
+  "gpt-6-astra",
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+]);
+
+function pickEfforts(family: Family, model: string): readonly string[] {
+  return family === "codex" && CODEX_ULTRA.has(model) ? [...PICK_EFFORTS, "ultra"] : PICK_EFFORTS;
+}
+
 export type ModelChoice = {
   id: string;
   label: string;
@@ -310,7 +330,7 @@ function withEfforts(family: Family, models: string[]): ModelChoice[] {
   const choices: ModelChoice[] = [];
   for (const model of unique(models)) {
     choices.push({ id: modelChoiceId(family, model, ""), label: model, model, effort: "" });
-    for (const effort of PICK_EFFORTS) {
+    for (const effort of pickEfforts(family, model)) {
       choices.push({
         id: modelChoiceId(family, model, effort),
         label: `${model} · ${effort}`,
