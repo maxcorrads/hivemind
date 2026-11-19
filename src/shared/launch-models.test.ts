@@ -106,3 +106,18 @@ test("selectedChoiceId follows the software family", () => {
     ),
   );
 });
+
+test("the newest Codex and Claude models are offered, and ultra only where Codex takes it", () => {
+  const codex = modelChoiceGroups("codex")[0]?.choices ?? [];
+  for (const model of ["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-terra"]) {
+    for (const effort of ["", "low", "medium", "high", "xhigh", "max", "ultra"]) {
+      const id = selectedChoiceId("codex", model, effort);
+      assert.ok(codex.some(choice => choice.id === id), `${model} ${effort}`);
+      assert.deepEqual(parseChoiceId(id), { model, effort });
+    }
+  }
+  assert.equal(codex.some(choice => choice.model === "gpt-6-luna" && choice.effort === "ultra"), false);
+  const claude = modelChoiceGroups("claude")[0]?.choices ?? [];
+  assert.ok(claude.some(choice => choice.id === "claude:claude-fable-5-2::xhigh"));
+  assert.equal(claude.some(choice => choice.effort === "ultra"), false);
+});

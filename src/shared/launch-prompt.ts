@@ -132,7 +132,8 @@ export function sanitizeWorkspacePath(raw: string | null | undefined): string {
   return tree;
 }
 
-export const EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+// `ultra` exists only in Codex (some models); buildModelFlags refuses it for any other CLI.
+export const EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
 export type Effort = (typeof EFFORTS)[number];
 
 export function sanitizeModel(raw: string): string {
@@ -151,7 +152,7 @@ export function sanitizeEffort(raw: string): string {
   const effort = raw.trim().toLowerCase();
   if (!effort) return "";
   if (!(EFFORTS as readonly string[]).includes(effort)) {
-    throw new Error("Effort must be none, minimal, low, medium, high, xhigh, or max");
+    throw new Error("Effort must be none, minimal, low, medium, high, xhigh, max, or ultra");
   }
   return effort;
 }
@@ -178,6 +179,7 @@ export function buildModelFlags(software: string, model?: string | null, effort?
   const family = softwareFamily(software);
   const m = sanitizeModel(model ?? "");
   const e = family === "cursor" ? "" : sanitizeEffort(effort ?? "");
+  if (e === "ultra" && family !== "codex") throw new Error("Effort ultra is only for Codex");
   const parts: string[] = [];
   if (m) {
     if (family === "codex" || family === "opencode") parts.push(`-m ${m}`);
