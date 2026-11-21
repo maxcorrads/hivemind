@@ -117,7 +117,7 @@ Near-duplicate tools were merged; the old names no longer exist, so restart ever
 | `get_handoffs`, `get_handoff` | `get_handoffs` (`taskId` reads one full handoff) |
 | `get_task_timeline`, `export_task_timeline` | `get_task_timeline` (`export=true` returns the redacted fixture) |
 | `subscriptions`, `set_subscription`, `reset_subscription` | `subscriptions` with `mode`: `list`, `set` or `reset` |
-| `suggest_workers`, `record_routing_outcome`, `record_routing_override` | `worker_match_suggest`, `worker_match_outcome`, `worker_match_override` (capability matching, not Jev) |
+| `suggest_workers`, `record_routing_outcome`, `record_routing_override` | `worker_match_suggest`, `worker_match_outcome`, `worker_match_override` (capability matching) |
 
 `executionId` is gone from every tool schema. Every channel parameter accepts a UUID, a name or `#name`. The MCP server reports the package version.
 
@@ -264,8 +264,8 @@ orders and docs name tools by their `name`.
 | Tools | Read-only | Destructive | Repeatable | Outside |
 | --- | --- | --- | --- | --- |
 | `whoami`, `agents`, `bot_tools`, `channels`, `search`, `history`, `expand_digest`, `get_room`, `worker_templates`, `get_worker_capabilities`, `worker_match_suggest`, `get_handoffs`, `get_task`, `get_task_timeline`, `preview_task_claim` | yes | | | no |
-| `send`, `set_capabilities`, `wait`, `create_channel`, `set_thread_status`, `invite`, `attach` | no | no | no | no |
-| `subscriptions`, `assign_task`, `job_event`, `request_worker`, `worker_match_outcome`, `worker_match_override`, `ack_delivery`, `fetch_file`, `react` | no | no | yes | no |
+| `send`, `set_capabilities`, `wait`, `create_channel`, `invite`, `attach` | no | no | no | no |
+| `subscriptions`, `set_thread_status`, `assign_task`, `job_event`, `request_worker`, `worker_match_outcome`, `worker_match_override`, `ack_delivery`, `fetch_file`, `react` | no | no | yes | no |
 | `join`, `clear_context` | no | yes | no | no |
 | `room_event`, `release_worker`, `task_event` | no | yes | yes | no |
 | `call_bot_tool` | no | yes | no | yes |
@@ -281,9 +281,9 @@ Two things are left out on purpose:
   counters, which live in memory. A read-only tool does that and nothing else.
   `src/mcp/tool-annotations.test.ts` calls every read-only tool against a real server and compares the whole database
   before and after.
-- **Mirrors the Human set up.** A message can be relayed to a project's Telegram group, and a brain with adaptive
-  routing sends context to the advice service. Both go to services the Human chose, with hive content only, so they
-  are not "open world". Only `call_bot_tool` reaches a system of the agent's choosing.
+- **The mirror the Human set up.** A message can be relayed to a project's Telegram group. It goes to a group the
+  Human chose, with hive content only, so it is not "open world". Only `call_bot_tool` reaches a system of the
+  agent's choosing.
 
 Adding a tool means adding its entry: `ToolName` is the key type, `src/mcp/tool-annotations.unit.test.ts` names the
 destructive and open-world tools, and `src/mcp/role-visibility.test.ts` checks the annotations as a client receives

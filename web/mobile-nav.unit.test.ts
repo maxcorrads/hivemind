@@ -7,13 +7,11 @@ test("each selection maps to one phone screen and its bottom tab", () => {
   assert.equal(mobileScreen({ kind: "dms", project: "alpha" }, false), "dms");
   assert.equal(mobileScreen({ kind: "inbox", project: "alpha" }, false), "activity");
   assert.equal(mobileScreen({ kind: "tasks", project: null }, false), "tasks");
-  assert.equal(mobileScreen({ kind: "jev", project: "alpha" }, false), "jev");
   assert.equal(mobileScreen({ kind: "channel", id: "a", thread: "root" }, false), "channel");
   assert.equal(mobileScreen({ kind: "channel", id: "a" }, true), "search");
 
   assert.equal(mobileTab("activity"), "activity");
   assert.equal(mobileTab("tasks"), "tasks");
-  assert.equal(mobileTab("jev"), "home");
   assert.equal(mobileTab("search"), "home");
   assert.equal(mobileTab("channel"), null);
 });
@@ -26,7 +24,7 @@ test("tabs lead to the project's lists, Activity to its For you view", () => {
 });
 
 test("a channel's back arrow returns to the list it came from, else to the list that holds it", () => {
-  const from = { kind: "jev", project: "beta" } as const;
+  const from = { kind: "tasks", project: "beta" } as const;
   assert.deepEqual(channelBack({ type: "public", project: "alpha" }, from, "alpha"), from);
   assert.deepEqual(channelBack({ type: "public", project: "alpha" }, null, "zeta"), { kind: "home", project: "alpha" });
   assert.deepEqual(channelBack({ type: "dm", project: "alpha" }, null, "zeta"), { kind: "dms", project: "alpha" });

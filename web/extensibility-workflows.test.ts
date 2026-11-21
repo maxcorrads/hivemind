@@ -266,7 +266,6 @@ test("brain DMs have no routing selector and post only the Human message (#211)"
   await f.change(composer, "Handle this directly");
   await f.click(f.button("Send"));
   assert.match(f.host.textContent!, /Handle this directly/);
-  assert.doesNotMatch(f.host.textContent!, /Hivemind adaptive topology/);
   const sent = listRows(f.hive, "messages", { where: { author_id: "human", channel_id: f.hive.channels.findDm(f.human.id, f.brainA.id)!.id },
     columns: "body", orderBy: "seq" }) as Array<{ body: string }>;
   assert.deepEqual(sent.map(row => row.body), ["Handle this directly"]);

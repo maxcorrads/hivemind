@@ -14,7 +14,7 @@ function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-agent-traffic-"));
   const hive = new Hive(path.join(dir, "hive.db"));
   const app = createApp(hive);
-  t.after(async () => { await hive.adaptiveTopology.stop(); hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
+  t.after(async () => { hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
   const call = async (method: string, url: string, body?: unknown, token?: string) => {
     const response = await app.request(url, { method, headers: { "content-type": "application/json",
       ...(token ? { authorization: `Bearer ${token}` } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });

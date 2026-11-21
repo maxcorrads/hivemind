@@ -89,7 +89,8 @@ test("post-baseline migrations are idempotent on the current schema", t => {
   t.after(() => db.close());
   applyMigrations(db);
   const before = { schema: schemaOf(db), rows: rowsOf(db) };
-  for (const migration of MIGRATIONS.filter(m => m.version > BASELINE_VERSION)) rerunMigration(db, migration.name);
+  // jev_advisory rebuilt tables that drop_jev removes: it runs once, before them, and cannot run on the current schema.
+  for (const migration of MIGRATIONS.filter(m => m.version > BASELINE_VERSION && m.name !== "jev_advisory")) rerunMigration(db, migration.name);
   assert.deepEqual({ schema: schemaOf(db), rows: rowsOf(db) }, before);
 });
 
@@ -114,12 +115,13 @@ test("a populated current-main (user_version 2) hive upgrades with every row and
   hive.db.close();
 
   const after = inspect(file, db => ({ schema: schemaOf(db), rows: rowsOf(db) }));
-  // #211 (jev_advisory) drops what only served enforced topologies, #215 (agent_tombstones) adds agents.removed_at
+  // drop_jev removes every table of the removed Jev advice, #215 (agent_tombstones) adds agents.removed_at
   // and replaces the constant Human token hash, drop_decision_requests removes the Human decision queue (its
   // messages stay) and agent_terminal_session adds agents.terminal_session (empty); every other row and object is untouched.
   const dropped = ["adaptive_topology_locks", "adaptive_topology_tasks", "adaptive_topology_evaluated", "adaptive_topology_messages",
+    "adaptive_topology_executions", "adaptive_topology_events", "adaptive_evidence_runs", "adaptive_evidence_attempts", "jev_calls",
     "decision_requests", "decision_mutations"];
-  const rewritten = ["adaptive_topology_executions", "adaptive_topology_events", "agents", "task_records", "worker_capabilities"];
+  const rewritten = ["agents", "task_records", "worker_capabilities"];
   // #217 (performance_retention) adds the per-message receipt index, backfilled from the delivery ledger;
   // worker_templates (#276) adds an empty table.
   const added = ["inbox_receipts", "bot_access", "worker_templates", "launch_requests", "launcher_commands", "jobs", "job_events",
@@ -149,12 +151,9 @@ test("a populated current-main (user_version 2) hive upgrades with every row and
   }
   const kept = (rows: Record<string, unknown[]>) => Object.fromEntries(Object.entries(rows)
     .filter(([table]) => !dropped.includes(table) && !rewritten.includes(table) && !added.includes(table)));
-  assert.deepEqual(kept(after.rows), kept(before.rows), "the advisory migration keeps every other row, including jev_calls and evidence");
+  assert.deepEqual(kept(after.rows), kept(before.rows), "every other row is kept");
   for (const table of dropped) assert.equal(after.rows[table], undefined, `${table} is dropped`);
-  assert.deepEqual(after.rows.adaptive_topology_events, [], "enforced routing events are cleared");
-  assert.deepEqual(after.rows.adaptive_topology_executions!.map(row => (row as { execution_id: string }).execution_id), ["ex1"],
-    "only the current execution survives; a draining one is dropped");
-  assert.ok(after.rows.jev_calls!.length > 0 && after.rows.adaptive_evidence_runs!.length > 0);
+  assert.ok(before.rows.jev_calls!.length > 0 && before.rows.adaptive_evidence_runs!.length > 0, "the Jev history existed before the upgrade");
   type Delivery = { agent_id: string; seqs: string; acknowledged_at: number | null };
   const receipts = new Map<string, number | null>();
   for (const row of before.rows.inbox_deliveries as Delivery[]) for (const seq of JSON.parse(row.seqs) as number[]) {
@@ -185,13 +184,16 @@ test("the advisory migration strips enforcement fields from execution snapshots 
     db.prepare(`INSERT INTO adaptive_topology_executions(execution_id,channel_id,brain_id,project_id,root_message_id,snapshot,current)
       VALUES('ex1','c','b','p','m',?,1),('ex0','c','b','p','m','not json',0)`).run(JSON.stringify(snapshot));
     db.prepare("INSERT INTO adaptive_topology_locks(channel_id,brain_id,topology,updated_at) VALUES('c','b','single',1)").run();
-    applyMigrations(db);
+    applyMigrations(db, { target: BASELINE_VERSION + 1 });
     const rows = db.prepare("SELECT execution_id, snapshot FROM adaptive_topology_executions").all();
     assert.deepEqual(rows.map(row => row.execution_id), ["ex1"]);
     assert.deepEqual(JSON.parse(String(rows[0]!.snapshot)), { executionId: "ex1", channelId: "c", projectId: "p", brainId: "b",
       rootMessageId: "m", updatedAt: 5, recommendation: { targetTopology: "brain_multi_dm", targetWorkers: 2 } });
     assert.equal(db.prepare("SELECT 1 FROM sqlite_master WHERE name='adaptive_topology_locks'").get(), undefined);
+    // drop_jev then removes what the advisory migration kept, with its rows, indexes and trigger.
+    applyMigrations(db);
     assert.equal(schemaVersion(db), LATEST_VERSION);
+    assert.deepEqual(db.prepare("SELECT name FROM sqlite_master WHERE name LIKE '%adaptive%' OR name LIKE '%jev%'").all(), []);
   });
 });
 

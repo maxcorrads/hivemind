@@ -2,9 +2,6 @@ import type { JobView } from '../shared/jobs.ts';
 import { EventEmitter } from "node:events";
 import type { Agent, Channel, InboxStatus, Message, QueueEstimate, Thread } from "../shared/types.ts";
 import type { AgentWork, TaskSnapshot } from "../shared/tasks.ts";
-import type { AdaptiveExecutionState, AdaptiveRoutingEvent } from "../shared/adaptive-topology.ts";
-import type { JevCallSummary } from "../shared/jev-calls.ts";
-import type { EvidenceCollectorHealth } from "../shared/evidence-health.ts";
 import type { ActivityItem } from "../shared/read-state.ts";
 import type { TelegramAdminService } from "./services/telegram-admin.ts";
 import type { LaunchRequestView } from "./launcher-queue.ts";
@@ -52,12 +49,6 @@ export type HiveEvents = {
    * `archived` is the room's archive state after the change (sidebar projection).
    */
   room: { channelId: string; archived: boolean };
-  /** Adaptive routing recorded an event for a channel; `state` is null when no execution is displayed. */
-  "adaptive-routing": { channelId: string; state: AdaptiveExecutionState | null; event: AdaptiveRoutingEvent };
-  /** A Jev call was recorded or settled in the call log. */
-  "jev-call": JevCallSummary;
-  /** Evidence-collector health changed (write failure, marker persisted); Human-only, no raw errors. */
-  "evidence-health": EvidenceCollectorHealth;
   /** A project's worker templates were created, edited or deleted; clients refetch them. */
   "worker-templates": { projectId: string };
   /** The account catalog (order, paths, policy) changed; clients refetch it. */

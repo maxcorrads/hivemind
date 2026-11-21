@@ -22,8 +22,10 @@ test("parseHash defaults to #general and reads every route", () => {
   // The removed Decisions view: old links land on the project's For you.
   assert.deepEqual(parseHash("#/decisions/alpha"), { kind: "inbox", project: "alpha", box: "unread" });
   assert.deepEqual(parseHash("#/decisions"), { kind: "inbox", project: "", box: "unread" });
-  assert.deepEqual(parseHash("#/routing-log/alpha"), { kind: "jev", project: "alpha" });
-  assert.deepEqual(parseHash("#/jev/alpha"), { kind: "jev", project: "alpha" });
+  // The removed Routing log: the same.
+  assert.deepEqual(parseHash("#/routing-log/alpha"), { kind: "inbox", project: "alpha", box: "unread" });
+  assert.deepEqual(parseHash("#/jev/alpha"), { kind: "inbox", project: "alpha", box: "unread" });
+  assert.deepEqual(parseHash("#/routing-log"), { kind: "inbox", project: "", box: "unread" });
   assert.deepEqual(parseHash("#/home/alpha"), { kind: "home", project: "alpha" });
   assert.deepEqual(parseHash("#/dms"), { kind: "dms", project: "" });
 });
@@ -36,27 +38,25 @@ test("hashFor round-trips through parseHash", () => {
     { kind: "tasks", project: "a b" },
     { kind: "tasks", project: "all" },
     { kind: "tasks", project: null },
-    { kind: "jev", project: "alpha" },
     { kind: "home", project: "a b" },
     { kind: "dms", project: "alpha" },
     { kind: "channel", id: "ch/1", thread: undefined },
     { kind: "channel", id: "ch", thread: "root 1" },
   ];
   for (const sel of selections) assert.deepEqual(parseHash(`#${hashFor(sel)}`), sel);
-  assert.equal(hashFor({ kind: "jev", project: "" }), "/routing-log");
+  assert.equal(hashFor({ kind: "home", project: "" }), "/home");
   assert.equal(hashFor({ kind: "inbox", project: "alpha" }), "/inbox/alpha");
   assert.equal(hashFor({ kind: "channel", id: "ch", thread: null }), "/c/ch");
 });
 
 test("repairSel keeps valid selections and falls back to the first project", () => {
-  const snap = { projects: [project("alpha"), project("beta")], channels: [channel("general")], jev: { enabled: true } };
+  const snap = { projects: [project("alpha"), project("beta")], channels: [channel("general")] };
   assert.equal(repairSel({ kind: "channel", id: "general" }, snap), null);
   assert.equal(repairSel({ kind: "inbox", project: "beta" }, snap), null);
   assert.equal(repairSel({ kind: "tasks", project: null }, snap), null);
   assert.equal(repairSel({ kind: "tasks", project: "beta" }, snap), null);
   assert.deepEqual(repairSel({ kind: "tasks", project: "gone" }, snap), { kind: "tasks", project: "alpha" });
   assert.deepEqual(repairSel({ kind: "inbox", project: "", box: "all" }, snap), { kind: "inbox", project: "alpha", box: "all" });
-  assert.deepEqual(repairSel({ kind: "jev", project: "gone" }, snap), { kind: "jev", project: "alpha" });
   assert.deepEqual(repairSel({ kind: "home", project: "" }, snap), { kind: "home", project: "alpha" });
   assert.deepEqual(repairSel({ kind: "dms", project: "gone" }, snap), { kind: "dms", project: "alpha" });
   assert.equal(repairSel({ kind: "dms", project: "beta" }, snap), null);
@@ -71,16 +71,9 @@ test("repairSel prefers the project last shown in this browser while it exists",
   assert.equal(repairSel({ kind: "inbox", project: "alpha" }, snap, "beta"), null, "a valid selection is never moved");
 });
 
-test("repairSel sends the Routing log to For you while Jev is off", () => {
-  const snap = { projects: [project("alpha"), project("beta")], channels: [channel("general")] };
-  assert.deepEqual(repairSel({ kind: "jev", project: "beta" }, snap), { kind: "inbox", project: "beta" });
-  assert.deepEqual(repairSel({ kind: "jev", project: "gone" }, { ...snap, jev: { enabled: false } }), { kind: "inbox", project: "alpha" });
-  assert.equal(repairSel({ kind: "jev", project: "beta" }, { ...snap, jev: { enabled: true } }), null);
-});
-
 test("repairSel without projects", () => {
-  const empty = { projects: [], channels: [], jev: { enabled: true } };
+  const empty = { projects: [], channels: [] };
   assert.equal(repairSel({ kind: "inbox", project: "" }, empty), null);
-  assert.deepEqual(repairSel({ kind: "jev", project: "gone" }, empty), { kind: "jev", project: "" });
+  assert.deepEqual(repairSel({ kind: "dms", project: "gone" }, empty), { kind: "dms", project: "" });
   assert.deepEqual(repairSel({ kind: "channel", id: "gone" }, empty), { kind: "inbox", project: "" });
 });

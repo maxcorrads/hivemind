@@ -6,26 +6,19 @@ import { test, type TestContext } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Hive } from './hive.ts';
 import { createApp } from './app.ts';
-import { saveAdaptiveRouting } from './adaptive-config.ts';
-import { jevTopologyResponse } from './fixtures/jev-topology.ts';
 import { countRows, failWrites, insertRow, snapshotTables } from './test-fixtures.ts';
-import { HiveError, type Message } from '../shared/types.ts';
-import type { AdaptiveExecutionState, AdaptiveRoutingEvent } from '../shared/adaptive-topology.ts';
+import { HiveError } from '../shared/types.ts';
 
 // #215: removing an agent leaves a tombstone. History stays readable and attributed; the agent can no longer act, be
 // addressed or receive mail, and its open work is closed in the same transaction.
 const contract = { objective: 'Ship the parser.', scope: [], nonGoals: [], acceptanceCriteria: ['Tests pass.'], dependencies: [], evidenceSeqs: [] };
 const status = (code: number) => (error: unknown) => error instanceof HiveError && error.status === code;
 
-function fixture(t: TestContext, options: { jev?: boolean } = {}) {
+function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-agent-lifecycle-'));
   const hive = new Hive(path.join(dir, 'hive.db'));
   const app = createApp(hive);
-  if (options.jev) {
-    t.mock.method(globalThis, 'fetch', async (_url: unknown, init?: RequestInit) => Response.json(jevTopologyResponse(String(init?.body))));
-    saveAdaptiveRouting(dir, { enabled: true, apiKey: 'fixture-key' });
-  }
-  t.after(async () => { await hive.adaptiveTopology.stop(); hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
+  t.after(() => { hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
   const human = hive.identity.getAgent('human');
   const brain = hive.identity.join({ role: 'brain' }), other = hive.identity.join({ role: 'brain' });
   const worker = hive.identity.join({ role: 'worker', seniority: 'mid' });
@@ -39,15 +32,9 @@ function fixture(t: TestContext, options: { jev?: boolean } = {}) {
   return { hive, app, human, brain, other, worker, room, ui, remove };
 }
 
-test('removing a brain keeps its history, closes its Jev request, and its worker can still submit', async t => {
-  const f = fixture(t, { jev: true });
-  const { hive, brain, other, worker, room } = f;
-  // A Jev request owned by the brain: Human mentions it in a room both brains share.
-  const request = await f.ui('POST', `/channels/${room.id}/messages`, { body: `@${brain.agent.name} please plan the parser`, requestId: 'plan' });
-  assert.equal(request.status, 200);
-  const root = request.json.message as Message;
-  const executions = () => hive.adaptiveTopology.store.rootedExecutions(root.id).map(row => JSON.parse(String(row.snapshot)) as AdaptiveExecutionState);
-  assert.deepEqual(executions().map(state => state.brainId), [brain.agent.id], 'the request is recorded for its brain at once');
+test('removing a brain keeps its history, and its worker can still submit', async t => {
+  const f = fixture(t);
+  const { hive, brain, worker, room } = f;
   // An open task and chat history.
   const task = hive.tasks.assign(brain.agent, { requestId: 'task', worker: worker.agent.name, channel: room.id, contract }).task;
   hive.tasks.event(worker.agent, task.id, { requestId: 'accept', expectedRevision: task.revision, action: { type: 'accept' } });
@@ -79,16 +66,9 @@ test('removing a brain keeps its history, closes its Jev request, and its worker
   const general = hive.messageQueries.listMessages(f.human, 'general').messages.at(-1)!;
   assert.match(general.body, new RegExp(`Human removed ${brain.agent.name} from the hive\\. 1 task ${brain.agent.name} assigned stay open`));
 
-  // The Jev request is completed and audited; a reply in its thread goes to the remaining brain.
-  const execution = executions();
-  assert.equal(execution.length, 1);
-  assert.equal(typeof execution[0]!.completedAt, 'number');
-  const audit = hive.adaptiveTopology.store.recentEvents(room.id).map(row => JSON.parse(String(row.snapshot)) as AdaptiveRoutingEvent);
-  assert.ok(audit.some(event => event.kind === 'status' && event.reason === 'brain_removed'));
-  const followUp = await f.ui('POST', `/channels/${room.id}/messages`, { body: 'Any news?', threadId: root.id, requestId: 'follow-up' });
+  // A reply in the removed brain's thread is still accepted.
+  const followUp = await f.ui('POST', `/channels/${room.id}/messages`, { body: 'Any news?', threadId: said.id, requestId: 'follow-up' });
   assert.equal(followUp.status, 200, JSON.stringify(followUp.json));
-  const open = executions().filter(state => !state.completedAt);
-  assert.deepEqual(open.map(state => state.brainId), [other.agent.id], 'the removed brain request stays closed');
 
   // The task stays open: the worker can still checkpoint and submit, with evidence the removed brain can no longer read.
   const evidence = hive.messages.postMessage(worker.agent, { channel: room.id, body: 'Parser tests: 42 passed' });

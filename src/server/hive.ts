@@ -14,7 +14,6 @@ import { TaskViews } from './services/task-views.ts';
 import { JobStore } from './services/jobs.ts';
 import { WorkerOrchestration } from "./services/worker-orchestration.ts";
 import { AgentTraffic } from "./agent-traffic.ts";
-import { AdaptiveTopologyRuntime } from "./adaptive-topology.ts";
 import { HiveBus } from "./hive-events.ts";
 import { InboxDeliveryStore } from "./inbox-delivery.ts";
 import { InboxReader } from "./inbox-reader.ts";
@@ -93,7 +92,6 @@ type ServiceRegistry = Core & {
   rooms: RoomStore;
   notifications: NotificationStore;
   timeline: TimelineStore;
-  adaptiveTopology: AdaptiveTopologyRuntime;
 };
 
 /**
@@ -143,7 +141,6 @@ export class Hive {
   readonly rooms!: RoomStore;
   readonly notifications!: NotificationStore;
   readonly timeline!: TimelineStore;
-  readonly adaptiveTopology!: AdaptiveTopologyRuntime;
 
   constructor(dbPath = path.join(hiveHome(), "hive.db"), options: { routineBatchMs?: number; uploadLimits?: Partial<UploadLimits> } = {}) {
     this.home = path.dirname(dbPath);
@@ -195,7 +192,6 @@ export class Hive {
       this.notifications = services.notifications = new NotificationStore(services);
       this.routing = services.routing = new RoutingStore(services);
       this.timeline = services.timeline = new TimelineStore(services);
-      this.adaptiveTopology = services.adaptiveTopology = new AdaptiveTopologyRuntime(services);
       this.inbox = services.inbox = new InboxDeliveryStore(this.db);
       services.inboxReader = new InboxReader(this.db, this.inbox, this.notifications, options.routineBatchMs ?? ROUTINE_BATCH_MS);
       this.management = services.management = new AgentManagement(services);
@@ -219,7 +215,7 @@ export class Hive {
     this.channels.addHumanToAllChannels();
   }
 
-  /** Closes the database. Stop the runtimes that use it (HTTP, Telegram, adaptive routing) first. */
+  /** Closes the database. Stop the runtimes that use it (HTTP, Telegram) first. */
   close() {
     this.db.close();
   }

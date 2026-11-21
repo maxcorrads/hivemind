@@ -446,11 +446,6 @@ export class TaskStore {
     return task.workerId === workerId && task.state === 'paused' && task.pause?.mode === 'hard' &&
       task.pause.closedAt !== undefined && task.pause.resumeRequestId === requestId;
   }
-  /** True when the actor already used `requestId` for a task event (or an aliased room assignment). */
-  hasRequest(actorId: string, requestId: string): boolean {
-    return Boolean(this.db.prepare('SELECT 1 FROM task_events WHERE actor_id=? AND request_id=?').get(actorId, requestId) ||
-      this.db.prepare('SELECT 1 FROM task_request_aliases WHERE actor_id=? AND request_id=?').get(actorId, requestId));
-  }
   /** Native launcher outcomes enter the task thread as durable, server-authored task events. */
   launchOutcome(taskId: string, requestId: string, workerId: string, state: 'launched' | 'failed' | 'rejected' | 'expired'): void {
     this.transaction(() => {
@@ -476,22 +471,6 @@ export class TaskStore {
   isOpenFor(taskId: string, workerId: string): boolean {
     return Boolean(this.db.prepare(`SELECT 1 FROM task_records t WHERE t.id=? AND t.worker_id=?
       AND json_extract(t.snapshot,'$.state') NOT IN ('accepted_complete','rejected','cancelled')`).get(taskId, workerId));
-  }
-  /** Work that occupies a worker in a project: unfinished tasks not stopped by their room, and held claims. */
-  capacityWork(projectId: string): Array<{ id: string; workerId: string; assignerId: string; state: string; held: boolean; dependencies: string[] }> {
-    return this.db.prepare(`SELECT t.id,t.worker_id,
-        json_extract(t.snapshot,'$.assignerId') AS assigner_id,
-        json_extract(t.snapshot,'$.state') AS state,
-        json_extract(t.snapshot,'$.claim.state') AS claim_state,
-        json_extract(t.snapshot,'$.contract.dependencies') AS dependencies
-      FROM task_records t
-      LEFT JOIN room_tasks room ON room.task_id=t.id
-      WHERE t.channel_id IN (SELECT value FROM json_each(?)) AND ((json_extract(t.snapshot,'$.state') NOT IN ('accepted_complete','rejected','cancelled')
-        AND COALESCE(room.status,'active')!='stopped') OR json_extract(t.snapshot,'$.claim.state')='held')`)
-      .all(JSON.stringify(this.deps.channels.channelIdsIn(projectId))).map(row => ({
-        id: String(row.id), workerId: String(row.worker_id), assignerId: String(row.assigner_id), state: String(row.state), held: row.claim_state === 'held',
-        dependencies: row.dependencies ? JSON.parse(String(row.dependencies)) as string[] : [],
-      }));
   }
   /**
    * Current work per agent id: unfinished tasks not stopped by their room, the
@@ -521,12 +500,6 @@ export class TaskStore {
       if (row.state === 'result_submitted') assigner.toReview++;
     }
     return work;
-  }
-  /** The subset of `ids` that are accepted-complete tasks. */
-  completedAmong(ids: string[]): string[] {
-    return (this.db.prepare(`SELECT id FROM task_records
-      WHERE id IN (SELECT value FROM json_each(?)) AND json_extract(snapshot,'$.state')='accepted_complete'`)
-      .all(JSON.stringify(ids)) as { id: string }[]).map(row => String(row.id));
   }
   /** The subset of `ids` that are tasks not yet accepted-complete. */
   unfinished(ids: string[]): string[] {

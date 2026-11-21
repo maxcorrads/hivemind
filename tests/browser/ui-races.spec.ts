@@ -1915,9 +1915,6 @@ test("settings stay inside the viewport and backdrop dismissal requires a comple
   await installSnapshot(page, () => snap);
   await installSocketHarness(page);
   await installMessages(page, async route => fulfillJson(route, payload(a, [])));
-  await page.route("**/api/ui/adaptive-routing", route => fulfillJson(route, {
-    enabled: false, apiKeySet: false, apiKeyHint: null, model: "jev-latest", defaultModel: "jev-latest", modelPinned: false,
-  }));
   await page.route("**/api/ui/telegram", route => fulfillJson(route, {
     configured: false, running: false, tokenSet: false, tokenHint: null, allowUserIds: [], projects: {},
   }));
@@ -1931,7 +1928,7 @@ test("settings stay inside the viewport and backdrop dismissal requires a comple
   }));
   await page.setViewportSize({ width: 1180, height: 700 });
   await page.goto("/#/c/a");
-  for (const title of ["Adaptive routing", "Telegram", "Launch agent"]) {
+  for (const title of ["Telegram", "Launch agent"]) {
     await page.locator(".tools-menu > summary").click();
     await page.getByTitle(title, { exact: true }).click();
     const modal = page.locator(".modal"), sheet = modal.locator(".sheet");
@@ -1965,7 +1962,7 @@ test("settings stay inside the viewport and backdrop dismissal requires a comple
   }
 });
 
-test("direct conversations, inbox receipts and the Jev advice strip remain independent", async ({ page }, testInfo) => {
+test("direct conversations and inbox receipts remain independent", async ({ page }, testInfo) => {
   const alpha = project("alpha", "Example Hive");
   const dm = { ...channel("dm", "Human · Beacon", alpha), type: "dm" as const, memberIds: ["human", "brain"] };
   const peers = { ...channel("peers", "Beacon · Helper", alpha), type: "dm" as const, memberIds: ["brain", "worker"] };
@@ -1987,21 +1984,12 @@ test("direct conversations, inbox receipts and the Jev advice strip remain indep
       .filter(item => (!reasons.length || reasons.includes(item.reason)) && (query.get("unread") !== "1" || !item.read));
     return fulfillJson(route, { readInstance: "browser-fixture", readRevision: harnesses.get(page)!.revision, readSeq: 2, items, hasMore: false });
   });
-  const advised = { executionId: "run", channelId: dm.id, projectId: alpha.id, brainId: "brain", rootMessageId: "direct", updatedAt: 1,
-    revision: 1, completedAt: null, monitoring: "active", recommendation: { routeId: "r", contractVersion: "adaptive-routing-v3",
-      targetTopology: "brain_multi_dm", targetWorkers: 2, confidence: 0.72, reason: "parallel_workstreams", providerStatus: "ok",
-      model: "fixture", latencyMs: 1, inputTokens: 1, outputTokens: 1, singleSufficient: false, needsOrchestration: true } };
-  await page.route("**/api/ui/channels/*/adaptive-routing", route => fulfillJson(route,
-    route.request().url().includes(`/channels/${dm.id}/`) ? { state: advised, executions: [advised], events: [] } : { state: null, events: [] }));
   await page.goto("/#/c/dm");
   await expect(page.locator(".with-human")).toBeVisible();
   await expect(page.locator(".between-agents")).not.toBeVisible();
-  // #211: the composer has no mode or lock selector; an informational strip shows Jev's latest advice.
-  await expect(page.locator(".routing-strip button")).toHaveText("Jev suggests: Multi-DM · 2 workers (72%)");
-  await expect(page.locator(".routing-strip span")).toHaveText("Advisory only · the brain decides");
+  // #211: the composer has no mode or lock selector.
   await expect(page.getByLabel("Message routing options")).toHaveCount(0);
   await expect(page.locator(".composer select")).toHaveCount(0);
-  const strip = await page.locator(".routing-strip").boundingBox(); expect(strip!.height).toBeLessThan(60);
   await page.locator(".composer").screenshot({ path: testInfo.outputPath("composer.png") });
   await page.getByRole("button", { name: /^For you/ }).click();
   // Channel reading already acknowledged the direct message; test only the remaining mention.

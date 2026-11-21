@@ -13,8 +13,6 @@ type SendDeps = {
   selection: Pick<Selection, "selRef" | "threadIdRef">;
   channel: ChannelPane;
   thread: ThreadPane;
-  activeBrainChannel: boolean;
-  refreshRoutingView: () => void;
   setErr: (error: string) => void;
 };
 
@@ -30,7 +28,7 @@ export function useSend(deps: SendDeps) {
   const sendOperations = useRef(createSendOperations(api.upload, api.send));
 
   const send = useCallback(async (body: string, tid: string | null, files: File[] = []): Promise<boolean> => {
-    const { sel, selection: { selRef, threadIdRef }, channel, thread, activeBrainChannel, refreshRoutingView, setErr } = latest.current;
+    const { sel, selection: { selRef, threadIdRef }, channel, thread, setErr } = latest.current;
     if (sel.kind !== "channel") return false;
     const channelId = sel.id;
     const root = tid;
@@ -51,7 +49,6 @@ export function useSend(deps: SendDeps) {
     const returnToLive = sentPane?.historyThrough !== undefined || isReadingHistory(root ? threadStream.current : channelStream.current);
     recordChannelConfirmation(channelJournal.current, result.message);
     setPane((current) => applyChannelMessage(current, result.message));
-    if (activeBrainChannel) refreshRoutingView();
     if (root) onThreadMessage(result.message, true);
     if (returnToLive) {
       // Fetch the complete latest window, including messages hidden while reading

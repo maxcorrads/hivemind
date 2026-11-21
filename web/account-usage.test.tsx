@@ -39,7 +39,7 @@ async function fixture(t: TestContext) {
   });
   const host = document.createElement("div"); document.body.append(host);
   const root = createRoot(host);
-  t.after(async () => { await act(async () => root.unmount()); host.remove(); await hive.adaptiveTopology.stop(); hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
+  t.after(async () => { await act(async () => root.unmount()); host.remove(); hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
   const settle = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
   const render = async () => {
     await act(async () => root.render(<AccountsSheet onClose={() => undefined} />));

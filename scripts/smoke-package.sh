@@ -45,9 +45,9 @@ if [[ -e "$package_root/bots/gitlab" ]]; then
 fi
 HIVEMIND_HOME="$home_root" "$hivemind" bots list | grep -Eq '^\[\]$'
 
-# Every local Markdown page the packaged README links (e.g. docs/adaptive-routing.md) ships with it.
-if [[ ! -f "$package_root/docs/adaptive-routing.md" ]]; then
-  echo "Packaged hivemind is missing docs/adaptive-routing.md linked from the README" >&2
+# Every local Markdown page the packaged README links (e.g. docs/guide.md) ships with it.
+if [[ ! -f "$package_root/docs/guide.md" ]]; then
+  echo "Packaged hivemind is missing docs/guide.md linked from the README" >&2
   exit 1
 fi
 missing_docs=""

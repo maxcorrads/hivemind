@@ -11,7 +11,7 @@ export type MobileTab = "home" | "dms" | "activity" | "tasks";
  * What a phone shows for a selection (#223): one screen at a time. `channel`
  * covers an open thread too; the thread replaces the channel once it has loaded.
  */
-export type MobileScreen = MobileTab | "jev" | "search" | "channel";
+export type MobileScreen = MobileTab | "search" | "channel";
 
 export function mobileScreen(sel: Sel, searching: boolean): MobileScreen {
   if (searching) return "search";
@@ -19,10 +19,10 @@ export function mobileScreen(sel: Sel, searching: boolean): MobileScreen {
   return sel.kind;
 }
 
-/** The highlighted bottom tab; the routing log and search live under Home, channels hide the bar. */
+/** The highlighted bottom tab; search lives under Home, channels hide the bar. */
 export function mobileTab(screen: MobileScreen): MobileTab | null {
   if (screen === "channel") return null;
-  return screen === "jev" || screen === "search" ? "home" : screen;
+  return screen === "search" ? "home" : screen;
 }
 
 /**

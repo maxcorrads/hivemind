@@ -1,11 +1,8 @@
-import { Archive, ArchiveRestore, Hash, Lock, Sparkles, UserPlus } from "lucide-react";
+import { Archive, ArchiveRestore, Hash, Lock, UserPlus } from "lucide-react";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
-import type { AdaptiveRoutingView } from "../src/shared/adaptive-topology.ts";
 import type { ChannelTaskPage } from "../src/shared/tasks.ts";
 import type { Agent, Channel, Message, ThreadStatus } from "../src/shared/types.ts";
-import { adviceSummary } from "./AdaptiveRoutingPanel.tsx";
 import { agentRuntime } from "./agent-runtime.ts";
-import { adviceStrip } from "./adaptive-routing-view.ts";
 import { api, type UnreadTarget } from "./api.ts";
 import { Avatar } from "./Avatar.tsx";
 import { applyChannelMessage, recordChannelMessage } from "./channel-state.ts";
@@ -35,10 +32,10 @@ export type ChannelTab = "messages" | "tasks" | "contract" | "terminal";
 
 /**
  * The selected channel: header with its members, tabs (Messages · Tasks · Contract for rooms) and, on
- * Messages, the message stream, Jev advice strip and composer.
+ * Messages, the message stream and composer.
  */
 export function ChannelDesk({ channelId, activeChannel, archived = false, agents, roomAgents, channel, threadPaneId, stickBottom, threadOpenAnchor, unreadTarget,
-  go, onReopenThread, roomTick, routingView, activeBrainChannel, brainNames, onOpenRouting, onInvite, compose, draftInsert, onDraftInserted, onMarkUnread, setErr, onBack }: {
+  go, onReopenThread, roomTick, onInvite, compose, draftInsert, onDraftInserted, onMarkUnread, setErr, onBack }: {
   channelId: string;
   /** A new explicit badge navigation reveals Messages without remounting its draft. */
   unreadTarget?: UnreadTarget | null;
@@ -54,10 +51,6 @@ export function ChannelDesk({ channelId, activeChannel, archived = false, agents
   go: (next: Sel) => void;
   onReopenThread?: (channelId: string, threadId: string) => void;
   roomTick: number;
-  routingView: AdaptiveRoutingView | null;
-  activeBrainChannel: boolean;
-  brainNames: Record<string, string>;
-  onOpenRouting: () => void;
   onInvite: () => void;
   compose: ReturnType<typeof useSend>;
   draftInsert?: { token: string; text: string } | null;
@@ -240,9 +233,6 @@ export function ChannelDesk({ channelId, activeChannel, archived = false, agents
           </button>
         </div>
       )}
-      {activeBrainChannel && routingView && (
-        <RoutingStrip view={routingView} channelId={activeChannel?.id} brainNames={brainNames} onOpen={onOpenRouting} />
-      )}
       <Composer
         agents={roomAgents}
         draftInsert={draftInsert}
@@ -344,35 +334,5 @@ export function TaskList({ page, error, activeId, onOpen, now }: {
       </ul>
       {page.hasMore && <p className="empty">Showing the 100 most recently updated tasks.</p>}
     </>
-  );
-}
-
-
-/**
- * Informational strip above the composer (#211): Jev's latest advice for the primary request in this channel, e.g.
- * "Jev suggests: Multi-DM · 2 workers (72%)". Nothing is applied; it opens the Routing panel. Jev is optional (#214):
- * the strip is absent while Jev is disabled, before it has advised, and when its call failed (the Routing log has it).
- */
-export function RoutingStrip({ view, channelId, brainNames, onOpen }: {
-  view: AdaptiveRoutingView;
-  channelId: string | undefined;
-  brainNames: Record<string, string>;
-  onOpen: () => void;
-}) {
-  const { state, brains } = adviceStrip(view, channelId);
-  const failed = state?.advice?.state === "unavailable" || state?.advice?.state === "rejected";
-  if (!state?.recommendation || state.monitoring === "disabled" || failed) return null;
-  const unsure = state.advice && state.advice.state !== "ok";
-  return (
-    <div className={`routing-strip ${unsure ? "warning" : ""}`}>
-      <button type="button" onClick={onOpen}>
-        <Sparkles size={14} aria-hidden="true" />
-        <strong>{adviceSummary(state.recommendation)}</strong>
-        {brains > 1 ? ` · ${brainNames[state.brainId] ?? "brain"} · ${brains} brains` : ""}
-      </button>
-      <span>
-        {state.monitoring === "completed" ? "Request closed · no further advice" : "Advisory only · the brain decides"}
-      </span>
-    </div>
   );
 }

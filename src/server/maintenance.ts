@@ -24,14 +24,13 @@ export type MaintenanceResult = {
   /** The cutoff used for retention, or null when retention is disabled. */
   cutoff: number | null;
   inboxDeliveries: number;
-  jevCalls: number;
   agentLifecycle: number;
   uploads: { attachments: number; blobs: number };
 };
 
 /**
  * One maintenance pass. Retention prunes only append-only operational logs older than the window:
- * acknowledged or superseded inbox deliveries (per-message receipts and totals are kept) and Jev call logs.
+ * acknowledged or superseded inbox deliveries (per-message receipts and totals are kept) and agent lifecycle events.
  * Messages, tasks and room contracts are never deleted. Unsent uploads older than a day and
  * unreferenced blobs are collected (as `hivemind gc` does), then SQLite refreshes its planner statistics.
  */
@@ -39,11 +38,10 @@ export function runMaintenance(hive: Hive, options: { retentionDays: number; now
   const now = options.now ?? Date.now();
   const cutoff = options.retentionDays > 0 ? now - options.retentionDays * DAY_MS : null;
   const inboxDeliveries = cutoff === null ? 0 : hive.inbox.prune(cutoff);
-  const jevCalls = cutoff === null ? 0 : hive.adaptiveTopology.observations.jevCalls.prune(cutoff);
   const agentLifecycle = cutoff === null ? 0 : hive.lifecycleLog.prune(cutoff);
   const uploads = hive.files.gcFiles();
   hive.storage.optimize();
-  return { cutoff, inboxDeliveries, jevCalls, agentLifecycle, uploads };
+  return { cutoff, inboxDeliveries, agentLifecycle, uploads };
 }
 
 /** Schedules maintenance inside `serve`; the returned function stops it (call it before closing the hive). */

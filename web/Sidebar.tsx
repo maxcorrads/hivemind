@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronDown, ChevronRight, ChevronsUpDown, Inbox, ListTodo, Plus, Route, Search, SlidersHorizontal, SquareTerminal, Terminal, TextSearch } from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronsUpDown, Inbox, ListTodo, Plus, Search, SlidersHorizontal, SquareTerminal, Terminal, TextSearch } from "lucide-react";
 import { isLiveSearchQuery } from "../src/shared/search-query.ts";
 import type { AgentWork } from "../src/shared/tasks.ts";
 import type { Agent, Channel, Project } from "../src/shared/types.ts";
@@ -264,7 +264,6 @@ function ProjectSection({ project, snap, sel, go, unified, tools, find, onProjec
   const n = snap.mentionCounts[project.slug] ?? 0;
   const inboxActive = sel.kind === "inbox" && sel.project === project.slug;
   const tasksActive = sel.kind === "tasks" && sel.project === project.slug;
-  const jevActive = sel.kind === "jev" && sel.project === project.slug;
   const channelRow = (ch: Channel) => (
     <ChannelItem
       key={ch.id}
@@ -320,17 +319,6 @@ function ProjectSection({ project, snap, sel, go, unified, tools, find, onProjec
         aria-current={tasksActive ? "page" : undefined} onClick={() => go({ kind: "tasks", project: project.slug })}>
         <ListTodo className="nav-icon" size={15} aria-hidden="true" /><span>Tasks</span>
       </button>
-      {snap.jev?.enabled && (
-        <button
-          className={`nav ${jevActive ? "active" : ""}`}
-          aria-current={jevActive ? "page" : undefined}
-          onClick={() => go({ kind: "jev", project: project.slug })}
-          title="Every request Hivemind sent to Jev (TypeSafe) and its answer"
-        >
-          <Route className="nav-icon" size={15} aria-hidden="true" />
-          <span>Routing log</span>
-        </button>
-      )}
       <div className="group">
         <div className="group-h">
           <span>Channels</span>

@@ -1,18 +1,6 @@
 [
  {
   "type": "index",
-  "name": "adaptive_evidence_channel",
-  "tbl": "adaptive_evidence_runs",
-  "sql": "CREATE INDEX adaptive_evidence_channel ON adaptive_evidence_runs(channel_id)"
- },
- {
-  "type": "index",
-  "name": "adaptive_evidence_execution",
-  "tbl": "adaptive_evidence_attempts",
-  "sql": "CREATE INDEX adaptive_evidence_execution ON adaptive_evidence_attempts(execution_id)"
- },
- {
-  "type": "index",
   "name": "agent_accounts_driver_label",
   "tbl": "agent_accounts",
   "sql": "CREATE UNIQUE INDEX agent_accounts_driver_label ON agent_accounts(driver, label)"
@@ -34,24 +22,6 @@
   "name": "capabilities_project",
   "tbl": "worker_capabilities",
   "sql": "CREATE INDEX capabilities_project ON worker_capabilities(project_id, worker_id)"
- },
- {
-  "type": "index",
-  "name": "idx_adaptive_topology_brain",
-  "tbl": "adaptive_topology_executions",
-  "sql": "CREATE INDEX idx_adaptive_topology_brain ON adaptive_topology_executions(brain_id,project_id)"
- },
- {
-  "type": "index",
-  "name": "idx_adaptive_topology_events_channel",
-  "tbl": "adaptive_topology_events",
-  "sql": "CREATE INDEX idx_adaptive_topology_events_channel ON adaptive_topology_events(channel_id,created_at DESC)"
- },
- {
-  "type": "index",
-  "name": "idx_adaptive_topology_root",
-  "tbl": "adaptive_topology_executions",
-  "sql": "CREATE INDEX idx_adaptive_topology_root ON adaptive_topology_executions(root_message_id)"
  },
  {
   "type": "index",
@@ -112,18 +82,6 @@
   "name": "idx_channels_project_type_name",
   "tbl": "channels",
   "sql": "CREATE INDEX idx_channels_project_type_name ON channels(project_id, type, name)"
- },
- {
-  "type": "index",
-  "name": "idx_jev_calls_execution",
-  "tbl": "jev_calls",
-  "sql": "CREATE INDEX idx_jev_calls_execution ON jev_calls(execution_id, created_at)"
- },
- {
-  "type": "index",
-  "name": "idx_jev_calls_project",
-  "tbl": "jev_calls",
-  "sql": "CREATE INDEX idx_jev_calls_project ON jev_calls(project_id, created_at DESC)"
  },
  {
   "type": "index",
@@ -337,30 +295,6 @@
  },
  {
   "type": "table",
-  "name": "adaptive_evidence_attempts",
-  "tbl": "adaptive_evidence_attempts",
-  "sql": "CREATE TABLE adaptive_evidence_attempts ( id TEXT PRIMARY KEY, execution_id TEXT NOT NULL REFERENCES adaptive_evidence_runs(execution_id) ON DELETE CASCADE, snapshot TEXT NOT NULL)"
- },
- {
-  "type": "table",
-  "name": "adaptive_evidence_runs",
-  "tbl": "adaptive_evidence_runs",
-  "sql": "CREATE TABLE adaptive_evidence_runs ( execution_id TEXT PRIMARY KEY, channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE, project_id TEXT NOT NULL, snapshot TEXT NOT NULL)"
- },
- {
-  "type": "table",
-  "name": "adaptive_topology_events",
-  "tbl": "adaptive_topology_events",
-  "sql": "CREATE TABLE adaptive_topology_events ( id TEXT PRIMARY KEY, execution_id TEXT NOT NULL, channel_id TEXT NOT NULL, project_id TEXT NOT NULL, created_at INTEGER NOT NULL, snapshot TEXT NOT NULL)"
- },
- {
-  "type": "table",
-  "name": "adaptive_topology_executions",
-  "tbl": "adaptive_topology_executions",
-  "sql": "CREATE TABLE \"adaptive_topology_executions\" (execution_id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, brain_id TEXT NOT NULL, project_id TEXT NOT NULL, root_message_id TEXT NOT NULL, snapshot TEXT NOT NULL, UNIQUE(channel_id,brain_id))"
- },
- {
-  "type": "table",
   "name": "agent_account_policies",
   "tbl": "agent_account_policies",
   "sql": "CREATE TABLE agent_account_policies ( driver TEXT PRIMARY KEY CHECK (driver IN ('codex','claude')), policy TEXT NOT NULL CHECK (policy IN ('sequential','balanced')), revision INTEGER NOT NULL DEFAULT 1, updated_at INTEGER NOT NULL )"
@@ -472,12 +406,6 @@
   "name": "inbox_sessions",
   "tbl": "inbox_sessions",
   "sql": "CREATE TABLE inbox_sessions ( agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE, session_id TEXT NOT NULL, generation INTEGER NOT NULL, PRIMARY KEY(agent_id, session_id), UNIQUE(agent_id, generation) )"
- },
- {
-  "type": "table",
-  "name": "jev_calls",
-  "tbl": "jev_calls",
-  "sql": "CREATE TABLE jev_calls ( id TEXT PRIMARY KEY, route_id TEXT NOT NULL UNIQUE, project_id TEXT NOT NULL, channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE, execution_id TEXT NOT NULL, created_at INTEGER NOT NULL, summary TEXT NOT NULL, sent TEXT, received TEXT, outcome TEXT)"
  },
  {
   "type": "table",
@@ -700,12 +628,6 @@
   "name": "worker_templates",
   "tbl": "worker_templates",
   "sql": "CREATE TABLE worker_templates ( id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, slug TEXT NOT NULL, revision INTEGER NOT NULL, spec TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE (project_id, slug) )"
- },
- {
-  "type": "trigger",
-  "name": "adaptive_channel_deleted",
-  "tbl": "channels",
-  "sql": "CREATE TRIGGER adaptive_channel_deleted AFTER DELETE ON channels BEGIN DELETE FROM adaptive_topology_events WHERE channel_id=OLD.id; DELETE FROM adaptive_topology_executions WHERE channel_id=OLD.id; END"
  },
  {
   "type": "trigger",

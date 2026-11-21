@@ -99,7 +99,6 @@ function fixture(url, request) {
   if (endpoint === '/api/ui/launch-requests') return { requests: [] };
   if (endpoint === '/api/ui/activity') return { readInstance: snapshot.readInstance, readRevision: 1, readSeq: 120, items: [], hasMore: false };
   if (endpoint === '/api/ui/tasks') return taskPage;
-  if (endpoint.endsWith('/adaptive-routing')) return { state: null, events: [] };
   if (endpoint.endsWith('/worker-templates')) return { templates };
   if (endpoint.endsWith('/tasks')) return { items: taskItems.map(item => item.task), hasMore: false };
   if (endpoint.endsWith('/room')) return { room: null, tasks: [], activeTaskCount: 3, tasksHasMore: false, nextTaskCursor: null, links: [], unmanagedBots: [] };

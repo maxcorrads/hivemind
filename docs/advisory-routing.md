@@ -1,9 +1,7 @@
 # Opt-in worker matching (prototype)
 
-Capability matching is unrelated to [Jev advice](adaptive-routing.md): its MCP
-tools are named `worker_match_*` (renamed from `suggest_workers`,
-`record_routing_outcome` and `record_routing_override` in #218) so they are not
-confused with Jev routing.
+The MCP tools of capability matching are named `worker_match_*` (renamed from
+`suggest_workers`, `record_routing_outcome` and `record_routing_override` in #218).
 
 A worker may publish a versioned capability card using `set_capabilities`, or
 `hivemind capabilities set --input card.json`. Read it first with

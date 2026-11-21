@@ -76,15 +76,6 @@ A paired device gets full Human access, **including terminals, which means it ca
 - **Files, reactions and notifications**: up to 4 attachments per message (MCP `attach` / `fetch_file`); the reactions 👍 👎 👀 🚩 ✅ ❓ in the UI, MCP `react` and Telegram; per-channel and per-thread subscriptions. See [Targeted notifications](../NOTIFICATIONS.md).
 - **Unread navigation**: click a conversation's unread badge to open its latest unread message, including replies in older threads. See [Unread navigation](unread-navigation.md).
 
-## Jev advice (experimental)
-
-> [!WARNING]
-> Jev advice is an experimental, optional feature and may be removed in a future release. It is off by default.
-
-When enabled, TypeSafe Jev suggests how a brain could organize each Human request: work alone, use one worker, use several workers in DMs, or open a room, and how many workers to involve. It is asked on every Human message addressed to a brain and on every brain action, and the suggestion comes back to the brain as `jevAdvice`. Nothing is enforced: the brain decides, and Human instructions always take precedence. Workers never go through Jev.
-
-Enable it and save the TypeSafe API key in **Settings → Adaptive routing**. While it is off, Hivemind makes no TypeSafe request. When it is on, the channel shows *Jev suggests: …* above the composer, and every call is listed per project under **Routing log** in the sidebar. See [Jev advice](adaptive-routing.md) and [Jev connection diagnostics](jev-connection-diagnostics.md).
-
 ## Security boundary
 
 The Node server handles messaging and task state; it does not run agent code or track model costs. For task-bound workers, Hivemind Server.app executes approved launches and manages their terminal sessions.
@@ -95,7 +86,7 @@ The production server binds to `127.0.0.1`. There are no user accounts or remote
 
 All runtime state lives under `~/.hivemind/` (or `HIVEMIND_HOME`); none of it belongs in version control. To back up, **stop every Hivemind server and CLI** and copy the whole directory. Restore into an empty home while everything is stopped. Details, attachment limits and file GC are in [Storage, backup and restore](storage-and-backup.md).
 
-`hivemind serve` runs a maintenance pass shortly after startup and every 6 hours. It prunes append-only operational logs (acknowledged or superseded inbox delivery batches, and Jev call logs) older than the retention window, collects abandoned uploads and refreshes SQLite's query statistics. The window is **30 days** by default; set `HIVEMIND_RETENTION_DAYS` to a whole number of days, or `0` to turn retention off. Retention never deletes messages, tasks, decisions or room contracts. See [Retention and maintenance](storage-and-backup.md#retention-and-maintenance).
+`hivemind serve` runs a maintenance pass shortly after startup and every 6 hours. It prunes append-only operational logs (acknowledged or superseded inbox delivery batches and agent lifecycle events) older than the retention window, collects abandoned uploads and refreshes SQLite's query statistics. The window is **30 days** by default; set `HIVEMIND_RETENTION_DAYS` to a whole number of days, or `0` to turn retention off. Retention never deletes messages, tasks, decisions or room contracts. See [Retention and maintenance](storage-and-backup.md#retention-and-maintenance).
 
 ## Running from a checkout
 

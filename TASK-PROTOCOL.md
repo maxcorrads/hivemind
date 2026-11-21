@@ -120,8 +120,6 @@ Assignment (optional `channel` omitted for the ordinary worker DM):
 }
 ```
 
-With Jev enabled the response also carries `jevAdvice`; see [Jev advice](#jev-advice).
-
 Worker: `task_event` with `taskId`, a new `requestId`, `expectedRevision: 1` and
 `action: {"type":"accept"}`. On a blocker, use `{"type":"block","needed":"Which
 encoding must we support?"}`. Submit `{"type":"result","result":{"summary":"Fixed
@@ -155,18 +153,10 @@ hivemind task get --id TASK_ID
 hivemind task event --id TASK_ID --input event.json
 ```
 
-## Jev advice
+## Older clients
 
-With Jev enabled, every brain action, including `assign_task` and each brain
-`task_event`, returns `jevAdvice`: Jev's non-binding suggestion (plan, topology,
-worker count, confidence and state) for the Human request the brain serves. The
-action has already been performed and is never blocked because of the advice: a
-brain may assign work even when Jev suggests Single. The brain decides, and Human
-instructions always take precedence. Workers never trigger Jev and receive no
-advice.
-
-Since #211 delegation needs no `executionId`, and since #218 it is gone from every
-schema; the server silently drops one sent by an older client. See [Jev advice](docs/adaptive-routing.md).
+No schema lists `executionId` (#218), and no response carries `jevAdvice`: the Jev
+advice was removed. The server silently drops an `executionId` sent by an older client.
 
 ## Evaluation: do not mistake protocol tests for productivity measurements
 

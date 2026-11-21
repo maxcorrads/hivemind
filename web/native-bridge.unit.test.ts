@@ -229,7 +229,7 @@ test("in a browser notices keep the opt-in, permission and focus rules of the No
 
 const menuProps = (notifications: Partial<DesktopNotifications>, openRequest?: number) => ({
   theme: "light" as const, onToggleTheme() {}, layout: "rail" as const, onLayout() {}, telegram: undefined as never,
-  onTelegram() {}, onAdaptiveRouting() {}, onAccounts() {}, onLaunch() {}, onHelp() {}, openRequest,
+  onTelegram() {}, onAccounts() {}, onLaunch() {}, onHelp() {}, openRequest,
   notifications: { supported: true, native: false, enabled: false, blocked: false, toggle: async () => {}, onLiveEvent() {},
     ...notifications },
 });

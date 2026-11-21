@@ -16,7 +16,7 @@ const status = (code: number) => (error: unknown) => error instanceof HiveError 
 function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-a4-control-'));
   const hive = new Hive(path.join(dir, 'hive.db'), { routineBatchMs: 0 });
-  t.after(async () => { await hive.adaptiveTopology.stop(); hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
+  t.after(async () => { hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
   const human = hive.identity.getAgent('human');
   const project = hive.projects.createProject(human, { name: 'Project', slug: 'project', worktree: dir });
   const brain = hive.identity.join({ role: 'brain', project: project.slug }).agent;

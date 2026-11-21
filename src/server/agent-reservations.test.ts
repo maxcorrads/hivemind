@@ -21,7 +21,7 @@ const spec = (patch: Partial<WorkerTemplateSpec> = {}): WorkerTemplateSpec => ({
 function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hive-reservations-"));
   const hive = new Hive(path.join(dir, "hive.db"), { routineBatchMs: 0 });
-  t.after(async () => { await hive.adaptiveTopology.stop(); hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
+  t.after(async () => { hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
   const human = hive.identity.getAgent("human");
   const project = hive.projects.listProjects()[0]!;
   const template = hive.workerTemplates.create(human, project.id, { slug: "codex-senior", spec: spec() });

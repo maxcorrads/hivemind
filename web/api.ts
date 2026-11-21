@@ -1,6 +1,4 @@
 import type { CliConversation } from "../src/shared/cli-conversations.ts";
-import type { JevCall, JevCallLogView } from '../src/shared/jev-calls.ts';
-import type { EvidenceCollectorHealth } from '../src/shared/evidence-health.ts';
 import type { RoutingRequest, RoutingSuggestions } from '../src/shared/routing.ts';
 import type { TelegramHealth } from "./telegram-health.ts";
 import type { WorkerTemplate, WorkerTemplateSpec } from "../src/shared/worker-templates.ts";
@@ -19,7 +17,6 @@ import type { TaskControlInput } from '../src/shared/task-control.ts';
 import type { TaskOverview, TaskViewsPage } from '../src/shared/task-views.ts';
 import type { RoomView, Room } from '../src/shared/rooms.ts';
 import type { TimelineExport, TimelineView } from '../src/shared/timeline.ts';
-import type { AdaptiveRoutingView } from '../src/shared/adaptive-topology.ts';
 import type { AgentOverview, AgentRemoveImpact, AgentLifecycleEvent } from '../src/shared/agent-management.ts';
 import type { CapabilityCard, CapabilityView } from '../src/shared/routing.ts';
 
@@ -54,8 +51,6 @@ export type Snapshot = ReadSnapshot & {
   /** Bytes the agent API returned per brain/worker since the server started. */
   agentTraffic?: Record<string, AgentTrafficView>;
   telegram?: { running: boolean; configured: boolean } & TelegramHealth;
-  /** Whether Jev adaptive routing is on; the Routing log is offered only then. */
-  jev?: { enabled: boolean };
   /** A verified Hivemind Server.app can receive launcher commands. */
   launcherAvailable?: boolean;
 };
@@ -94,17 +89,6 @@ export type ProjectBotsView = {
 export type NavStatus = {
   /** Open work per agent id; agents without any are omitted. */
   agentWork: Record<string, AgentWork>;
-};
-
-export type AdaptiveRoutingSettings = {
-  enabled: boolean;
-  apiKeySet: boolean;
-  apiKeyHint: string | null;
-  /** The identifier Hivemind requests from TypeSafe. */
-  model: string;
-  /** The provider alias used when nothing is pinned. */
-  defaultModel: string;
-  modelPinned: boolean;
 };
 
 export type TelegramSettings = TelegramHealth & {
@@ -148,29 +132,10 @@ export type AccountsView = { accounts: AgentAccount[]; policies: AccountPolicies
 export type AccountsWithUsage = AccountsView & { usage: AccountUsage[] };
 
 export const api = {
-  adaptiveRouting: () => req<AdaptiveRoutingSettings>("/api/ui/adaptive-routing"),
-  saveAdaptiveRouting: (body: {
-    enabled: boolean;
-    apiKey?: string | null;
-    /** A bounded identifier to pin, or null for the default alias. */
-    model?: string | null;
-  }) =>
-    req<AdaptiveRoutingSettings>("/api/ui/adaptive-routing", {
-      method: "PUT",
-      body: JSON.stringify(body),
-    }),
-  adaptiveRoutingView: (channelId: string, signal?: AbortSignal) =>
-    req<AdaptiveRoutingView>(`/api/ui/channels/${encodeURIComponent(channelId)}/adaptive-routing`, { signal }),
   taskTimeline: (id: string, signal?: AbortSignal) =>
     req<{ timeline: TimelineView }>(`/api/ui/tasks/${encodeURIComponent(id)}/timeline`, { signal }),
   exportTaskTimeline: (id: string, signal?: AbortSignal) =>
     req<{ fixture: TimelineExport }>(`/api/ui/tasks/${encodeURIComponent(id)}/timeline/export`, { signal }),
-  /** `cursor` is the previous page's opaque `nextCursor`; omit it for the newest page. */
-  jevCalls: (project: string, cursor?: string | null, signal?: AbortSignal) =>
-    req<JevCallLogView>(`/api/ui/projects/${encodeURIComponent(project)}/jev-calls${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`, { signal }),
-  evidenceHealth: (signal?: AbortSignal) => req<EvidenceCollectorHealth>('/api/ui/adaptive-routing/evidence-health', { signal }),
-  jevCall: (project: string, id: string, signal?: AbortSignal) =>
-    req<{ call: JevCall }>(`/api/ui/projects/${encodeURIComponent(project)}/jev-calls/${encodeURIComponent(id)}`, { signal }),
   suggestWorkers: (id: string, body: RoutingRequest, signal?: AbortSignal) => req<RoutingSuggestions>(`/api/ui/tasks/${encodeURIComponent(id)}/routing`, { method: 'POST', body: JSON.stringify(body), signal }),
   recordRoutingChoice: (id: string, body: { expectedRevision: number; workerId: string; reason: string; requestId: string }, signal?: AbortSignal) => req<{ assigned: false }>(`/api/ui/tasks/${encodeURIComponent(id)}/routing-override`, { method: 'POST', body: JSON.stringify(body), signal }),
   botCredential: (project: string, bot: string) => req<BotCredentialView>(
@@ -333,7 +298,7 @@ export const api = {
     const suffix = q.toString() ? `?${q}` : "";
     return req<ChannelPayload>(`/api/ui/channels/${encodeURIComponent(id)}/messages${suffix}`, { signal });
   },
-  /** Returns once the message is committed; Jev never delays a send, its advice arrives over realtime (#214). */
+  /** Returns once the message is committed. */
   send: (id: string, body: string, threadId?: string | null, attachmentIds?: string[], requestId?: string) =>
     req<{ message: Message }>(`/api/ui/channels/${encodeURIComponent(id)}/messages`, {
       method: "POST",

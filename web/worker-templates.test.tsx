@@ -45,7 +45,7 @@ async function fixture(t: TestContext) {
   const host = document.createElement("div"); document.body.append(host);
   const root = createRoot(host);
   let closed = 0;
-  t.after(async () => { await act(async () => root.unmount()); host.remove(); await hive.adaptiveTopology.stop(); hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
+  t.after(async () => { await act(async () => root.unmount()); host.remove(); hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
   await act(async () => root.render(<WorkerTemplatesSheet project={project} onClose={() => { closed++; }} />));
   const settle = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
   await settle();

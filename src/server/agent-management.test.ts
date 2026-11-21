@@ -23,7 +23,7 @@ const contract = { objective: 'Implement panel', scope: [], nonGoals: [], accept
 function fixture(t: TestContext) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'hive-agent-management-'));
   const hive = new Hive(path.join(dir, 'hive.db'), { routineBatchMs: 0 });
-  t.after(async () => { await hive.adaptiveTopology.stop(); hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
+  t.after(async () => { hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
   const app = createApp(hive), human = hive.identity.getAgent('human');
   const project = hive.projects.createProject(human, { name: 'Panel', slug: 'panel', worktree: dir });
   const brain = hive.identity.join({ role: 'brain', project: project.slug });

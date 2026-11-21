@@ -24,9 +24,17 @@ function rowsOf(db: DatabaseSync): Record<string, unknown[]> {
     [String(name), db.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all().map(row => ({ ...row }))]));
 }
 
+// drop_jev removes these tables later in the chain, with their rows.
+const DROPPED_LATER = new Set(["jev_calls", "adaptive_topology_executions", "adaptive_topology_events",
+  "adaptive_evidence_runs", "adaptive_evidence_attempts"]);
+
 function assertPreviousRowsPreserved(db: DatabaseSync, before: Record<string, unknown[]>): void {
   const after = rowsOf(db);
   for (const [table, rows] of Object.entries(before)) {
+    if (DROPPED_LATER.has(table)) {
+      assert.equal(after[table], undefined, `${table}: dropped`);
+      continue;
+    }
     assert.equal(after[table]?.length, rows.length, `${table}: no rows lost or added`);
     if (!rows.length) continue;
     const columns = Object.keys(rows[0] as object);

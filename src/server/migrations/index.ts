@@ -6,6 +6,7 @@ import * as telegram from "./baseline-telegram.ts";
 import { agentTerminalSession } from "./agent-terminal-session.ts";
 import { agentTombstones } from "./agent-tombstones.ts";
 import { dropDecisionRequests } from "./drop-decision-requests.ts";
+import { dropJev } from "./drop-jev.ts";
 import { botCapabilities } from './bot-capabilities.ts';
 import { jevAdvisory } from "./jev-advisory.ts";
 import { performanceRetention } from "./performance-retention.ts";
@@ -99,6 +100,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 43, name: "message_thread_author_index", up: messageThreadAuthorIndex },
   { version: 44, name: "message_unread_cover_index", up: messageUnreadCoverIndex },
   { version: 45, name: "launch_request_host", up: launchRequestHost },
+  { version: 46, name: "drop_jev", up: dropJev },
 ];
 
 /** The last idempotent baseline migration; later migrations may assume its schema. */

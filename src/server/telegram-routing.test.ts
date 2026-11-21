@@ -9,8 +9,6 @@ import { Hive } from "./hive.ts";
 import { countRows, hasRow, insertRow, readValue, rowsContaining } from "./test-fixtures.ts";
 import { TelegramBridge, startTelegram, writeTelegramFile, readTelegramFile, loadTelegramConfig, telegramConfigKey } from "./telegram.ts";
 import { enqueueTelegramPending } from "./telegram-outbox.ts";
-import { saveAdaptiveRouting } from "./adaptive-config.ts";
-import { jevTopologyResponse } from "./fixtures/jev-topology.ts";
 
 async function until(predicate: () => boolean) {
   for (let i = 0; i < 5000; i++) { if (predicate()) return; await nextTurn(); }
@@ -110,8 +108,8 @@ test("different bots process colliding update and message IDs without inheriting
   } finally { await bridge.stop(); close(); }
 });
 
-test("Telegram Human replies in a brain DM are posted without waiting for Jev, which advises afterwards (#214)", async t => {
-  const { hive, dir, close } = fixture();
+test("a Telegram Human reply in a brain DM topic is posted once to that DM (#214)", async t => {
+  const { hive, close } = fixture();
   const human = hive.identity.getAgent("human");
   const brain = hive.identity.join({ role: "brain", project: "acme" }).agent;
   const dm = hive.channels.openDm(human, brain.name);
@@ -119,26 +117,15 @@ test("Telegram Human replies in a brain DM are posted without waiting for Jev, w
   const botKey = telegramConfigKey(cfg);
   const bridge = new TelegramBridge(hive, cfg);
   insertRow(hive, "telegram_topics", { channel_id: dm.id, telegram_thread_id: 22, telegram_chat_id: -1001, bot_key: botKey });
-  saveAdaptiveRouting(dir, { enabled: true, apiKey: "typesafe-fixture" });
-  let polls = 0, jevCalls = 0, answerJev!: () => void;
-  const jevAnswered = new Promise<void>(resolve => { answerJev = resolve; });
-  const routingRequests: unknown[] = [];
+  let polls = 0;
   t.mock.method(globalThis, "fetch", async (url: unknown, init?: RequestInit) => {
-    if (String(url) === "https://api.typesafe.ai/v1/systemone") {
-      jevCalls++;
-      const request = JSON.parse(String(init?.body)) as { state?: { request?: string } };
-      routingRequests.push(request.state?.request);
-      // Jev does not answer until the message has been checked: the inbound post must not wait for it.
-      await jevAnswered;
-      return Response.json(jevTopologyResponse(String(init?.body), "single"));
-    }
     const method = String(url).split("/").at(-1);
     if (method === "getUpdates") {
       polls++;
       if (polls === 1) return Response.json({ ok: true, result: [{
         update_id: 901,
         message: { message_id: 88, message_thread_id: 22, chat: { id: -1001 },
-          from: { id: 1, first_name: "Matteo" }, text: "Small Telegram request" },
+          from: { id: 1, first_name: "Ada" }, text: "Small Telegram request" },
       }] });
       return blocked(init?.signal);
     }
@@ -146,25 +133,16 @@ test("Telegram Human replies in a brain DM are posted without waiting for Jev, w
   });
   try {
     bridge.start();
-    await until(() => jevCalls === 1 && rowsContaining(hive, "messages", "body", "Small Telegram request", "channel_id")
+    await until(() => polls >= 2 && rowsContaining(hive, "messages", "body", "Small Telegram request", "channel_id")
       .filter(row => row.channel_id === dm.id).length === 1);
     const messages = hive.messageQueries.listMessages(human, dm.id).messages.filter(m => m.kind === "chat");
     const original = messages.find(m => m.body.endsWith("Small Telegram request"))!;
     assert.ok(original);
-    assert.equal(messages.length, 1, "Jev posts no directive (#211)");
-    assert.deepEqual(routingRequests, ["Small Telegram request"], "Sender display name is not classifier context");
-    assert.equal(hive.adaptiveTopology.view(human, dm.id).state?.recommendation ?? null, null, "posted before Jev answered");
-    answerJev();
-    await hive.adaptiveTopology.settled();
-    const state = hive.adaptiveTopology.view(human, dm.id).state!;
-    assert.equal(state.recommendation?.providerStatus, "ok", "A malformed fixture must not silently pass via fallback");
-    assert.equal(state.recommendation?.contractVersion, "adaptive-routing-v3");
-    assert.equal(state.advice?.plan, "single");
+    assert.equal(messages.length, 1, "the reply is posted once and nothing is posted next to it");
     assert.equal(hive.messages.fromTelegram(original.id), true);
     assert.equal(readValue(hive, "telegram_out", "seq", { telegram_chat_id: -1001, telegram_message_id: 88, bot_key: botKey }), original.seq);
   } finally {
     await bridge.stop();
-    await hive.adaptiveTopology.stop();
     close();
   }
 });

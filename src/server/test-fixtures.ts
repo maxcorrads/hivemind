@@ -107,10 +107,9 @@ export function rowsContaining(owner: DbOwner, table: string, column: string, fr
     .all(`%${fragment}%`).map(row => ({ ...row }));
 }
 
-/** Parsed JSON `snapshot` column of a stored task or topology execution. */
-export function storedSnapshot<T = Record<string, unknown>>(owner: DbOwner, table: "task_records" | "adaptive_topology_executions", id: string): T {
-  const key = table === "task_records" ? "id" : "execution_id";
-  const value = readValue(owner, table, "snapshot", { [key]: id });
+/** Parsed JSON `snapshot` column of a stored task. */
+export function storedSnapshot<T = Record<string, unknown>>(owner: DbOwner, table: "task_records", id: string): T {
+  const value = readValue(owner, table, "snapshot", { id });
   if (value === undefined) throw new Error(`No ${table} row for ${id}`);
   return JSON.parse(String(value)) as T;
 }

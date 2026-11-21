@@ -135,8 +135,8 @@ test("a DM with an unlabelled agent has a Terminal tab for its recorded session,
   installBridge();
   const host = await mount(() => <ChannelDesk channelId="dm1" activeChannel={dm} agents={[human, atlas]} roomAgents={[human, atlas]}
     channel={{ pane: null, setPane() {}, channelStream: ref(null), channelJournal: ref(new Map()), loadChannel: async () => {} } as never}
-    threadPaneId={null} stickBottom={ref(true)} threadOpenAnchor={ref(null)} go={() => {}} roomTick={0} routingView={null}
-    activeBrainChannel={false} brainNames={{}} onOpenRouting={() => {}} onInvite={() => {}}
+    threadPaneId={null} stickBottom={ref(true)} threadOpenAnchor={ref(null)} go={() => {}} roomTick={0}
+    onInvite={() => {}}
     compose={{ sendChannel: async () => true } as never} onMarkUnread={async () => {}} setErr={() => {}} onBack={() => {}} />);
   const tabs = () => Array.from(host.querySelectorAll("[role=tab]")).map(tab => tab.textContent);
   await fromApp(connected);

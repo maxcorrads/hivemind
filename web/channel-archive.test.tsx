@@ -31,8 +31,8 @@ async function mount(t: TestContext, channel: Channel, archived: boolean) {
   const render = (isArchived: boolean) => act(async () => root.render(<ChannelDesk channelId={channel.id} activeChannel={channel}
     archived={isArchived} agents={[human]} roomAgents={[human]}
     channel={{ pane: null, setPane() {}, channelStream: ref(null), channelJournal: ref(new Map()), loadChannel: async () => {} } as never}
-    threadPaneId={null} stickBottom={ref(true)} threadOpenAnchor={ref(null)} go={() => {}} roomTick={0} routingView={null}
-    activeBrainChannel={false} brainNames={{}} onOpenRouting={() => {}} onInvite={() => {}}
+    threadPaneId={null} stickBottom={ref(true)} threadOpenAnchor={ref(null)} go={() => {}} roomTick={0}
+    onInvite={() => {}}
     compose={{ sendChannel: async () => true } as never} onMarkUnread={async () => {}} setErr={error => errors.push(error)} onBack={() => {}} />));
   t.after(async () => { await act(async () => root.unmount()); host.remove(); });
   await render(archived);

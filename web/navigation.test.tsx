@@ -40,7 +40,7 @@ function fixture(t: TestContext) {
   const human = hive.identity.getAgent('human');
   const home = hive.projects.listProjects()[0]!;
   const other = hive.projects.createProject(human, { name: 'Other Place', slug: 'other-place' });
-  t.after(async () => { await hive.adaptiveTopology.stop(); hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
+  t.after(async () => { hive.db.close(); rmSync(dir, { recursive: true, force: true }); });
   return { hive, human, home, other };
 }
 
